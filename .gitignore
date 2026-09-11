@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# env & secrets
+.env
+.env.local
+*.pem
+*.key
+
+# data dirs (buddi state, logs)
+data/
+*.log
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# OS/editor
+.DS_Store
