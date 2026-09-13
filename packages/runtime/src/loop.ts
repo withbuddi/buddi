@@ -34,6 +34,14 @@ export interface RunAgentOptions {
   pool: Queryable;
   conversationId: string;
   userMessage: string;
+  /**
+   * An extra system line appended to the agent's prompt for this run only —
+   * how the surface tells the agent about its own rendering constraints
+   * ("Telegram: plain text, no tables"). Presentation, not policy: it never
+   * changes tools, tiers or authorization, and it is not persisted with the
+   * agent definition.
+   */
+  systemSuffix?: string;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
 }
@@ -151,6 +159,12 @@ function textOf(content: ContentBlock[]): string {
     .trim();
 }
 
+/** The system prompt for one run: the agent's, plus an optional surface hint. */
+export function composeSystem(systemPrompt: string, systemSuffix?: string): string {
+  const suffix = (systemSuffix ?? '').trim();
+  return suffix === '' ? systemPrompt : `${systemPrompt}\n\n${suffix}`;
+}
+
 /* ------------------------------------------------------------------ *
  * The loop
  * ------------------------------------------------------------------ */
@@ -161,6 +175,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // Fail closed: unknown tool names are a configuration defect, not a runtime
   // refusal — and they are caught before a single token is sent anywhere.
   const tools = selectTools(registry, agent);
+  const system = composeSystem(agent.systemPrompt, opts.systemSuffix);
 
   const history = await loadMessages(pool, conversationId);
   const userBlocks: ContentBlock[] = [{ type: 'text', text: userMessage }];
@@ -182,7 +197,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   while (turns < agent.maxTurns) {
     turns++;
     const res = await provider.complete({
-      system: agent.systemPrompt,
+      system,
       messages,
       tools,
     });
