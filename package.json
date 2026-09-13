@@ -1,0 +1,26 @@
+{
+  "name": "buddi",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "node scripts/check-boundaries.mjs && pnpm -r test",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "node scripts/migrate.mjs",
+    "chat": "node packages/gateway/dist/cli.js chat",
+    "ask": "node packages/gateway/dist/cli.js ask"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.2"
+  },
+  "dependencies": {
+    "@buddi/core": "workspace:*",
+    "dotenv": "^16.4.7"
+  }
+}
