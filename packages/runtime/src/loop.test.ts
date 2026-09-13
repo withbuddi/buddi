@@ -7,7 +7,13 @@ import type {
   CompletionResponse,
   RuntimeProvider,
 } from './anthropic.js';
-import { createConversation, loadMessages, runAgent, type Queryable } from './loop.js';
+import {
+  composeSystem,
+  createConversation,
+  loadMessages,
+  runAgent,
+  type Queryable,
+} from './loop.js';
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
 
@@ -132,7 +138,46 @@ describe('createConversation / loadMessages', () => {
   });
 });
 
+describe('composeSystem', () => {
+  it('returns the agent prompt untouched when there is no surface hint', () => {
+    expect(composeSystem('base')).toBe('base');
+    expect(composeSystem('base', '   ')).toBe('base');
+  });
+
+  it('appends the surface hint last, so it is the final word', () => {
+    expect(composeSystem('base', 'Surface: Telegram.')).toBe('base\n\nSurface: Telegram.');
+  });
+});
+
 describe('runAgent', () => {
+  it('passes the surface hint to the provider as part of the system prompt', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+      systemSuffix: 'Surface: Telegram. Plain text only.',
+    });
+    expect(provider.calls[0]?.system).toBe(
+      'You advise on money.\n\nSurface: Telegram. Plain text only.',
+    );
+    // The agent definition itself is untouched.
+    expect(agent.systemPrompt).toBe('You advise on money.');
+  });
+
   it('fails closed when the agent names an unregistered tool — before any API call', async () => {
     const db = new FakeDb();
     const provider = scriptedProvider([]);

@@ -4,4 +4,6 @@ export * from './registry.js';
 export * from './agent.js';
 export * from './db.js';
 export * from './events.js';
+export * from './scheduler/index.js';
+export * from './owner.js';
 export { runMigrations } from './cli-migrate.js';
