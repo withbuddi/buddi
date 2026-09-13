@@ -169,6 +169,110 @@ export interface TelegramSurfaceOptions {
 }
 
 /* ------------------------------------------------------------------ *
+ * Plain text safety net
+ * ------------------------------------------------------------------ */
+
+/*
+ * We never send `parse_mode`, so any markdown a model emits is shown to the
+ * owner literally: `**Status — 2026-09-13**`, backticks, pipe tables. The
+ * prompt asks for plain text; this is the deterministic net under that ask.
+ *
+ * It is pure and conservative: markers are only removed when they actually
+ * wrap a span, so arithmetic (`2 * 3`) and identifiers (`snake_case`) survive
+ * untouched, and no digit, currency symbol or word is ever rewritten.
+ */
+
+/** A ``` fence line, with or without a language tag. */
+const FENCE_RE = /^\s*```[A-Za-z0-9_+-]*\s*$/;
+
+/** `# Heading` → `Heading`. Only at the start of a line, marker plus space. */
+const HEADING_RE = /^(\s*)#{1,6}[ \t]+(?=\S)/;
+
+/** `[label](url)` → `label (url)`. */
+const LINK_RE = /\[([^\]\n]*)\]\(([^()\s]*)\)/g;
+
+/** `` `code` `` → `code`. Single backticks only; the span may not be empty. */
+const INLINE_CODE_RE = /`([^`\n]+)`/g;
+
+/** `**bold**` — both markers must hug non-space, so `a ** b` is left alone. */
+const BOLD_STAR_RE = /\*\*(?=\S)([^*\n]+?)(?<=\S)\*\*/g;
+
+/** `__bold__` — word characters on either side mean it is an identifier. */
+const BOLD_UNDER_RE = /(^|[^\w])__(?=\S)([^_\n]+?)(?<=\S)__(?!\w)/g;
+
+/** `*italic*` — a lone `*` (as in `2 * 3`) never matches: it wraps nothing. */
+const ITALIC_STAR_RE = /\*(?=\S)([^*\n]+?)(?<=\S)\*/g;
+
+/** `_italic_` — `snake_case` keeps its underscores: they sit inside a word. */
+const ITALIC_UNDER_RE = /(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g;
+
+/** `|---|:--:|` and friends: a table rule carries no content. */
+function isTableSeparatorRow(cells: readonly string[]): boolean {
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
+}
+
+/** `| a | b |` → `a — b`; the separator row is dropped by the caller. */
+function tableCells(line: string): string[] | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || trimmed.length < 2) return undefined;
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+  if (!inner.includes('|') && inner.trim() === '') return undefined;
+  return inner.split('|').map((cell) => cell.trim());
+}
+
+/** Marker removal inside one line of prose. Never applied to fenced code. */
+function stripInline(line: string): string {
+  return line
+    .replace(LINK_RE, (whole, label: string, url: string) => {
+      const text = label.trim();
+      if (url === '') return text;
+      return text === '' ? url : `${text} (${url})`;
+    })
+    .replace(INLINE_CODE_RE, '$1')
+    .replace(BOLD_STAR_RE, '$1')
+    .replace(BOLD_UNDER_RE, '$1$2')
+    .replace(ITALIC_STAR_RE, '$1')
+    .replace(ITALIC_UNDER_RE, '$1$2');
+}
+
+/**
+ * Render agent-authored markdown as the plain text Telegram will display
+ * verbatim. Pure: same input, same output, no clock and no I/O.
+ *
+ * Applied to final agent and mission answers only. Progress lines and the
+ * surface's own copy (`/help`, `/agents`) are already plain by construction.
+ */
+export function toPlainText(text: string): string {
+  if (text === '') return '';
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let inFence = false;
+
+  for (const line of lines) {
+    if (FENCE_RE.test(line)) {
+      // Drop the fence, keep whatever it wrapped.
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+      continue;
+    }
+
+    const cells = tableCells(line);
+    if (cells) {
+      if (isTableSeparatorRow(cells)) continue;
+      out.push(stripInline(cells.join(' — ')));
+      continue;
+    }
+
+    out.push(stripInline(line.replace(HEADING_RE, '$1')));
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+/* ------------------------------------------------------------------ *
  * The progress bubble
  * ------------------------------------------------------------------ */
 
@@ -645,7 +749,9 @@ export class TelegramSurface {
     );
 
     try {
-      const reply = await produce(progress);
+      // Everything an agent or a mission writes passes the plain-text net: we
+      // never send `parse_mode`, so stray markdown would be shown literally.
+      const reply = toPlainText(await produce(progress));
       await progress.settle();
       await this.#finish(chatId, placeholderId, reply);
     } catch (err) {

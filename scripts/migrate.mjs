@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Root `db:migrate`. Core migrates always; the finance plugin only if it is built.
+ * Root `db:migrate`. Core migrates always; each plugin only if it is built.
  * Core with zero plugins installed is a valid, running state.
  */
 import { existsSync } from 'node:fs';
@@ -20,10 +20,12 @@ if (!url) {
 const { createPool, runMigrations } = await import('@buddi/core');
 
 const manifests = [];
-const financeDist = path.join(repoRoot, 'packages', 'tools', 'finance', 'dist');
-if (existsSync(path.join(financeDist, 'index.js'))) {
-  const mod = await import(path.join(financeDist, 'index.js'));
-  const manifest = mod.manifest ?? mod.financeManifest ?? mod.default;
+/** Every plugin that is built. Core with zero plugins installed is a valid state. */
+for (const name of ['finance', 'memory']) {
+  const entry = path.join(repoRoot, 'packages', 'tools', name, 'dist', 'index.js');
+  if (!existsSync(entry)) continue;
+  const mod = await import(entry);
+  const manifest = mod.manifest ?? mod.default;
   if (manifest && typeof manifest === 'object' && 'migrationsDir' in manifest) {
     manifests.push(manifest);
     console.log(`plugin: ${manifest.name}@${manifest.version} (schema ${manifest.schema})`);

@@ -40,7 +40,7 @@ export async function loadBaseline(
   const start = today(ctx.now);
 
   let accountId: string | undefined;
-  let scope = 'all accounts';
+  let scope = 'all cashflow accounts';
   if (opts.account) {
     const account = await findAccount(ctx.db, opts.account);
     if (!account) throw new Error(`unknown account: ${opts.account}`);
@@ -50,6 +50,9 @@ export async function loadBaseline(
 
   // Only the window matters; pulling the whole ledger would grow without bound.
   const from = `${start.slice(0, 7)}-01`;
+  // Non-cashflow accounts are invisible here: a 401k contribution is not
+  // variable spending, and a retirement account that only sees one transaction
+  // a quarter must never sit in the coverage roll call and veto whole months.
   const { rows } = accountId
     ? await ctx.db.query(
         `select t.occurred_on, t.amount, t.description, t.category, a.name as account_name
@@ -67,6 +70,7 @@ export async function loadBaseline(
            left join finance.accounts a on a.id = t.account_id
           where t.occurred_on < $1::date
             and t.occurred_on >= ($1::date - make_interval(months => $2::int))
+            and (a.id is null or a.include_in_cashflow)
           order by t.occurred_on`,
         [from, lookbackMonths],
       );
@@ -87,7 +91,9 @@ export async function loadBaseline(
        left join finance.accounts a on a.id = r.account_id
       where r.active`,
   );
-  const { rows: accountRows } = await ctx.db.query(`select name from finance.accounts`);
+  const { rows: accountRows } = await ctx.db.query(
+    `select name from finance.accounts where include_in_cashflow`,
+  );
 
   const recurringItems: RecurringMatchItem[] = itemRows.map((r) => ({
     name: r.name as string,
@@ -158,14 +164,14 @@ const input = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('Limit to one account. Default: every account.'),
+    .describe('Limit to one account. Default: every spendable account; retirement, investment and HSA accounts are never measured.'),
   baselineOptions: baselineOptionsSchema.optional(),
 });
 
 export const spendingBaseline: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.spending_baseline',
   description:
-    "Measure typical variable spending — everything that is not already a recurring item, not an internal transfer between the owner's own accounts, and not a person-to-person transfer — over the last whole calendar months, and express it as a typical month, a daily burn and a per-category breakdown. The headline `avgMonthlyVariableOut` is by default the MEDIAN of the monthly totals (summed per category), not the mean, so a single freak month cannot set the burn; `meanMonthlyVariableOut` is reported alongside and a large gap between the two is itself the finding. Credit-card and loan payments are excluded as debt servicing (see `excluded.byCategory`) because they settle spending already counted and are modelled by the liabilities and recurring items. Person-to-person rails (Zelle, PayPal, Ria, Lemfi, Moneygram) are reported separately under `p2p` because they can be either spending or money being moved around; never fold them into spending without asking. finance.project_cashflow already applies this daily burn, so use this tool to explain *what* the burn is made of, not to add it on top.",
+    "Measure typical variable spending — everything that is not already a recurring item, not an internal transfer between the owner's own accounts, and not a person-to-person transfer — over the last whole calendar months, and express it as a typical month, a daily burn and a per-category breakdown. The headline `avgMonthlyVariableOut` is by default the MEDIAN of the monthly totals (summed per category), not the mean, so a single freak month cannot set the burn; `meanMonthlyVariableOut` is reported alongside and a large gap between the two is itself the finding. Credit-card and loan payments are excluded as debt servicing (see `excluded.byCategory`) because they settle spending already counted and are modelled by the liabilities and recurring items. Person-to-person rails (Zelle, PayPal, Ria, Lemfi, Moneygram) are reported separately under `p2p` because they can be either spending or money being moved around; never fold them into spending without asking. finance.project_cashflow already applies this daily burn, so use this tool to explain *what* the burn is made of, not to add it on top. Accounts that are not spendable (retirement, investment, HSA) are invisible to this measurement: neither their transactions nor their presence in the coverage roll call count.",
   tier: 'auto',
   input,
   async execute(args, ctx) {

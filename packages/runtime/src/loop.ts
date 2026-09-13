@@ -42,6 +42,15 @@ export interface RunAgentOptions {
    * agent definition.
    */
   systemSuffix?: string;
+  /**
+   * What the agent remembers, rendered as a system-prompt preamble for this run.
+   *
+   * The runtime holds no memory schema: it asks for a block of text by agent id
+   * and prepends it. Whoever wires the run decides where it comes from (the
+   * memory plugin, in this build) — and whether there is any memory at all.
+   * An empty string means "no block", not an empty heading.
+   */
+  memoryPreamble?: (agentId: string) => Promise<string>;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
 }
@@ -159,10 +168,23 @@ function textOf(content: ContentBlock[]): string {
     .trim();
 }
 
-/** The system prompt for one run: the agent's, plus an optional surface hint. */
-export function composeSystem(systemPrompt: string, systemSuffix?: string): string {
+/**
+ * The system prompt for one run: what the agent remembers, then the agent's own
+ * prompt, then an optional surface hint.
+ *
+ * Memory goes first and the persona second on purpose — the persona's rules are
+ * the last word the model reads, so a remembered line can never read as an
+ * override of them.
+ */
+export function composeSystem(
+  systemPrompt: string,
+  systemSuffix?: string,
+  memoryPreamble?: string,
+): string {
   const suffix = (systemSuffix ?? '').trim();
-  return suffix === '' ? systemPrompt : `${systemPrompt}\n\n${suffix}`;
+  const memory = (memoryPreamble ?? '').trim();
+  const body = suffix === '' ? systemPrompt : `${systemPrompt}\n\n${suffix}`;
+  return memory === '' ? body : `${memory}\n\n${body}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -175,7 +197,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // Fail closed: unknown tool names are a configuration defect, not a runtime
   // refusal — and they are caught before a single token is sent anywhere.
   const tools = selectTools(registry, agent);
-  const system = composeSystem(agent.systemPrompt, opts.systemSuffix);
+  const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
+  const system = composeSystem(agent.systemPrompt, opts.systemSuffix, memory);
+
+  // Provenance for every tool call this run makes. The caller's context is not
+  // mutated: it is shared across runs, and a run's identity is its own.
+  const toolCtx: ToolContext = { ...ctx, conversationId, agentId: agent.id };
 
   const history = await loadMessages(pool, conversationId);
   const userBlocks: ContentBlock[] = [{ type: 'text', text: userMessage }];
@@ -233,7 +260,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         conversationId,
       );
 
-      const outcome = await registry.invoke(call.name, call.input, ctx);
+      const outcome = await registry.invoke(call.name, call.input, toolCtx);
       if (outcome.ok) {
         results.push({
           type: 'tool_result',

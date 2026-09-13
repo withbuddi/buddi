@@ -31,20 +31,30 @@ describe('the shipped agents directory', () => {
     expect(catalog.resolve().id).toBe('finance-advisor');
   });
 
-  it('resolves the finance advisor grant to every registered finance tool', () => {
+  it('resolves the finance advisor grant to every registered finance and memory tool', () => {
     const registered = createToolRegistry()
       .list()
       .map((t) => t.name)
-      .filter((n) => n.startsWith('finance.'));
+      // ... plus the one agent tool it names explicitly: it may ask a colleague.
+      .filter((n) => n.startsWith('finance.') || n.startsWith('memory.') || n === 'agent.delegate');
     expect(catalog.resolve('finance-advisor').tools).toEqual(registered);
-    expect(registered.length).toBeGreaterThan(0);
+    expect(registered).toContain('agent.delegate');
+    expect(registered.some((n) => n.startsWith('finance.'))).toBe(true);
+    expect(registered.some((n) => n.startsWith('memory.'))).toBe(true);
   });
 
-  it('ships the concierge with no tools and no default flag', () => {
+  it('ships the concierge with the memory tools only, and no default flag', () => {
+    const registered = createToolRegistry()
+      .list()
+      .map((t) => t.name)
+      .filter((n) => n.startsWith('memory.'));
     const concierge = catalog.resolve('concierge');
-    expect(concierge.tools).toEqual([]);
+    expect(concierge.tools).toEqual(registered);
+    expect(concierge.tools.some((n) => n.startsWith('finance.'))).toBe(false);
     expect(concierge.isDefault).toBe(false);
-    expect(concierge.systemPromptTemplate).toContain('You have no tools in this installation.');
+    expect(concierge.systemPromptTemplate).toContain(
+      `Tools available to you in this installation: ${registered.join(', ')}.`,
+    );
     expect(concierge.file.startsWith(AGENTS_DIR)).toBe(true);
   });
 

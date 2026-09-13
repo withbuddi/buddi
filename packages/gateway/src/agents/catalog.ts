@@ -8,8 +8,15 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadAgentCatalog, ToolRegistry, type AgentCatalog } from '@buddi/core';
+import {
+  loadAgentCatalog,
+  ToolRegistry,
+  type AgentCatalog,
+  type PluginManifest,
+} from '@buddi/core';
 import { manifest as financeManifest } from '@buddi/tool-finance';
+import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
+import { createDelegationManifest } from './delegation.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
 export const REPO_ROOT = path.resolve(
@@ -23,11 +30,38 @@ export const REPO_ROOT = path.resolve(
 /** Agents are files in the repo, auto-discovered (ARCHITECTURE.md, "Drop-in tools and skills"). */
 export const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
 
+/** The slice of `pg.Pool` the memory preamble needs. */
+export interface Queryable {
+  query(sql: string, params?: any[]): Promise<{ rows: any[] }>;
+}
+
 /** The plugins installed in this build. Core with zero plugins is still valid. */
 export function createToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(financeManifest);
+  registry.register(memoryManifest);
+  // Delegation is registered last and takes the registry itself: the nested run
+  // executes against this same registry, and its catalog and provider are bound
+  // by `bindDelegation` once they exist (the catalog is loaded *against* this
+  // registry, so it cannot exist yet).
+  registry.register(createDelegationManifest(registry));
   return registry;
+}
+
+/** Every plugin manifest installed here — what `db:migrate` walks. */
+export function installedManifests(): PluginManifest[] {
+  return [financeManifest, memoryManifest];
+}
+
+/**
+ * The runtime's memory hook, bound to a pool.
+ *
+ * The runtime knows only `(agentId) => Promise<string>`; which plugin answers,
+ * and what a memory even is, stops here. Pass the result as `memoryPreamble` to
+ * `runAgent` and the agent starts every run knowing what it remembers.
+ */
+export function memoryPreambleFor(pool: Queryable): (agentId: string) => Promise<string> {
+  return (agentId) => buildPreamble(pool, agentId);
 }
 
 export interface GatewayCatalogOptions {

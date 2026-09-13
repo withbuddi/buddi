@@ -20,6 +20,15 @@ import type { AgentDefinition } from '../agent.js';
 import type { ProviderRef } from '../provider.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
 import { providerFromEnv } from './provider-from-env.js';
+import {
+  loadSkillsDir,
+  skillAdmits,
+  skillsSection,
+  SkillFileError,
+  SKILLS_DIR,
+  type Skill,
+  type SkillProvenance,
+} from './skills.js';
 
 /** Default turn budget when the agent file does not pin one. */
 export const DEFAULT_MAX_TURNS = 12;
@@ -43,7 +52,10 @@ export class AgentCatalogError extends Error {
       | 'unresolvable-tool'
       | 'multiple-defaults'
       | 'no-default-agent'
-      | 'agent-file',
+      | 'agent-file'
+      | 'skill-file'
+      | 'unknown-skill'
+      | 'duplicate-skill',
     message: string,
   ) {
     super(message);
@@ -65,6 +77,13 @@ export interface AgentSummary {
   isDefault: boolean;
 }
 
+/** A skill as the catalog reports it: enough to trace it, not its whole text. */
+export interface CatalogAgentSkill {
+  name: string;
+  provenance: SkillProvenance;
+  file: string;
+}
+
 export interface CatalogAgent extends AgentSummary {
   /** Where the file came from — quoted in errors, never in a prompt. */
   file: string;
@@ -74,6 +93,8 @@ export interface CatalogAgent extends AgentSummary {
   maxTurns: number;
   language: AgentLanguage;
   provider: ProviderRef;
+  /** Skills composed into the prompt, private first, then shared. */
+  skills: CatalogAgentSkill[];
   /** The persona plus the generated sections; still carries `{{today}}`. */
   systemPromptTemplate: string;
   /** The runnable definition for one turn, with `{{today}}` substituted. */
@@ -93,6 +114,12 @@ export interface LoadAgentCatalogOptions {
   dir: string;
   registry: ToolNameSource;
   env: NodeJS.ProcessEnv;
+  /**
+   * Directory of shared skills. Defaults to `skills/` next to the agents
+   * directory (so `<repo>/agents` pairs with `<repo>/skills`). A missing
+   * directory simply means no shared skills.
+   */
+  skillsDir?: string;
 }
 
 /** `YYYY-MM-DD` in UTC — the same rendering the tools use for dates. */
@@ -158,16 +185,80 @@ export function generatedSection(tools: readonly string[], language: AgentLangua
   return `## Your wiring (generated, authoritative)\n- ${toolLine}\n- ${LANGUAGE_LINE[language]}`;
 }
 
+/**
+ * Which skills this agent loads.
+ *
+ *  - every private skill under `agents/<id>/skills/`, unconditionally;
+ *  - every shared skill whose `agents` filter admits this agent — no filter
+ *    means every agent, which is how a house rule reaches agents whose files
+ *    nobody edited.
+ *
+ * `skills:` in the frontmatter is an explicit request by name; a name that is
+ * not a shared skill, or is one this agent is not admitted to, fails the load
+ * rather than quietly composing a prompt missing its procedure.
+ */
+export function selectSkills(
+  agentId: string,
+  declared: readonly string[],
+  privateSkills: readonly Skill[],
+  sharedSkills: readonly Skill[],
+): Skill[] {
+  const chosen: Skill[] = [...privateSkills];
+  const byName = new Map(privateSkills.map((s) => [s.name, s]));
+
+  for (const skill of sharedSkills) {
+    const shadowed = byName.get(skill.name);
+    if (shadowed !== undefined) {
+      throw new AgentCatalogError(
+        'duplicate-skill',
+        `agent "${agentId}": shared skill "${skill.name}" (${skill.file}) collides with its own ` +
+          `skill (${shadowed.file}); one name, one procedure`,
+      );
+    }
+  }
+
+  for (const name of declared) {
+    const skill = sharedSkills.find((s) => s.name === name);
+    if (skill === undefined) {
+      throw new AgentCatalogError(
+        'unknown-skill',
+        `agent "${agentId}" declares skill "${name}", which is not a shared skill ` +
+          `(shared: ${sharedSkills.map((s) => s.name).join(', ') || 'none'})`,
+      );
+    }
+    if (!skillAdmits(skill, agentId)) {
+      throw new AgentCatalogError(
+        'unknown-skill',
+        `agent "${agentId}" declares skill "${name}", which lists agents ` +
+          `${(skill.agents ?? []).join(', ')} and not this one`,
+      );
+    }
+  }
+
+  for (const skill of sharedSkills) {
+    if (skillAdmits(skill, agentId) || declared.includes(skill.name)) chosen.push(skill);
+  }
+  return chosen;
+}
+
 function buildAgent(
   frontmatter: AgentFrontmatter,
   body: string,
   file: string,
+  sharedSkills: readonly Skill[],
   opts: LoadAgentCatalogOptions,
 ): CatalogAgent {
   const tools = resolveToolNames(frontmatter.tools, opts.registry, frontmatter.id);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
   const provider = providerFromEnv(opts.env, frontmatter.model);
-  const systemPromptTemplate = `${body.trimEnd()}\n\n${generatedSection(tools, language)}`;
+  const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
+  const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
+  const section = skillsSection(skills);
+  const systemPromptTemplate = [
+    body.trimEnd(),
+    ...(section === '' ? [] : [section]),
+    generatedSection(tools, language),
+  ].join('\n\n');
   const maxTurns = frontmatter.maxTurns ?? DEFAULT_MAX_TURNS;
 
   return {
@@ -181,6 +272,11 @@ function buildAgent(
     maxTurns,
     language,
     provider,
+    skills: skills.map(({ name, provenance, file: skillFile }) => ({
+      name,
+      provenance,
+      file: skillFile,
+    })),
     systemPromptTemplate,
     definition(now: Date): AgentDefinition {
       return {
@@ -193,6 +289,16 @@ function buildAgent(
       };
     },
   };
+}
+
+/** Read one skills directory, re-labelling a parse failure as a catalog error. */
+function readSkills(dir: string, scope: 'private' | 'shared'): Skill[] {
+  try {
+    return loadSkillsDir(dir, scope);
+  } catch (err) {
+    if (err instanceof SkillFileError) throw new AgentCatalogError('skill-file', err.message);
+    throw err;
+  }
 }
 
 /** Read `<dir>/<id>/agent.md` for every subdirectory, in sorted id order. */
@@ -209,6 +315,11 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
       `cannot read agents directory ${opts.dir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+
+  const sharedSkills = readSkills(
+    opts.skillsDir ?? path.join(path.dirname(path.resolve(opts.dir)), SKILLS_DIR),
+    'shared',
+  );
 
   const agents = new Map<string, CatalogAgent>();
   const defaults: string[] = [];
@@ -227,7 +338,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
       if (err instanceof AgentFileError) throw new AgentCatalogError('agent-file', err.message);
       throw err;
     }
-    const agent = buildAgent(parsed.frontmatter, parsed.body, file, opts);
+    const agent = buildAgent(parsed.frontmatter, parsed.body, file, sharedSkills, opts);
     if (agents.has(agent.id)) {
       throw new AgentCatalogError('duplicate-agent', `duplicate agent id: ${agent.id}`);
     }

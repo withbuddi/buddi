@@ -30,6 +30,14 @@ function mapRow(r: Record<string, unknown>): Record<string, unknown> {
       r.kind === 'credit_card' && creditLimit !== null && creditLimit > 0
         ? round2((balance / creditLimit) * 100)
         : null,
+    statementDay: (r.statement_day as number | null) ?? null,
+    reportedBalance:
+      r.reported_balance === null || r.reported_balance === undefined
+        ? null
+        : num(r.reported_balance),
+    reportedOn: r.reported_on === null || r.reported_on === undefined
+      ? null
+      : toDateString(r.reported_on),
   };
 }
 
@@ -59,12 +67,27 @@ const setInput = z.object({
     .optional()
     .describe('Name of the account the payment comes out of. Must already exist.'),
   asOf: DATE.optional().describe('Date the balance was observed. Defaults to today.'),
+  statementDay: z
+    .number()
+    .int()
+    .min(1)
+    .max(31)
+    .optional()
+    .describe(
+      'Day of the month the statement closes — the day the issuer snapshots the balance it reports to the bureaus. Not the due day.',
+    ),
+  reportedBalance: z
+    .number()
+    .min(0)
+    .optional()
+    .describe('Balance the issuer last reported at statement close, when it is known.'),
+  reportedOn: DATE.optional().describe('Date that reported balance was snapshotted.'),
 });
 
 export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
   name: 'finance.set_liability',
   description:
-    'Record or update a debt — a credit card, a loan — with what is owed, the minimum payment and the due day. Debts are tracked separately from cash: they are never added to account balances and never change a projection. The monthly payment itself belongs in finance.add_recurring; if it is already a recurring item, do not add it again.',
+    'Record or update a debt — a credit card, a loan — with what is owed, the minimum payment and the due day. Debts are tracked separately from cash: they are never added to account balances and never change a projection. The monthly payment itself belongs in finance.add_recurring; if it is already a recurring item, do not add it again. For a card, statementDay (the closing day, not the due day) is what makes utilization advice possible.',
   tier: 'auto',
   input: setInput,
   async execute(input, ctx) {
@@ -94,10 +117,13 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
            apr = coalesce($7, apr),
            paid_from_account_id = coalesce($8, paid_from_account_id),
            as_of = $9,
+           statement_day = coalesce($10, statement_day),
+           reported_balance = coalesce($11, reported_balance),
+           reported_on = coalesce($12, reported_on),
            active = true
          where id = $1
          returning id, name, kind, balance, credit_limit, minimum_payment, due_day, apr,
-                   paid_from_account_id, as_of, active`,
+                   paid_from_account_id, as_of, active, statement_day, reported_balance, reported_on`,
         [
           current.id,
           input.kind,
@@ -108,6 +134,9 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
           input.apr ?? null,
           paidFromId,
           asOf,
+          input.statementDay ?? null,
+          input.reportedBalance ?? null,
+          input.reportedOn ?? null,
         ],
       );
       const row = updated[0];
@@ -120,8 +149,9 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
 
     const { rows } = await ctx.db.query(
       `insert into finance.liabilities
-         (name, kind, balance, credit_limit, minimum_payment, due_day, apr, paid_from_account_id, as_of, active)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+         (name, kind, balance, credit_limit, minimum_payment, due_day, apr, paid_from_account_id,
+          as_of, statement_day, reported_balance, reported_on, active)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)
        on conflict (name) do update set
          kind = excluded.kind,
          balance = excluded.balance,
@@ -131,9 +161,12 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
          apr = coalesce(excluded.apr, finance.liabilities.apr),
          paid_from_account_id = coalesce(excluded.paid_from_account_id, finance.liabilities.paid_from_account_id),
          as_of = excluded.as_of,
+         statement_day = coalesce(excluded.statement_day, finance.liabilities.statement_day),
+         reported_balance = coalesce(excluded.reported_balance, finance.liabilities.reported_balance),
+         reported_on = coalesce(excluded.reported_on, finance.liabilities.reported_on),
          active = true
        returning id, name, kind, balance, credit_limit, minimum_payment, due_day, apr,
-                 paid_from_account_id, as_of, active`,
+                 paid_from_account_id, as_of, active, statement_day, reported_balance, reported_on`,
       [
         input.name,
         input.kind,
@@ -144,6 +177,9 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
         input.apr ?? null,
         paidFromId,
         asOf,
+        input.statementDay ?? null,
+        input.reportedBalance ?? null,
+        input.reportedOn ?? null,
       ],
     );
     const row = rows[0];
@@ -173,7 +209,8 @@ export const listLiabilities: ToolDefinition<z.infer<typeof listInput>, unknown>
     const prefs = await loadPreferences(ctx.db);
     const { rows } = await ctx.db.query(
       `select l.id, l.name, l.kind, l.balance, l.credit_limit, l.minimum_payment, l.due_day,
-              l.apr, l.paid_from_account_id, l.as_of, l.active, a.name as account_name
+              l.apr, l.paid_from_account_id, l.as_of, l.active, l.statement_day,
+              l.reported_balance, l.reported_on, a.name as account_name
          from finance.liabilities l
          left join finance.accounts a on a.id = l.paid_from_account_id
         where ($1::boolean is false or l.active)
@@ -215,7 +252,7 @@ export const removeLiability: ToolDefinition<z.infer<typeof removeInput>, unknow
       `update finance.liabilities set active = false
         where lower(name) = lower($1) and active
         returning id, name, kind, balance, credit_limit, minimum_payment, due_day, apr,
-                  paid_from_account_id, as_of, active`,
+                  paid_from_account_id, as_of, active, statement_day, reported_balance, reported_on`,
       [input.name],
     );
     if (rows.length === 0) return { removed: 0, message: 'no active liability matched' };

@@ -35,7 +35,7 @@ const input = z.object({
     .string()
     .min(1)
     .optional()
-    .describe('Limit the projection to one account. Default: all accounts summed.'),
+    .describe('Limit the projection to one account. Default: every spendable account summed (retirement, investment and HSA accounts are always left out).'),
   includeBaseline: z
     .boolean()
     .optional()
@@ -73,7 +73,7 @@ function compressDays(days: ProjectionDay[], minBalanceDate: string): Projection
 export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.project_cashflow',
   description:
-    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Add `hypotheticals` to test a purchase before making it. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
+    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Add `hypotheticals` to test a purchase before making it. Accounts that are not spendable (retirement, investment, HSA) are left out of the start balance entirely and listed under `startBalanceExcludes`, along with any recurring item attached to one. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
   tier: 'auto',
   input,
   async execute(args, ctx) {
@@ -83,6 +83,19 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
     let startBalance = 0;
     let accountId: string | undefined;
     let scope: string;
+    // Money that is real but not spendable — a 401k, a brokerage, an HSA —
+    // never enters a projection. Reported back so the answer can say so out
+    // loud instead of silently looking poorer than the balance sheet.
+    const { rows: excludedRows } = await ctx.db.query(
+      `select name, kind, balance from finance.accounts
+        where not include_in_cashflow order by balance desc, name`,
+    );
+    const startBalanceExcludes = excludedRows.map((r) => ({
+      account: r.name as string,
+      kind: r.kind as string,
+      balance: num(r.balance),
+    }));
+
     if (args.account) {
       const account = await findAccount(ctx.db, args.account);
       if (!account) throw new Error(`unknown account: ${args.account}`);
@@ -91,12 +104,16 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
       scope = account.name;
     } else {
       const { rows } = await ctx.db.query(
-        `select coalesce(sum(balance), 0) as total, count(*)::int as n from finance.accounts`,
+        `select coalesce(sum(balance), 0) as total, count(*)::int as n from finance.accounts
+          where include_in_cashflow`,
       );
       startBalance = num(rows[0]?.total);
-      scope = `all accounts (${rows[0]?.n ?? 0})`;
+      scope = `all cashflow accounts (${rows[0]?.n ?? 0})`;
     }
 
+    // An item attached to an excluded account (a 401k contribution booked as a
+    // recurring income) is excluded with it; an item with no account at all is
+    // assumed to hit the cash.
     const { rows: itemRows } = accountId
       ? await ctx.db.query(
           `select kind, name, amount, cadence, anchor_date from finance.recurring_items
@@ -104,8 +121,11 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
           [accountId],
         )
       : await ctx.db.query(
-          `select kind, name, amount, cadence, anchor_date from finance.recurring_items
-            where active order by anchor_date`,
+          `select r.kind, r.name, r.amount, r.cadence, r.anchor_date
+             from finance.recurring_items r
+             left join finance.accounts a on a.id = r.account_id
+            where r.active and (a.id is null or a.include_in_cashflow)
+            order by r.anchor_date`,
         );
 
     const items: RecurringItem[] = itemRows.map((r) => ({
@@ -173,6 +193,12 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
       currency: prefs.currency,
       safetyFloor: prefs.safetyFloor,
       itemCount: items.length,
+      /**
+       * Balances deliberately left out of `startBalance`: retirement,
+       * investment and HSA money. Mention it when it is material, and never as
+       * money that could cover the purchase being tested.
+       */
+      startBalanceExcludes,
       includeBaseline,
       baseline,
       hypotheticals,

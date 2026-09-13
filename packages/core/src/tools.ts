@@ -12,6 +12,21 @@ export interface ToolContext {
   db: Pool;
   ownerId: string;
   now: () => Date;
+  /**
+   * Provenance for tools that record something. Optional so every existing
+   * caller keeps compiling; the runtime loop fills both in for every tool call
+   * it makes, and a tool that needs them must fail closed when they are absent
+   * rather than guess.
+   */
+  conversationId?: string;
+  agentId?: string;
+  /**
+   * How many delegations deep this run is: absent or 0 for a run the owner
+   * started, 1 inside a run another agent delegated. The delegation tool reads
+   * it and refuses at >= 1, so a delegate never delegates again and a cycle
+   * cannot exist. Optional because every other tool ignores it.
+   */
+  delegationDepth?: number;
 }
 
 export interface ToolDefinition<I = unknown, O = unknown> {

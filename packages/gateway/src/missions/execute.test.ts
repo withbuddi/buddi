@@ -3,6 +3,8 @@ import { ToolRegistry, type Mission, type Occurrence, type ToolContext } from '@
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { manifest as financeManifest } from '@buddi/tool-finance';
+import { manifest as memoryManifest } from '@buddi/tool-memory';
+import { createDelegationManifest } from '../agents/delegation.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
 import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError } from './execute.js';
 
@@ -45,6 +47,11 @@ class FakeDb {
       return {
         rows: [{ id: `evt-${this.events.length}`, created_at: new Date(), ...row }],
       };
+    }
+    // The memory preamble reads the plugin's own schema; a mission run in this
+    // fake world simply remembers nothing.
+    if (text.includes('memory.preferences') || text.includes('memory.notes')) {
+      return { rows: [] };
     }
     throw new Error(`FakeDb: unexpected sql: ${text}`);
   }
@@ -91,6 +98,10 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
   const db = new FakeDb();
   const registry = new ToolRegistry();
   registry.register(financeManifest);
+  registry.register(memoryManifest);
+  // The finance advisor's file grants agent.delegate, so the registry a mission
+  // runs against must carry it too. It is unbound here: delegation refuses.
+  registry.register(createDelegationManifest(registry));
   const ctx: ToolContext = {
     db: {} as ToolContext['db'],
     ownerId: 'owner',

@@ -17,6 +17,7 @@ import {
   SURFACE,
   TelegramSurface,
   progressLine,
+  toPlainText,
   toolLabel,
   type RunMission,
 } from './surface.js';
@@ -243,6 +244,61 @@ function withOwner(db: FakeDb, chatId = OWNER): FakeDb {
 
 /* ---------------- tests ---------------- */
 
+describe('toPlainText', () => {
+  it('strips bold markers without touching the date inside', () => {
+    expect(toPlainText('**Status — 2026-09-13**')).toBe('Status — 2026-09-13');
+  });
+
+  it('leaves a plain paragraph exactly as it is', () => {
+    const plain = 'You have 1 240,50 € left after rent, and nothing is due before Friday.';
+    expect(toPlainText(plain)).toBe(plain);
+  });
+
+  it('keeps a lone asterisk in arithmetic and underscores inside words', () => {
+    expect(toPlainText('2 * 3 = 6 and finance.list_accounts ran')).toBe(
+      '2 * 3 = 6 and finance.list_accounts ran',
+    );
+  });
+
+  it('turns a pipe table into em-dash lines and drops the rule row', () => {
+    const table = [
+      '| Account | Balance |',
+      '| --- | ---: |',
+      '| Checking | 1 240,50 € |',
+      '| Savings | 8 000,00 € |',
+    ].join('\n');
+    expect(toPlainText(table)).toBe(
+      ['Account — Balance', 'Checking — 1 240,50 €', 'Savings — 8 000,00 €'].join('\n'),
+    );
+  });
+
+  it('drops code fences and keeps their content verbatim', () => {
+    const fenced = ['Here:', '```sql', 'select * from core.events', '```', 'done'].join('\n');
+    expect(toPlainText(fenced)).toBe(
+      ['Here:', 'select * from core.events', 'done'].join('\n'),
+    );
+  });
+
+  it('removes headings, inline code and italics, and rewrites links', () => {
+    expect(toPlainText('## Next steps')).toBe('Next steps');
+    expect(toPlainText('run `pnpm serve` now')).toBe('run pnpm serve now');
+    expect(toPlainText('this is *important* and __also this__')).toBe(
+      'this is important and also this',
+    );
+    expect(toPlainText('see [the docs](https://example.com/x)')).toBe(
+      'see the docs (https://example.com/x)',
+    );
+  });
+
+  it('collapses three or more blank lines to two', () => {
+    expect(toPlainText('a\n\n\n\n\nb')).toBe('a\n\nb');
+  });
+
+  it('is a no-op on an empty string', () => {
+    expect(toPlainText('')).toBe('');
+  });
+});
+
 describe('splitMessage', () => {
   it('leaves a short message alone', () => {
     expect(splitMessage('hello')).toEqual(['hello']);
@@ -385,6 +441,17 @@ describe('TelegramSurface conversation handling', () => {
     await surface.processUpdates([message(52, OWNER, OWNER, '/new'), message(53, OWNER, OWNER, 'third')]);
     await surface.drain();
     expect(run.mock.calls.at(-1)?.[0].conversationId).toBe('conv-2');
+  });
+
+  it('sends the final answer as plain text, markdown markers removed', async () => {
+    const db = withOwner(new FakeDb());
+    const run = vi.fn(async () => '**Status — 2026-09-13**\n\nYou have 1 240,50 € left.');
+    const { surface, sent } = surfaceWith(db, run as any);
+    await surface.processUpdates([message(65, OWNER, OWNER, 'where do I stand?')]);
+    await surface.drain();
+
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    expect(final?.body.text).toBe('Status — 2026-09-13\n\nYou have 1 240,50 € left.');
   });
 
   it('maps /status onto the advisor status overview', async () => {

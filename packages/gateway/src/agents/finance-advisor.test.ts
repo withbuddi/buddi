@@ -1,5 +1,6 @@
 import { DEFAULT_MODEL } from '@buddi/core';
 import { manifest as financeManifest } from '@buddi/tool-finance';
+import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { describe, expect, it } from 'vitest';
 import {
   createFinanceAdvisor,
@@ -79,12 +80,18 @@ describe('agent definition', () => {
     expect(agent.maxTurns).toBe(12);
     expect(agent.tools).toEqual(FINANCE_TOOLS);
     expect(agent.tools).toContain('finance.project_cashflow');
-    expect(agent.tools.every((t) => t.startsWith('finance.'))).toBe(true);
+    expect(agent.tools).toContain('memory.note');
+    expect(agent.tools).toContain('agent.delegate');
+    expect(
+      agent.tools.every(
+        (t) => t.startsWith('finance.') || t.startsWith('memory.') || t === 'agent.delegate',
+      ),
+    ).toBe(true);
   });
 
-  it('never hardcodes how many finance tools there are', () => {
+  it('never hardcodes how many tools there are', () => {
     expect(FINANCE_TOOLS.length).toBe(
-      financeManifest.tools.filter((t) => t.name.startsWith('finance.')).length,
+      financeManifest.tools.length + memoryManifest.tools.length + 1, // + agent.delegate
     );
   });
 });

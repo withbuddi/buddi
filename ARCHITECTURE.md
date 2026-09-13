@@ -143,7 +143,13 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
 - **Skills** (prompt-level knowledge and procedures — markdown, Claude-Code-style) are
   the low-risk half: agent-authored is allowed, but skills carry provenance like derived
   memory, so a "learned" skill can be traced to its source and deleted. A skill informs
-  reasoning; it never grants a tool or lowers a tier.
+  reasoning; it never grants a tool or lowers a tier — a skill file carrying a `tools` or
+  `tier` key fails the load. Skills live at `agents/<id>/skills/*.md` (private to that
+  agent, always loaded) and `skills/*.md` (shared). A shared skill with an `agents:` list
+  loads only for those agents; **with no `agents:` key it loads for every agent
+  automatically**, which is how a house rule reaches agents whose files nobody edited. An
+  agent may also name shared skills in its `skills:` frontmatter; an unknown name fails
+  the load.
 
 ## Computer access (host computer-use first, CDP demoted)
 

@@ -25,8 +25,10 @@ import {
   AGENTS_DIR,
   createToolRegistry,
   loadGatewayCatalog,
+  memoryPreambleFor,
   REPO_ROOT,
 } from './agents/catalog.js';
+import { bindDelegation } from './agents/delegation.js';
 
 const OWNER_ID = 'owner';
 
@@ -163,9 +165,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const provider = createAnthropicProvider(resolution.provider);
+  /** Delegation needs both halves; until this call, agent.delegate refuses. */
+  bindDelegation(registry, { catalog, provider });
 
   const pool = createPool(databaseUrl);
   const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now };
+  /** Every run starts with what this agent remembers about the owner. */
+  const memoryPreamble = memoryPreambleFor(pool);
 
   try {
     let conversationId = args.resume;
@@ -189,6 +195,7 @@ async function main(): Promise<void> {
         pool,
         conversationId: id,
         userMessage: message,
+        memoryPreamble,
         onToolCall: (name, input) => {
           console.error(dim(`⚙ ${name} ${JSON.stringify(input)}`));
         },
