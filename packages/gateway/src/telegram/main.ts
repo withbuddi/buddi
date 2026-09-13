@@ -23,10 +23,10 @@ import {
 } from '@buddi/core';
 import { runAgent, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
-import { createFinanceAdvisor } from '../agents/finance-advisor.js';
 import { createWiring, loadEnv } from '../bootstrap.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surface.js';
+import type { AgentCatalog } from './types.js';
 
 /**
  * The command menu, shown only to paired owner chats.
@@ -37,12 +37,26 @@ import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surfa
  * takes with messages.
  */
 export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
+  { command: 'agents', description: 'List the agents you can talk to' },
+  { command: 'use', description: 'Switch agent' },
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
   { command: 'new', description: 'Start a fresh conversation' },
   { command: 'id', description: 'Show my Telegram ids' },
   { command: 'help', description: 'What buddi can do' },
 ];
+
+/**
+ * The menu as one chat sees it: `use` names the agent that chat is talking to,
+ * so the active agent is visible without asking. Everything else is identical.
+ */
+export function ownerCommandsFor(activeAgentName?: string): readonly TelegramBotCommand[] {
+  const name = (activeAgentName ?? '').trim();
+  if (name === '') return OWNER_COMMANDS;
+  return OWNER_COMMANDS.map((c) =>
+    c.command === 'use' ? { ...c, description: `Switch agent (active: ${name})` } : c,
+  );
+}
 
 /**
  * Publish the owner menu for every paired chat and clear the default scope.
@@ -52,6 +66,7 @@ export async function applyCommandMenus(
   api: Pick<TelegramApi, 'setMyCommands' | 'deleteMyCommands'>,
   paired: readonly SurfaceIdentity[],
   log: (line: string) => void,
+  activeAgentName?: (chatId: string) => Promise<string | undefined>,
 ): Promise<void> {
   try {
     await api.deleteMyCommands({ type: 'default' });
@@ -61,8 +76,15 @@ export async function applyCommandMenus(
   for (const identity of paired) {
     const chatId = identity.externalChatId;
     if (!chatId) continue;
+    let name: string | undefined;
+    if (activeAgentName) {
+      name = await activeAgentName(chatId).catch((err) => {
+        log(`telegram: active agent for chat ${chatId} unknown: ${errorText(err)}`);
+        return undefined;
+      });
+    }
     try {
-      await api.setMyCommands(OWNER_COMMANDS, { type: 'chat', chat_id: chatId });
+      await api.setMyCommands(ownerCommandsFor(name), { type: 'chat', chat_id: chatId });
       log(`telegram: menu set for chat ${chatId}`);
     } catch (err) {
       log(`telegram: menu for chat ${chatId} failed: ${errorText(err)}`);
@@ -87,6 +109,8 @@ export function numericId(value: string | undefined, label: string): string | un
 export interface TelegramDeps {
   pool: Pool;
   registry: ToolRegistry;
+  /** Every installed agent. One bot, many agents; the chat picks with /use. */
+  catalog: AgentCatalog;
   provider: RuntimeProvider;
   ctx: ToolContext;
   env: NodeJS.ProcessEnv;
@@ -140,18 +164,23 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   const cursor = await getSurfaceCursor(pool, SURFACE);
   const me = await api.getMe();
 
-  // Only paired chats get a menu; strangers see none.
-  await applyCommandMenus(api, paired, log);
+  const setChatMenu = async (chatId: string, agent: { name: string }): Promise<void> => {
+    await api.setMyCommands(ownerCommandsFor(agent.name), { type: 'chat', chat_id: chatId });
+  };
 
   const surface = new TelegramSurface({
     api,
     pool,
-    agentId: createFinanceAdvisor({ env, now: now() }).id,
+    catalog: deps.catalog,
     log,
+    setChatMenu,
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
-    run: async ({ conversationId, text, onToolCall }) => {
+    // The surface decided *which* agent this turn belongs to; resolving the id
+    // again here is what makes the definition current (`{{today}}`, a reloaded
+    // file) without letting the wiring choose a different agent.
+    run: async ({ conversationId, text, agent, onToolCall }) => {
       const result = await runAgent({
-        agent: createFinanceAdvisor({ env, now: now() }),
+        agent: deps.catalog.resolve(agent.id).definition(now()),
         provider: deps.provider,
         registry: deps.registry,
         ctx: deps.ctx,
@@ -167,6 +196,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       return result.text;
     },
   });
+
+  // Only paired chats get a menu; strangers see none. Each chat's menu names
+  // the agent that chat is talking to.
+  await applyCommandMenus(api, paired, log, async (chatId) =>
+    (await surface.activeAgent(chatId)).name,
+  );
+
   surface.offset = cursor === undefined ? undefined : Number(cursor);
 
   const done = surface.start();
@@ -209,6 +245,7 @@ export async function main(): Promise<void> {
     const handle = await startTelegram({
       pool: wiring.pool,
       registry: wiring.registry,
+      catalog: wiring.catalog,
       provider: wiring.provider,
       ctx: wiring.ctx,
       env: process.env,

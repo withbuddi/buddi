@@ -139,6 +139,7 @@ export async function main(): Promise<void> {
     const missionDeps = {
       pool,
       registry: wiring.registry,
+      catalog: wiring.catalog,
       provider: wiring.provider,
       ctx: wiring.ctx,
       env: process.env,

@@ -16,18 +16,33 @@
  *    one conversation.
  */
 import {
+  getActiveAgent,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
+  setActiveAgent,
   setSurfaceCursor,
   type Queryable,
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
 import { MAX_MESSAGE_CHARS, type TelegramApi, type TelegramUpdate } from './api.js';
+import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 
 export const SURFACE = 'telegram';
 
-/** The bubble posted the moment a run starts, so the chat is never silent. */
+/** The bubble posted when the agent that is working is not known by name. */
 export const PLACEHOLDER_TEXT = '⏳ Working on it…';
+
+/** `⏳ Finance Advisor is working…` — the owner sees *who* they are waiting on. */
+export function placeholderText(agentName?: string): string {
+  const name = (agentName ?? '').trim();
+  return name === '' ? PLACEHOLDER_TEXT : `⏳ ${name} is working…`;
+}
+
+/**
+ * `/status` and `/recap` are finance features: they are answered by this agent
+ * whichever one the chat is currently talking to.
+ */
+export const FINANCE_ADVISOR_ID = 'finance-advisor';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -50,9 +65,9 @@ export function toolLabel(name: string): string {
 }
 
 /** `⏳ Working… (checking accounts, projecting cash flow)`, capped in length. */
-export function progressLine(labels: readonly string[]): string {
+export function progressLine(labels: readonly string[], placeholder = PLACEHOLDER_TEXT): string {
   const line = labels.length === 0
-    ? PLACEHOLDER_TEXT
+    ? placeholder
     : `⏳ Working… (${labels.join(', ')})`;
   return line.length <= PROGRESS_MAX_CHARS
     ? line
@@ -64,15 +79,24 @@ export const SURFACE_HINT =
   'Surface: Telegram. Plain text only, no markdown tables, short lines.';
 
 export const HELP = [
-  'buddi — finance advisor on Telegram.',
+  'buddi on Telegram.',
   '',
   'Just write your question. Commands:',
-  '/status — where you stand right now',
-  '/recap — run the weekly recap now',
-  '/new — start a fresh conversation',
+  '/agents — list the agents you can talk to',
+  '/use <id> — switch to an agent',
+  '/whoami — which agent is active here',
+  '/status — where you stand right now (finance advisor)',
+  '/recap — run the weekly recap now (finance advisor)',
+  '/new — start a fresh conversation with the active agent',
   '/id — your numeric user id and this chat id',
   '/help — this message',
 ].join('\n');
+
+/** `/use` with an id the catalog does not know. Never an error to the owner. */
+export const UNKNOWN_AGENT_TEXT = 'Unknown agent. Send /agents to see the list.';
+
+/** `/use` with no argument at all. */
+export const USE_WITHOUT_ID_TEXT = 'Send /use <id>, for example /use finance-advisor. Send /agents to see the list.';
 
 /** The mission `/recap` runs. Named here so the surface asks for one thing. */
 export const RECAP_MISSION_ID = 'friday-recap';
@@ -108,6 +132,12 @@ export interface RunRequest {
   chatId: string;
   text: string;
   /**
+   * The agent this turn belongs to — the chat's active one, except for the
+   * finance-only commands, which name the finance advisor explicitly. The
+   * surface resolves it; the caller never re-decides which agent runs.
+   */
+  agent: CatalogAgent;
+  /**
    * Called by the runtime as each tool call is proposed. The surface uses it to
    * keep the placeholder bubble alive with a human progress line; it is purely
    * presentational and must never affect the run.
@@ -118,12 +148,17 @@ export interface RunRequest {
 export interface TelegramSurfaceOptions {
   api: TelegramApi;
   pool: Queryable;
-  /** Agent the surface routes to; used when creating a chat's conversation. */
-  agentId: string;
+  /** Every agent this installation can talk to; the surface only reads it. */
+  catalog: AgentCatalog;
   /** Submits one turn and returns the reply text. */
   run(req: RunRequest): Promise<string>;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
   runMission?: RunMission;
+  /**
+   * Re-publish this chat's command menu after `/use`, so the menu names the
+   * agent now active. Cosmetic: a failure is logged, never surfaced.
+   */
+  setChatMenu?: (chatId: string, agent: CatalogAgent) => Promise<void>;
   log?: (line: string) => void;
   /** Typing indicator cadence; Telegram's own lasts ~5s. */
   typingIntervalMs?: number;
@@ -149,7 +184,7 @@ export class ProgressBubble {
   readonly #labels: string[] = [];
   #chain: Promise<void> = Promise.resolve();
   #lastEditAt = 0;
-  #lastText = PLACEHOLDER_TEXT;
+  #lastText: string;
 
   constructor(
     private readonly api: TelegramApi,
@@ -158,7 +193,10 @@ export class ProgressBubble {
     private readonly log: (line: string) => void,
     private readonly intervalMs: number,
     private readonly now: () => number,
-  ) {}
+    placeholder: string = PLACEHOLDER_TEXT,
+  ) {
+    this.#lastText = placeholder;
+  }
 
   /** Synchronous: the runtime's callback must never wait on Telegram. */
   noteToolCall(name: string): void {
@@ -191,14 +229,21 @@ export class ProgressBubble {
  * Conversation mapping (core.surface_conversations)
  * ------------------------------------------------------------------ */
 
+/*
+ * A conversation belongs to a (chat, agent) pair, not to a chat: switching with
+ * `/use` resumes that agent's own thread, and `/new` resets only the agent the
+ * chat is talking to right now. Two agents never share a history.
+ */
+
 export async function getConversationForChat(
   pool: Queryable,
   chatId: string,
+  agentId: string,
 ): Promise<string | undefined> {
   const { rows } = await pool.query(
     `select conversation_id from core.surface_conversations
-      where surface = $1 and external_chat_id = $2`,
-    [SURFACE, chatId],
+      where surface = $1 and external_chat_id = $2 and agent_id = $3`,
+    [SURFACE, chatId, agentId],
   );
   return rows[0]?.conversation_id ? String(rows[0].conversation_id) : undefined;
 }
@@ -206,39 +251,52 @@ export async function getConversationForChat(
 export async function setConversationForChat(
   pool: Queryable,
   chatId: string,
+  agentId: string,
   conversationId: string,
 ): Promise<void> {
   await pool.query(
-    `insert into core.surface_conversations (surface, external_chat_id, conversation_id)
-     values ($1, $2, $3)
-     on conflict (surface, external_chat_id) do update
+    `insert into core.surface_conversations (surface, external_chat_id, agent_id, conversation_id)
+     values ($1, $2, $3, $4)
+     on conflict (surface, external_chat_id, agent_id) do update
        set conversation_id = excluded.conversation_id, created_at = now()`,
-    [SURFACE, chatId, conversationId],
+    [SURFACE, chatId, agentId, conversationId],
   );
 }
 
-/** The chat's conversation, created on first contact. */
+/** The chat's conversation with this agent, created on first contact. */
 export async function ensureConversationForChat(
   pool: Queryable,
   chatId: string,
   agentId: string,
 ): Promise<string> {
-  const existing = await getConversationForChat(pool, chatId);
+  const existing = await getConversationForChat(pool, chatId, agentId);
   if (existing) return existing;
   const id = await createConversation(pool, agentId);
-  await setConversationForChat(pool, chatId, id);
+  await setConversationForChat(pool, chatId, agentId, id);
   return id;
 }
 
-/** Drop the mapping so the next message starts a fresh conversation. */
+/** Drop the mapping so the next message to this agent starts fresh. */
 export async function startNewConversationForChat(
   pool: Queryable,
   chatId: string,
   agentId: string,
 ): Promise<string> {
   const id = await createConversation(pool, agentId);
-  await setConversationForChat(pool, chatId, id);
+  await setConversationForChat(pool, chatId, agentId, id);
   return id;
+}
+
+/** `• finance-advisor — Finance Advisor (active)`, one line per agent. */
+export function agentsText(
+  agents: readonly { id: string; name: string }[],
+  activeId: string,
+): string {
+  if (agents.length === 0) return 'No agents are installed.';
+  const lines = agents.map(
+    (a) => `• ${a.id} — ${a.name}${a.id === activeId ? ' (active)' : ''}`,
+  );
+  return ['Agents:', ...lines, '', 'Send /use <id> to switch.'].join('\n');
 }
 
 async function appendSurfaceEvent(
@@ -405,6 +463,28 @@ export class TelegramSurface {
     return next;
   }
 
+  /**
+   * The agent this chat is talking to. A stored id the catalog no longer knows
+   * (an agent file was removed) degrades to the default rather than failing the
+   * message — the owner's question still gets answered.
+   */
+  async activeAgent(chatId: string): Promise<CatalogAgent> {
+    const stored = await getActiveAgent(this.#opts.pool, SURFACE, chatId);
+    if (stored === null) return this.#opts.catalog.defaultAgent();
+    try {
+      return this.#opts.catalog.resolve(stored);
+    } catch (err) {
+      if (!isUnknownAgentError(err)) throw err;
+      this.#log(`telegram: chat ${chatId} pinned unknown agent ${stored}, using the default`);
+      return this.#opts.catalog.defaultAgent();
+    }
+  }
+
+  /** The finance advisor, for the finance-only commands; default if absent. */
+  #financeAgent(): CatalogAgent {
+    return this.#opts.catalog.get(FINANCE_ADVISOR_ID) ?? this.#opts.catalog.defaultAgent();
+  }
+
   /** One accepted owner message: commands first, then a run. */
   async handleText(chatId: string, userId: string, text: string): Promise<void> {
     const command = text.startsWith('/') ? (text.split(/\s+/)[0] as string).toLowerCase() : '';
@@ -420,9 +500,33 @@ export class TelegramSurface {
       await this.#opts.api.sendMessage(chatId, HELP);
       return;
     }
+    if (command === '/agents') {
+      const active = await this.activeAgent(chatId);
+      await this.#opts.api.sendMessage(
+        chatId,
+        agentsText(this.#opts.catalog.list(), active.id),
+      );
+      return;
+    }
+    if (command === '/use') {
+      await this.handleUse(chatId, text);
+      return;
+    }
+    if (command === '/whoami') {
+      const active = await this.activeAgent(chatId);
+      await this.#opts.api.sendMessage(
+        chatId,
+        `You are talking to ${active.name} (${active.id}).`,
+      );
+      return;
+    }
     if (command === '/new') {
-      const id = await startNewConversationForChat(this.#opts.pool, chatId, this.#opts.agentId);
-      await this.#opts.api.sendMessage(chatId, `New conversation started (${id}).`);
+      const active = await this.activeAgent(chatId);
+      await startNewConversationForChat(this.#opts.pool, chatId, active.id);
+      await this.#opts.api.sendMessage(
+        chatId,
+        `New conversation started with ${active.name}.`,
+      );
       return;
     }
     if (command === '/recap') {
@@ -430,21 +534,61 @@ export class TelegramSurface {
       return;
     }
 
-    const prompt = command === '/status' ? 'Status' : text;
-    const conversationId = await ensureConversationForChat(
-      this.#opts.pool,
-      chatId,
-      this.#opts.agentId,
-    );
+    // `/status` is a finance feature: it is answered by the finance advisor
+    // whoever the chat is talking to, in that advisor's own conversation, and
+    // the active agent is left exactly as it was.
+    const active = await this.activeAgent(chatId);
+    const status = command === '/status';
+    const agent = status ? this.#financeAgent() : active;
+    const prompt = status ? 'Status' : text;
+    const note =
+      status && agent.id !== active.id
+        ? `(${agent.name} answered this one; you are still talking to ${active.name}.)`
+        : undefined;
 
-    await this.#withBubble(chatId, (progress) =>
-      this.#opts.run({
-        conversationId,
-        chatId,
-        text: prompt,
-        onToolCall: (name) => progress.noteToolCall(name),
-      }),
+    const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
+
+    await this.#withBubble(
+      chatId,
+      async (progress) => {
+        const reply = await this.#opts.run({
+          conversationId,
+          chatId,
+          agent,
+          text: prompt,
+          onToolCall: (name) => progress.noteToolCall(name),
+        });
+        return note ? `${note}\n\n${reply}` : reply;
+      },
+      agent.name,
     );
+  }
+
+  /** `/use <id>` — switch this chat to another agent, or explain why not. */
+  async handleUse(chatId: string, text: string): Promise<void> {
+    const requested = text.split(/\s+/).slice(1).join(' ').trim();
+    if (requested === '') {
+      await this.#opts.api.sendMessage(chatId, USE_WITHOUT_ID_TEXT);
+      return;
+    }
+
+    let agent: CatalogAgent;
+    try {
+      agent = this.#opts.catalog.resolve(requested);
+    } catch (err) {
+      if (!isUnknownAgentError(err)) throw err;
+      await this.#opts.api.sendMessage(chatId, UNKNOWN_AGENT_TEXT);
+      return;
+    }
+
+    await setActiveAgent(this.#opts.pool, SURFACE, chatId, agent.id);
+    // The menu names the active agent, so it is re-published for this chat.
+    if (this.#opts.setChatMenu) {
+      await this.#opts.setChatMenu(chatId, agent).catch((err) => {
+        this.#log(`telegram: menu refresh for chat ${chatId} failed: ${message(err)}`);
+      });
+    }
+    await this.#opts.api.sendMessage(chatId, `You are now talking to ${agent.name}.`);
   }
 
   /**
@@ -457,12 +601,16 @@ export class TelegramSurface {
       await this.#opts.api.sendMessage(chatId, RECAP_UNAVAILABLE_TEXT);
       return;
     }
-    await this.#withBubble(chatId, async (progress) => {
-      const outcome = await runMission(RECAP_MISSION_ID, chatId, (name) =>
-        progress.noteToolCall(name),
-      );
-      return outcome.ok ? outcome.text : RECAP_NOT_REGISTERED_TEXT;
-    });
+    await this.#withBubble(
+      chatId,
+      async (progress) => {
+        const outcome = await runMission(RECAP_MISSION_ID, chatId, (name) =>
+          progress.noteToolCall(name),
+        );
+        return outcome.ok ? outcome.text : RECAP_NOT_REGISTERED_TEXT;
+      },
+      this.#financeAgent().name,
+    );
   }
 
   /**
@@ -473,12 +621,14 @@ export class TelegramSurface {
   async #withBubble(
     chatId: string,
     produce: (progress: ProgressBubble) => Promise<string>,
+    agentName?: string,
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
+    const placeholder = placeholderText(agentName);
     // An explicit bubble, posted before the provider is called: the owner sees
     // that the question landed, and the same bubble becomes the answer.
     const placeholderId = await this.#opts.api
-      .sendMessage(chatId, PLACEHOLDER_TEXT)
+      .sendMessage(chatId, placeholder)
       .catch((err) => {
         this.#log(`telegram: placeholder failed: ${message(err)}`);
         return undefined;
@@ -491,6 +641,7 @@ export class TelegramSurface {
       this.#log,
       this.#opts.progressIntervalMs ?? PROGRESS_EDIT_INTERVAL_MS,
       this.#opts.now ?? (() => Date.now()),
+      placeholder,
     );
 
     try {

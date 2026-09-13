@@ -1,13 +1,10 @@
+import { DEFAULT_MODEL } from '@buddi/core';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { describe, expect, it } from 'vitest';
 import {
-  BASELINE_TOOL,
-  buildSystemPromptTemplate,
   createFinanceAdvisor,
-  DEFAULT_MODEL,
   FINANCE_TOOLS,
   injectToday,
-  LIABILITY_TOOLS,
   providerFromEnv,
   SYSTEM_PROMPT_TEMPLATE,
 } from './finance-advisor.js';
@@ -41,6 +38,11 @@ describe('providerFromEnv', () => {
   it('honours BUDDI_MODEL', () => {
     const ref = providerFromEnv({ ANTHROPIC_API_KEY: 'k', BUDDI_MODEL: 'claude-opus-4-1' });
     expect(ref.model).toBe('claude-opus-4-1');
+  });
+
+  it('lets an agent file pin a model over BUDDI_MODEL', () => {
+    const ref = providerFromEnv({ BUDDI_MODEL: 'claude-opus-4-1' }, 'claude-haiku-4-5');
+    expect(ref.model).toBe('claude-haiku-4-5');
   });
 });
 
@@ -79,6 +81,12 @@ describe('agent definition', () => {
     expect(agent.tools).toContain('finance.project_cashflow');
     expect(agent.tools.every((t) => t.startsWith('finance.'))).toBe(true);
   });
+
+  it('never hardcodes how many finance tools there are', () => {
+    expect(FINANCE_TOOLS.length).toBe(
+      financeManifest.tools.filter((t) => t.name.startsWith('finance.')).length,
+    );
+  });
 });
 
 describe('system prompt content', () => {
@@ -98,9 +106,6 @@ describe('system prompt content', () => {
   it('describes the Status overview', () => {
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('the total cash across accounts');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('next 14 days');
-  });
-
-  it('lists every cash account individually in a status', () => {
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('every cash account individually');
   });
 
@@ -112,76 +117,45 @@ describe('system prompt content', () => {
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('no backticks or code fences');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('never a pipe table');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('CAPITALS or a plain word followed by a colon');
-    expect(SYSTEM_PROMPT_TEMPLATE).toContain('- "');
   });
 
   it('forbids naming internal tools to the owner', () => {
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('Never name your tools');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('The owner never hears an internal tool name');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('want me to set a safety floor?');
-    // the old phrasing handed the owner a tool name for the floor
     expect(SYSTEM_PROMPT_TEMPLATE).not.toContain('offer to set one with finance.set_preferences');
   });
 
-  it('keeps the plain-text and tool-name rules whatever the manifest ships', () => {
-    for (const prompt of [
-      buildSystemPromptTemplate(['finance.project_cashflow']),
-      buildSystemPromptTemplate([...FINANCE_TOOLS, BASELINE_TOOL, ...LIABILITY_TOOLS]),
+  it('keeps the spending-baseline guidance the manifest ships', () => {
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('finance.spending_baseline');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('includes typical variable spending');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('includeBaseline:false');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain("includeP2P:'net'");
+  });
+
+  it('keeps the liability rules, including the itemised status', () => {
+    for (const name of [
+      'finance.set_liability',
+      'finance.list_liabilities',
+      'finance.remove_liability',
+      'finance.payoff_estimate',
     ]) {
-      expect(prompt).toContain('NO markdown of any kind');
-      expect(prompt).toContain('Never name your tools');
+      expect(SYSTEM_PROMPT_TEMPLATE).toContain(name);
+      expect(FINANCE_TOOLS).toContain(name);
     }
-  });
-});
-
-describe('optional tool families', () => {
-  const withAll = buildSystemPromptTemplate([
-    ...FINANCE_TOOLS,
-    BASELINE_TOOL,
-    ...LIABILITY_TOOLS,
-  ]);
-
-  it('only mentions the spending baseline when the manifest ships it', () => {
-    expect(withAll).toContain(BASELINE_TOOL);
-    expect(withAll).toContain('includes typical variable spending');
-    expect(withAll).toContain('includeBaseline:false');
-    expect(withAll).toContain("includeP2P:'net'");
-    expect(buildSystemPromptTemplate(['finance.project_cashflow'])).not.toContain(BASELINE_TOOL);
-  });
-
-  it('only mentions liabilities when the manifest ships them', () => {
-    for (const name of LIABILITY_TOOLS) expect(withAll).toContain(name);
-    expect(withAll).toContain('Never add a liability balance to a cash total');
-    expect(withAll).toContain('net worth');
-    const bare = buildSystemPromptTemplate(['finance.project_cashflow']);
-    for (const name of LIABILITY_TOOLS) expect(bare).not.toContain(name);
-    expect(bare).not.toContain('net worth');
-  });
-
-  it('requires every liability listed individually in a status', () => {
-    expect(withAll).toContain('list EVERY liability individually');
-    expect(withAll).toContain(
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('Never add a liability balance to a cash total');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('list EVERY liability individually');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain(
       'its name, its balance, its APR, its minimum payment and the day of the month it is due',
     );
-    expect(withAll).toContain('Never collapse several debts into a single figure');
-    expect(withAll).toContain('total debt and the net worth');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('Never collapse several debts into a single figure');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('total debt and the net worth');
   });
 
-  it('keeps the language rule last whatever the manifest ships', () => {
-    for (const prompt of [withAll, buildSystemPromptTemplate(['finance.project_cashflow'])]) {
-      expect(prompt).toContain('Never switch language on your own.');
-      expect(prompt).toContain('{{today}}');
-    }
-  });
-
-  it('never hardcodes how many finance tools there are', () => {
-    const agent = createFinanceAdvisor({
-      env: { CLAUDE_CODE_OAUTH_TOKEN: 't' },
-      now: new Date('2026-09-13T00:00:00Z'),
-    });
-    expect(agent.tools).toEqual(FINANCE_TOOLS);
-    expect(agent.tools.length).toBe(
-      financeManifest.tools.filter((t) => t.name.startsWith('finance.')).length,
+  it('ends with the generated wiring section listing the resolved tools', () => {
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('## Your wiring (generated, authoritative)');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain(
+      `Tools available to you in this installation: ${FINANCE_TOOLS.join(', ')}.`,
     );
   });
 });

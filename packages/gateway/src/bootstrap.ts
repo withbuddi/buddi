@@ -1,32 +1,26 @@
 /**
  * Shared process wiring for the gateway's long-running entry points.
  *
- * `buddi serve`, `buddi-telegram` and `buddi missions` all need the same three
- * things — a pool, a tool registry and a resolved provider — built the same way
- * and exactly once. Resolution fails closed with a typed problem: a process that
- * cannot reach a credential never starts and never guesses one.
+ * `buddi serve`, `buddi-telegram` and `buddi missions` all need the same four
+ * things — a pool, a tool registry, the agent catalog and a resolved provider —
+ * built the same way and exactly once. Resolution fails closed with a typed
+ * problem: a process that cannot reach a credential never starts and never
+ * guesses one.
  */
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   createPool,
   resolveProvider,
-  ToolRegistry,
+  type AgentCatalog,
   type ToolContext,
+  type ToolRegistry,
 } from '@buddi/core';
 import { createAnthropicProvider, type RuntimeProvider } from '@buddi/runtime';
-import { manifest as financeManifest } from '@buddi/tool-finance';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
-import { createFinanceAdvisor } from './agents/finance-advisor.js';
+import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
 
-/** Repo root relative to this module — resolved from the module URL, never cwd. */
-export const REPO_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-);
+export { REPO_ROOT };
 
 export const OWNER_ID = 'owner';
 
@@ -38,6 +32,8 @@ export function loadEnv(): void {
 export interface Wiring {
   pool: Pool;
   registry: ToolRegistry;
+  /** Every agent installed as a file under `agents/`. */
+  catalog: AgentCatalog;
   provider: RuntimeProvider;
   /** What `resolveProvider` settled on — printed in startup logs. */
   model: string;
@@ -55,14 +51,11 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     throw new Error('DATABASE_URL is not set (cp .env.example .env, then pnpm db:up)');
   }
 
-  const registry = new ToolRegistry();
-  registry.register(financeManifest);
+  const registry = createToolRegistry();
+  const catalog = loadGatewayCatalog({ env, registry });
 
   const now = (): Date => new Date();
-  const resolution = resolveProvider(
-    createFinanceAdvisor({ env, now: now() }).provider,
-    env,
-  );
+  const resolution = resolveProvider(catalog.defaultAgent().provider, env);
   if (!resolution.ok) {
     throw new Error(
       `provider not usable [${resolution.problem.code}]: ${resolution.problem.message}` +
@@ -74,6 +67,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   return {
     pool,
     registry,
+    catalog,
     provider: createAnthropicProvider(resolution.provider),
     model: resolution.provider.model,
     credentialKind: resolution.provider.credentialKind,

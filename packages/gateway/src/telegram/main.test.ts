@@ -8,7 +8,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Queryable, SurfaceIdentity } from '@buddi/core';
 import type { TelegramApi } from './api.js';
-import { OWNER_COMMANDS, applyCommandMenus, startTelegram } from './main.js';
+import { OWNER_COMMANDS, applyCommandMenus, ownerCommandsFor, startTelegram } from './main.js';
+import type { AgentCatalog, CatalogAgent } from './types.js';
 
 /* ---------------- fakes ---------------- */
 
@@ -67,6 +68,54 @@ function identity(userId: string, chatId: string | null): SurfaceIdentity {
   };
 }
 
+const PROVIDER = {
+  kind: 'anthropic' as const,
+  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  model: 'claude-sonnet-5',
+};
+
+function catalogAgent(id: string, name: string): CatalogAgent {
+  return {
+    id,
+    name,
+    description: `${name}, for testing`,
+    isDefault: id === 'finance-advisor',
+    file: `${id}/agent.md`,
+    model: 'claude-sonnet-5',
+    tools: [],
+    maxTurns: 4,
+    language: 'mirror',
+    provider: PROVIDER,
+    systemPromptTemplate: `${name}. Today is {{today}}.`,
+    definition: () => ({
+      id,
+      name,
+      systemPrompt: name,
+      tools: [],
+      provider: PROVIDER,
+      maxTurns: 4,
+    }),
+  };
+}
+
+function fakeCatalog(): AgentCatalog {
+  const agents = [
+    catalogAgent('finance-advisor', 'Finance Advisor'),
+    catalogAgent('concierge', 'Concierge'),
+  ];
+  return {
+    get: (id) => agents.find((a) => a.id === id),
+    list: () =>
+      agents.map(({ id, name, description, isDefault }) => ({ id, name, description, isDefault })),
+    defaultAgent: () => agents[0] as CatalogAgent,
+    resolve: (id) => {
+      const found = id === undefined ? agents[0] : agents.find((a) => a.id === id);
+      if (!found) throw new Error(`unknown agent ${id}`);
+      return found;
+    },
+  };
+}
+
 function fakeMenuApi(fail?: 'default' | 'chat') {
   const calls: { method: string; commands?: readonly unknown[]; scope?: any }[] = [];
   const api = {
@@ -101,6 +150,8 @@ describe('applyCommandMenus', () => {
     ]);
     expect(calls[1]?.commands).toBe(OWNER_COMMANDS);
     expect(OWNER_COMMANDS.map((c) => c.command)).toEqual([
+      'agents',
+      'use',
       'status',
       'recap',
       'new',
@@ -155,6 +206,7 @@ describe('startTelegram', () => {
     const handle = await startTelegram({
       pool: db as any,
       registry: {} as any,
+      catalog: fakeCatalog(),
       provider: {} as any,
       ctx: {} as any,
       env: { TELEGRAM_OWNER_USER_ID: '4242', TELEGRAM_OWNER_CHAT_ID: '9001' },
@@ -165,11 +217,42 @@ describe('startTelegram', () => {
     await handle.stop();
 
     expect(menu.api.deleteMyCommands).toHaveBeenCalledWith({ type: 'default' });
-    expect(menu.api.setMyCommands).toHaveBeenCalledWith(OWNER_COMMANDS, {
+    // The menu a chat sees names the agent that chat is talking to.
+    expect(menu.api.setMyCommands).toHaveBeenCalledWith(ownerCommandsFor('Finance Advisor'), {
       type: 'chat',
       chat_id: '9001',
     });
     expect(lines).toContain('telegram: menu set for chat 9001');
     expect(handle.paired.map((p) => p.externalChatId)).toEqual(['9001']);
+  });
+});
+
+describe('ownerCommandsFor', () => {
+  it('names the active agent in the /use description', () => {
+    const commands = ownerCommandsFor('Concierge');
+    expect(commands.find((c) => c.command === 'use')?.description).toBe(
+      'Switch agent (active: Concierge)',
+    );
+    // Everything else is the shared menu, unchanged.
+    expect(commands.map((c) => c.command)).toEqual(OWNER_COMMANDS.map((c) => c.command));
+    expect(commands.filter((c) => c.command !== 'use')).toEqual(
+      OWNER_COMMANDS.filter((c) => c.command !== 'use'),
+    );
+  });
+
+  it('falls back to the plain menu when no agent is named', () => {
+    expect(ownerCommandsFor()).toBe(OWNER_COMMANDS);
+    expect(ownerCommandsFor('  ')).toBe(OWNER_COMMANDS);
+  });
+
+  it('publishes a per-chat menu naming that chat active agent', async () => {
+    const { api, calls } = fakeMenuApi();
+    await applyCommandMenus(
+      api as unknown as TelegramApi,
+      [identity('4242', '4242')],
+      () => {},
+      async () => 'Concierge',
+    );
+    expect(calls[1]?.commands).toEqual(ownerCommandsFor('Concierge'));
   });
 });

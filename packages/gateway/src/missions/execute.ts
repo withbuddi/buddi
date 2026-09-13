@@ -6,18 +6,29 @@
  *
  *   fresh conversation -> runAgent(mission.prompt) -> notifyOwner(text)
  *
- * Two rules matter here. The agent id is matched against the agents this
- * gateway actually ships — an unknown id fails closed, it is never coerced into
- * the only agent that exists. And delivery has no fallback destination: if no
- * owner chat is paired, a scheduled run is a *failure* (the occurrence is
+ * Two rules matter here. The agent id is resolved through the agent catalog —
+ * the files under `agents/` — and an unknown id fails closed; it is never
+ * coerced into whichever agent happens to be the default. And delivery has no
+ * fallback destination: if no owner chat is paired, a scheduled run is a *failure* (the occurrence is
  * marked failed by the runner and no retry is invented in v1), while an
  * explicitly inline run reports the skip and still hands back the text.
  */
-import { appendEvent, type Mission, type Occurrence, type ToolContext, type ToolRegistry } from '@buddi/core';
+import {
+  appendEvent,
+  UnknownAgentError,
+  type AgentCatalog,
+  type Mission,
+  type Occurrence,
+  type ToolContext,
+  type ToolRegistry,
+} from '@buddi/core';
 import { createConversation, runAgent, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
-import { createFinanceAdvisor } from '../agents/finance-advisor.js';
+import { gatewayCatalog } from '../agents/catalog.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
+
+/** Re-exported so callers keep catching the error they always caught. */
+export { UnknownAgentError };
 
 /**
  * Presentation contract for an unattended run. Presentation only: it changes no
@@ -31,20 +42,6 @@ export const SCHEDULED_RUN_SUFFIX = [
   'Plain text only: no markdown, no tables, no bullets built from pipes. Short lines.',
 ].join(' ');
 
-/** The agents this gateway can schedule, by id. Unknown ids fail closed. */
-export const SCHEDULABLE_AGENTS = ['finance-advisor'] as const;
-
-export class UnknownAgentError extends Error {
-  override readonly name = 'UnknownAgentError';
-  readonly code = 'unknown-agent';
-  constructor(agentId: string) {
-    super(
-      `mission agent "${agentId}" is not registered in this gateway ` +
-        `(known: ${SCHEDULABLE_AGENTS.join(', ')})`,
-    );
-  }
-}
-
 /** Sends the recap somewhere and returns where it went. */
 export type Deliver = (text: string) => Promise<string>;
 
@@ -54,6 +51,8 @@ export interface MissionExecutorDeps {
   provider: RuntimeProvider;
   ctx: ToolContext;
   env: NodeJS.ProcessEnv;
+  /** Defaults to the catalog loaded from `agents/` for this environment. */
+  catalog?: AgentCatalog;
   now: () => Date;
   /** Defaults to `notifyOwner` over Telegram. Injected in tests. */
   deliver: Deliver;
@@ -84,12 +83,12 @@ export function createMissionExecutor(
   const log = deps.log ?? ((line: string) => console.error(line));
   const requireDelivery = deps.requireDelivery !== false;
 
-  return async function execute(occurrence, mission): Promise<MissionRunResult> {
-    if (!(SCHEDULABLE_AGENTS as readonly string[]).includes(mission.agentId)) {
-      throw new UnknownAgentError(mission.agentId);
-    }
+  const catalog = deps.catalog ?? gatewayCatalog(deps.env);
 
-    const agent = createFinanceAdvisor({ env: deps.env, now: deps.now() });
+  return async function execute(occurrence, mission): Promise<MissionRunResult> {
+    // Fails closed with UnknownAgentError: a mission naming an agent this
+    // install does not carry is a configuration problem, not a fallback.
+    const agent = catalog.resolve(mission.agentId).definition(deps.now());
     const conversationId = await createConversation(deps.pool, mission.agentId);
     log(
       `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,
