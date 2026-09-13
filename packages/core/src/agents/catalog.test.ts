@@ -8,6 +8,7 @@ import type { PluginManifest } from '../tools.js';
 import {
   AgentCatalogError,
   DEFAULT_MAX_TURNS,
+  selectSkills,
   generatedSection,
   injectToday,
   loadAgentCatalog,
@@ -17,6 +18,7 @@ import {
 } from './catalog.js';
 import { AgentFileError, parseAgentFile, parseYamlSubset, splitFrontmatter } from './frontmatter.js';
 import { DEFAULT_MODEL } from './provider-from-env.js';
+import { parseSkillFile } from './skills.js';
 
 /** A stand-in plugin: core may not import a real one (dependency direction). */
 function fakeManifest(names: string[], plugin = 'finance'): PluginManifest {
@@ -49,13 +51,39 @@ function agentFile(frontmatter: string, body = 'You are a test agent. Today is {
   return `---\n${frontmatter}\n---\n\n${body}\n`;
 }
 
-function catalogDir(files: Record<string, string>): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'buddi-agents-'));
+/**
+ * Lay out `<root>/agents/<id>/agent.md`, optional `<root>/agents/<id>/skills/`
+ * and optional `<root>/skills/`, and return the agents directory — the shared
+ * skills directory is found next to it, exactly as it is in the repo.
+ */
+function catalogDir(
+  files: Record<string, string>,
+  extra: { shared?: Record<string, string>; skills?: Record<string, Record<string, string>> } = {},
+): string {
+  const root = mkdtempSync(path.join(tmpdir(), 'buddi-agents-'));
+  const dir = path.join(root, 'agents');
+  mkdirSync(dir, { recursive: true });
   for (const [id, content] of Object.entries(files)) {
     mkdirSync(path.join(dir, id), { recursive: true });
     writeFileSync(path.join(dir, id, 'agent.md'), content);
   }
+  for (const [id, skills] of Object.entries(extra.skills ?? {})) {
+    mkdirSync(path.join(dir, id, 'skills'), { recursive: true });
+    for (const [name, content] of Object.entries(skills)) {
+      writeFileSync(path.join(dir, id, 'skills', `${name}.md`), content);
+    }
+  }
+  if (extra.shared !== undefined) {
+    mkdirSync(path.join(root, 'skills'), { recursive: true });
+    for (const [name, content] of Object.entries(extra.shared)) {
+      writeFileSync(path.join(root, 'skills', `${name}.md`), content);
+    }
+  }
   return dir;
+}
+
+function skillFile(frontmatter: string, body = 'Do the thing carefully.'): string {
+  return `---\n${frontmatter}\n---\n\n${body}\n`;
 }
 
 const FINANCE = agentFile(
@@ -312,5 +340,142 @@ describe('generatedSection', () => {
     expect(generatedSection([], 'mirror')).toContain('Never switch language on your own.');
     expect(generatedSection([], 'en')).toContain('Always reply in English');
     expect(generatedSection([], 'fr')).toContain('Réponds toujours en français');
+  });
+});
+
+describe('skills in the catalog', () => {
+  const load = (
+    files: Record<string, string>,
+    extra: Parameters<typeof catalogDir>[1] = {},
+  ) => loadAgentCatalog({ dir: catalogDir(files, extra), registry: registryOf(), env: {} });
+
+  const VERDICTS = skillFile(
+    ['name: verdicts', 'description: What a verdict states.', 'provenance: owner'].join('\n'),
+    'Always quote minBalance and its date.',
+  );
+  const HOUSE = skillFile(
+    ['name: plain-text', 'description: No markdown on plain surfaces.', 'provenance: imported', 'source: https://example.test/rule'].join('\n'),
+    'Never type an asterisk.',
+  );
+
+  it('loads a private skill and composes it into the prompt with its footer', () => {
+    const agent = load({ 'finance-advisor': FINANCE }, {
+      skills: { 'finance-advisor': { verdicts: VERDICTS } },
+    }).resolve('finance-advisor');
+
+    expect(agent.skills.map((s) => s.name)).toEqual(['verdicts']);
+    expect(agent.skills[0]?.provenance).toBe('owner');
+    expect(agent.skills[0]?.file.endsWith(path.join('skills', 'verdicts.md'))).toBe(true);
+    expect(agent.systemPromptTemplate).toContain('# SKILLS');
+    expect(agent.systemPromptTemplate).toContain('## verdicts');
+    expect(agent.systemPromptTemplate).toContain('Always quote minBalance and its date.');
+    expect(agent.systemPromptTemplate).toContain('(skill: verdicts, provenance: owner)');
+  });
+
+  it('keeps the generated wiring section last, after the skills', () => {
+    const agent = load({ 'finance-advisor': FINANCE }, {
+      skills: { 'finance-advisor': { verdicts: VERDICTS } },
+    }).resolve('finance-advisor');
+    const skillsAt = agent.systemPromptTemplate.indexOf('# SKILLS');
+    const wiringAt = agent.systemPromptTemplate.indexOf('## Your wiring');
+    expect(skillsAt).toBeGreaterThan(0);
+    expect(wiringAt).toBeGreaterThan(skillsAt);
+  });
+
+  it('adds no section at all when an agent has no skills', () => {
+    const agent = load({ concierge: CONCIERGE }).resolve('concierge');
+    expect(agent.skills).toEqual([]);
+    expect(agent.systemPromptTemplate).not.toContain('# SKILLS');
+  });
+
+  it('loads an unfiltered shared skill for every agent, and quotes its source', () => {
+    const catalog = load(
+      { 'finance-advisor': FINANCE, concierge: CONCIERGE },
+      { shared: { 'plain-text': HOUSE } },
+    );
+    for (const id of ['finance-advisor', 'concierge']) {
+      const agent = catalog.resolve(id);
+      expect(agent.skills.map((s) => s.name)).toEqual(['plain-text']);
+      expect(agent.systemPromptTemplate).toContain(
+        '(skill: plain-text, provenance: imported, source: https://example.test/rule)',
+      );
+    }
+  });
+
+  it('honours the agents filter on a shared skill', () => {
+    const filtered = HOUSE.replace('provenance: imported', 'provenance: imported\nagents: [concierge]');
+    const catalog = load(
+      { 'finance-advisor': FINANCE, concierge: CONCIERGE },
+      { shared: { 'plain-text': filtered } },
+    );
+    expect(catalog.resolve('concierge').skills.map((s) => s.name)).toEqual(['plain-text']);
+    expect(catalog.resolve('finance-advisor').skills).toEqual([]);
+  });
+
+  it('orders private skills before shared ones', () => {
+    const agent = load({ 'finance-advisor': FINANCE }, {
+      shared: { 'plain-text': HOUSE },
+      skills: { 'finance-advisor': { verdicts: VERDICTS } },
+    }).resolve('finance-advisor');
+    expect(agent.skills.map((s) => s.name)).toEqual(['verdicts', 'plain-text']);
+  });
+
+  it('fails closed on a skills: entry naming no shared skill', () => {
+    const declared = FINANCE.replace('tools: [finance.*]', 'tools: [finance.*]\nskills: [nope]');
+    expect(() => load({ 'finance-advisor': declared }, { shared: { 'plain-text': HOUSE } })).toThrow(
+      /declares skill "nope"/,
+    );
+  });
+
+  it('fails closed when a declared shared skill excludes this agent', () => {
+    const filtered = HOUSE.replace('provenance: imported', 'provenance: imported\nagents: [concierge]');
+    const declared = FINANCE.replace('tools: [finance.*]', 'tools: [finance.*]\nskills: [plain-text]');
+    expect(() => load({ 'finance-advisor': declared }, { shared: { 'plain-text': filtered } })).toThrow(
+      /lists agents concierge and not this one/,
+    );
+  });
+
+  it('reports a malformed skill file as a skill-file catalog error', () => {
+    const broken = skillFile('name: verdicts\ndescription: d\ntools: [finance.*]');
+    let caught: unknown;
+    try {
+      load({ 'finance-advisor': FINANCE }, { skills: { 'finance-advisor': { verdicts: broken } } });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AgentCatalogError);
+    expect((caught as AgentCatalogError).code).toBe('skill-file');
+    expect((caught as Error).message).toMatch(/never grants a tool/);
+  });
+
+  it('refuses a shared skill that collides with a private one', () => {
+    expect(() =>
+      load({ 'finance-advisor': FINANCE }, {
+        shared: { verdicts: VERDICTS },
+        skills: { 'finance-advisor': { verdicts: VERDICTS } },
+      }),
+    ).toThrow(/one name, one procedure/);
+  });
+});
+
+describe('selectSkills', () => {
+  const shared = (name: string, agents?: string[]) =>
+    parseSkillFile(
+      `---\nname: ${name}\ndescription: d${agents ? `\nagents: [${agents.join(', ')}]` : ''}\n---\n\nbody\n`,
+      { scope: 'shared' },
+    );
+
+  it('includes an unfiltered shared skill without it being declared', () => {
+    expect(selectSkills('a', [], [], [shared('house')]).map((s) => s.name)).toEqual(['house']);
+  });
+
+  it('excludes a filtered shared skill that does not name the agent', () => {
+    expect(selectSkills('a', [], [], [shared('house', ['b'])])).toEqual([]);
+  });
+
+  it('includes a filtered shared skill that names the agent', () => {
+    expect(selectSkills('a', [], [], [shared('house', ['a', 'b'])]).map((s) => s.name)).toEqual([
+      'house',
+    ]);
   });
 });

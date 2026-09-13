@@ -31,7 +31,8 @@ export class AgentFileError extends Error {
 
 export type YamlValue = string | number | boolean | string[];
 
-const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Ids and skill names share one shape: lowercase words joined by hyphens. */
+export const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** Split `---\n<yaml>\n---\n<body>`. The leading `---` must be the first line. */
 export function splitFrontmatter(source: string, file?: string): {
@@ -127,6 +128,8 @@ export const agentFrontmatterSchema = z
     description: z.string().min(1),
     model: z.string().min(1).optional(),
     tools: z.array(z.string().min(1)),
+    /** Shared skills to load by name; private skills are always loaded. */
+    skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),
     default: z.boolean().optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),

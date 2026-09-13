@@ -1,6 +1,8 @@
 /** Shared DB helpers for the finance tools. */
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
+import { defaultIncludeInCashflow } from '../accounts.js';
+import type { AccountKind } from '../accounts.js';
 
 export const DEFAULT_CURRENCY = 'EUR';
 export const DEFAULT_SAFETY_FLOOR = 0;
@@ -54,40 +56,58 @@ export interface AccountRow {
   name: string;
   balance: number;
   balanceAsOf: string;
+  kind: AccountKind;
+  /** False for money that counts toward net worth but can never be spent. */
+  includeInCashflow: boolean;
+  institution: string | null;
+  notes: string | null;
+}
+
+/** Every column the tools read back, in one place so the shapes cannot drift. */
+export const ACCOUNT_COLUMNS =
+  'id, name, balance, balance_as_of, kind, include_in_cashflow, institution, notes';
+
+export function mapAccountRow(row: Record<string, unknown>): AccountRow {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    balance: num(row.balance),
+    balanceAsOf: toDateString(row.balance_as_of),
+    kind: (row.kind as AccountKind) ?? 'cash',
+    includeInCashflow: row.include_in_cashflow !== false,
+    institution: (row.institution as string | null) ?? null,
+    notes: (row.notes as string | null) ?? null,
+  };
 }
 
 export async function findAccount(db: Pool, name: string): Promise<AccountRow | undefined> {
   const { rows } = await db.query(
-    `select id, name, balance, balance_as_of from finance.accounts where lower(name) = lower($1)`,
+    `select ${ACCOUNT_COLUMNS} from finance.accounts where lower(name) = lower($1)`,
     [name],
   );
   const row = rows[0];
   if (!row) return undefined;
-  return {
-    id: row.id,
-    name: row.name,
-    balance: num(row.balance),
-    balanceAsOf: toDateString(row.balance_as_of),
-  };
+  return mapAccountRow(row);
 }
 
 /** Accounts are created on first mention; naming one is not a write worth a prompt. */
-export async function ensureAccount(db: Pool, name: string): Promise<AccountRow> {
+export async function ensureAccount(
+  db: Pool,
+  name: string,
+  /** Applied only when the account is actually created; an existing one is left alone. */
+  onCreate: { kind?: AccountKind; includeInCashflow?: boolean } = {},
+): Promise<AccountRow> {
   const existing = await findAccount(db, name);
   if (existing) return existing;
+  const kind: AccountKind = onCreate.kind ?? 'cash';
+  const includeInCashflow = onCreate.includeInCashflow ?? defaultIncludeInCashflow(kind);
   const { rows } = await db.query(
-    `insert into finance.accounts (name) values ($1)
+    `insert into finance.accounts (name, kind, include_in_cashflow) values ($1, $2, $3)
      on conflict (name) do update set name = excluded.name
-     returning id, name, balance, balance_as_of`,
-    [name],
+     returning ${ACCOUNT_COLUMNS}`,
+    [name, kind, includeInCashflow],
   );
-  const row = rows[0];
-  return {
-    id: row.id,
-    name: row.name,
-    balance: num(row.balance),
-    balanceAsOf: toDateString(row.balance_as_of),
-  };
+  return mapAccountRow(rows[0]);
 }
 
 /**

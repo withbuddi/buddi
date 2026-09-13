@@ -19,6 +19,7 @@ import { createAnthropicProvider, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
+import { bindDelegation } from './agents/delegation.js';
 
 export { REPO_ROOT };
 
@@ -64,11 +65,15 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   }
 
   const pool = createPool(databaseUrl);
+  const provider = createAnthropicProvider(resolution.provider);
+  // Delegation can only be wired once both exist; before this call the tool
+  // refuses rather than reaching for an ambient catalog.
+  bindDelegation(registry, { catalog, provider });
   return {
     pool,
     registry,
     catalog,
-    provider: createAnthropicProvider(resolution.provider),
+    provider,
     model: resolution.provider.model,
     credentialKind: resolution.provider.credentialKind,
     now,

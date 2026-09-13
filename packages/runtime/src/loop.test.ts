@@ -147,6 +147,20 @@ describe('composeSystem', () => {
   it('appends the surface hint last, so it is the final word', () => {
     expect(composeSystem('base', 'Surface: Telegram.')).toBe('base\n\nSurface: Telegram.');
   });
+
+  it('prepends the memory preamble, so the persona still reads last', () => {
+    expect(composeSystem('base', undefined, '## What you remember\n- paid biweekly')).toBe(
+      '## What you remember\n- paid biweekly\n\nbase',
+    );
+    expect(composeSystem('base', 'Surface: Telegram.', 'remembered')).toBe(
+      'remembered\n\nbase\n\nSurface: Telegram.',
+    );
+  });
+
+  it('treats an empty memory block as no block at all', () => {
+    expect(composeSystem('base', undefined, '')).toBe('base');
+    expect(composeSystem('base', undefined, '  \n ')).toBe('base');
+  });
 });
 
 describe('runAgent', () => {
@@ -176,6 +190,95 @@ describe('runAgent', () => {
     );
     // The agent definition itself is untouched.
     expect(agent.systemPrompt).toBe('You advise on money.');
+  });
+
+  it('asks the memory hook for this agent and prepends what it returns', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    const memoryPreamble = vi.fn(async (agentId: string) => `## What you remember (${agentId})`);
+
+    await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+      memoryPreamble,
+    });
+
+    expect(memoryPreamble).toHaveBeenCalledWith('finance');
+    expect(provider.calls[0]?.system).toBe(
+      '## What you remember (finance)\n\nYou advise on money.',
+    );
+  });
+
+  it('gives tools the run provenance without mutating the caller context', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const seen: ToolContext[] = [];
+    const manifest: PluginManifest = {
+      name: 'probe',
+      version: '0.0.1',
+      schema: 'probe',
+      migrationsDir: '/tmp/probe',
+      tools: [
+        {
+          name: 'probe.ctx',
+          description: 'Reports its context.',
+          tier: 'auto',
+          input: z.object({}),
+          execute: async (_input: unknown, toolCtx: ToolContext) => {
+            seen.push(toolCtx);
+            return { ok: true };
+          },
+        },
+      ],
+    };
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'tool_use', id: 'tu_1', name: 'probe.ctx', input: {} }],
+        stopReason: 'tool_use',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+      {
+        content: [{ type: 'text', text: 'done' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+
+    await runAgent({
+      agent: { ...agent, tools: ['probe.ctx'] },
+      provider,
+      registry,
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'go',
+    });
+
+    expect(seen[0]).toMatchObject({
+      ownerId: 'owner-1',
+      agentId: 'finance',
+      conversationId,
+    });
+    expect(ctx).not.toHaveProperty('agentId');
+    expect(ctx).not.toHaveProperty('conversationId');
   });
 
   it('fails closed when the agent names an unregistered tool — before any API call', async () => {

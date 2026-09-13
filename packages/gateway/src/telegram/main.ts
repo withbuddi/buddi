@@ -23,6 +23,7 @@ import {
 } from '@buddi/core';
 import { runAgent, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
+import { memoryPreambleFor } from '../agents/catalog.js';
 import { createWiring, loadEnv } from '../bootstrap.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surface.js';
@@ -188,6 +189,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         conversationId,
         userMessage: text,
         systemSuffix: SURFACE_HINT,
+        memoryPreamble: memoryPreambleFor(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);
           onToolCall?.(name, input);

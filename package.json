@@ -15,12 +15,13 @@
     "ask": "node packages/gateway/dist/cli.js ask",
     "telegram": "node packages/gateway/dist/telegram/main.js",
     "serve": "node packages/gateway/dist/serve.js",
-    "missions": "node packages/gateway/dist/missions-cli.js"
+    "missions": "node packages/gateway/dist/missions-cli.js",
+    "agents": "node packages/gateway/dist/cli.js agents"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.8",
-    "@types/node": "^22.10.2"
+    "vitest": "^2.1.8"
   },
   "dependencies": {
     "@buddi/core": "workspace:*",

@@ -425,6 +425,384 @@ suite('finance tools (postgres)', () => {
     });
   });
 
+  it('tracks credit scores with the delta against the previous one', async () => {
+    const empty = await call('finance.credit_score_history', {});
+    expect(empty.count).toBe(0);
+    expect(empty.message).toMatch(/no credit score/);
+
+    const first = await call('finance.record_credit_score', {
+      source: 'Experian',
+      score: 640,
+      model: 'FICO 8',
+      observedOn: '2026-07-01',
+    });
+    expect(first).toMatchObject({ score: 640, delta: null, observedOn: '2026-07-01' });
+
+    const second = await call('finance.record_credit_score', {
+      source: 'Experian',
+      score: 668,
+      model: 'FICO 8',
+      observedOn: '2026-09-01',
+      note: 'paid the Visa down before the statement',
+    });
+    expect(second).toMatchObject({ score: 668, previousScore: 640, delta: 28 });
+
+    // A different source has its own trend; it never deltas against Experian.
+    const other = await call('finance.record_credit_score', {
+      source: 'Credit Karma',
+      score: 700,
+      observedOn: '2026-09-02',
+    });
+    expect(other.delta).toBeNull();
+
+    const history = await call('finance.credit_score_history', {});
+    expect(history.count).toBe(3);
+    expect(history.latest).toMatchObject({ source: 'Credit Karma', score: 700 });
+    expect(history.scores.find((s: { score: number }) => s.score === 668).delta).toBe(28);
+    expect(await call('finance.credit_score_history', { limit: 1 })).toMatchObject({ count: 1 });
+
+    const bad = await registry.invoke('finance.record_credit_score', { source: 'X', score: 90 }, ctx);
+    expect(bad.ok).toBe(false);
+  });
+
+  it('reports utilization, statements and a deterministic payment plan', async () => {
+    // A fresh pair of cards; statement days make the statement calendar work.
+    await call('finance.set_liability', {
+      name: 'Credit Visa',
+      kind: 'credit_card',
+      balance: 900,
+      creditLimit: 1000,
+      minimumPayment: 40,
+      dueDay: 28,
+      apr: 26,
+      statementDay: 18,
+    });
+    await call('finance.set_liability', {
+      name: 'Credit Amex',
+      kind: 'credit_card',
+      balance: 5000,
+      creditLimit: 10_000,
+      minimumPayment: 120,
+      dueDay: 12,
+      apr: 15,
+      statementDay: 2,
+      reportedBalance: 5200,
+      reportedOn: '2026-09-02',
+    });
+
+    const util = await call('finance.credit_utilization', {});
+    const visa = util.cards.find((c: { name: string }) => c.name === 'Credit Visa');
+    expect(visa).toMatchObject({
+      utilization: 90,
+      paymentFor30: 600,
+      targetBalanceFor30: 300,
+      paymentFor10: 800,
+      targetBalanceFor10: 100,
+      statementDay: 18,
+    });
+    // Dearest APR first: Visa (26) before Amex (15) before the older 24% card.
+    expect(util.cards[0].name).toBe('Credit Visa');
+
+    // The new columns survive a later update that omits them.
+    await call('finance.set_liability', {
+      name: 'credit amex',
+      kind: 'credit_card',
+      balance: 5000,
+      minimumPayment: 120,
+      dueDay: 12,
+    });
+    const listed = await call('finance.list_liabilities', {});
+    expect(listed.liabilities.find((l: { name: string }) => l.name === 'Credit Amex'))
+      .toMatchObject({ statementDay: 2, reportedBalance: 5200, reportedOn: '2026-09-02' });
+
+    const statements = await call('finance.upcoming_statements', { days: 30 });
+    expect(statements.from).toBe('2026-09-13');
+    expect(statements.statements[0]).toMatchObject({
+      name: 'Credit Visa',
+      statementDate: '2026-09-18',
+      payBefore: '2026-09-15',
+      paymentFor30: 600,
+      targetBalanceFor30: 300,
+    });
+    expect(statements.message).toMatch(/no statement closing day/); // the older card
+
+    const narrow = await call('finance.upcoming_statements', { days: 3 });
+    expect(narrow.count).toBe(0);
+
+    const plan = await call('finance.credit_plan', { monthlyBudget: 700 });
+    const visaAlloc = plan.allocations.find((a: { name: string }) => a.name === 'Credit Visa');
+    expect(visaAlloc).toMatchObject({
+      payment: 600,
+      balanceAfter: 300,
+      utilizationAfter: 30,
+      reason: 'under-30',
+    });
+    expect(plan.allCardsUnder30).toBe(false);
+    expect(plan.shortfall).toBeGreaterThan(0);
+    expect(plan.message).toMatch(/short of putting every card under 30%/);
+    expect(plan.focusCard).toBe('Credit Visa');
+  });
+
+  it('records payments once per due date and reports the on-time rate', async () => {
+    const unknown = await call('finance.record_payment', {
+      liability: 'Nope',
+      dueOn: '2026-08-28',
+      status: 'missed',
+    });
+    expect(unknown.status).toBe('unknown-liability');
+
+    await call('finance.record_payment', {
+      liability: 'Credit Visa',
+      dueOn: '2026-07-28',
+      paidOn: '2026-07-26',
+      amount: 40,
+      status: 'paid_on_time',
+    });
+    await call('finance.record_payment', {
+      liability: 'Credit Visa',
+      dueOn: '2026-08-28',
+      paidOn: '2026-09-04',
+      amount: 40,
+      status: 'paid_late',
+    });
+    await call('finance.record_payment', {
+      liability: 'Credit Amex',
+      dueOn: '2026-09-12',
+      paidOn: '2026-09-10',
+      amount: 120,
+      status: 'paid_on_time',
+    });
+    await call('finance.record_payment', {
+      liability: 'Credit Visa',
+      dueOn: '2026-09-28',
+      status: 'scheduled',
+    });
+
+    // Same debt, same due date: corrected, not duplicated.
+    const again = await call('finance.record_payment', {
+      liability: 'credit visa',
+      dueOn: '2026-08-28',
+      paidOn: '2026-08-27',
+      amount: 60,
+      status: 'paid_on_time',
+    });
+    expect(again).toMatchObject({ updated: true, amount: 60, paymentStatus: 'paid_on_time' });
+
+    const history = await call('finance.payment_history', {});
+    expect(history.count).toBe(4);
+    expect(history.settled).toBe(3);
+    expect(history.scheduled).toBe(1);
+    expect(history.onTime).toBe(3);
+    expect(history.late).toBe(0);
+    expect(history.onTimeRate).toBe(100);
+
+    const oneCard = await call('finance.payment_history', { liability: 'Credit Amex' });
+    expect(oneCard.count).toBe(1);
+
+    // A one-month window drops the July and August rows.
+    const recent = await call('finance.payment_history', { months: 1 });
+    expect(recent.payments.every((p: { dueOn: string }) => p.dueOn >= '2026-08-13')).toBe(true);
+  });
+
+  it('classifies an account by kind and splits cash from money that cannot be spent', async () => {
+    const before = await call('finance.list_accounts', {});
+    expect(before.total).toBe(before.cashTotal);
+
+    // A 401k: real money, counted in net worth, never spendable.
+    const retirement = await call('finance.set_balance', {
+      account: 'Fidelity 401k',
+      balance: 12_000,
+      kind: 'retirement',
+      institution: 'Fidelity',
+      notes: 'employer matches 4%',
+    });
+    expect(retirement).toMatchObject({
+      kind: 'retirement',
+      includeInCashflow: false,
+      institution: 'Fidelity',
+      notes: 'employer matches 4%',
+    });
+
+    // A savings pot is liquid, so it keeps its place in the cash total.
+    const savings = await call('finance.set_balance', {
+      account: 'Rainy Day',
+      balance: 500,
+      kind: 'savings',
+    });
+    expect(savings).toMatchObject({ kind: 'savings', includeInCashflow: true });
+
+    const listed = await call('finance.list_accounts', {});
+    expect(listed.cashTotal).toBe(Math.round((before.cashTotal + 500) * 100) / 100);
+    expect(listed.total).toBe(listed.cashTotal);
+    expect(listed.excludedTotal).toBe(12_000);
+    expect(listed.excludedByKind).toEqual([
+      { kind: 'retirement', balance: 12_000, accounts: ['Fidelity 401k'] },
+    ]);
+    expect(listed.netWorth).toBe(
+      Math.round((listed.cashTotal + 12_000 - listed.totalLiabilities) * 100) / 100,
+    );
+
+    // A later balance with no kind preserves everything already recorded.
+    const refreshed = await call('finance.set_balance', {
+      account: 'Fidelity 401k',
+      balance: 12_400,
+    });
+    expect(refreshed).toMatchObject({
+      balance: 12_400,
+      kind: 'retirement',
+      includeInCashflow: false,
+      institution: 'Fidelity',
+      notes: 'employer matches 4%',
+    });
+  });
+
+  it('keeps excluded accounts out of the projection and the baseline', async () => {
+    const projection = await call('finance.project_cashflow', {
+      horizonDays: 60,
+      includeBaseline: false,
+    });
+    // 12,400 of retirement money is nowhere in the start balance...
+    expect(projection.startBalance).toBe(1400);
+    expect(projection.scope).toMatch(/cashflow accounts/);
+    // ...but it is reported, so the answer can say why the cash looks small.
+    expect(projection.startBalanceExcludes).toEqual([
+      { account: 'Fidelity 401k', kind: 'retirement', balance: 12_400 },
+    ]);
+
+    // A recurring item on an excluded account is excluded with it.
+    await call('finance.add_recurring', {
+      kind: 'income',
+      name: '401k deferral',
+      amount: 400,
+      cadence: 'monthly',
+      anchorDate: '2026-09-15',
+      account: 'Fidelity 401k',
+    });
+    const after = await call('finance.project_cashflow', {
+      horizonDays: 60,
+      includeBaseline: false,
+    });
+    expect(after.itemCount).toBe(projection.itemCount);
+    expect(after.endBalance).toBe(projection.endBalance);
+
+    // And a contribution booked against it is not variable spending.
+    const baselineBefore = await call('finance.spending_baseline', {});
+    const contribution = await call('finance.record_contribution', {
+      account: 'Fidelity 401k',
+      amount: 400,
+      occurredOn: '2026-08-15',
+      description: '401k payroll contribution',
+    });
+    expect(contribution).toMatchObject({
+      recorded: true,
+      account: 'Fidelity 401k',
+      accountKind: 'retirement',
+      includeInCashflow: false,
+      amount: 400,
+    });
+    const baselineAfter = await call('finance.spending_baseline', {});
+    expect(baselineAfter.avgMonthlyVariableOut).toBe(baselineBefore.avgMonthlyVariableOut);
+    expect(baselineAfter.monthsUsed).toBe(baselineBefore.monthsUsed);
+    expect(baselineAfter.sampleSize).toBe(baselineBefore.sampleSize);
+
+    // The same contribution twice on the same day is two real contributions.
+    const again = await call('finance.record_contribution', {
+      account: 'Fidelity 401k',
+      amount: 400,
+      occurredOn: '2026-08-15',
+      description: '401k payroll contribution',
+    });
+    expect(again.recorded).toBe(true);
+    const { rows } = await pool.query(
+      `select count(*)::int as n from finance.transactions t
+         join finance.accounts a on a.id = t.account_id
+        where a.name = 'Fidelity 401k'`,
+    );
+    expect(rows[0].n).toBe(2);
+  });
+
+  it('refuses a contribution to cash and to an account it does not know', async () => {
+    const toCash = await registry.invoke(
+      'finance.record_contribution',
+      { account: 'Checking', amount: 100 },
+      ctx,
+    );
+    expect(toCash.ok).toBe(false);
+    if (!toCash.ok) expect(toCash.message).toMatch(/cash-flow account/);
+
+    const unknown = await registry.invoke(
+      'finance.record_contribution',
+      { account: 'Nowhere', amount: 100 },
+      ctx,
+    );
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) expect(unknown.message).toMatch(/unknown account/);
+  });
+
+  it('reclassifies and renames an account, carrying its history with it', async () => {
+    await call('finance.set_balance', { account: 'PNC Growth', balance: 13.21 });
+    await call('finance.record_transaction', {
+      account: 'PNC Growth',
+      occurredOn: '2026-09-02',
+      amount: -5,
+      description: 'Fee',
+    });
+
+    // Relabelling it a brokerage takes it out of the cash flow on its own.
+    const reclassified = await call('finance.update_account', {
+      account: 'pnc growth',
+      kind: 'investment',
+      institution: 'PNC',
+      notes: 'self-directed',
+    });
+    expect(reclassified).toMatchObject({
+      kind: 'investment',
+      includeInCashflow: false,
+      institution: 'PNC',
+      balance: 13.21,
+      renamed: false,
+    });
+
+    const renamed = await call('finance.update_account', {
+      account: 'PNC Growth',
+      rename: 'PNC Brokerage',
+    });
+    expect(renamed).toMatchObject({
+      name: 'PNC Brokerage',
+      previousName: 'PNC Growth',
+      renamed: true,
+      kind: 'investment',
+      includeInCashflow: false,
+      institution: 'PNC',
+      notes: 'self-directed',
+      balance: 13.21,
+    });
+
+    // Same row, so the transaction moved with the name.
+    const { rows } = await pool.query(
+      `select count(*)::int as n from finance.transactions t
+         join finance.accounts a on a.id = t.account_id
+        where a.name = 'PNC Brokerage'`,
+    );
+    expect(rows[0].n).toBe(1);
+
+    // The owner can overrule the kind's default when they really do spend it.
+    const spendable = await call('finance.update_account', {
+      account: 'PNC Brokerage',
+      includeInCashflow: true,
+    });
+    expect(spendable).toMatchObject({ kind: 'investment', includeInCashflow: true });
+    await call('finance.update_account', { account: 'PNC Brokerage', includeInCashflow: false });
+
+    const missing = await registry.invoke(
+      'finance.update_account',
+      { account: 'No Such Account', kind: 'cash' },
+      ctx,
+    );
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.message).toMatch(/unknown account/);
+  });
+
   it('refuses invalid arguments at the registry boundary', async () => {
     const bad = await registry.invoke(
       'finance.add_recurring',

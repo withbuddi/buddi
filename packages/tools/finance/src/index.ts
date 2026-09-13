@@ -9,8 +9,17 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core';
-import { listAccounts, setBalance } from './tools/accounts.js';
+import { listAccounts, setBalance, updateAccount } from './tools/accounts.js';
 import { spendingBaseline } from './tools/baseline.js';
+import {
+  creditPlanTool,
+  creditScoreHistory,
+  creditUtilization,
+  paymentHistory,
+  recordCreditScore,
+  recordPayment,
+  upcomingStatementsTool,
+} from './tools/credit.js';
 import { projectCashflow } from './tools/cashflow.js';
 import {
   listLiabilities,
@@ -20,7 +29,12 @@ import {
 } from './tools/liabilities.js';
 import { getPreferences, setPreferences } from './tools/preferences.js';
 import { addRecurring, listRecurring, removeRecurring } from './tools/recurring.js';
-import { importCsv, recordTransaction, summary } from './tools/transactions.js';
+import {
+  importCsv,
+  recordContribution,
+  recordTransaction,
+  summary,
+} from './tools/transactions.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
 export const MIGRATIONS_DIR = path.resolve(
@@ -38,11 +52,13 @@ export const manifest: PluginManifest = {
     setPreferences,
     getPreferences,
     setBalance,
+    updateAccount,
     listAccounts,
     addRecurring,
     listRecurring,
     removeRecurring,
     recordTransaction,
+    recordContribution,
     importCsv,
     summary,
     spendingBaseline,
@@ -51,6 +67,13 @@ export const manifest: PluginManifest = {
     listLiabilities,
     removeLiability,
     payoffEstimate,
+    recordCreditScore,
+    creditScoreHistory,
+    recordPayment,
+    paymentHistory,
+    creditUtilization,
+    creditPlanTool,
+    upcomingStatementsTool,
   ],
 };
 
@@ -60,11 +83,13 @@ export {
   setPreferences,
   getPreferences,
   setBalance,
+  updateAccount,
   listAccounts,
   addRecurring,
   listRecurring,
   removeRecurring,
   recordTransaction,
+  recordContribution,
   importCsv,
   summary,
   spendingBaseline,
@@ -73,9 +98,18 @@ export {
   listLiabilities,
   removeLiability,
   payoffEstimate,
+  recordCreditScore,
+  creditScoreHistory,
+  recordPayment,
+  paymentHistory,
+  creditUtilization,
+  creditPlanTool,
+  upcomingStatementsTool,
 };
 
+export * from './accounts.js';
 export * from './projection.js';
 export * from './baseline.js';
 export * from './amortization.js';
+export * from './credit.js';
 export * from './csv.js';

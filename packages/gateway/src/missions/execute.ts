@@ -24,7 +24,7 @@ import {
 } from '@buddi/core';
 import { createConversation, runAgent, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
-import { gatewayCatalog } from '../agents/catalog.js';
+import { gatewayCatalog, memoryPreambleFor } from '../agents/catalog.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
 
 /** Re-exported so callers keep catching the error they always caught. */
@@ -103,6 +103,7 @@ export function createMissionExecutor(
       conversationId,
       userMessage: mission.prompt,
       systemSuffix: SCHEDULED_RUN_SUFFIX,
+      memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),
     });
 

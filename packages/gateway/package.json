@@ -29,6 +29,7 @@
     "@buddi/core": "workspace:*",
     "@buddi/runtime": "workspace:*",
     "@buddi/tool-finance": "workspace:*",
+    "@buddi/tool-memory": "workspace:*",
     "dotenv": "^16.4.7",
     "pg": "^8.13.1"
   },
