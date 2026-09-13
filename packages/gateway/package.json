@@ -12,7 +12,10 @@
     }
   },
   "bin": {
-    "buddi": "./dist/cli.js"
+    "buddi": "./dist/cli.js",
+    "buddi-telegram": "./dist/telegram/main.js",
+    "buddi-serve": "./dist/serve.js",
+    "buddi-missions": "./dist/missions-cli.js"
   },
   "files": [
     "dist"

@@ -1,0 +1,224 @@
+/**
+ * Telegram Bot API client — raw `fetch`, no library.
+ *
+ * The surface is a thin transport: it moves text in and out and reports the
+ * numeric ids Telegram asserts. It decides nothing about who the owner is
+ * (that is `@buddi/core`'s `resolveOwnerForSurface`) and it executes no tool.
+ */
+
+/** Telegram rejects messages over 4096 characters; we split well below it. */
+export const MAX_MESSAGE_CHARS = 4000;
+
+/** Long-poll timeout, in seconds. Telegram holds the request open that long. */
+export const POLL_TIMEOUT_SECONDS = 25;
+
+/** The only update kinds this surface asks for. */
+export const ALLOWED_UPDATES = ['message', 'callback_query'] as const;
+
+export interface TelegramUser {
+  id: number;
+  is_bot?: boolean;
+  username?: string;
+  first_name?: string;
+}
+
+export interface TelegramChat {
+  id: number;
+  /** 'private' | 'group' | 'supergroup' | 'channel'. Only 'private' is served. */
+  type: string;
+}
+
+export interface TelegramMessage {
+  message_id: number;
+  from?: TelegramUser;
+  chat: TelegramChat;
+  text?: string;
+  date?: number;
+  forward_origin?: unknown;
+  forward_from?: unknown;
+}
+
+export interface TelegramUpdate {
+  update_id: number;
+  message?: TelegramMessage;
+  edited_message?: TelegramMessage;
+  callback_query?: { id: string; from?: TelegramUser; data?: string };
+}
+
+/** One entry of the bot's command menu. `command` carries no leading slash. */
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
+/**
+ * Where a command menu applies. Only the two scopes buddi uses are modelled:
+ * the global default (what an unpaired stranger would see) and a single chat.
+ */
+export type TelegramCommandScope =
+  | { type: 'default' }
+  | { type: 'chat'; chat_id: string | number };
+
+/** A Bot API call that came back `ok: false`, or a non-2xx HTTP response. */
+export class TelegramApiError extends Error {
+  override readonly name = 'TelegramApiError';
+  constructor(
+    readonly method: string,
+    readonly status: number,
+    readonly description: string,
+  ) {
+    super(`telegram ${method} failed (${status}): ${description}`);
+  }
+}
+
+/** Minimal `fetch` shape, so tests inject a fake without DOM lib types. */
+export type FetchLike = (
+  input: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: any },
+) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+
+export interface TelegramApiOptions {
+  token: string;
+  fetch?: FetchLike;
+  baseUrl?: string;
+}
+
+export class TelegramApi {
+  readonly #token: string;
+  readonly #fetch: FetchLike;
+  readonly #baseUrl: string;
+
+  constructor(opts: TelegramApiOptions) {
+    if (!opts.token || opts.token.trim() === '') {
+      throw new Error('TelegramApi: token is required (TELEGRAM_BOT_TOKEN)');
+    }
+    this.#token = opts.token.trim();
+    this.#fetch = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
+    this.#baseUrl = opts.baseUrl ?? 'https://api.telegram.org';
+  }
+
+  async call<T>(method: string, body: Record<string, unknown>, signal?: any): Promise<T> {
+    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    const raw = await res.text();
+    let parsed: any;
+    try {
+      parsed = raw === '' ? {} : JSON.parse(raw);
+    } catch {
+      throw new TelegramApiError(method, res.status, `unparseable response: ${raw.slice(0, 200)}`);
+    }
+    if (!res.ok || parsed?.ok !== true) {
+      throw new TelegramApiError(
+        method,
+        res.status,
+        String(parsed?.description ?? 'unknown error'),
+      );
+    }
+    return parsed.result as T;
+  }
+
+  getMe(): Promise<TelegramUser> {
+    return this.call<TelegramUser>('getMe', {});
+  }
+
+  /** Long poll. `offset` is the first update id we have *not* processed. */
+  getUpdates(offset: number | undefined, signal?: any): Promise<TelegramUpdate[]> {
+    const body: Record<string, unknown> = {
+      timeout: POLL_TIMEOUT_SECONDS,
+      allowed_updates: ALLOWED_UPDATES,
+    };
+    if (offset !== undefined) body.offset = offset;
+    return this.call<TelegramUpdate[]>('getUpdates', body, signal);
+  }
+
+  /**
+   * Plain text only. The advisor's markdown (tables above all) renders badly on
+   * Telegram, and any parse mode turns user-authored text into a parsing hazard
+   * — so no `parse_mode` is ever sent.
+   */
+  async sendMessage(chatId: string | number, text: string): Promise<number | undefined> {
+    let firstId: number | undefined;
+    for (const chunk of splitMessage(text)) {
+      const result = await this.call<{ message_id?: number }>('sendMessage', {
+        chat_id: chatId,
+        text: chunk,
+        disable_web_page_preview: true,
+      });
+      const id = typeof result?.message_id === 'number' ? result.message_id : undefined;
+      if (firstId === undefined) firstId = id;
+    }
+    return firstId;
+  }
+
+  /**
+   * Replace the text of a message we sent. Telegram rejects an edit whose text
+   * is identical to the current one, and refuses very old messages — callers
+   * treat a failure as cosmetic and fall back to a fresh message.
+   */
+  async editMessageText(
+    chatId: string | number,
+    messageId: number,
+    text: string,
+  ): Promise<void> {
+    await this.call('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      disable_web_page_preview: true,
+    });
+  }
+
+  async deleteMessage(chatId: string | number, messageId: number): Promise<void> {
+    await this.call('deleteMessage', { chat_id: chatId, message_id: messageId });
+  }
+
+  async sendChatAction(chatId: string | number, action = 'typing'): Promise<void> {
+    await this.call('sendChatAction', { chat_id: chatId, action });
+  }
+
+  /**
+   * Publish the command menu for a scope. Omitting `scope` is Telegram's
+   * `default` scope — buddi always passes one, so the menu is a per-chat fact.
+   */
+  async setMyCommands(
+    commands: readonly TelegramBotCommand[],
+    scope?: TelegramCommandScope,
+  ): Promise<void> {
+    await this.call('setMyCommands', {
+      commands,
+      ...(scope ? { scope } : {}),
+    });
+  }
+
+  /** Clear a scope's menu, so chats in it fall back to the next scope up. */
+  async deleteMyCommands(scope?: TelegramCommandScope): Promise<void> {
+    await this.call('deleteMyCommands', { ...(scope ? { scope } : {}) });
+  }
+}
+
+/**
+ * Split a reply into Telegram-sized chunks, preferring paragraph then line
+ * boundaries, and hard-cutting only a single line longer than the limit.
+ */
+export function splitMessage(text: string, limit = MAX_MESSAGE_CHARS): string[] {
+  const body = text.trim() === '' ? '(no reply)' : text;
+  if (body.length <= limit) return [body];
+
+  const chunks: string[] = [];
+  let rest = body;
+  while (rest.length > limit) {
+    const window = rest.slice(0, limit);
+    let cut = window.lastIndexOf('\n\n');
+    if (cut < limit * 0.5) cut = window.lastIndexOf('\n');
+    if (cut < limit * 0.5) cut = window.lastIndexOf(' ');
+    if (cut <= 0) cut = limit;
+    chunks.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).replace(/^\s+/, '');
+  }
+  if (rest !== '') chunks.push(rest);
+  return chunks;
+}
