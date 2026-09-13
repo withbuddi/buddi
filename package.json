@@ -12,7 +12,10 @@
     "db:down": "docker compose down",
     "db:migrate": "node scripts/migrate.mjs",
     "chat": "node packages/gateway/dist/cli.js chat",
-    "ask": "node packages/gateway/dist/cli.js ask"
+    "ask": "node packages/gateway/dist/cli.js ask",
+    "telegram": "node packages/gateway/dist/telegram/main.js",
+    "serve": "node packages/gateway/dist/serve.js",
+    "missions": "node packages/gateway/dist/missions-cli.js"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

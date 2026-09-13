@@ -99,6 +99,39 @@ describe('system prompt content', () => {
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('the total cash across accounts');
     expect(SYSTEM_PROMPT_TEMPLATE).toContain('next 14 days');
   });
+
+  it('lists every cash account individually in a status', () => {
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('every cash account individually');
+  });
+
+  it('forbids markdown when the surface hint says plain text', () => {
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('Plain text when the surface says so');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('NO markdown of any kind');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('**bold**');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('no # headings');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('no backticks or code fences');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('never a pipe table');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('CAPITALS or a plain word followed by a colon');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('- "');
+  });
+
+  it('forbids naming internal tools to the owner', () => {
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('Never name your tools');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('The owner never hears an internal tool name');
+    expect(SYSTEM_PROMPT_TEMPLATE).toContain('want me to set a safety floor?');
+    // the old phrasing handed the owner a tool name for the floor
+    expect(SYSTEM_PROMPT_TEMPLATE).not.toContain('offer to set one with finance.set_preferences');
+  });
+
+  it('keeps the plain-text and tool-name rules whatever the manifest ships', () => {
+    for (const prompt of [
+      buildSystemPromptTemplate(['finance.project_cashflow']),
+      buildSystemPromptTemplate([...FINANCE_TOOLS, BASELINE_TOOL, ...LIABILITY_TOOLS]),
+    ]) {
+      expect(prompt).toContain('NO markdown of any kind');
+      expect(prompt).toContain('Never name your tools');
+    }
+  });
 });
 
 describe('optional tool families', () => {
@@ -123,6 +156,15 @@ describe('optional tool families', () => {
     const bare = buildSystemPromptTemplate(['finance.project_cashflow']);
     for (const name of LIABILITY_TOOLS) expect(bare).not.toContain(name);
     expect(bare).not.toContain('net worth');
+  });
+
+  it('requires every liability listed individually in a status', () => {
+    expect(withAll).toContain('list EVERY liability individually');
+    expect(withAll).toContain(
+      'its name, its balance, its APR, its minimum payment and the day of the month it is due',
+    );
+    expect(withAll).toContain('Never collapse several debts into a single figure');
+    expect(withAll).toContain('total debt and the net worth');
   });
 
   it('keeps the language rule last whatever the manifest ships', () => {
