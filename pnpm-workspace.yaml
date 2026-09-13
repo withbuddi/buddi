@@ -1,0 +1,7 @@
+packages:
+  - 'packages/*'
+  - 'packages/tools/*'
+
+# vitest's esbuild only unpacks its prebuilt binary in this script.
+allowBuilds:
+  esbuild: true

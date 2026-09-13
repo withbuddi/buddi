@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: buddi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: buddi
+      POSTGRES_USER: buddi
+      POSTGRES_PASSWORD: buddi
+    ports:
+      # Host port is overridable: some machines already run postgres on 5432.
+      - "${BUDDI_DB_PORT:-5432}:5432"
+    volumes:
+      - buddi-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buddi -d buddi"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  buddi-pgdata:
