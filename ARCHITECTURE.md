@@ -5,8 +5,9 @@ reachable from any surface (web, phone, Telegram, native apps later), running sc
 event-driven work on your behalf — with mechanically enforced human-approval gates before
 anything irreversible.
 
-Reviewed by Codex (2026-09); critical findings incorporated. The contracts below are
-requirements, not aspirations — anything marked *fail closed* is a test case.
+Reviewed by Codex (2026-09); critical findings incorporated. Revised 2026-09-11 to move
+tools out of core behind explicit plugin contracts (effect tools + sources). The contracts
+below are requirements, not aspirations — anything marked *fail closed* is a test case.
 
 ## Design principles
 
@@ -23,13 +24,19 @@ requirements, not aspirations — anything marked *fail closed* is a test case.
    ("multi-user later" is a rewrite, not an auth layer; only the owner concept is designed
    in now). Runs on the user's machine. Note: "local" does not mean "data never leaves" —
    prompts sent to cloud models are a data flow, per-agent provider choice governs it.
+6. **The core is the trust boundary — nothing else is core.** Every world-touching
+   capability (email, filesystem, computer-use) is a droppable plugin behind one of two
+   contracts: an **effect tool** (agent-proposed, gated by the action/approval machinery)
+   or a **source** (system-invoked, originates work). Core with zero plugins installed
+   is a valid, running state; droppability is enforced by dependency direction (core
+   never imports tools), not by a runtime plugin framework.
 
 ## Technology decisions (ADR-style)
 
 | Decision | Choice | Why |
 |---|---|---|
 | Language | TypeScript (Node) | Owner's comfort; one language across gateway, agents, web UI |
-| Database | PostgreSQL | State, queue, event log, send ledger. One install path (docker-compose) |
+| Database | PostgreSQL | State, queue, event log, effect ledger. One install path (docker-compose); plugin families ship their own schemas |
 | Email | IMAP transport + per-account auth; Gmail app password for v1 | Gmail OAuth restricted scopes force either verification (CASA, costly) or testing mode — and unpublished apps' refresh tokens **expire weekly**, unusable for an unattended system. App passwords work on personal Gmail today (not under Advanced Protection; revoked by password change). No cross-provider promise: Exchange Online killed basic auth — the `EmailProvider` port's second auth mode is OAuth XOAUTH2 **on the same IMAP transport**, not a new stack |
 | AI runtime | Own thin agent loop behind `RuntimeProvider` port | Hard requirement: provider swap. Design borrowed from Foreman, modified (see "Runtime provider port") |
 | Deployment | User's machine | No infra, user-owned, data local (modulo cloud-model data flow above) |
@@ -39,11 +46,12 @@ requirements, not aspirations — anything marked *fail closed* is a test case.
 Transport is separate from authentication. IMAP (`imapflow`) + SMTP are the transport;
 auth modes are `app-password` (v1) and `xoauth2` (later) behind the same `EmailAuth`
 interface. App passwords are powerful bearer secrets — buddi scoping does not narrow
-their upstream privileges; verified TLS required.
+their upstream privileges; verified TLS required. The adapter is a plugin
+(`packages/tools/email`), not core — nothing in core mentions IMAP or SMTP.
 
 ## Process boundaries (modular monolith)
 
-One process, five modules with strict, disjoint ownership:
+One process, five core modules plus droppable tool plugins, with strict, disjoint ownership:
 
 - **Surfaces** — authenticate the sender, translate presentation. Never create runs.
 - **Gateway** — map authenticated identity → conversation; submit *commands*; render replies.
@@ -51,6 +59,10 @@ One process, five modules with strict, disjoint ownership:
 - **Runtime** — the agent loop: proposes tool calls, consumes results. Never executes effects.
 - **Executor** — the *only* module that authorizes and performs effects, and the only path
   to effectful credentials.
+- **Tools (plugins, outside core)** — everything that touches the world: email, filesystem,
+  computer-use, browser, calendar. They enter only through registry contracts; core never
+  imports a tool, tools import core. An **effect tool** is agent-proposed (`smtp.send`);
+  a **source** originates work without an agent in the loop (IMAP polling → triage run).
 
 **Commands vs events.** Commands request work; events record committed facts. Both travel
 in versioned envelopes: event id, source dedup key, principal, conversation/run ids,
@@ -83,7 +95,9 @@ agents cannot read or modify. Consequences:
 - **Unknown tool → refuse. Invalid arguments → refuse.** Agent overrides may tighten
   policy; never loosen mandatory gates.
 - Policy tables are inaccessible to agent tools. The Executor holds credentials; agents
-  hold none.
+  hold none. The registry contract is the *only* thing core knows about tools: no tool
+  has a sibling inside core, and removing every plugin leaves the boundary intact and
+  the system running.
 - External/MCP tools with credentials are trusted code the registry cannot constrain —
   so they enter through **declared manifests** (see "Drop-in tools and skills"): the
   owner classifies each tool at install time; undeclared capabilities fail closed.
@@ -92,13 +106,32 @@ agents cannot read or modify. Consequences:
 
 Tools and skills are files in the repo (`tools/`, `skills/`), auto-discovered — which is
 also what keeps an install reproducible on any machine. The trust lifecycle is the
-point, not the packaging:
+point, not the packaging — and so is the dependency direction: **core never imports a
+tool; tools import core**, enforced by lint (import boundaries) and a CI check that boots
+core with the tools directory absent. There is deliberately no runtime plugin framework:
+for a single-owner system, "droppable" means *delete the folder and it still boots*.
+
+Not everything that plugs in is the same kind of thing — there are two plugin contracts:
+
+- **Effect tools** — agent-proposed capabilities (`smtp.send`, `fs.write`, `deploy`).
+  They always travel the action/approval machinery and only ever execute through the
+  Executor.
+- **Sources** — system-invoked pollers that *originate* work without an agent in the
+  loop (IMAP polling, a webhook receiver). A source carries: a poll schedule, event
+  emission with source dedup keys, **transactional cursor advancement** (cursor and
+  created events commit together), and an explicit offline/retention contract.
+  Email is both: IMAP is a source, SMTP is an effect tool.
 
 - **Manifests.** Every tool declares its operations and requested tier. The **owner
   classifies at install time**; unclassified tools default to `gated`; undeclared
   capabilities fail closed. This is what makes a broadly privileged drop-in like a
   Chrome MCP connection acceptable: declare `navigate/screenshot/read` at `session`
   tier, `click/type` at `gated`, and the registry enforces the rest.
+- **Plugin-owned schema.** A plugin family ships its own migrations in a Postgres schema
+  namespace (`email.mailboxes`, `email.email_messages`), registered with core at install;
+  core's schema contains no tool-specific tables. Uninstall drops the schema and registry
+  rows, nothing else. A mission that requires a missing plugin is *uninstallable* — a
+  clean configuration state, not a broken system.
 - **Agent-created tools** follow a probation lifecycle: *proposed* (code + manifest +
   why) → *owner approval bound to the code hash* → installed with **every call gated** →
   promoted by the owner only after observed behavior. Agent-written code that then
@@ -152,7 +185,12 @@ object** created *before* the approval request:
 - Browser actions get bounded session grants (targets, operations, duration, revocation)
   because the page can change under an immutable argument list.
 
-## Email ingestion
+## Email ingestion (first plugin: IMAP source + SMTP effect tool)
+
+Email is not core — it is the first plugin, chosen to prove both contracts at once:
+an IMAP **source** (mail arrives → triage run, no agent in the loop) and an SMTP
+**effect tool** (agent proposes, approvals gate, ledger records). Everything below is
+the email plugin's implementation of the source contract:
 
 - Identity is `(account_id, mailbox_id, uidvalidity, uid)` with a unique constraint —
   UIDs are not stable alone (RFC 9051). Handle UIDVALIDITY resets, moves, expunges,
@@ -174,13 +212,16 @@ object** created *before* the approval request:
 - Event-triggered work carries its own source-event dedup key.
 - Timezone persisted per schedule; DST behavior defined.
 
-## Effectful side effects (SMTP and beyond)
+## Effectful side effects (the effect ledger)
 
-Exactly-once at the wire is impossible (RFC 5321 acknowledges duplicate delivery). The
-guarantee buddi offers instead: **durable intent, controlled retries, explicit
-uncertainty**. A durable send ledger records the exact message before dispatch; ambiguous
-completion (crash/timeout) marks the attempt `unknown` — in v1 that requires user review,
-never a blind retry.
+Exactly-once at the wire is impossible (RFC 5321 acknowledges duplicate delivery; the
+same holds for deploys, payments, and most mutating APIs). The guarantee buddi offers
+instead: **durable intent, controlled retries, explicit uncertainty**. A durable
+**effect ledger** (`effect_attempts`, core-owned and generic) records the exact envelope
+before dispatch for *any* non-idempotent external effect; ambiguous completion
+(crash/timeout) marks the attempt `unknown` — in v1 that requires user review, never a
+blind retry. SMTP is the ledger's first user; deploy and other irreversible tools reuse
+it unchanged.
 
 ## Queue, concurrency, recovery (Phase 1, not Phase 2)
 
@@ -234,6 +275,28 @@ Reference: `~/Projects/personal/foreman-0.1.18/.../foreman/src/provider.ts`.
   required endpoint forces it — and when it exists, it sits inside the trust boundary,
   credentials and all.
 
+### Credential kinds (native Anthropic wire)
+
+- **`api-key`** — `x-api-key` header, `ANTHROPIC_API_KEY`.
+- **`subscription-token`** — the `sk-ant-oat01-…` token from `claude setup-token`, sent as
+  `Authorization: Bearer`. Verified 2026-09-13 against the live API: `/v1/models` accepts it
+  plainly; `/v1/messages` accepts it only when the **first `system` content block is exactly**
+  `You are Claude Code, Anthropic's official CLI for Claude.` — its own block, exact match, no
+  trailing newline. A string system prompt, or one merged block with the agent prompt appended,
+  returns 429: the check is equality on the first block, not a prefix test. So the adapter emits
+  the two-block form (identity block, then the agent prompt) for this credential kind, and a
+  plain string for `api-key`. The `anthropic-beta: oauth-2025-04-20` header is sent for parity
+  with Claude Code but was not enforced on `/v1/messages` at verification time. Bills the
+  owner's subscription; the token is revoked by a Claude Code re-login; using it outside Claude
+  Code is the owner's decision under Anthropic's terms.
+- **`claude-code`** (ambient install, Foreman-style, via Agent SDK) — explicitly **out of
+  scope**: it is a different runtime, not a credential; it violates the "no ambient
+  credentials" rule and executes its own tools outside the Executor. Reconsider only as a
+  second runtime adapter with tools re-exposed over MCP and built-ins disabled.
+
+Secrets come from the vault; in the day-1 build they come from `.env` via an explicit
+env-name reference (never read ambiently by the adapter).
+
 ## Memory
 
 Four separated kinds: **conversation history**, **run checkpoints**, **explicit user
@@ -269,27 +332,37 @@ provenance: source message refs, timestamp, scope, expiry, embedding model/versi
 - `missions`, `schedule_specs`, `occurrences` (unique constraint), `runs`, `steps`
 - `artifacts` (versioned files: kind, content ref, owning run, previewable)
 - `actions` (immutable: canonical args, hashes, envelope), `approvals` (state machine),
-  `send_attempts` (ledger)
+  `effect_attempts` (generic ledger — SMTP is the first effect type)
 - `events` (append-only, outbox)
-- `email_accounts`, `mailboxes`, `email_messages` (identity quad), `drafts`,
-  `message_triage` (separate lifecycles)
 - `memories` (kind, provenance, scope, expiry)
-- `tool_registry` (capability classification)
+- `installed_plugins` + `tool_registry` (capability classification, per-plugin manifests)
 - secrets live in the OS vault — there is no secrets table
+- **Plugin-owned schemas** — `email_accounts`, `mailboxes`, `email_messages` (identity
+  quad), `drafts` (linking messages to artifact versions), `message_triage` all live in
+  the `email` schema: shipped, versioned, and dropped with the email plugin. Core's own
+  schema contains none of them.
 
 ## Tool families (exemplar-driven backlog)
 
 Three concrete missions define the tool inventory; each names what the layers above must provide.
 
-- **"Every Friday, check my bank accounts → finance recap + advice"** — periodic mission
-  + derived memory with history. No consumer bank APIs; the primary strategy is the
-  **host computer-use driver on a dedicated browser profile** (see "Computer access"):
-  no bank credential ever enters the vault, 2FA happened with the human present, and
-  OS-level input leaves no in-page automation artifacts. Rules: log in to selected
-  sites once (sessions persist; re-login is co-driven); reads at `session` tier; money
-  actions always `gated`. Fallbacks: **CSV drop folder** (zero-risk, works even when a
-  bank refuses automation), open-banking adapter later (same verification pain as
-  Gmail OAuth — port now, implement later). Financial data → cloud model is a
+- **"Every Friday, check my bank accounts → finance recap + advice"** — the **first
+  agent, not the last**. It needs no effect tools: every tool is a read over
+  plugin-owned data or pure computation, so it ships before the approval machinery
+  exists. Plugin: `packages/tools/finance`, schema `finance` — `accounts` (balance,
+  as-of), `recurring_items` (income|charge, amount, cadence, anchor date, account),
+  `transactions` (date, amount, category, account, source manual|csv, dedup hash),
+  `preferences` (currency, safety floor). Tools: add/list recurring, set balance,
+  record transaction, CSV import (drop folder), monthly summary, and
+  `project_cashflow(horizonDays, hypothetical?)` — a deterministic day-by-day balance
+  simulation returning the minimum balance and its date. **The model explains; it never
+  computes.** CSV drop is the primary v1 intake, not a fallback. Bank access via the
+  **host computer-use driver on a dedicated browser profile** (see "Computer access")
+  stays the later strategy: no bank credential ever enters the vault, 2FA happened with
+  the human present, OS-level input leaves no in-page automation artifacts; log in to
+  selected sites once (sessions persist; re-login is co-driven); reads at `session`
+  tier; money actions always `gated`. Open-banking adapter later (same verification pain
+  as Gmail OAuth — port now, implement later). Financial data → cloud model is a
   per-agent provider decision (principle 5).
 - **"Prepare slides for my next training on Trokky CMS"** — needs a **calendar read tool**
   (auto tier) and, more importantly, an **artifact store** as a first-class domain concept:
@@ -310,7 +383,7 @@ buddi/
     core/          domain, db, event log, queue+leases, outbox, scheduler, trust, vault
     runtime/       agent loop, RuntimeProvider port + anthropic/openai adapters
     gateway/       surface adapters (telegram, web-api), owner identity, routing
-    tools/         email (imapflow/smtp), computer-use (a11y+vision+input), browser (CDP fallback), filesystem — executor-owned
+    tools/         plugins: finance (read-only: accounts, recurring, transactions, cashflow projection), email (IMAP source + SMTP tool), computer-use (a11y+vision+input), browser (CDP fallback), filesystem — import core; never imported by it
     web/           dashboard UI (React/Vite) — transcripts, missions, approvals
   docker-compose.yml   (postgres)
   .env.example         (single data dir; nothing scattered)
@@ -318,19 +391,32 @@ buddi/
 
 ## Roadmap
 
-1. **Spine, narrow but operationally complete.** One owner, one Telegram surface
-   (allowlisted), one Gmail mailbox (app password), two API-key provider adapters
-   (Anthropic + OpenAI) to prove the port, mail-triage mission, drafts, gated SMTP send
-   with action/approval machinery, durable queue + leases + recovery + pause, keychain
-   vault, event log. Approvals resolve over Telegram — no web UI yet.
-2. **Dashboard + scheduler config.** Web UI over the event log (transcripts, missions,
+1. **Finance advisor, read-only.** Scaffold; core contracts + trust registry that **fails
+   closed on non-`auto` tiers**; runtime loop + Anthropic adapter with **both credential
+   kinds** (`api-key`, `subscription-token`); the **finance plugin** (its own schema and
+   migrations, classified at install); a CLI chat surface; the event log; core migrations
+   — plus the **CI check that boots core with zero plugins installed**. No effect tools,
+   no approvals: every finance tool is a read or a pure computation.
+2. **Telegram surface + owner identity + the scheduled Friday recap.** One allowlisted
+   Telegram surface (numeric user id + private-chat id, update-id dedup) bound to the
+   installation owner; missions with materialized **occurrences** and per-mission
+   **misfire policy** — a week asleep does not produce a week of stale recaps.
+3. **Effects: queue, vault, approvals — and email as the first effect tool.** Durable
+   Postgres queue + leases + startup recovery + pause; keychain vault; the immutable
+   action object and approval state machine; the effect ledger. Then the **email**
+   plugin: IMAP source, SMTP effect tool, one Gmail mailbox (app password); install runs
+   its migrations, the owner classifies its manifest. Mail-triage mission is
+   configuration (agent prompt + source subscription); drafts are artifacts; gated SMTP
+   send exercises the approval machinery and the ledger. Approvals resolve over Telegram
+   — no web UI yet. The **OpenAI adapter** lands here, proving the runtime port swaps.
+4. **Dashboard + scheduler config.** Web UI over the event log (transcripts, missions,
    approvals); occurrence/misfire policy configuration.
-3. **Specialization + cooperation.** Second agent; delegation via the queue; derived
+5. **Specialization + cooperation.** Second agent; delegation via the queue; derived
    memory with provenance.
-4. **Host computer-use, native apps.** The computer-use driver (a11y tree + vision +
+6. **Host computer-use, native apps.** The computer-use driver (a11y tree + vision +
    synthesized input) on a dedicated buddi browser profile with session grants —
-   unlocks the bank/finance exemplar; CDP fallback for machine-friendly sites; PWA
-   before native.
+   upgrades the finance agent from CSV drop to live bank reads; CDP fallback for
+   machine-friendly sites; PWA before native.
 
 ## Risks
 
@@ -339,9 +425,15 @@ buddi/
 - **Lossy offline window**: Telegram updates expire; catch-up cannot recover them.
   Mitigation: documented offline contract; persisted offsets; resume reconciliation.
 - **No exactly-once externally**: accepted; durable intent + ledger + `unknown` states.
-- **Generic tools resist capability classification**: v1 ships only narrow built-ins;
-  generic/MCP plugin support waits for a sandboxing story.
+- **Generic tools resist capability classification**: v1 ships only one narrow plugin
+  (email); generic/MCP plugin support waits for a sandboxing story.
+- **Plugin schema lifecycle**: plugin migrations interact with core migrations, and
+  uninstall must be explicit and lossy-safe. Mitigation: install/uninstall is owner-run,
+  versioned, transactional; core never references plugin tables; a dropped plugin loses
+  only its schema and registry rows.
 - **Host automation vs bank ToS**: undetectable ≠ permitted — behavioral analytics can
   still flag, and the realistic downside is an account lock. Mitigation: session-tier
   co-driving, human pacing, gentle reads, CSV fallback.
+- **Subscription token as credential**: revoked by re-login, subject to Anthropic's terms
+  for non-Claude-Code use; `api-key` kind is the fallback and needs no code change.
 - **Provider drift**: pinned providers, fail-closed resolution, per-run snapshots.
