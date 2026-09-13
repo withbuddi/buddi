@@ -18,6 +18,26 @@ describe('parseArgs', () => {
     });
   });
 
+  it('reads --agent', () => {
+    expect(parseArgs(['ask', 'q', '--agent', 'concierge'])).toMatchObject({
+      command: 'ask',
+      question: 'q',
+      agent: 'concierge',
+    });
+  });
+
+  it('leaves the agent unset when no --agent is given', () => {
+    expect(parseArgs(['chat']).agent).toBeUndefined();
+  });
+
+  it('refuses --agent without a value', () => {
+    expect(() => parseArgs(['chat', '--agent'])).toThrow(/agent id/);
+  });
+
+  it('parses the agents listing command', () => {
+    expect(parseArgs(['agents']).command).toBe('agents');
+  });
+
   it('refuses an unknown option', () => {
     expect(() => parseArgs(['chat', '--wat'])).toThrow(/unknown option/);
   });

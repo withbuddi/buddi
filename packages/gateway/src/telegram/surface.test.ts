@@ -3,11 +3,14 @@
  * Bot API and an in-memory `Queryable` stands in for core's tables.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Queryable } from '@buddi/core';
+import { UnknownAgentError, type Queryable } from '@buddi/core';
 import { TelegramApi, splitMessage, type FetchLike, type TelegramUpdate } from './api.js';
 import {
   HELP,
   PLACEHOLDER_TEXT,
+  UNKNOWN_AGENT_TEXT,
+  agentsText,
+  placeholderText,
   RECAP_MISSION_ID,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
@@ -17,6 +20,7 @@ import {
   toolLabel,
   type RunMission,
 } from './surface.js';
+import type { AgentCatalog, CatalogAgent } from './types.js';
 import { OwnerNotPairedError, notifyOwner, ownerChatId } from './notify.js';
 
 /* ---------------- in-memory core tables ---------------- */
@@ -26,7 +30,9 @@ class FakeDb implements Queryable {
   updates: { surface: string; update_id: string }[] = [];
   cursors = new Map<string, string>();
   conversations: { id: string; agent_id: string }[] = [];
+  /** keyed `${chatId}::${agentId}` — a conversation belongs to a (chat, agent). */
   chatConversations = new Map<string, string>();
+  activeAgents = new Map<string, string>();
   events: { kind: string; payload: any }[] = [];
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
@@ -55,11 +61,19 @@ class FakeDb implements Queryable {
       return { rows: cursor === undefined ? [] : [{ cursor }] };
     }
     if (text.startsWith('select conversation_id from core.surface_conversations')) {
-      const id = this.chatConversations.get(params[1]);
+      const id = this.chatConversations.get(`${params[1]}::${params[2]}`);
       return { rows: id ? [{ conversation_id: id }] : [] };
     }
     if (text.startsWith('insert into core.surface_conversations')) {
-      this.chatConversations.set(params[1], params[2]);
+      this.chatConversations.set(`${params[1]}::${params[2]}`, params[3]);
+      return { rows: [] };
+    }
+    if (text.startsWith('select agent_id from core.surface_active_agent')) {
+      const agentId = this.activeAgents.get(params[1]);
+      return { rows: agentId === undefined ? [] : [{ agent_id: agentId }] };
+    }
+    if (text.startsWith('insert into core.surface_active_agent')) {
+      this.activeAgents.set(params[1], params[2]);
       return { rows: [] };
     }
     if (text.startsWith('insert into core.conversations')) {
@@ -126,6 +140,64 @@ function message(updateId: number, userId: number, chatId: number, text: string)
   };
 }
 
+/* ---------------- fake agent catalog ---------------- */
+
+const MODEL = 'claude-sonnet-5';
+const PROVIDER = {
+  kind: 'anthropic' as const,
+  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  model: MODEL,
+};
+
+function catalogAgent(id: string, name: string, isDefault: boolean): CatalogAgent {
+  return {
+    id,
+    name,
+    description: `${name}, for testing`,
+    isDefault,
+    file: `${id}/agent.md`,
+    model: MODEL,
+    tools: [],
+    maxTurns: 4,
+    language: 'mirror',
+    provider: PROVIDER,
+    systemPromptTemplate: `${name}. Today is {{today}}.`,
+    definition: (now: Date) => ({
+      id,
+      name,
+      systemPrompt: `${name}. Today is ${now.toISOString().slice(0, 10)}.`,
+      tools: [],
+      provider: PROVIDER,
+      maxTurns: 4,
+    }),
+  };
+}
+
+const FINANCE = catalogAgent('finance-advisor', 'Finance Advisor', true);
+const CONCIERGE = catalogAgent('concierge', 'Concierge', false);
+
+/** Two agents, one of them the default — the smallest catalog that can switch. */
+function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalog {
+  const first = agents[0] as CatalogAgent;
+  const byDefault = agents.find((a) => a.isDefault) ?? first;
+  return {
+    get: (id) => agents.find((a) => a.id === id),
+    list: () =>
+      agents.map(({ id, name, description, isDefault }) => ({ id, name, description, isDefault })),
+    defaultAgent: () => byDefault,
+    resolve: (id) => {
+      if (id === undefined) return byDefault;
+      const found = agents.find((a) => a.id === id);
+      if (!found) throw new UnknownAgentError(id, agents.map((a) => a.id));
+      return found;
+    },
+  };
+}
+
+/** The placeholder as each agent renders it. */
+const FINANCE_PLACEHOLDER = placeholderText(FINANCE.name);
+const CONCIERGE_PLACEHOLDER = placeholderText(CONCIERGE.name);
+
 function surfaceWith(
   db: FakeDb,
   run = vi.fn(async () => 'reply'),
@@ -133,18 +205,21 @@ function surfaceWith(
     failOn?: (method: string) => boolean;
     now?: () => number;
     runMission?: RunMission;
+    catalog?: AgentCatalog;
+    setChatMenu?: (chatId: string, agent: CatalogAgent) => Promise<void>;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn);
   const surface = new TelegramSurface({
     api,
     pool: db,
-    agentId: 'finance-advisor',
+    catalog: extra.catalog ?? fakeCatalog(),
     run,
     log: () => {},
     typingIntervalMs: 60_000,
     ...(extra.now ? { now: extra.now } : {}),
     ...(extra.runMission ? { runMission: extra.runMission } : {}),
+    ...(extra.setChatMenu ? { setChatMenu: extra.setChatMenu } : {}),
   });
   return { surface, sent, run, api };
 }
@@ -396,7 +471,7 @@ describe('TelegramSurface progress bubble', () => {
     await made.surface.drain();
 
     expect(sentAtRun.filter((s) => s.method === 'sendMessage')).toHaveLength(1);
-    expect(sentAtRun.find((s) => s.method === 'sendMessage')?.body.text).toBe(PLACEHOLDER_TEXT);
+    expect(sentAtRun.find((s) => s.method === 'sendMessage')?.body.text).toBe(FINANCE_PLACEHOLDER);
   });
 
   it('edits the placeholder with a progress line on a tool call', async () => {
@@ -509,7 +584,7 @@ describe('TelegramSurface progress bubble', () => {
     await surface.drain();
 
     expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(3);
-    expect(sent.some((s) => s.body.text === PLACEHOLDER_TEXT)).toBe(false);
+    expect(sent.some((s) => s.body.text === FINANCE_PLACEHOLDER)).toBe(false);
     expect(sent.some((s) => s.method === 'editMessageText')).toBe(false);
   });
 });
@@ -534,7 +609,7 @@ describe('TelegramSurface /recap', () => {
     // placeholder -> progress line -> final answer, one bubble throughout
     const sends = sent.filter((s) => s.method === 'sendMessage');
     expect(sends).toHaveLength(1);
-    expect(sends[0]?.body.text).toBe(PLACEHOLDER_TEXT);
+    expect(sends[0]?.body.text).toBe(FINANCE_PLACEHOLDER);
     const edits = sent.filter((s) => s.method === 'editMessageText').map((s) => s.body.text);
     expect(edits).toEqual(['⏳ Working… (checking accounts)', 'cash is fine']);
   });
@@ -611,5 +686,208 @@ describe('notifyOwner', () => {
     const db = new FakeDb();
     const { api } = fakeApi();
     await expect(notifyOwner('recap', { pool: db, api })).rejects.toBeInstanceOf(OwnerNotPairedError);
+  });
+});
+
+
+describe('TelegramSurface agents', () => {
+  it('runs the default agent when the chat has never switched', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run } = surfaceWith(db);
+    await surface.processUpdates([message(200, OWNER, OWNER, 'how much is left?')]);
+    await surface.drain();
+
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('finance-advisor');
+    expect(db.activeAgents.size).toBe(0);
+    expect(db.conversations[0]?.agent_id).toBe('finance-advisor');
+  });
+
+  it('lists the agents, marking the active one', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([message(201, OWNER, OWNER, '/agents')]);
+    await surface.drain();
+
+    const text = sent.find((s) => s.method === 'sendMessage')?.body.text as string;
+    expect(text.split('\n').slice(1, 3)).toEqual([
+      '• finance-advisor — Finance Advisor (active)',
+      '• concierge — Concierge',
+    ]);
+    expect(text).toBe(agentsText(fakeCatalog().list(), 'finance-advisor'));
+  });
+
+  it('/use persists the switch and later messages run that agent', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([
+      message(202, OWNER, OWNER, 'hello advisor'),
+      message(203, OWNER, OWNER, '/use concierge'),
+      message(204, OWNER, OWNER, 'hello concierge'),
+    ]);
+    await surface.drain();
+
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+    expect(sent.some((s) => s.body.text === 'You are now talking to Concierge.')).toBe(true);
+    expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual([
+      'finance-advisor',
+      'concierge',
+    ]);
+    // Each agent keeps its own conversation for this chat.
+    expect(run.mock.calls.map((c: any) => c[0].conversationId)).toEqual(['conv-1', 'conv-2']);
+    expect(db.conversations.map((c) => c.agent_id)).toEqual(['finance-advisor', 'concierge']);
+  });
+
+  it('resumes an agent conversation when switching back', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run } = surfaceWith(db);
+    await surface.processUpdates([
+      message(205, OWNER, OWNER, 'one'),
+      message(206, OWNER, OWNER, '/use concierge'),
+      message(207, OWNER, OWNER, 'two'),
+      message(208, OWNER, OWNER, '/use finance-advisor'),
+      message(209, OWNER, OWNER, 'three'),
+    ]);
+    await surface.drain();
+
+    expect(run.mock.calls.map((c: any) => c[0].conversationId)).toEqual([
+      'conv-1',
+      'conv-2',
+      'conv-1',
+    ]);
+    expect(db.conversations).toHaveLength(2);
+  });
+
+  it('/new resets only the active agent conversation', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run, sent } = surfaceWith(db);
+    await surface.processUpdates([
+      message(210, OWNER, OWNER, 'advisor one'),
+      message(211, OWNER, OWNER, '/use concierge'),
+      message(212, OWNER, OWNER, 'concierge one'),
+      message(213, OWNER, OWNER, '/new'),
+      message(214, OWNER, OWNER, 'concierge two'),
+      message(215, OWNER, OWNER, '/use finance-advisor'),
+      message(216, OWNER, OWNER, 'advisor two'),
+    ]);
+    await surface.drain();
+
+    expect(sent.some((s) => s.body.text === 'New conversation started with Concierge.')).toBe(true);
+    expect(run.mock.calls.map((c: any) => c[0].conversationId)).toEqual([
+      'conv-1', // finance advisor
+      'conv-2', // concierge
+      'conv-3', // concierge, after /new
+      'conv-1', // the finance advisor thread is untouched
+    ]);
+  });
+
+  it('refuses an unknown agent id without switching', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([
+      message(217, OWNER, OWNER, '/use nope'),
+      message(218, OWNER, OWNER, 'hello'),
+    ]);
+    await surface.drain();
+
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(UNKNOWN_AGENT_TEXT);
+    expect(db.activeAgents.size).toBe(0);
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('finance-advisor');
+  });
+
+  it('re-publishes the chat menu after a switch', async () => {
+    const db = withOwner(new FakeDb());
+    const menus: { chatId: string; name: string }[] = [];
+    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), {
+      setChatMenu: async (chatId, agent) => {
+        menus.push({ chatId, name: agent.name });
+      },
+    });
+    await surface.processUpdates([message(219, OWNER, OWNER, '/use concierge')]);
+    await surface.drain();
+    expect(menus).toEqual([{ chatId: String(OWNER), name: 'Concierge' }]);
+  });
+
+  it('names the working agent in the placeholder', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([
+      message(220, OWNER, OWNER, 'hello'),
+      message(221, OWNER, OWNER, '/use concierge'),
+      message(222, OWNER, OWNER, 'hello again'),
+    ]);
+    await surface.drain();
+
+    const placeholders = sent
+      .filter((s) => s.method === 'sendMessage' && String(s.body.text).startsWith('⏳'))
+      .map((s) => s.body.text);
+    expect(placeholders).toEqual([FINANCE_PLACEHOLDER, CONCIERGE_PLACEHOLDER]);
+    expect(FINANCE_PLACEHOLDER).toBe('⏳ Finance Advisor is working…');
+    expect(placeholderText()).toBe(PLACEHOLDER_TEXT);
+  });
+
+  it('/whoami names the active agent', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([
+      message(223, OWNER, OWNER, '/use concierge'),
+      message(224, OWNER, OWNER, '/whoami'),
+    ]);
+    await surface.drain();
+    expect(sent.at(-1)?.body.text).toBe('You are talking to Concierge (concierge).');
+  });
+
+  it('falls back to the default when the pinned agent is gone', async () => {
+    const db = withOwner(new FakeDb());
+    db.activeAgents.set(String(OWNER), 'retired-agent');
+    const { surface, run } = surfaceWith(db);
+    await surface.processUpdates([message(225, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('finance-advisor');
+  });
+});
+
+describe('TelegramSurface /status under another agent', () => {
+  it('runs the finance advisor for that one message without switching', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
+    await surface.processUpdates([
+      message(230, OWNER, OWNER, '/use concierge'),
+      message(231, OWNER, OWNER, 'hello'),
+      message(232, OWNER, OWNER, '/status'),
+      message(233, OWNER, OWNER, 'and again'),
+    ]);
+    await surface.drain();
+
+    const calls = run.mock.calls.map((c: any) => c[0]);
+    expect(calls.map((c: any) => c.agent.id)).toEqual([
+      'concierge',
+      'finance-advisor',
+      'concierge',
+    ]);
+    // The status run uses the advisor's own conversation, and the chat stays
+    // pointed at the concierge.
+    expect(calls.map((c: any) => c.conversationId)).toEqual(['conv-1', 'conv-2', 'conv-1']);
+    expect(calls[1]?.text).toBe('Status');
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+
+    const statusPlaceholder = sent.filter(
+      (s) => s.method === 'sendMessage' && s.body.text === FINANCE_PLACEHOLDER,
+    );
+    expect(statusPlaceholder).toHaveLength(1);
+    const noted = sent
+      .filter((s) => s.method === 'editMessageText')
+      .map((s) => s.body.text as string)
+      .filter((t) => t.startsWith('('));
+    expect(noted).toEqual([
+      '(Finance Advisor answered this one; you are still talking to Concierge.)\n\nyou have $12 left',
+    ]);
+  });
+
+  it('adds no note when the finance advisor is already active', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
+    await surface.processUpdates([message(234, OWNER, OWNER, '/status')]);
+    await surface.drain();
+    expect(sent.find((s) => s.method === 'editMessageText')?.body.text).toBe('you have $12 left');
   });
 });

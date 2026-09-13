@@ -183,3 +183,45 @@ export async function setSurfaceCursor(
     [surface, cursor],
   );
 }
+
+/* ------------------------------------------------------------------ *
+ * Active agent per chat (one bot, many agents)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Which agent a chat is currently talking to, or `null` when it has never
+ * switched. `null` is not an error: the caller falls back to the catalog's
+ * default agent, so an installation that never runs `/use` stores no row.
+ */
+export async function getActiveAgent(
+  pool: Queryable,
+  surface: string,
+  externalChatId: string,
+): Promise<string | null> {
+  const { rows } = await pool.query(
+    `select agent_id from core.surface_active_agent
+      where surface = $1 and external_chat_id = $2`,
+    [surface, externalChatId],
+  );
+  const agentId = rows[0]?.agent_id;
+  return agentId === undefined || agentId === null ? null : String(agentId);
+}
+
+/**
+ * Point a chat at an agent. The id is stored as given — validity is the agent
+ * catalog's decision, made before this is called, never here.
+ */
+export async function setActiveAgent(
+  pool: Queryable,
+  surface: string,
+  externalChatId: string,
+  agentId: string,
+): Promise<void> {
+  await pool.query(
+    `insert into core.surface_active_agent (surface, external_chat_id, agent_id, updated_at)
+     values ($1, $2, $3, now())
+     on conflict (surface, external_chat_id) do update
+       set agent_id = excluded.agent_id, updated_at = now()`,
+    [surface, externalChatId, agentId],
+  );
+}

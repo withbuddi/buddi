@@ -14,22 +14,19 @@ import { fileURLToPath } from 'node:url';
 import {
   createPool,
   resolveProvider,
-  ToolRegistry,
+  UnknownAgentError,
+  type CatalogAgent,
   type ToolContext,
 } from '@buddi/core';
 import { createAnthropicProvider, createConversation, runAgent } from '@buddi/runtime';
-import { manifest as financeManifest } from '@buddi/tool-finance';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
-import { createFinanceAdvisor } from './agents/finance-advisor.js';
-
-/** Repo root relative to this file — resolved from the module URL, never cwd. */
-const REPO_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-);
+import {
+  AGENTS_DIR,
+  createToolRegistry,
+  loadGatewayCatalog,
+  REPO_ROOT,
+} from './agents/catalog.js';
 
 const OWNER_ID = 'owner';
 
@@ -37,30 +34,40 @@ const ESC = '\u001b[';
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
 const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
 
-const USAGE = `buddi — personal finance advisor
+const USAGE = `buddi — your personal agents
 
-  buddi chat                 start a new conversation
+  buddi chat                 start a new conversation with the default agent
+  buddi chat --agent <id>    ... with a specific agent (buddi agents to list them)
   buddi chat --resume <id>   continue a conversation
   buddi chat --last          continue the most recent conversation
   buddi ask "<question>"     one turn, then exit
+  buddi ask "<question>" --agent <id>
   buddi ask "<question>" --resume <id>
+  buddi agents               every agent installed under agents/
 
 In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;
 
 export type ParsedArgs = {
-  command: 'chat' | 'ask' | 'help';
+  command: 'chat' | 'ask' | 'agents' | 'help';
   question?: string;
   resume?: string;
+  /** Agent id from --agent; undefined means the catalog default. */
+  agent?: string;
   last: boolean;
 };
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const [raw, ...rest] = argv;
-  const command = raw === 'chat' ? 'chat' : raw === 'ask' ? 'ask' : 'help';
+  const command =
+    raw === 'chat' ? 'chat' : raw === 'ask' ? 'ask' : raw === 'agents' ? 'agents' : 'help';
   const parsed: ParsedArgs = { command, last: false };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i] as string;
-    if (arg === '--resume') {
+    if (arg === '--agent') {
+      const value = rest[++i];
+      if (!value) throw new Error('--agent needs an agent id');
+      parsed.agent = value;
+    } else if (arg === '--resume') {
       const value = rest[++i];
       if (!value) throw new Error('--resume needs a conversation id');
       parsed.resume = value;
@@ -103,12 +110,25 @@ async function main(): Promise<void> {
     console.log(USAGE);
     return;
   }
+
+  loadDotenv({ path: path.join(REPO_ROOT, '.env') });
+
+  const registry = createToolRegistry();
+  const catalog = loadGatewayCatalog({ env: process.env, registry });
+
+  if (args.command === 'agents') {
+    for (const a of catalog.list()) {
+      console.log(
+        `${bold(a.id)}${a.isDefault ? dim(' (default)') : ''} — ${a.name}: ${a.description}`,
+      );
+    }
+    return;
+  }
+
   if (args.command === 'ask' && !args.question) {
     console.error('buddi ask needs a question: buddi ask "can I afford a bike?"');
     process.exit(1);
   }
-
-  loadDotenv({ path: path.join(REPO_ROOT, '.env') });
 
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -116,11 +136,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const registry = new ToolRegistry();
-  registry.register(financeManifest);
-
   const now = (): Date => new Date();
-  const agent = createFinanceAdvisor({ env: process.env, now: now() });
+
+  // Fails closed: an unknown --agent is never coerced into the default.
+  let selected: CatalogAgent;
+  try {
+    selected = catalog.resolve(args.agent);
+  } catch (err) {
+    if (err instanceof UnknownAgentError) {
+      console.error(err.message);
+      console.error(`agents live in ${AGENTS_DIR}; run "buddi agents" to list them`);
+      process.exit(1);
+    }
+    throw err;
+  }
+  const agent = selected.definition(now());
 
   const resolution = resolveProvider(agent.provider, process.env);
   if (!resolution.ok) {
@@ -150,7 +180,7 @@ async function main(): Promise<void> {
 
     /** One turn. The definition is rebuilt so `{{today}}` stays current. */
     const turn = async (message: string): Promise<void> => {
-      const definition = createFinanceAdvisor({ env: process.env, now: now() });
+      const definition = selected.definition(now());
       const result = await runAgent({
         agent: definition,
         provider,
@@ -172,7 +202,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    console.log(bold('buddi — Finance Advisor'));
+    console.log(bold(`buddi — ${agent.name}`));
     console.log(dim(`conversation: ${id}`));
     console.log(
       dim(`model: ${resolution.provider.model} (${resolution.provider.credentialKind})`),
@@ -195,7 +225,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (message === '/tools') {
-        for (const spec of registry.list()) {
+        for (const spec of registry.list().filter((s) => agent.tools.includes(s.name))) {
           console.log(`${spec.name} [${spec.tier}] — ${spec.description}`);
         }
         continue;

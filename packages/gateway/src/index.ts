@@ -1,4 +1,5 @@
 // @buddi/gateway — surface adapters. The CLI lives in ./cli.ts (bin: buddi).
+export * from './agents/catalog.js';
 export * from './agents/finance-advisor.js';
 export * from './telegram/api.js';
 export * from './telegram/surface.js';
