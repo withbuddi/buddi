@@ -417,8 +417,13 @@ suite('queue (postgres)', () => {
         onError: () => {},
       });
       // Backoff is real time, so only the first attempt happens promptly; the
-      // point under test is that it does not spin.
-      await waitFor(async () => (await getJob(pool, job.id))?.state === 'pending');
+      // point under test is that it does not spin. Wait for the state *after*
+      // the first failure — `pending` alone is also the job's initial state, so
+      // the attempt count is what makes the condition unambiguous under load.
+      await waitFor(async () => {
+        const j = await getJob(pool, job.id);
+        return j?.state === 'pending' && j.attempts === 1;
+      });
       await worker.stop();
       const after = await getJob(pool, job.id);
       expect(after?.attempts).toBe(1);
