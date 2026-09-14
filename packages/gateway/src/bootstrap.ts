@@ -29,6 +29,7 @@ import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
+import { bindOwnerTools } from './agents/owner-tools.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 
 export { REPO_ROOT };
@@ -202,6 +203,10 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
       return agent ? providerFor(agent) : provider;
     },
   });
+  // `owner.rename_me` rewrites the calling agent's own file, so it needs the
+  // catalog for the same reason delegation does. Each surface rebinds with its
+  // own name, so a completed first run records where it actually happened.
+  bindOwnerTools(registry, { catalog });
   return {
     pool,
     registry,

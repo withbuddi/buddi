@@ -22,6 +22,7 @@ import {
   requireDatabase,
   runChatCli,
   runMissionsCli,
+  runNudgesCli,
   runRemindersCli,
   runServe,
 } from '@buddi/gateway';
@@ -129,6 +130,13 @@ export async function dispatch(command: Command): Promise<number> {
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       await runRemindersCli(command.argv);
+      return process.exitCode === undefined ? 0 : Number(process.exitCode);
+    }
+    case 'nudges': {
+      loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
+      await runNudgesCli(command.argv);
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'serve':

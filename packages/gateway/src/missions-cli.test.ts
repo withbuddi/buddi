@@ -116,6 +116,7 @@ describe('the default missions', () => {
       'friday-recap',
       'daily-check',
       'weekly-consolidation',
+      'getting-started',
       'sentinel-wake',
     ]);
     expect(plan.skipped).toEqual([]);

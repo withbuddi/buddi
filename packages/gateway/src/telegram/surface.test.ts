@@ -40,9 +40,9 @@ import {
   toPlainText,
   toolLabel,
   type RunMission,
-  ORIENTATION,
-  withOrientation,
-  chatIsNew,
+  BURST_GAP_MS,
+  MAX_BURST_MESSAGES,
+  splitIntoMessages,
 } from './surface.js';
 import {
   classifyMime,
@@ -108,6 +108,35 @@ class FakeDb implements Queryable {
   lastAttachment = new Map<string, { artifact_id: string; created_at: Date }>();
   /** The clock rows are stamped with, so recency is a test input. */
   clock: () => number = () => Date.now();
+  /**
+   * core.onboarding. `done` by default: almost every test here is about an
+   * installation that has been talking for weeks, and a pending row would put
+   * the first-run interview in front of all of them. `pendingOnboarding(db)`
+   * is how a test asks for a brand-new machine.
+   */
+  onboarding: {
+    state: string;
+    started_at: Date | null;
+    completed_at: Date | null;
+    surface: string | null;
+    steps_done: string[];
+    nudges_sent: number;
+    last_nudge_at: Date | null;
+    unanswered: number;
+    quiet_until: Date | null;
+    updated_at: Date | null;
+  } | null = {
+    state: 'done',
+    started_at: new Date(0),
+    completed_at: new Date(0),
+    surface: 'pre-existing',
+    steps_done: [],
+    nudges_sent: 0,
+    last_nudge_at: null,
+    unanswered: 0,
+    quiet_until: null,
+    updated_at: new Date(0),
+  };
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -302,6 +331,31 @@ class FakeDb implements Queryable {
       const id = `conv-${this.conversations.length + 1}`;
       this.conversations.push({ id, agent_id: params[0] });
       return { rows: [{ id }] };
+    }
+    if (text.startsWith('select owner_id, state, started_at')) {
+      return {
+        rows: this.onboarding
+          ? [{ owner_id: 'owner', ...this.onboarding }]
+          : [],
+      };
+    }
+    if (text.startsWith('insert into core.onboarding')) {
+      // The only write this surface makes: the claim. `where state = 'pending'`
+      // is the whole of it, so a second caller gets no row back.
+      if (this.onboarding !== null && this.onboarding.state !== 'pending') return { rows: [] };
+      this.onboarding = {
+        state: 'in-progress',
+        started_at: new Date(this.clock()),
+        completed_at: null,
+        surface: String(params[1] ?? 'telegram'),
+        steps_done: [],
+        nudges_sent: 0,
+        last_nudge_at: null,
+        unanswered: 0,
+        quiet_until: null,
+        updated_at: new Date(this.clock()),
+      };
+      return { rows: [{ owner_id: 'owner', ...this.onboarding }] };
     }
     if (text.startsWith('insert into core.events')) {
       this.events.push({ kind: params[0], payload: JSON.parse(params[1]) });
@@ -502,6 +556,7 @@ function surfaceWith(
     artifacts?: ArtifactStore | null;
     approvals?: ApprovalHooks;
     recapMissionId?: string | null;
+    burstGapMs?: number;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -522,6 +577,7 @@ function surfaceWith(
     ...(extra.runMission ? { runMission: extra.runMission } : {}),
     ...(extra.setChatMenu ? { setChatMenu: extra.setChatMenu } : {}),
     ...(extra.approvals ? { approvals: extra.approvals } : {}),
+    ...(extra.burstGapMs === undefined ? {} : { burstGapMs: extra.burstGapMs }),
   });
   return { surface, sent, run, api, store };
 }
@@ -612,6 +668,12 @@ function tick(): Promise<void> {
 function alreadyGreeted(db: FakeDb, chatId = OWNER, agentId = 'finance-advisor'): FakeDb {
   db.conversations.push({ id: 'conv-prior', agent_id: agentId });
   db.chatConversations.set(`${chatId}::${agentId}`, 'conv-prior');
+  return db;
+}
+
+/** A machine that has never been talked to: the first run is still ahead of it. */
+function pendingOnboarding(db: FakeDb): FakeDb {
+  db.onboarding = null;
   return db;
 }
 
@@ -2509,7 +2571,7 @@ describe('approvals on the surface', () => {
   });
 });
 
-/* ---------------- first-run orientation ---------------- */
+/* ---------------- the first run ---------------- */
 
 /** The last thing the owner actually read, however it reached the chat. */
 function lastText(sent: { method: string; body: any }[]): string {
@@ -2517,82 +2579,149 @@ function lastText(sent: { method: string; body: any }[]): string {
   return String(said.at(-1)?.body?.text ?? '');
 }
 
-describe('first-message orientation', () => {
-  it('is two lines, and names /agents', () => {
-    const lines = ORIENTATION.split('\n');
-    expect(lines).toHaveLength(2);
-    expect(ORIENTATION).toContain('/agents');
+/** Every message the owner read, in order. */
+function allTexts(sent: { method: string; body: any }[]): string[] {
+  return sent
+    .filter((s) => s.method === 'sendMessage' || s.method === 'editMessageText')
+    .map((s) => String(s.body?.text ?? ''));
+}
+
+describe('splitIntoMessages', () => {
+  it('sends one paragraph as one message', () => {
+    expect(splitIntoMessages('just the one line')).toEqual(['just the one line']);
   });
 
-  it('prepends nothing when the chat is not new', () => {
-    expect(withOrientation('an answer', false)).toBe('an answer');
+  it('sends two and three paragraphs as that many messages', () => {
+    expect(splitIntoMessages('one\n\ntwo')).toEqual(['one', 'two']);
+    expect(splitIntoMessages('one\n\ntwo\n\nthree')).toEqual(['one', 'two', 'three']);
   });
 
-  it('is true exactly once: chatIsNew flips after the first answered message', async () => {
-    const db = withOwner(new FakeDb());
-    expect(await chatIsNew(db, String(OWNER))).toBe(true);
-    const { surface } = surfaceWith(db);
-    await surface.processUpdates([message(1, OWNER, OWNER, 'hello')]);
+  it('sends four or more as a single message rather than a burst plus a blob', () => {
+    const four = 'one\n\ntwo\n\nthree\n\nfour';
+    expect(splitIntoMessages(four)).toEqual([four]);
+    expect(MAX_BURST_MESSAGES).toBe(3);
+  });
+
+  it('never breaks a long single paragraph, however long it is', () => {
+    const long = 'word '.repeat(400).trim();
+    expect(splitIntoMessages(long)).toEqual([long]);
+  });
+
+  it('is empty for an empty answer, and trims what it keeps', () => {
+    expect(splitIntoMessages('   \n\n  ')).toEqual([]);
+    expect(splitIntoMessages('  one  \n\n  two  ')).toEqual(['one', 'two']);
+  });
+});
+
+describe('first contact', () => {
+  const burst = { burstGapMs: 0 };
+
+  it('runs the default agent with the first-run instruction, not a canned script', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    const run = vi.fn(async () => 'Hi — I am the agent that runs on this machine.');
+    const { surface, sent } = surfaceWith(db, run, burst);
+
+    await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
     await surface.drain();
-    expect(await chatIsNew(db, String(OWNER))).toBe(false);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    const req = run.mock.calls[0]?.[0] as any;
+    expect(req.agent.id).toBe(fakeCatalog().defaultAgent().id);
+    expect(req.systemSuffix).toContain('first run');
+    // Every word the owner reads came from the agent.
+    expect(allTexts(sent)).toEqual(['Hi — I am the agent that runs on this machine.']);
   });
 
-  it('greets a freshly paired chat above the agent reply, once', async () => {
-    const db = withOwner(new FakeDb());
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'Hello, I am the assistant.'));
+  it('answers the owner\'s own first question instead of a hello', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    const run = vi.fn(async () => 'reply');
+    const { surface } = surfaceWith(db, run, burst);
+
+    await surface.processUpdates([message(1, OWNER, OWNER, 'what is this?')]);
+    await surface.drain();
+
+    expect((run.mock.calls[0]?.[0] as any).text).toBe('what is this?');
+  });
+
+  it('breaks the answer into messages with the typing indicator between them', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'one\n\ntwo\n\nthree'), burst);
+
+    await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
+    await surface.drain();
+
+    expect(allTexts(sent)).toEqual(['one', 'two', 'three']);
+    // No progress bubble: the machine is speaking first, not working on a question.
+    expect(sent.some((s) => s.method === 'editMessageText')).toBe(false);
+    const typing = sent.filter((s) => s.method === 'sendChatAction').length;
+    expect(typing).toBeGreaterThanOrEqual(3);
+    expect(BURST_GAP_MS).toBeGreaterThan(0);
+  });
+
+  it('happens once and never again', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    const run = vi.fn(async () => 'hello');
+    const { surface } = surfaceWith(db, run, burst);
+
+    await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
+    await surface.drain();
+    await surface.processUpdates([message(2, OWNER, OWNER, 'and now a question')]);
+    await surface.drain();
+
+    expect(run).toHaveBeenCalledTimes(2);
+    // The second turn is an ordinary one: no instruction, and the bubble is back.
+    expect((run.mock.calls[1]?.[0] as any).systemSuffix).toBeUndefined();
+  });
+
+  it('never starts once another surface has claimed it', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    // `buddi chat` got there first: the row is already in-progress.
+    db.onboarding = {
+      state: 'in-progress',
+      started_at: new Date(0),
+      completed_at: null,
+      surface: 'cli',
+      steps_done: [],
+      nudges_sent: 0,
+      last_nudge_at: null,
+      unanswered: 0,
+      quiet_until: null,
+      updated_at: new Date(0),
+    };
+    const run = vi.fn(async () => 'reply');
+    const { surface } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
     await surface.drain();
 
-    const first = lastText(sent);
-    expect(first.startsWith(ORIENTATION)).toBe(true);
-    expect(first).toContain('Hello, I am the assistant.');
-
-    await surface.processUpdates([message(2, OWNER, OWNER, 'and again')]);
-    await surface.drain();
-
-    expect(lastText(sent)).toBe('Hello, I am the assistant.');
+    expect((run.mock.calls[0]?.[0] as any).systemSuffix).toBeUndefined();
+    expect(db.onboarding?.surface).toBe('cli');
   });
 
-  it('never repeats it, not even across a /new or an agent switch', async () => {
-    const db = withOwner(new FakeDb());
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
+  it('leaves an installation that was already talking completely alone', async () => {
+    const db = withOwner(new FakeDb()); // onboarding: done
+    const run = vi.fn(async () => 'reply');
+    const { surface, sent } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
     await surface.drain();
-    expect(lastText(sent)).toContain(ORIENTATION);
 
-    for (const [id, text] of [
-      [2, '/new'],
-      [3, 'after a reset'],
-      [4, '/use @concierge'],
-      [5, 'to the other agent'],
-    ] as const) {
-      await surface.processUpdates([message(id, OWNER, OWNER, text)]);
-      await surface.drain();
-      expect(lastText(sent), text).not.toContain(ORIENTATION);
-    }
-  });
-
-  it('does not greet a chat that was already talking before this shipped', async () => {
-    // A pre-existing mapping is exactly what an upgraded installation has.
-    const db = alreadyGreeted(withOwner(new FakeDb()));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
-    await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
-    await surface.drain();
+    expect((run.mock.calls[0]?.[0] as any).systemSuffix).toBeUndefined();
     expect(lastText(sent)).toBe('reply');
   });
 
-  it('leaves /help alone, and does not spend the greeting on it', async () => {
-    const db = withOwner(new FakeDb());
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
+  it('does not spend it on a command the owner deliberately typed', async () => {
+    const db = pendingOnboarding(withOwner(new FakeDb()));
+    const run = vi.fn(async () => 'hello');
+    const { surface, sent } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, '/help')]);
     await surface.drain();
     expect(lastText(sent)).toBe(HELP);
+    expect(run).not.toHaveBeenCalled();
 
     await surface.processUpdates([message(2, OWNER, OWNER, 'now a real question')]);
     await surface.drain();
-    expect(lastText(sent)).toContain(ORIENTATION);
+    expect((run.mock.calls[0]?.[0] as any).systemSuffix).toContain('first run');
   });
 });

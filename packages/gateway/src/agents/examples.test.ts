@@ -27,12 +27,26 @@ describe('the examples this repository ships', () => {
     expect(summaries.every((a) => a.source === 'example')).toBe(true);
   });
 
-  it('grant the example agent nothing but memory and reminders', () => {
+  it('grant the example agent nothing but memory, reminders and the owner profile', () => {
     const assistant = catalog().resolve('assistant');
     expect(assistant.tools.length).toBeGreaterThan(0);
     expect(
-      assistant.tools.every((name) => name.startsWith('memory.') || name.startsWith('reminder.')),
+      assistant.tools.every(
+        (name) =>
+          name.startsWith('memory.') ||
+          name.startsWith('reminder.') ||
+          name.startsWith('owner.'),
+      ),
     ).toBe(true);
+  });
+
+  it('let the example agent conduct a first run: it has the owner tools and the skill', () => {
+    // The agent a fresh clone answers with is the agent that meets the owner.
+    // Both halves have to be there, or first contact is a blank prompt.
+    const assistant = catalog().resolve('assistant');
+    expect(assistant.tools).toContain('owner.get_profile');
+    expect(assistant.tools).toContain('owner.finish_onboarding');
+    expect(assistant.skills.map((s) => s.name)).toContain('first-run');
   });
 
   it('carry the shared example skill into the prompt', () => {

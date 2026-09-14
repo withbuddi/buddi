@@ -71,6 +71,8 @@ export type Command =
   | { kind: 'missions'; argv: string[] }
   /** One-off reminders the agents set. Delegated to the gateway's CLI. */
   | { kind: 'reminders'; argv: string[] }
+  /** The first-run arc: what it has sent, and the switch. */
+  | { kind: 'nudges'; argv: string[] }
   | { kind: 'migrate' }
   /** `--yes`: ask nothing, take every default, skip what needs typing. */
   | { kind: 'init'; yes: boolean }
@@ -129,6 +131,7 @@ export function parseArgs(argv: string[]): Command {
   }
   if (head === 'missions') return { kind: 'missions', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
+  if (head === 'nudges') return { kind: 'nudges', argv: rest };
   if (head === 'migrate') return { kind: 'migrate' };
   if (head === 'init') {
     let yes = false;
@@ -421,6 +424,7 @@ export const USAGE = `buddi — your personal agents, one command
   buddi missions list|add-defaults|add-friday-recap|run-now <id>|enable <id>|disable <id>
   buddi reminders [--agent <id>] [--all]      one-off nudges the agents set
   buddi reminders cancel <id>
+  buddi nudges status|stop|resume             the first-run arc and its budget
   buddi migrate              apply core + plugin migrations
 
 In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;

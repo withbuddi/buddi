@@ -433,6 +433,7 @@ conversations.
 | `/recap` | run the recap mission now |
 | `/files` | the last files you sent |
 | `/reminders` | what the agents put on the clock, with a button to cancel one |
+| `/quiet [1d\|1w\|off]` | stop proactive messages for a while (7 days by default) |
 | `/approvals` | anything waiting for you |
 | `/devices` | the devices paired to this installation |
 | `/new` | a fresh conversation with the active agent |
@@ -463,7 +464,8 @@ buddi chat [--agent <handle>] [--resume <id>] [--last] [--quiet]
 | `/help` | `/agents` | `/use <handle>` | `/whoami` |
 | `/new` | `/resume [n]` | `/id` | `/tools` |
 | `/model` | `/usage` | `/status` | `/recap` |
-| `/reminders` | `/files [n]` | `/attach <path>` | `/approvals` |
+| `/reminders` | `/quiet [1d\|1w\|off]` | `/files [n]` | `/attach <path>` |
+| `/approvals` | | | |
 | `/approve <id>` | `/reject <id>` | `/devices` | `/clear` |
 | `/quit` | | | |
 
@@ -574,6 +576,7 @@ buddi missions run-now <id>
 buddi missions enable <id>
 buddi missions disable <id>
 buddi reminders                      # what is on the clock
+buddi nudges status                  # the first-run arc: what it has sent, and whether it is still on
 buddi pause                          # stop claiming work; running jobs finish
 buddi resume
 buddi jobs --state failed
@@ -699,6 +702,8 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi missions enable <id>` / `disable <id>` | |
 | `buddi reminders` | `[--agent <id>] [--all]` — one-off nudges the agents set |
 | `buddi reminders cancel <id>` | |
+| `buddi nudges status` | the first-run arc: messages sent, unanswered, quiet-until, active or not |
+| `buddi nudges stop` / `resume` | turn the arc off permanently, or ask for it back |
 | `buddi pause` | stop claiming work (running jobs finish) |
 | `buddi resume` | start claiming again |
 | `buddi jobs` | `[--state <s>] [--kind <k>] [--limit <n>]` |

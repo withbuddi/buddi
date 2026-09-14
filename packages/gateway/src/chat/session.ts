@@ -65,6 +65,7 @@ import {
 } from '../telegram/surface.js';
 import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 import { isUnknownAgentError } from '../telegram/types.js';
+import { FIRST_RUN_SUFFIX } from '../agents/first-run.js';
 import { attachFile, type PendingAttachment } from './attach.js';
 import type { ApprovalPort } from './approvals.js';
 import {
@@ -77,6 +78,7 @@ import {
   saidYes,
   unknownCommandText,
 } from './commands.js';
+import type { EngagementHooks } from '../missions/engagement.js';
 import { listRecentConversations, type ConversationLine } from './conversations.js';
 import { renderMarkdown } from './render.js';
 import type { Spinner } from './spinner.js';
@@ -106,6 +108,10 @@ export const APPROVAL_QUESTION = 'Approve this? [y]es / [n]o / [l]ater ';
 /** Left pending on purpose. */
 export const APPROVAL_LATER_TEXT =
   'Left pending. It is in /approvals here, and on Telegram with buttons.';
+
+/** `/quiet` with nothing proactive to quieten. A fact, not an error. */
+export const QUIET_UNAVAILABLE_TEXT =
+  'There is nothing proactive running here yet, so there is nothing to quieten.';
 
 /** No approval machinery in this build: a fact about the installation. */
 export const APPROVALS_UNAVAILABLE_TEXT =
@@ -146,6 +152,11 @@ export interface ChatSessionDeps {
   artifacts?: ArtifactStore;
   approvals?: ApprovalPort;
   runMission?: RunMission;
+  /**
+   * `/quiet`, and "the owner said something". Absent: `/quiet` says there is
+   * nothing proactive to quieten, and nothing is counted.
+   */
+  engagement?: EngagementHooks;
   /**
    * The mission `/recap` runs, resolved by the composition root from the
    * installed plugins' suggestions for the `recap` role. Absent: no plugin
@@ -265,6 +276,11 @@ export class ChatSession {
   async handle(input: string, opts: { literal?: boolean } = {}): Promise<HandleResult> {
     const text = input.trim();
     if (text === '') return 'continue';
+
+    // The owner said something here. That is what clears the unanswered
+    // counter, whatever the message turns out to be — a command included.
+    await this.#deps.engagement?.noteActivity();
+
     if (opts.literal) {
       await this.runTurn(this.#agent, input);
       return 'continue';
@@ -369,6 +385,13 @@ export class ChatSession {
         return 'continue';
       case '/reminders':
         await this.reminders(arg);
+        return 'continue';
+      case '/quiet':
+        this.#out(
+          this.#deps.engagement
+            ? await this.#deps.engagement.quiet(arg)
+            : QUIET_UNAVAILABLE_TEXT,
+        );
         return 'continue';
       case '/files':
         await this.files(arg);
@@ -842,6 +865,23 @@ export class ChatSession {
   }
 
   /**
+   * The very first turn of a brand-new installation, with the default agent.
+   *
+   * The caller has already claimed the first run in core; this only runs it.
+   * The owner has typed nothing yet, so the turn opens with a bare hello and
+   * the whole of what they read is written by the agent, following its
+   * first-run skill — there is no greeting in this file to go stale.
+   */
+  async firstRun(): Promise<TurnOutcome> {
+    const agent = this.#deps.catalog.defaultAgent();
+    const conversationId = await this.conversationFor(agent);
+    return this.#run(agent, conversationId, {
+      userMessage: 'Hello.',
+      systemSuffix: FIRST_RUN_SUFFIX,
+    });
+  }
+
+  /**
    * The one shared shape of a run: spinner up, runtime, spinner down, answer,
    * footer — and the approval prompt when the run stops instead of finishing.
    */
@@ -853,6 +893,8 @@ export class ChatSession {
       resume?: ApprovalResume;
       attachments?: AttachmentRef[];
       depth?: number;
+      /** One extra instruction for this turn, after the surface hint. */
+      systemSuffix?: string;
     },
   ): Promise<TurnOutcome> {
     const deps = this.#deps;
@@ -867,7 +909,8 @@ export class ChatSession {
       ctx: deps.ctx,
       pool: deps.pool,
       conversationId,
-      systemSuffix: SURFACE_HINT,
+      systemSuffix:
+        turn.systemSuffix === undefined ? SURFACE_HINT : `${SURFACE_HINT}\n${turn.systemSuffix}`,
       ...(turn.userMessage !== undefined ? { userMessage: turn.userMessage } : {}),
       ...(turn.resume ? { resume: turn.resume } : {}),
       ...(turn.attachments ? { attachments: turn.attachments } : {}),
