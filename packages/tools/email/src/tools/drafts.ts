@@ -1,0 +1,171 @@
+/**
+ * Drafting. A draft is a proposal, never a send.
+ *
+ * Tier `auto` on purpose: writing a draft touches nothing outside the
+ * installation. What makes it safe is that `email.send` is a separate, gated
+ * tool — the agent may compose freely, and only an owner approval bound to the
+ * finished envelope puts anything on the wire.
+ *
+ * Drafts are artifacts (ARCHITECTURE.md, roadmap step 3): the body text is
+ * saved into the core artifact store with the authoring agent as its
+ * provenance, and the draft row points at that version. That is what lets an
+ * approval reference a version and what makes the preview *be* what ships.
+ */
+import { saveArtifact, type ToolDefinition } from '@buddi/core';
+import { z } from 'zod';
+import { normalizeAddress, normalizeAddresses, replySubject } from '../mail.js';
+import { DRAFT_COLUMNS, toDraft } from '../rows.js';
+import { requireAccount, requireAgentId, requireMessage, UUID } from './shared.js';
+import type { Pool } from 'pg';
+
+const ADDRESS = z.string().min(3).describe('One email address.');
+
+const BODY = z
+  .string()
+  .min(1)
+  .describe('The full plain-text body of the message. Write it as it should be sent.');
+
+/** A filename for the stored artifact — readable in a listing, safe on disk. */
+export function draftFilename(subject: string, at: Date): string {
+  const slug = subject
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return `draft-${at.toISOString().slice(0, 10)}-${slug || 'untitled'}.txt`;
+}
+
+interface InsertDraftInput {
+  db: Pool;
+  inReplyTo: string | null;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  bodyText: string;
+  agentId: string;
+  conversationId?: string | undefined;
+  now: Date;
+}
+
+async function insertDraft(input: InsertDraftInput) {
+  // The body lands in the artifact store first: an orphan artifact is harmless,
+  // a draft row pointing at an artifact that was never written is a broken
+  // reference an approval would later try to render.
+  const artifact = await saveArtifact(input.db, {
+    bytes: Buffer.from(input.bodyText, 'utf8'),
+    mime: 'text/plain',
+    filename: draftFilename(input.subject, input.now),
+    caption: input.subject,
+    createdBy: input.agentId,
+    conversationId: input.conversationId ?? null,
+  });
+
+  const { rows } = await input.db.query(
+    `insert into email.drafts
+       (in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, created_at)
+     values ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9)
+     returning ${DRAFT_COLUMNS}`,
+    [
+      input.inReplyTo,
+      JSON.stringify(input.to),
+      JSON.stringify(input.cc),
+      JSON.stringify(input.bcc),
+      input.subject,
+      input.bodyText,
+      artifact.id,
+      input.agentId,
+      input.now,
+    ],
+  );
+  const row = rows[0];
+  if (!row) throw new Error('draft insert returned no row');
+  const draft = toDraft(row);
+  return {
+    id: draft.id,
+    inReplyTo: draft.inReplyTo,
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    subject: draft.subject,
+    bodyText: draft.bodyText,
+    artifactId: draft.artifactId,
+    createdBy: draft.createdByAgent,
+    sent: false,
+    note: 'Nothing has been sent. A draft only leaves the machine through email.send, which the owner must approve.',
+  };
+}
+
+const draftReplyInput = z.object({
+  inReplyTo: UUID.describe('The message being replied to, by the id the tools gave you.'),
+  bodyText: BODY,
+  subjectOverride: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Use a different subject line instead of "Re: <original>".'),
+});
+
+export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown> = {
+  name: 'email.draft_reply',
+  description:
+    'Write a reply to a message and save it as a draft. The recipient and the subject come from the original; the draft is threaded to it. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
+  tier: 'auto',
+  input: draftReplyInput,
+  async execute(input, ctx) {
+    const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
+    await requireAccount(ctx.db);
+    const original = await requireMessage(ctx.db, input.inReplyTo);
+    return insertDraft({
+      db: ctx.db,
+      inReplyTo: original.id,
+      to: [normalizeAddress(original.from)],
+      cc: [],
+      bcc: [],
+      subject: input.subjectOverride ?? replySubject(original.subject),
+      bodyText: input.bodyText,
+      agentId,
+      conversationId: ctx.conversationId,
+      now: ctx.now(),
+    });
+  },
+};
+
+const draftNewInput = z.object({
+  to: z
+    .union([ADDRESS, z.array(ADDRESS).min(1)])
+    .describe('Recipient address, or a list of them.'),
+  subject: z.string().min(1).describe('The subject line.'),
+  bodyText: BODY,
+  cc: z.array(ADDRESS).optional().describe('Addresses to copy.'),
+  bcc: z
+    .array(ADDRESS)
+    .optional()
+    .describe('Addresses to blind-copy. They are shown in full in the approval preview.'),
+});
+
+export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = {
+  name: 'email.draft_new',
+  description:
+    'Write a new message and save it as a draft. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
+  tier: 'auto',
+  input: draftNewInput,
+  async execute(input, ctx) {
+    const agentId = requireAgentId(ctx.agentId, 'email.draft_new');
+    await requireAccount(ctx.db);
+    const to = normalizeAddresses(Array.isArray(input.to) ? input.to : [input.to]);
+    if (to.length === 0) throw new Error('email.draft_new: at least one recipient is required');
+    return insertDraft({
+      db: ctx.db,
+      inReplyTo: null,
+      to,
+      cc: normalizeAddresses(input.cc ?? []),
+      bcc: normalizeAddresses(input.bcc ?? []),
+      subject: input.subject,
+      bodyText: input.bodyText,
+      agentId,
+      conversationId: ctx.conversationId,
+      now: ctx.now(),
+    });
+  },
+};

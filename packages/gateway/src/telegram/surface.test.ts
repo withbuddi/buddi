@@ -21,8 +21,10 @@ import {
   RECAP_MISSION_ID,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
+  APPROVALS_UNAVAILABLE_TEXT,
   SURFACE,
   TelegramSurface,
+  type ApprovalHooks,
   devicesText,
   pairedText,
   parseStartCode,
@@ -461,6 +463,7 @@ function surfaceWith(
     setChatMenu?: (chatId: string, agent: CatalogAgent) => Promise<void>;
     files?: Record<string, FakeFile>;
     artifacts?: ArtifactStore | null;
+    approvals?: ApprovalHooks;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -477,6 +480,7 @@ function surfaceWith(
     ...(extra.now ? { now: extra.now } : {}),
     ...(extra.runMission ? { runMission: extra.runMission } : {}),
     ...(extra.setChatMenu ? { setChatMenu: extra.setChatMenu } : {}),
+    ...(extra.approvals ? { approvals: extra.approvals } : {}),
   });
   return { surface, sent, run, api, store };
 }
@@ -2150,5 +2154,69 @@ describe('devices', () => {
     // An id that never existed is a fact, not an exception.
     expect(await unpairDevice(db, '00000000-0000-4000-8000-000000009999')).toBe(false);
     expect(await unpairDevice(db, 'nonsense')).toBe(false);
+  });
+});
+
+/* ---------------- approvals routing ---------------- */
+
+describe('approvals on the surface', () => {
+  const pairedDb = (): FakeDb => {
+    const db = new FakeDb();
+    db.identities.push({
+      owner_id: 'owner',
+      surface: SURFACE,
+      external_user_id: String(OWNER),
+      external_chat_id: String(OWNER),
+    });
+    return db;
+  };
+
+  const callbackUpdate = (data: string, fromId = OWNER): TelegramUpdate => ({
+    update_id: 700,
+    callback_query: {
+      id: 'cb-1',
+      from: { id: fromId },
+      data,
+      message: { message_id: 42, chat: { id: OWNER, type: 'private' } },
+    },
+  });
+
+  it('hands a callback_query to the approval machinery, unchanged', async () => {
+    const db = pairedDb();
+    const handleCallback = vi.fn(async () => {});
+    const approvals: ApprovalHooks = { handleCallback, pending: async () => 'none' };
+    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+
+    const update = callbackUpdate('apr:33333333-3333-3333-3333-333333333333:approve');
+    await surface.processUpdates([update]);
+    await surface.drain();
+
+    expect(handleCallback).toHaveBeenCalledTimes(1);
+    expect(handleCallback.mock.calls[0]?.[0]).toEqual(update.callback_query);
+  });
+
+  it('ignores a callback when no approval machinery is wired', async () => {
+    const db = pairedDb();
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([callbackUpdate('apr:x:approve')]);
+    await surface.drain();
+    expect(sent.filter((c) => c.method === 'sendMessage')).toEqual([]);
+  });
+
+  it('answers /approvals from the machinery, and says so plainly without it', async () => {
+    const db = pairedDb();
+    const approvals: ApprovalHooks = {
+      handleCallback: async () => {},
+      pending: async () => 'Waiting for you:\n• mail.send',
+    };
+    const withHooks = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+    await withHooks.surface.dispatch(message(701, OWNER, OWNER, '/approvals'));
+    await withHooks.surface.drain();
+    expect(withHooks.sent.at(-1)?.body.text).toContain('mail.send');
+
+    const without = surfaceWith(pairedDb());
+    await without.surface.dispatch(message(702, OWNER, OWNER, '/approvals'));
+    await without.surface.drain();
+    expect(without.sent.at(-1)?.body.text).toBe(APPROVALS_UNAVAILABLE_TEXT);
   });
 });

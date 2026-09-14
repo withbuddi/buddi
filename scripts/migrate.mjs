@@ -21,7 +21,7 @@ const { createPool, runMigrations } = await import('@buddi/core');
 
 const manifests = [];
 /** Every plugin that is built. Core with zero plugins installed is a valid state. */
-for (const name of ['finance', 'memory', 'artifacts']) {
+for (const name of ['finance', 'memory', 'artifacts', 'email']) {
   const entry = path.join(repoRoot, 'packages', 'tools', name, 'dist', 'index.js');
   if (!existsSync(entry)) continue;
   const mod = await import(entry);

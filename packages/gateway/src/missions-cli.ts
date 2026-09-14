@@ -24,7 +24,7 @@ import {
   type OccurrenceState,
 } from '@buddi/core';
 import type { Pool } from 'pg';
-import { createWiring, loadEnv } from './bootstrap.js';
+import { createWiringAsync, loadEnv } from './bootstrap.js';
 import {
   addDefaultMissions,
   DEFAULT_MISSIONS,
@@ -278,7 +278,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   loadEnv();
   let wiring;
   try {
-    wiring = createWiring(process.env);
+    wiring = await createWiringAsync(process.env);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

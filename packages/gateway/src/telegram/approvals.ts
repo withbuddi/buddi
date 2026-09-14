@@ -1,0 +1,351 @@
+/**
+ * Approvals over Telegram — the surface half of the authorization boundary.
+ *
+ * ARCHITECTURE.md, "Owner and surface authentication": *«Approval callbacks are
+ * bound: a callback resolves exactly the pending action it references, from the
+ * owner identity. A plain message saying "yes" never resolves anything.»*
+ *
+ * That sentence is the whole design of this file:
+ *
+ *  - The only thing that decides an action is an inline-keyboard callback whose
+ *    `callback_data` names the action id. There is no text command that
+ *    approves, no "yes", no "ok", no reply-to-approve.
+ *  - The sender is re-authenticated against core on every callback — a paired
+ *    owner identity, in the chat that identity is bound to. A stranger's tap is
+ *    recorded as `surface.rejected` and answered with nothing useful.
+ *  - The decision itself is core's atomic transition. This module never reads a
+ *    state and then writes one; it asks core to move the row, and renders
+ *    whatever core says happened.
+ *  - Execution follows approval through the Executor, and the run that was
+ *    waiting is resumed through the queue's documented interface.
+ *
+ * The preview shown to the owner is the one stored on the action, rendered by
+ * the tool before the approval existed — never model-written text.
+ */
+import {
+  decideApproval,
+  executeApproved,
+  getAction,
+  listPendingActions,
+  localDateString,
+  resolveOwnerForSurface,
+  resumeJobForAction,
+  type ActionRecord,
+  type ApprovalState,
+  type Decision,
+  type JobControl,
+  type Queryable,
+  type ToolContext,
+  type ToolRegistry,
+} from '@buddi/core';
+import {
+  MAX_CALLBACK_DATA_BYTES,
+  type InlineKeyboardMarkup,
+  type TelegramApi,
+  type TelegramUpdate,
+} from './api.js';
+import { SURFACE } from './surface.js';
+
+/** The prefix every approval callback carries. Short: 64 bytes is the ceiling. */
+export const CALLBACK_PREFIX = 'apr';
+
+/** The worker id recorded on an action claimed by a Telegram decision. */
+export const TELEGRAM_WORKER = 'telegram-approval';
+
+export type CallbackQuery = NonNullable<TelegramUpdate['callback_query']>;
+
+/** `apr:<actionId>:<approve|reject>` */
+export function approvalCallbackData(actionId: string, decision: 'approve' | 'reject'): string {
+  const data = `${CALLBACK_PREFIX}:${actionId}:${decision}`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    // A uuid keeps this well under the limit; anything that does not is a bug
+    // worth failing on rather than silently truncating into another action's id.
+    throw new Error(`approval callback data is too long for Telegram: ${data.length} bytes`);
+  }
+  return data;
+}
+
+export interface ParsedCallback {
+  actionId: string;
+  decision: Decision;
+}
+
+/**
+ * Parse a callback payload, or return nothing.
+ *
+ * Strict on purpose: the action id must be a uuid, because the id is the whole
+ * binding between a tap and the effect it authorizes. Anything else is not an
+ * approval callback and is treated as if it had never arrived.
+ */
+export function parseApprovalCallback(data: string | undefined): ParsedCallback | undefined {
+  const m = /^apr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approve|reject)$/i.exec(
+    (data ?? '').trim(),
+  );
+  if (!m) return undefined;
+  return {
+    actionId: (m[1] as string).toLowerCase(),
+    decision: m[2] === 'approve' ? 'approved' : 'rejected',
+  };
+}
+
+export function approvalKeyboard(actionId: string): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: '✅ Approve', callback_data: approvalCallbackData(actionId, 'approve') },
+        { text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') },
+      ],
+    ],
+  };
+}
+
+/** Takes the buttons away: a decided approval must not be tappable again. */
+export const NO_KEYBOARD: InlineKeyboardMarkup = { inline_keyboard: [] };
+
+/**
+ * The message the owner is asked to decide.
+ *
+ * Every line comes from the stored action: the tool that will run, the preview
+ * the tool rendered, and when the request stops standing.
+ */
+export function approvalRequestText(action: ActionRecord, timezone: string): string {
+  return [
+    `Approval needed — ${action.tool}`,
+    '',
+    action.preview,
+    '',
+    `Asked by @${action.agentId}. Expires ${localDateString(action.expiresAt, timezone)}.`,
+    `Action ${action.id}`,
+  ].join('\n');
+}
+
+/** What replaces the request once it is decided. */
+export function decidedText(action: ActionRecord, state: ApprovalState, detail?: string): string {
+  const head =
+    state === 'rejected'
+      ? `Rejected — ${action.tool}`
+      : state === 'succeeded'
+        ? `Approved and done — ${action.tool}`
+        : state === 'failed'
+          ? `Approved, but it failed — ${action.tool}`
+          : state === 'unknown'
+            ? `Approved, outcome unknown — ${action.tool}`
+            : `Approved — ${action.tool}`;
+  return [head, '', action.preview, ...(detail ? ['', detail] : []), '', `Action ${action.id}`].join(
+    '\n',
+  );
+}
+
+/** `/approvals` — what is still waiting, oldest first. */
+export function pendingText(actions: readonly ActionRecord[], timezone: string): string {
+  if (actions.length === 0) return 'Nothing is waiting for your approval.';
+  return [
+    'Waiting for you:',
+    ...actions.map(
+      (a) =>
+        `• ${a.tool} — ${firstLine(a.preview)}\n  expires ${localDateString(a.expiresAt, timezone)}\n  ${a.id}`,
+    ),
+    '',
+    'Tap Approve or Reject on the message for one, or ask me to show it again.',
+  ].join('\n');
+}
+
+function firstLine(text: string): string {
+  const line = (text.split('\n')[0] ?? '').trim();
+  return line.length <= 120 ? line : `${line.slice(0, 119)}…`;
+}
+
+export interface ApprovalsOptions {
+  api: Pick<TelegramApi, 'sendMessage' | 'editMessageText' | 'answerCallbackQuery'>;
+  pool: Queryable;
+  /** Needed to execute an approved action; the Executor looks tools up in it. */
+  registry: ToolRegistry;
+  /** The context an approved effect runs with. */
+  ctx: ToolContext;
+  timezone: string;
+  /**
+   * The queue, when this build has one wired. Absent: a decision is still
+   * recorded and executed, it simply wakes nothing.
+   */
+  jobs?: JobControl;
+  log?: (line: string) => void;
+  now?: () => Date;
+}
+
+/**
+ * The approval surface for Telegram: post a request, handle a tap, list what is
+ * pending. It owns no state of its own — every fact lives in core.
+ */
+export class TelegramApprovals {
+  readonly #opts: ApprovalsOptions;
+  readonly #log: (line: string) => void;
+
+  constructor(opts: ApprovalsOptions) {
+    this.#opts = opts;
+    this.#log = opts.log ?? ((line) => console.error(line));
+  }
+
+  #now(): Date {
+    return (this.#opts.now ?? (() => new Date()))();
+  }
+
+  /** Post a pending action to the owner's chat, buttons attached. */
+  async request(chatId: string, action: ActionRecord): Promise<number | undefined> {
+    return this.#opts.api.sendMessage(
+      chatId,
+      approvalRequestText(action, this.#opts.timezone),
+      { replyMarkup: approvalKeyboard(action.id) },
+    );
+  }
+
+  /** `/approvals`. */
+  async pending(): Promise<string> {
+    const actions = await listPendingActions(this.#opts.pool, { now: this.#now() });
+    return pendingText(actions, this.#opts.timezone);
+  }
+
+  /**
+   * One inline-keyboard tap.
+   *
+   * Authenticate, decide, execute, wake the run, and only then say anything.
+   * The order matters: nothing is shown as decided before core says it is.
+   */
+  async handleCallback(query: CallbackQuery): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const parsed = parseApprovalCallback(query.data);
+    if (!parsed || userId === '' || chatId === '') {
+      // Not ours, or not enough to authenticate: answer the spinner, say
+      // nothing, do nothing.
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    // Identity is re-established from core on every tap. A callback is not
+    // trusted because it arrived on a chat that was once paired.
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: approval callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendRejected(pool, {
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        actionId: parsed.actionId,
+      });
+      // A stranger learns nothing: no text, no alert, just a stopped spinner.
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const decision = await decideApproval(pool, {
+      actionId: parsed.actionId,
+      decision: parsed.decision,
+      by: resolution.ownerId,
+      via: SURFACE,
+      now: this.#now(),
+    });
+
+    if (!decision.ok) {
+      const action = await getAction(pool, parsed.actionId);
+      await api.answerCallbackQuery(query.id, decision.message).catch(() => {});
+      if (action && messageId !== undefined) {
+        await this.#edit(chatId, messageId, decidedText(action, action.state, decision.message));
+      }
+      return;
+    }
+
+    const action = decision.action;
+
+    if (parsed.decision === 'rejected') {
+      await api.answerCallbackQuery(query.id, 'Rejected.').catch(() => {});
+      if (messageId !== undefined) {
+        await this.#edit(chatId, messageId, decidedText(action, 'rejected'));
+      }
+      await this.#wake(action, { state: 'rejected' });
+      return;
+    }
+
+    // Approved. The Executor is the only thing that runs it, and it claims the
+    // action atomically — so a second worker, or a second tap, cannot double it.
+    await api.answerCallbackQuery(query.id, 'Approved — running it now.').catch(() => {});
+    if (messageId !== undefined) {
+      await this.#edit(chatId, messageId, decidedText(action, 'approved', 'Running it now…'));
+    }
+
+    const outcome = await executeApproved(pool, {
+      actionId: action.id,
+      registry: this.#opts.registry,
+      ctx: this.#opts.ctx,
+      worker: TELEGRAM_WORKER,
+      now: this.#now(),
+    });
+
+    const state: ApprovalState = outcome.ok ? 'succeeded' : outcome.state;
+    const detail = outcome.ok ? undefined : outcome.message;
+    if (messageId !== undefined) {
+      await this.#edit(chatId, messageId, decidedText(action, state, detail));
+    }
+    await this.#wake(action, {
+      state,
+      ...(outcome.ok ? { result: outcome.result } : { error: outcome.message }),
+    });
+  }
+
+  /** Wake the suspended run, if there is one. Never fails the decision. */
+  async #wake(
+    action: ActionRecord,
+    outcome: { state: ApprovalState; result?: unknown; error?: string },
+  ): Promise<void> {
+    try {
+      const what = await resumeJobForAction(this.#opts.pool, this.#opts.jobs, action, outcome);
+      if (what === 'no-queue' && action.jobId !== null) {
+        this.#log(
+          `telegram: action ${action.id} belongs to job ${action.jobId}, but no queue is wired into this process`,
+        );
+      }
+    } catch (err) {
+      this.#log(
+        `telegram: resuming job ${action.jobId} for action ${action.id} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /** Edits are cosmetic: a failed one is logged, never allowed to undo a decision. */
+  async #edit(chatId: string, messageId: number, text: string): Promise<void> {
+    try {
+      await this.#opts.api.editMessageText(chatId, messageId, text, {
+        replyMarkup: NO_KEYBOARD,
+      });
+    } catch (err) {
+      this.#log(
+        `telegram: editing approval message ${messageId} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+}
+
+async function appendRejected(
+  pool: Queryable,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await pool.query(
+    `insert into core.events (kind, conversation_id, payload)
+     values ($1, null, $2::jsonb)`,
+    ['surface.rejected', JSON.stringify({ surface: SURFACE, kind: 'callback', ...payload })],
+  );
+}

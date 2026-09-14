@@ -25,9 +25,11 @@ import { parseArgs, USAGE, UsageError, type Command } from './args.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
+import { jobsCancel, jobsList, jobsRetry, pause, resume } from './jobs-cmd.js';
 import { loadEnv, REPO_ROOT } from './paths.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
+import { runVault } from './vault-cmd.js';
 
 /** Apply core's migrations and every installed plugin's. Same work as `pnpm db:migrate`. */
 export async function migrate(): Promise<number> {
@@ -119,6 +121,30 @@ export async function dispatch(command: Command): Promise<number> {
     case 'telegram':
       loadEnv();
       return runTelegram(command.action, command.deviceId);
+    case 'vault':
+      loadEnv();
+      return runVault(command.action, command.name);
+    case 'pause':
+      loadEnv();
+      return pause();
+    case 'resume':
+      loadEnv();
+      return resume();
+    case 'jobs': {
+      loadEnv();
+      switch (command.action) {
+        case 'retry':
+          return jobsRetry(command.jobId);
+        case 'cancel':
+          return jobsCancel(command.jobId);
+        default:
+          return jobsList({
+            ...(command.state ? { state: command.state } : {}),
+            ...(command.kind_ ? { kind: command.kind_ } : {}),
+            ...(command.limit ? { limit: command.limit } : {}),
+          });
+      }
+    }
   }
 }
 

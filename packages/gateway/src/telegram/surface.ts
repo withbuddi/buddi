@@ -138,6 +138,7 @@ export const HELP = [
   '/status — where you stand right now (finance advisor)',
   '/recap — run the weekly recap now (finance advisor)',
   '/files — the last files you sent me',
+  '/approvals — anything waiting for your approval',
   '/devices — the devices paired to this installation',
   '/new — start a fresh conversation with the active agent',
   '/id — your numeric user id and this chat id',
@@ -154,6 +155,10 @@ export const FILES_UNAVAILABLE_TEXT =
 /** Download or storage failed. The owner is told, and can simply resend. */
 export const FILE_FAILED_TEXT =
   "I couldn't save that file — send it again and I'll retry.";
+
+/** No approval machinery in this build: said as a fact, not as an error. */
+export const APPROVALS_UNAVAILABLE_TEXT =
+  'Approvals are not wired up in this build, so nothing can be waiting for one.';
 
 /** `/use` with an id the catalog does not know. Never an error to the owner. */
 export const UNKNOWN_AGENT_TEXT = 'Unknown agent. Send /agents to see the list.';
@@ -367,6 +372,16 @@ export interface RunRequest {
   onToolCall?: (name: string, input: unknown) => void;
 }
 
+/**
+ * What the surface asks of the approval machinery. A tap and a list; nothing
+ * about state, and nothing it could decide on its own.
+ */
+export interface ApprovalHooks {
+  handleCallback(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void>;
+  /** The `/approvals` answer, already rendered. */
+  pending(): Promise<string>;
+}
+
 export interface TelegramSurfaceOptions {
   api: TelegramApi;
   pool: Queryable;
@@ -387,6 +402,14 @@ export interface TelegramSurfaceOptions {
   run(req: RunRequest): Promise<string>;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
   runMission?: RunMission;
+  /**
+   * The approval surface, when this build has the machinery wired up.
+   *
+   * Structural on purpose: the surface routes a tap and a command to it and
+   * knows nothing else. Every authorization decision — is this the owner, is
+   * this action still pending — is made inside it, against core.
+   */
+  approvals?: ApprovalHooks;
   /**
    * Re-publish this chat's command menu after `/use`, so the menu names the
    * agent now active. Cosmetic: a failure is logged, never surfaced.
@@ -740,10 +763,19 @@ export class TelegramSurface {
   async dispatch(update: TelegramUpdate): Promise<void> {
     const message = update.message ?? update.edited_message;
     if (!message) {
-      if (update.callback_query) {
-        // Approvals arrive in roadmap step 3; nothing here resolves an action.
-        this.#log(`telegram: callback_query ignored (no approvals yet)`);
+      const callback = update.callback_query;
+      if (!callback) return;
+      const approvals = this.#opts.approvals;
+      if (!approvals) {
+        this.#log('telegram: callback_query ignored (no approval machinery wired)');
+        return;
       }
+      // Authorization belongs to the approval handler, which re-establishes the
+      // owner identity from core; the surface only serializes the tap on the
+      // chat's own chain so a decision cannot interleave with a run in it.
+      const callbackChat = callback.message?.chat?.id;
+      const chain = callbackChat === undefined ? `cb:${callback.id}` : String(callbackChat);
+      this.enqueue(chain, () => approvals.handleCallback(callback));
       return;
     }
 
@@ -1013,6 +1045,14 @@ export class TelegramSurface {
     }
     if (command === '/recap') {
       await this.handleRecap(chatId);
+      return;
+    }
+    if (command === '/approvals') {
+      const approvals = this.#opts.approvals;
+      await this.#opts.api.sendMessage(
+        chatId,
+        approvals ? await approvals.pending() : APPROVALS_UNAVAILABLE_TEXT,
+      );
       return;
     }
     if (command === '/devices') {

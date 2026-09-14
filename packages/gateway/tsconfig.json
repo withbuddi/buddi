@@ -11,6 +11,7 @@
     { "path": "../core" },
     { "path": "../runtime" },
     { "path": "../tools/artifacts" },
+    { "path": "../tools/email" },
     { "path": "../tools/finance" },
     { "path": "../tools/memory" }
   ]

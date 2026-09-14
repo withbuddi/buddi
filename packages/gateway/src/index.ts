@@ -3,6 +3,7 @@ export * from './agents/catalog.js';
 export * from './agents/finance-advisor.js';
 export * from './telegram/api.js';
 export * from './telegram/surface.js';
+export * from './telegram/approvals.js';
 export * from './telegram/notify.js';
 export * from './telegram/pairing.js';
 export * from './bootstrap.js';

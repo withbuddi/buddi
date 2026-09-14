@@ -19,15 +19,22 @@
  */
 import {
   appendEvent,
+  getAction,
   markFindingDelivered,
   ToolRegistry,
   UnknownAgentError,
+  type ActionRecord,
   type AgentCatalog,
   type Mission,
   type Occurrence,
   type ToolContext,
 } from '@buddi/core';
-import { createConversation, runAgent, type RuntimeProvider } from '@buddi/runtime';
+import {
+  createConversation,
+  runAgent,
+  type ApprovalResume,
+  type RuntimeProvider,
+} from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { gatewayCatalog, memoryPreambleFor } from '../agents/catalog.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
@@ -96,11 +103,43 @@ export interface MissionExecutorDeps {
    */
   notifyPolicy?: boolean;
   prepare?: PrepareRun;
+  /**
+   * How the owner is asked about a gated call this run proposed. A scheduled
+   * run has no chat of its own, so the request is posted on its behalf — with
+   * the preview the tool rendered and buttons bound to that one action. Absent:
+   * the action is still recorded and still waits for `/approvals`.
+   */
+  askApproval?: (action: ActionRecord) => Promise<void>;
   log?: (line: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
 }
 
 export type MissionDecisionKind = 'report' | 'silent' | 'no-decision';
+
+/**
+ * How a *durable* run is threaded through the executor.
+ *
+ * A mission run started by a queue job is resumable: it may stop on an approval
+ * and come back, minutes or hours later, in a different process. Two things
+ * have to cross that gap, and they are exactly these — the job the run belongs
+ * to (so a gated call records it on the action, and the decision can find the
+ * run again) and, on the way back, the conversation plus the decision itself.
+ *
+ * An inline run passes neither: nothing about it is durable, and a gated call
+ * inside it belongs to no job.
+ */
+export interface MissionRunControl {
+  /** The durable job this run belongs to. Recorded on any action it proposes. */
+  jobId?: string;
+  /** Continue the run that suspended on an approval, in its own conversation. */
+  resume?: { conversationId: string; approval: ApprovalResume };
+}
+
+/** What the run is waiting for, when it stopped instead of finishing. */
+export interface AwaitingApproval {
+  actionId: string;
+  conversationId: string;
+}
 
 export interface MissionRunResult {
   conversationId: string;
@@ -117,6 +156,11 @@ export interface MissionRunResult {
   chatId?: string;
   /** Why delivery was skipped, when `requireDelivery` is false. */
   skipped?: string;
+  /**
+   * Set when the run stopped on a gated call instead of finishing. Nothing was
+   * delivered and no decision was taken: the caller suspends and comes back.
+   */
+  awaiting?: AwaitingApproval;
 }
 
 /**
@@ -136,14 +180,18 @@ const MISSION_TOOLS = ['mission.report', 'mission.silent'];
 /** Build the `execute` callback `runScheduler` calls. */
 export function createMissionExecutor(
   deps: MissionExecutorDeps,
-): (occurrence: Occurrence, mission: Mission) => Promise<MissionRunResult> {
+): (
+  occurrence: Occurrence,
+  mission: Mission,
+  control?: MissionRunControl,
+) => Promise<MissionRunResult> {
   const log = deps.log ?? ((line: string) => console.error(line));
   const requireDelivery = deps.requireDelivery !== false;
   const notifyPolicy = deps.notifyPolicy !== false;
 
   const catalog = deps.catalog ?? gatewayCatalog(deps.env);
 
-  return async function execute(occurrence, mission): Promise<MissionRunResult> {
+  return async function execute(occurrence, mission, control): Promise<MissionRunResult> {
     // Fails closed with UnknownAgentError: a mission naming an agent this
     // install does not carry is a configuration problem, not a fallback.
     const finding = findingOf(occurrence.payload);
@@ -165,23 +213,67 @@ export function createMissionExecutor(
       .filter((part) => part.trim() !== '')
       .join('\n\n');
 
-    const conversationId = await createConversation(deps.pool, agentId);
+    // A resumed run continues in the conversation it suspended in; the decision
+    // arrives as its opening turn. A fresh run gets a fresh conversation.
+    const conversationId =
+      control?.resume?.conversationId ?? (await createConversation(deps.pool, agentId));
     log(
-      `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,
+      control?.resume
+        ? `mission ${mission.id}: occurrence ${occurrence.id} resumed in conversation ${conversationId} (action ${control.resume.approval.actionId} ${control.resume.approval.state})`
+        : `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,
     );
+
+    // The job rides on the tool context: a gated call records it on the action,
+    // and that is the only way the owner's decision later finds this run.
+    const ctx: ToolContext = {
+      ...deps.ctx,
+      ...(control?.jobId ? { jobId: control.jobId } : {}),
+    };
 
     const result = await runAgent({
       agent,
       provider: deps.provider,
       registry,
-      ctx: deps.ctx,
+      ctx,
       pool: deps.pool,
       conversationId,
-      userMessage,
+      ...(control?.resume
+        ? { resume: control.resume.approval }
+        : { userMessage }),
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),
     });
+
+    // The run proposed a gated effect and stopped. Nothing is decided, nothing
+    // is delivered and nothing is silent: the caller parks the job and the
+    // owner's answer brings the run back exactly here.
+    if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
+      log(
+        `mission ${mission.id}: awaiting approval on action ${result.pendingActionId} (conversation ${conversationId})`,
+      );
+      // Asking must never fail the run: the action is recorded and the caller
+      // is about to park the job whatever Telegram says.
+      if (deps.askApproval) {
+        try {
+          const action = await getAction(deps.pool, result.pendingActionId);
+          if (action) await deps.askApproval(action);
+        } catch (err) {
+          log(
+            `mission ${mission.id}: could not post the approval request: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+      return {
+        conversationId,
+        text: result.text.trim(),
+        delivered: false,
+        decision: 'no-decision',
+        awaiting: { actionId: result.pendingActionId, conversationId },
+      };
+    }
 
     const decision: MissionDecision | undefined = sink.decision;
     const kind: MissionDecisionKind =

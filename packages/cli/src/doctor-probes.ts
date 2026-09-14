@@ -9,7 +9,9 @@ import { readdir } from 'node:fs/promises';
 import {
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
+  countJobsByState,
   createPool,
+  isPaused,
   providerAuthHeaders,
   resolveProvider,
   timezoneFromEnv,
@@ -220,6 +222,31 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env): Probes {
             status: 'ok',
             detail: devices.map((d) => `${d.surface}:${d.label ?? d.externalUserId}`).join(', '),
           };
+    },
+
+    /**
+     * A paused installation is a *warning*, not a failure — it is a state the
+     * owner chose. Failed and suspended jobs are named because they are the two
+     * things waiting on a human.
+     */
+    async queue(): Promise<ProbeResult> {
+      const pool = await connected();
+      if (!pool) return { status: 'warn', detail: 'skipped — no database connection' };
+      try {
+        const counts = await countJobsByState(pool);
+        const summary =
+          `${counts.pending} pending, ${counts.leased} running, ${counts.suspended} suspended, ` +
+          `${counts.failed} failed, ${counts.succeeded} succeeded`;
+        if (await isPaused(pool)) {
+          return { status: 'warn', detail: `PAUSED — ${summary} (\`buddi resume\` to start again)` };
+        }
+        if (counts.failed > 0) {
+          return { status: 'warn', detail: `${summary} — \`buddi jobs --state failed\`` };
+        }
+        return { status: 'ok', detail: `running — ${summary}` };
+      } catch {
+        return { status: 'warn', detail: 'core.jobs does not exist — run `buddi migrate`' };
+      }
     },
 
     async service(): Promise<ProbeResult> {

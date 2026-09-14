@@ -82,8 +82,39 @@ export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
-  callback_query?: { id: string; from?: TelegramUser; data?: string };
+  /**
+   * An inline-keyboard tap. `data` is what the button carried; `message` is the
+   * message the keyboard was attached to, which is what gets edited to show the
+   * decision. The chat is read from `message`, never from `from`: a button is
+   * bound to the message it sits under.
+   */
+  callback_query?: {
+    id: string;
+    from?: TelegramUser;
+    data?: string;
+    message?: { message_id: number; chat: TelegramChat };
+  };
 }
+
+/**
+ * One inline-keyboard button. Only `callback_data` buttons are modelled: a URL
+ * button cannot resolve an approval, and nothing else needs one.
+ *
+ * Telegram caps `callback_data` at 64 bytes, which is why an approval callback
+ * carries an action id and a verb and nothing else.
+ */
+export interface InlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+/** Rows of buttons, as Telegram's `reply_markup` wants them. */
+export interface InlineKeyboardMarkup {
+  inline_keyboard: InlineKeyboardButton[][];
+}
+
+/** Telegram's hard limit on `callback_data`, in bytes. */
+export const MAX_CALLBACK_DATA_BYTES = 64;
 
 /** One entry of the bot's command menu. `command` carries no leading slash. */
 export interface TelegramBotCommand {
@@ -216,13 +247,22 @@ export class TelegramApi {
    * Telegram, and any parse mode turns user-authored text into a parsing hazard
    * — so no `parse_mode` is ever sent.
    */
-  async sendMessage(chatId: string | number, text: string): Promise<number | undefined> {
+  async sendMessage(
+    chatId: string | number,
+    text: string,
+    opts: { replyMarkup?: InlineKeyboardMarkup } = {},
+  ): Promise<number | undefined> {
     let firstId: number | undefined;
-    for (const chunk of splitMessage(text)) {
+    const chunks = splitMessage(text);
+    for (const [index, chunk] of chunks.entries()) {
+      // A keyboard belongs to the *last* chunk: it must sit under the whole
+      // message the owner is being asked about, not under its first page.
+      const last = index === chunks.length - 1;
       const result = await this.call<{ message_id?: number }>('sendMessage', {
         chat_id: chatId,
         text: chunk,
         disable_web_page_preview: true,
+        ...(last && opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       });
       const id = typeof result?.message_id === 'number' ? result.message_id : undefined;
       if (firstId === undefined) firstId = id;
@@ -239,12 +279,33 @@ export class TelegramApi {
     chatId: string | number,
     messageId: number,
     text: string,
+    opts: { replyMarkup?: InlineKeyboardMarkup } = {},
   ): Promise<void> {
     await this.call('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text,
       disable_web_page_preview: true,
+      // An omitted `reply_markup` leaves the old keyboard in place; an empty
+      // one takes it away. A decided approval must never keep its buttons.
+      ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+    });
+  }
+
+  /**
+   * Answer a callback query. Telegram shows a spinner on the button until this
+   * arrives, and expires the query after ~15 seconds, so it is sent even when
+   * the decision was refused — silence would look like a broken bot.
+   */
+  async answerCallbackQuery(
+    callbackQueryId: string,
+    text?: string,
+    opts: { showAlert?: boolean } = {},
+  ): Promise<void> {
+    await this.call('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      ...(text ? { text } : {}),
+      ...(opts.showAlert ? { show_alert: true } : {}),
     });
   }
 

@@ -66,13 +66,14 @@ describe('the shipped agents directory', () => {
     }
   });
 
-  it('ships the three handles the owner types', () => {
+  it('ships the handles the owner types', () => {
     expect(
       Object.fromEntries(catalog.list().map((a) => [a.id, a.handle])),
     ).toEqual({
       concierge: 'buddi',
       'credit-coach': 'credo',
       'finance-advisor': 'ledger',
+      'mail-triage': 'postman',
     });
   });
 

@@ -74,8 +74,8 @@ describe('ToolRegistry', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it.each(['draft', 'gated', 'session'] as Tier[])(
-    'refuses tier %s (approval machinery not built)',
+  it.each(['draft', 'session'] as Tier[])(
+    'refuses tier %s (drafts and session grants are not built)',
     async (tier) => {
       const execute = vi.fn();
       const r = new ToolRegistry();
@@ -85,6 +85,74 @@ describe('ToolRegistry', () => {
       expect(execute).not.toHaveBeenCalled();
     },
   );
+
+  it('turns a gated call into a pending approval instead of executing it', async () => {
+    const execute = vi.fn();
+    const r = new ToolRegistry();
+    r.register(manifest('gated', execute as never));
+    // The action is recorded before anyone is asked, so the gated path needs a
+    // database; here it is a stub that answers the one insert with one row.
+    const rows: any[][] = [];
+    const db = {
+      query: async (sql: string, params?: any[]) => {
+        rows.push([sql, params]);
+        if (!sql.includes('insert into core.actions')) return { rows: [] };
+        return {
+          rows: [
+            {
+              id: '11111111-1111-1111-1111-111111111111',
+              tool: 'demo.double',
+              tool_version: '0.0.1',
+              agent_id: 'agent-1',
+              conversation_id: null,
+              job_id: null,
+              canonical_args: { n: 1 },
+              envelope: { n: 1 },
+              args_hash: 'hash',
+              preview: 'demo.double {"n":1}',
+              expires_at: new Date('2026-01-02T00:00:00Z'),
+              policy_version: 1,
+              created_at: new Date('2026-01-01T00:00:00Z'),
+              state: 'pending',
+              updated_at: new Date('2026-01-01T00:00:00Z'),
+            },
+          ],
+        };
+      },
+    };
+    const res = await r.invoke('demo.double', { n: 1 }, {
+      ...ctx,
+      db: db as ToolContext['db'],
+      agentId: 'agent-1',
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      reason: 'approval-required',
+      actionId: '11111111-1111-1111-1111-111111111111',
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('refuses a gated call when the action cannot be recorded', async () => {
+    const execute = vi.fn();
+    const r = new ToolRegistry();
+    r.register(manifest('gated', execute as never));
+    const db = {
+      query: async () => {
+        throw new Error('database is down');
+      },
+    };
+    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db: db as ToolContext['db'] });
+    expect(res).toMatchObject({ ok: false, reason: 'tool-error' });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('hands the Executor a tool with its plugin version', () => {
+    const r = new ToolRegistry();
+    r.register(manifest('gated'));
+    expect(r.lookup('demo.double')).toMatchObject({ name: 'demo.double', version: '0.0.1' });
+    expect(r.lookup('demo.missing')).toBeUndefined();
+  });
 
   it('reports a throwing tool as tool-error', async () => {
     const r = new ToolRegistry();

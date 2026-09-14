@@ -6,4 +6,5 @@ export * from './paths.js';
 export * from './proc.js';
 export * from './service/index.js';
 export * from './telegram-cmd.js';
+export * from './vault-cmd.js';
 export { dispatch, doctor, main, migrate } from './main.js';
