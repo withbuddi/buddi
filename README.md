@@ -408,11 +408,14 @@ Core boots with none of them installed — that is a test
 `scripts/check-boundaries.mjs` fails the build if core ever imports a tool
 package.
 
-**Writing one.** The contract is `packages/core/src/tools.ts` — read it first.
-Then copy the smallest complete plugin, `packages/tools/memory/src/index.ts`:
-35 lines, a manifest, five tools, one migration. For sources and gated effects,
-read `packages/tools/email/src/index.ts`. Apply your schema with
-`buddi migrate`, which runs core's migrations and every installed plugin's.
+**Writing one.** [docs/plugins.md](docs/plugins.md) is the guide: the four
+contributions, the rules that bite, and a complete worked example
+(`examples/plugins/weather`) you can copy. The contract itself is
+`packages/core/src/tools.ts` — read it first. The smallest complete plugin in the
+repository is `packages/tools/memory/src/index.ts`: 35 lines, a manifest, five
+tools, one migration. For sources and gated effects, read
+`packages/tools/email/src/index.ts`. Apply your schema with `buddi migrate`,
+which runs core's migrations and every installed plugin's.
 
 ---
 

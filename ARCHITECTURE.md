@@ -106,6 +106,9 @@ agents cannot read or modify. Consequences:
 
 ## Drop-in tools and skills
 
+> The practical guide to writing one — the four contributions, their real type
+> signatures, and a complete worked example — is [docs/plugins.md](docs/plugins.md).
+
 Tools and skills are files in the repo (`tools/`, `skills/`), auto-discovered — which is
 also what keeps an install reproducible on any machine. The trust lifecycle is the
 point, not the packaging — and so is the dependency direction: **core never imports a
