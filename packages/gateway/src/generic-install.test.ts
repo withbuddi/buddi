@@ -135,8 +135,10 @@ describe('a generic installation: one agent, no roles, no plugins', () => {
 
     // No plugins at all: nothing is suggested, and only the infrastructure
     // mission — which belongs to the gateway, not to a domain — is registered.
+    // `getting-started` rides along with it: the first-run arc belongs to the
+    // gateway too, and with no onboarding state read it is registered disabled.
     const bare = planDefaultMissions(catalog, []);
-    expect(bare.entries.map((e) => e.mission.id)).toEqual(['sentinel-wake']);
+    expect(bare.entries.map((e) => e.mission.id)).toEqual(['getting-started', 'sentinel-wake']);
     expect(bare.skipped).toEqual([]);
     expect(recapMissionId([])).toBeUndefined();
 
@@ -167,7 +169,10 @@ describe('a generic installation: one agent, no roles, no plugins', () => {
         ],
       },
     ]);
-    expect(withPlugin.entries.map((e) => e.mission.id)).toEqual(['sentinel-wake']);
+    expect(withPlugin.entries.map((e) => e.mission.id)).toEqual([
+      'getting-started',
+      'sentinel-wake',
+    ]);
     expect(withPlugin.skipped.map((s) => s.missionId)).toEqual(['demo-recap', 'demo-ghost']);
     expect(withPlugin.skipped[0]?.reason).toContain('roles: [recap]');
     expect(withPlugin.skipped[1]?.reason).toContain('nobody-here');
@@ -175,9 +180,14 @@ describe('a generic installation: one agent, no roles, no plugins', () => {
 
   it('points the wake mission at the only agent there is', () => {
     const catalog = genericCatalog();
-    const wake = planDefaultMissions(catalog, []).entries[0];
+    const entries = planDefaultMissions(catalog, []).entries;
+    const wake = entries.find((e) => e.mission.id === 'sentinel-wake');
     expect(wake?.mission.agentId).toBe('notetaker');
     expect(wake?.cron).toBeUndefined();
+    // The arc names the same agent for the same reason: nobody claims a role.
+    const arc = entries.find((e) => e.mission.id === 'getting-started');
+    expect(arc?.mission.agentId).toBe('notetaker');
+    expect(arc?.mission.enabled).toBe(false);
   });
 
   it('omits the money block from the dashboard overview', async () => {

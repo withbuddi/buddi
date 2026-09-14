@@ -35,6 +35,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: '/status', summary: 'where you stand right now' },
   { name: '/recap', summary: 'run the recap mission now' },
   { name: '/reminders', args: '[cancel <id>]', summary: 'what the agents put on the clock' },
+  { name: '/quiet', args: '[1d|1w|off]', summary: 'stop proactive messages for a while (7 days by default)' },
   { name: '/files', args: '[n]', summary: 'the files this installation has stored' },
   { name: '/attach', args: '<path>', summary: 'attach a file to your next message' },
   { name: '/approvals', summary: 'anything waiting for your approval' },

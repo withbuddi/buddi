@@ -18,6 +18,7 @@
 import {
   DEFAULT_TIMEZONE,
   cancelReminder,
+  getOnboarding,
   consumePairingCode,
   getActiveAgent,
   getOwnerDisplayName,
@@ -62,6 +63,7 @@ import {
   type IncomingAttachment,
 } from './attachments.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
+import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 
 export const SURFACE = 'telegram';
 
@@ -98,6 +100,7 @@ export function readingText(agentLabel?: string): string {
  * the catalog who claims the role, answers with that agent whichever one the
  * chat is currently talking to, and says plainly when nobody claims it.
  */
+import type { EngagementHooks } from '../missions/engagement.js';
 import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
@@ -155,6 +158,7 @@ export const HELP = [
   '/recap — run the recap mission now',
   '/files — the last files you sent me',
   '/reminders — what the agents have put on the clock, with a button to cancel one',
+  '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
   '/approvals — anything waiting for your approval',
   '/devices — the devices paired to this installation',
   '/new — start a fresh conversation with the active agent',
@@ -163,25 +167,46 @@ export const HELP = [
 ].join('\n');
 
 /**
- * The two lines a freshly paired chat reads above its very first answer.
+ * First contact is a conversation, not a banner.
  *
- * Two, and once: the owner just pressed a button on a QR code and is waiting
- * for an answer, not for a manual. `/help` is always a message away — what this
- * has to establish is only *what this is* and *where the other agents are*.
+ * There used to be a two-line orientation pasted above the first answer a
+ * freshly paired chat ever got. It was one-way: it told the owner what buddi
+ * was and then left them in front of a blank prompt, which is the moment most
+ * installations are abandoned. It is replaced by the agent itself — when
+ * onboarding is `pending`, the default agent is run with `FIRST_RUN_SUFFIX` and
+ * conducts the interview in its own words, using the `owner.*` tools.
+ *
+ * What is left in code is only the *shape* of the delivery, below.
  */
-export const ORIENTATION = [
-  'This is buddi: your own agents, running on your machine, reachable from here.',
-  'Send /agents to see who is installed, or just ask me something.',
-].join('\n');
+
+/** How many messages one first-run answer may be broken into. */
+export const MAX_BURST_MESSAGES = 3;
+
+/** The pause between them: long enough to read as typing, short enough to wait. */
+export const BURST_GAP_MS = 600;
 
 /**
- * Put the orientation above a reply, or leave the reply alone.
+ * Break an answer into the messages it should arrive as.
  *
- * Pure, so "it fires once and never again" is a property of the caller's
- * `first` flag rather than of a string this file builds twice.
+ * A paragraph break is the agent saying "and then this" — in a chat that is a
+ * second message, not a blank line inside one bubble. So up to
+ * `MAX_BURST_MESSAGES` paragraphs become that many sends, with a typing
+ * indicator in between.
+ *
+ * The cap is a cap, not a truncation: an answer with *more* paragraphs than
+ * that is sent whole. Breaking a six-paragraph explanation into three bubbles
+ * and a blob would read worse than either, and a first run should never be
+ * six paragraphs anyway — the skill says two short messages, maximum.
  */
-export function withOrientation(reply: string, first: boolean): string {
-  return first ? `${ORIENTATION}\n\n${reply}` : reply;
+export function splitIntoMessages(text: string, max = MAX_BURST_MESSAGES): string[] {
+  const body = text.trim();
+  if (body === '') return [];
+  const paragraphs = body
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  if (paragraphs.length <= 1 || paragraphs.length > max) return [body];
+  return paragraphs;
 }
 
 /**
@@ -355,6 +380,13 @@ export function parseMention(text: string, botUsername?: string): Mention | unde
 }
 
 /** `buddi-telegram` standalone has no scheduler wiring, and says so plainly. */
+/**
+ * `/quiet` in a build with no onboarding row to write to. Said as a fact about
+ * the installation rather than as an error the owner caused.
+ */
+export const QUIET_UNAVAILABLE_TEXT =
+  'There is nothing proactive running here yet, so there is nothing to quieten.';
+
 export const RECAP_UNAVAILABLE_TEXT =
   'The recap runs from the scheduler, which is only wired up under `buddi serve`. Start buddi that way and /recap will work here.';
 
@@ -421,6 +453,13 @@ export interface RunRequest {
    * presentational and must never affect the run.
    */
   onToolCall?: (name: string, input: unknown) => void;
+  /**
+   * An extra instruction for this one turn, appended to the surface's own
+   * presentation hint. The first run is the only thing that sets it: the agent
+   * is told to conduct the interview, and nothing about the *content* of that
+   * interview is decided here.
+   */
+  systemSuffix?: string;
 }
 
 /**
@@ -472,11 +511,18 @@ export interface TelegramSurfaceOptions {
    * agent now active. Cosmetic: a failure is logged, never surfaced.
    */
   setChatMenu?: (chatId: string, agent: CatalogAgent) => Promise<void>;
+  /**
+   * `/quiet`, and "the owner said something". Absent: `/quiet` says there is
+   * nothing proactive to quieten, and nothing is counted.
+   */
+  engagement?: EngagementHooks;
   log?: (line: string) => void;
   /** Typing indicator cadence; Telegram's own lasts ~5s. */
   typingIntervalMs?: number;
   /** Minimum gap between placeholder edits. Default 1.5s (Telegram rate limits). */
   progressIntervalMs?: number;
+  /** Pause between the messages of a first-run burst. Default `BURST_GAP_MS`. */
+  burstGapMs?: number;
   /** Clock, injected in tests. */
   now?: () => number;
   /** The owner's timezone, for every date this surface renders. */
@@ -809,24 +855,6 @@ export async function setConversationForChat(
        set conversation_id = excluded.conversation_id, created_at = now()`,
     [SURFACE, chatId, agentId, conversationId],
   );
-}
-
-/**
- * Has this chat ever had a conversation with *any* agent?
- *
- * This is what "first accepted message" means here, and it is also what records
- * it: `ensureConversationForChat` writes a row the first time a chat is
- * answered, rows are updated and never deleted (`/new` rewrites the
- * conversation id, it does not drop the mapping), so this is false exactly
- * once in the life of a chat.
- */
-export async function chatIsNew(pool: Queryable, chatId: string): Promise<boolean> {
-  const { rows } = await pool.query(
-    `select 1 from core.surface_conversations
-      where surface = $1 and external_chat_id = $2 limit 1`,
-    [SURFACE, chatId],
-  );
-  return rows.length === 0;
 }
 
 /** The chat's conversation with this agent, created on first contact. */
@@ -1203,6 +1231,11 @@ export class TelegramSurface {
     // allowlist pairs by id alone) and never overwrites a stored label.
     await this.#touch(userId, senderLabel(message.from));
 
+    // The owner said something. That is the only evidence the arc is being
+    // read, so it clears the unanswered counter — before the message is even
+    // dispatched, and whatever the message turns out to be.
+    await this.#opts.engagement?.noteActivity();
+
     // A file takes the same authorized path a sentence does — it is queued on
     // this chat's chain, so a document and the message after it cannot race.
     const incoming = extractAttachment(message);
@@ -1370,6 +1403,12 @@ export class TelegramSurface {
     // Telegram's own mention is a routing prefix, never part of the question.
     const text = stripBotMention(raw, this.#opts.botUsername).trim();
 
+    // A brand-new installation's first words are the interview, whatever the
+    // owner happened to type. Asked before anything else so that `/start` —
+    // the message Telegram itself sends when a chat is opened — is the opening
+    // of a conversation rather than a help screen.
+    if (await this.#maybeFirstRun(chatId, text)) return;
+
     // `@ledger can I afford it?` — this one message goes to that agent, in that
     // agent's own conversation, and the chat keeps the agent it was talking to.
     const mention = parseMention(text);
@@ -1445,6 +1484,18 @@ export class TelegramSurface {
       await this.handleReminders(chatId);
       return;
     }
+    // `/quiet 1w` — the argument is everything after the command word, so
+    // `/quiet` alone parses as the default. The surface never reads a duration.
+    if (command === '/quiet') {
+      const engagement = this.#opts.engagement;
+      await this.#opts.api.sendMessage(
+        chatId,
+        engagement
+          ? await engagement.quiet(text.slice(command.length).trim())
+          : QUIET_UNAVAILABLE_TEXT,
+      );
+      return;
+    }
     if (command === '/devices') {
       const devices = await listSurfaceIdentitiesDetailed(this.#opts.pool);
       await this.#opts.api.sendMessage(
@@ -1486,6 +1537,108 @@ export class TelegramSurface {
   }
 
   /**
+   * The first conversation this installation ever has, if this is it.
+   *
+   * Returns whether the message was spent on it. Three things decide:
+   *
+   *  - onboarding is still `pending` — and the claim is atomic in core, so the
+   *    terminal and this surface racing the same minute interview once;
+   *  - the message is not a command the owner deliberately typed. `/start` is
+   *    the exception, because Telegram sends it *for* them when the chat opens;
+   *  - nothing here writes a word of the conversation. The default agent is
+   *    run with `FIRST_RUN_SUFFIX` and says whatever its skill tells it to.
+   *
+   * Every failure degrades to "not a first run": a database that cannot answer
+   * must cost the owner a greeting, never their answer.
+   */
+  async #maybeFirstRun(chatId: string, text: string): Promise<boolean> {
+    const command = text.startsWith('/') ? (text.split(/\s+/)[0] as string).toLowerCase() : '';
+    if (command !== '' && command !== '/start') return false;
+    // `/start <code>` is pairing, and pairing has already happened by the time
+    // a message is accepted — but a code in the text is not a hello either.
+    if (command === '/start' && parseStartCode(text) !== undefined) return false;
+
+    let claimed = false;
+    try {
+      const state = await getOnboarding(this.#opts.pool);
+      if (state.state !== 'pending') return false;
+      claimed = await shouldStartFirstRun(this.#opts.pool, SURFACE);
+    } catch (err) {
+      this.#log(`telegram: onboarding state unavailable: ${message(err)}`);
+      return false;
+    }
+    if (!claimed) return false;
+
+    // `/start` carries no question; anything else is the owner already talking,
+    // and the agent answers *that* while it introduces itself.
+    await this.#runFirstRun(chatId, command === '/start' ? 'Hello.' : text);
+    return true;
+  }
+
+  /**
+   * The first-run turn: no progress bubble, and the answer delivered as
+   * messages rather than as one block.
+   *
+   * The bubble is deliberately absent. It exists to say "your question landed
+   * and somebody is working on it", which is the right promise for a question
+   * the owner asked — but this turn is the machine speaking first, and a
+   * placeholder that mutates into a greeting reads like software. A typing
+   * indicator and a message arriving reads like a person.
+   */
+  async #runFirstRun(chatId: string, prompt: string): Promise<void> {
+    const agent = this.#opts.catalog.defaultAgent();
+    const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
+    const stopTyping = this.#startTyping(chatId);
+    try {
+      const reply = toPlainText(
+        await this.#opts.run({
+          conversationId,
+          chatId,
+          agent,
+          text: prompt,
+          systemSuffix: FIRST_RUN_SUFFIX,
+        }),
+      );
+      await this.#sendBurst(chatId, reply);
+    } catch (err) {
+      this.#log(`telegram: first run failed: ${message(err)}`);
+      await appendSurfaceEvent(this.#opts.pool, 'surface.error', {
+        surface: SURFACE,
+        externalChatId: chatId,
+        message: message(err),
+      });
+      await this.#opts.api
+        .sendMessage(chatId, `Something went wrong: ${message(err)}`)
+        .catch(() => {});
+    } finally {
+      stopTyping();
+    }
+  }
+
+  /**
+   * Send one answer as up to three messages, typing between them.
+   *
+   * The pause is the whole point: three bubbles posted in the same millisecond
+   * are one block with extra steps. `splitIntoMessages` decides how many there
+   * are; this only paces them.
+   */
+  async #sendBurst(chatId: string, reply: string): Promise<void> {
+    const parts = splitIntoMessages(reply);
+    if (parts.length === 0) {
+      await this.#opts.api.sendMessage(chatId, '(no reply)');
+      return;
+    }
+    const gap = this.#opts.burstGapMs ?? BURST_GAP_MS;
+    for (const [index, part] of parts.entries()) {
+      if (index > 0) {
+        await this.#opts.api.sendChatAction(chatId).catch(() => {});
+        await sleep(gap);
+      }
+      await this.#opts.api.sendMessage(chatId, part);
+    }
+  }
+
+  /**
    * One turn with one agent: its own conversation for this chat, the progress
    * bubble named after its handle, and the active agent left exactly as it was.
    */
@@ -1495,8 +1648,6 @@ export class TelegramSurface {
     prompt: string,
     opts: { note?: string | undefined; carry?: boolean } = {},
   ): Promise<void> {
-    // Asked *before* `ensure…` writes the row that answers it.
-    const first = await chatIsNew(this.#opts.pool, chatId);
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
 
     // "import this statement" three minutes after a PDF means that PDF. The
@@ -1517,8 +1668,7 @@ export class TelegramSurface {
           ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
           onToolCall: (name) => progress.noteToolCall(name),
         });
-        const body = opts.note ? `${opts.note}\n\n${reply}` : reply;
-        return withOrientation(body, first);
+        return opts.note ? `${opts.note}\n\n${reply}` : reply;
       },
       label,
       carried ? readingText(label) : undefined,
@@ -1671,8 +1821,6 @@ export class TelegramSurface {
     }
 
     const agent = await this.activeAgent(chatId);
-    // A captioned file can be the very first thing a paired chat ever sends.
-    const first = await chatIsNew(this.#opts.pool, chatId);
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
     const turn = this.#attachmentTurn({
       artifactId: row.id,
@@ -1685,17 +1833,14 @@ export class TelegramSurface {
     await this.#withBubble(
       chatId,
       async (progress) =>
-        withOrientation(
-          await this.#opts.run({
-            conversationId,
-            chatId,
-            agent,
-            text: `${caption}\n\n${turn.note}`,
-            ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
-            onToolCall: (name) => progress.noteToolCall(name),
-          }),
-          first,
-        ),
+        this.#opts.run({
+          conversationId,
+          chatId,
+          agent,
+          text: `${caption}\n\n${turn.note}`,
+          ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
+          onToolCall: (name) => progress.noteToolCall(name),
+        }),
       handleLabel(agent.handle),
       readingText(handleLabel(agent.handle)),
     );

@@ -47,6 +47,7 @@ import {
   REPO_ROOT,
 } from '../agents/catalog.js';
 import { bindDelegation } from '../agents/delegation.js';
+import { bindOwnerTools } from '../agents/owner-tools.js';
 
 /** The instant every case runs at. A Sunday; "today" for every expectation. */
 export const EVAL_NOW = new Date('2026-09-13T12:00:00Z');
@@ -492,6 +493,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return target ? providerFor(target) : leadProvider;
     },
   });
+  bindOwnerTools(registry, { catalog });
 
   // A throwaway database, seeded from scratch: the golden set never reads or
   // writes the developer's own ledger, and every case starts from the same

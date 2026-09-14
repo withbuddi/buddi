@@ -64,6 +64,7 @@ import {
   type MissionRunControl,
   type MissionRunResult,
 } from './missions/execute.js';
+import { withNudgeBudget } from './missions/getting-started.js';
 import { createInlineMissionRunner, type InlineMissionDeps } from './missions/inline.js';
 import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
@@ -366,12 +367,25 @@ export async function main(): Promise<void> {
       await telegram.approvals.request(chatId, action);
     };
 
-    const execute = createMissionExecutor({
-      ...missionDeps,
-      deliver: (text) => notifyOwner(text, { pool, env: process.env }),
-      prepare: createDigestPrepare(pool, { now }),
-      askApproval,
-    });
+    // The first-run arc is the only mission that speaks without being asked
+    // *and* without having been asked for, so it is the only one wrapped in a
+    // budget. The wrapper refuses before the run — a message that is not
+    // allowed to be sent must not cost a model call to discover that — and
+    // counts only what actually reached the owner.
+    const execute = withNudgeBudget(
+      createMissionExecutor({
+        ...missionDeps,
+        deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+        prepare: createDigestPrepare(pool, { now }),
+        askApproval,
+      }),
+      {
+        pool,
+        now,
+        deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+        log: (line) => console.error(line),
+      },
+    );
 
     // The watchers. They run on their own loop: a sentinel that reads a plugin's
     // schema is usually fast, but "usually fast" is not a scheduling guarantee,

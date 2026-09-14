@@ -178,10 +178,20 @@ suite('scheduled missions run as queue jobs', () => {
       leaseMs: 5_000,
       onError: () => {},
     });
-    await waitFor(async () => (await getJob(pool, job.id))?.state === 'pending');
+    // Wait for the *spent* attempt, not merely for `pending`: a job is pending
+    // from the moment it is enqueued, so waiting on the state alone can be
+    // satisfied before the worker has claimed it once. `attempts >= 1` is the
+    // proof that the handler ran and the failure was recorded.
+    await waitFor(async () => {
+      const current = await getJob(pool, job.id);
+      return current?.state === 'pending' && current.attempts >= 1;
+    });
     await worker.stop();
 
-    expect((await getJob(pool, job.id))?.lastError).toBe('the provider said no');
+    const retried = await getJob(pool, job.id);
+    expect(retried?.lastError).toBe('the provider said no');
+    // Retries are left: the job is queued again rather than failed.
+    expect(retried?.attempts).toBeLessThan(retried?.maxAttempts ?? 0);
     // Still claimed: the retry, when it comes, will find work to do.
     expect((await getOccurrence(pool, occurrence.id))?.state).toBe('claimed');
   }, 20_000);

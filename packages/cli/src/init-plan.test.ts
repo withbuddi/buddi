@@ -32,6 +32,7 @@ const FRESH: InitFacts = {
   pairedDevices: 0,
   serviceInstalled: false,
   dashboardEnabled: true,
+  onboardingPending: true,
 };
 
 /** The same machine after a successful run. */
@@ -45,7 +46,35 @@ const FINISHED: InitFacts = {
   hasPrivateAgents: true,
   pairedDevices: 1,
   serviceInstalled: true,
+  onboardingPending: false,
 };
+
+describe('the first run', () => {
+  it('is a question on a machine with no paired device', () => {
+    expect(stepOf(planInit(FRESH), 'first-run').action).toBe('ask');
+  });
+
+  it('is only a line to read when a device is paired: the agent opens it there', () => {
+    const plan = planInit({ ...FRESH, pairedDevices: 1 });
+    expect(stepOf(plan, 'first-run').action).toBe('run');
+  });
+
+  it('is done on a machine that has already had the conversation', () => {
+    const step = stepOf(planInit(FINISHED), 'first-run');
+    expect(step.action).toBe('done');
+    expect(step.reason).toBe('already done');
+  });
+
+  it('is skipped with nobody at the keyboard, and names what to run', () => {
+    const step = stepOf(planInit({ ...FRESH, interactive: false }), 'first-run');
+    expect(step.action).toBe('skipped');
+    expect(step.reason).toContain('buddi chat');
+  });
+
+  it('is the last thing the wizard does', () => {
+    expect(STEP_IDS[STEP_IDS.length - 1]).toBe('first-run');
+  });
+});
 
 describe('planInit', () => {
   it('returns exactly one row per step, in order, whatever the facts', () => {

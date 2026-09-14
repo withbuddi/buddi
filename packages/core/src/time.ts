@@ -101,3 +101,23 @@ export function localDateString(date: Date, timezone: string): string {
   const day = part('day').padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/**
+ * Is this a zone `Intl` actually knows?
+ *
+ * The one check anything writing a timezone must pass. `Intl` is the authority
+ * rather than a list shipped here: the zone database changes, and a hardcoded
+ * set would start refusing real places. A name it does not know is refused
+ * without a suggestion — guessing "EST" meant `America/New_York` is exactly
+ * how an installation ends up a day off twice a year.
+ */
+export function isKnownTimezone(timezone: string): boolean {
+  const name = timezone.trim();
+  if (name === '') return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: name });
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -27,12 +27,15 @@ import {
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
+import { bindOwnerTools } from '../agents/owner-tools.js';
 import { createWiringAsync, loadEnv } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
+import { createEngagementHooks } from '../missions/engagement.js';
 import { recapMissionId } from '../missions/recap.js';
 import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
 import {
+  QUIET_UNAVAILABLE_TEXT,
   SURFACE,
   SURFACE_HINT,
   TelegramSurface,
@@ -55,6 +58,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
   { command: 'reminders', description: 'What the agents put on the clock' },
+  { command: 'quiet', description: 'Stop proactive messages for a while' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
   { command: 'files', description: 'The last files you sent me' },
   { command: 'devices', description: 'Devices paired to this installation' },
@@ -239,6 +243,10 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     now,
   });
 
+  // Rebound with this surface's name so a first run completed here is recorded
+  // as having happened here.
+  bindOwnerTools(deps.registry, { catalog: deps.catalog, surface: SURFACE });
+
   const surface = new TelegramSurface({
     api,
     pool,
@@ -250,6 +258,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     artifacts,
     log,
     setChatMenu,
+    // `/quiet` and the unanswered counter. Both belong to the arc, not to the
+    // transport: the surface routes the word and prints the sentence.
+    engagement: createEngagementHooks({
+      pool,
+      now,
+      timezone: deps.ctx.timezone,
+      unavailableText: QUIET_UNAVAILABLE_TEXT,
+      log,
+    }),
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
     ...(deps.recapMissionId === undefined
       ? (() => {
@@ -261,7 +278,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: async ({ conversationId, chatId, text, agent, attachments, onToolCall }) => {
+    run: async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -275,7 +292,10 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         pool,
         conversationId,
         userMessage: text,
-        systemSuffix: SURFACE_HINT,
+        // The surface hint is always present; a turn may add one instruction of
+        // its own (the first run does). Never a replacement: plain text is a
+        // property of Telegram, not of what this turn happens to be about.
+        systemSuffix: systemSuffix === undefined ? SURFACE_HINT : `${SURFACE_HINT}\n${systemSuffix}`,
         memoryPreamble: memoryPreambleFor(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);

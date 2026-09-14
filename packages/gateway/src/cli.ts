@@ -36,14 +36,17 @@ import type { Pool } from 'pg';
 import { AGENTS_DIR, memoryPreambleFor } from './agents/catalog.js';
 import { main as runAgentsCli } from './agents-cli.js';
 import { bindDelegation } from './agents/delegation.js';
+import { bindOwnerTools } from './agents/owner-tools.js';
+import { CLI_SURFACE, shouldStartFirstRun } from './agents/first-run.js';
 import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
 import { CliApprovals } from './chat/approvals.js';
 import { COMMAND_NAMES } from './chat/commands.js';
-import { ChatSession } from './chat/session.js';
+import { ChatSession, QUIET_UNAVAILABLE_TEXT } from './chat/session.js';
 import { Spinner, silentSpinner } from './chat/spinner.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 import { describeDatabaseError } from './db-ready.js';
 import { createInlineMissionRunner } from './missions/inline.js';
+import { createEngagementHooks } from './missions/engagement.js';
 import { recapMissionId } from './missions/recap.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { stripToolNames } from './telegram/surface.js';
@@ -343,6 +346,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     },
   });
 
+  bindOwnerTools(registry, { catalog, surface: CLI_SURFACE });
+
   /** Every run starts with what this agent remembers about the owner. */
   const memoryPreamble = memoryPreambleFor(pool);
 
@@ -517,6 +522,14 @@ async function chat(
     artifacts,
     approvals,
     runMission,
+    // `/quiet` and the unanswered counter. The same two verbs Telegram gets:
+    // proactive messages are one arc, whichever surface the owner is on.
+    engagement: createEngagementHooks({
+      pool,
+      now,
+      timezone,
+      unavailableText: QUIET_UNAVAILABLE_TEXT,
+    }),
     // Which mission `/recap` runs is the installed plugins' suggestion for the
     // `recap` role, resolved here at the composition root, never in the surface.
     ...(recapMissionId() === undefined ? {} : { recapMissionId: recapMissionId() as string }),
@@ -552,6 +565,22 @@ async function chat(
     ),
   );
   out(dim('/help for commands, /quit to leave', style.color));
+
+  /*
+   * A brand-new installation introduces itself before the owner types anything.
+   *
+   * Only where somebody is watching: a piped `buddi chat` is a script, and a
+   * script has no first run to have. The claim is core's and is atomic, so the
+   * terminal and Telegram cannot both interview the same owner — whichever gets
+   * here first is the one that does it.
+   */
+  if (style.tty && !args.quiet) {
+    try {
+      if (await shouldStartFirstRun(pool, CLI_SURFACE)) await session.firstRun();
+    } catch (err) {
+      out(dim(`first run unavailable: ${err instanceof Error ? err.message : String(err)}`, style.color));
+    }
+  }
 
   let leaving = false;
 

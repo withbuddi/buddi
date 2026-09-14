@@ -28,6 +28,7 @@ import {
   type Vault,
 } from '@buddi/core';
 import { createPairingCode, listDevices, TelegramApi } from '@buddi/gateway';
+import { getOnboarding } from '@buddi/core';
 import { runDashboard } from './dashboard-cmd.js';
 import { applyEnvEdits, isBlank, maskSecret, parseEnv, type EnvEdit } from './env-file.js';
 import {
@@ -188,6 +189,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       pairedDevices: await countPairedDevices(env.DATABASE_URL),
       serviceInstalled: await serviceIsInstalled(),
       dashboardEnabled: (env.BUDDI_WEB ?? '1').trim() !== '0',
+      onboardingPending: await onboardingIsPending(env.DATABASE_URL),
     });
 
     let plan = planInit(await facts());
@@ -343,12 +345,78 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       }
     }
 
+    /*
+     * 10d. The first conversation. Not configuration: the wizard has finished
+     *      asking things, and the last thing it does is get out of the way so
+     *      the agent can ask the two or three things it actually needs — in its
+     *      own words, in a chat, rather than as three more prompts here.
+     */
+    plan = planInit(await facts());
+    const interview = await offerFirstRun(confirm, stepOf(plan, 'first-run'));
+
     console.log();
     for (const line of nextSteps(planInit(await facts()))) console.log(line);
+
+    if (interview) {
+      // readline owns stdin; hand it over before `buddi chat` wants it.
+      rl?.close();
+      console.log();
+      await runInherit(process.execPath, [CLI_ENTRY, 'chat'], { cwd: REPO_ROOT });
+    }
     return 0;
   } finally {
     rl?.close();
   }
+}
+
+/** This process's own entry point — what `buddi chat` is, from inside init. */
+const CLI_ENTRY = path.join(REPO_ROOT, 'packages', 'cli', 'dist', 'main.js');
+
+/**
+ * Has this installation ever had its first conversation?
+ *
+ * Best effort in the honest sense: a database that is not up, or one migrated
+ * before 013 landed, answers "no" — the wizard then says nothing about it
+ * rather than failing a run that otherwise succeeded.
+ */
+export async function onboardingIsPending(databaseUrl: string | undefined): Promise<boolean> {
+  if (!databaseUrl) return false;
+  const pool = createPool(databaseUrl);
+  try {
+    return (await getOnboarding(pool)).state === 'pending';
+  } catch {
+    return false;
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+/**
+ * The wizard's last step: point the owner at the conversation, or offer to have
+ * it here. Returns whether `buddi chat` should be started on the way out.
+ *
+ * With a paired device there is nothing to offer — the agent opens the
+ * conversation itself the moment the owner opens the chat — so this is one
+ * line, not a question.
+ */
+export async function offerFirstRun(
+  confirm: (question: string, byDefault?: boolean) => Promise<boolean>,
+  step: PlannedStep,
+): Promise<boolean> {
+  if (step.action === 'done' || step.action === 'skipped') return false;
+  console.log(bold('\nMeet your agent'));
+  if (step.action === 'run') {
+    console.log(
+      '  Open your paired Telegram chat and say hello — the agent introduces itself\n' +
+        '  there and asks the few things it needs.',
+    );
+    return false;
+  }
+  if (!(await confirm('Have that conversation here now? It takes a minute.', true))) {
+    console.log(dim('  skipped — `buddi chat` and it will introduce itself'));
+    return false;
+  }
+  return true;
 }
 
 /* ------------------------------------------------------------------ *

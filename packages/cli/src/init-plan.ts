@@ -31,6 +31,7 @@ export const STEP_IDS = [
   'telegram-pair',
   'service',
   'dashboard',
+  'first-run',
 ] as const;
 
 export type StepId = (typeof STEP_IDS)[number];
@@ -76,6 +77,11 @@ export interface InitFacts {
   serviceInstalled: boolean;
   /** `BUDDI_WEB` is not `0`. */
   dashboardEnabled: boolean;
+  /**
+   * The owner has never had the first conversation. False on every machine
+   * that was already talking before this shipped, and on every second run.
+   */
+  onboardingPending: boolean;
 }
 
 const NO_TTY = 'non-interactive';
@@ -213,6 +219,32 @@ export function planInit(facts: InitFacts): PlannedStep[] {
       : interactive
         ? undefined
         : `${NO_TTY} — run \`buddi dashboard\``,
+  );
+
+  /*
+   * The last step, and the only one that is not configuration: the agent
+   * introduces itself. There is nothing to *do* when a device is paired — the
+   * agent will open the conversation the moment the owner opens the chat — so
+   * that case is `run`, a line to read rather than a question. With no device,
+   * the interview has to happen here or not at all, which is a question.
+   */
+  step(
+    'first-run',
+    'meet your agent — it asks the few things it needs',
+    !facts.onboardingPending
+      ? 'done'
+      : facts.pairedDevices > 0
+        ? 'run'
+        : interactive
+          ? 'ask'
+          : 'skipped',
+    !facts.onboardingPending
+      ? 'already done'
+      : facts.pairedDevices > 0
+        ? undefined
+        : interactive
+          ? undefined
+          : `${NO_TTY} — run \`buddi chat\` and it will introduce itself`,
   );
 
   return steps;

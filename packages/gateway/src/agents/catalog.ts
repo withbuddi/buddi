@@ -23,6 +23,7 @@ import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from './delegation.js';
+import { createOwnerManifest } from './owner-tools.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
@@ -88,6 +89,10 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   // reminder set in a chat is the same object as one set by the daily check.
   registry.register(createReminderManifest(reminderLimitsFromEnv(env)));
   registry.register(createScheduleManifest());
+  // The first-run tools. Registered in the base registry like the reminders:
+  // the owner may correct their name or their zone in any conversation, not
+  // only in the one that first asked for it.
+  registry.register(createOwnerManifest(registry));
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
   // by `bindDelegation` once they exist (the catalog is loaded *against* this
