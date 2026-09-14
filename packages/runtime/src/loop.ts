@@ -18,6 +18,11 @@ import type {
   Usage,
 } from './anthropic.js';
 import {
+  degradeMessages,
+  DEFAULT_CAPABILITIES,
+  type ProviderCapabilities,
+} from './capabilities.js';
+import {
   assertAttachmentCount,
   hydrateContent,
   hydrateMessages,
@@ -110,6 +115,23 @@ export interface RunResult {
   usage: Usage;
   /** Set only when `stopped === 'awaiting-approval'`. */
   pendingActionId?: string;
+  /**
+   * What this run actually ran on (ARCHITECTURE.md, "Per-run snapshot").
+   * Pinned provider, pinned model, credential kind — plus the concrete model
+   * the endpoint says it served, which is the one that can differ from the pin.
+   */
+  snapshot: RunSnapshot;
+}
+
+/** The per-run provenance record; written to `core.events` and returned. */
+export interface RunSnapshot {
+  provider: string;
+  credentialKind: string;
+  /** The model the agent file / environment pinned. */
+  model: string;
+  /** What the endpoint reported serving, once it has answered. */
+  servedModel?: string;
+  capabilities: ProviderCapabilities;
 }
 
 /**
@@ -284,6 +306,19 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // Fail closed: unknown tool names are a configuration defect, not a runtime
   // refusal — and they are caught before a single token is sent anywhere.
   const tools = selectTools(registry, agent);
+
+  /*
+   * What this provider can carry, asked *before* a request is built rather than
+   * discovered as a 400 with the owner's file already in the body. An adapter
+   * that does not declare a matrix is treated as the native wire.
+   */
+  const capabilities = provider.capabilities ?? DEFAULT_CAPABILITIES;
+  const snapshot: RunSnapshot = {
+    provider: agent.provider.kind,
+    credentialKind: agent.provider.credential.kind,
+    model: agent.provider.model,
+    capabilities,
+  };
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
   const system = composeSystem(agent.systemPrompt, opts.systemSuffix, memory);
 
@@ -311,10 +346,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   });
   // What is persisted is the reference, never the base64.
   await persistMessage(pool, conversationId, 'user', userBlocks);
-  const messages: NeutralMessage[] = [
-    ...replayed,
-    { role: 'user', content: sentUserBlocks },
-  ];
+  // Degrade what the provider cannot carry into a placeholder the model can
+  // read and talk about. Only what is *sent* changes: the persisted turn above
+  // still holds the artifact reference, so the same history sent to a provider
+  // that accepts documents tomorrow still carries the real file.
+  const messages: NeutralMessage[] = degradeMessages(
+    [...replayed, { role: 'user', content: sentUserBlocks }],
+    capabilities,
+  );
 
   await appendEvent(
     pool,
@@ -323,6 +362,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       agentId: agent.id,
       tools: agent.tools,
       maxTurns: agent.maxTurns,
+      // The per-run snapshot: which company this run's data went to, on which
+      // model, under which credential. Written before the first call, so it is
+      // on record even if the call never comes back.
+      provider: snapshot.provider,
+      credentialKind: snapshot.credentialKind,
+      model: snapshot.model,
+      capabilities: snapshot.capabilities,
       ...(resume ? { actionId: resume.actionId, approvalState: resume.state } : {}),
     },
     conversationId,
@@ -344,6 +390,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     });
     usage.input += res.usage.input;
     usage.output += res.usage.output;
+    // The concrete model, as the endpoint reports it — an alias resolving to a
+    // dated snapshot is exactly what the pin cannot tell you.
+    if (res.model) snapshot.servedModel = res.model;
 
     const assistantContent = res.content;
     messages.push({ role: 'assistant', content: assistantContent });
@@ -442,7 +491,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   await appendEvent(
     pool,
     'run.finished',
-    { turns, stopped, usage, ...(pendingActionId ? { actionId: pendingActionId } : {}) },
+    {
+      turns,
+      stopped,
+      usage,
+      provider: snapshot.provider,
+      model: snapshot.model,
+      servedModel: snapshot.servedModel ?? null,
+      credentialKind: snapshot.credentialKind,
+      ...(pendingActionId ? { actionId: pendingActionId } : {}),
+    },
     conversationId,
   );
 
@@ -451,6 +509,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     turns,
     stopped,
     usage,
+    snapshot,
     ...(pendingActionId ? { pendingActionId } : {}),
   };
 }

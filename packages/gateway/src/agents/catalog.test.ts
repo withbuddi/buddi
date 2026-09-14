@@ -84,7 +84,42 @@ describe('the shipped agents directory', () => {
       'credit-coach': 'credo',
       'finance-advisor': 'ledger',
       'mail-triage': 'postman',
+      scout: 'scout',
     });
+  });
+
+  /*
+   * The living proof that the RuntimeProvider port swaps: one shipped agent
+   * runs on a different company's endpoint, and the installation does not
+   * depend on that company's key being present.
+   */
+  it('ships one agent on the second provider, with only its own narrow tools', () => {
+    const scout = catalog.resolve('scout');
+    expect(scout.provider.kind).toBe('openai');
+    expect(scout.provider.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
+    expect(scout.model).toBe('gpt-5');
+    expect(scout.isDefault).toBe(false);
+    expect(scout.tools.every((n) => n.startsWith('memory.') || n.startsWith('reminder.'))).toBe(
+      true,
+    );
+    expect(scout.tools.some((n) => n.startsWith('finance.'))).toBe(false);
+    expect(scout.tools.some((n) => n.startsWith('email.'))).toBe(false);
+    // It says so itself, in its own persona.
+    expect(scout.systemPromptTemplate).toContain('different AI provider');
+  });
+
+  it('loads the whole catalog with no OPENAI_API_KEY, marking only scout unavailable', () => {
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-test' };
+    const withoutKey = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+    expect(withoutKey.list()).toHaveLength(5);
+    const summaries = Object.fromEntries(withoutKey.list().map((a) => [a.id, a]));
+    expect(summaries.scout?.available).toBe(false);
+    expect(summaries.scout?.unavailableReason).toContain('OPENAI_API_KEY');
+    for (const id of ['concierge', 'credit-coach', 'finance-advisor', 'mail-triage']) {
+      expect(summaries[id]?.available).toBe(true);
+    }
+    // And the default agent still resolves and still runs.
+    expect(withoutKey.defaultAgent().id).toBe('finance-advisor');
   });
 
   it('resolves each agent by its handle as readily as by its id', () => {

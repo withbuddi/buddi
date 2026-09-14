@@ -41,6 +41,8 @@ export interface DoctorProbes {
   pairedDevices(): Promise<ProbeResult>;
   /** The durable queue: paused or running, and how the jobs stand. */
   queue(): Promise<ProbeResult>;
+  /** The local dashboard: where it is bound, and whether a token exists yet. */
+  dashboard(): Promise<ProbeResult>;
   service(): Promise<ProbeResult>;
   timezone(): ProbeResult;
 }
@@ -57,6 +59,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
   { name: 'queue', critical: false, probe: 'queue' },
+  { name: 'dashboard', critical: false, probe: 'dashboard' },
   { name: 'service', critical: false, probe: 'service' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];

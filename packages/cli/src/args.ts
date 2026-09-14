@@ -33,6 +33,10 @@ export type DbAction = (typeof DB_ACTIONS)[number];
 export const VAULT_ACTIONS = ['set', 'get', 'delete', 'list', 'import-env'] as const;
 export type VaultAction = (typeof VAULT_ACTIONS)[number];
 
+/** `buddi dashboard` — open it, print just the ticket, or explain the off switch. */
+export const DASHBOARD_ACTIONS = ['open', 'token', 'off'] as const;
+export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
+
 export const TELEGRAM_ACTIONS = ['pair', 'devices', 'unpair'] as const;
 export type TelegramAction = (typeof TELEGRAM_ACTIONS)[number];
 
@@ -63,6 +67,8 @@ export type Command =
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
+  /** The local dashboard over the event log. */
+  | { kind: 'dashboard'; action: DashboardAction }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
   /** Global pause control (ARCHITECTURE.md, "Queue, concurrency, recovery"). */
@@ -151,6 +157,19 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'vault', action: action as VaultAction, ...(name ? { name } : {}) };
   }
 
+  if (head === 'dashboard') {
+    // No sub-verbs: the bare command is what a person types, and the two flags
+    // are the two other things they might want.
+    if (rest.length === 0) return { kind: 'dashboard', action: 'open' };
+    if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
+    const flag = rest[0];
+    if (flag === '--token') return { kind: 'dashboard', action: 'token' };
+    if (flag === '--off') return { kind: 'dashboard', action: 'off' };
+    throw new UsageError(
+      `unknown option for buddi dashboard: ${flag} (expected --token or --off)`,
+    );
+  }
+
   if (head === 'telegram') {
     const action = rest[0];
     if (action === undefined) {
@@ -237,6 +256,10 @@ export const USAGE = `buddi — your personal agents, one command
   buddi service install      run it in the background, at login
   buddi service start|stop   load/unload it without touching the plist
   buddi service uninstall|status|logs|restart
+
+  buddi dashboard            open the local dashboard (one-time link)
+  buddi dashboard --token    print just the one-time token
+  buddi dashboard --off      how to turn the dashboard off
 
   buddi telegram pair        a QR code + deep link that pairs a device
   buddi telegram devices     every paired device

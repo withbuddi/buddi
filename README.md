@@ -57,6 +57,15 @@ empty. If `CLAUDE_CODE_OAUTH_TOKEN` is set the agent uses the subscription
 token; otherwise it uses `ANTHROPIC_API_KEY`. Pin a different model with
 `BUDDI_MODEL` (default `claude-sonnet-5`).
 
+An agent file may pin a different provider (`provider: openai`), which reads
+`OPENAI_API_KEY` and `BUDDI_OPENAI_MODEL` (default `gpt-5`) and nothing else —
+no subscription token, no fallback to the Anthropic key, and no model borrowed
+from the other provider's catalogue. `@scout` ships that way. If its key is
+absent, `buddi agents` lists it as unavailable and says which variable is
+missing; every other agent is unaffected. `pnpm eval --provider openai` runs the
+golden set against it, skipping — out loud — every case that needs the finance
+tools it does not have.
+
 **Secrets.** `.env` is the day-1 fallback; the OS keychain is the real home.
 `buddi vault import-env` moves every known secret into it and rewrites each line
 in `.env` to `NAME="<vault>"` — a marker, not a value, which resolution treats as
@@ -80,8 +89,9 @@ buddi doctor
 
 One table: node/pnpm/docker versions, postgres reachability, whether migrations
 are up to date, whether the model credential is actually accepted, whether the
-bot token is valid, how many devices are paired, whether the background service
-is running, and which timezone is in force. It exits 1 if anything critical is
+bot token is valid, how many devices are paired, where the dashboard is bound
+and whether it has a token yet, whether the background service is running, and
+which timezone is in force. It exits 1 if anything critical is
 broken, so it is usable from a script.
 
 ## Usage
@@ -178,6 +188,45 @@ Docker)** when the daemon is down, the rows under the database say
 `service` row points at `buddi service start` when the LaunchAgent is installed
 but the process is not up.
 
+## Dashboard
+
+`buddi serve` also serves a small local dashboard over the event log — bound to
+`127.0.0.1:4317`, session-authenticated, and reachable with one command:
+
+```sh
+buddi dashboard           # prints the URL with a one-time link, and opens it
+buddi dashboard --token   # just the one-time token, for piping
+buddi dashboard --off     # how to turn it off
+```
+
+Overview, Events, Conversations, Missions, Approvals, Jobs, Reminders,
+Sentinels and Agents. It is read-first: the writes it offers are the ones you
+already have elsewhere — approve or reject a pending action, pause and resume,
+enable or disable a mission and change its misfire policy, retry or cancel a
+job, cancel a reminder — and every one of them calls the same core function the
+CLI and Telegram call, so a decision made here is the same atomic transition
+and shows up in the log a second later.
+
+**How the link works.** A long random token is generated on first run and kept
+in the OS keychain under `BUDDI_WEB_TOKEN` (or, with no usable vault, in
+`data/web-token`, mode 600). It never appears in a URL. What `buddi dashboard`
+prints is a *ticket* signed with it: single-use and valid for five minutes. The
+server verifies it, spends it, and swaps it for an HttpOnly, `SameSite=Strict`
+session cookie on a clean URL. Every write additionally needs a double-submit
+CSRF header and an `Origin` that is the bound address; there is no CORS, and a
+request without a valid session gets `401` and an empty body. Failed
+authentications are rate-limited per address.
+
+| Variable | Default | What it means |
+| --- | --- | --- |
+| `BUDDI_WEB` | `1` | `0` turns the dashboard off entirely. |
+| `BUDDI_WEB_HOST` | `127.0.0.1` | Bind address. Anything but loopback exposes an approval button to your network — put it behind an authenticated transport if you do, and `buddi doctor` will warn about it. |
+| `BUDDI_WEB_PORT` | `4317` | Port. |
+
+The UI is a small React app built by Vite into `packages/web/dist`, served as
+static files by the same process. It makes no external requests at all — no
+CDN, no web fonts, no telemetry — so it works with the machine offline.
+
 ## Missions
 
 ```sh
@@ -227,6 +276,7 @@ attach and detach the global `buddi`.
 
 Packages: `core` (domain, db, event log, tool registry, provider port), `runtime` (agent
 loop + Anthropic adapter), `gateway` (the surfaces: terminal, Telegram, scheduler),
+`web` (the dashboard UI, React + Vite, built to static files the gateway serves),
 `cli` (the single `buddi` binary — a dispatcher over the gateway's own entry points,
 plus `init`, `doctor` and `service`), `tools/finance` (the finance plugin, which owns the
 `finance` schema). Core never imports a tool; delete `packages/tools/finance` and the

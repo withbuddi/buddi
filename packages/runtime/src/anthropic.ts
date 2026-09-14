@@ -20,6 +20,13 @@
  * No ambient credentials: everything comes from the already-resolved provider.
  */
 import { providerAuthHeaders, type ResolvedProvider } from '@buddi/core';
+import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
+import {
+  defaultSleep,
+  isRetryableStatus,
+  nextDelayMs,
+  RETRY_DELAYS_MS,
+} from './retry.js';
 
 /**
  * Exact text of the system block the subscription-token path must send first.
@@ -103,6 +110,12 @@ export interface CompletionResponse {
 
 export interface RuntimeProvider {
   complete(req: CompletionRequest): Promise<CompletionResponse>;
+  /**
+   * What this adapter can actually carry. Optional so a two-line test double
+   * stays two lines; absent means the native wire this runtime was built on
+   * (see `DEFAULT_CAPABILITIES`), never "everything".
+   */
+  readonly capabilities?: ProviderCapabilities;
 }
 
 /** Typed transport/API failure. Never carries the credential. */
@@ -125,15 +138,23 @@ export class ProviderError extends Error {
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Retry policy
- * ------------------------------------------------------------------ */
+/**
+ * A request an adapter refuses to send because its wire cannot express it.
+ *
+ * Thrown rather than approximated: an adapter that quietly dropped a PDF would
+ * leave the model answering about a document it never saw. The loop consults
+ * the capability matrix first, so in practice this fires only for a caller that
+ * went round the loop — and it still says what to do instead.
+ */
+export class ProviderCapabilityError extends ProviderError {
+  override readonly name = 'ProviderCapabilityError';
+  /** The neutral block kind that could not be carried. */
+  readonly blockType: string;
 
-/** Backoff before attempts 2, 3 and 4. Three retries, then give up. */
-export const RETRY_DELAYS_MS: readonly number[] = [500, 1500, 4000];
-
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || status === 529 || status >= 500;
+  constructor(args: { provider: string; blockType: string; message: string }) {
+    super({ status: 0, type: 'unsupported_content', message: args.message });
+    this.blockType = args.blockType;
+  }
 }
 
 export interface AnthropicProviderOptions {
@@ -243,32 +264,46 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
  * suffix, and a per-request map turns the model's answer back into the real
  * name. Nothing above this module ever sees the wire spelling.
  */
-const WIRE_TOOL_NAME_OK = /^[a-zA-Z0-9_-]{1,128}$/;
+const WIRE_TOOL_NAME_CHARS = /^[a-zA-Z0-9_-]+$/;
 
-export function encodeToolName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+/** Anthropic allows 128 characters; OpenAI's function names stop at 64. */
+export const ANTHROPIC_TOOL_NAME_MAX = 128;
+export const OPENAI_TOOL_NAME_MAX = 64;
+
+export function encodeToolName(name: string, maxLength = ANTHROPIC_TOOL_NAME_MAX): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, maxLength);
 }
 
-/** wire name -> registry name, for one request's tool list. */
-export function toolNameMap(tools: ToolSchema[]): Map<string, string> {
+/**
+ * wire name -> registry name, for one request's tool list. `maxLength` is the
+ * wire's own limit; both adapters share the encoding so a tool answers to the
+ * same registry name whichever provider proposed it.
+ */
+export function toolNameMap(
+  tools: ToolSchema[],
+  maxLength = ANTHROPIC_TOOL_NAME_MAX,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const tool of tools) {
-    if (WIRE_TOOL_NAME_OK.test(tool.name)) {
+    if (WIRE_TOOL_NAME_CHARS.test(tool.name) && tool.name.length <= maxLength) {
       map.set(tool.name, tool.name);
       continue;
     }
-    const base = encodeToolName(tool.name);
+    const base = encodeToolName(tool.name, maxLength);
     let wire = base;
-    for (let n = 2; map.has(wire); n++) wire = `${base.slice(0, 124)}_${n}`;
+    for (let n = 2; map.has(wire); n++) wire = `${base.slice(0, maxLength - 4)}_${n}`;
     map.set(wire, tool.name);
   }
   return map;
 }
 
-function wireNameFor(map: Map<string, string>, registryName: string): string {
+/** wire name for a registry name, within one request's map. */
+export function wireToolName(map: Map<string, string>, registryName: string): string {
   for (const [wire, real] of map) if (real === registryName) return wire;
   return registryName;
 }
+
+const wireNameFor = wireToolName;
 
 function fromWireBlocks(raw: unknown, names: Map<string, string>): ContentBlock[] {
   if (!Array.isArray(raw)) return [];
@@ -325,10 +360,6 @@ export function withClaudeCodeIdentity(system: string): { type: 'text'; text: st
   ];
   if (rest.trim() !== '') blocks.push({ type: 'text', text: rest });
   return blocks;
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function createAnthropicProvider(
@@ -399,14 +430,19 @@ export function createAnthropicProvider(
     return new ProviderError({ status: res.status, type, message, requestId });
   }
 
+  const capabilities = providerCapabilities('anthropic');
+
   return {
+    capabilities,
     async complete(req: CompletionRequest): Promise<CompletionResponse> {
       const names = toolNameMap(req.tools);
       const payload = JSON.stringify(body(req, names));
       let lastError: ProviderError | undefined;
+      /** What the last failure asked us to wait, when it asked. */
+      let delay = 0;
 
       for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-        if (attempt > 0) await sleep(RETRY_DELAYS_MS[attempt - 1] as number);
+        if (attempt > 0) await sleep(delay);
 
         let res: Response;
         try {
@@ -418,6 +454,7 @@ export function createAnthropicProvider(
             type: 'transport_error',
             message: err instanceof Error ? err.message : String(err),
           });
+          delay = nextDelayMs(attempt + 1);
           continue;
         }
 
@@ -434,9 +471,13 @@ export function createAnthropicProvider(
           };
         }
 
+        // Read `Retry-After` before the body is consumed: a 429 that names its
+        // own window is the one case where our curve is the wrong answer.
+        const wait = nextDelayMs(attempt + 1, res.headers);
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
+        delay = wait;
       }
 
       throw (

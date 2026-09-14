@@ -27,6 +27,11 @@ import {
   listDevices,
   loadGatewayCatalog,
   TelegramApi,
+  webConfig,
+  webTokenExists,
+  webUrl,
+  isLoopback,
+  WEB_ENABLED_VAR,
 } from '@buddi/gateway';
 import type { Pool } from 'pg';
 import {
@@ -301,6 +306,29 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       } catch {
         return { status: 'warn', detail: 'core.jobs does not exist — run `buddi migrate`' };
       }
+    },
+
+    /**
+     * The dashboard: the address it is bound to, and whether the installation
+     * has a token yet. Never creates one — the doctor reports, it does not
+     * configure — and never prints it.
+     */
+    async dashboard(): Promise<ProbeResult> {
+      const config = webConfig(env);
+      if (!config.enabled) {
+        return { status: 'warn', detail: `off (${WEB_ENABLED_VAR}=0)` };
+      }
+      const source = await webTokenExists({ env, ...(opts.vault ? { vault: opts.vault } : {}) });
+      const where = `${webUrl(config)} (${config.host}:${config.port})`;
+      if (!isLoopback(config.host)) {
+        return {
+          status: 'warn',
+          detail: `${where} — NOT loopback; anyone who can reach this address can approve effects`,
+        };
+      }
+      return source === null
+        ? { status: 'warn', detail: `${where} — no token yet (created on the next \`buddi serve\`)` }
+        : { status: 'ok', detail: `${where} — token in the ${source}` };
     },
 
     async service(): Promise<ProbeResult> {

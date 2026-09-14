@@ -11,6 +11,7 @@ export * from './db-ready.js';
 export * from './missions/execute.js';
 export * from './missions/recap.js';
 export * from './missions/reminders.js';
+export * from './web/index.js';
 export { startTelegram, describePaired } from './telegram/main.js';
 
 // Entry points, named for the one global binary (@buddi/cli) that calls them.

@@ -169,3 +169,16 @@ describe('buddi status', () => {
     expect(parseArgs(['doctor'])).toEqual({ kind: 'doctor' });
   });
 });
+
+describe('dashboard', () => {
+  it('opens by default, and has exactly two flags', () => {
+    expect(parseArgs(['dashboard'])).toEqual({ kind: 'dashboard', action: 'open' });
+    expect(parseArgs(['dashboard', '--token'])).toEqual({ kind: 'dashboard', action: 'token' });
+    expect(parseArgs(['dashboard', '--off'])).toEqual({ kind: 'dashboard', action: 'off' });
+  });
+
+  it('refuses anything else', () => {
+    expect(() => parseArgs(['dashboard', '--open'])).toThrow(UsageError);
+    expect(() => parseArgs(['dashboard', '--token', 'extra'])).toThrow(UsageError);
+  });
+});
