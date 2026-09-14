@@ -50,7 +50,11 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import type { ApprovalResume } from '@buddi/runtime';
-import { ensureGmailAccount } from '@buddi/tool-email';
+import {
+  DEFAULT_POLL_TIMEOUT_MS,
+  ensureGmailAccount,
+  POLL_TIMEOUT_VAR,
+} from '@buddi/tool-email';
 import { createWiringAsync, loadEnv } from './bootstrap.js';
 import { insertOccurrence } from './missions-cli.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
@@ -61,6 +65,7 @@ import {
   type MissionRunResult,
 } from './missions/execute.js';
 import { createDigestPrepare } from './missions/recap.js';
+import { startLoop } from './loop.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 import type { MissionOutcome, RunMission } from './telegram/surface.js';
@@ -68,6 +73,15 @@ import type { MissionOutcome, RunMission } from './telegram/surface.js';
 /** Scheduler cadence and the age at which a claim is considered abandoned. */
 export const TICK_MS = 30_000;
 export const STALE_CLAIM_MS = 15 * 60_000;
+
+/**
+ * The watchers and the sources run on their own loops, off the scheduler's
+ * critical path. A poll that reaches the network must never be able to stop the
+ * clock: a wedged IMAP call once held the whole tick, so sentinels, sources and
+ * the scheduler are three independent loops that share only the pool.
+ */
+export const SENTINEL_TICK_MS = 30_000;
+export const SOURCE_TICK_MS = 30_000;
 
 /** The scheduler's kind: run one occurrence of a scheduled mission. */
 export const MISSION_JOB_KIND = 'mission-run';
@@ -391,8 +405,10 @@ export async function main(): Promise<void> {
       askApproval,
     });
 
-    // The watchers. They run inside the scheduler tick, before materialization,
-    // so an urgent finding enqueued now is claimed in the same pass.
+    // The watchers. They run on their own loop: a sentinel that reads a plugin's
+    // schema is usually fast, but "usually fast" is not a scheduling guarantee,
+    // and a slow one must not delay materialization. A finding it enqueues is
+    // claimed by the very next scheduler pass, seconds later.
     const sentinels = collectSentinels(wiring.registry.manifests());
     const sentinelTick = async (): Promise<void> => {
       const outcomes = await runSentinels(pool, wiring.registry.manifests(), now(), wiring.timezone);
@@ -428,6 +444,14 @@ export async function main(): Promise<void> {
       });
       console.log(`source run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);
     };
+    // A source's own per-call deadline bounds one poll; the loop's hard abort is
+    // twice that, so the loop only ever intervenes when a source failed to.
+    const sourcePollTimeoutMs = (() => {
+      const raw = process.env[POLL_TIMEOUT_VAR]?.trim();
+      const n = raw ? Number(raw) : NaN;
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_POLL_TIMEOUT_MS;
+    })();
+    const sourceAbortMs = sourcePollTimeoutMs * 2;
     const sourceTick = async (): Promise<void> => {
       const outcomes = await runSources(pool, wiring.registry.manifests(), {
         now: now(),
@@ -487,14 +511,29 @@ export async function main(): Promise<void> {
         ),
     });
 
+    // Two independent loops, neither of them on the scheduler's critical path.
+    // Non-overlapping: a tick that lands while the previous poll is still
+    // running says so and skips, and a poll still going at 2x the deadline is
+    // abandoned so the next one starts clean.
+    const sentinelLoop = startLoop({
+      name: 'sentinels',
+      everyMs: SENTINEL_TICK_MS,
+      abortAfterMs: SENTINEL_TICK_MS * 2,
+      run: sentinelTick,
+      log: (line) => console.error(line),
+    });
+    const sourceLoop = startLoop({
+      name: 'sources',
+      everyMs: SOURCE_TICK_MS,
+      abortAfterMs: sourceAbortMs,
+      run: sourceTick,
+      log: (line) => console.error(line),
+    });
+
     const scheduler = runScheduler({
       pool,
       now,
       tickMs: TICK_MS,
-      sentinelTick: async () => {
-        await sentinelTick();
-        await sourceTick();
-      },
       execute: async (occurrence, mission) => {
         const job = await queueOccurrence(pool, occurrence, mission);
         console.log(`mission ${mission.id}: occurrence ${occurrence.id} queued as job ${job.id}`);
@@ -512,6 +551,10 @@ export async function main(): Promise<void> {
     console.log(`  paired owner ids: ${describePaired(telegram.paired)}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
+    console.log(
+      `  loops: sentinels every ${SENTINEL_TICK_MS / 1000}s, sources every ${SOURCE_TICK_MS / 1000}s ` +
+        `(independent of the scheduler; source poll deadline ${sourcePollTimeoutMs / 1000}s)`,
+    );
     const jobCounts = await countJobsByState(pool);
     console.log(
       `  queue: worker for ${JOB_KINDS.join(', ')}, lease ${JOB_LEASE_MS / 60_000}m — ` +
@@ -549,6 +592,8 @@ export async function main(): Promise<void> {
       stopping = true;
       console.log(`\n${signal}: stopping scheduler and telegram surface…`);
       clearInterval(sweep);
+      sentinelLoop.stop();
+      sourceLoop.stop();
       void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));

@@ -61,6 +61,11 @@ const ENV = {
   GMAIL_USER: 'owner@example.test',
   [GMAIL_SECRET_NAME]: 'app-password',
   BUDDI_TZ: 'UTC',
+  // A first contact plants the cursor at UIDNEXT-1 and reads no history, so
+  // the one message this end-to-end seeds would otherwise be "before we
+  // started". The backfill is how the real installation would be told to
+  // pick up the newest few, and it is what makes the fixture arrive.
+  EMAIL_BACKFILL: '20',
 } as NodeJS.ProcessEnv;
 
 const NOW = new Date('2026-09-13T09:15:00Z');

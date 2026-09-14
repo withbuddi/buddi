@@ -108,8 +108,14 @@ export {
 export {
   createInboxPollSource,
   triageDedupKey,
+  withDeadline,
+  ImapTimeoutError,
+  BACKFILL_VAR,
+  DEFAULT_BACKFILL,
+  DEFAULT_POLL_TIMEOUT_MS,
   MAX_PER_POLL,
   POLL_EVERY_SECONDS,
+  POLL_TIMEOUT_VAR,
   TRIAGE_AGENT_ID,
 } from './sources/inbox-poll.js';
 export {

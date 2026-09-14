@@ -8,16 +8,30 @@
  *  - **Identity is the quad.** `(account, mailbox, uidvalidity, uid)` with a
  *    unique constraint. A UID means nothing without its UIDVALIDITY.
  *  - **UIDVALIDITY resets are handled, not hoped about.** When the generation
- *    changes, every stored uid for that mailbox is meaningless: the cursor goes
- *    back to 0, the change is logged, and the mailbox re-syncs from the start.
+ *    changes, every stored uid for that mailbox is meaningless: the change is
+ *    logged and the cursor is re-planted by the first-contact policy below.
  *    Already-stored rows are kept — they are a different generation and the
  *    unique constraint keeps them apart.
  *  - **Transactional cursor advancement.** Rows and `last_uid` commit together,
  *    so a crash can re-fetch but can never skip.
+ *  - **A new mailbox starts at *now*, not at message one.** A first contact has
+ *    no cursor, and "no cursor" must never mean "read 140,000 messages from
+ *    UID 1". The cursor is planted at `UIDNEXT - 1` — everything that arrives
+ *    from this moment on is new mail, and the history stays where it is.
+ *    `EMAIL_BACKFILL=N` plants it N lower instead, so the newest N messages
+ *    come along for context. The same policy runs on a UIDVALIDITY reset: a new
+ *    generation is a new mailbox, and re-reading a decade of mail is not a
+ *    re-sync, it is an outage.
  *  - **Offline contract.** Catch-up is durable by construction: IMAP keeps the
  *    messages, the cursor is where we left off, and a machine that slept a week
  *    simply walks forward 50 messages per poll until it catches up. Nothing is
  *    lost the way a Telegram update is.
+ *  - **Every IMAP call has a deadline.** A socket to a mail server can accept
+ *    the connection and then say nothing. Connect, select and fetch each run
+ *    under `EMAIL_POLL_TIMEOUT_MS` (45s); on expiry the poll aborts, the
+ *    connection is closed, the error is recorded in `core.source_runs` and the
+ *    next poll starts clean. A poll that hangs is a bug; a poll that gives up
+ *    and says so is a source.
  *  - **Flags are never mutated.** The fetch is a peek; `\Seen` stays whatever
  *    the owner's own mail client made it.
  *
@@ -44,6 +58,73 @@ export const POLL_EVERY_SECONDS = 300;
 /** Hard cap per poll. A backlog drains over several polls rather than in one gulp. */
 export const MAX_PER_POLL = 50;
 
+/** Deadline for every single IMAP call. Env: `EMAIL_POLL_TIMEOUT_MS`. */
+export const DEFAULT_POLL_TIMEOUT_MS = 45_000;
+export const POLL_TIMEOUT_VAR = 'EMAIL_POLL_TIMEOUT_MS';
+
+/**
+ * How many of the newest messages a first contact brings along for context.
+ * Zero means "start at now": no history is fetched at all. Env: `EMAIL_BACKFILL`.
+ */
+export const DEFAULT_BACKFILL = 0;
+export const BACKFILL_VAR = 'EMAIL_BACKFILL';
+
+/** A deliberate, recorded give-up — not a defect. Carries which call expired. */
+export class ImapTimeoutError extends Error {
+  override readonly name = 'ImapTimeoutError';
+  constructor(
+    readonly op: string,
+    readonly ms: number,
+  ) {
+    super(`imap ${op} timed out after ${ms}ms`);
+  }
+}
+
+/**
+ * Run one IMAP call under a deadline.
+ *
+ * A promise cannot be cancelled, so the loser is *abandoned*, not killed:
+ * `onAbandoned` is the caller's chance to clean up whatever it eventually
+ * yields (a connection nobody is holding any more). Without it, a connect that
+ * times out would leak the socket it later opens.
+ */
+export async function withDeadline<T>(
+  op: string,
+  ms: number,
+  work: Promise<T>,
+  onAbandoned?: (value: T) => void,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  let expired = false;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      reject(new ImapTimeoutError(op, ms));
+    }, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+  // The loser must never surface as an unhandled rejection.
+  work.then(
+    (value) => {
+      if (expired && onAbandoned) onAbandoned(value);
+    },
+    () => {},
+  );
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** A positive integer from the environment, or the default. */
+function envInt(env: EnvLike, name: string, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
 /** `triage:<message row id>` — stable for the life of the row. */
 export function triageDedupKey(messageRowId: string): string {
   return `triage:${messageRowId}`;
@@ -57,6 +138,10 @@ export interface InboxPollOptions {
   mailbox?: string;
   limit?: number;
   agentId?: string;
+  /** Deadline per IMAP call, ms. Overrides `EMAIL_POLL_TIMEOUT_MS`. */
+  timeoutMs?: number;
+  /** Newest-N to bring along on first contact. Overrides `EMAIL_BACKFILL`. */
+  backfill?: number;
 }
 
 /** One message that has landed but whose triage run has not been created yet. */
@@ -215,62 +300,140 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
         return;
       }
 
+      const timeoutMs = Math.max(1, opts.timeoutMs ?? envInt(env, POLL_TIMEOUT_VAR, DEFAULT_POLL_TIMEOUT_MS));
+      const backfill = Math.max(0, opts.backfill ?? envInt(env, BACKFILL_VAR, DEFAULT_BACKFILL));
+
       let mailbox = await ensureMailbox(ctx.db, account, mailboxName);
 
+      // The connection is opened for this poll and closed at the end of it,
+      // always. A long-lived IMAP session is a socket that silently dies while
+      // nobody is looking; one per poll is cheap (half a second) and honest.
       let client: ImapClient | null = null;
       let pending: PendingTriage[] = [];
+      let skipFetch = false;
       try {
-        client = await opts.connect(account, auth.value);
-        const status = await client.open(mailboxName);
+        client = await withDeadline(
+          'connect',
+          timeoutMs,
+          opts.connect(account, auth.value),
+          // We gave up waiting, but the connection may still arrive: close it
+          // rather than leave a socket nobody owns.
+          (late) => void late.close().catch(() => {}),
+        );
+        const status = await withDeadline('select', timeoutMs, client.open(mailboxName));
 
-        if (mailbox.uidValidity !== null && mailbox.uidValidity !== status.uidValidity) {
+        const changed =
+          mailbox.uidValidity !== null && mailbox.uidValidity !== status.uidValidity;
+        if (changed) {
           // Every uid we stored belongs to a generation that no longer exists.
           log(
             `email.inbox-poll: UIDVALIDITY changed on ${account.address}/${mailboxName} ` +
-              `(${mailbox.uidValidity} -> ${status.uidValidity}); cursor reset, re-syncing`,
+              `(${mailbox.uidValidity} -> ${status.uidValidity}); re-planting the cursor`,
           );
-          const { rows } = await ctx.db.query(
-            `update email.mailboxes set uidvalidity = $2, last_uid = 0
-              where id = $1 returning ${MAILBOX_COLUMNS}`,
-            [mailbox.id, status.uidValidity],
-          );
-          mailbox = toMailbox(rows[0] as Record<string, unknown>);
         }
 
-        const fetched = await client.fetchSince(mailboxName, mailbox.lastUid, limit);
-        pending = await commitBatch(
-          ctx.db,
-          account,
-          mailbox,
-          status.uidValidity,
-          fetched.map(prepareForIngest),
-        );
-        if (pending.length > 0) {
+        if (mailbox.uidValidity === null || changed) {
+          // First contact with this generation. "No cursor" means *start now*,
+          // not "read the whole mailbox": a real INBOX is six figures of mail
+          // and walking it from UID 1 is how a poll becomes a hang. The cursor
+          // is planted at UIDNEXT-1 (minus the requested backfill) and the
+          // generation is persisted on the spot, so a crash before the first
+          // real fetch still leaves a mailbox that starts from now.
+          const startUid = Math.max(0, status.uidNext - 1 - backfill);
+          mailbox = await plantCursor(ctx.db, mailbox.id, status.uidValidity, startUid);
           log(
-            `email.inbox-poll: ${pending.length} new message(s) on ${account.address}/${mailboxName}`,
+            `email.inbox-poll: initial sync on ${account.address}/${mailboxName} — ` +
+              `uidvalidity ${status.uidValidity}, uidnext ${status.uidNext}, ` +
+              `${status.exists} message(s) in the mailbox; cursor planted at ${startUid}` +
+              (backfill > 0 ? ` (backfilling the newest ${backfill})` : ' (no history fetched)'),
+          );
+          // Nothing to backfill: skip the fetch entirely. The next poll picks
+          // up whatever arrives after UIDNEXT-1, which is exactly "new mail".
+          skipFetch = backfill === 0;
+        }
+
+        if (!skipFetch) {
+          const fetched = await withDeadline(
+            'fetch',
+            timeoutMs,
+            client.fetchSince(mailboxName, mailbox.lastUid, limit),
+          );
+          pending = await commitBatch(
+            ctx.db,
+            account,
+            mailbox,
+            status.uidValidity,
+            fetched.map(prepareForIngest),
+          );
+          if (pending.length > 0) {
+            log(
+              `email.inbox-poll: ${pending.length} new message(s) on ${account.address}/${mailboxName}`,
+            );
+          }
+        }
+      } catch (err) {
+        if (err instanceof ImapTimeoutError) {
+          // A recorded give-up. The throw is deliberate: `runSources` writes it
+          // to core.source_runs.last_error and emits `source.polled` with it,
+          // so a mailbox that stopped answering is visible rather than silent.
+          log(
+            `email.inbox-poll: ${err.message} on ${account.address}/${mailboxName}; ` +
+              `connection closed, retrying next poll`,
           );
         }
+        throw err;
       } finally {
         await client?.close().catch(() => {});
       }
 
-      // Anything an earlier poll ingested but never enqueued comes along now.
-      const recovered = await unstamped(ctx.db, account.id, limit);
-      const byId = new Map(recovered.map((p) => [p.id, p]));
-      for (const p of pending) byId.set(p.id, p);
-
-      for (const message of byId.values()) {
-        await ctx.enqueueRun({
-          agentId,
-          prompt: message.prompt,
-          dedupKey: triageDedupKey(message.id),
-        });
-        await ctx.db.query(
-          `update email.messages set triage_enqueued_at = $2
-            where id = $1 and triage_enqueued_at is null`,
-          [message.id, ctx.now()],
-        );
-      }
+      return await drain(ctx, account, agentId, limit, pending);
     },
   };
+}
+
+/** Persist the generation and the cursor together, and return the fresh row. */
+async function plantCursor(
+  db: Pool,
+  mailboxId: string,
+  uidValidity: number,
+  lastUid: number,
+): Promise<MailboxRecord> {
+  const { rows } = await db.query(
+    `update email.mailboxes set uidvalidity = $2, last_uid = $3
+      where id = $1 returning ${MAILBOX_COLUMNS}`,
+    [mailboxId, uidValidity, lastUid],
+  );
+  const row = rows[0];
+  if (!row) throw new Error('email.inbox-poll: cursor update returned no row');
+  return toMailbox(row);
+}
+
+/**
+ * Create the triage run for everything that landed, including anything an
+ * earlier poll ingested but never managed to enqueue. Runs outside the IMAP
+ * connection on purpose: the socket is already closed by the time we get here.
+ */
+async function drain(
+  ctx: SourceContext,
+  account: AccountRecord,
+  agentId: string,
+  limit: number,
+  pending: PendingTriage[],
+): Promise<void> {
+  const recovered = await unstamped(ctx.db, account.id, limit);
+  const byId = new Map(recovered.map((p) => [p.id, p]));
+  for (const p of pending) byId.set(p.id, p);
+
+  for (const message of byId.values()) {
+    await ctx.enqueueRun({
+      agentId,
+      prompt: message.prompt,
+      dedupKey: triageDedupKey(message.id),
+    });
+    await ctx.db.query(
+      `update email.messages set triage_enqueued_at = $2
+        where id = $1 and triage_enqueued_at is null`,
+      [message.id, ctx.now()],
+    );
+  }
 }

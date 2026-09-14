@@ -31,7 +31,13 @@ import { createWiringAsync, loadEnv } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
-import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surface.js';
+import {
+  SURFACE,
+  SURFACE_HINT,
+  TelegramSurface,
+  handleLabel,
+  type RunMission,
+} from './surface.js';
 import type { AgentCatalog } from './types.js';
 
 /**
@@ -57,14 +63,15 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
 
 /**
  * The menu as one chat sees it: `use` names the agent that chat is talking to
- * by its handle — `Switch agent (active: @ledger)` — so the active agent is
- * visible without asking, in the same spelling the owner types.
+ * — `Switch agent (active: Ledger)` — so the active agent is visible without
+ * asking. No `@`: that spelling is reserved for what the owner types, because
+ * Telegram renders it as a link to a user who does not exist.
  */
 export function ownerCommandsFor(activeAgentHandle?: string): readonly TelegramBotCommand[] {
-  const handle = (activeAgentHandle ?? '').trim().replace(/^@/, '');
-  if (handle === '') return OWNER_COMMANDS;
+  const label = handleLabel(activeAgentHandle);
+  if (label === '') return OWNER_COMMANDS;
   return OWNER_COMMANDS.map((c) =>
-    c.command === 'use' ? { ...c, description: `Switch agent (active: @${handle})` } : c,
+    c.command === 'use' ? { ...c, description: `Switch agent (active: ${label})` } : c,
   );
 }
 
