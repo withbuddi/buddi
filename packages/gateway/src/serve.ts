@@ -66,6 +66,7 @@ import {
   type MissionRunResult,
 } from './missions/execute.js';
 import { createDigestPrepare } from './missions/recap.js';
+import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
@@ -83,6 +84,13 @@ export const STALE_CLAIM_MS = 15 * 60_000;
  */
 export const SENTINEL_TICK_MS = 30_000;
 export const SOURCE_TICK_MS = 30_000;
+
+/**
+ * The reminder loop. A minute is the resolution a one-off nudge deserves: the
+ * owner asked to be told "on the 3rd", not "at 09:00:00 on the 3rd", and a
+ * cheaper clock would mean a reminder set for 09:00 arriving at 09:29.
+ */
+export const REMINDER_TICK_MS = 60_000;
 
 /** The scheduler's kind: run one occurrence of a scheduled mission. */
 export const MISSION_JOB_KIND = 'mission-run';
@@ -472,6 +480,25 @@ export async function main(): Promise<void> {
       }
     };
 
+    // Reminders. An agent promised the owner a nudge; this is the clock that
+    // keeps the promise. Firing enqueues an ordinary agent run — the same job
+    // kind a source originates — whose prompt says "check first, then speak or
+    // stay silent", so a reminder never delivers a fact that stopped being true.
+    const reminderTick = createReminderTick({
+      pool,
+      now,
+      timezone: wiring.timezone,
+      enqueueRun: async (input) => {
+        const job = await enqueue(pool, {
+          kind: AGENT_RUN_JOB_KIND,
+          payload: { agentId: input.agentId, prompt: input.prompt },
+          dedupKey: input.dedupKey,
+        });
+        console.log(`reminder run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);
+      },
+      log: (line) => console.log(line),
+    });
+
     const sweepStaleClaims = async (): Promise<void> => {
       const released = await releaseStaleClaims(pool, new Date(now().getTime() - STALE_CLAIM_MS));
       if (released > 0) console.error(`scheduler: released ${released} stale claim(s)`);
@@ -538,6 +565,16 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
+    const reminderLoop = startLoop({
+      name: 'reminders',
+      everyMs: REMINDER_TICK_MS,
+      abortAfterMs: REMINDER_TICK_MS * 2,
+      run: async () => {
+        await reminderTick();
+      },
+      log: (line) => console.error(line),
+    });
+
     const scheduler = runScheduler({
       pool,
       now,
@@ -560,7 +597,8 @@ export async function main(): Promise<void> {
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
     console.log(
-      `  loops: sentinels every ${SENTINEL_TICK_MS / 1000}s, sources every ${SOURCE_TICK_MS / 1000}s ` +
+      `  loops: sentinels every ${SENTINEL_TICK_MS / 1000}s, sources every ${SOURCE_TICK_MS / 1000}s, ` +
+        `reminders every ${REMINDER_TICK_MS / 1000}s ` +
         `(independent of the scheduler; source poll deadline ${sourcePollTimeoutMs / 1000}s)`,
     );
     const jobCounts = await countJobsByState(pool);
@@ -602,6 +640,7 @@ export async function main(): Promise<void> {
       clearInterval(sweep);
       sentinelLoop.stop();
       sourceLoop.stop();
+      reminderLoop.stop();
       void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));

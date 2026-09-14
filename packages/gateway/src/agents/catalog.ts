@@ -19,6 +19,7 @@ import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from './delegation.js';
+import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
 export const REPO_ROOT = path.resolve(
@@ -44,6 +45,11 @@ export function createToolRegistry(): ToolRegistry {
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
+  // Reminders and schedules are registered in the *base* registry, unlike the
+  // mission tools: an agent can put something on the clock from any run, and a
+  // reminder set in a chat is the same object as one set by the daily check.
+  registry.register(createReminderManifest());
+  registry.register(createScheduleManifest());
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
   // by `bindDelegation` once they exist (the catalog is loaded *against* this

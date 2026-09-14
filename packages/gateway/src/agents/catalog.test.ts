@@ -36,18 +36,28 @@ describe('the shipped agents directory', () => {
       .list()
       .map((t) => t.name)
       // ... plus the one agent tool it names explicitly: it may ask a colleague.
-      .filter((n) => n.startsWith('finance.') || n.startsWith('memory.') || n.startsWith('artifacts.') || n === 'agent.delegate');
+      .filter(
+        (n) =>
+          n.startsWith('finance.') ||
+          n.startsWith('memory.') ||
+          n.startsWith('artifacts.') ||
+          n.startsWith('reminder.') ||
+          n.startsWith('schedule.') ||
+          n === 'agent.delegate',
+      );
     expect(catalog.resolve('finance-advisor').tools).toEqual(registered);
     expect(registered).toContain('agent.delegate');
     expect(registered.some((n) => n.startsWith('finance.'))).toBe(true);
     expect(registered.some((n) => n.startsWith('memory.'))).toBe(true);
   });
 
-  it('ships the concierge with the memory tools only, and no default flag', () => {
+  it('ships the concierge with the memory, reminder and schedule tools, and no default flag', () => {
     const registered = createToolRegistry()
       .list()
       .map((t) => t.name)
-      .filter((n) => n.startsWith('memory.'));
+      .filter(
+        (n) => n.startsWith('memory.') || n.startsWith('reminder.') || n.startsWith('schedule.'),
+      );
     const concierge = catalog.resolve('concierge');
     expect(concierge.tools).toEqual(registered);
     expect(concierge.tools.some((n) => n.startsWith('finance.'))).toBe(false);

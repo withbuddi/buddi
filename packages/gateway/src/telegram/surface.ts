@@ -17,17 +17,21 @@
  */
 import {
   DEFAULT_TIMEZONE,
+  cancelReminder,
   consumePairingCode,
   getActiveAgent,
   getOwnerDisplayName,
+  listReminders,
   listSurfaceIdentitiesDetailed,
   localDateString,
+  localDateTimeString,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
   setActiveAgent,
   setSurfaceCursor,
   touchSurfaceIdentity,
   type Queryable,
+  type Reminder,
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
 import {
@@ -144,6 +148,7 @@ export const HELP = [
   '/status — where you stand right now (finance advisor)',
   '/recap — run the weekly recap now (finance advisor)',
   '/files — the last files you sent me',
+  '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/approvals — anything waiting for your approval',
   '/devices — the devices paired to this installation',
   '/new — start a fresh conversation with the active agent',
@@ -502,6 +507,135 @@ function stripInline(line: string): string {
     .replace(ITALIC_UNDER_RE, '$1$2');
 }
 
+/* ------------------------------------------------------------------ *
+ * Tool names never reach the owner
+ * ------------------------------------------------------------------ */
+
+/**
+ * The namespaces the runtime registers tools under. Tool names are internal
+ * plumbing: the owner is told what happened, never which function did it.
+ * The personas say so, and this pass is the deterministic net under that ask
+ * for the turns where the model slips anyway.
+ *
+ * The surface is constructed without a registry to read, so this is the one
+ * place the namespaces live. A new namespace belongs here the day its tools
+ * are registered.
+ */
+export const TOOL_NAMESPACES = [
+  'finance',
+  'memory',
+  'artifacts',
+  'email',
+  'agent',
+  'mission',
+  'reminder',
+  'schedule',
+] as const;
+
+/**
+ * Tool names that carry no underscore. A dotted pair counts as a tool only
+ * when the namespace is known *and* the second half is snake_case or one of
+ * these — "has a dot" is never the rule, so `gmail.com`, `shotcrisp.app`,
+ * `Statement.pdf`, `v1.2.3` and an email address are all left alone.
+ */
+const TOOL_WORDS = [
+  'summary',
+  'balance',
+  'delegate',
+  'report',
+  'silent',
+  'status',
+  'search',
+  'send',
+  'list',
+  'add',
+  'set',
+  'get',
+  'cancel',
+  'snooze',
+  'purge',
+  'remember',
+  'recall',
+  'forget',
+  'note',
+  'read',
+  'text',
+  'describe',
+  'reconcile',
+] as const;
+
+const NAMESPACE_ALT = TOOL_NAMESPACES.join('|');
+
+/**
+ * `finance.set_liability`, `agent.delegate`. The guards on either side keep
+ * the match off anything that merely contains a dot: a longer hostname
+ * (`mail.finance.summary.io`), a path segment, an address local part. A dot
+ * that ends a sentence is not a continuation, so a mention may close one.
+ */
+const TOOL_REF_SRC =
+  `(?<![\\w./@-])(?:${NAMESPACE_ALT})\\.` +
+  `(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|${TOOL_WORDS.join('|')})(?![\\w@/-])(?!\\.[A-Za-z0-9])`;
+
+/** `(finance.set_liability)`, `(via agent.delegate)` — the whole aside goes. */
+const TOOL_PAREN_RE = new RegExp(
+  `[ \\t]*\\((?:\\s*(?:via|see|using|through|with|by)\\s+)?${TOOL_REF_SRC}` +
+    `(?:[ \\t]*(?:,|and|\\+|&)[ \\t]*${TOOL_REF_SRC})*[ \\t]*\\)`,
+  'gi',
+);
+
+/** `` `finance.x` ``, `'finance.x'`, `"finance.x"` — the quotes leave with it. */
+const TOOL_QUOTED_RE = new RegExp(`[\`'"“‘]${TOOL_REF_SRC}[\`'"”’]`, 'gi');
+
+/** A bare mention, with the connector that introduced it when there is one. */
+const TOOL_BARE_RE = new RegExp(
+  `(?:[ \\t]+(?:via|using|through|by calling)[ \\t]+)?${TOOL_REF_SRC}`,
+  'gi',
+);
+
+/**
+ * Spacing and punctuation left dangling by a removal: `stored , and` or
+ * `on the calendar .`. Applied only to a line something was actually removed
+ * from, so prose that mentions no tool is returned byte for byte.
+ */
+function tidyAfterRemoval(cleaned: string, indent: string): string {
+  const body = cleaned
+    .replace(/\(\s*\)/g, '')
+    .replace(/\[\s*\]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\([ \t]+/g, '(')
+    .replace(/[ \t]+([,.;:!?)])/g, '$1')
+    .replace(/,(?:[ \t]*,)+/g, ',')
+    .replace(/,[ \t]*([.;:!?])/g, '$1')
+    .replace(/([.;:!?])[ \t]*,/g, '$1')
+    .trim();
+  if (body === '') return '';
+  // All that survived is punctuation: the mention *was* the sentence. Drop
+  // the remains and leave every other line of the answer untouched.
+  return /^[,.;:!?—-]+$/.test(body) ? '' : `${indent}${body}`;
+}
+
+/** One line of prose, minus any tool reference and the mess it leaves. */
+function stripToolNamesFromLine(line: string): string {
+  const cleaned = line
+    .replace(TOOL_PAREN_RE, '')
+    .replace(TOOL_QUOTED_RE, '')
+    .replace(TOOL_BARE_RE, '');
+  if (cleaned === line) return line;
+  return tidyAfterRemoval(cleaned, /^[ \t]*/.exec(line)?.[0] ?? '');
+}
+
+/**
+ * Remove internal tool names from an agent answer. Pure, idempotent, and
+ * conservative: a line with no tool reference in it is returned unchanged.
+ *
+ * Exported on its own so every surface that renders an answer — Telegram
+ * through `toPlainText`, the CLI directly — applies the same rule.
+ */
+export function stripToolNames(text: string): string {
+  if (text === '') return '';
+  return text.split('\n').map(stripToolNamesFromLine).join('\n');
+}
+
 /**
  * Render agent-authored markdown as the plain text Telegram will display
  * verbatim. Pure: same input, same output, no clock and no I/O.
@@ -529,11 +663,11 @@ export function toPlainText(text: string): string {
     const cells = tableCells(line);
     if (cells) {
       if (isTableSeparatorRow(cells)) continue;
-      out.push(stripInline(cells.join(' — ')));
+      out.push(stripToolNamesFromLine(stripInline(cells.join(' — '))));
       continue;
     }
 
-    out.push(stripInline(line.replace(HEADING_RE, '$1')));
+    out.push(stripToolNamesFromLine(stripInline(line.replace(HEADING_RE, '$1'))));
   }
 
   return out.join('\n').replace(/\n{3,}/g, '\n\n');
@@ -713,14 +847,100 @@ export function parseAgentCallback(data: string | undefined): string | undefined
   return AGENT_ID_RE.test(id) ? id : undefined;
 }
 
+/* ------------------------------------------------------------------ *
+ * Reminders
+ * ------------------------------------------------------------------ */
+
+/**
+ * The prefix a "cancel this reminder" callback carries.
+ *
+ * Three owners now: approvals hold `apr:`, agent switching holds `use:`, and
+ * reminders hold `rem:`. They never overlap, and `callbackKind` remains the one
+ * place that decides which handler sees a tap.
+ */
+export const REMINDER_CALLBACK_PREFIX = 'rem';
+
+/** `rem:<id>:cancel`, refused rather than truncated if it cannot fit. */
+export function reminderCallbackData(reminderId: string): string {
+  const data = `${REMINDER_CALLBACK_PREFIX}:${reminderId}:cancel`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    throw new Error(`reminder callback data is too long for Telegram: ${data.length} bytes`);
+  }
+  return data;
+}
+
+/**
+ * The reminder id in a `rem:` callback, or nothing.
+ *
+ * Strict on the uuid for the same reason approvals are: the id is the whole
+ * binding between a thumb and the row it changes.
+ */
+export function parseReminderCallback(data: string | undefined): string | undefined {
+  const m = /^rem:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):cancel$/i.exec(
+    (data ?? '').trim(),
+  );
+  return m ? (m[1] as string).toLowerCase() : undefined;
+}
+
+/** What `/reminders` says when nothing is pending. */
+export const NO_REMINDERS_TEXT =
+  'Nothing is on the clock. Ask an agent to remind you about something and it will show up here.';
+
+/** `/reminders` — every pending nudge, soonest first, with who set it. */
+export function remindersText(
+  reminders: readonly Reminder[],
+  timezone: string,
+  handleFor?: (agentId: string) => string,
+): string {
+  if (reminders.length === 0) return NO_REMINDERS_TEXT;
+  return [
+    'On the clock:',
+    ...reminders.map((r) => {
+      const who = handleFor ? handleFor(r.agentId) : r.agentId;
+      return `• ${localDateTimeString(r.dueAt, timezone)} — ${firstLineOf(r.text)}\n  set by ${who}`;
+    }),
+    '',
+    'Tap Cancel under this message to drop one.',
+  ].join('\n');
+}
+
+function firstLineOf(text: string): string {
+  const line = (text.split('\n')[0] ?? '').trim();
+  return line.length <= 120 ? line : `${line.slice(0, 119)}…`;
+}
+
+/** One Cancel button per reminder, in the same order the text lists them. */
+export function remindersKeyboard(
+  reminders: readonly Reminder[],
+  timezone: string,
+): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: reminders.map((r) => [
+      {
+        text: `✖ Cancel — ${localDateTimeString(r.dueAt, timezone)}`,
+        callback_data: reminderCallbackData(r.id),
+      },
+    ]),
+  };
+}
+
+/** What a tap answers once the row is gone. */
+export const REMINDER_CANCELLED_TEXT = 'Cancelled.';
+
+/** And when it was already fired, cancelled or expired. */
+export const REMINDER_GONE_TEXT = 'That reminder is no longer pending.';
+
 /**
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
-  return (data ?? '').trim().startsWith(`${USE_CALLBACK_PREFIX}:`) ? 'agent' : 'approval';
+  const raw = (data ?? '').trim();
+  if (raw.startsWith(`${USE_CALLBACK_PREFIX}:`)) return 'agent';
+  if (raw.startsWith(`${REMINDER_CALLBACK_PREFIX}:`)) return 'reminder';
+  return 'approval';
 }
 
 /**
@@ -860,8 +1080,13 @@ export class TelegramSurface {
       // the callback prefix alone: `use:` here, everything else to approvals.
       const callbackChat = callback.message?.chat?.id;
       const chain = callbackChat === undefined ? `cb:${callback.id}` : String(callbackChat);
-      if (callbackKind(callback.data) === 'agent') {
+      const kind = callbackKind(callback.data);
+      if (kind === 'agent') {
         this.enqueue(chain, () => this.handleAgentCallback(callback));
+        return;
+      }
+      if (kind === 'reminder') {
+        this.enqueue(chain, () => this.handleReminderCallback(callback));
         return;
       }
       const approvals = this.#opts.approvals;
@@ -1149,6 +1374,10 @@ export class TelegramSurface {
         chatId,
         approvals ? await approvals.pending() : APPROVALS_UNAVAILABLE_TEXT,
       );
+      return;
+    }
+    if (command === '/reminders') {
+      await this.handleReminders(chatId);
       return;
     }
     if (command === '/devices') {
@@ -1492,6 +1721,97 @@ export class TelegramSurface {
 
     await api.answerCallbackQuery(query.id, switchedText(label)).catch(() => {});
     await this.#republishMenu(chatId, agent);
+  }
+
+  /**
+   * `/reminders` — what the agents put on the clock, and one button per row to
+   * take it off again.
+   *
+   * The owner's view of a capability the agents now have: every pending nudge,
+   * whoever set it, cancellable without knowing an id.
+   */
+  async handleReminders(chatId: string): Promise<void> {
+    const timezone = this.#opts.timezone ?? DEFAULT_TIMEZONE;
+    const reminders = await listReminders(this.#opts.pool, { state: 'pending', limit: 20 });
+    const text = remindersText(reminders, timezone, (agentId) => {
+      const agent = this.#opts.catalog.get(agentId);
+      return agent ? (handleLabel(agent.handle) || agent.name) : agentId;
+    });
+    await this.#opts.api.sendMessage(
+      chatId,
+      text,
+      reminders.length === 0 ? {} : { replyMarkup: remindersKeyboard(reminders, timezone) },
+    );
+  }
+
+  /**
+   * A tap on a reminder's Cancel button.
+   *
+   * Same rule as every other callback: the sender is re-authenticated against
+   * core on every tap, and a stranger gets an empty answer and a
+   * `surface.rejected` row — never a hint that the button did anything.
+   */
+  async handleReminderCallback(
+    query: NonNullable<TelegramUpdate['callback_query']>,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const reminderId = parseReminderCallback(query.data);
+    if (reminderId === undefined || userId === '' || chatId === '') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: reminder callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendSurfaceEvent(pool, 'surface.rejected', {
+        surface: SURFACE,
+        kind: 'callback',
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        reminderId,
+      });
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const cancelled = await cancelReminder(pool, reminderId, 'cancelled by the owner in Telegram');
+    await api
+      .answerCallbackQuery(query.id, cancelled ? REMINDER_CANCELLED_TEXT : REMINDER_GONE_TEXT)
+      .catch(() => {});
+
+    // The list under the thumb is now wrong either way, so it is redrawn from
+    // the rows. Cosmetic: a failed edit is logged, never allowed to undo it.
+    if (messageId !== undefined) {
+      const timezone = this.#opts.timezone ?? DEFAULT_TIMEZONE;
+      const remaining = await listReminders(pool, { state: 'pending', limit: 20 });
+      try {
+        await api.editMessageText(
+          chatId,
+          messageId,
+          remindersText(remaining, timezone, (agentId) => {
+            const agent = this.#opts.catalog.get(agentId);
+            return agent ? (handleLabel(agent.handle) || agent.name) : agentId;
+          }),
+          { replyMarkup: remindersKeyboard(remaining, timezone) },
+        );
+      } catch (err) {
+        this.#log(`telegram: refreshing the reminder list failed: ${message(err)}`);
+      }
+    }
   }
 
   /** The chat menu names the active agent. Cosmetic: a failure is logged. */

@@ -166,6 +166,7 @@ describe('applyCommandMenus', () => {
       'use',
       'status',
       'recap',
+      'reminders',
       'approvals',
       'files',
       'devices',

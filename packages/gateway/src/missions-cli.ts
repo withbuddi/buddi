@@ -32,6 +32,7 @@ import {
   type RegistrationOutcome,
 } from './missions/defaults.js';
 import { createMissionExecutor } from './missions/execute.js';
+import { missionOwnerAgent } from './missions/reminders.js';
 import {
   createDigestPrepare,
   FRIDAY_RECAP_CRON,
@@ -191,7 +192,13 @@ async function commandList(pool: Pool, now: Date): Promise<void> {
     const spec = await getActiveSchedule(pool, mission.id);
     const history = await listOccurrences(pool, mission.id, 1);
     const last = history[0];
-    console.log(`${mission.id} — ${mission.name}`);
+    // A mission whose id carries `agent:<id>:` was proposed by that agent and
+    // approved by the owner, not typed by the owner. Saying so is the whole
+    // point of the marker: the list must never blur the two.
+    const proposedBy = missionOwnerAgent(mission.id);
+    console.log(
+      `${mission.id} — ${mission.name}${proposedBy ? ` [proposed by ${proposedBy}, approved by you]` : ''}`,
+    );
     console.log(`  agent: ${mission.agentId}`);
     console.log(`  enabled: ${mission.enabled}`);
     console.log(
