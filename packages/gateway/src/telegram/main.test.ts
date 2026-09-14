@@ -246,7 +246,7 @@ describe('ownerCommandsFor', () => {
   it('names the active agent by handle in the /use description', () => {
     const commands = ownerCommandsFor('ledger');
     expect(commands.find((c) => c.command === 'use')?.description).toBe(
-      'Switch agent (active: @ledger)',
+      'Switch agent (active: Ledger)',
     );
     // Typed with or without the @, the menu reads the same.
     expect(ownerCommandsFor('@ledger')).toEqual(commands);

@@ -114,7 +114,9 @@ export function approvalRequestText(action: ActionRecord, timezone: string): str
     '',
     action.preview,
     '',
-    `Asked by @${action.agentId}. Expires ${localDateString(action.expiresAt, timezone)}.`,
+    // No `@`: Telegram links `@name` in bot text to a Telegram user that does
+    // not exist, and tapping it errors. The agent is named plainly instead.
+    `Asked by ${action.agentId}. Expires ${localDateString(action.expiresAt, timezone)}.`,
     `Action ${action.id}`,
   ].join('\n');
 }

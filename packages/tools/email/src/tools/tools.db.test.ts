@@ -107,7 +107,10 @@ suite('email tools (postgres)', () => {
         date: new Date('2026-09-13T08:00:00Z'),
       }),
     );
-    const source = createInboxPollSource({ connect: server.factory(), env: ENV });
+    // `backfill` is explicit: a first contact starts at *now* by default and
+    // fetches no history, so a fixture that seeds through a real poll has to
+    // ask for the history it just wrote.
+    const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 });
     await source.poll({
       db: pool,
       now: ctx.now,

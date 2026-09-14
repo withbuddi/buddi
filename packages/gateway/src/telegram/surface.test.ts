@@ -11,7 +11,13 @@ import {
   PAIRING_MAX_ATTEMPTS,
   PLACEHOLDER_TEXT,
   UNKNOWN_AGENT_TEXT,
+  agentCallbackData,
+  agentsKeyboard,
   agentsText,
+  alreadyActiveText,
+  callbackKind,
+  parseAgentCallback,
+  switchedText,
   emptyMentionText,
   handleLabel,
   parseMention,
@@ -1108,8 +1114,8 @@ describe('TelegramSurface agents', () => {
 
     const text = sent.find((s) => s.method === 'sendMessage')?.body.text as string;
     expect(text.split('\n').slice(1, 3)).toEqual([
-      '• @ledger — Finance Advisor (active)',
-      '• @buddi — Concierge',
+      '• ledger — Finance Advisor (active)',
+      '• buddi — Concierge',
     ]);
     expect(text).toBe(agentsText(fakeCatalog().list(), 'finance-advisor'));
   });
@@ -1126,7 +1132,7 @@ describe('TelegramSurface agents', () => {
 
     expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
     expect(
-      sent.some((s) => s.body.text === 'You are now talking to Concierge (@buddi).'),
+      sent.some((s) => s.body.text === 'You are now talking to Concierge.'),
     ).toBe(true);
     expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual([
       'finance-advisor',
@@ -1235,7 +1241,7 @@ describe('TelegramSurface agents', () => {
       message(224, OWNER, OWNER, '/whoami'),
     ]);
     await surface.drain();
-    expect(sent.at(-1)?.body.text).toBe('You are talking to Concierge (@buddi).');
+    expect(sent.at(-1)?.body.text).toBe('You are talking to Concierge. Send /agents to switch.');
   });
 
   it('falls back to the default when the pinned agent is gone', async () => {
@@ -1245,6 +1251,151 @@ describe('TelegramSurface agents', () => {
     await surface.processUpdates([message(225, OWNER, OWNER, 'hello')]);
     await surface.drain();
     expect(run.mock.calls[0]?.[0].agent.id).toBe('finance-advisor');
+  });
+});
+
+describe('TelegramSurface agent buttons', () => {
+  /** A tap on the agent list, from whoever. */
+  const useTap = (agentId: string, fromId = OWNER, updateId = 300): TelegramUpdate => ({
+    update_id: updateId,
+    callback_query: {
+      id: `cb-${updateId}`,
+      from: { id: fromId },
+      data: `use:${agentId}`,
+      message: { message_id: 42, chat: { id: OWNER, type: 'private' } },
+    },
+  });
+
+  it('parses and routes callback data by prefix', () => {
+    expect(callbackKind('use:concierge')).toBe('agent');
+    expect(callbackKind('apr:1111:approve')).toBe('approval');
+    expect(callbackKind(undefined)).toBe('approval');
+    expect(agentCallbackData('finance-advisor')).toBe('use:finance-advisor');
+    expect(parseAgentCallback('use:finance-advisor')).toBe('finance-advisor');
+    // Bounded and validated: no spaces, no colons, nothing unbounded.
+    expect(parseAgentCallback('use:')).toBeUndefined();
+    expect(parseAgentCallback('use:a b')).toBeUndefined();
+    expect(parseAgentCallback(`use:${'a'.repeat(80)}`)).toBeUndefined();
+    expect(parseAgentCallback('apr:x:approve')).toBeUndefined();
+    expect(() => agentCallbackData('a'.repeat(80))).toThrow(/too long/);
+  });
+
+  it('answers /agents with one button per agent and no @handle in the text', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([message(299, OWNER, OWNER, '/agents')]);
+    await surface.drain();
+
+    const msg = sent.find((s) => s.method === 'sendMessage');
+    const text = msg?.body.text as string;
+    const keyboard = msg?.body.reply_markup?.inline_keyboard as { text: string; callback_data: string }[][];
+    expect(keyboard).toHaveLength(2);
+    expect(keyboard.map((row) => row[0])).toEqual([
+      { text: '✓ Ledger (active)', callback_data: 'use:finance-advisor' },
+      { text: 'Switch to Buddi', callback_data: 'use:concierge' },
+    ]);
+    // The list itself never spells a handle with an `@`: Telegram would link it.
+    for (const line of text.split('\n').filter((l) => l.startsWith('•'))) {
+      expect(line).not.toContain('@');
+    }
+    expect(agentsKeyboard(fakeCatalog().list(), 'concierge').inline_keyboard[1]?.[0]?.text).toBe(
+      '✓ Buddi (active)',
+    );
+  });
+
+  it('switches on a tap, refreshes the list, answers and re-publishes the menu', async () => {
+    const db = withOwner(new FakeDb());
+    const menus: { chatId: string; name: string }[] = [];
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'reply'), {
+      setChatMenu: async (chatId, agent) => {
+        menus.push({ chatId, name: agent.name });
+      },
+    });
+    await surface.processUpdates([
+      useTap('concierge'),
+      message(301, OWNER, OWNER, 'hello'),
+    ]);
+    await surface.drain();
+
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+    const edit = sent.find((s) => s.method === 'editMessageText');
+    expect(edit?.body.message_id).toBe(42);
+    expect(edit?.body.text).toBe(agentsText(fakeCatalog().list(), 'concierge'));
+    expect(edit?.body.reply_markup?.inline_keyboard).toHaveLength(2);
+    expect(edit?.body.reply_markup.inline_keyboard[1][0].text).toBe('✓ Buddi (active)');
+    const answer = sent.find((s) => s.method === 'answerCallbackQuery');
+    expect(answer?.body.text).toBe(switchedText('Buddi'));
+    expect(menus).toEqual([{ chatId: String(OWNER), name: 'Concierge' }]);
+    // The switch is durable: the next message runs the agent that was tapped.
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('concierge');
+  });
+
+  it('answers a tap on the active agent without changing anything', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([useTap('finance-advisor', OWNER, 302)]);
+    await surface.drain();
+
+    expect(db.activeAgents.size).toBe(0);
+    expect(sent.filter((s) => s.method === 'editMessageText')).toEqual([]);
+    expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBe(
+      alreadyActiveText('Ledger'),
+    );
+  });
+
+  it('records a stranger tap as rejected and tells them nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([useTap('concierge', 999, 303)]);
+    await surface.drain();
+
+    expect(db.activeAgents.size).toBe(0);
+    expect(sent.filter((s) => s.method === 'editMessageText')).toEqual([]);
+    expect(sent.filter((s) => s.method === 'sendMessage')).toEqual([]);
+    const answer = sent.find((s) => s.method === 'answerCallbackQuery');
+    expect(answer?.body).toEqual({ callback_query_id: 'cb-303' });
+    const rejected = db.events.filter((e) => e.kind === 'surface.rejected');
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.payload).toMatchObject({
+      surface: SURFACE,
+      kind: 'callback',
+      agentId: 'concierge',
+      externalUserId: '999',
+    });
+  });
+
+  it('answers an unknown agent id with an error and switches nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([useTap('retired-agent', OWNER, 304)]);
+    await surface.drain();
+
+    expect(db.activeAgents.size).toBe(0);
+    expect(sent.filter((s) => s.method === 'editMessageText')).toEqual([]);
+    expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBe(
+      UNKNOWN_AGENT_TEXT,
+    );
+  });
+
+  it('never hands a use: tap to the approval machinery', async () => {
+    const db = withOwner(new FakeDb());
+    const handleCallback = vi.fn(async () => {});
+    const approvals: ApprovalHooks = { handleCallback, pending: async () => 'none' };
+    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+    await surface.processUpdates([useTap('concierge', OWNER, 305)]);
+    await surface.drain();
+
+    expect(handleCallback).not.toHaveBeenCalled();
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+  });
+
+  it('handles a use: tap even when no approval machinery is wired', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([useTap('concierge', OWNER, 306)]);
+    await surface.drain();
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+    expect(sent.some((s) => s.method === 'answerCallbackQuery')).toBe(true);
   });
 });
 
@@ -1281,7 +1432,7 @@ describe('TelegramSurface /status under another agent', () => {
       .map((s) => s.body.text as string)
       .filter((t) => t.startsWith('('));
     expect(noted).toEqual([
-      '(@ledger answered this one; you are still talking to @buddi.)\n\nyou have $12 left',
+      '(Finance Advisor answered this one; you are still talking to Concierge.)\n\nyou have $12 left',
     ]);
   });
 
@@ -1777,7 +1928,7 @@ describe('TelegramSurface @mention', () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(sent.map((s) => s.body.text)).toContain(unknownHandleText('nobody'));
-    expect(unknownHandleText('nobody')).toBe('No agent called @nobody. Send /agents.');
+    expect(unknownHandleText('nobody')).toBe('No agent called "nobody". Send /agents.');
   });
 
   it('asks for the question when the message is only an address', async () => {
@@ -1815,7 +1966,7 @@ describe('TelegramSurface @mention', () => {
     await surface.processUpdates([message(308, OWNER, OWNER, '/use ledger')]);
     await surface.drain();
     expect(db.activeAgents.get(String(OWNER))).toBe('finance-advisor');
-    expect(sent.at(-1)?.body.text).toBe('You are now talking to Finance Advisor (@ledger).');
+    expect(sent.at(-1)?.body.text).toBe('You are now talking to Finance Advisor.');
   });
 });
 

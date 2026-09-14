@@ -30,7 +30,13 @@ import {
   type Queryable,
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
-import { MAX_MESSAGE_CHARS, type TelegramApi, type TelegramUpdate } from './api.js';
+import {
+  MAX_CALLBACK_DATA_BYTES,
+  MAX_MESSAGE_CHARS,
+  type InlineKeyboardMarkup,
+  type TelegramApi,
+  type TelegramUpdate,
+} from './api.js';
 import {
   attachmentNote,
   extractAttachment,
@@ -131,7 +137,7 @@ export const HELP = [
   'Send a statement, a receipt photo or a CSV and tell me what to do with it.',
   '',
   'Just write your question. Commands:',
-  '/agents — list the agents you can talk to',
+  '/agents — list the agents you can talk to, and tap one to switch',
   '/use <handle> — switch to an agent, e.g. /use @ledger',
   '@handle … — ask that agent this one message without switching',
   '/whoami — which agent is active here',
@@ -166,14 +172,17 @@ export const UNKNOWN_AGENT_TEXT = 'Unknown agent. Send /agents to see the list.'
 /** `/use` with no argument at all. */
 export const USE_WITHOUT_ID_TEXT = 'Send /use <handle>, for example /use @ledger. Send /agents to see the list.';
 
-/** A message addressed to `@nobody`. Named back, so the typo is visible. */
+/**
+ * A message addressed to `@nobody`. The typo is quoted back rather than spelled
+ * with an `@`: Telegram would render that as a link to a user who is not there.
+ */
 export function unknownHandleText(handle: string): string {
-  return `No agent called @${handle}. Send /agents.`;
+  return `No agent called "${handle}". Send /agents.`;
 }
 
 /** `@ledger` and nothing else: there is no question to route. */
 export function emptyMentionText(handle: string): string {
-  return `What would you like to ask @${handle}?`;
+  return `What would you like to ask ${handleLabel(handle) || handle}?`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -649,21 +658,102 @@ export async function startNewConversationForChat(
   return id;
 }
 
-/** `• @ledger — Finance Advisor (active)`, one line per agent. */
+/**
+ * `• ledger — Finance Advisor (active)`, one line per agent.
+ *
+ * The handle carries no `@`: Telegram turns `@ledger` in bot text into a link
+ * to a *Telegram user* that does not exist, and tapping it errors. The `@`
+ * spelling survives only where it is an instruction the owner should type.
+ */
 export function agentsText(
   agents: readonly { id: string; handle: string; name: string }[],
   activeId: string,
 ): string {
   if (agents.length === 0) return 'No agents are installed.';
   const lines = agents.map(
-    (a) => `• @${a.handle} — ${a.name}${a.id === activeId ? ' (active)' : ''}`,
+    (a) => `• ${a.handle} — ${a.name}${a.id === activeId ? ' (active)' : ''}`,
   );
   return [
     'Agents:',
     ...lines,
     '',
-    'Send /use @handle to switch, or start a message with @handle to ask that one just this once.',
+    'Tap one to switch. You can also send /use <handle>, or start a message with @handle to ask that one just this once.',
   ].join('\n');
+}
+
+/* ------------------------------------------------------------------ *
+ * Switching agent by button
+ * ------------------------------------------------------------------ */
+
+/**
+ * The prefix every "switch to this agent" callback carries.
+ *
+ * Approvals own `apr:`; this surface owns `use:`. The two never overlap, and
+ * `callbackKind` is the only thing that decides which handler sees a tap.
+ */
+export const USE_CALLBACK_PREFIX = 'use';
+
+/** Agent ids are catalog directory names: letters, digits, `-`, `_` and `.`. */
+const AGENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,48}$/;
+
+/** `use:<agentId>`, refused rather than truncated if it cannot fit. */
+export function agentCallbackData(agentId: string): string {
+  const data = `${USE_CALLBACK_PREFIX}:${agentId}`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    throw new Error(`agent callback data is too long for Telegram: ${data.length} bytes`);
+  }
+  return data;
+}
+
+/** The agent id in a `use:` callback, or nothing. Strict: a tap binds an id. */
+export function parseAgentCallback(data: string | undefined): string | undefined {
+  const raw = (data ?? '').trim();
+  if (!raw.startsWith(`${USE_CALLBACK_PREFIX}:`)) return undefined;
+  const id = raw.slice(USE_CALLBACK_PREFIX.length + 1);
+  return AGENT_ID_RE.test(id) ? id : undefined;
+}
+
+/**
+ * Which handler owns a callback payload. One small dispatcher keyed by prefix,
+ * so approvals keep owning `apr:` and nothing else has to know about them.
+ */
+export type CallbackKind = 'agent' | 'approval';
+
+export function callbackKind(data: string | undefined): CallbackKind {
+  return (data ?? '').trim().startsWith(`${USE_CALLBACK_PREFIX}:`) ? 'agent' : 'approval';
+}
+
+/**
+ * One button per agent, one per row: `Switch to Ledger`, and `✓ Ledger
+ * (active)` for the one this chat is already talking to. The active button
+ * stays tappable — a no-op that says so — because a keyboard that changes
+ * shape under a thumb is worse than one that answers.
+ */
+export function agentsKeyboard(
+  agents: readonly { id: string; handle: string; name: string }[],
+  activeId: string,
+): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: agents.map((a) => {
+      const label = handleLabel(a.handle) || a.name;
+      return [
+        {
+          text: a.id === activeId ? `✓ ${label} (active)` : `Switch to ${label}`,
+          callback_data: agentCallbackData(a.id),
+        },
+      ];
+    }),
+  };
+}
+
+/** What a tap on the agent this chat is already talking to answers. */
+export function alreadyActiveText(agentLabel: string): string {
+  return `Already talking to ${agentLabel}.`;
+}
+
+/** What a successful switch answers on the button. */
+export function switchedText(agentLabel: string): string {
+  return `Now talking to ${agentLabel}.`;
 }
 
 async function appendSurfaceEvent(
@@ -765,16 +855,22 @@ export class TelegramSurface {
     if (!message) {
       const callback = update.callback_query;
       if (!callback) return;
+      // Every tap is serialized on the chat's own chain, so a callback cannot
+      // interleave with a run in that chat. Which handler sees it is decided by
+      // the callback prefix alone: `use:` here, everything else to approvals.
+      const callbackChat = callback.message?.chat?.id;
+      const chain = callbackChat === undefined ? `cb:${callback.id}` : String(callbackChat);
+      if (callbackKind(callback.data) === 'agent') {
+        this.enqueue(chain, () => this.handleAgentCallback(callback));
+        return;
+      }
       const approvals = this.#opts.approvals;
       if (!approvals) {
         this.#log('telegram: callback_query ignored (no approval machinery wired)');
         return;
       }
       // Authorization belongs to the approval handler, which re-establishes the
-      // owner identity from core; the surface only serializes the tap on the
-      // chat's own chain so a decision cannot interleave with a run in it.
-      const callbackChat = callback.message?.chat?.id;
-      const chain = callbackChat === undefined ? `cb:${callback.id}` : String(callbackChat);
+      // owner identity from core.
       this.enqueue(chain, () => approvals.handleCallback(callback));
       return;
     }
@@ -1016,10 +1112,10 @@ export class TelegramSurface {
     }
     if (command === '/agents') {
       const active = await this.activeAgent(chatId);
-      await this.#opts.api.sendMessage(
-        chatId,
-        agentsText(this.#opts.catalog.list(), active.id),
-      );
+      const agents = this.#opts.catalog.list();
+      await this.#opts.api.sendMessage(chatId, agentsText(agents, active.id), {
+        replyMarkup: agentsKeyboard(agents, active.id),
+      });
       return;
     }
     if (command === '/use') {
@@ -1030,7 +1126,7 @@ export class TelegramSurface {
       const active = await this.activeAgent(chatId);
       await this.#opts.api.sendMessage(
         chatId,
-        `You are talking to ${active.name} (@${active.handle}).`,
+        `You are talking to ${active.name}. Send /agents to switch.`,
       );
       return;
     }
@@ -1081,7 +1177,7 @@ export class TelegramSurface {
     const prompt = status ? 'Status' : text;
     const note =
       status && agent.id !== active.id
-        ? `(@${agent.handle} answered this one; you are still talking to @${active.handle}.)`
+        ? `(${agent.name} answered this one; you are still talking to ${active.name}.)`
         : undefined;
 
     await this.#runFor(chatId, agent, prompt, { note, carry: !status });
@@ -1316,15 +1412,94 @@ export class TelegramSurface {
 
     await setActiveAgent(this.#opts.pool, SURFACE, chatId, agent.id);
     // The menu names the active agent, so it is re-published for this chat.
-    if (this.#opts.setChatMenu) {
-      await this.#opts.setChatMenu(chatId, agent).catch((err) => {
-        this.#log(`telegram: menu refresh for chat ${chatId} failed: ${message(err)}`);
-      });
+    await this.#republishMenu(chatId, agent);
+    await this.#opts.api.sendMessage(chatId, `You are now talking to ${agent.name}.`);
+  }
+
+  /**
+   * A tap on an agent button under `/agents`.
+   *
+   * Same rule as an approval callback: the sender is re-authenticated against
+   * core on every tap — a button is not trusted because it sits in a chat that
+   * was once paired — and a stranger is answered with a bare, empty callback
+   * answer and recorded as `surface.rejected`.
+   */
+  async handleAgentCallback(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const agentId = parseAgentCallback(query.data);
+    if (agentId === undefined || userId === '' || chatId === '') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
     }
-    await this.#opts.api.sendMessage(
-      chatId,
-      `You are now talking to ${agent.name} (@${agent.handle}).`,
-    );
+
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: agent callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendSurfaceEvent(pool, 'surface.rejected', {
+        surface: SURFACE,
+        kind: 'callback',
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        agentId,
+      });
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    // The callback carries an *id*, so the lookup is exact: a handle never
+    // resolves here, and an agent that has since been removed is said plainly.
+    const agent = this.#opts.catalog.get(agentId);
+    if (!agent) {
+      await api.answerCallbackQuery(query.id, UNKNOWN_AGENT_TEXT).catch(() => {});
+      return;
+    }
+
+    const label = handleLabel(agent.handle) || agent.name;
+    const active = await this.activeAgent(chatId);
+    if (active.id === agent.id) {
+      // Tappable, but nothing moves: no write, no edit, no menu churn.
+      await api.answerCallbackQuery(query.id, alreadyActiveText(label)).catch(() => {});
+      return;
+    }
+
+    await setActiveAgent(pool, SURFACE, chatId, agent.id);
+
+    // The list the owner is looking at now names a different active agent, so
+    // the message it sits under is refreshed. Cosmetic: a failed edit is logged.
+    if (messageId !== undefined) {
+      const agents = this.#opts.catalog.list();
+      try {
+        await api.editMessageText(chatId, messageId, agentsText(agents, agent.id), {
+          replyMarkup: agentsKeyboard(agents, agent.id),
+        });
+      } catch (err) {
+        this.#log(`telegram: refreshing the agent list failed: ${message(err)}`);
+      }
+    }
+
+    await api.answerCallbackQuery(query.id, switchedText(label)).catch(() => {});
+    await this.#republishMenu(chatId, agent);
+  }
+
+  /** The chat menu names the active agent. Cosmetic: a failure is logged. */
+  async #republishMenu(chatId: string, agent: CatalogAgent): Promise<void> {
+    if (!this.#opts.setChatMenu) return;
+    await this.#opts.setChatMenu(chatId, agent).catch((err) => {
+      this.#log(`telegram: menu refresh for chat ${chatId} failed: ${message(err)}`);
+    });
   }
 
   /**
