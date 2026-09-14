@@ -163,6 +163,28 @@ export const HELP = [
 ].join('\n');
 
 /**
+ * The two lines a freshly paired chat reads above its very first answer.
+ *
+ * Two, and once: the owner just pressed a button on a QR code and is waiting
+ * for an answer, not for a manual. `/help` is always a message away — what this
+ * has to establish is only *what this is* and *where the other agents are*.
+ */
+export const ORIENTATION = [
+  'This is buddi: your own agents, running on your machine, reachable from here.',
+  'Send /agents to see who is installed, or just ask me something.',
+].join('\n');
+
+/**
+ * Put the orientation above a reply, or leave the reply alone.
+ *
+ * Pure, so "it fires once and never again" is a property of the caller's
+ * `first` flag rather than of a string this file builds twice.
+ */
+export function withOrientation(reply: string, first: boolean): string {
+  return first ? `${ORIENTATION}\n\n${reply}` : reply;
+}
+
+/**
  * A file arrived in a build with no artifact store wired up. Not an error the
  * owner caused, and said as a fact about the installation rather than a stack.
  */
@@ -288,7 +310,7 @@ export function devicesText(devices: readonly DeviceLine[], timezone: string): s
     'Paired devices:',
     ...lines,
     '',
-    'To unpair one, run this where buddi is installed: buddi devices unpair <id>',
+    'To unpair one, run this where buddi is installed: buddi telegram unpair <id>',
   ].join('\n');
 }
 
@@ -787,6 +809,24 @@ export async function setConversationForChat(
        set conversation_id = excluded.conversation_id, created_at = now()`,
     [SURFACE, chatId, agentId, conversationId],
   );
+}
+
+/**
+ * Has this chat ever had a conversation with *any* agent?
+ *
+ * This is what "first accepted message" means here, and it is also what records
+ * it: `ensureConversationForChat` writes a row the first time a chat is
+ * answered, rows are updated and never deleted (`/new` rewrites the
+ * conversation id, it does not drop the mapping), so this is false exactly
+ * once in the life of a chat.
+ */
+export async function chatIsNew(pool: Queryable, chatId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `select 1 from core.surface_conversations
+      where surface = $1 and external_chat_id = $2 limit 1`,
+    [SURFACE, chatId],
+  );
+  return rows.length === 0;
 }
 
 /** The chat's conversation with this agent, created on first contact. */
@@ -1455,6 +1495,8 @@ export class TelegramSurface {
     prompt: string,
     opts: { note?: string | undefined; carry?: boolean } = {},
   ): Promise<void> {
+    // Asked *before* `ensure…` writes the row that answers it.
+    const first = await chatIsNew(this.#opts.pool, chatId);
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
 
     // "import this statement" three minutes after a PDF means that PDF. The
@@ -1475,7 +1517,8 @@ export class TelegramSurface {
           ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
           onToolCall: (name) => progress.noteToolCall(name),
         });
-        return opts.note ? `${opts.note}\n\n${reply}` : reply;
+        const body = opts.note ? `${opts.note}\n\n${reply}` : reply;
+        return withOrientation(body, first);
       },
       label,
       carried ? readingText(label) : undefined,
@@ -1628,6 +1671,8 @@ export class TelegramSurface {
     }
 
     const agent = await this.activeAgent(chatId);
+    // A captioned file can be the very first thing a paired chat ever sends.
+    const first = await chatIsNew(this.#opts.pool, chatId);
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
     const turn = this.#attachmentTurn({
       artifactId: row.id,
@@ -1639,15 +1684,18 @@ export class TelegramSurface {
 
     await this.#withBubble(
       chatId,
-      (progress) =>
-        this.#opts.run({
-          conversationId,
-          chatId,
-          agent,
-          text: `${caption}\n\n${turn.note}`,
-          ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
-          onToolCall: (name) => progress.noteToolCall(name),
-        }),
+      async (progress) =>
+        withOrientation(
+          await this.#opts.run({
+            conversationId,
+            chatId,
+            agent,
+            text: `${caption}\n\n${turn.note}`,
+            ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
+            onToolCall: (name) => progress.noteToolCall(name),
+          }),
+          first,
+        ),
       handleLabel(agent.handle),
       readingText(handleLabel(agent.handle)),
     );

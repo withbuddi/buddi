@@ -22,37 +22,87 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import {
   KNOWN_SECRETS,
+  createPool,
   createVault,
   resolveSecrets,
   type Vault,
 } from '@buddi/core';
-import { TelegramApi } from '@buddi/gateway';
+import { createPairingCode, listDevices, TelegramApi } from '@buddi/gateway';
+import { runDashboard } from './dashboard-cmd.js';
 import { applyEnvEdits, isBlank, maskSecret, parseEnv, type EnvEdit } from './env-file.js';
+import {
+  isNoop,
+  nextSteps,
+  planInit,
+  renderPlan,
+  stepOf,
+  willRun,
+  type InitFacts,
+  type PlannedStep,
+} from './init-plan.js';
 import { ENV_EXAMPLE_FILE, ENV_FILE, REPO_ROOT } from './paths.js';
 import { run, runInherit, versionOf } from './proc.js';
+import { createServiceManager } from './service/index.js';
+import { renderQr } from './telegram-cmd.js';
 
 const ESC = '\u001b[';
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
 const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
 
 const MIN_NODE_MAJOR = 22;
-
 export interface InitOptions {
   /** Injected in tests; defaults to a real readline over stdin/stdout. */
   ask?: (question: string) => Promise<string>;
   /** Injected in tests; defaults to this machine's vault. */
   vault?: Vault | undefined;
+  /**
+   * `--yes`. Ask nothing: take the default for every step that only needs
+   * consent, and skip every step that needs something typed.
+   */
+  yes?: boolean;
+  /**
+   * Whether the owner can be asked anything. Defaults to "there is a TTY on
+   * both ends and `--yes` was not passed"; injected in tests.
+   */
+  interactive?: boolean;
+  /** Injected in tests. Real runs open a browser via `buddi dashboard`. */
+  openDashboard?: () => Promise<number>;
 }
 
+/** How long `init` waits for a device to scan the QR before moving on. */
+export const PAIR_WAIT_MS = 120_000;
+
+/** How often it asks the database whether the pairing landed. */
+export const PAIR_POLL_MS = 2_000;
+
 export async function runInit(opts: InitOptions = {}): Promise<number> {
-  const rl = opts.ask
-    ? undefined
-    : readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask = opts.ask ?? ((q: string) => rl!.question(q));
+  const assumeYes = opts.yes === true;
+  const interactive =
+    opts.interactive ??
+    (!assumeYes &&
+      (opts.ask !== undefined ||
+        (process.stdin.isTTY === true && process.stdout.isTTY === true)));
+
+  const rl =
+    opts.ask !== undefined || !interactive
+      ? undefined
+      : readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = opts.ask ?? (rl ? (q: string) => rl.question(q) : async () => '');
+
+  /** A yes/no gate. Non-interactive answers with `--yes` and never blocks. */
+  const confirm = async (question: string, byDefault = true): Promise<boolean> => {
+    if (!interactive) return assumeYes;
+    const answer = (await ask(`${question} [${byDefault ? 'Y/n' : 'y/N'}] `)).trim().toLowerCase();
+    if (answer === '') return byDefault;
+    return answer === 'y' || answer === 'yes';
+  };
 
   try {
     console.log(bold('buddi init'));
     console.log(dim(`installation: ${REPO_ROOT}`));
+    if (!interactive) {
+      console.log(dim(assumeYes ? '--yes: nothing will be asked' : 'no terminal: nothing will be asked'));
+    }
     console.log();
 
     /* 1. Prerequisites — named, never installed. */
@@ -82,7 +132,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     console.log();
 
     /* 2. .env exists. */
-    if (!existsSync(ENV_FILE)) {
+    const envFileExisted = existsSync(ENV_FILE);
+    if (!envFileExisted) {
       if (!existsSync(ENV_EXAMPLE_FILE)) {
         console.error(`neither ${ENV_FILE} nor ${ENV_EXAMPLE_FILE} exists — is this a buddi clone?`);
         return 1;
@@ -118,8 +169,36 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       known[key] = value;
     };
 
-    /* 3. Model credential. */
-    if (isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN') && isBlank(known, 'ANTHROPIC_API_KEY')) {
+    /*
+     * 3. The plan. Everything above was gathering facts; from here the wizard
+     *    is driven by `planInit`, so what it is about to do can be printed
+     *    first and asserted in a test without a machine.
+     */
+    const facts = async (): Promise<InitFacts> => ({
+      interactive,
+      assumeYes,
+      envFileExists: envFileExisted,
+      hasModelCredential:
+        !isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN') || !isBlank(known, 'ANTHROPIC_API_KEY'),
+      hasBotToken: !isBlank(known, 'TELEGRAM_BOT_TOKEN'),
+      hasTimezone: !isBlank(env, 'BUDDI_TZ'),
+      hasOwnerName: !isBlank(env, 'BUDDI_OWNER_NAME'),
+      hasPrivateAgents: hasPrivateAgents({ ...env, ...known }),
+      hasDocker: dockerVersion !== undefined,
+      pairedDevices: await countPairedDevices(env.DATABASE_URL),
+      serviceInstalled: await serviceIsInstalled(),
+      dashboardEnabled: (env.BUDDI_WEB ?? '1').trim() !== '0',
+    });
+
+    let plan = planInit(await facts());
+    console.log(bold('Plan'));
+    console.log(renderPlan(plan));
+    if (isNoop(plan)) {
+      console.log(dim('\nnothing left to do — re-running changes nothing.'));
+    }
+
+    /* 4. Model credential. */
+    if (willRun(plan, 'model-credential')) {
       console.log(bold('\nModel credential'));
       console.log(
         'Two ways in:\n' +
@@ -137,15 +216,15 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       }
       const got = known.CLAUDE_CODE_OAUTH_TOKEN ?? known.ANTHROPIC_API_KEY ?? '';
       console.log(got === '' ? dim('  (left empty — buddi chat will refuse to start)') : `  stored ${maskSecret(got)}`);
-    } else {
+    } else if (stepOf(plan, 'model-credential').action === 'done') {
       const kind = !isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN')
         ? 'CLAUDE_CODE_OAUTH_TOKEN'
         : 'ANTHROPIC_API_KEY';
       console.log(`\nModel credential: ${kind} already set ${dim(`(${sourceOf(secrets.sources[kind])})`)}`);
     }
 
-    /* 4. Telegram bot token — validated against getMe, which also names the bot. */
-    if (isBlank(known, 'TELEGRAM_BOT_TOKEN')) {
+    /* 5. Telegram bot token — validated against getMe, which also names the bot. */
+    if (willRun(plan, 'telegram-token')) {
       console.log(bold('\nTelegram bot'));
       console.log(
         'Talk to @BotFather in Telegram, `/newbot`, and paste the token it gives you.\n' +
@@ -161,7 +240,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
           console.log(dim('  Telegram rejected that token; skipping. Re-run `buddi init` to retry.'));
         }
       }
-    } else {
+    } else if (stepOf(plan, 'telegram-token').action === 'done') {
       const me = await verifyBot(known.TELEGRAM_BOT_TOKEN as string);
       const where = sourceOf(secrets.sources.TELEGRAM_BOT_TOKEN);
       console.log(
@@ -171,9 +250,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       );
     }
 
-    /* 5. Timezone — the day every agent means by "today". */
-    if (isBlank(env, 'BUDDI_TZ')) {
-      const guess = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    /* 6. Timezone — the day every agent means by "today". */
+    if (willRun(plan, 'timezone')) {
+      const guess = detectedTimezone();
       const answer = (await ask(`\nTimezone [${guess}]: `)).trim();
       const tz = answer === '' ? guess : answer;
       if (!validTimezone(tz)) {
@@ -182,23 +261,27 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
         remember('BUDDI_TZ', tz);
         console.log(`  BUDDI_TZ=${tz}`);
       }
-    } else {
+    } else if (stepOf(plan, 'timezone').action === 'done') {
       console.log(`\nTimezone: ${env.BUDDI_TZ} ${dim('(unchanged)')}`);
     }
 
-    /* 6. Who the owner is, for the agent to use by name. */
-    if (isBlank(env, 'BUDDI_OWNER_NAME')) {
+    /* 7. Who the owner is, for the agent to use by name. */
+    if (willRun(plan, 'owner-name')) {
       const name = (await ask('\nWhat should the agents call you? ')).trim();
       if (name !== '') {
         remember('BUDDI_OWNER_NAME', name);
         console.log(`  BUDDI_OWNER_NAME=${name}`);
       }
-    } else {
+    } else if (stepOf(plan, 'owner-name').action === 'done') {
       console.log(`\nOwner: ${env.BUDDI_OWNER_NAME} ${dim('(unchanged)')}`);
     }
 
-    /* 7. Where the owner's own agents and skills live. */
-    await setUpPrivateConfig(ask, { ...env, ...known }, remember);
+    /* 8. Where the owner's own agents and skills live. */
+    if (willRun(plan, 'private-config')) {
+      await setUpPrivateConfig(ask, { ...env, ...known }, remember, { interactive });
+    } else {
+      console.log(`\nPrivate configuration: ${dim(stepOf(plan, 'private-config').reason ?? '')}`);
+    }
 
     if (edits.length > 0) {
       text = applyEnvEdits(text, edits);
@@ -207,8 +290,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       env = parseEnv(text);
     }
 
-    /* 8. Bring the machine up. */
-    if (dockerVersion) {
+    /* 9. Bring the machine up. */
+    if (willRun(plan, 'database')) {
       console.log(bold('\nStarting postgres (docker compose up -d postgres)…'));
       const code = await runInherit('pnpm', ['db:up'], { cwd: REPO_ROOT });
       if (code !== 0) {
@@ -232,14 +315,194 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       return 1;
     }
 
-    console.log(bold('\nbuddi is set up.'));
-    console.log('  Next:  buddi service install   — run the surface + scheduler in the background');
-    console.log('         buddi telegram pair     — pair your phone');
-    console.log('  Then:  buddi doctor            — confirm everything at once');
+    /*
+     * 10. The tail. The database was down when the plan was first made, so the
+     *     three steps that depend on it are re-planned now that it is up — a
+     *     machine that is already paired must not be asked to pair again.
+     */
+    plan = planInit(await facts());
+
+    /* 10a. Pair a device, right here, by QR. */
+    if (willRun(plan, 'telegram-pair')) {
+      const paired = await pairHere(confirm, env, {
+        onNeedsService: () => ensureService(confirm),
+      });
+      if (paired) plan = planInit(await facts());
+    } else if (stepOf(plan, 'telegram-pair').action === 'done') {
+      console.log(`\nTelegram: ${dim(stepOf(plan, 'telegram-pair').reason ?? '')}`);
+    }
+
+    /* 10b. The background service. */
+    if (willRun(plan, 'service')) await ensureService(confirm);
+
+    /* 10c. The dashboard. */
+    if (willRun(plan, 'dashboard')) {
+      if (await confirm('\nOpen the local dashboard now?', true)) {
+        const open = opts.openDashboard ?? (() => runDashboard('open'));
+        await open();
+      }
+    }
+
+    console.log();
+    for (const line of nextSteps(planInit(await facts()))) console.log(line);
     return 0;
   } finally {
     rl?.close();
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The steps that need more than a question
+ * ------------------------------------------------------------------ */
+
+/**
+ * Install (and start) the background service, with the owner's consent.
+ *
+ * Returns whether a service is now installed. Never throws: a launchd that
+ * refuses is a line to read, not a failed installation — everything else the
+ * wizard did still stands.
+ */
+export async function ensureService(
+  confirm: (question: string, byDefault?: boolean) => Promise<boolean>,
+): Promise<boolean> {
+  const manager = createServiceManager();
+  try {
+    const status = await manager.status();
+    if (status.installed) {
+      console.log(`\nBackground service: ${dim(status.detail)}`);
+      return true;
+    }
+  } catch {
+    /* fall through and offer it anyway */
+  }
+  if (!(await confirm('\nRun the surfaces and scheduler in the background, starting at login?', true))) {
+    console.log(dim('  skipped — `buddi service install` when you want it'));
+    return false;
+  }
+  try {
+    for (const note of await manager.install()) console.log(`  ${note}`);
+    return true;
+  } catch (err) {
+    console.log(dim(`  could not install the service: ${message(err)}`));
+    console.log(dim('  run `buddi service install` to see the whole error'));
+    return false;
+  }
+}
+
+/**
+ * Pair a device without leaving the wizard: mint a code, draw the QR, and then
+ * watch the database until a device appears or `PAIR_WAIT_MS` runs out.
+ *
+ * Polling is the honest mechanism here. The device pairs by talking to the bot,
+ * which is a different process; the only thing this one can observe is the row
+ * that process writes.
+ */
+export async function pairHere(
+  confirm: (question: string, byDefault?: boolean) => Promise<boolean>,
+  env: Record<string, string | undefined>,
+  hooks: {
+    onNeedsService?: () => Promise<boolean>;
+    /** Injected in tests; the real one sleeps. */
+    wait?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<boolean> {
+  const databaseUrl = env.DATABASE_URL;
+  if (!databaseUrl) return false;
+
+  console.log(bold('\nPair a device'));
+  if (!(await confirm('Pair your phone now? It takes about thirty seconds.', true))) {
+    console.log(dim('  skipped — `buddi telegram pair` when you want it'));
+    return false;
+  }
+
+  // Nothing receives the code unless a poller is running: the surface claims it,
+  // not this process. Offer to put one there before printing something with a
+  // ten-minute life.
+  if (hooks.onNeedsService) {
+    const running = await hooks.onNeedsService();
+    if (!running) {
+      console.log(
+        dim('  no service is installed, so nothing is listening for the code — pair later with `buddi telegram pair`.'),
+      );
+      return false;
+    }
+  }
+
+  const pool = createPool(databaseUrl);
+  try {
+    const before = (await listDevices(pool)).length;
+    const { code, deepLink, expiresAt } = await createPairingCode(pool, { env });
+    console.log(await renderQr(deepLink));
+    console.log(bold('  Scan it, or open this link on the device:'));
+    console.log(`  ${deepLink}`);
+    console.log(`  code ${bold(code)}`);
+    console.log(dim(`  valid until ${expiresAt.toISOString()} — anyone holding it can pair.`));
+    console.log(dim(`  waiting up to ${Math.round(PAIR_WAIT_MS / 1000)}s… (Ctrl-C to skip)`));
+
+    const wait = hooks.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const now = hooks.now ?? (() => Date.now());
+    const deadline = now() + PAIR_WAIT_MS;
+    while (now() < deadline) {
+      await wait(PAIR_POLL_MS);
+      const devices = await listDevices(pool);
+      if (devices.length > before) {
+        const device = devices[devices.length - 1];
+        console.log(`  paired: ${device?.label ?? device?.externalUserId ?? 'a device'}`);
+        return true;
+      }
+    }
+    console.log(dim('  nothing paired yet — the code stays valid; run `buddi telegram pair` to mint another.'));
+    return false;
+  } catch (err) {
+    console.log(dim(`  pairing could not start: ${message(err)}`));
+    return false;
+  } finally {
+    await pool.end();
+  }
+}
+
+/** This machine's IANA zone, with a defined fallback. */
+export function detectedTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+}
+
+/** Does the owner's private agents directory already hold an agent? */
+export function hasPrivateAgents(env: Record<string, string | undefined>): boolean {
+  const pinned = (env.BUDDI_AGENTS_DIR ?? '').trim();
+  const dir = pinned !== '' ? pinned : path.join(DEFAULT_PRIVATE_DIR, 'agents');
+  if (!existsSync(dir)) return false;
+  try {
+    return readdirSync(dir).some((name) => !name.startsWith('.'));
+  } catch {
+    return false;
+  }
+}
+
+/** Best effort: a database that is not up yet simply has no paired devices. */
+async function countPairedDevices(databaseUrl: string | undefined): Promise<number> {
+  if (!databaseUrl) return 0;
+  const pool = createPool(databaseUrl);
+  try {
+    return (await listDevices(pool)).length;
+  } catch {
+    return 0;
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+/** Best effort: a platform with no service manager is simply not installed. */
+async function serviceIsInstalled(): Promise<boolean> {
+  try {
+    return (await createServiceManager().status()).installed;
+  } catch {
+    return false;
+  }
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /* ------------------------------------------------------------------ *
@@ -289,9 +552,12 @@ export async function setUpPrivateConfig(
   ask: (question: string) => Promise<string>,
   known: Record<string, string>,
   remember: (key: string, value: string) => void,
-  io: { log?: (line: string) => void } = {},
+  io: { log?: (line: string) => void; interactive?: boolean } = {},
 ): Promise<string> {
   const log = io.log ?? ((line: string) => console.log(line));
+  // With nobody to ask, the default location *is* the answer: a script still
+  // gets a private directory with the example agent in it.
+  const interactive = io.interactive ?? true;
   const pinned = known.BUDDI_AGENTS_DIR;
   let root = DEFAULT_PRIVATE_DIR;
 
@@ -306,7 +572,7 @@ export async function setUpPrivateConfig(
       'The agents in this repository are examples. Yours live in a private directory\n' +
         'that is never committed — personas name real accounts, inboxes and people.',
     );
-    const answer = (await ask(`Where should they live? [${root}] `)).trim();
+    const answer = interactive ? (await ask(`Where should they live? [${root}] `)).trim() : '';
     if (answer !== '') {
       root = path.resolve(answer);
       if (root !== DEFAULT_PRIVATE_DIR) remember('BUDDI_AGENTS_DIR', path.join(root, 'agents'));

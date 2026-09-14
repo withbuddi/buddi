@@ -35,8 +35,13 @@ import {
   WEB_ENABLED_VAR,
 } from '@buddi/gateway';
 import type { Pool } from 'pg';
+import { listArchives } from './backup/prune.js';
+import { STALE_AFTER_MS } from './backup/manifest.js';
+import { createBackupScheduler } from './backup/schedule.js';
+import { BACKUP_DIR } from './paths.js';
 import {
   checkAgents,
+  checkBackups,
   checkConfig,
   checkNodeVersion,
   checkVault,
@@ -413,6 +418,41 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       } catch (err) {
         return { status: 'warn', detail: err instanceof Error ? err.message : String(err) };
       }
+    },
+
+    /**
+     * Do backups exist, are they recent, and is anything taking the next one?
+     *
+     * Reads the directory listing only — never an archive's contents — so it
+     * costs nothing and still works with Docker down, which is one of the
+     * moments an owner most wants to know whether they have a backup.
+     */
+    async backups(): Promise<ProbeResult> {
+      const archives = await listArchives(BACKUP_DIR);
+      const newest = archives[0];
+      let scheduleInstalled = false;
+      let scheduleError: string | undefined;
+      try {
+        scheduleInstalled = (await createBackupScheduler().status()).installed;
+      } catch (err) {
+        scheduleError = err instanceof Error ? err.message : String(err);
+      }
+      return checkBackups(
+        {
+          dir: BACKUP_DIR,
+          count: archives.length,
+          ...(newest
+            ? {
+                newestAgeMs: Date.now() - newest.at,
+                newestName: newest.name,
+                newestBytes: newest.bytes,
+              }
+            : {}),
+          scheduleInstalled,
+          ...(scheduleError === undefined ? {} : { scheduleError }),
+        },
+        STALE_AFTER_MS,
+      );
     },
 
     timezone(): ProbeResult {

@@ -52,6 +52,11 @@ export interface DoctorProbes {
   /** The local dashboard: where it is bound, and whether a token exists yet. */
   dashboard(): Promise<ProbeResult>;
   service(): Promise<ProbeResult>;
+  /**
+   * The backups. Optional for the same reason `config` is: a caller built
+   * before this row existed still satisfies the interface.
+   */
+  backups?(): Promise<ProbeResult>;
   timezone(): ProbeResult;
 }
 
@@ -71,6 +76,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'queue', critical: false, probe: 'queue' },
   { name: 'dashboard', critical: false, probe: 'dashboard' },
   { name: 'service', critical: false, probe: 'service' },
+  { name: 'backups', critical: false, probe: 'backups' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];
 
@@ -241,6 +247,85 @@ export function checkConfig(facts: ConfigFacts): ProbeResult {
     };
   }
   return { status: 'ok', detail: where };
+}
+
+/* ------------------------------------------------------------------ *
+ * The backups row
+ * ------------------------------------------------------------------ */
+
+/** What the doctor needs to know about the backups. */
+export interface BackupFacts {
+  /** Where the archives live. Printed whether or not any exist. */
+  dir: string;
+  /** Milliseconds since the newest archive was written; absent when there is none. */
+  newestAgeMs?: number;
+  newestName?: string;
+  newestBytes?: number;
+  count: number;
+  /** Is the nightly job installed with the OS? */
+  scheduleInstalled: boolean;
+  /** Why the schedule could not be read at all (an unsupported platform). */
+  scheduleError?: string;
+}
+
+/**
+ * Never critical, always loud.
+ *
+ * An installation with no backup still works perfectly today — which is exactly
+ * why this must not be a `fail` that an owner learns to ignore, and exactly why
+ * it must not be silent either. It warns when there is no backup at all, when
+ * the newest is older than the nightly job would allow, and when backups exist
+ * but nothing is scheduled to take the next one.
+ */
+export function checkBackups(facts: BackupFacts, staleAfterMs: number): ProbeResult {
+  const where = `${facts.dir}`;
+  const schedule = facts.scheduleError
+    ? `schedule unavailable (${facts.scheduleError})`
+    : facts.scheduleInstalled
+      ? 'nightly schedule installed'
+      : 'NO nightly schedule (`buddi backup schedule install`)';
+
+  if (facts.count === 0 || facts.newestAgeMs === undefined) {
+    return {
+      status: 'warn',
+      detail: `no backup has ever been taken — \`buddi backup create\` (${where}); ${schedule}`,
+    };
+  }
+
+  const age = formatAgeShort(facts.newestAgeMs);
+  const size = facts.newestBytes === undefined ? '' : `, ${formatBytesShort(facts.newestBytes)}`;
+  const summary = `${facts.count} archive(s) in ${where}; newest ${facts.newestName ?? ''} ${age}${size}; ${schedule}`;
+
+  if (facts.newestAgeMs > staleAfterMs) {
+    return {
+      status: 'warn',
+      detail: `STALE — the newest backup is ${age} (over ${Math.round(staleAfterMs / 3_600_000)}h). ${summary}`,
+    };
+  }
+  if (!facts.scheduleInstalled && facts.scheduleError === undefined) {
+    return { status: 'warn', detail: summary };
+  }
+  return { status: 'ok', detail: summary };
+}
+
+/** Kept here so the row is a pure function of its facts, with no imports. */
+function formatAgeShort(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 1) return `${Math.max(1, Math.floor(ms / 60_000))}m ago`;
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function formatBytesShort(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
 }
 
 /* ------------------------------------------------------------------ *

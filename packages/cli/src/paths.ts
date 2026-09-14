@@ -44,6 +44,10 @@ export const ENV_FILE = path.join(REPO_ROOT, '.env');
 export const ENV_EXAMPLE_FILE = path.join(REPO_ROOT, '.env.example');
 /** What the service supervises: the built long-running process. */
 export const SERVE_ENTRY = path.join(REPO_ROOT, 'packages', 'gateway', 'dist', 'serve.js');
+/** The built `buddi` binary — what a scheduled backup runs. */
+export const CLI_ENTRY = path.join(REPO_ROOT, 'packages', 'cli', 'dist', 'main.js');
+/** Where `buddi backup create` writes unless `--out` says otherwise. */
+export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
 /** Load `.env` from the repo root. Idempotent; never overrides a real env var. */
 export function loadEnv(): void {

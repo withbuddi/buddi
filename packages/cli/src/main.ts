@@ -7,7 +7,7 @@
  * gateway's own entry points, called as functions; `serve` is the gateway's
  * `main`; `migrate` is core's `runMigrations` over the gateway's installed
  * manifests. The binary adds only what has nowhere else to live — `init`,
- * `doctor`, `service`, `telegram`.
+ * `doctor`, `service`, `telegram`, `backup`.
  *
  * The repo root comes from this module's location (see `paths.ts`), never from
  * `process.cwd()`, so the global binary behaves the same from any directory.
@@ -26,6 +26,7 @@ import {
   runServe,
 } from '@buddi/gateway';
 import { parseArgs, USAGE, UsageError, type Command, type ServiceAction } from './args.js';
+import { runBackup } from './backup/index.js';
 import { runDashboard } from './dashboard-cmd.js';
 import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
@@ -143,9 +144,16 @@ export async function dispatch(command: Command): Promise<number> {
     case 'db':
       loadEnv();
       return runDb(command.action, process.env);
+    case 'backup':
+      // No `requireDatabase` gate: `list`, `verify` and `prune` are exactly the
+      // commands an owner reaches for when the database is down, and `create`
+      // and `restore` talk to Postgres through the container themselves and say
+      // so in their own words.
+      loadEnv();
+      return runBackup(command, process.env);
     case 'init':
       loadEnv();
-      return runInit();
+      return runInit({ yes: command.yes });
     case 'doctor':
       loadEnv();
       return doctor();

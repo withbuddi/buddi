@@ -39,7 +39,7 @@ describe('parseArgs', () => {
 
   it('parses the standalone commands', () => {
     expect(parseArgs(['serve'])).toEqual({ kind: 'serve' });
-    expect(parseArgs(['init'])).toEqual({ kind: 'init' });
+    expect(parseArgs(['init'])).toEqual({ kind: 'init', yes: false });
     expect(parseArgs(['doctor'])).toEqual({ kind: 'doctor' });
     expect(parseArgs(['migrate'])).toEqual({ kind: 'migrate' });
   });

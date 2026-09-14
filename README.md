@@ -1,120 +1,213 @@
 # buddi
 
-A personal AI agent platform for a single owner. Today it ships one agent: a **finance
-advisor** you talk to from the terminal. It records your balances, incomes and fixed
-charges in Postgres, and answers "can I afford this?" from a deterministic day-by-day
-cash-flow projection — the model explains, it never computes.
+buddi is a personal agent platform you run yourself. An agent is a markdown file
+you write: its frontmatter lists the tools it may call, its body is its persona.
+Agents get real access to your data and your tools — a bank export, an inbox, a
+file you drop on them — and you reach them from Telegram, from a terminal, and
+from a small dashboard on localhost. They also work while you are not there:
+scheduled missions, watchers that only speak when something is wrong, one-off
+reminders they set themselves. Anything irreversible stops and waits for you to
+approve it. Everything runs on your machine, against a Postgres container on
+your machine; the one thing that leaves is the prompt, which goes to whichever
+AI provider each agent's file pins — so that one line in that one file decides
+which company sees that agent's conversations.
 
 Design and rationale: [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+---
+
 ## Install
 
-buddi is one command. Install it once, run it from anywhere.
+**Prerequisites**
+
+- **Node 22 or newer** (developed on 26)
+- **pnpm 11**
+- **Docker Desktop**, for the Postgres container. Turn on *Settings → General →
+  Start Docker Desktop when you sign in* — buddi is one database away from
+  working, and that setting is the difference between "it came back after the
+  reboot" and "nothing works this morning".
 
 ```sh
 git clone <this repo> buddi && cd buddi
-pnpm install && pnpm -r build
-pnpm run link               # puts the global `buddi` on your PATH
-buddi init                  # credentials, timezone, database, migrations
-```
-
-`scripts/install.sh` does exactly those four steps on a fresh machine, after
-checking for git, node, pnpm and docker — it names what is missing and where to
-get it, and installs no system software itself.
-
-```sh
 ./scripts/install.sh
 ```
 
-`pnpm run link`, not `pnpm link` — the latter is pnpm's own builtin and means
-something else. It is `pnpm add --global ./packages/cli`: a global install that
-points straight at this checkout, so a rebuild is picked up with no relinking.
-`pnpm run unlink` removes it.
+`install.sh` checks for git, node, pnpm and docker — naming what is missing and
+where to get it, installing no system software itself — then runs the three
+steps you can also run by hand:
 
-If `buddi` is not found afterwards, pnpm's global bin directory is not on your
-PATH: run `pnpm setup`, open a new shell, and `pnpm run link` again. Everything
-also works unlinked, as `pnpm buddi …` from the repo.
+```sh
+pnpm install
+pnpm -r build
+pnpm run link     # puts the global `buddi` on your PATH
+```
 
-### Prerequisites
+`pnpm run link`, not `pnpm link`: the latter is pnpm's own builtin and means
+something else. It is `pnpm add --global ./packages/cli`, a global install
+pointing at this checkout, so a rebuild is picked up without relinking.
+`pnpm run unlink` removes it. If `buddi` is not found afterwards, pnpm's global
+bin directory is not on your PATH: run `pnpm setup`, open a new shell, and
+`pnpm run link` again. Everything also works unlinked, as `pnpm buddi …` from
+the repo.
 
-- Node 22 or newer (26 is what it is developed on)
-- pnpm 11
-- Docker (for the Postgres container)
+Then:
 
-### What `buddi init` does
+```sh
+buddi init
+```
 
-It is an interactive wizard, and it is idempotent — a second run asks only about
-what is still missing. It copies `.env.example` to `.env`, asks for a model
-credential (`claude setup-token` for a Claude subscription, or an
-`ANTHROPIC_API_KEY`), an optional Telegram bot token which it validates against
-`getMe` and names the bot back to you, your timezone (defaulting to this
-machine's) and what the agents should call you. Then it starts postgres, builds
-and migrates. Secrets go into `.env` (mode 600) and are never printed back.
+---
 
-Credentials are never read ambiently: an agent names the *environment variable*
-it wants, and resolution fails closed with a typed problem if it is missing or
-empty. If `CLAUDE_CODE_OAUTH_TOKEN` is set the agent uses the subscription
-token; otherwise it uses `ANTHROPIC_API_KEY`. Pin a different model with
-`BUDDI_MODEL` (default `claude-sonnet-5`).
+## First ten minutes
 
-An agent file may pin a different provider (`provider: openai`), which reads
-`OPENAI_API_KEY` and `BUDDI_OPENAI_MODEL` (default `gpt-5`) and nothing else —
-no subscription token, no fallback to the Anthropic key, and no model borrowed
-from the other provider's catalogue. `@scout` ships that way. If its key is
-absent, `buddi agents` lists it as unavailable and says which variable is
-missing; every other agent is unaffected. `pnpm eval --provider openai` runs the
-golden set against it, skipping — out loud — every case that needs the finance
-tools it does not have.
+### 1. `buddi init`
 
-**Secrets.** `.env` is the day-1 fallback; the OS keychain is the real home.
-`buddi vault import-env` moves every known secret into it and rewrites each line
-in `.env` to `NAME="<vault>"` — a marker, not a value, which resolution treats as
-absent so the vault answers instead. The quotes matter: unquoted, `<` is a shell
-redirection and `set -a; . ./.env` would fail. `buddi vault list | get | set |
-delete` manage the keychain directly, and no command ever prints a value back.
+An interactive wizard, and idempotent — a second run asks only about what is
+still missing. It prints its plan before it does anything:
 
-**Port note.** The container publishes `${BUDDI_DB_PORT:-5432}`. If 5432 is already taken on
-your machine, set `BUDDI_DB_PORT` **and** the port in `DATABASE_URL` together, e.g.:
+```
+buddi init
+installation: /Users/you/buddi
+
+  node    26.2.0
+  pnpm    11.0.0
+  docker  Docker version 27.4.0
+
+Plan
+ • create .env from .env.example
+ • a model credential (subscription token or API key)
+ • a Telegram bot token (optional)
+ • the timezone every agent means by "today"
+ • what the agents should call you
+ • your private agents directory, seeded with the example agent
+ • start the postgres container
+ • build the workspace
+ • apply core + plugin migrations
+ • pair a device by QR code
+ • run the surfaces + scheduler in the background, at login
+ • open the local dashboard
+```
+
+Every step is skippable, and a step you skip never blocks the next one. It ends
+by naming the first three things to say to an agent.
+
+`buddi init --yes` is the same wizard with nobody at the keyboard: it does
+everything that needs no input and skips everything that does, saying which. A
+run with no TTY behaves the same way.
+
+**Credentials.** Two ways in: `claude setup-token` for a Claude subscription
+(paste the `sk-ant-oat01-…` into `CLAUDE_CODE_OAUTH_TOKEN`), or an
+`ANTHROPIC_API_KEY` from console.anthropic.com. Secrets go into `.env` at mode
+600 and are never printed back. `buddi vault import-env` later moves them into
+the OS keychain.
+
+**Port note.** The container publishes `${BUDDI_DB_PORT:-5432}`. If 5432 is
+already taken, set `BUDDI_DB_PORT` **and** the port in `DATABASE_URL` together:
 
 ```sh
 BUDDI_DB_PORT=55433
 DATABASE_URL=postgres://buddi:buddi@localhost:55433/buddi
 ```
 
-### Is it working?
+### 2. `buddi doctor`
 
-```sh
-buddi doctor
+One table, and an exit code a script can use: `1` when something critical is
+broken.
+
+```
+$ buddi doctor
+buddi doctor — /Users/you/buddi
+
+  ok    node              26.2.0
+  ok    pnpm              11.0.0
+  ok    docker            Docker version 27.4.0
+  ok    postgres          reachable at localhost:55433
+  ok    migrations        up to date (23 applied)
+  ok    vault             keychain (3 secrets)
+  ok    model credential  CLAUDE_CODE_OAUTH_TOKEN accepted by anthropic
+  ok    config            agents: examples + private/agents (1 private)
+  ok    agents            1 agent, 1 runnable — assistant (anthropic/claude-sonnet-5)
+  warn  telegram bot      TELEGRAM_BOT_TOKEN is not set — the Telegram surface is off
+  warn  paired devices    none — run `buddi telegram pair`
+  ok    queue             running; 0 pending, 0 failed
+  ok    dashboard         127.0.0.1:4317, token in the keychain
+  warn  service           not installed — run `buddi service install`
+  ok    timezone          Europe/Paris
+
+everything critical is in place; 3 thing(s) to look at
 ```
 
-One table: node/pnpm/docker versions, postgres reachability, whether migrations
-are up to date, whether the model credential is actually accepted, one
-`agents` row summarising which engine each agent runs on and which of them this
-machine can reach (it FAILS only when the *default* agent cannot run), whether
-the bot token is valid, how many devices are paired, where the dashboard is bound
-and whether it has a token yet, whether the background service is running, and
-which timezone is in force. It exits 1 if anything critical is
-broken, so it is usable from a script.
+`buddi status` is the same report under the name people reach for.
 
-## Usage
+### 3. `buddi chat`
+
+A REPL against the default agent. `/help` lists the commands, `/quit` or Ctrl-D
+leaves. Tool calls are echoed as dim `⚙ memory.note` lines so you can see what
+the agent actually did.
 
 ```sh
-buddi chat                      # interactive REPL, new conversation
-buddi chat --agent ledger       # ... with a specific agent, by @handle or id
-buddi chat --resume <id>        # continue a conversation
-buddi chat --last               # continue the most recent one
-buddi ask "can I afford a 600 EUR bike on the 20th?"
-buddi ask "..." --resume <id>   # one turn against an existing conversation
-buddi agents                    # every agent installed, and where it came from
+buddi chat
+buddi chat --agent ledger      # by @handle or id
+buddi chat --last              # continue the most recent conversation
 ```
+
+### 4. `buddi telegram pair`
+
+Ask @BotFather for a bot token, put it in `.env`, then:
+
+```
+$ buddi telegram pair
+  █▀▀▀▀▀█ ▀▄▀ ▀█▄█ █▀▀▀▀▀█
+  █ ███ █ █▀▀▄ ▄▀█ █ ███ █
+  █ ▀▀▀ █ ▀ █▄▀▄▀▀ █ ▀▀▀ █
+  ▀▀▀▀▀▀▀ █ ▀ █ █▄ ▀▀▀▀▀▀▀
+  ▀█▄█▄▀▀▄▄▀█▀▄ ▄██▀▄▄▀█▄▀
+  ▀ ▀▀ ▀▀▀▄█ ▄▀█▄▀▀▀▄█▀▄▄█
+  █▀▀▀▀▀█ ▄▀ ▄▀▄█ █ ▀ ▄▄▀█
+  █ ███ █ █▄▀█▄▄▀███▀▀▄█▀▀
+  █ ▀▀▀ █ ▄ ▀▄ ▀█ ▄▀▄█▄▄▀
+  ▀▀▀▀▀▀▀ ▀  ▀▀ ▀▀  ▀▀▀ ▀▀
+
+  Scan it, or open this link on the device:
+  https://t.me/your_bot?start=K7M2QX9B
+  code K7M2QX9B
+  valid until 2026-09-14T15:04:00.000Z (10 minutes). Anyone holding it can
+  pair — do not paste it anywhere public.
+  `buddi serve` (or the installed service) must be running to receive it.
+```
+
+Scan it. The bot answers *Paired. You're talking to buddi as <you>.* Your first
+real message gets a two-line orientation above the reply, once, and never
+again. `buddi init` can do this step for you, QR and all, waiting up to two
+minutes for the scan.
+
+### 5. `buddi service install`
+
+Runs the Telegram surface and the scheduler in the background, starting at
+login. `buddi serve` is the same thing in your shell, in the foreground.
+
+Then, once:
+
+```sh
+buddi backup schedule install    # nightly at 03:30, prune included
+```
+
+A second, separate background job — a service that is crash-looping must not be
+the reason last night's backup did not happen.
+
+### 6. `buddi dashboard`
+
+Prints a one-time link and opens it.
+
+---
 
 ## Your agents are yours
 
-The agents in this repository are **examples**. Your own live in a private
-directory that is never committed — a persona names your bank, your landlord,
-your inbox, and none of that belongs in a repository you might share or push.
+The agents in this repository are **examples**. Yours live in a directory that
+is never committed — a persona names your bank, your landlord, your inbox, and
+none of that belongs in a repository you might push.
 
-Both are loaded, in this order, later winning:
+Both halves are loaded, in this order, **later winning**:
 
 | Order | Agents | Skills |
 | --- | --- | --- |
@@ -122,282 +215,608 @@ Both are loaded, in this order, later winning:
 | 2. yours | `$BUDDI_AGENTS_DIR`, else `private/agents` if it exists, else `~/.buddi/agents` | `$BUDDI_SKILLS_DIR`, else `private/skills`, else `~/.buddi/skills` |
 
 An agent of yours with the same **id** as an example one *replaces* it wholesale
-— the file, not a merge — so the way to change an example is to copy the folder
-across and edit the copy. A skill of yours with the same **name** as an example
-one replaces it the same way. `buddi agents` prints where each one came from
-(`example` or `private`), and so does the `config` row of `buddi doctor`.
+— the file, never a merge — so the way to change an example is to copy the
+folder across and edit the copy. A skill of yours with the same **name**
+replaces one of theirs the same way. `buddi agents` prints where each one came
+from.
 
-**Adding one.** Make a folder named for the id, put an `agent.md` in it, restart:
+**`private/` is gitignored.** `buddi init` writes a `private/README.md` saying
+so. If you keep your agents somewhere else entirely, point `BUDDI_AGENTS_DIR`
+(and `BUDDI_SKILLS_DIR`) at it.
+
+### Writing an agent file
+
+One folder per agent, named for its id, with an `agent.md` in it:
 
 ```sh
 mkdir -p private/agents/ledger
-$EDITOR private/agents/ledger/agent.md   # id, handle, name, description, tools + persona
-buddi agents                             # confirm it loaded
-buddi service restart                    # the running surfaces reload the catalog
+$EDITOR private/agents/ledger/agent.md
+buddi agents             # confirm it loaded, and from where
+buddi service restart    # the running surfaces reload the catalog
 ```
 
-**`private/` is gitignored.** Nothing in it is tracked, and `buddi init` writes a
-`private/README.md` saying so. If you keep your agents somewhere else entirely,
-point `BUDDI_AGENTS_DIR` (and `BUDDI_SKILLS_DIR`) at it.
+```markdown
+---
+id: ledger                 # required. kebab-case, and it must equal the folder name
+handle: ledger             # required. what you type as @ledger; 2–20 chars, starts with a letter
+name: Ledger               # required. what surfaces call it in a sentence
+description: Tracks my accounts and answers "can I afford this?".   # required. one line
+provider: anthropic        # optional. anthropic | openai. Absent means anthropic
+model: claude-sonnet-5     # optional. validated against that provider's catalogue
+tools: [finance.*, memory.*, reminder.*]   # required. globs allowed; nothing else is callable
+maxTurns: 12               # optional. how many model turns one run may take
+language: mirror           # optional. mirror | en | fr — mirror answers in the language you wrote
+roles: [overview, recap]   # optional. free-form capability claims; /status asks for `overview`
+default: true              # optional. the agent a bare `buddi chat` talks to. One per directory
+---
 
-**Sharing a persona.** Hand somebody the agent's folder. It is a markdown file
-with a frontmatter block — no data, no credentials, nothing machine-specific.
-They drop it into their own private agents directory and restart.
+You are my finance advisor. There is exactly one owner: the person you are
+talking to. Today is {{today}}.
+
+Everything below the second `---` is the persona — plain markdown, no schema.
+Say what the agent is for, what it must never do, and how it should sound.
+```
+
+The frontmatter parser is strict: an unknown key is a load error, not a warning.
+An empty body is a load error too. `{{today}}` is substituted with the owner's
+date in `BUDDI_TZ`.
+
+**Skills** are shared procedure, not capability: markdown files that are
+composed into an agent's prompt. Two homes, both auto-discovered —
+`private/agents/<id>/skills/*.md` loads for that agent only, and
+`private/skills/*.md` loads for every agent (or, with an `agents:` list in its
+own frontmatter, only for the ones it names). A skill may never carry `tools`
+or `tier`: that is a privilege escalation attempt and fails the load loudly.
+
+**`delegates.json`** sits next to `agent.md` and is an authorization file, which
+is why it is not a frontmatter key — the file the model's persona lives in is
+not where authorization belongs. It is a plain JSON array of agent ids:
+
+```json
+["credit-coach"]
+```
+
+Missing file means no delegation. A delegate never delegates again, so cycles
+cannot exist. Anything that is not an array of ids fails loudly.
+
+**Sharing a persona.** Hand somebody the folder. It is a markdown file with a
+frontmatter block — no data, no credentials, nothing machine-specific.
 
 **Upgrading from an older clone.** If your agents are still in `<repo>/agents`,
-buddi keeps loading them and prints a one-line notice. Move them once:
+buddi keeps loading them and prints a notice. Move them once with
+`buddi agents migrate` (`--dry-run` to see it first), then
+`buddi service restart`.
 
-```sh
-buddi agents migrate            # --dry-run to see it first
-buddi service restart
+### The shipped example, in one screen
+
+`examples/agents/assistant/agent.md`:
+
+```markdown
+---
+id: assistant
+handle: assistant
+name: Assistant
+description: The example agent buddi ships with — explains what buddi is and how to add agents of your own.
+default: true
+tools: [memory.*, reminder.*]
+maxTurns: 8
+language: mirror
+---
+
+You are buddi's example assistant. There is exactly one owner: the person you
+are talking to. Today is {{today}}.
+
+## What buddi is
+- buddi is a personal agent platform the owner runs themselves, on their own
+  machine, against their own data. …
+- An agent is a configuration file, not code. Adding an agent means adding a
+  file. A conversation never grants a tool.
+
+## What you do and do not do
+- Your tools are memory and reminders, nothing else. You cannot read a balance,
+  an inbox or a calendar, and you never guess at one.
+- When a question needs data you do not have, say so plainly and say what would
+  answer it: an agent the owner writes, with the tool that reaches that data.
+
+## Style
+- Short and concrete. Two or three sentences, then the next step.
+- Plain text, no markdown — the owner may be reading this in Telegram.
 ```
 
-It moves `agents/` and `skills/` into your private directory, never overwrites a
-file already there, leaves `examples/` alone, and does nothing on a second run.
+That is the whole shape: nine frontmatter keys, a persona, no code.
 
-### Choosing the engine
+---
 
-Which provider and model an agent runs on is a line in its own file —
-`<private>/agents/<id>/agent.md` — because an endpoint is a data destination: this line,
-and nothing ambient, decides which company sees that agent's conversations.
+## Choosing the engine
 
-```yaml
-provider: anthropic        # or openai; absent means anthropic
-model: claude-sonnet-5     # validated against that provider's catalogue
-maxTurns: 12
-```
+Which provider and model an agent runs on is a line in its own file, because an
+endpoint is a data destination: **that line, and nothing ambient, decides which
+company sees that agent's conversations.**
 
 You do not have to edit it by hand:
 
 ```sh
-buddi agents                                  # handle, id, provider, model, credential, availability, roles
-buddi agents show ledger                      # persona file, tools, skills, capabilities, last run
-buddi agents models                           # the catalogue, per provider, and what this machine can reach
+buddi agents                                    # handle, id, provider, model, credential, availability, roles
+buddi agents show ledger                        # persona file, tools, skills, capabilities, last run
+buddi agents models                             # the catalogue, per provider, and what this machine can reach
 buddi agents models --provider openai
-buddi agents set ledger --model claude-opus-5 # edits the frontmatter in place
+buddi agents set ledger --model claude-opus-5   # edits the frontmatter in place
 buddi agents set scout --provider openai --model gpt-5
-buddi agents set ledger --max-turns 8 --language en
-buddi agents test ledger                      # one cheap live turn: provider, served model, latency, tokens, cost
+buddi agents set ledger --max-turns 8
+buddi agents test ledger                        # one cheap live turn: provider, served model, latency, tokens, cost
 ```
 
-`set` rewrites only the keys you named — the persona body, the comments and the
-key order are left exactly as they were — and it refuses a model the pinned
-provider does not serve, in the catalogue's own words. A model is never migrated
-for you: moving an agent to another provider means naming both, `--provider` and
-`--model`, together. The same controls are on the dashboard's Agents page, which
-writes through `POST /api/agents/:id/engine` and calls the same function.
+`set` rewrites only the keys you named — persona body, comments and key order
+are left exactly as they were — and it refuses a model the pinned provider does
+not serve, in the catalogue's own words. A model is never migrated for you:
+moving an agent to another provider means naming `--provider` and `--model`
+together. The dashboard's Agents page writes through the same function.
 
-Where a file pins nothing, the environment decides: `BUDDI_MODEL` (default
-`claude-sonnet-5`) for Anthropic agents and `BUDDI_OPENAI_MODEL` (default
-`gpt-5`) for OpenAI ones — never one for the other. The credential is named, not
-discovered: `CLAUDE_CODE_OAUTH_TOKEN` if you ran `claude setup-token`, otherwise
-`ANTHROPIC_API_KEY`; `OPENAI_API_KEY` for OpenAI, which has no subscription-token
-form and no fallback. An agent whose credential is absent is *listed*, marked
-unavailable with the reason, and every other agent keeps working.
+Where a file pins nothing, the environment decides — never one provider's
+default for the other:
+
+| Variable | Default | For |
+| --- | --- | --- |
+| `BUDDI_MODEL` | `claude-sonnet-5` | Anthropic agents with no `model:` |
+| `BUDDI_OPENAI_MODEL` | `gpt-5` | OpenAI agents with no `model:` |
+
+The credential is named, not discovered: `CLAUDE_CODE_OAUTH_TOKEN` if you ran
+`claude setup-token`, otherwise `ANTHROPIC_API_KEY`; `OPENAI_API_KEY` for
+OpenAI, which has no subscription-token form and no fallback. An agent whose
+credential is absent is *listed*, marked unavailable with the reason, and every
+other agent keeps working.
+
+**The vault.** `.env` is the day-1 fallback; the OS keychain is the real home.
+`buddi vault import-env` moves every known secret into it and rewrites each line
+in `.env` to `NAME="<vault>"` — a marker, not a value, which resolution treats
+as absent so the vault answers instead. The quotes matter: unquoted, `<` is a
+shell redirection. `buddi vault list`, `buddi vault get <NAME>`,
+`buddi vault set <NAME>` and `buddi vault delete <NAME>` manage the keychain
+directly, and no command ever prints a value back.
 
 A change reaches the next `buddi chat` or `buddi ask` immediately — they are
-their own processes. The running surfaces (`buddi serve`, Telegram, the
-scheduler, the dashboard) hold the catalog they loaded at boot, so finish with:
+their own processes. The running surfaces hold the catalog they loaded at boot,
+so finish with `buddi service restart`.
+
+---
+
+## Tools and plugins
+
+The core is the trust boundary, and **the core has no tools**. Every
+world-touching capability is a plugin, and a plugin can contribute four things:
+
+- an **effect tool** — something an agent proposes and the approval machinery
+  gates (`email.send`);
+- a **source** — something that polls the world and enqueues a run when it finds
+  something (an IMAP inbox);
+- a **sentinel** — a watcher that produces *findings*; core alone decides
+  whether a finding is worth waking you for;
+- a **suggested mission** — scheduled work the plugin thinks is worth doing,
+  addressed to a **role** rather than to an agent id.
+
+Four ship in this repository:
+
+| Plugin | Schema | What it gives an agent |
+| --- | --- | --- |
+| `finance` | `finance` | Accounts, recurring charges, transactions and CSV import, receipts, liabilities, credit utilization and payoff, and a deterministic day-by-day cash-flow projection. Six sentinels (floor breach, minimum due, statement closing, stale balance, unmatched receipts, unprocessed files) and three suggested missions. |
+| `email` | `email` | One Gmail account: an IMAP **source** that triages new mail, and `email.send` as a **gated effect tool**. |
+| `memory` | `memory` | Owner preferences (revisioned) and agent-written notes with provenance and expiry, plus keyword recall. No embeddings. |
+| `artifacts` | *none* | Reads over the artifact store, so an agent can look at the file you dropped on it. Owns no schema: uninstalling removes tools, not your files. |
+
+Core boots with none of them installed — that is a test
+(`packages/gateway/src/generic-install.test.ts`), not an aspiration, and
+`scripts/check-boundaries.mjs` fails the build if core ever imports a tool
+package.
+
+**Writing one.** The contract is `packages/core/src/tools.ts` — read it first.
+Then copy the smallest complete plugin, `packages/tools/memory/src/index.ts`:
+35 lines, a manifest, five tools, one migration. For sources and gated effects,
+read `packages/tools/email/src/index.ts`. Apply your schema with
+`buddi migrate`, which runs core's migrations and every installed plugin's.
+
+---
+
+## Every surface
+
+An agent is not bound to a surface. These are three adapters over the same
+conversations.
+
+### Telegram
+
+| Command | |
+| --- | --- |
+| `/agents` | every agent, with a button to switch |
+| `/use <handle>` | switch, e.g. `/use @ledger` |
+| `@handle …` | ask that agent one message without switching |
+| `/whoami` | which agent is active here |
+| `/status` | where you stand right now (answered by whoever claims the `overview` role) |
+| `/recap` | run the recap mission now |
+| `/files` | the last files you sent |
+| `/reminders` | what the agents put on the clock, with a button to cancel one |
+| `/approvals` | anything waiting for you |
+| `/devices` | the devices paired to this installation |
+| `/new` | a fresh conversation with the active agent |
+| `/id` | your numeric user id and this chat id |
+| `/help` | the list |
+
+**Attachments.** Send a document, a photo or a CSV. With a caption, the agent
+starts working on it immediately; without one, it is kept and acknowledged, and
+"import that statement" a few minutes later still means that file. Size is
+checked three times, and only the downloaded length is believed. Voice notes are
+kept, never transcribed.
+
+**Approvals** arrive as a message with *Approve* / *Reject* buttons. Tapping one
+re-authenticates you against the paired identity, runs the same core transition
+the dashboard and the terminal call, and edits the message into its outcome.
+
+Unpairing is deliberately not a chat command: a stolen phone is already in a
+paired chat. Revocation stays on the machine — `buddi telegram unpair <id>`.
+
+### The terminal
 
 ```sh
-buddi service restart
+buddi chat [--agent <handle>] [--resume <id>] [--last] [--quiet]
 ```
 
-In the REPL: `/tools` lists the registered tools, `/id` prints the conversation id,
-`/quit` (or Ctrl-D) exits. Tool calls are echoed as dim `⚙ finance.…` lines so you can see
-what the agent actually did.
+| | | | |
+| --- | --- | --- | --- |
+| `/help` | `/agents` | `/use <handle>` | `/whoami` |
+| `/new` | `/resume [n]` | `/id` | `/tools` |
+| `/model` | `/usage` | `/status` | `/recap` |
+| `/reminders` | `/files [n]` | `/attach <path>` | `/approvals` |
+| `/approve <id>` | `/reject <id>` | `/devices` | `/clear` |
+| `/quit` | | | |
 
-Start by telling it the facts — it stores each one and confirms:
+`@handle …` asks one agent a single message without switching. A line ending in
+`\` continues; `"""` on its own line opens a literal block where nothing,
+including a leading `/`, is interpreted. Ctrl-C cancels a run in flight.
 
-> My checking balance is 900 EUR as of today. I get paid 3200 on the 28th, rent is 1200 on
-> the 1st, a streaming sub of 40 on the 15th. Keep a safety floor of 200.
+**Attachments.** `/attach ~/Downloads/statement.pdf`, or just drag the file into
+the terminal — if the whole message is a path that exists, it asks
+`Attach …? [Y/n]`. Staged files ride with exactly one next message.
 
-Then ask it things. Any "can I afford / is it wise" question goes through
-`finance.project_cashflow`, and the verdict quotes the minimum balance, the date it happens
-and the next income.
+**Inline approvals.** When a run stops on a gated call, the preview is printed
+and the prompt becomes `Approve this? [y]es / [n]o / [l]ater`. `later` leaves it
+pending, where `/approvals` and Telegram can still reach it.
 
-**CSV import.** Bank CSV export is the primary intake in v1: drop the file anywhere and ask
-the agent to import it, giving the path and the account:
+### The dashboard
 
-> Import ~/Downloads/checking-2026-09.csv into Checking
+`buddi serve` serves it on `127.0.0.1:4317`. `buddi dashboard` prints a
+single-use link, valid five minutes, and opens it. `buddi dashboard --token`
+prints just the ticket, for piping; `buddi dashboard --off` explains the off
+switch.
 
-It detects the date/amount/description columns, handles `;`/`,` separators and comma
-decimals, and skips rows already imported.
+| Page | Shows |
+| --- | --- |
+| Overview | Pending approvals, failed jobs and open urgent findings first; the numbers second |
+| Events | The event log, polled every 5s, filterable; a row opens the whole envelope |
+| Conversations | Recent runs, and one run's full transcript — persona words, tool calls, raw results, cost |
+| Missions | Scheduled work: next fire, misfire policy, whether it spoke last time |
+| Approvals | What is waiting, with the tool-written preview; approve or reject |
+| Jobs | The durable queue by state; retry or cancel |
+| Reminders | One-off nudges the agents set; cancel a pending one |
+| Sentinels | Installed watchers, last run, open and resolved findings |
+| Agents | Tools, skills, pinned provider and which env var holds the credential — never the credential |
 
-## Always on
+It is read-first: every write it offers calls the same core function the CLI and
+Telegram call, so a decision made here is the same atomic transition. The UI
+makes no external requests at all — no CDN, no web fonts, no telemetry.
 
-`buddi serve` runs both halves of the installation in your shell: the Telegram
-surface (inbound) and the mission scheduler (outbound). To have it run in the
-background and come back at login:
+**How the link works.** A long random token is generated on first run and kept
+in the OS keychain under `BUDDI_WEB_TOKEN` (or `data/web-token`, mode 600, where
+there is no vault). It never appears in a URL. What you are handed is a *ticket*
+signed with it: single-use, five minutes, swapped for an HttpOnly
+`SameSite=Strict` session cookie on a clean URL. Every write additionally needs
+a double-submit CSRF header and an `Origin` that is the bound address. There is
+no CORS. A request without a valid session gets `401` and an empty body, and
+failed authentications are rate-limited per address.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `BUDDI_WEB` | `1` | `0` turns the dashboard off entirely |
+| `BUDDI_WEB_HOST` | `127.0.0.1` | Anything but loopback exposes an approval button to your network — put it behind an authenticated transport, and `buddi doctor` will warn about it |
+| `BUDDI_WEB_PORT` | `4317` | |
+
+### Scripts
+
+```sh
+buddi ask "can I afford a 600 EUR bike on the 20th?"
+buddi ask "…" --agent ledger --quiet
+```
+
+One turn, then exit. Exit code `0` answered, `1` failed, `2` stopped awaiting
+your approval.
+
+---
+
+## Running it
 
 ```sh
 buddi service install     # macOS: a launchd LaunchAgent, KeepAlive + RunAtLoad
 buddi service status      # installed? running? which pid?
 buddi service logs        # follow data/logs/serve.log and .err
-buddi service start       # load and run it (the plist stays where it is)
+buddi service restart     # after changing an agent file or .env
+buddi service start       # load and run it (the unit stays where it is)
 buddi service stop        # unload it; `start`, or the next login, brings it back
-buddi service restart
 buddi service uninstall   # stops it and removes the unit; the logs stay
 ```
 
 `install` refuses if `.env` is missing what `serve` needs, and warns if a
 `serve` is already running — two pollers fight over the same bot. On Linux the
-same commands write a **systemd user unit** instead; that implementation is
-best-effort and untested.
+same commands write a systemd **user** unit; that path is best-effort and
+untested.
 
-Then pair a device:
+**What runs on its own**, once the service is up — four independent loops, so a
+wedged network call never holds the clock:
 
-```sh
-buddi telegram pair       # a QR code and the same deep link as text
-buddi telegram devices
-buddi telegram unpair <id>
-```
-
-The pairing code is a bearer credential for the ten minutes it lives: it is
-printed once, and `buddi serve` must be running to receive it.
-
-### After a reboot
-
-Everything here sits on one Postgres container, so if Docker Desktop did not
-start, nothing works. Two things make that a non-event:
-
-- Turn on **Docker Desktop → Settings → General → Start Docker Desktop when you
-  sign in**. The container itself is `restart: unless-stopped`, so it comes back
-  by itself whenever the daemon does.
-- Or start it by hand: `buddi db up` (`buddi db status`, `buddi db down`).
-
-The background service does not need either one to be true *at the moment it
-starts*: with no database it waits and retries — 5s, 10s, 20s, up to a minute —
-instead of exiting, so launchd has nothing to crash-loop on and `serve`
-connects on its own once Docker is up. `buddi service logs` shows it waiting.
-
-The foreground commands do the opposite: `buddi chat`, `buddi ask`,
-`buddi missions` and `buddi jobs` fail immediately with
-
-```
-database not reachable at localhost:55433 — is Docker running? try: buddi db up
-```
-
-`buddi status` (the same report as `buddi doctor`) is the thing to run when
-something is off: the `docker` row says **Docker is not running (open -a
-Docker)** when the daemon is down, the rows under the database say
-`skipped: database unreachable` rather than repeating the same failure, and the
-`service` row points at `buddi service start` when the LaunchAgent is installed
-but the process is not up.
-
-## Dashboard
-
-`buddi serve` also serves a small local dashboard over the event log — bound to
-`127.0.0.1:4317`, session-authenticated, and reachable with one command:
-
-```sh
-buddi dashboard           # prints the URL with a one-time link, and opens it
-buddi dashboard --token   # just the one-time token, for piping
-buddi dashboard --off     # how to turn it off
-```
-
-Overview, Events, Conversations, Missions, Approvals, Jobs, Reminders,
-Sentinels and Agents. It is read-first: the writes it offers are the ones you
-already have elsewhere — approve or reject a pending action, pause and resume,
-enable or disable a mission and change its misfire policy, retry or cancel a
-job, cancel a reminder — and every one of them calls the same core function the
-CLI and Telegram call, so a decision made here is the same atomic transition
-and shows up in the log a second later.
-
-**How the link works.** A long random token is generated on first run and kept
-in the OS keychain under `BUDDI_WEB_TOKEN` (or, with no usable vault, in
-`data/web-token`, mode 600). It never appears in a URL. What `buddi dashboard`
-prints is a *ticket* signed with it: single-use and valid for five minutes. The
-server verifies it, spends it, and swaps it for an HttpOnly, `SameSite=Strict`
-session cookie on a clean URL. Every write additionally needs a double-submit
-CSRF header and an `Origin` that is the bound address; there is no CORS, and a
-request without a valid session gets `401` and an empty body. Failed
-authentications are rate-limited per address.
-
-| Variable | Default | What it means |
+| | Every | |
 | --- | --- | --- |
-| `BUDDI_WEB` | `1` | `0` turns the dashboard off entirely. |
-| `BUDDI_WEB_HOST` | `127.0.0.1` | Bind address. Anything but loopback exposes an approval button to your network — put it behind an authenticated transport if you do, and `buddi doctor` will warn about it. |
-| `BUDDI_WEB_PORT` | `4317` | Port. |
+| Scheduler | cron | Decides which mission occurrences are due and *queues* them. It never runs one itself. Catch-up by construction: a machine that was asleep does not silently skip work |
+| Sentinels | 30s | Runs each watcher whose interval has elapsed and hands its findings to core |
+| Sources | 30s | Polls each due source and enqueues runs idempotently on its own dedup key |
+| Reminders | 60s | Fires the one-off nudges agents set for themselves |
+| Queue worker | 1s | Actually executes the queued runs, with leases, retries and suspension on approval |
 
-The UI is a small React app built by Vite into `packages/web/dist`, served as
-static files by the same process. It makes no external requests at all — no
-CDN, no web fonts, no telemetry — so it works with the machine offline.
+**Quiet by default.** An unattended run does not get to *answer*; it gets to
+**decide**, and it decides by calling a tool — `mission.report` to deliver
+exactly that text, or `mission.silent` with a reason. A run that calls neither
+is treated as silent. Sentinels work the same way: a plugin can only produce a
+finding, and core alone decides what it costs you — `urgent` wakes you now and
+then stays quiet 24 hours for the same key, `info` is noted for the weekly
+digest and stays quiet a week. Silence is the default, not an optimization.
 
-## Missions
+Missions:
 
 ```sh
 buddi missions list
-buddi missions add-defaults     # register every mission the installed plugins suggest
-buddi missions add-recap        # just the recap mission (add-friday-recap still works)
-buddi missions run-now <id> [--inline]
-buddi missions enable <id> | disable <id>
-buddi migrate                   # core + every installed plugin's schema
+buddi missions add-defaults          # register every mission the installed plugins suggest
+buddi missions run-now <id>
+buddi missions enable <id>
+buddi missions disable <id>
+buddi reminders                      # what is on the clock
+buddi pause                          # stop claiming work; running jobs finish
+buddi resume
+buddi jobs --state failed
 ```
 
-A scheduled mission is not something the gateway knows: each plugin *suggests*
-its own (`missions` in its manifest), naming the agent by **role** rather than
-by id. `add-defaults` registers what it can place and prints, for anything it
-cannot, the one line that would fix it — a role no installed agent claims is a
-configuration state, not a failure. The only mission the gateway owns is
-`sentinel-wake`, which has no schedule: a watcher enqueues it.
+A plugin's suggested mission names an agent by **role**, not by id.
+`add-defaults` registers what it can place and prints, for anything it cannot,
+the one line that would fix it — a role no installed agent claims is a
+configuration state, not a failure.
 
-### Roles
+### After a reboot
 
-`/status` and `/recap` name a capability, never an agent. An agent claims one in
-its frontmatter:
+Everything sits on one Postgres container, so if Docker Desktop did not start,
+nothing works. Two things make that a non-event:
 
-```yaml
-roles: [overview, recap]        # free-form, kebab-case; core ships no vocabulary
-```
+- Turn on **Docker Desktop → Settings → General → Start Docker Desktop when you
+  sign in**. The container is `restart: unless-stopped`, so it comes back by
+  itself whenever the daemon does.
+- Or start it by hand: `buddi db up` (`buddi db status`, `buddi db down`).
 
-`/status` runs whoever claims `overview` (without switching the agent you are
-talking to); `/recap` runs the recap mission with whoever claims `recap`. If no
-installed agent claims the role, both say so and name the key above. The
-dashboard's money cards follow the same rule: they appear only when an
-`overview` agent and a plugin that reports balances are both installed.
+The background service does not need either to be true *at the moment it
+starts*: with no database it waits and retries — 5s, 10s, 20s, up to a minute —
+instead of exiting, so launchd has nothing to crash-loop on. `buddi service
+logs` shows it waiting. The foreground commands do the opposite and fail
+immediately, naming the port and the fix.
 
-## Reminders
+---
 
-An agent can put one future nudge on its own clock (`reminder.set`): when it
-fires the agent is woken with its own note and checks the fact again before
-saying anything. The firing loop ticks once a minute, so a reminder lands within
-about a minute of its instant. The budget is enforced in code, not in a prompt,
-and every number in it is tunable in `.env`:
+## Backups
 
-| Variable | Default | Range | What it means |
-| --- | --- | --- | --- |
-| `BUDDI_REMINDER_MIN_LEAD_MINUTES` | `5` | 1–1440 | How far out a reminder must be. Below this the agent should just say it now. |
-| `BUDDI_REMINDER_MAX_HORIZON_DAYS` | `365` | 1–3650 | How far out a reminder may be. |
-| `BUDDI_REMINDER_MAX_PENDING_PER_AGENT` | `10` | 1–100 | Pending reminders one agent may hold. |
-| `BUDDI_REMINDER_MAX_PENDING_TOTAL` | `25` | 1–500 | Pending reminders across every agent. |
+An archive of the database, your private agents and the artifact store.
 
-A value outside its range is clamped and a value that is not a whole number is
-ignored — either way the reason is logged once at startup and the machine still
-comes up. The tool's own description is built from the resolved numbers, so the
-agent is told the limits this installation actually has. Changing any of them
-needs a restart (`buddi service stop && buddi service start`).
+**No secret is ever in a backup** — not the model credential, not the bot token,
+not `BUDDI_VAULT_KEY`; the manifest lists their *names* and the exact
+`buddi vault set <NAME>` lines that put them back, and you type those by hand.
+
+**[docs/operations.md](./docs/operations.md)** has the rest: everything an
+archive contains, everything deliberately left out and why, and the restore
+step by step.
 
 ```sh
-buddi reminders list
+buddi backup create
+buddi backup list
+buddi backup verify <archive>
+buddi backup restore <archive>
+buddi backup prune
+buddi backup schedule install    # the nightly job, prune included
 ```
+
+---
+
+## Operations reference
+
+Every command the binary has, as `buddi help` prints it. If something here is
+wrong, a test fails (`packages/cli/src/readme.test.ts`).
+
+**Setup and health**
+
+| | |
+| --- | --- |
+| `buddi init` | set this machine up (interactive, idempotent) |
+| `buddi init --yes` | the same, asking nothing: for scripts and CI |
+| `buddi doctor` | check every moving part and say what is wrong |
+| `buddi status` | the same report, under the name you reached for |
+| `buddi migrate` | apply core + plugin migrations |
+
+**Database**
+
+| | |
+| --- | --- |
+| `buddi db up` | start the postgres container (after a reboot) |
+| `buddi db down` | stop it |
+| `buddi db status` | is it up? |
+
+**Talking to agents**
+
+| | |
+| --- | --- |
+| `buddi chat` | talk to the default agent |
+| `buddi chat --agent <handle>` | … to a specific agent, by @handle or id |
+| `buddi chat --resume <id>` / `--last` | continue a conversation |
+| `buddi ask "<question>"` | one turn, then exit |
+
+**The agent catalog**
+
+| | |
+| --- | --- |
+| `buddi agents` | every agent, its engine and whether it can run |
+| `buddi agents show <handle>` | one agent in full: tools, skills, engine, last run |
+| `buddi agents set <handle>` | `[--provider p] [--model m] [--max-turns n]` |
+| `buddi agents models` | the model catalogue, and what this machine can reach |
+| `buddi agents test <handle>` | one cheap live turn on that agent's provider |
+| `buddi agents migrate` | move `agents/` and `skills/` into your private directory |
+
+**Running**
+
+| | |
+| --- | --- |
+| `buddi serve` | run the Telegram surface + scheduler in this shell |
+| `buddi service install` | run it in the background, at login |
+| `buddi service start` / `stop` | load/unload without touching the unit |
+| `buddi service status` / `logs` / `restart` / `uninstall` | |
+
+**Surfaces**
+
+| | |
+| --- | --- |
+| `buddi dashboard` | open the local dashboard (one-time link) |
+| `buddi dashboard --token` | print just the one-time token |
+| `buddi dashboard --off` | how to turn the dashboard off |
+| `buddi telegram pair` | a QR code + deep link that pairs a device |
+| `buddi telegram devices` | every paired device |
+| `buddi telegram unpair <id>` | revoke one |
+
+**Work**
+
+| | |
+| --- | --- |
+| `buddi missions list` | every registered mission |
+| `buddi missions add-defaults` | register what the installed plugins suggest |
+| `buddi missions add-friday-recap` | just the recap mission |
+| `buddi missions run-now <id>` | run one now |
+| `buddi missions enable <id>` / `disable <id>` | |
+| `buddi reminders` | `[--agent <id>] [--all]` — one-off nudges the agents set |
+| `buddi reminders cancel <id>` | |
+| `buddi pause` | stop claiming work (running jobs finish) |
+| `buddi resume` | start claiming again |
+| `buddi jobs` | `[--state <s>] [--kind <k>] [--limit <n>]` |
+| `buddi jobs retry <id>` / `cancel <id>` | |
+
+**Secrets**
+
+| | |
+| --- | --- |
+| `buddi vault set <NAME>` | keep a secret in the OS keychain (prompts, hidden) |
+| `buddi vault get <NAME>` / `delete <NAME>` / `list` | |
+| `buddi vault import-env` | move `.env` secrets into the keychain |
+
+**Backups** — see [docs/operations.md](./docs/operations.md).
+
+| | |
+| --- | --- |
+| `buddi backup create` | one archive: database, private agents, artifacts |
+| `buddi backup list` | every archive, newest first |
+| `buddi backup verify <archive>` | checksums + manifest, no database needed |
+| `buddi backup restore <archive>` | `[--into <db>] [--yes] [--force]` — refuses over a database that has rows in it |
+| `buddi backup prune` | `[--keep n]` |
+| `buddi backup schedule install` | the nightly job, prune included |
+
+---
+
+## Troubleshooting
+
+**`database not reachable at localhost:55433`.** Docker is not running, or the
+container is not up. `buddi db up`. If that fails, open Docker Desktop. If the
+port in the message is not the port in your `DATABASE_URL`, you changed one and
+not the other — `BUDDI_DB_PORT` and `DATABASE_URL` must agree.
+
+**`buddi service status` says installed but not running.** The unit is on disk
+and nothing is alive: `buddi service start`. If it starts and dies, `buddi
+service logs` has the reason, and it is usually a missing value in `.env` — the
+service reads the file, not your shell.
+
+**Telegram is silent.** In order: is `TELEGRAM_BOT_TOKEN` set and accepted
+(`buddi doctor`, `telegram bot` row)? Is anything polling (`buddi service
+status`)? Is your chat paired (`buddi telegram devices`)? An unpaired sender
+gets silence by design, so "no reply" and "not paired" look identical from the
+phone. Also check that only *one* `serve` is running — two pollers fight over
+the same bot and drop each other's updates.
+
+**An agent is listed as unavailable.** `buddi agents` names the environment
+variable it wanted. Credentials are never discovered ambiently: the agent's file
+pins a provider, the provider names one variable, and a missing one fails closed
+for that agent and nothing else. `buddi agents show <handle>` says more; `buddi
+agents test <handle>` proves it end to end.
+
+**The dashboard answers `401`.** The link expired — it is single-use and lives
+five minutes. Run `buddi dashboard` again. If every link fails, the token
+changed under you (a new keychain entry, or a deleted `data/web-token`); the
+next `buddi dashboard` mints a fresh one. If the page will not load at all,
+check `BUDDI_WEB` is not `0` and that `buddi serve` is running.
+
+---
+
+## Privacy and safety
+
+**What is stored, and where.** All of it on your machine:
+
+| | |
+| --- | --- |
+| Postgres container (`buddi-pgdata` volume) | Conversations, the event log, missions, jobs, approvals, reminders, paired devices, and every plugin's schema |
+| `data/` | Artifacts (the files you hand it), logs, the dashboard token where there is no vault. Gitignored |
+| `private/` | Your agents and skills. Gitignored |
+| `.env` (mode 600) | Configuration, and secrets until you run `buddi vault import-env` |
+| OS keychain | Secrets after that. No command ever prints one back |
+
+`buddi-pgdata` is a Docker named volume: it is not in git, it is not in any
+clone, and `docker compose down -v` (or Docker Desktop's *Clean / Purge data*)
+deletes it outright. A backup is the only copy of it that survives that — see
+[docs/operations.md](./docs/operations.md).
+
+**What leaves.** Prompts, and only prompts. Each agent's file pins a provider —
+Anthropic or OpenAI — and that agent's conversation, including whatever its
+tools returned into the context, goes there and nowhere else. A model is never
+migrated for you and one provider's credential is never used for another's
+agent. Delegation resolves the provider of the agent being delegated *to*, so
+handing work sideways never quietly changes the destination. The dashboard makes
+no external requests at all. There is no telemetry.
+
+**The approval gate is in code.** Tools are tiered; anything that is not
+`auto` stops the run and waits for you. Unknown tools, invalid arguments and
+missing configuration never execute — they fail closed. A conversation cannot
+grant a tool: an agent can call only what its own file names and what this
+installation actually has, and no text from a model, an email or a document can
+change that.
+
+**Strangers get silence.** A message from an unpaired Telegram user is logged as
+`surface.rejected` and never answered — a reply would confirm the bot exists.
+The single exception is `/start <code>` with a *valid* pairing code; a wrong,
+spent or expired one gets the same silence, rate-limited to five attempts an
+hour.
+
+**This is not advice.** The finance plugin computes arithmetic and the model
+explains it. Nothing here is financial, legal, tax or medical advice, and an
+agent can be confidently wrong about your money. Check anything that matters.
+
+---
 
 ## Development
 
 ```sh
 pnpm -r build
 pnpm typecheck
-pnpm test        # includes the check that core imports no tool package
+pnpm test          # includes the check that core imports no tool package
 ```
 
-Every `pnpm` script still works from the repo (`pnpm chat`, `pnpm serve`,
-`pnpm missions …`) — they call the same binary. `pnpm run link` / `pnpm run unlink`
-attach and detach the global `buddi`.
+Every `pnpm` script works from the repo (`pnpm chat`, `pnpm serve`,
+`pnpm missions …`) — they call the same binary.
 
-Packages: `core` (domain, db, event log, tool registry, provider port), `runtime` (agent
-loop + Anthropic adapter), `gateway` (the surfaces: terminal, Telegram, scheduler),
-`web` (the dashboard UI, React + Vite, built to static files the gateway serves),
-`cli` (the single `buddi` binary — a dispatcher over the gateway's own entry points,
-plus `init`, `doctor` and `service`), `tools/finance` (the finance plugin, which owns the
-`finance` schema). Core never imports a tool; delete `packages/tools/finance` and the
-system still boots.
+Packages: `core` (domain, db, event log, tool registry, provider port, and the
+plugin contract), `runtime` (the agent loop and the provider adapters),
+`gateway` (the surfaces: terminal, Telegram, scheduler, dashboard server),
+`web` (the dashboard UI, React + Vite, built to static files), `cli` (the single
+`buddi` binary, plus `init`, `doctor`, `service` and `backup`), and
+`tools/{finance,email,memory,artifacts}` (the plugins). Core never imports a
+tool: delete `packages/tools/finance` and the system still boots.
