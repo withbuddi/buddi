@@ -81,7 +81,9 @@ export async function hydrateSecrets(
     else env[name] = value;
   }
   return {
-    vault: vaultSelection({ env }),
+    // The vault that actually answered, not the one the environment selects —
+    // they differ only when a caller injected one (a test, the doctor).
+    vault: vault?.kind ?? vaultSelection({ env }),
     sources: resolved.sources,
     problems: resolved.problems,
   };

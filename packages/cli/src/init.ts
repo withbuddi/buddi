@@ -11,6 +11,12 @@
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import readline from 'node:readline/promises';
+import {
+  KNOWN_SECRETS,
+  createVault,
+  resolveSecrets,
+  type Vault,
+} from '@buddi/core';
 import { TelegramApi } from '@buddi/gateway';
 import { applyEnvEdits, isBlank, maskSecret, parseEnv, type EnvEdit } from './env-file.js';
 import { ENV_EXAMPLE_FILE, ENV_FILE, REPO_ROOT } from './paths.js';
@@ -25,6 +31,8 @@ const MIN_NODE_MAJOR = 22;
 export interface InitOptions {
   /** Injected in tests; defaults to a real readline over stdin/stdout. */
   ask?: (question: string) => Promise<string>;
+  /** Injected in tests; defaults to this machine's vault. */
+  vault?: Vault | undefined;
 }
 
 export async function runInit(opts: InitOptions = {}): Promise<number> {
@@ -76,14 +84,33 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
 
     let text = readFileSync(ENV_FILE, 'utf8');
     let env = parseEnv(text);
+
+    /*
+     * A secret the owner already moved into the vault leaves `NAME=<vault>`
+     * behind in `.env` — a marker, not a value. Ask about what is missing only
+     * after the vault has had its say, so a second run on a keychain-backed
+     * installation asks nothing. Vault values are never written back to the
+     * file: only what the owner types here becomes an edit.
+     */
+    const vault = opts.vault ?? createVault({ env: process.env });
+    const secrets = await resolveSecrets(KNOWN_SECRETS, { vault, env });
+    const locked = Object.values(secrets.problems).find((p) => p.code === 'vault-locked');
+    if (locked) {
+      console.error(`The vault is locked: ${locked.message}`);
+      console.error('Unlock it and run `buddi init` again — nothing was changed.');
+      return 1;
+    }
+    const known = secrets.env as Record<string, string>;
+
     const edits: EnvEdit[] = [];
     const remember = (key: string, value: string): void => {
       edits.push({ key, value });
       env[key] = value;
+      known[key] = value;
     };
 
     /* 3. Model credential. */
-    if (isBlank(env, 'CLAUDE_CODE_OAUTH_TOKEN') && isBlank(env, 'ANTHROPIC_API_KEY')) {
+    if (isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN') && isBlank(known, 'ANTHROPIC_API_KEY')) {
       console.log(bold('\nModel credential'));
       console.log(
         'Two ways in:\n' +
@@ -99,17 +126,17 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
         const token = (await ask('CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`): ')).trim();
         if (token !== '') remember('CLAUDE_CODE_OAUTH_TOKEN', token);
       }
-      const got = env.CLAUDE_CODE_OAUTH_TOKEN ?? env.ANTHROPIC_API_KEY ?? '';
+      const got = known.CLAUDE_CODE_OAUTH_TOKEN ?? known.ANTHROPIC_API_KEY ?? '';
       console.log(got === '' ? dim('  (left empty — buddi chat will refuse to start)') : `  stored ${maskSecret(got)}`);
     } else {
-      const kind = !isBlank(env, 'CLAUDE_CODE_OAUTH_TOKEN')
+      const kind = !isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN')
         ? 'CLAUDE_CODE_OAUTH_TOKEN'
         : 'ANTHROPIC_API_KEY';
-      console.log(`\nModel credential: ${kind} already set ${dim('(unchanged)')}`);
+      console.log(`\nModel credential: ${kind} already set ${dim(`(${sourceOf(secrets.sources[kind])})`)}`);
     }
 
     /* 4. Telegram bot token — validated against getMe, which also names the bot. */
-    if (isBlank(env, 'TELEGRAM_BOT_TOKEN')) {
+    if (isBlank(known, 'TELEGRAM_BOT_TOKEN')) {
       console.log(bold('\nTelegram bot'));
       console.log(
         'Talk to @BotFather in Telegram, `/newbot`, and paste the token it gives you.\n' +
@@ -126,11 +153,12 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
         }
       }
     } else {
-      const me = await verifyBot(env.TELEGRAM_BOT_TOKEN as string);
+      const me = await verifyBot(known.TELEGRAM_BOT_TOKEN as string);
+      const where = sourceOf(secrets.sources.TELEGRAM_BOT_TOKEN);
       console.log(
         me
-          ? `\nTelegram bot: @${me.username ?? me.id} ${dim('(token already set)')}`
-          : `\nTelegram bot: token set but Telegram rejected it ${dim('(clear TELEGRAM_BOT_TOKEN in .env to re-enter)')}`,
+          ? `\nTelegram bot: @${me.username ?? me.id} ${dim(`(token ${where})`)}`
+          : `\nTelegram bot: token set but Telegram rejected it ${dim(`(${where}; \`buddi vault set TELEGRAM_BOT_TOKEN\` to replace it)`)}`,
       );
     }
 
@@ -200,6 +228,11 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   } finally {
     rl?.close();
   }
+}
+
+/** Where a resolved secret came from, for a line the owner reads. Never a value. */
+function sourceOf(source: 'vault' | 'env' | undefined): string {
+  return source === 'vault' ? 'from the vault' : 'unchanged';
 }
 
 async function verifyBot(token: string): Promise<{ id: number; username?: string } | null> {

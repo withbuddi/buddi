@@ -34,6 +34,8 @@ export interface DoctorProbes {
   dockerVersion(): Promise<ProbeResult>;
   postgres(): Promise<ProbeResult>;
   migrations(): Promise<ProbeResult>;
+  /** Where this boot's secrets came from — the vault, or `.env`. */
+  vault(): Promise<ProbeResult>;
   modelCredential(): Promise<ProbeResult>;
   botToken(): Promise<ProbeResult>;
   pairedDevices(): Promise<ProbeResult>;
@@ -50,6 +52,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'docker', critical: false, probe: 'dockerVersion' },
   { name: 'postgres', critical: true, probe: 'postgres' },
   { name: 'migrations', critical: true, probe: 'migrations' },
+  { name: 'vault', critical: true, probe: 'vault' },
   { name: 'model credential', critical: true, probe: 'modelCredential' },
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
@@ -101,6 +104,75 @@ export function summarize(checks: Check[]): string {
     return `everything critical is in place; ${failed.length + warnings.length} thing(s) to look at`;
   }
   return 'everything checks out';
+}
+
+/* ------------------------------------------------------------------ *
+ * The vault row
+ * ------------------------------------------------------------------ */
+
+/**
+ * What hydration learned this boot: which vault, where each secret came from,
+ * and which ones resolved nowhere. Names and reasons only — never a value, so
+ * the whole row is safe to paste into an issue.
+ *
+ * Structurally the gateway's `SecretHydration`; restated here so the pure part
+ * of the doctor keeps depending on nothing.
+ */
+export interface VaultFacts {
+  /** `keychain`, `file`, `memory` or `none`. */
+  vault: string;
+  sources: Record<string, 'vault' | 'env'>;
+  problems: Record<string, { code: string; message: string }>;
+}
+
+/**
+ * The model credential, under either of its two names. This is the only secret
+ * the installation genuinely *requires*: a missing bot token costs a surface, a
+ * missing app password costs a plugin, but with no model credential nothing
+ * runs at all.
+ */
+export const REQUIRED_SECRETS: readonly string[] = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+
+/**
+ * Turn hydration into a row.
+ *
+ * A locked vault fails *before* anything else is said about the secrets: every
+ * probe downstream is about to report a credential it could not reach, and the
+ * lock is the one fact that explains all of them.
+ */
+export function checkVault(facts: VaultFacts, required: readonly string[] = REQUIRED_SECRETS): ProbeResult {
+  const locked = Object.values(facts.problems).find((p) => p.code === 'vault-locked');
+  if (locked) {
+    return {
+      status: 'fail',
+      detail: `${facts.vault} vault is locked: ${locked.message} — unlock it and re-run (no secret was read)`,
+    };
+  }
+
+  const named = (source: 'vault' | 'env'): string[] =>
+    Object.keys(facts.sources)
+      .filter((name) => facts.sources[name] === source)
+      .sort();
+  const fromVault = named('vault');
+  const fromEnv = named('env');
+  const where =
+    [
+      fromVault.length > 0 ? `from the vault: ${fromVault.join(', ')}` : '',
+      fromEnv.length > 0 ? `from .env: ${fromEnv.join(', ')}` : '',
+    ]
+      .filter((s) => s !== '')
+      .join('; ') || 'no secrets resolved';
+
+  if (!required.some((name) => facts.sources[name] !== undefined)) {
+    return {
+      status: 'fail',
+      detail:
+        `${facts.vault} — ${where}; no model credential ` +
+        `(\`buddi vault set CLAUDE_CODE_OAUTH_TOKEN\`, or set it in .env)`,
+    };
+  }
+
+  return { status: 'ok', detail: `${facts.vault} — ${where}` };
 }
 
 /** Node's own floor. Kept here so the version rule is testable without a process. */
