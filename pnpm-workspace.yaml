@@ -1,6 +1,8 @@
 packages:
   - 'packages/*'
   - 'packages/tools/*'
+  # The worked example from docs/plugins.md. Not registered in the gateway.
+  - 'examples/plugins/*'
 
 # vitest's esbuild only unpacks its prebuilt binary in this script.
 allowBuilds:
