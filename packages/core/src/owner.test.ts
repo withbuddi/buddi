@@ -228,6 +228,38 @@ suite('owner identity (postgres)', () => {
     expect(paired.includes('1001') !== paired.includes('1002')).toBe(true);
   });
 
+  it('fills in a missing label on a touch, and never overwrites one', async () => {
+    // Paired by the environment allowlist: an id, and no name at all.
+    const nameless = await pairSurfaceIdentity(pool, {
+      surface: 'telegram',
+      externalUserId: '3003',
+      externalChatId: '3003',
+      pairedVia: 'env',
+    });
+    const named = await pairSurfaceIdentity(pool, {
+      surface: 'telegram',
+      externalUserId: '3004',
+      externalChatId: '3004',
+      label: "Amen's phone",
+      pairedVia: 'code',
+    });
+
+    await touchSurfaceIdentity(pool, 'telegram', '3003', { label: '@TheRealAmenophis' });
+    await touchSurfaceIdentity(pool, 'telegram', '3004', { label: '@TheRealAmenophis' });
+
+    const devices = await listSurfaceIdentitiesDetailed(pool);
+    expect(devices.find((d) => d.id === nameless.id)?.label).toBe('@TheRealAmenophis');
+    // A name the owner chose is theirs; the transport does not get to rename it.
+    expect(devices.find((d) => d.id === named.id)?.label).toBe("Amen's phone");
+
+    // A touch with no label, or a blank one, leaves the row exactly as it was.
+    await touchSurfaceIdentity(pool, 'telegram', '3003');
+    await touchSurfaceIdentity(pool, 'telegram', '3004', { label: '   ' });
+    const again = await listSurfaceIdentitiesDetailed(pool);
+    expect(again.find((d) => d.id === nameless.id)?.label).toBe('@TheRealAmenophis');
+    expect(again.find((d) => d.id === named.id)?.label).toBe("Amen's phone");
+  });
+
   it('records last seen, lists devices and unpairs one', async () => {
     const identity = await pairSurfaceIdentity(pool, {
       surface: 'telegram',

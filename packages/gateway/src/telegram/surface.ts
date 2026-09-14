@@ -208,6 +208,21 @@ export function parseStartCode(text: string): string | undefined {
   return m ? (m[1] as string) : undefined;
 }
 
+/**
+ * The name a device is *called*: `@username` when Telegram reports one, else
+ * the first name, else nothing.
+ *
+ * Cosmetic by construction. It is stored so `buddi telegram devices` lists a
+ * name instead of a bare number, and it is never read by anything that decides
+ * whether a message is the owner's — a username is not an identity.
+ */
+export function senderLabel(from?: { username?: string; first_name?: string }): string | null {
+  const username = (from?.username ?? '').trim();
+  if (username !== '') return `@${username.replace(/^@/, '')}`;
+  const first = (from?.first_name ?? '').trim();
+  return first === '' ? null : first;
+}
+
 /** The one sentence a successful pairing answers with. */
 export function pairedText(ownerDisplayName: string): string {
   return `Paired. You're talking to buddi as ${ownerDisplayName}. Send /help.`;
@@ -758,9 +773,7 @@ export class TelegramSurface {
       const code =
         resolution.reason === 'unpaired' ? parseStartCode(message.text ?? '') : undefined;
       if (code !== undefined) {
-        const label = message.from?.username
-          ? `@${message.from.username}`
-          : (message.from?.first_name ?? null);
+        const label = senderLabel(message.from);
         this.enqueue(chatId, () =>
           this.handlePairing(update, userId, chatId, code, label),
         );
@@ -771,8 +784,10 @@ export class TelegramSurface {
     }
 
     // "This device spoke." Written after the message is accepted, throttled,
-    // and never allowed to cost the owner an answer.
-    await this.#touch(userId);
+    // and never allowed to cost the owner an answer. The name Telegram reports
+    // rides along: it fills in a device that paired without one (the startup
+    // allowlist pairs by id alone) and never overwrites a stored label.
+    await this.#touch(userId, senderLabel(message.from));
 
     // A file takes the same authorized path a sentence does — it is queued on
     // this chat's chain, so a document and the message after it cannot race.
@@ -888,13 +903,13 @@ export class TelegramSurface {
   }
 
   /** `last_seen_at`, at most once per identity per `TOUCH_INTERVAL_MS`. */
-  async #touch(userId: string): Promise<void> {
+  async #touch(userId: string, label: string | null): Promise<void> {
     const at = this.#now();
     const last = this.#lastTouch.get(userId);
     if (last !== undefined && at - last < TOUCH_INTERVAL_MS) return;
     this.#lastTouch.set(userId, at);
     try {
-      await touchSurfaceIdentity(this.#opts.pool, SURFACE, userId);
+      await touchSurfaceIdentity(this.#opts.pool, SURFACE, userId, { label });
     } catch (err) {
       this.#log(`telegram: last-seen for user ${userId} failed: ${message(err)}`);
     }

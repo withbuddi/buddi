@@ -386,17 +386,25 @@ export async function consumePairingCode(
  * "This device spoke just now." Deliberately not part of authorization: it is
  * written after a message is accepted and a failure to write it must never cost
  * the owner their answer.
+ *
+ * A label supplied here *fills in* a missing one and never replaces one that is
+ * already stored: a device paired from the environment allowlist has no name,
+ * and the first message it sends is where its name honestly comes from — but a
+ * name the owner chose stays theirs, whatever the transport now calls them.
  */
 export async function touchSurfaceIdentity(
   pool: Queryable,
   surface: string,
   externalUserId: string,
+  opts: { label?: string | null } = {},
 ): Promise<void> {
+  const label = (opts.label ?? '').trim() === '' ? null : (opts.label as string).trim();
   await pool.query(
     `update core.surface_identities
-        set last_seen_at = now()
+        set last_seen_at = now(),
+            label = coalesce(label, $3)
       where surface = $1 and external_user_id = $2`,
-    [surface, externalUserId],
+    [surface, externalUserId, label],
   );
 }
 
