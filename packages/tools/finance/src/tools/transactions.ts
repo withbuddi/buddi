@@ -178,7 +178,7 @@ export const recordContribution: ToolDefinition<z.infer<typeof contributionInput
         `${account.name} is a cash-flow account (kind ${account.kind}); use finance.record_transaction, or reclassify it with finance.update_account`,
       );
     }
-    const occurredOn = input.occurredOn ?? today(ctx.now);
+    const occurredOn = input.occurredOn ?? today(ctx);
     const description = input.description ?? `${account.name} contribution`;
     // Contributions to the same account on the same day for the same amount are
     // genuinely common (two payrolls, a match alongside the deferral), so each

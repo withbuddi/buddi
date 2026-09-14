@@ -108,6 +108,7 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
     db: {} as ToolContext['db'],
     ownerId: 'owner',
     now: () => new Date('2026-09-11T12:00:00Z'),
+    timezone: 'UTC',
   };
   const base = {
     pool: db as unknown as Pool,

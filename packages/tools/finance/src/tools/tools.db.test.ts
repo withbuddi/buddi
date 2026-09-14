@@ -43,7 +43,12 @@ suite('finance tools (postgres)', () => {
     await migrate(pool, { schema: manifest.schema, dir: manifest.migrationsDir });
 
     registry.register(manifest);
-    ctx = { db: pool, ownerId: 'test', now: () => new Date('2026-09-13T12:00:00Z') };
+    ctx = {
+      db: pool,
+      ownerId: 'test',
+      now: () => new Date('2026-09-13T12:00:00Z'),
+      timezone: 'UTC',
+    };
     dir = await mkdtemp(path.join(tmpdir(), 'buddi-finance-'));
   }, 60_000);
 

@@ -84,7 +84,7 @@ export const setBalance: ToolDefinition<z.infer<typeof setBalanceInput>, unknown
   tier: 'auto',
   input: setBalanceInput,
   async execute(input, ctx) {
-    const asOf = input.asOf ?? today(ctx.now);
+    const asOf = input.asOf ?? today(ctx);
     const existing = await findAccount(ctx.db, input.account);
     const account =
       existing ??

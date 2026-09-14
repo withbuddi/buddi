@@ -88,7 +88,9 @@ export function createMissionExecutor(
   return async function execute(occurrence, mission): Promise<MissionRunResult> {
     // Fails closed with UnknownAgentError: a mission naming an agent this
     // install does not carry is a configuration problem, not a fallback.
-    const agent = catalog.resolve(mission.agentId).definition(deps.now());
+    const agent = catalog
+      .resolve(mission.agentId)
+      .definition(deps.now(), deps.ctx.timezone);
     const conversationId = await createConversation(deps.pool, mission.agentId);
     log(
       `mission ${mission.id}: occurrence ${occurrence.id} -> conversation ${conversationId}`,

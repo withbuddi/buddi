@@ -20,6 +20,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentDefinition } from '../agent.js';
 import type { ProviderRef } from '../provider.js';
+import { localDateString, timezoneFromEnv } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
 import { providerFromEnv } from './provider-from-env.js';
 import {
@@ -109,8 +110,12 @@ export interface CatalogAgent extends AgentSummary {
   skills: CatalogAgentSkill[];
   /** The persona plus the generated sections; still carries `{{today}}`. */
   systemPromptTemplate: string;
-  /** The runnable definition for one turn, with `{{today}}` substituted. */
-  definition(now: Date): AgentDefinition;
+  /**
+   * The runnable definition for one turn, with `{{today}}` substituted. The
+   * date is the owner's calendar day, not UTC's: `timezone` defaults to the
+   * catalog's (from `BUDDI_TZ` in the `env` the loader was handed).
+   */
+  definition(now: Date, timezone?: string): AgentDefinition;
 }
 
 export interface AgentCatalog {
@@ -139,9 +144,13 @@ export interface LoadAgentCatalogOptions {
   skillsDir?: string;
 }
 
-/** `YYYY-MM-DD` in UTC — the same rendering the tools use for dates. */
-export function toDateString(now: Date): string {
-  return now.toISOString().slice(0, 10);
+/**
+ * `YYYY-MM-DD` in the owner's zone — the same rendering the tools use for
+ * dates. UTC is never the answer: at 8 PM in New York it is already tomorrow
+ * there, and the agent would greet the owner with the wrong day.
+ */
+export function toDateString(now: Date, timezone: string = timezoneFromEnv()): string {
+  return localDateString(now, timezone);
 }
 
 /** Substitute every `{{today}}` placeholder. Pure; tested. */
@@ -286,6 +295,9 @@ function buildAgent(
   roster: readonly AgentRosterEntry[] = [],
 ): CatalogAgent {
   const tools = resolveToolNames(frontmatter.tools, opts.registry, frontmatter.id);
+  // The owner's zone, read from the env the caller passed — the catalog still
+  // never reaches for `process.env` itself.
+  const catalogTimezone = timezoneFromEnv(opts.env);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
   const provider = providerFromEnv(opts.env, frontmatter.model);
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
@@ -317,11 +329,11 @@ function buildAgent(
       file: skillFile,
     })),
     systemPromptTemplate,
-    definition(now: Date): AgentDefinition {
+    definition(now: Date, timezone: string = catalogTimezone): AgentDefinition {
       return {
         id: frontmatter.id,
         name: frontmatter.name,
-        systemPrompt: injectToday(systemPromptTemplate, toDateString(now)),
+        systemPrompt: injectToday(systemPromptTemplate, localDateString(now, timezone)),
         tools,
         provider,
         maxTurns,

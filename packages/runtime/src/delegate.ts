@@ -50,7 +50,7 @@ export interface DelegateAgent {
   /** How the owner names it: `@credo`. Returned so the caller can quote it. */
   handle: string;
   name: string;
-  definition(now: Date): AgentDefinition;
+  definition(now: Date, timezone?: string): AgentDefinition;
 }
 
 /**
@@ -193,7 +193,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         ctx.conversationId ?? conversationId,
       );
 
-      const definition = target.definition(now());
+      const definition = target.definition(now(), base.timezone ?? ctx.timezone);
       let result;
       try {
         result = await run({

@@ -392,7 +392,7 @@ describe('loadAgentCatalog', () => {
 
   it('builds a runnable definition with {{today}} substituted', () => {
     const agent = load({ 'finance-advisor': FINANCE }).resolve('finance-advisor');
-    const definition = agent.definition(new Date('2026-09-13T23:30:00Z'));
+    const definition = agent.definition(new Date('2026-09-13T23:30:00Z'), 'UTC');
     expect(definition.id).toBe('finance-advisor');
     expect(definition.name).toBe('Finance Advisor');
     expect(definition.maxTurns).toBe(DEFAULT_MAX_TURNS);
@@ -401,11 +401,39 @@ describe('loadAgentCatalog', () => {
     expect(definition.systemPrompt).not.toContain('{{today}}');
     expect(agent.systemPromptTemplate).toContain('{{today}}');
   });
+
+  it('substitutes the owner day, not the UTC day', () => {
+    const agent = load({ 'finance-advisor': FINANCE }).resolve('finance-advisor');
+    // 00:30 UTC on the 14th: still the evening of the 13th in New York, and
+    // already the 14th in Paris. The agent must be told the owner's day.
+    const instant = new Date('2026-09-14T00:30:00Z');
+    expect(agent.definition(instant, 'America/New_York').systemPrompt).toContain(
+      'Today is 2026-09-13.',
+    );
+    expect(agent.definition(instant, 'Europe/Paris').systemPrompt).toContain(
+      'Today is 2026-09-14.',
+    );
+  });
+
+  it('defaults the zone to BUDDI_TZ from the env the catalog was loaded with', () => {
+    const instant = new Date('2026-09-14T00:30:00Z');
+    const paris = load({ 'finance-advisor': FINANCE }, { BUDDI_TZ: 'Europe/Paris' })
+      .resolve('finance-advisor')
+      .definition(instant);
+    expect(paris.systemPrompt).toContain('Today is 2026-09-14.');
+    // No BUDDI_TZ: New York, the same default the scheduler uses.
+    const home = load({ 'finance-advisor': FINANCE })
+      .resolve('finance-advisor')
+      .definition(instant);
+    expect(home.systemPrompt).toContain('Today is 2026-09-13.');
+  });
 });
 
 describe('today injection', () => {
-  it('renders the UTC date', () => {
-    expect(toDateString(new Date('2026-09-13T23:59:59Z'))).toBe('2026-09-13');
+  it('renders the date in the zone it is given', () => {
+    const instant = new Date('2026-09-14T00:30:00Z');
+    expect(toDateString(instant, 'UTC')).toBe('2026-09-14');
+    expect(toDateString(instant, 'America/New_York')).toBe('2026-09-13');
   });
 
   it('replaces every placeholder', () => {

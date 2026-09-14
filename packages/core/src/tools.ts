@@ -13,6 +13,13 @@ export interface ToolContext {
   ownerId: string;
   now: () => Date;
   /**
+   * The owner's timezone (an IANA name). `now()` is an instant; a tool that
+   * needs a *day* — a default date, the start of a projection — must render it
+   * in this zone with `localDateString`, never in UTC, or "today" flips at 8 PM
+   * in New York.
+   */
+  timezone: string;
+  /**
    * Provenance for tools that record something. Optional so every existing
    * caller keeps compiling; the runtime loop fills both in for every tool call
    * it makes, and a tool that needs them must fail closed when they are absent

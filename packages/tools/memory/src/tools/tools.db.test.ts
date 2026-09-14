@@ -31,6 +31,7 @@ suite('memory tools (postgres)', () => {
     db: pool,
     ownerId: 'test',
     now,
+    timezone: 'UTC',
     conversationId: CONVERSATION,
     ...(agentId ? { agentId } : {}),
   });

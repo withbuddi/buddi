@@ -97,7 +97,7 @@ export const setLiability: ToolDefinition<z.infer<typeof setInput>, unknown> = {
       if (!account) throw new Error(`unknown account: ${input.paidFrom}`);
       paidFromId = account.id;
     }
-    const asOf = input.asOf ?? today(ctx.now);
+    const asOf = input.asOf ?? today(ctx);
 
     // Upsert by name, case-insensitively: 'test mastercard' is the same debt as
     // 'Test Mastercard', and the model will not always spell it the same way.

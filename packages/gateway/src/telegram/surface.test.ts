@@ -1547,10 +1547,26 @@ describe('TelegramSurface /files', () => {
         createdAt: new Date('2026-09-12T08:00:00Z'),
       },
     ];
-    expect(filesText(rows)).toBe(
+    expect(filesText(rows, 'UTC')).toBe(
       ['Files in this chat:', '• receipt.jpg — image, 117 KB, 2026-09-12', '  art-9'].join('\n'),
     );
-    expect(filesText([])).toBe(NO_FILES_TEXT);
+    expect(filesText([], 'UTC')).toBe(NO_FILES_TEXT);
+  });
+
+  it('dates a file by the owner day, not the UTC day', () => {
+    const rows = [
+      {
+        artifactId: 'art-10',
+        filename: 'statement.pdf',
+        kind: 'document',
+        mime: 'application/pdf',
+        sizeBytes: 1_000,
+        // 00:30 UTC on the 13th: still the evening of the 12th in New York.
+        createdAt: new Date('2026-09-13T00:30:00Z'),
+      },
+    ];
+    expect(filesText(rows, 'America/New_York')).toContain('2026-09-12');
+    expect(filesText(rows, 'UTC')).toContain('2026-09-13');
   });
 });
 

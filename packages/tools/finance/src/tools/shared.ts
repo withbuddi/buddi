@@ -1,5 +1,6 @@
 /** Shared DB helpers for the finance tools. */
 import { createHash } from 'node:crypto';
+import { localDateString, type ToolContext } from '@buddi/core';
 import type { Pool } from 'pg';
 import { defaultIncludeInCashflow } from '../accounts.js';
 import type { AccountKind } from '../accounts.js';
@@ -31,9 +32,13 @@ export function toDateString(value: unknown): string {
   return String(value).slice(0, 10);
 }
 
-/** Today in UTC, from the injected clock — tools never read the wall clock. */
-export function today(now: () => Date): string {
-  return now().toISOString().slice(0, 10);
+/**
+ * Today in the *owner's* timezone, from the injected clock — tools never read
+ * the wall clock, and never render a day in UTC: from 8 PM in New York UTC is
+ * already tomorrow, and a default date one day out is a wrong ledger row.
+ */
+export function today(ctx: Pick<ToolContext, 'now' | 'timezone'>): string {
+  return localDateString(ctx.now(), ctx.timezone);
 }
 
 export async function loadPreferences(db: Pool): Promise<Preferences> {

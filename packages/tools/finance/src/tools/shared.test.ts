@@ -1,5 +1,29 @@
+import type { ToolContext } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
-import { dedupHash, occurrenceIndexes } from './shared.js';
+import { dedupHash, occurrenceIndexes, today } from './shared.js';
+
+/** Only the two fields `today` reads; the tools call it with the real context. */
+const clock = (iso: string, timezone: string): Pick<ToolContext, 'now' | 'timezone'> => ({
+  now: () => new Date(iso),
+  timezone,
+});
+
+describe('today', () => {
+  it('is the owner\'s calendar day, not the UTC one', () => {
+    // 00:30 UTC on the 14th is 20:30 on the 13th in New York. Before this was
+    // fixed, every default date — a projection start, a balance asOf, a
+    // recorded transaction — jumped a day at 8 PM.
+    expect(today(clock('2026-09-14T00:30:00Z', 'America/New_York'))).toBe('2026-09-13');
+    expect(today(clock('2026-09-14T00:30:00Z', 'UTC'))).toBe('2026-09-14');
+  });
+
+  it('is the projection start date the cash-flow tool uses', () => {
+    // finance.project_cashflow starts the projection at `today(ctx)`; a zone
+    // ahead of UTC starts it on the owner's tomorrow, not on UTC's today.
+    expect(today(clock('2026-09-13T23:30:00Z', 'Europe/Paris'))).toBe('2026-09-14');
+    expect(today(clock('2026-09-13T12:00:00Z', 'America/New_York'))).toBe('2026-09-13');
+  });
+});
 
 describe('dedupHash', () => {
   const zelle = (occurrence?: number): string =>

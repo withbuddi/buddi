@@ -7,6 +7,7 @@ const ctx: ToolContext = {
   db: {} as ToolContext['db'],
   ownerId: 'owner-1',
   now: () => new Date('2026-01-01T00:00:00Z'),
+  timezone: 'UTC',
 };
 
 function manifest(tier: Tier, execute = async (i: { n: number }) => i.n * 2): PluginManifest {

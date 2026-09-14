@@ -142,7 +142,7 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
       anchorDate: toDateString(r.anchor_date),
     }));
 
-    const startDate = today(ctx.now);
+    const startDate = today(ctx);
     const hypotheticals: Hypothetical[] = args.hypotheticals ?? [];
 
     // Pending money is committed money: the charge exists, the bank has just
