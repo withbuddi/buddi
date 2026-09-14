@@ -8,6 +8,7 @@ const mission: Mission = {
   agentId: 'finance-advisor',
   prompt: 'recap',
   enabled: true,
+  alwaysDeliver: true,
   createdAt: new Date('2026-09-01T00:00:00Z'),
 };
 

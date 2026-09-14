@@ -6,7 +6,17 @@
  * `SCHEDULED_RUN_SUFFIX`, not here. The two are kept apart on purpose: changing
  * how Telegram renders must not rewrite what the owner asked for weekly.
  */
-import { DEFAULT_TIMEZONE, timezoneFromEnv, type UpsertMissionInput } from '@buddi/core';
+import {
+  consumeDigestItems,
+  DEFAULT_TIMEZONE,
+  pendingDigestItems,
+  renderDigest,
+  timezoneFromEnv,
+  type Mission,
+  type UpsertMissionInput,
+} from '@buddi/core';
+import type { Pool } from 'pg';
+import type { PrepareRun } from './execute.js';
 
 // The owner's timezone lives in core (`packages/core/src/time.ts`) now that the
 // tools need it too; re-exported here so every existing caller keeps its import.
@@ -31,4 +41,34 @@ export const FRIDAY_RECAP_MISSION: UpsertMissionInput = {
   agentId: 'finance-advisor',
   prompt: FRIDAY_RECAP_PROMPT,
   enabled: true,
+  // The one mission that speaks whether or not it decided to: the owner asked
+  // for a recap every Friday, not for a recap when something is wrong.
+  alwaysDeliver: true,
 };
+
+/**
+ * The weekly digest, appended to the recap prompt.
+ *
+ * `info` findings never interrupt: the watchers put them here during the week
+ * and the recap picks them up. They are consumed only once the recap has
+ * actually been delivered — the commit hook runs after delivery, so a failed
+ * send does not silently eat a week of observations.
+ */
+export function createDigestPrepare(
+  pool: Pool,
+  opts: { missionId?: string; now: () => Date },
+): PrepareRun {
+  const missionId = opts.missionId ?? FRIDAY_RECAP_ID;
+  return async function prepare(mission: Mission) {
+    if (mission.id !== missionId) return null;
+    const items = await pendingDigestItems(pool);
+    if (items.length === 0) return null;
+    const ids = items.map((item) => item.id);
+    return {
+      appendix: renderDigest(items),
+      commit: async () => {
+        await consumeDigestItems(pool, ids, opts.now());
+      },
+    };
+  };
+}

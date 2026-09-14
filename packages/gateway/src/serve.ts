@@ -22,12 +22,15 @@ import {
   nextAfter,
   releaseStaleClaims,
   runScheduler,
+  runSentinels,
+  collectSentinels,
   type Mission,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { createWiring, loadEnv } from './bootstrap.js';
 import { insertOccurrence } from './missions-cli.js';
 import { createMissionExecutor, type MissionExecutorDeps } from './missions/execute.js';
+import { createDigestPrepare } from './missions/recap.js';
 import { notifyOwner } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 import type { MissionOutcome, RunMission } from './telegram/surface.js';
@@ -76,7 +79,10 @@ export function formatMissionLine(line: MissionLine): string {
 }
 
 /** What `createInlineMissionRunner` needs: an executor's deps minus delivery. */
-export type InlineMissionDeps = Omit<MissionExecutorDeps, 'deliver' | 'onToolCall' | 'requireDelivery'>;
+export type InlineMissionDeps = Omit<
+  MissionExecutorDeps,
+  'deliver' | 'onToolCall' | 'requireDelivery' | 'notifyPolicy' | 'prepare'
+>;
 
 /**
  * `/recap` in Telegram: run a mission *now*, through the very executor the
@@ -103,6 +109,10 @@ export function createInlineMissionRunner(base: InlineMissionDeps): RunMission {
     const execute = createMissionExecutor({
       ...base,
       deliver: async () => chatId,
+      // The owner asked for this one, in a chat that is open: the answer belongs
+      // in the bubble whatever the run decided about notifying.
+      notifyPolicy: false,
+      prepare: createDigestPrepare(base.pool, { now: base.now }),
       ...(onToolCall ? { onToolCall } : {}),
     });
 
@@ -154,7 +164,27 @@ export async function main(): Promise<void> {
     const execute = createMissionExecutor({
       ...missionDeps,
       deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+      prepare: createDigestPrepare(pool, { now }),
     });
+
+    // The watchers. They run inside the scheduler tick, before materialization,
+    // so an urgent finding enqueued now is claimed in the same pass.
+    const sentinels = collectSentinels(wiring.registry.manifests());
+    const sentinelTick = async (): Promise<void> => {
+      const outcomes = await runSentinels(pool, wiring.registry.manifests(), now(), wiring.timezone);
+      for (const outcome of outcomes) {
+        if (!outcome.ran) continue;
+        if (outcome.error) {
+          console.error(`sentinel ${outcome.sentinelId}: ${outcome.error}`);
+          continue;
+        }
+        if (outcome.fired > 0 || outcome.resolved > 0) {
+          console.log(
+            `sentinel ${outcome.sentinelId}: ${outcome.findings} finding(s), ${outcome.fired} fired, ${outcome.resolved} resolved`,
+          );
+        }
+      }
+    };
 
     const sweepStaleClaims = async (): Promise<void> => {
       const released = await releaseStaleClaims(pool, new Date(now().getTime() - STALE_CLAIM_MS));
@@ -172,10 +202,13 @@ export async function main(): Promise<void> {
       pool,
       now,
       tickMs: TICK_MS,
+      sentinelTick,
       execute: async (occurrence, mission) => {
         const result = await execute(occurrence, mission);
         console.log(
-          `mission ${mission.id} delivered (${result.text.length} chars) → conversation ${result.conversationId}`,
+          result.delivered
+            ? `mission ${mission.id} delivered (${result.text.length} chars) → conversation ${result.conversationId}`
+            : `mission ${mission.id} stayed silent (${result.reason ?? result.decision}) → conversation ${result.conversationId}`,
         );
         return { conversationId: result.conversationId };
       },
@@ -190,6 +223,13 @@ export async function main(): Promise<void> {
     console.log(`  paired owner ids: ${describePaired(telegram.paired)}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
+    console.log(
+      sentinels.length === 0
+        ? '  sentinels: none installed'
+        : `  sentinels (${sentinels.length}): ${sentinels
+            .map((s) => `${s.id} every ${s.every}s`)
+            .join(', ')}`,
+    );
     console.log(
       missions.length === 0
         ? '  missions: none registered (pnpm missions add-friday-recap)'

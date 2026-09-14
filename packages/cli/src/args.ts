@@ -112,7 +112,7 @@ export const USAGE = `buddi — your personal agents, one command
   buddi telegram devices     every paired device
   buddi telegram unpair <id>
 
-  buddi missions list|add-friday-recap|run-now <id>|enable <id>|disable <id>
+  buddi missions list|add-defaults|add-friday-recap|run-now <id>|enable <id>|disable <id>
   buddi migrate              apply core + plugin migrations
 
 In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;

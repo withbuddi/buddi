@@ -19,6 +19,15 @@ export type RunSchedulerOptions = {
    * from the layer above.
    */
   execute: (occurrence: Occurrence, mission: Mission) => Promise<ExecuteResult>;
+  /**
+   * Run the deterministic watchers, before anything is materialized.
+   *
+   * Injected rather than built here: the sentinels come from installed plugin
+   * manifests, which core does not import. A sentinel that fails is the
+   * sentinel runner's problem — this hook never takes the scheduler down with
+   * it (errors go to `onError` and the pass continues).
+   */
+  sentinelTick?: () => Promise<void>;
   /** Max occurrences drained per pass, so one pass cannot starve the loop. */
   maxPerTick?: number;
   /** Start the background loop immediately (default true). Tests drive `tick()`. */
@@ -54,6 +63,14 @@ export function runScheduler(opts: RunSchedulerOptions): SchedulerHandle {
   let wake: (() => void) | null = null;
 
   const tick = async (): Promise<{ materialized: number; executed: number }> => {
+    if (opts.sentinelTick) {
+      try {
+        await opts.sentinelTick();
+      } catch (err) {
+        opts.onError?.(err);
+      }
+    }
+
     const materialized = await materializeOccurrences(pool, now());
     for (const occ of materialized) {
       await appendEvent(pool, 'occurrence.materialized', {

@@ -25,6 +25,14 @@ export type Mission = {
   agentId: string;
   prompt: string;
   enabled: boolean;
+  /**
+   * Deliver this mission's answer whether or not the agent asked for it.
+   *
+   * The default is false: a scheduled run speaks only when it calls
+   * `mission.report`, so a watcher that found nothing stays quiet. The weekly
+   * recap is the deliberate exception — the owner asked for it every Friday.
+   */
+  alwaysDeliver: boolean;
   createdAt: Date;
 };
 
@@ -50,6 +58,11 @@ export type Occurrence = {
   finishedAt: Date | null;
   runConversationId: string | null;
   error: string | null;
+  /**
+   * What this run carries beyond its instant — the sentinel finding that
+   * enqueued it. Null for a cron occurrence.
+   */
+  payload: unknown;
 };
 
 export type MissionRow = {
@@ -58,6 +71,7 @@ export type MissionRow = {
   agent_id: string;
   prompt: string;
   enabled: boolean;
+  always_deliver: boolean;
   created_at: Date;
 };
 
@@ -83,6 +97,7 @@ export type OccurrenceRow = {
   finished_at: Date | null;
   run_conversation_id: string | null;
   error: string | null;
+  payload: unknown;
 };
 
 export function toMission(row: MissionRow): Mission {
@@ -92,6 +107,7 @@ export function toMission(row: MissionRow): Mission {
     agentId: row.agent_id,
     prompt: row.prompt,
     enabled: row.enabled,
+    alwaysDeliver: row.always_deliver ?? false,
     createdAt: row.created_at,
   };
 }
@@ -121,8 +137,9 @@ export function toOccurrence(row: OccurrenceRow): Occurrence {
     finishedAt: row.finished_at,
     runConversationId: row.run_conversation_id,
     error: row.error,
+    payload: row.payload ?? null,
   };
 }
 
 export const OCCURRENCE_COLUMNS =
-  'id, mission_id, schedule_revision, scheduled_at, state, claimed_at, finished_at, run_conversation_id, error';
+  'id, mission_id, schedule_revision, scheduled_at, state, claimed_at, finished_at, run_conversation_id, error, payload';
