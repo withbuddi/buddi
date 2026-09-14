@@ -11,12 +11,17 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "node scripts/migrate.mjs",
-    "chat": "node packages/gateway/dist/cli.js chat",
-    "ask": "node packages/gateway/dist/cli.js ask",
+    "chat": "node packages/cli/dist/main.js chat",
+    "ask": "node packages/cli/dist/main.js ask",
     "telegram": "node packages/gateway/dist/telegram/main.js",
-    "serve": "node packages/gateway/dist/serve.js",
-    "missions": "node packages/gateway/dist/missions-cli.js",
-    "agents": "node packages/gateway/dist/cli.js agents"
+    "serve": "node packages/cli/dist/main.js serve",
+    "missions": "node packages/cli/dist/main.js missions",
+    "agents": "node packages/cli/dist/main.js agents",
+    "link": "pnpm add --global ./packages/cli",
+    "unlink": "pnpm remove --global @buddi/cli",
+    "buddi": "node packages/cli/dist/main.js",
+    "doctor": "node packages/cli/dist/main.js doctor",
+    "init": "node packages/cli/dist/main.js init"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
