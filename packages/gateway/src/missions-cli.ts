@@ -203,10 +203,10 @@ function invokedDirectly(): boolean {
   }
 }
 
-export async function main(): Promise<void> {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let args: ParsedMissionsArgs;
   try {
-    args = parseMissionsArgs(process.argv.slice(2));
+    args = parseMissionsArgs(argv);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

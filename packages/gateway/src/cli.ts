@@ -101,10 +101,15 @@ async function lastConversation(pool: Pool, agentId: string): Promise<string | u
   return rows[0]?.id ? String(rows[0].id) : undefined;
 }
 
-async function main(): Promise<void> {
+/**
+ * The chat surface's entry point. `argv` is the command and its options —
+ * `buddi` (@buddi/cli) passes the slice it owns, so the single global binary
+ * calls this function instead of re-implementing it.
+ */
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let args: ParsedArgs;
   try {
-    args = parseArgs(process.argv.slice(2));
+    args = parseArgs(argv);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);

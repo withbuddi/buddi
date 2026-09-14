@@ -7,28 +7,55 @@ cash-flow projection — the model explains, it never computes.
 
 Design and rationale: [ARCHITECTURE.md](./ARCHITECTURE.md).
 
-## Prerequisites
+## Install
 
-- Node 26
+buddi is one command. Install it once, run it from anywhere.
+
+```sh
+git clone <this repo> buddi && cd buddi
+pnpm install && pnpm -r build
+pnpm run link               # puts the global `buddi` on your PATH
+buddi init                  # credentials, timezone, database, migrations
+```
+
+`scripts/install.sh` does exactly those four steps on a fresh machine, after
+checking for git, node, pnpm and docker — it names what is missing and where to
+get it, and installs no system software itself.
+
+```sh
+./scripts/install.sh
+```
+
+`pnpm run link`, not `pnpm link` — the latter is pnpm's own builtin and means
+something else. It is `pnpm add --global ./packages/cli`: a global install that
+points straight at this checkout, so a rebuild is picked up with no relinking.
+`pnpm run unlink` removes it.
+
+If `buddi` is not found afterwards, pnpm's global bin directory is not on your
+PATH: run `pnpm setup`, open a new shell, and `pnpm run link` again. Everything
+also works unlinked, as `pnpm buddi …` from the repo.
+
+### Prerequisites
+
+- Node 22 or newer (26 is what it is developed on)
 - pnpm 11
 - Docker (for the Postgres container)
 
-## Setup
+### What `buddi init` does
 
-```sh
-cp .env.example .env
-claude setup-token          # paste the sk-ant-oat01-… token into CLAUDE_CODE_OAUTH_TOKEN
-                            # (or set ANTHROPIC_API_KEY instead — either works)
-pnpm install
-pnpm db:up                  # docker compose: postgres
-pnpm -r build
-pnpm db:migrate             # core schema + the finance plugin's own schema
-```
+It is an interactive wizard, and it is idempotent — a second run asks only about
+what is still missing. It copies `.env.example` to `.env`, asks for a model
+credential (`claude setup-token` for a Claude subscription, or an
+`ANTHROPIC_API_KEY`), an optional Telegram bot token which it validates against
+`getMe` and names the bot back to you, your timezone (defaulting to this
+machine's) and what the agents should call you. Then it starts postgres, builds
+and migrates. Secrets go into `.env` (mode 600) and are never printed back.
 
-Credentials are never read ambiently: an agent names the *environment variable* it wants,
-and resolution fails closed with a typed problem if it is missing or empty. If
-`CLAUDE_CODE_OAUTH_TOKEN` is set the agent uses the subscription token; otherwise it uses
-`ANTHROPIC_API_KEY`. Pin a different model with `BUDDI_MODEL` (default `claude-sonnet-5`).
+Credentials are never read ambiently: an agent names the *environment variable*
+it wants, and resolution fails closed with a typed problem if it is missing or
+empty. If `CLAUDE_CODE_OAUTH_TOKEN` is set the agent uses the subscription
+token; otherwise it uses `ANTHROPIC_API_KEY`. Pin a different model with
+`BUDDI_MODEL` (default `claude-sonnet-5`).
 
 **Port note.** The container publishes `${BUDDI_DB_PORT:-5432}`. If 5432 is already taken on
 your machine, set `BUDDI_DB_PORT` **and** the port in `DATABASE_URL` together, e.g.:
@@ -38,14 +65,28 @@ BUDDI_DB_PORT=55433
 DATABASE_URL=postgres://buddi:buddi@localhost:55433/buddi
 ```
 
+### Is it working?
+
+```sh
+buddi doctor
+```
+
+One table: node/pnpm/docker versions, postgres reachability, whether migrations
+are up to date, whether the model credential is actually accepted, whether the
+bot token is valid, how many devices are paired, whether the background service
+is running, and which timezone is in force. It exits 1 if anything critical is
+broken, so it is usable from a script.
+
 ## Usage
 
 ```sh
-pnpm chat                      # interactive REPL, new conversation
-pnpm chat --resume <id>        # continue a conversation
-pnpm chat --last               # continue the most recent one
-pnpm ask "can I afford a 600 EUR bike on the 20th?"
-pnpm ask "..." --resume <id>   # one turn against an existing conversation
+buddi chat                      # interactive REPL, new conversation
+buddi chat --agent ledger       # ... with a specific agent, by @handle or id
+buddi chat --resume <id>        # continue a conversation
+buddi chat --last               # continue the most recent one
+buddi ask "can I afford a 600 EUR bike on the 20th?"
+buddi ask "..." --resume <id>   # one turn against an existing conversation
+buddi agents                    # every agent installed under agents/
 ```
 
 In the REPL: `/tools` lists the registered tools, `/id` prints the conversation id,
@@ -69,6 +110,46 @@ the agent to import it, giving the path and the account:
 It detects the date/amount/description columns, handles `;`/`,` separators and comma
 decimals, and skips rows already imported.
 
+## Always on
+
+`buddi serve` runs both halves of the installation in your shell: the Telegram
+surface (inbound) and the mission scheduler (outbound). To have it run in the
+background and come back at login:
+
+```sh
+buddi service install     # macOS: a launchd LaunchAgent, KeepAlive + RunAtLoad
+buddi service status      # installed? running? which pid?
+buddi service logs        # follow data/logs/serve.log and .err
+buddi service restart
+buddi service uninstall   # stops it and removes the unit; the logs stay
+```
+
+`install` refuses if `.env` is missing what `serve` needs, and warns if a
+`serve` is already running — two pollers fight over the same bot. On Linux the
+same commands write a **systemd user unit** instead; that implementation is
+best-effort and untested.
+
+Then pair a device:
+
+```sh
+buddi telegram pair       # a QR code and the same deep link as text
+buddi telegram devices
+buddi telegram unpair <id>
+```
+
+The pairing code is a bearer credential for the ten minutes it lives: it is
+printed once, and `buddi serve` must be running to receive it.
+
+## Missions
+
+```sh
+buddi missions list
+buddi missions add-friday-recap
+buddi missions run-now <id> [--inline]
+buddi missions enable <id> | disable <id>
+buddi migrate                   # core + every installed plugin's schema
+```
+
 ## Development
 
 ```sh
@@ -77,7 +158,13 @@ pnpm typecheck
 pnpm test        # includes the check that core imports no tool package
 ```
 
+Every `pnpm` script still works from the repo (`pnpm chat`, `pnpm serve`,
+`pnpm missions …`) — they call the same binary. `pnpm run link` / `pnpm run unlink`
+attach and detach the global `buddi`.
+
 Packages: `core` (domain, db, event log, tool registry, provider port), `runtime` (agent
-loop + Anthropic adapter), `gateway` (the CLI surface), `tools/finance` (the finance
-plugin, which owns the `finance` schema). Core never imports a tool; delete
-`packages/tools/finance` and the system still boots.
+loop + Anthropic adapter), `gateway` (the surfaces: terminal, Telegram, scheduler),
+`cli` (the single `buddi` binary — a dispatcher over the gateway's own entry points,
+plus `init`, `doctor` and `service`), `tools/finance` (the finance plugin, which owns the
+`finance` schema). Core never imports a tool; delete `packages/tools/finance` and the
+system still boots.

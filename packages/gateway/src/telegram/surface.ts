@@ -17,11 +17,16 @@
  */
 import {
   DEFAULT_TIMEZONE,
+  consumePairingCode,
   getActiveAgent,
+  getOwnerDisplayName,
+  listSurfaceIdentitiesDetailed,
+  localDateString,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
   setActiveAgent,
   setSurfaceCursor,
+  touchSurfaceIdentity,
   type Queryable,
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
@@ -133,6 +138,7 @@ export const HELP = [
   '/status — where you stand right now (finance advisor)',
   '/recap — run the weekly recap now (finance advisor)',
   '/files — the last files you sent me',
+  '/devices — the devices paired to this installation',
   '/new — start a fresh conversation with the active agent',
   '/id — your numeric user id and this chat id',
   '/help — this message',
@@ -163,6 +169,87 @@ export function unknownHandleText(handle: string): string {
 /** `@ledger` and nothing else: there is no question to route. */
 export function emptyMentionText(handle: string): string {
   return `What would you like to ask @${handle}?`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Pairing by one-time code
+ * ------------------------------------------------------------------ */
+
+/*
+ * `/start <code>` from an unpaired user is the *only* message this surface
+ * answers without a paired identity behind it, and the exception is narrow on
+ * purpose:
+ *
+ *  - Only a good code is answered. A wrong, spent or expired one gets silence,
+ *    exactly like any other stranger — a reply would confirm the bot exists and
+ *    turn the code space into something worth probing.
+ *  - Five attempts per user id per hour. The code space is 32^8, so five tries
+ *    an hour is not a brute force; it is a typo budget.
+ *  - The code is claimed in core, atomically. The surface never reads a code and
+ *    then decides.
+ */
+
+/** Attempts one user id may make in `PAIRING_WINDOW_MS`. A typo budget. */
+export const PAIRING_MAX_ATTEMPTS = 5;
+
+/** The rate-limit window for pairing attempts: one hour. */
+export const PAIRING_WINDOW_MS = 60 * 60 * 1000;
+
+/** How often a device's `last_seen_at` is written, at most: once per 5 minutes. */
+export const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * The code in `/start ABCD2345`, if there is one. `/start` alone is the plain
+ * welcome and returns nothing. Telegram's `/start@thebot CODE` form is accepted
+ * because Telegram itself sends it.
+ */
+export function parseStartCode(text: string): string | undefined {
+  const m = /^\/start(?:@\S+)?[ \t]+(\S+)[ \t]*$/i.exec(text.trim());
+  return m ? (m[1] as string) : undefined;
+}
+
+/** The one sentence a successful pairing answers with. */
+export function pairedText(ownerDisplayName: string): string {
+  return `Paired. You're talking to buddi as ${ownerDisplayName}. Send /help.`;
+}
+
+/** Shown when the owner row carries no name of its own. */
+export const OWNER_FALLBACK_NAME = 'the owner';
+
+/** Nothing is paired at all — only reachable when the row was just deleted. */
+export const NO_DEVICES_TEXT = 'No devices are paired.';
+
+/** What a device looks like to `/devices`. Structural: core's row satisfies it. */
+export interface DeviceLine {
+  id: string;
+  surface: string;
+  externalUserId: string;
+  label: string | null;
+  pairedAt: Date | null;
+  lastSeenAt: Date | null;
+}
+
+/**
+ * `/devices` — every paired device, with the id needed to revoke one.
+ *
+ * Unpairing is deliberately *not* a chat command: a stolen phone is already in
+ * a paired chat, and letting that chat unpair the others would hand it the
+ * installation. Revocation stays on the machine that hosts buddi.
+ */
+export function devicesText(devices: readonly DeviceLine[], timezone: string): string {
+  if (devices.length === 0) return NO_DEVICES_TEXT;
+  const lines = devices.map((d) => {
+    const name = d.label && d.label.trim() !== '' ? d.label : d.externalUserId;
+    const paired = d.pairedAt ? localDateString(d.pairedAt, timezone) : 'unknown';
+    const seen = d.lastSeenAt ? localDateString(d.lastSeenAt, timezone) : 'never';
+    return `• ${name} (${d.surface}) — paired ${paired}, last seen ${seen}\n  ${d.id}`;
+  });
+  return [
+    'Paired devices:',
+    ...lines,
+    '',
+    'To unpair one, run this where buddi is installed: buddi devices unpair <id>',
+  ].join('\n');
 }
 
 /* ------------------------------------------------------------------ *
@@ -562,6 +649,10 @@ export class TelegramSurface {
   readonly #log: (line: string) => void;
   /** One promise chain per chat: runs never interleave within a chat. */
   readonly #queues = new Map<string, Promise<void>>();
+  /** Pairing attempt timestamps per user id, for the hourly limit. */
+  readonly #pairingAttempts = new Map<string, number[]>();
+  /** When each identity's `last_seen_at` was last written. */
+  readonly #lastTouch = new Map<string, number>();
   #offset: number | undefined;
   #running = false;
   #abort: AbortController | undefined;
@@ -661,9 +752,27 @@ export class TelegramSurface {
       externalChatId: chatId,
     });
     if (!resolution.ok) {
+      // The one exception to silence: an unpaired user presenting a code. A
+      // `chat-mismatch` is never offered this path — that user id is already
+      // paired somewhere else, and a code would not be the honest fix.
+      const code =
+        resolution.reason === 'unpaired' ? parseStartCode(message.text ?? '') : undefined;
+      if (code !== undefined) {
+        const label = message.from?.username
+          ? `@${message.from.username}`
+          : (message.from?.first_name ?? null);
+        this.enqueue(chatId, () =>
+          this.handlePairing(update, userId, chatId, code, label),
+        );
+        return;
+      }
       await this.#reject(update, userId, chatId, resolution.reason);
       return;
     }
+
+    // "This device spoke." Written after the message is accepted, throttled,
+    // and never allowed to cost the owner an answer.
+    await this.#touch(userId);
 
     // A file takes the same authorized path a sentence does — it is queued on
     // this chat's chain, so a document and the message after it cannot race.
@@ -693,6 +802,7 @@ export class TelegramSurface {
     userId: string,
     chatId: string,
     reason: string,
+    detail?: Record<string, unknown>,
   ): Promise<void> {
     this.#log(
       `telegram: rejected update ${update.update_id} (${reason}) from user ${userId} in chat ${chatId}`,
@@ -703,7 +813,91 @@ export class TelegramSurface {
       updateId: String(update.update_id),
       externalUserId: userId,
       externalChatId: chatId,
+      ...(detail ?? {}),
     });
+  }
+
+  #now(): number {
+    return (this.#opts.now ?? (() => Date.now()))();
+  }
+
+  /** Five attempts per user id per hour, counted in memory. */
+  #allowPairingAttempt(userId: string): boolean {
+    const at = this.#now();
+    const recent = (this.#pairingAttempts.get(userId) ?? []).filter(
+      (t) => at - t < PAIRING_WINDOW_MS,
+    );
+    if (recent.length >= PAIRING_MAX_ATTEMPTS) {
+      this.#pairingAttempts.set(userId, recent);
+      return false;
+    }
+    recent.push(at);
+    this.#pairingAttempts.set(userId, recent);
+    return true;
+  }
+
+  /**
+   * `/start <code>` from an unpaired user. Success is the only outcome that
+   * says anything at all; every failure is logged and answered with silence.
+   */
+  async handlePairing(
+    update: TelegramUpdate,
+    userId: string,
+    chatId: string,
+    code: string,
+    label: string | null,
+  ): Promise<void> {
+    if (!this.#allowPairingAttempt(userId)) {
+      await this.#reject(update, userId, chatId, 'pairing-rate-limited');
+      return;
+    }
+
+    const result = await consumePairingCode(this.#opts.pool, {
+      surface: SURFACE,
+      code,
+      externalUserId: userId,
+      externalChatId: chatId,
+      label,
+    });
+    if (!result.ok) {
+      // One event reason for every bad code, with the detail in the payload:
+      // the *sender* is told nothing either way.
+      await this.#reject(update, userId, chatId, 'bad-pairing-code', {
+        pairing: result.reason,
+      });
+      return;
+    }
+
+    this.#log(`telegram: paired user ${userId} in chat ${chatId} by code`);
+    this.#lastTouch.set(userId, this.#now());
+    const ownerName =
+      (await getOwnerDisplayName(this.#opts.pool).catch(() => undefined)) ??
+      OWNER_FALLBACK_NAME;
+    await this.#opts.api.sendMessage(chatId, pairedText(ownerName));
+
+    // The menu is scoped per chat and this chat had none: publish it now, or
+    // the freshly paired device sees a bot with no commands.
+    if (this.#opts.setChatMenu) {
+      try {
+        const agent = await this.activeAgent(chatId);
+        await this.#opts.setChatMenu(chatId, agent);
+      } catch (err) {
+        this.#log(`telegram: menu for newly paired chat ${chatId} failed: ${message(err)}`);
+      }
+    }
+  }
+
+  /** `last_seen_at`, at most once per identity per `TOUCH_INTERVAL_MS`. */
+  async #touch(userId: string): Promise<void> {
+    const at = this.#now();
+    const last = this.#lastTouch.get(userId);
+    if (last !== undefined && at - last < TOUCH_INTERVAL_MS) return;
+    this.#lastTouch.set(userId, at);
+    try {
+      await touchSurfaceIdentity(this.#opts.pool, SURFACE, userId);
+    } catch (err) {
+      this.#log(`telegram: last-seen for user ${userId} failed: ${message(err)}`);
+    }
   }
 
   /** Serialize per chat. */
@@ -804,6 +998,14 @@ export class TelegramSurface {
     }
     if (command === '/recap') {
       await this.handleRecap(chatId);
+      return;
+    }
+    if (command === '/devices') {
+      const devices = await listSurfaceIdentitiesDetailed(this.#opts.pool);
+      await this.#opts.api.sendMessage(
+        chatId,
+        devicesText(devices, this.#opts.timezone ?? DEFAULT_TIMEZONE),
+      );
       return;
     }
     if (command === '/files') {

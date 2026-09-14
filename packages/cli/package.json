@@ -1,5 +1,5 @@
 {
-  "name": "@buddi/gateway",
+  "name": "@buddi/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,7 @@
     }
   },
   "bin": {
-    "buddi-telegram": "./dist/telegram/main.js",
-    "buddi-serve": "./dist/serve.js",
-    "buddi-missions": "./dist/missions-cli.js"
+    "buddi": "./dist/main.js"
   },
   "files": [
     "dist"
@@ -26,16 +24,15 @@
   },
   "dependencies": {
     "@buddi/core": "workspace:*",
-    "@buddi/runtime": "workspace:*",
-    "@buddi/tool-artifacts": "workspace:*",
-    "@buddi/tool-finance": "workspace:*",
-    "@buddi/tool-memory": "workspace:*",
+    "@buddi/gateway": "workspace:*",
     "dotenv": "^16.4.7",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
+    "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }

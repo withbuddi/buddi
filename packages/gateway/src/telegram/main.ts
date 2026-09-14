@@ -44,6 +44,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
   { command: 'files', description: 'The last files you sent me' },
+  { command: 'devices', description: 'Devices paired to this installation' },
   { command: 'new', description: 'Start a fresh conversation' },
   { command: 'id', description: 'Show my Telegram ids' },
   { command: 'help', description: 'What buddi can do' },
@@ -159,10 +160,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   const ownerUserId = numericId(env.TELEGRAM_OWNER_USER_ID, 'TELEGRAM_OWNER_USER_ID');
   const ownerChatId = numericId(env.TELEGRAM_OWNER_CHAT_ID, 'TELEGRAM_OWNER_CHAT_ID');
   if (ownerUserId) {
+    // The startup allowlist. `paired_via` is recorded, and core keeps the
+    // first value, so a device that paired by code is never relabelled 'env'.
     await pairSurfaceIdentity(pool, {
       surface: SURFACE,
       externalUserId: ownerUserId,
       externalChatId: ownerChatId ?? ownerUserId,
+      pairedVia: 'env',
     });
   }
 

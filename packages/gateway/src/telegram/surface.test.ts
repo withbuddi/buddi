@@ -7,6 +7,8 @@ import { UnknownAgentError, type Queryable } from '@buddi/core';
 import { TelegramApi, splitMessage, type FetchLike, type TelegramUpdate } from './api.js';
 import {
   HELP,
+  NO_DEVICES_TEXT,
+  PAIRING_MAX_ATTEMPTS,
   PLACEHOLDER_TEXT,
   UNKNOWN_AGENT_TEXT,
   agentsText,
@@ -21,6 +23,9 @@ import {
   RECAP_UNAVAILABLE_TEXT,
   SURFACE,
   TelegramSurface,
+  devicesText,
+  pairedText,
+  parseStartCode,
   progressLine,
   readingText,
   toPlainText,
@@ -42,11 +47,34 @@ import {
 } from './attachments.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
 import { OwnerNotPairedError, notifyOwner, ownerChatId } from './notify.js';
+import {
+  createPairingCode,
+  createPairingCodeFor,
+  listDevices,
+  pairingDeepLink,
+  unpairDevice,
+} from './pairing.js';
 
 /* ---------------- in-memory core tables ---------------- */
 
 class FakeDb implements Queryable {
-  identities: { owner_id: string; surface: string; external_user_id: string; external_chat_id: string | null }[] = [];
+  identities: {
+    id?: string;
+    owner_id: string;
+    surface: string;
+    external_user_id: string;
+    external_chat_id: string | null;
+    label?: string | null;
+    paired_at?: Date;
+    last_seen_at?: Date | null;
+    paired_via?: string | null;
+  }[] = [];
+  /** core.pairing_codes, keyed by code. */
+  pairingCodes = new Map<
+    string,
+    { surface: string; expiresAt: number; usedAt: number | null; usedBy: string | null }
+  >();
+  ownerDisplayName: string | null = 'Amen';
   updates: { surface: string; update_id: string }[] = [];
   cursors = new Map<string, string>();
   conversations: { id: string; agent_id: string }[] = [];
@@ -72,13 +100,103 @@ class FakeDb implements Queryable {
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
 
+    // The detailed listing must be matched before the narrow one: it starts
+    // with the same column list.
+    if (text.startsWith('select id, owner_id, surface, external_user_id, external_chat_id, label')) {
+      return {
+        rows: this.identities.map((r, n) => ({
+          id: r.id ?? `id-${n}`,
+          ...r,
+          label: r.label ?? null,
+          paired_at: r.paired_at ?? new Date(this.clock()),
+          last_seen_at: r.last_seen_at ?? null,
+          paired_via: r.paired_via ?? null,
+        })),
+      };
+    }
     if (text.startsWith('select id, owner_id, surface, external_user_id, external_chat_id')) {
       const rows = this.identities.filter((i) =>
         params.length === 2
           ? i.surface === params[0] && i.external_user_id === params[1]
           : i.surface === params[0],
       );
-      return { rows: rows.map((r, n) => ({ id: `id-${n}`, ...r })) };
+      return { rows: rows.map((r, n) => ({ ...r, id: r.id ?? `id-${n}` })) };
+    }
+    if (text.startsWith('insert into core.owner')) return { rows: [{ id: 'owner' }] };
+    if (text.startsWith('select display_name from core.owner')) {
+      return { rows: [{ display_name: this.ownerDisplayName }] };
+    }
+    if (text.startsWith('insert into core.surface_identities')) {
+      const [, surface, userId, chatId, label, via] = params;
+      const existing = this.identities.find(
+        (i) => i.surface === surface && i.external_user_id === userId,
+      );
+      if (existing) {
+        if (chatId) existing.external_chat_id = chatId;
+        if (label) existing.label = label;
+        existing.paired_via = existing.paired_via ?? via ?? null;
+        return { rows: [{ ...existing, id: existing.id }] };
+      }
+      const row = {
+        id: `00000000-0000-4000-8000-${String(this.identities.length).padStart(12, '0')}`,
+        owner_id: params[0],
+        surface,
+        external_user_id: userId,
+        external_chat_id: chatId ?? null,
+        label: label ?? null,
+        paired_at: new Date(this.clock()),
+        last_seen_at: null,
+        paired_via: via ?? null,
+      };
+      this.identities.push(row);
+      return { rows: [row] };
+    }
+    if (text.startsWith('update core.surface_identities set last_seen_at')) {
+      const row = this.identities.find(
+        (i) => i.surface === params[0] && i.external_user_id === params[1],
+      );
+      if (row) row.last_seen_at = new Date(this.clock());
+      return { rows: [] };
+    }
+    if (text.startsWith('delete from core.surface_identities')) {
+      const before = this.identities.length;
+      this.identities = this.identities.filter((i) => i.id !== params[0]);
+      return { rows: before === this.identities.length ? [] : [{ id: params[0] }] };
+    }
+    if (text.startsWith('insert into core.pairing_codes')) {
+      const [code, surface, ttl] = params;
+      if (this.pairingCodes.has(code)) return { rows: [] };
+      const expiresAt = this.clock() + Number(ttl) * 60_000;
+      this.pairingCodes.set(code, { surface, expiresAt, usedAt: null, usedBy: null });
+      return { rows: [{ code, expires_at: new Date(expiresAt) }] };
+    }
+    // The atomic claim: one statement, and only an unused, unexpired code
+    // belonging to this surface comes back.
+    if (text.startsWith('update core.pairing_codes set used_at')) {
+      const [code, surface] = params;
+      const row = this.pairingCodes.get(code);
+      if (!row || row.surface !== surface || row.usedAt !== null || row.expiresAt <= this.clock()) {
+        return { rows: [] };
+      }
+      row.usedAt = this.clock();
+      return { rows: [{ code }] };
+    }
+    if (text.startsWith('select used_at, expires_at from core.pairing_codes')) {
+      const row = this.pairingCodes.get(params[0]);
+      if (!row || row.surface !== params[1]) return { rows: [] };
+      return {
+        rows: [
+          {
+            used_at: row.usedAt === null ? null : new Date(row.usedAt),
+            expires_at: new Date(row.expiresAt),
+          },
+        ],
+      };
+    }
+    if (text.startsWith('update core.pairing_codes set used_by_identity')) {
+      const row = this.pairingCodes.get(params[0]);
+      if (row) row.usedBy = params[1];
+      return { rows: [] };
     }
     if (text.startsWith('insert into core.surface_updates')) {
       const seen = this.updates.some((u) => u.surface === params[0] && u.update_id === params[1]);
@@ -1689,5 +1807,312 @@ describe('TelegramSurface @mention', () => {
     await surface.drain();
     expect(db.activeAgents.get(String(OWNER))).toBe('finance-advisor');
     expect(sent.at(-1)?.body.text).toBe('You are now talking to Finance Advisor (@ledger).');
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * Pairing by one-time code
+ * ------------------------------------------------------------------ */
+
+describe('parseStartCode', () => {
+  it('reads the code out of /start and nothing else', () => {
+    expect(parseStartCode('/start ABCD2345')).toBe('ABCD2345');
+    // Telegram addresses the bot by name in some clients.
+    expect(parseStartCode('/start@buddibot ABCD2345')).toBe('ABCD2345');
+    expect(parseStartCode('  /start abcd2345  ')).toBe('abcd2345');
+  });
+
+  it('is nothing for a plain /start, another command or prose', () => {
+    expect(parseStartCode('/start')).toBeUndefined();
+    expect(parseStartCode('/help')).toBeUndefined();
+    expect(parseStartCode('start ABCD2345')).toBeUndefined();
+    // Two arguments is not a code; it is someone poking at the parser.
+    expect(parseStartCode('/start ABCD2345 EFGH')).toBeUndefined();
+  });
+});
+
+describe('pairing codes (gateway)', () => {
+  it('mints a code with the deep link that sends it back as /start', async () => {
+    const db = new FakeDb();
+    const invite = await createPairingCodeFor(db, 'buddibot', { ttlMinutes: 10 });
+    expect(invite.code).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
+    expect(invite.deepLink).toBe(`https://t.me/buddibot?start=${invite.code}`);
+    expect(parseStartCode(`/start ${invite.code}`)).toBe(invite.code);
+    expect(invite.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    // The @ is how the owner writes a username, not part of the URL.
+    expect(pairingDeepLink('@buddibot', 'X')).toBe('https://t.me/buddibot?start=X');
+  });
+
+  it('asks Telegram who the bot is when no username is given', async () => {
+    const db = new FakeDb();
+    const getMe = vi.fn(async () => ({ id: 1, username: 'buddibot' }));
+    const invite = await createPairingCode(db, { api: { getMe } });
+    expect(getMe).toHaveBeenCalled();
+    expect(invite.deepLink).toBe(`https://t.me/buddibot?start=${invite.code}`);
+  });
+});
+
+describe('TelegramSurface pairing', () => {
+  /** A stranger: any user id that is not the paired owner. */
+  const STRANGER = 5150;
+
+  it('pairs an unpaired user who sends /start with a good code', async () => {
+    const db = new FakeDb();
+    const menu = vi.fn(async () => {});
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'reply'), {
+      setChatMenu: menu,
+    });
+    const { code } = await createPairingCodeFor(db, 'buddibot');
+
+    await surface.processUpdates([message(200, STRANGER, STRANGER, `/start ${code}`)]);
+    await surface.drain();
+
+    const replies = sent.filter((s) => s.method === 'sendMessage');
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.body.text).toBe(pairedText('Amen'));
+    expect(db.events).toHaveLength(0);
+    // The chat had no menu — a paired device must get one.
+    expect(menu).toHaveBeenCalledWith(String(STRANGER), expect.objectContaining({ id: 'finance-advisor' }));
+
+    const paired = db.identities.find((i) => i.external_user_id === String(STRANGER));
+    expect(paired).toMatchObject({
+      external_chat_id: String(STRANGER),
+      label: '@someone',
+      paired_via: 'code',
+    });
+
+    // And the device is now the owner for every message after it.
+    await surface.processUpdates([message(201, STRANGER, STRANGER, 'hello')]);
+    await surface.drain();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing at all to a bad code, and records why', async () => {
+    const db = new FakeDb();
+    const { surface, sent, run } = surfaceWith(db);
+
+    await surface.processUpdates([message(210, STRANGER, STRANGER, '/start ZZZZZZZZ')]);
+    await surface.drain();
+
+    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(0);
+    expect(run).not.toHaveBeenCalled();
+    expect(db.identities).toHaveLength(0);
+    expect(db.events[0]).toMatchObject({
+      kind: 'surface.rejected',
+      payload: { reason: 'bad-pairing-code', pairing: 'invalid', externalUserId: String(STRANGER) },
+    });
+  });
+
+  it('spends a code once: the second device gets silence', async () => {
+    const db = new FakeDb();
+    const { surface, sent } = surfaceWith(db);
+    const { code } = await createPairingCodeFor(db, 'buddibot');
+
+    await surface.processUpdates([
+      message(220, STRANGER, STRANGER, `/start ${code}`),
+      message(221, 6161, 6161, `/start ${code}`),
+    ]);
+    await surface.drain();
+
+    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(1);
+    expect(db.identities.map((i) => i.external_user_id)).toEqual([String(STRANGER)]);
+    expect(db.events[0]?.payload).toMatchObject({ reason: 'bad-pairing-code', pairing: 'used' });
+  });
+
+  it('refuses a code that has expired', async () => {
+    const db = new FakeDb();
+    let at = Date.parse('2026-09-13T12:00:00Z');
+    db.clock = () => at;
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+    const { code } = await createPairingCodeFor(db, 'buddibot', { ttlMinutes: 10 });
+
+    at += 11 * 60_000;
+    await surface.processUpdates([message(230, STRANGER, STRANGER, `/start ${code}`)]);
+    await surface.drain();
+
+    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(0);
+    expect(db.events[0]?.payload).toMatchObject({ pairing: 'expired' });
+  });
+
+  it('allows five attempts an hour per user id, then stops trying', async () => {
+    const db = new FakeDb();
+    let at = Date.parse('2026-09-13T12:00:00Z');
+    db.clock = () => at;
+    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+
+    for (let i = 0; i < PAIRING_MAX_ATTEMPTS + 1; i += 1) {
+      await surface.processUpdates([message(300 + i, STRANGER, STRANGER, '/start WRONGONE')]);
+      at += 1000;
+    }
+    await surface.drain();
+
+    const reasons = db.events.map((e) => e.payload.reason);
+    expect(reasons).toEqual([
+      ...Array(PAIRING_MAX_ATTEMPTS).fill('bad-pairing-code'),
+      'pairing-rate-limited',
+    ]);
+
+    // A real code presented while limited is not even read — and so not spent.
+    const blocked = await createPairingCodeFor(db, 'buddibot');
+    await surface.processUpdates([message(400, STRANGER, STRANGER, `/start ${blocked.code}`)]);
+    await surface.drain();
+    expect(db.identities).toHaveLength(0);
+    expect(db.pairingCodes.get(blocked.code)?.usedAt).toBeNull();
+
+    // …and an hour later the budget is back.
+    at += 60 * 60 * 1000;
+    const fresh = await createPairingCodeFor(db, 'buddibot');
+    await surface.processUpdates([message(401, STRANGER, STRANGER, `/start ${fresh.code}`)]);
+    await surface.drain();
+    expect(db.identities.map((i) => i.external_user_id)).toEqual([String(STRANGER)]);
+  });
+
+  it('leaves a paired user the plain welcome for /start with a code', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    const { code } = await createPairingCodeFor(db, 'buddibot');
+
+    await surface.processUpdates([message(240, OWNER, OWNER, `/start ${code}`)]);
+    await surface.drain();
+
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(HELP);
+    // The code was not spent by someone who did not need it.
+    expect(db.pairingCodes.get(code)?.usedAt).toBeNull();
+  });
+});
+
+describe('TelegramSurface last seen', () => {
+  it('writes last_seen_at once, then again only after five minutes', async () => {
+    const db = withOwner(new FakeDb());
+    let at = Date.parse('2026-09-13T12:00:00Z');
+    db.clock = () => at;
+    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+    const device = () => db.identities[0]?.last_seen_at ?? null;
+
+    await surface.processUpdates([message(500, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(device()).toEqual(new Date(at));
+
+    // A minute later: still the same write, not a new one per message.
+    const first = device();
+    at += 60_000;
+    await surface.processUpdates([message(501, OWNER, OWNER, 'again')]);
+    await surface.drain();
+    expect(device()).toEqual(first);
+
+    at += 5 * 60_000;
+    await surface.processUpdates([message(502, OWNER, OWNER, 'and again')]);
+    await surface.drain();
+    expect(device()).toEqual(new Date(at));
+  });
+
+  it('answers the owner even when last_seen_at cannot be written', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run } = surfaceWith(db);
+    const real = db.query.bind(db);
+    vi.spyOn(db, 'query').mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.replace(/\s+/g, ' ').trim().startsWith('update core.surface_identities set last_seen_at')) {
+        throw new Error('db hiccup');
+      }
+      return real(sql, params);
+    });
+
+    await surface.processUpdates([message(510, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('devices', () => {
+  it('lists a device with its label, pairing date and last seen', () => {
+    const text = devicesText(
+      [
+        {
+          id: 'dev-1',
+          surface: 'telegram',
+          externalUserId: '4242',
+          label: '@amen',
+          pairedAt: new Date('2026-09-10T15:00:00Z'),
+          lastSeenAt: new Date('2026-09-13T15:00:00Z'),
+        },
+        {
+          id: 'dev-2',
+          surface: 'telegram',
+          externalUserId: '99',
+          label: null,
+          pairedAt: new Date('2026-09-12T15:00:00Z'),
+          lastSeenAt: null,
+        },
+      ],
+      'America/New_York',
+    );
+    expect(text).toContain('• @amen (telegram) — paired 2026-09-10, last seen 2026-09-13');
+    // No label: the numeric id is the honest name.
+    expect(text).toContain('• 99 (telegram) — paired 2026-09-12, last seen never');
+    expect(text).toContain('dev-1');
+    // Unpairing stays on the machine that hosts buddi, and the text says so.
+    expect(text).toContain('buddi devices unpair <id>');
+  });
+
+  it('says so plainly when nothing is paired', () => {
+    expect(devicesText([], 'America/New_York')).toBe(NO_DEVICES_TEXT);
+  });
+
+  it('answers /devices from the chat, and names every surface', async () => {
+    const db = new FakeDb();
+    db.identities.push({
+      id: 'dev-9',
+      owner_id: 'owner',
+      surface: SURFACE,
+      external_user_id: String(OWNER),
+      external_chat_id: String(OWNER),
+      label: 'Phone',
+      paired_at: new Date('2026-09-01T12:00:00Z'),
+      last_seen_at: null,
+      paired_via: 'env',
+    });
+    const { surface, sent } = surfaceWith(db);
+
+    await surface.processUpdates([message(600, OWNER, OWNER, '/devices')]);
+    await surface.drain();
+
+    const text = sent.find((s) => s.method === 'sendMessage')?.body.text as string;
+    expect(text).toContain('Paired devices:');
+    expect(text).toContain('Phone (telegram)');
+    expect(text).toContain('dev-9');
+    expect(HELP).toContain('/devices');
+  });
+
+  it('lists devices and unpairs one, after which its messages are ignored', async () => {
+    const db = new FakeDb();
+    const { surface, sent, run } = surfaceWith(db);
+    const { code } = await createPairingCodeFor(db, 'buddibot');
+    await surface.processUpdates([message(700, OWNER, OWNER, `/start ${code}`)]);
+    await surface.drain();
+
+    const devices = await listDevices(db);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toMatchObject({
+      surface: SURFACE,
+      externalUserId: String(OWNER),
+      externalChatId: String(OWNER),
+      label: '@someone',
+      lastSeenAt: null,
+    });
+    expect(devices[0]?.pairedAt).toBeInstanceOf(Date);
+
+    expect(await unpairDevice(db, devices[0]?.id as string)).toBe(true);
+    // Revocation needs no restart: authorization is read per message.
+    const before = sent.length;
+    await surface.processUpdates([message(701, OWNER, OWNER, 'still there?')]);
+    await surface.drain();
+    expect(sent.slice(before).filter((s) => s.method === 'sendMessage')).toHaveLength(0);
+    expect(run).not.toHaveBeenCalled();
+    expect(db.events.at(-1)?.payload).toMatchObject({ reason: 'unpaired' });
+
+    // An id that never existed is a fact, not an exception.
+    expect(await unpairDevice(db, '00000000-0000-4000-8000-000000009999')).toBe(false);
+    expect(await unpairDevice(db, 'nonsense')).toBe(false);
   });
 });
