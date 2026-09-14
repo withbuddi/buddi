@@ -27,10 +27,8 @@
  * a reminder set by the daily check are the same object.
  */
 import {
-  MAX_HORIZON_DAYS,
-  MAX_PENDING_PER_AGENT,
+  DEFAULT_REMINDER_LIMITS,
   MAX_REMINDER_TEXT,
-  MIN_LEAD_MINUTES,
   cancelReminder,
   createReminder,
   dueReminders,
@@ -50,6 +48,7 @@ import {
   upsertMission,
   type PluginManifest,
   type Reminder,
+  type ReminderLimits,
   type ToolDefinition,
 } from '@buddi/core';
 import type { Pool } from 'pg';
@@ -136,16 +135,39 @@ function rendered(reminder: Reminder, timezone: string): ReminderToolResult {
 }
 
 /**
- * The reminder tools. No state of its own: the rows are core's, and the
- * timezone is the one on the tool context, which is the owner's.
+ * The budget, in the sentence the model reads.
+ *
+ * The limits are configurable (`reminderLimitsFromEnv`), so a description that
+ * hardcoded "30 minutes" would be a lie on any installation that moved the
+ * line — and a model told the wrong minimum wastes a turn discovering the real
+ * one from a refusal. The numbers here and the numbers the store enforces come
+ * from the same object.
  */
-export function createReminderManifest(): PluginManifest {
+export function describeReminderLimits(limits: ReminderLimits): string {
+  return (
+    `At least ${limits.minLeadMinutes} minutes out, at most ${limits.maxHorizonDays} days, ` +
+    `${limits.maxPendingPerAgent} pending at a time. ` +
+    'It fires within about a minute of the time you name.'
+  );
+}
+
+/**
+ * The reminder tools. No state of its own: the rows are core's, the timezone is
+ * the one on the tool context (the owner's), and the limits are whatever the
+ * composition root resolved — the shipped defaults unless the environment moved
+ * them.
+ */
+export function createReminderManifest(
+  limits: ReminderLimits = DEFAULT_REMINDER_LIMITS,
+): PluginManifest {
   const set: ToolDefinition<z.infer<typeof setInput>, unknown> = {
     name: 'reminder.set',
     description:
       'Put one future nudge on the clock, for a specific thing the owner asked you to remind them about ' +
       '("remind me when to pay the card", "tell me on the 3rd if the transfer has not landed"). ' +
-      `When it fires you are woken with this note and you check the fact again before saying anything — so a reminder is a promise to look, not a message queued for delivery. At least ${MIN_LEAD_MINUTES} minutes out, at most ${MAX_HORIZON_DAYS} days, ${MAX_PENDING_PER_AGENT} pending at a time. ` +
+      'When it fires you are woken with this note and you check the fact again before saying anything — ' +
+      'so a reminder is a promise to look, not a message queued for delivery. ' +
+      `${describeReminderLimits(limits)} ` +
       NOT_FOR_WATCHERS,
     tier: 'auto',
     input: setInput,
@@ -157,6 +179,7 @@ export function createReminderManifest(): PluginManifest {
         agentId: ctx.agentId ?? '',
         dueAt: when.at,
         text: input.text,
+        limits,
         ...(input.context === undefined ? {} : { context: input.context }),
         ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
         now: ctx.now(),

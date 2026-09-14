@@ -206,15 +206,38 @@ describe('reminder.set', () => {
     expect(db.rows).toHaveLength(0);
   });
 
-  it('refuses one sooner than the minimum lead, and one past the budget', async () => {
+  it('takes one six minutes out: the default lead is five minutes, not thirty', async () => {
     const db = new FakeDb();
-    const registry = reminderRegistry();
-    const soon = await registry.invoke(
+    // NOW is 08:00 in the owner's zone, so this is six minutes from now.
+    const result = await reminderRegistry().invoke(
       'reminder.set',
-      { when: '2026-09-14T08:10', text: 'now-ish' },
+      { when: '2026-09-14T08:06', text: 'check the transfer landed' },
       contextFor(db),
     );
-    expect(soon.ok && (soon.output as { reason: string }).reason).toBe('too-soon');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toMatchObject({ ok: true });
+    expect(db.rows).toHaveLength(1);
+  });
+
+  it('refuses one two minutes out, and says five minutes in the refusal', async () => {
+    const db = new FakeDb();
+    const result = await reminderRegistry().invoke(
+      'reminder.set',
+      { when: '2026-09-14T08:02', text: 'now-ish' },
+      contextFor(db),
+    );
+    expect(result.ok).toBe(true); // a refusal the model can read, not a throw
+    if (!result.ok) return;
+    const out = result.output as { ok: boolean; reason: string; message: string };
+    expect(out).toMatchObject({ ok: false, reason: 'too-soon' });
+    expect(out.message).toContain('at least 5 minutes out');
+    expect(db.rows).toHaveLength(0);
+  });
+
+  it('refuses one past the budget', async () => {
+    const db = new FakeDb();
+    const registry = reminderRegistry();
 
     for (let i = 0; i < MAX_PENDING_PER_AGENT; i += 1) {
       await registry.invoke(
@@ -229,6 +252,40 @@ describe('reminder.set', () => {
       contextFor(db),
     );
     expect(over.ok && (over.output as { reason: string }).reason).toBe('too-many-for-agent');
+  });
+
+  it('describes the limits this installation actually has, not the shipped ones', async () => {
+    const tight = createReminderManifest({
+      minLeadMinutes: 90,
+      maxHorizonDays: 7,
+      maxPendingPerAgent: 2,
+      maxPendingTotal: 4,
+      maxTextChars: 500,
+    });
+    const description = tight.tools.find((t) => t.name === 'reminder.set')?.description ?? '';
+    expect(description).toContain('At least 90 minutes out, at most 7 days, 2 pending at a time.');
+    expect(description).toContain('within about a minute');
+
+    // And the numbers it advertises are the numbers it enforces.
+    const db = new FakeDb();
+    const registry = new ToolRegistry();
+    registry.register(tight);
+    const result = await registry.invoke(
+      'reminder.set',
+      { when: '2026-09-14T09:00', text: 'an hour out, under the tightened lead' },
+      contextFor(db),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toMatchObject({ ok: false, reason: 'too-soon' });
+  });
+
+  it('describes the default budget with the five-minute lead', () => {
+    const description =
+      createReminderManifest().tools.find((t) => t.name === 'reminder.set')?.description ?? '';
+    expect(description).toContain(
+      `At least 5 minutes out, at most 365 days, ${MAX_PENDING_PER_AGENT} pending at a time.`,
+    );
   });
 
   it('is a fail-closed tool like any other: bad args refuse', async () => {
