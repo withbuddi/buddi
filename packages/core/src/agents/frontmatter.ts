@@ -12,6 +12,7 @@
  * turning into code.
  */
 import { z } from 'zod';
+import { modelProblem, PROVIDER_KINDS, type ProviderKind } from '../provider.js';
 
 export class AgentFileError extends Error {
   override readonly name = 'AgentFileError';
@@ -147,6 +148,12 @@ export const agentFrontmatterSchema = z
       .regex(HANDLE, 'handle must be kebab-case and start with a letter'),
     name: z.string().min(1),
     description: z.string().min(1),
+    /**
+     * Which provider this agent runs on. Pinned per agent, because an endpoint
+     * is a data destination: the owner's finances go to one company or another
+     * by this line, not by whichever key happens to be set.
+     */
+    provider: z.enum(['anthropic', 'openai']).optional(),
     model: z.string().min(1).optional(),
     tools: z.array(z.string().min(1)),
     /** Shared skills to load by name; private skills are always loaded. */
@@ -155,7 +162,21 @@ export const agentFrontmatterSchema = z
     default: z.boolean().optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
   })
-  .strict();
+  .strict()
+  // The model catalogue validates *within* the pinned provider and never
+  // authorizes a migration: an agent file asking for a model its provider does
+  // not serve is a configuration error, caught at load, not a silent re-route.
+  .superRefine((value, ctx) => {
+    if (value.model === undefined) return;
+    const kind: ProviderKind = value.provider ?? 'anthropic';
+    const problem = modelProblem(kind, value.model);
+    if (problem !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['model'], message: problem });
+    }
+  });
+
+/** Provider names an agent file may use, for error messages. */
+export const AGENT_PROVIDERS: readonly ProviderKind[] = PROVIDER_KINDS;
 
 export type AgentFrontmatter = z.infer<typeof agentFrontmatterSchema>;
 

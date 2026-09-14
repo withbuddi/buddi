@@ -300,8 +300,40 @@ Reference: `~/Projects/personal/foreman-0.1.18/.../foreman/src/provider.ts`.
   credentials" rule and executes its own tools outside the Executor. Reconsider only as a
   second runtime adapter with tools re-exposed over MCP and built-ins disabled.
 
+### Credential kinds (OpenAI wire)
+
+- **`api-key`** — `Authorization: Bearer`, `OPENAI_API_KEY`. The **only** kind. There is
+  no subscription-token analogue (a ChatGPT login is not an API credential) and no
+  ambient discovery; the Claude Code identity block is never sent to this provider. The
+  Anthropic subscription token and `BUDDI_MODEL` never reach it either — an OpenAI agent
+  reads `BUDDI_OPENAI_MODEL` or the default `gpt-5`, because letting an Anthropic model
+  name through would be exactly the silent migration this design withdraws.
+
 Secrets come from the vault; in the day-1 build they come from `.env` via an explicit
 env-name reference (never read ambiently by the adapter).
+
+### Capability matrix
+
+`providerCapabilities(kind)` (packages/runtime) is the port's honest account of what each
+adapter can carry: streaming tool args, multimodal image, document/PDF, tool-result
+ordering, parallel tool calls, cancellation, usage reporting. The loop consults it before
+building a request and degrades what the provider cannot carry into a placeholder the
+model can read and explain — a PDF sent to Chat Completions, which has no document part,
+becomes a sentence naming the file and telling the model to ask for the text. What is
+*persisted* is unchanged: the transcript keeps the artifact reference, so the same
+history sent to an Anthropic agent tomorrow still carries the real file. The adapters
+also share one retry policy (three retries, `Retry-After` honoured and capped at 60s), so
+swapping the provider changes the endpoint and nothing about how failures behave.
+
+### An agent whose provider is not installed
+
+Provider choice is pinned per agent (`provider:` in the agent file, default `anthropic`),
+and the model catalogue validates *within* it. A missing credential for **one** agent
+never takes the catalog down: that agent loads and is marked unavailable with the typed
+problem that says which variable is missing, every other agent loads normally, and the
+run path still fails closed when someone tries to use it. `agents/scout` ships this way
+— a general second-opinion persona on OpenAI with memory and reminder tools only — as the
+living proof the port swaps.
 
 ## Memory
 

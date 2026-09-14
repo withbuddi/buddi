@@ -7,6 +7,7 @@ import type {
   CompletionResponse,
   RuntimeProvider,
 } from './anthropic.js';
+import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
   composeSystem,
   createConversation,
@@ -365,7 +366,7 @@ describe('runAgent', () => {
       onToolCall,
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       text: 'It is 42.',
       turns: 2,
       stopped: 'end_turn',
@@ -718,5 +719,130 @@ describe('runAgent and approvals', () => {
         resume: { actionId: ACTION_ID, state: 'succeeded' },
       }),
     ).rejects.toThrow(/exactly one/);
+  });
+});
+
+/* ---------------- provider awareness ---------------- */
+
+describe('runAgent — the per-run snapshot', () => {
+  it('records provider, pinned model and credential kind before the first call', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        // The endpoint served a dated snapshot behind the alias; that is
+        // exactly what the pin alone cannot tell you.
+        model: 'claude-sonnet-5-20260401',
+      },
+    ]);
+    const result = await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+    });
+
+    expect(result.snapshot).toMatchObject({
+      provider: 'anthropic',
+      credentialKind: 'api-key',
+      model: 'claude-sonnet-5',
+      servedModel: 'claude-sonnet-5-20260401',
+    });
+
+    const started = db.events.find((e) => e.kind === 'run.started')?.payload as any;
+    expect(started).toMatchObject({
+      provider: 'anthropic',
+      credentialKind: 'api-key',
+      model: 'claude-sonnet-5',
+    });
+    expect(started.capabilities.kind).toBe('anthropic');
+
+    const finished = db.events.find((e) => e.kind === 'run.finished')?.payload as any;
+    expect(finished).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-sonnet-5',
+      servedModel: 'claude-sonnet-5-20260401',
+      credentialKind: 'api-key',
+    });
+  });
+
+  it('snapshots the provider pinned on the agent, not a process-wide one', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'scout');
+    const provider = scriptedProvider([
+      { content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage, model: 'gpt-5' },
+    ]);
+    const result = await runAgent({
+      agent: {
+        ...agent,
+        id: 'scout',
+        tools: [],
+        provider: {
+          kind: 'openai',
+          credential: { kind: 'api-key', env: 'OPENAI_API_KEY' },
+          model: 'gpt-5',
+        },
+      },
+      provider: { ...provider, capabilities: providerCapabilities('openai') },
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+    });
+    expect(result.snapshot.provider).toBe('openai');
+    expect(result.snapshot.model).toBe('gpt-5');
+    expect(result.snapshot.capabilities.document).toBe(false);
+  });
+});
+
+describe('runAgent — the capability matrix is honoured', () => {
+  /** One run with a hydrated PDF in the owner's turn. */
+  async function runWithPdf(capabilities?: ProviderCapabilities) {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const base = scriptedProvider([
+      { content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage, model: 'm' },
+    ]);
+    const provider = capabilities ? { ...base, capabilities } : base;
+    await runAgent({
+      agent: { ...agent, tools: [] },
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'what does this say?',
+      attachments: [{ artifactId: 'art-1', mime: 'application/pdf', kind: 'document' }],
+      loadArtifact: async () => ({ mime: 'application/pdf', data: 'JVBERi0x' }),
+    });
+    return { db, sent: base.calls[0] };
+  }
+
+  it('sends the document to a provider whose wire carries one', async () => {
+    const { sent } = await runWithPdf(providerCapabilities('anthropic'));
+    expect(sent?.messages[0]?.content[1]).toMatchObject({ type: 'document' });
+  });
+
+  it('degrades it to a visible placeholder for a provider whose wire cannot', async () => {
+    const { db, sent } = await runWithPdf(providerCapabilities('openai'));
+    const block = sent?.messages[0]?.content[1] as { type: string; text: string };
+    expect(block.type).toBe('text');
+    expect(block.text).toContain('openai');
+    // What is *persisted* is still the reference: the same history sent to an
+    // Anthropic agent tomorrow still carries the real file.
+    const persisted = db.messages[0]?.content as any[];
+    expect(persisted[1]).toMatchObject({ type: 'artifact_ref', artifactId: 'art-1' });
+  });
+
+  it('treats a provider that declares nothing as the native wire', async () => {
+    const { sent } = await runWithPdf();
+    expect(sent?.messages[0]?.content[1]).toMatchObject({ type: 'document' });
   });
 });

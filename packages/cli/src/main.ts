@@ -26,6 +26,7 @@ import {
   runServe,
 } from '@buddi/gateway';
 import { parseArgs, USAGE, UsageError, type Command, type ServiceAction } from './args.js';
+import { runDashboard } from './dashboard-cmd.js';
 import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
@@ -146,6 +147,9 @@ export async function dispatch(command: Command): Promise<number> {
     case 'service':
       loadEnv();
       return service(command.action);
+    case 'dashboard':
+      loadEnv();
+      return runDashboard(command.action);
     case 'telegram': {
       loadEnv();
       const blocked = await requireDatabase(process.env.DATABASE_URL);

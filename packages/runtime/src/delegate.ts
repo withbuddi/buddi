@@ -74,8 +74,12 @@ export interface DelegateDeps {
   catalog: () => DelegateCatalog;
   /** The registry the nested run executes against — the same one, always. */
   registry: ToolRegistry;
-  /** Also lazy: the provider is resolved after the registry exists. */
-  provider: () => RuntimeProvider;
+  /**
+   * Also lazy: the provider is resolved after the registry exists. It takes the
+   * *target* agent, because provider choice is pinned per agent — a colleague
+   * on another provider must be run on that provider, never on the caller's.
+   */
+  provider: (agent: DelegateAgent) => RuntimeProvider;
   /** Defaults to the caller's `ctx.db`; injected in tests. */
   pool?: Queryable;
   /** Defaults to the caller's own context (owner, clock, db). */
@@ -198,7 +202,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       try {
         result = await run({
           agent: { ...definition, maxTurns: Math.min(definition.maxTurns, maxTurns) },
-          provider: deps.provider(),
+          provider: deps.provider(target),
           registry: deps.registry,
           // The nested run is one level deeper, and it is the target's run: the
           // loop stamps `agentId`/`conversationId` itself.

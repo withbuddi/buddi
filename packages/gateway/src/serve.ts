@@ -68,6 +68,7 @@ import {
 import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
+import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 import type { MissionOutcome, RunMission } from './telegram/surface.js';
@@ -589,6 +590,40 @@ export async function main(): Promise<void> {
         console.error(`scheduler: ${err instanceof Error ? err.message : String(err)}`),
     });
 
+    // The dashboard. One block, and the only thing `serve` knows about the web
+    // surface: a read-first view over the event log that reuses core's own
+    // functions for the handful of writes it offers. Bound to loopback by
+    // default (BUDDI_WEB_HOST/BUDDI_WEB_PORT), off with BUDDI_WEB=0. A port
+    // already in use costs the dashboard, never the installation.
+    const web = webConfig(process.env);
+    let dashboard: WebServer | undefined;
+    if (web.enabled) {
+      try {
+        const { token, source, created } = await ensureWebToken({ env: process.env });
+        dashboard = await startWebServer({
+          pool,
+          registry: wiring.registry,
+          catalog: wiring.catalog,
+          ctx: wiring.ctx,
+          timezone: wiring.timezone,
+          now,
+          config: web,
+          token,
+          jobs: { resumeJob },
+          log: (line) => console.error(line),
+        });
+        console.log(
+          `  dashboard: ${dashboard.url} (token in the ${source}${created ? ', created now' : ''}) — \`buddi dashboard\` opens it`,
+        );
+      } catch (err) {
+        console.error(
+          `dashboard not started: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      console.log('  dashboard: off (BUDDI_WEB=0)');
+    }
+
     const missions = await describeMissions(pool, now());
 
     console.log('buddi serve — telegram surface + scheduler');
@@ -641,6 +676,7 @@ export async function main(): Promise<void> {
       sentinelLoop.stop();
       sourceLoop.stop();
       reminderLoop.stop();
+      void dashboard?.close();
       void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));

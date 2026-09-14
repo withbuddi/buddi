@@ -68,7 +68,16 @@ export function readDelegates(agentId: string, agentsDir: string = AGENTS_DIR): 
 
 export interface DelegationBinding {
   catalog: DelegateCatalog;
+  /** The caller's provider; used for a colleague with no adapter of its own. */
   provider: RuntimeProvider;
+  /**
+   * The adapter for one target agent. Provider choice is pinned per agent, so
+   * delegating to a colleague on another provider must reach that provider —
+   * anything else would send the owner's data to a company their agent file
+   * does not name. Optional only so an older caller still binds; when it is
+   * absent every nested run uses `provider`.
+   */
+  providerFor?: (agent: { id: string }) => RuntimeProvider;
 }
 
 const bindings = new WeakMap<ToolRegistry, DelegationBinding>();
@@ -114,7 +123,10 @@ export function createDelegationManifest(
     tools: [
       createDelegateTool({
         catalog: () => boundOrThrow(registry).catalog,
-        provider: () => boundOrThrow(registry).provider,
+        provider: (agent) => {
+          const binding = boundOrThrow(registry);
+          return binding.providerFor?.(agent) ?? binding.provider;
+        },
         registry,
         allowlistFor: (agentId) => readDelegates(agentId, agentsDir),
       }),

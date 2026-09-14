@@ -17,7 +17,7 @@ import {
   UnknownAgentError,
 } from './catalog.js';
 import { AgentFileError, parseAgentFile, parseYamlSubset, splitFrontmatter } from './frontmatter.js';
-import { DEFAULT_MODEL } from './provider-from-env.js';
+import { DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, providerFromEnv } from './provider-from-env.js';
 import { parseSkillFile } from './skills.js';
 
 /** A stand-in plugin: core may not import a real one (dependency direction). */
@@ -243,7 +243,10 @@ describe('loadAgentCatalog', () => {
     loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
 
   it('lists every agent with its summary', () => {
-    const catalog = load({ 'finance-advisor': FINANCE, concierge: CONCIERGE });
+    const catalog = load(
+      { 'finance-advisor': FINANCE, concierge: CONCIERGE },
+      { ANTHROPIC_API_KEY: 'k' },
+    );
     expect(catalog.list()).toEqual([
       {
         id: 'concierge',
@@ -251,6 +254,8 @@ describe('loadAgentCatalog', () => {
         name: 'Concierge',
         description: 'Front desk.',
         isDefault: false,
+        providerKind: 'anthropic',
+        available: true,
       },
       {
         id: 'finance-advisor',
@@ -258,6 +263,8 @@ describe('loadAgentCatalog', () => {
         name: 'Finance Advisor',
         description: 'Money.',
         isDefault: true,
+        providerKind: 'anthropic',
+        available: true,
       },
     ]);
   });
@@ -583,5 +590,133 @@ describe('selectSkills', () => {
     expect(selectSkills('a', [], [], [shared('house', ['a', 'b'])]).map((s) => s.name)).toEqual([
       'house',
     ]);
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * A second provider: pinning, and one agent's missing key
+ * ------------------------------------------------------------------ */
+
+const SCOUT = agentFile(
+  [
+    'id: scout',
+    'handle: scout',
+    'name: Scout',
+    'description: Second opinion.',
+    'provider: openai',
+    'model: gpt-5',
+    'tools: []',
+  ].join('\n'),
+  'You are the scout.',
+);
+
+describe('a catalog with agents on two providers', () => {
+  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
+    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
+
+  const files = { 'finance-advisor': FINANCE, concierge: CONCIERGE, scout: SCOUT };
+
+  it('pins each agent to its own provider and credential', () => {
+    const catalog = load(files, { ANTHROPIC_API_KEY: 'k', OPENAI_API_KEY: 'o' });
+    const scout = catalog.resolve('scout');
+    expect(scout.provider.kind).toBe('openai');
+    expect(scout.provider.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
+    expect(scout.model).toBe('gpt-5');
+    expect(catalog.resolve('concierge').provider.kind).toBe('anthropic');
+  });
+
+  it('never lets an Anthropic subscription token or BUDDI_MODEL leak to the openai agent', () => {
+    const catalog = load(files, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01',
+      BUDDI_MODEL: 'claude-opus-4-1',
+      OPENAI_API_KEY: 'o',
+    });
+    const scout = catalog.resolve('scout');
+    expect(scout.provider.credential.kind).toBe('api-key');
+    expect(scout.provider.credential.env).toBe('OPENAI_API_KEY');
+    expect(scout.model).toBe('gpt-5');
+    // The Anthropic agents still take the token and the env model.
+    expect(catalog.resolve('concierge').provider.credential.kind).toBe('subscription-token');
+    expect(catalog.resolve('concierge').model).toBe('claude-opus-4-1');
+  });
+
+  it('loads every other agent when one agent\'s credential is missing', () => {
+    // No OPENAI_API_KEY: exactly the machine this ships on.
+    const catalog = load(files, { ANTHROPIC_API_KEY: 'k' });
+    expect(catalog.list().map((a) => a.id)).toEqual(['concierge', 'finance-advisor', 'scout']);
+    expect(catalog.defaultAgent().id).toBe('finance-advisor');
+
+    const scout = catalog.resolve('scout');
+    expect(scout.availability.ok).toBe(false);
+    if (scout.availability.ok) return;
+    expect(scout.availability.problem.code).toBe('missing-credential');
+    expect(scout.availability.problem.message).toContain('OPENAI_API_KEY');
+
+    const summary = catalog.list().find((a) => a.id === 'scout');
+    expect(summary?.available).toBe(false);
+    expect(summary?.unavailableReason).toContain('OPENAI_API_KEY');
+    // Every other agent is untouched: one missing key never takes the
+    // installation down.
+    for (const other of catalog.list().filter((a) => a.id !== 'scout')) {
+      expect(other.available).toBe(true);
+    }
+  });
+
+  it('never holds the secret itself, only whether one was reachable', () => {
+    const catalog = load(files, { ANTHROPIC_API_KEY: 'k', OPENAI_API_KEY: 'o-secret' });
+    expect(JSON.stringify(catalog.resolve('scout').availability)).not.toContain('o-secret');
+  });
+});
+
+describe('the model catalogue in an agent file', () => {
+  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
+    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
+
+  it('refuses a model that belongs to another provider', () => {
+    const crossed = SCOUT.replace('model: gpt-5', 'model: claude-sonnet-5');
+    expect(() => load({ scout: crossed })).toThrow(AgentCatalogError);
+    expect(() => load({ scout: crossed })).toThrow(/anthropic/);
+  });
+
+  it('refuses a model no catalogue claims, rather than trying it', () => {
+    const unknown = SCOUT.replace('model: gpt-5', 'model: llama-3-70b');
+    expect(() => load({ scout: unknown })).toThrow(/not in the openai catalogue/);
+  });
+
+  it('refuses an unknown provider name', () => {
+    const bogus = SCOUT.replace('provider: openai', 'provider: mistral');
+    expect(() => load({ scout: bogus })).toThrow(AgentCatalogError);
+  });
+});
+
+
+describe('providerFromEnv', () => {
+  it('reads the anthropic credential from what the owner has', () => {
+    expect(providerFromEnv({ ANTHROPIC_API_KEY: 'k' }).credential).toEqual({
+      kind: 'api-key',
+      env: 'ANTHROPIC_API_KEY',
+    });
+    expect(providerFromEnv({ CLAUDE_CODE_OAUTH_TOKEN: 't' }).credential).toEqual({
+      kind: 'subscription-token',
+      env: 'CLAUDE_CODE_OAUTH_TOKEN',
+    });
+  });
+
+  it('gives openai one credential kind and discovers nothing', () => {
+    const ref = providerFromEnv({ CLAUDE_CODE_OAUTH_TOKEN: 't' }, undefined, 'openai');
+    expect(ref.kind).toBe('openai');
+    expect(ref.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
+    expect(ref.model).toBe(DEFAULT_OPENAI_MODEL);
+  });
+
+  it('keeps each providers default model separate', () => {
+    expect(providerFromEnv({}).model).toBe(DEFAULT_MODEL);
+    expect(providerFromEnv({ BUDDI_MODEL: 'claude-opus-4-1' }, undefined, 'openai').model).toBe(
+      DEFAULT_OPENAI_MODEL,
+    );
+    expect(providerFromEnv({ BUDDI_OPENAI_MODEL: 'gpt-5-mini' }, undefined, 'openai').model).toBe(
+      'gpt-5-mini',
+    );
   });
 });

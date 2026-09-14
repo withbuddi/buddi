@@ -27,6 +27,7 @@ function fakeProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     botToken: async () => ok('@buddi_bot'),
     pairedDevices: async () => ok('telegram:phone'),
     queue: async () => ok('running — 0 pending, 0 running, 0 suspended, 0 failed, 3 succeeded'),
+    dashboard: async () => ok('http://127.0.0.1:4317/ — token in the keychain'),
     service: async () => ok('launchd: running (pid 1)'),
     timezone: () => ok('Europe/Paris (BUDDI_TZ)'),
     ...overrides,
@@ -47,6 +48,7 @@ describe('collectChecks', () => {
       'telegram bot',
       'paired devices',
       'queue',
+      'dashboard',
       'service',
       'timezone',
     ]);

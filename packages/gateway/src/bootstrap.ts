@@ -17,13 +17,14 @@ import {
   timezoneFromEnv,
   vaultSelection,
   type AgentCatalog,
+  type CatalogAgent,
   type SecretProblem,
   type SecretSource,
   type ToolContext,
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
-import { createAnthropicProvider, type RuntimeProvider } from '@buddi/runtime';
+import { createProvider, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
@@ -96,9 +97,20 @@ export interface Wiring {
   /** Every agent installed as a file under `agents/`. */
   catalog: AgentCatalog;
   provider: RuntimeProvider;
+  /**
+   * The adapter for one agent, built from that agent's own pinned provider.
+   *
+   * Provider choice is per agent, so "the process's provider" is only ever the
+   * default agent's. Every path that runs a *named* agent asks for its own —
+   * and gets a typed error, never another vendor's endpoint, when the agent's
+   * credential is not on this machine.
+   */
+  providerFor(agent: CatalogAgent): RuntimeProvider;
   /** What `resolveProvider` settled on — printed in startup logs. */
   model: string;
   credentialKind: string;
+  /** Which provider the default agent runs on. */
+  providerKind: string;
   now: () => Date;
   /** The owner's timezone (`BUDDI_TZ`), the one the scheduler already uses. */
   timezone: string;
@@ -148,6 +160,29 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     );
   }
 
+  /**
+   * One adapter per agent, memoised per provider ref. Fails closed and names
+   * the agent: "@scout needs OPENAI_API_KEY" is an answer the owner can act on,
+   * where "provider not usable" at startup would have taken down four agents
+   * that were perfectly fine.
+   */
+  const adapters = new Map<string, RuntimeProvider>();
+  const providerFor = (agent: CatalogAgent): RuntimeProvider => {
+    const key = `${agent.provider.kind}:${agent.provider.model}:${agent.provider.credential.env}`;
+    const cached = adapters.get(key);
+    if (cached) return cached;
+    const agentResolution = resolveProvider(agent.provider, env);
+    if (!agentResolution.ok) {
+      throw new Error(
+        `agent "${agent.id}" (@${agent.handle}) cannot run [${agentResolution.problem.code}]: ` +
+          `${agentResolution.problem.message}`,
+      );
+    }
+    const built = createProvider(agentResolution.provider);
+    adapters.set(key, built);
+    return built;
+  };
+
   const pool = createPool(databaseUrl);
   // The synchronous path cannot probe, but it can make sure the failure it
   // eventually hits is legible: an idle client that loses the server throws on
@@ -155,17 +190,27 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
-  const provider = createAnthropicProvider(resolution.provider);
+  const provider = createProvider(resolution.provider);
   // Delegation can only be wired once both exist; before this call the tool
-  // refuses rather than reaching for an ambient catalog.
-  bindDelegation(registry, { catalog, provider });
+  // refuses rather than reaching for an ambient catalog. `providerFor` rides
+  // along so a colleague pinned to another provider is run on that provider.
+  bindDelegation(registry, {
+    catalog,
+    provider,
+    providerFor: ({ id }) => {
+      const agent = catalog.get(id);
+      return agent ? providerFor(agent) : provider;
+    },
+  });
   return {
     pool,
     registry,
     catalog,
     provider,
+    providerFor,
     model: resolution.provider.model,
     credentialKind: resolution.provider.credentialKind,
+    providerKind: resolution.provider.kind,
     now,
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone },

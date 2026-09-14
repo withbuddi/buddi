@@ -15,7 +15,7 @@ import {
   UnknownAgentError,
   type CatalogAgent,
 } from '@buddi/core';
-import { createAnthropicProvider, createConversation, runAgent } from '@buddi/runtime';
+import { createConversation, createProvider, runAgent } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import {
   AGENTS_DIR,
@@ -122,9 +122,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const catalog = loadGatewayCatalog({ env: process.env, registry: createToolRegistry() });
     for (const a of catalog.list()) {
       console.log(
-        `${bold(`@${a.handle}`)} ${dim(a.id)}${a.isDefault ? dim(' (default)') : ''} — ` +
-          `${a.name}: ${a.description}`,
+        `${bold(`@${a.handle}`)} ${dim(a.id)}${a.isDefault ? dim(' (default)') : ''} ` +
+          `${dim(`[${a.providerKind}]`)} — ${a.name}: ${a.description}`,
       );
+      // An agent whose credential this machine does not have is listed, not
+      // hidden: the owner should see what they have installed and what it
+      // would take to run it.
+      if (!a.available) console.log(`  ${dim(`unavailable: ${a.unavailableReason}`)}`);
     }
     return;
   }
@@ -166,19 +170,30 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
   const agent = selected.definition(now(), timezone);
 
+  // The *selected* agent's provider, not the process's: an agent pinned to
+  // another provider is run on that provider or not at all.
   const resolution = resolveProvider(agent.provider, process.env);
   if (!resolution.ok) {
     console.error(
-      `provider not usable [${resolution.problem.code}]: ${resolution.problem.message}`,
+      `@${selected.handle} cannot run [${resolution.problem.code}]: ${resolution.problem.message}`,
     );
     console.error(
-      'Set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY in .env',
+      selected.provider.kind === 'openai'
+        ? 'Set OPENAI_API_KEY in .env, or pick an agent on another provider (buddi agents).'
+        : 'Set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY in .env',
     );
     process.exit(1);
   }
-  const provider = createAnthropicProvider(resolution.provider);
+  const provider = createProvider(resolution.provider);
   /** Delegation needs both halves; rebound here for the *selected* agent. */
-  bindDelegation(registry, { catalog, provider });
+  bindDelegation(registry, {
+    catalog,
+    provider,
+    providerFor: ({ id }) => {
+      const target = catalog.get(id);
+      return target ? wiring.providerFor(target) : provider;
+    },
+  });
 
   /** Every run starts with what this agent remembers about the owner. */
   const memoryPreamble = memoryPreambleFor(pool);
@@ -224,7 +239,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     console.log(bold(`buddi — ${agent.name}`));
     console.log(dim(`conversation: ${id}`));
     console.log(
-      dim(`model: ${resolution.provider.model} (${resolution.provider.credentialKind})`),
+      dim(
+        `provider: ${resolution.provider.kind}, model: ${resolution.provider.model} ` +
+          `(${resolution.provider.credentialKind})`,
+      ),
     );
     console.log(dim('/quit to exit, /tools to list tools, /id for the conversation id'));
 

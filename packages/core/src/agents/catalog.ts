@@ -13,13 +13,22 @@
  *    the handle is what the owner types, and it must name exactly one agent;
  *  - an unknown id at resolve time throws, it is never coerced to the default.
  *
+ * One thing is deliberately *not* fail-closed at the catalog level: a
+ * credential this machine does not have. An agent pinned to a provider whose
+ * key is absent is loaded and marked **unavailable**, with the typed problem
+ * that says why, and every other agent loads normally. A missing key for one
+ * agent may never take the installation down — the owner who has not signed up
+ * for a second provider must still be able to run the four agents they have.
+ * Running an unavailable agent still fails closed: the run path resolves the
+ * provider itself, and resolution is where the refusal lives.
+ *
  * The catalog knows tools only through the registry contract, and never reads
  * `process.env` itself: the caller passes `env`, as everywhere else in core.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentDefinition } from '../agent.js';
-import type { ProviderRef } from '../provider.js';
+import { resolveProvider, type ProviderKind, type ProviderProblem, type ProviderRef } from '../provider.js';
 import { localDateString, timezoneFromEnv } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
 import { providerFromEnv } from './provider-from-env.js';
@@ -81,7 +90,22 @@ export interface AgentSummary {
   name: string;
   description: string;
   isDefault: boolean;
+  /** Which company this agent's runs go to. `provider` on a `CatalogAgent`
+   * is the whole pinned ref; a summary carries only its kind. */
+  providerKind: ProviderKind;
+  /** False when this machine cannot reach the agent's provider credential. */
+  available: boolean;
+  /** Why not, in one sentence. Present only when `available` is false. */
+  unavailableReason?: string;
 }
+
+/**
+ * Whether this installation can actually run the agent, as a result union — the
+ * same shape `resolveProvider` uses, because it is that answer, kept.
+ */
+export type AgentAvailability =
+  | { ok: true }
+  | { ok: false; problem: ProviderProblem };
 
 /** One colleague as an agent's prompt sees it. */
 export interface AgentRosterEntry {
@@ -106,6 +130,12 @@ export interface CatalogAgent extends AgentSummary {
   maxTurns: number;
   language: AgentLanguage;
   provider: ProviderRef;
+  /**
+   * Resolution, done once at load with the `env` the caller passed. Not a
+   * credential: the secret itself is never held here, only whether one was
+   * reachable and what the problem is when it was not.
+   */
+  availability: AgentAvailability;
   /** Skills composed into the prompt, private first, then shared. */
   skills: CatalogAgentSkill[];
   /** The persona plus the generated sections; still carries `{{today}}`. */
@@ -299,7 +329,12 @@ function buildAgent(
   // never reaches for `process.env` itself.
   const catalogTimezone = timezoneFromEnv(opts.env);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
-  const provider = providerFromEnv(opts.env, frontmatter.model);
+  const provider = providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
+  // Fail *soft* here and fail closed at run time: see the file header.
+  const resolution = resolveProvider(provider, opts.env);
+  const availability: AgentAvailability = resolution.ok
+    ? { ok: true }
+    : { ok: false, problem: resolution.problem };
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
   const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
   const section = skillsSection(skills);
@@ -317,12 +352,16 @@ function buildAgent(
     name: frontmatter.name,
     description: frontmatter.description,
     isDefault: frontmatter.default === true,
+    providerKind: provider.kind,
+    available: availability.ok,
+    ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
     file,
     model: provider.model,
     tools,
     maxTurns,
     language,
     provider,
+    availability,
     skills: skills.map(({ name, provenance, file: skillFile }) => ({
       name,
       provenance,
@@ -440,12 +479,17 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     get: (id) => agents.get(id),
     byHandle: (handle) => byHandle.get(handle.trim().replace(/^@/, '').toLowerCase()),
     list: () =>
-      [...agents.values()].map(({ id, handle, name, description, isDefault }) => ({
-        id,
-        handle,
-        name,
-        description,
-        isDefault,
+      [...agents.values()].map((a) => ({
+        id: a.id,
+        handle: a.handle,
+        name: a.name,
+        description: a.description,
+        isDefault: a.isDefault,
+        providerKind: a.providerKind,
+        available: a.availability.ok,
+        ...(a.availability.ok
+          ? {}
+          : { unavailableReason: a.availability.problem.message }),
       })),
     defaultAgent(): CatalogAgent {
       const id = defaults[0];

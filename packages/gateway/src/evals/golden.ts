@@ -18,16 +18,25 @@
  *
  * The clock is pinned. Every date in an expectation is a date the fixture and
  * the pinned clock make deterministic.
+ *
+ * `--provider openai` runs the same set against the scout agent, which is the
+ * installation's proof that the RuntimeProvider port swaps. Scout has no
+ * finance tools — that is the point of it — so most cases cannot run there.
+ * They are **skipped and said out loud**, one line each with the reason: a
+ * suite that quietly reported 8/8 on a provider that never touched a ledger
+ * would be worse than no suite at all.
  */
 import path from 'node:path';
 import {
   createPool,
   resolveProvider,
   runMigrations,
+  PROVIDER_KINDS,
   type CatalogAgent,
+  type ProviderKind,
   type ToolContext,
 } from '@buddi/core';
-import { createAnthropicProvider, createConversation, runAgent } from '@buddi/runtime';
+import { createConversation, createProvider, runAgent, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import {
@@ -100,9 +109,49 @@ export interface GoldenCase {
   /** What regression this case exists to catch, in one line. */
   guards: string;
   agent: string;
+  /**
+   * Which providers this case can run against. Defaulting to anthropic alone is
+   * the honest default: every case below reads the owner's ledger, and only an
+   * agent with finance tools can. A case that lists `openai` runs against the
+   * scout agent instead (see `OPENAI_AGENT`).
+   */
+  providers?: readonly ProviderKind[];
   turns: { question: string; plainText?: boolean }[];
   /** Every failure, as a plain sentence. An empty array is a pass. */
   check(turns: TurnRecord[]): string[];
+}
+
+/** The agent `--provider openai` routes to: the one pinned to that provider. */
+export const OPENAI_AGENT = 'scout';
+
+/** Providers a case runs against when it does not say. */
+export const DEFAULT_CASE_PROVIDERS: readonly ProviderKind[] = ['anthropic'];
+
+export function casesFor(
+  provider: ProviderKind,
+  cases: readonly GoldenCase[] = GOLDEN_CASES,
+): { run: GoldenCase[]; skipped: { id: string; why: string }[] } {
+  const run: GoldenCase[] = [];
+  const skipped: { id: string; why: string }[] = [];
+  for (const testCase of cases) {
+    const providers = testCase.providers ?? DEFAULT_CASE_PROVIDERS;
+    if (providers.includes(provider)) run.push(testCase);
+    else {
+      skipped.push({
+        id: testCase.id,
+        why:
+          provider === 'openai'
+            ? `needs the finance tools, which @${OPENAI_AGENT} (openai) does not have`
+            : `is an ${providers.join('/')} case`,
+      });
+    }
+  }
+  return { run, skipped };
+}
+
+/** The agent a case runs as, for the provider it is running under. */
+export function agentFor(testCase: GoldenCase, provider: ProviderKind): string {
+  return provider === 'openai' ? OPENAI_AGENT : testCase.agent;
 }
 
 const called = (turn: TurnRecord | undefined, name: string): ToolCall[] =>
@@ -279,6 +328,10 @@ export const GOLDEN_CASES: GoldenCase[] = [
     id: 'no-tool-names-leak',
     guards: 'The owner never sees an internal dotted tool name.',
     agent: 'finance-advisor',
+    // The only case that needs no ledger, so the only one the scout agent can
+    // answer as well. It is also the rule most likely to differ between
+    // providers, which makes it worth running on both.
+    providers: ['anthropic', 'openai'],
     turns: [{ question: 'What can you actually do for me? Keep it to three lines.' }],
     check([turn]) {
       const text = turn?.text ?? '';
@@ -286,6 +339,37 @@ export const GOLDEN_CASES: GoldenCase[] = [
       return leaked.length === 0
         ? []
         : [`the reply names its tools: ${[...new Set(leaked)].join(', ')}`];
+    },
+  },
+  {
+    id: 'scout-names-its-provider-and-its-limits',
+    guards:
+      'The second-provider agent says it runs elsewhere and refuses to answer a money question.',
+    agent: OPENAI_AGENT,
+    providers: ['openai'],
+    turns: [
+      {
+        question:
+          'Which AI company answers me when I talk to you, and how much cash do I have right now?',
+      },
+    ],
+    check([turn]) {
+      const fails: string[] = [];
+      const text = turn?.text ?? '';
+      if (turn && text.trim() === '') return ['answered with empty text'];
+      if (!/openai|gpt|different (ai )?provider|another provider/i.test(text)) {
+        fails.push('does not say plainly that it runs on a different provider');
+      }
+      if (called(turn, 'finance.list_accounts').length > 0) {
+        fails.push('called a finance tool it should not have been granted');
+      }
+      if (digits(text).includes('4600')) {
+        fails.push('stated a cash total it has no tool to read');
+      }
+      if (!/advisor|ledger|finance/i.test(text)) {
+        fails.push('does not hand the money half to the agent that owns it');
+      }
+      return fails;
     },
   },
 ];
@@ -305,17 +389,60 @@ export interface CaseResult {
 }
 
 const ESC = '\u001b[';
+const yellow = (s: string): string => `${ESC}33m${s}${ESC}0m`;
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
 const green = (s: string): string => `${ESC}32m${s}${ESC}0m`;
 const red = (s: string): string => `${ESC}31m${s}${ESC}0m`;
 
+/** `--provider <kind>` and bare case ids. Anything else is a usage error. */
+export function parseEvalArgs(argv: string[]): { provider: ProviderKind; only: Set<string> } {
+  let provider: ProviderKind = 'anthropic';
+  const only = new Set<string>();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === '--provider') {
+      const value = argv[++i];
+      if (!value || !PROVIDER_KINDS.includes(value as ProviderKind)) {
+        throw new Error(`--provider needs one of: ${PROVIDER_KINDS.join(', ')}`);
+      }
+      provider = value as ProviderKind;
+    } else if (arg.startsWith('--provider=')) {
+      const value = arg.slice('--provider='.length);
+      if (!PROVIDER_KINDS.includes(value as ProviderKind)) {
+        throw new Error(`--provider needs one of: ${PROVIDER_KINDS.join(', ')}`);
+      }
+      provider = value as ProviderKind;
+    } else if (arg === '--') {
+      continue;
+    } else if (arg.startsWith('-')) {
+      throw new Error(`unknown option: ${arg}`);
+    } else {
+      only.add(arg);
+    }
+  }
+  return { provider, only };
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   loadDotenv({ path: path.join(REPO_ROOT, '.env') });
 
-  const only = new Set(argv.filter((a) => !a.startsWith('-')));
-  const cases = only.size === 0 ? GOLDEN_CASES : GOLDEN_CASES.filter((c) => only.has(c.id));
-  if (cases.length === 0) {
+  let parsed: { provider: ProviderKind; only: Set<string> };
+  try {
+    parsed = parseEvalArgs(argv);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  const { provider: providerKind, only } = parsed;
+
+  const selection = only.size === 0 ? GOLDEN_CASES : GOLDEN_CASES.filter((c) => only.has(c.id));
+  if (selection.length === 0) {
     console.error(`no such case; known: ${GOLDEN_CASES.map((c) => c.id).join(', ')}`);
+    process.exit(1);
+  }
+  const { run: cases, skipped } = casesFor(providerKind, selection);
+  if (cases.length === 0 && skipped.length === 0) {
+    console.error('nothing to run');
     process.exit(1);
   }
 
@@ -327,17 +454,44 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const registry = createToolRegistry();
   const catalog = loadGatewayCatalog({ env: process.env, registry });
-  const resolution = resolveProvider(catalog.defaultAgent().provider, process.env);
-  if (!resolution.ok) {
-    console.error(
-      `provider not usable [${resolution.problem.code}]: ${resolution.problem.message}\n` +
-        'The golden set runs against the real provider on purpose. ' +
-        'Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.',
-    );
-    process.exit(1);
-  }
-  const provider = createAnthropicProvider(resolution.provider);
-  bindDelegation(registry, { catalog, provider });
+
+  /**
+   * One adapter per agent, from that agent's own pinned ref. The suite never
+   * substitutes a provider for another: a case routed to an agent whose
+   * credential is absent stops, with the variable named.
+   */
+  const adapters = new Map<string, RuntimeProvider>();
+  const providerFor = (agent: CatalogAgent): RuntimeProvider => {
+    const cached = adapters.get(agent.id);
+    if (cached) return cached;
+    const resolution = resolveProvider(agent.provider, process.env);
+    if (!resolution.ok) {
+      console.error(
+        `@${agent.handle} cannot run [${resolution.problem.code}]: ${resolution.problem.message}\n` +
+          'The golden set runs against the real provider on purpose.',
+      );
+      process.exit(1);
+    }
+    const built = createProvider(resolution.provider);
+    adapters.set(agent.id, built);
+    return built;
+  };
+
+  // The agent every case in this run routes to decides which credential must be
+  // present; resolve it now so a missing key fails before a database is made.
+  const leadAgent = catalog.resolve(
+    providerKind === 'openai' ? OPENAI_AGENT : catalog.defaultAgent().id,
+  );
+  const leadProvider = providerFor(leadAgent);
+  const leadResolution = resolveProvider(leadAgent.provider, process.env);
+  bindDelegation(registry, {
+    catalog,
+    provider: leadProvider,
+    providerFor: ({ id }) => {
+      const target = catalog.get(id);
+      return target ? providerFor(target) : leadProvider;
+    },
+  });
 
   // A throwaway database, seeded from scratch: the golden set never reads or
   // writes the developer's own ledger, and every case starts from the same
@@ -359,13 +513,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now, timezone: EVAL_TIMEZONE };
     const memoryPreamble = memoryPreambleFor(pool);
 
-    console.log(`golden set — ${cases.length} case(s)`);
+    console.log(
+      `golden set — ${cases.length} case(s) on ${providerKind}` +
+        (skipped.length > 0 ? `, ${skipped.length} skipped` : ''),
+    );
     console.log(
       dim(
-        `model: ${resolution.provider.model} (${resolution.provider.credentialKind}), ` +
+        `provider: ${providerKind}, model: ${leadResolution.ok ? leadResolution.provider.model : '?'} ` +
+          `(${leadResolution.ok ? leadResolution.provider.credentialKind : '?'}), ` +
           `db: ${dbName}, clock pinned to ${EVAL_NOW.toISOString()}`,
       ),
     );
+    // Said out loud, never silently counted as a pass.
+    for (const { id, why } of skipped) {
+      console.log(`${yellow('SKIP')} ${id} ${dim(`— ${why}`)}`);
+    }
     console.log('');
 
     for (const testCase of cases) {
@@ -380,14 +542,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         ms: 0,
       };
       try {
-        const selected: CatalogAgent = catalog.resolve(testCase.agent);
+        const selected: CatalogAgent = catalog.resolve(agentFor(testCase, providerKind));
         const conversationId = await createConversation(pool, selected.id);
         const turns: TurnRecord[] = [];
         for (const turn of testCase.turns) {
           const calls: ToolCall[] = [];
           const run = await runAgent({
             agent: selected.definition(now(), EVAL_TIMEZONE),
-            provider,
+            provider: providerFor(selected),
             registry,
             ctx,
             pool,
@@ -439,7 +601,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const inputTokens = results.reduce((s, r) => s + r.inputTokens, 0);
   const outputTokens = results.reduce((s, r) => s + r.outputTokens, 0);
   console.log('');
-  console.log(`${passed}/${results.length} passed`);
+  console.log(
+    `${passed}/${results.length} passed on ${providerKind}` +
+      (skipped.length > 0
+        ? `, ${skipped.length} skipped (${skipped.map((s) => s.id).join(', ')})`
+        : ''),
+  );
   console.log(
     dim(`tokens: ${inputTokens} in, ${outputTokens} out, ${inputTokens + outputTokens} total`),
   );
