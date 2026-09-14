@@ -106,10 +106,15 @@ export async function dispatch(command: Command): Promise<number> {
     }
     case 'chat-cli': {
       loadEnv();
-      const blocked = await requireDatabase(process.env.DATABASE_URL);
-      if (blocked !== 0) return blocked;
+      // `buddi agents` reads files and edits files: it is the one command in
+      // this group that must still work with the database down — that is often
+      // exactly when an owner is trying to see what is configured.
+      if (command.argv[0] !== 'agents') {
+        const blocked = await requireDatabase(process.env.DATABASE_URL);
+        if (blocked !== 0) return blocked;
+      }
       await runChatCli(command.argv);
-      return 0;
+      return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'missions': {
       loadEnv();

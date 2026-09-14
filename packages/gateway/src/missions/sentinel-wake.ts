@@ -7,7 +7,13 @@
  * tools* before the owner's phone buzzes, and to let it call `mission.silent`
  * when the check says it does not matter after all.
  */
-import { SENTINEL_WAKE_MISSION_ID, type Severity, type UpsertMissionInput } from '@buddi/core';
+import {
+  SENTINEL_WAKE_MISSION_ID,
+  type AgentCatalog,
+  type Severity,
+  type UpsertMissionInput,
+} from '@buddi/core';
+import { ROLE_OVERVIEW } from '../agents/roles.js';
 
 export const SENTINEL_WAKE_ID = SENTINEL_WAKE_MISSION_ID;
 
@@ -61,12 +67,22 @@ export const SENTINEL_WAKE_PROMPT = `A deterministic watcher found something it 
 
 Do not greet, do not ask a question, do not offer to do anything on confirmation.`;
 
-export const SENTINEL_WAKE_MISSION: UpsertMissionInput = {
-  id: SENTINEL_WAKE_ID,
-  name: 'Sentinel wake',
-  // The default speaker. A finding naming its own agentId overrides it per run.
-  agentId: 'finance-advisor',
-  prompt: SENTINEL_WAKE_PROMPT,
-  enabled: true,
-  alwaysDeliver: false,
-};
+/**
+ * The wake mission, bound to whoever speaks for this installation.
+ *
+ * `sentinel-wake` is infrastructure — it belongs to the gateway, not to any
+ * plugin — but the *speaker* is not: it is the agent that claims the `overview`
+ * role, and the catalog's default agent only when nobody does. A finding
+ * naming its own `agentId` overrides it per run.
+ */
+export function sentinelWakeMission(catalog: AgentCatalog): UpsertMissionInput {
+  const overview = catalog.agentForRole(ROLE_OVERVIEW);
+  return {
+    id: SENTINEL_WAKE_ID,
+    name: 'Sentinel wake',
+    agentId: overview.ok ? overview.agent.id : catalog.defaultAgent().id,
+    prompt: SENTINEL_WAKE_PROMPT,
+    enabled: true,
+    alwaysDeliver: false,
+  };
+}

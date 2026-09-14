@@ -30,6 +30,7 @@ import { memoryPreambleFor } from '../agents/catalog.js';
 import { createWiringAsync, loadEnv } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
+import { recapMissionId } from '../missions/recap.js';
 import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
 import {
   SURFACE,
@@ -150,6 +151,8 @@ export interface TelegramDeps {
    * passes it; the standalone surface has no scheduler and leaves it out.
    */
   runMission?: RunMission;
+  /** The mission `/recap` runs; the installed plugins' `recap` suggestion. */
+  recapMissionId?: string;
   /**
    * The queue, for waking a run that suspended awaiting an approval. Defaults
    * to core's own `resumeJob`; a build with no queue passes `null`.
@@ -248,6 +251,12 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     log,
     setChatMenu,
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
+    ...(deps.recapMissionId === undefined
+      ? (() => {
+          const suggested = recapMissionId();
+          return suggested === undefined ? {} : { recapMissionId: suggested };
+        })()
+      : { recapMissionId: deps.recapMissionId }),
     approvals,
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded

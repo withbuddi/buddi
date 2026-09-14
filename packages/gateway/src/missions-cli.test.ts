@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { parseMissionsArgs } from './missions-cli.js';
 import {
-  DAILY_CHECK_MISSION,
-  DEFAULT_MISSIONS,
-  WEEKLY_CONSOLIDATION_MISSION,
-} from './missions/defaults.js';
-import { findingOf, renderFinding, SENTINEL_WAKE_MISSION } from './missions/sentinel-wake.js';
-import {
-  DEFAULT_TIMEZONE,
-  FRIDAY_RECAP_MISSION,
+  DAILY_CHECK_PROMPT,
   FRIDAY_RECAP_PROMPT,
-  timezoneFromEnv,
-} from './missions/recap.js';
+} from '@buddi/tool-finance';
+import { loadGatewayCatalog } from './agents/catalog.js';
+import { planDefaultMissions } from './missions/defaults.js';
+import { findingOf, renderFinding, sentinelWakeMission } from './missions/sentinel-wake.js';
+import { DEFAULT_TIMEZONE, recapMissionId, timezoneFromEnv } from './missions/recap.js';
+
+/** The plan this installation's plugins and agent files actually produce. */
+const catalog = loadGatewayCatalog({ env: {} });
+const plan = planDefaultMissions(catalog);
+const entry = (id: string) => plan.entries.find((e) => e.mission.id === id);
 
 describe('parseMissionsArgs', () => {
   it('reads list', () => {
@@ -83,12 +84,14 @@ describe('parseMissionsArgs', () => {
   });
 });
 
-describe('the Friday recap mission', () => {
-  it('is pinned to the finance advisor', () => {
-    expect(FRIDAY_RECAP_MISSION).toMatchObject({
+describe('the recap mission', () => {
+  it('comes from the plugin that knows what a recap is', () => {
+    expect(recapMissionId()).toBe('friday-recap');
+    expect(entry('friday-recap')?.mission).toMatchObject({
       id: 'friday-recap',
       agentId: 'finance-advisor',
       enabled: true,
+      alwaysDeliver: true,
     });
   });
 
@@ -108,37 +111,48 @@ describe('the Friday recap mission', () => {
 });
 
 describe('the default missions', () => {
-  it('registers the recap, the daily check, the wake and the placeholder', () => {
-    expect(DEFAULT_MISSIONS.map((d) => d.mission.id)).toEqual([
+  it('registers what the plugins suggest, then the wake mission', () => {
+    expect(plan.entries.map((d) => d.mission.id)).toEqual([
       'friday-recap',
       'daily-check',
-      'sentinel-wake',
       'weekly-consolidation',
+      'sentinel-wake',
     ]);
+    expect(plan.skipped).toEqual([]);
+  });
+
+  it('resolves every suggested mission through a role, not an agent name', () => {
+    for (const id of ['friday-recap', 'daily-check', 'weekly-consolidation']) {
+      expect(entry(id)?.mission.agentId).toBe('finance-advisor');
+    }
   });
 
   it('gives only the recap an unconditional delivery', () => {
-    const alwaysDeliver = DEFAULT_MISSIONS.filter((d) => d.mission.alwaysDeliver);
+    const alwaysDeliver = plan.entries.filter((d) => d.mission.alwaysDeliver);
     expect(alwaysDeliver.map((d) => d.mission.id)).toEqual(['friday-recap']);
   });
 
   it('gives the wake mission no schedule — it is enqueued, never cron-ed', () => {
-    const wake = DEFAULT_MISSIONS.find((d) => d.mission.id === 'sentinel-wake');
+    const wake = entry('sentinel-wake');
     expect(wake?.cron).toBeUndefined();
-    expect(SENTINEL_WAKE_MISSION.prompt).toContain('mission.silent');
+    expect(wake?.mission.prompt).toContain('mission.silent');
+  });
+
+  it('points the wake mission at the overview role holder', () => {
+    expect(sentinelWakeMission(catalog).agentId).toBe('finance-advisor');
   });
 
   it('runs the daily check at 08:00 and tells it to stay silent', () => {
-    const daily = DEFAULT_MISSIONS.find((d) => d.mission.id === 'daily-check');
+    const daily = entry('daily-check');
     expect(daily?.cron).toBe('0 8 * * *');
     expect(daily?.misfirePolicy).toBe('coalesce');
     for (const needle of ['projection', 'next 3 days', 'unmatched', 'mission.silent', '7 days']) {
-      expect(DAILY_CHECK_MISSION.prompt).toContain(needle);
+      expect(DAILY_CHECK_PROMPT).toContain(needle);
     }
   });
 
   it('ships the consolidation placeholder disabled', () => {
-    expect(WEEKLY_CONSOLIDATION_MISSION.enabled).toBe(false);
+    expect(entry('weekly-consolidation')?.mission.enabled).toBe(false);
   });
 });
 

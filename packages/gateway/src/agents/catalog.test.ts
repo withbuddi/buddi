@@ -1,14 +1,24 @@
 /**
- * The shipped agent files must load against the plugins this build installs.
- * These are the tests that fail the moment an agent file and the finance
- * manifest drift apart — a persona granting a tool nobody registered.
+ * The agent files installed *here* must load against the plugins this build
+ * installs. These are the tests that fail the moment an agent file and the
+ * finance manifest drift apart — a persona granting a tool nobody registered.
+ *
+ * They describe this owner's private set, which is no longer in the repository
+ * (see README, "Your agents are yours"), so on a clone that has only the
+ * examples the whole block is skipped rather than failed: a fresh install is
+ * not a broken one. `examples.test.ts` covers that case instead.
  */
 import { describe, expect, it } from 'vitest';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 
 const catalog = loadGatewayCatalog({ env: {} });
 
-describe('the shipped agents directory', () => {
+/** The owner's own agents, as distinct from anything `examples/` ships. */
+const owned = () => catalog.list().filter((a) => a.source !== 'example');
+const OWNER_IDS = ['concierge', 'credit-coach', 'finance-advisor', 'mail-triage', 'scout'];
+const installed = new Set(catalog.list().map((a) => a.id));
+
+describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agents', () => {
   it('loads every agent file against the real finance manifest', () => {
     const ids = catalog.list().map((a) => a.id);
     expect(ids).toContain('finance-advisor');
@@ -78,7 +88,7 @@ describe('the shipped agents directory', () => {
 
   it('ships the handles the owner types', () => {
     expect(
-      Object.fromEntries(catalog.list().map((a) => [a.id, a.handle])),
+      Object.fromEntries(owned().map((a) => [a.id, a.handle])),
     ).toEqual({
       concierge: 'buddi',
       'credit-coach': 'credo',
@@ -111,8 +121,9 @@ describe('the shipped agents directory', () => {
   it('loads the whole catalog with no OPENAI_API_KEY, marking only scout unavailable', () => {
     const env = { ANTHROPIC_API_KEY: 'sk-ant-test' };
     const withoutKey = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
-    expect(withoutKey.list()).toHaveLength(5);
-    const summaries = Object.fromEntries(withoutKey.list().map((a) => [a.id, a]));
+    const mine = withoutKey.list().filter((a) => a.source !== 'example');
+    expect(mine).toHaveLength(5);
+    const summaries = Object.fromEntries(mine.map((a) => [a.id, a]));
     expect(summaries.scout?.available).toBe(false);
     expect(summaries.scout?.unavailableReason).toContain('OPENAI_API_KEY');
     for (const id of ['concierge', 'credit-coach', 'finance-advisor', 'mail-triage']) {

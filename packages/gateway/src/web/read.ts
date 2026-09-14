@@ -28,6 +28,7 @@ import {
   type ToolContext,
   type ToolRegistry,
 } from '@buddi/core';
+import { ROLE_OVERVIEW } from '../agents/roles.js';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 
@@ -764,6 +765,11 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
  * Overview
  * ------------------------------------------------------------------ */
 
+/**
+ * The money block. `available` is false whenever this installation cannot
+ * produce it — no finance tools, or no agent claiming the `overview` role —
+ * and `note` then says what to install or declare rather than showing zeros.
+ */
 export interface OverviewFinance {
   available: boolean;
   currency: string | null;
@@ -806,6 +812,8 @@ export const OVERVIEW_HORIZON_DAYS = 14;
 export async function readOverview(deps: {
   pool: Pool;
   registry: ToolRegistry;
+  /** Consulted for the `overview` role; absent means "no roles here". */
+  catalog?: AgentCatalog;
   ctx: ToolContext;
   timezone: string;
   now: Date;
@@ -882,6 +890,10 @@ export async function readOverview(deps: {
   };
 }
 
+/** Said as a fact about the install, with the thing to do about it. */
+export const FINANCE_PLUGIN_MISSING_NOTE =
+  'No installed plugin reports balances here. Install a plugin that provides them (packages/tools/finance ships one) and run pnpm db:migrate.';
+
 const EMPTY_FINANCE: OverviewFinance = {
   available: false,
   currency: null,
@@ -902,12 +914,21 @@ const EMPTY_FINANCE: OverviewFinance = {
  * the same read-only tools an agent would call, and an installation without the
  * finance plugin simply reports `available: false` instead of failing.
  */
-async function readFinance(deps: {
+export async function readFinance(deps: {
   registry: ToolRegistry;
+  catalog?: AgentCatalog;
   ctx: ToolContext;
 }): Promise<OverviewFinance> {
   const { registry, ctx } = deps;
-  if (!registry.has('finance.list_accounts')) return EMPTY_FINANCE;
+  // Two conditions, both about *this* installation: somebody has to be able to
+  // read the numbers, and somebody has to be answerable for them.
+  const overview = deps.catalog?.agentForRole(ROLE_OVERVIEW);
+  if (overview !== undefined && !overview.ok) {
+    return { ...EMPTY_FINANCE, note: overview.problem.message };
+  }
+  if (!registry.has('finance.list_accounts')) {
+    return { ...EMPTY_FINANCE, note: FINANCE_PLUGIN_MISSING_NOTE };
+  }
 
   const accounts = await registry.invoke('finance.list_accounts', {}, ctx);
   if (!accounts.ok) return { ...EMPTY_FINANCE, note: accounts.message };

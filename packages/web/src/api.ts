@@ -274,6 +274,55 @@ export interface AgentRow {
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
 }
 
+/**
+ * One agent's engine, read from the agent *file* rather than from the catalog
+ * the server booted with — so a change made a second ago shows immediately, and
+ * `restartRequired` is the honest difference between the file and the running
+ * surfaces.
+ */
+export interface AgentEngine {
+  id: string;
+  handle: string;
+  name: string;
+  isDefault: boolean;
+  provider: string;
+  model: string;
+  maxTurns: number;
+  language: string;
+  credentialKind: string;
+  credentialEnv: string;
+  available: boolean;
+  unavailableReason?: string;
+  restartRequired: boolean;
+}
+
+/** The model catalogue, per provider, with what this machine can reach. */
+export interface ProviderModels {
+  kind: string;
+  credentialEnv: string;
+  credentialKind: string;
+  usable: boolean;
+  problem?: { code: string; message: string };
+  defaultModel: string;
+  defaultFrom: string;
+  defaultEnv: string;
+  prefixes: string[];
+  models: Array<{ id: string; note: string }>;
+}
+
+export interface AgentsView {
+  agents: AgentRow[];
+  engines: AgentEngine[];
+  providers: ProviderModels[];
+}
+
+export interface EngineChange {
+  provider?: string;
+  model?: string;
+  maxTurns?: number;
+  language?: string;
+}
+
 export const api = {
   session: () => get<{ csrf: string; timezone: string; host: string; port: number }>('/session'),
   overview: () => get<Overview>('/overview'),
@@ -287,7 +336,7 @@ export const api = {
   approvals: () => get<{ pending: ApprovalRow[]; recent: ApprovalRow[] }>('/approvals'),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
-  agents: () => get<{ agents: AgentRow[] }>('/agents'),
+  agents: () => get<AgentsView>('/agents'),
 
   decide: (id: string, decision: 'approve' | 'reject') =>
     post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(
@@ -303,6 +352,11 @@ export const api = {
     }),
   retryJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/retry`),
   cancelJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/cancel`),
+  setAgentEngine: (id: string, change: EngineChange) =>
+    post<{ agent: AgentEngine; changed: string[]; note: string }>(
+      `/agents/${encodeURIComponent(id)}/engine`,
+      change,
+    ),
   cancelReminder: (id: string) =>
     post<{ id: string; state: string }>(`/reminders/${encodeURIComponent(id)}/cancel`, {
       reason: 'cancelled from the dashboard',

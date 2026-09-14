@@ -49,10 +49,10 @@ import {
   type ArtifactStore,
 } from '../telegram/attachments.js';
 import {
-  FINANCE_ADVISOR_ID,
-  RECAP_MISSION_ID,
+  NO_RECAP_MISSION_TEXT,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
+  roleUnavailableText,
   UNKNOWN_AGENT_TEXT,
   USE_WITHOUT_ID_TEXT,
   devicesText,
@@ -63,6 +63,7 @@ import {
   unknownHandleText,
   type RunMission,
 } from '../telegram/surface.js';
+import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 import { isUnknownAgentError } from '../telegram/types.js';
 import { attachFile, type PendingAttachment } from './attach.js';
 import type { ApprovalPort } from './approvals.js';
@@ -145,6 +146,12 @@ export interface ChatSessionDeps {
   artifacts?: ArtifactStore;
   approvals?: ApprovalPort;
   runMission?: RunMission;
+  /**
+   * The mission `/recap` runs, resolved by the composition root from the
+   * installed plugins' suggestions for the `recap` role. Absent: no plugin
+   * suggests one, and the command says exactly that.
+   */
+  recapMissionId?: string;
   /** Long answers may go through a pager. Defaults to `out`. */
   present?(text: string): Promise<void>;
   /** `--quiet`: no run footer. */
@@ -483,38 +490,52 @@ export class ChatSession {
   }
 
   /**
-   * `/status` — a finance feature, answered by the finance advisor whoever this
-   * session is talking to, in that advisor's own conversation. The active agent
-   * is left exactly as it was, same as Telegram.
+   * `/status` — answered by whichever agent claims the `overview` role, in that
+   * agent's own conversation, whoever this session is talking to. The active
+   * agent is left exactly as it was, same as Telegram. No agent claiming the
+   * role is a fact about the installation, said plainly, not an error.
    */
   async status(): Promise<void> {
-    const advisor =
-      this.#deps.catalog.get(FINANCE_ADVISOR_ID) ?? this.#deps.catalog.defaultAgent();
-    if (advisor.id !== this.#agent.id) {
+    const resolution = this.#deps.catalog.agentForRole(ROLE_OVERVIEW);
+    if (!resolution.ok) {
+      this.#out(roleUnavailableText(ROLE_OVERVIEW));
+      return;
+    }
+    const overview = resolution.agent;
+    if (overview.id !== this.#agent.id) {
       this.#out(
         dim(
-          `(${advisor.name} answers this one; you are still talking to ${this.#agent.name}.)`,
+          `(${overview.name} answers this one; you are still talking to ${this.#agent.name}.)`,
           this.#style().color,
         ),
       );
     }
-    await this.runTurn(advisor, 'Status', { carry: false });
+    await this.runTurn(overview, 'Status', { carry: false });
   }
 
-  /** `/recap` — the weekly mission, run now through the same executor. */
+  /** `/recap` — the recap mission, run now through the same executor. */
   async recap(): Promise<void> {
+    const resolution = this.#deps.catalog.agentForRole(ROLE_RECAP);
+    if (!resolution.ok) {
+      this.#out(roleUnavailableText(ROLE_RECAP));
+      return;
+    }
+    const missionId = this.#deps.recapMissionId;
+    if (missionId === undefined) {
+      this.#out(NO_RECAP_MISSION_TEXT);
+      return;
+    }
     const runMission = this.#deps.runMission;
     if (!runMission) {
       this.#out(RECAP_UNAVAILABLE_TEXT);
       return;
     }
-    const advisor =
-      this.#deps.catalog.get(FINANCE_ADVISOR_ID) ?? this.#deps.catalog.defaultAgent();
+    const speaker = resolution.agent;
     const spinner = this.#deps.spinner;
     const startedAt = Date.now();
-    spinner.start(handleLabel(advisor.handle));
+    spinner.start(handleLabel(speaker.handle));
     try {
-      const outcome = await runMission(RECAP_MISSION_ID, CLI_CHAT_ID, (name) =>
+      const outcome = await runMission(missionId, CLI_CHAT_ID, (name) =>
         spinner.noteToolCall(name),
       );
       spinner.stop();

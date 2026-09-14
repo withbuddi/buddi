@@ -560,6 +560,7 @@ export async function main(): Promise<void> {
           now,
           config: web,
           token,
+          env: process.env,
           jobs: { resumeJob },
           log: (line) => console.error(line),
         });

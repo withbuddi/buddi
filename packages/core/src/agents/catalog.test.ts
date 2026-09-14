@@ -254,6 +254,8 @@ describe('loadAgentCatalog', () => {
         name: 'Concierge',
         description: 'Front desk.',
         isDefault: false,
+        roles: [],
+        source: 'private',
         providerKind: 'anthropic',
         available: true,
       },
@@ -263,10 +265,62 @@ describe('loadAgentCatalog', () => {
         name: 'Finance Advisor',
         description: 'Money.',
         isDefault: true,
+        roles: [],
+        source: 'private',
         providerKind: 'anthropic',
         available: true,
       },
     ]);
+  });
+
+  it('resolves an agent by the role it declares, in declaration order', () => {
+    const first = agentFile(
+      [
+        'id: alpha',
+        'handle: alpha',
+        'name: Alpha',
+        'description: First.',
+        'tools: []',
+        'roles: [overview, recap]',
+        'default: true',
+      ].join('\n'),
+      'You are alpha.',
+    );
+    const second = agentFile(
+      [
+        'id: beta',
+        'handle: beta',
+        'name: Beta',
+        'description: Second.',
+        'tools: []',
+        'roles: [overview]',
+      ].join('\n'),
+      'You are beta.',
+    );
+    const catalog = load({ alpha: first, beta: second });
+    expect(catalog.agentsWithRole('overview').map((a) => a.id)).toEqual(['alpha', 'beta']);
+    const resolved = catalog.agentForRole('overview');
+    expect(resolved.ok && resolved.agent.id).toBe('alpha');
+    expect(catalog.get('alpha')?.roles).toEqual(['overview', 'recap']);
+  });
+
+  it('answers a role nobody claims with a typed problem naming the key', () => {
+    const catalog = load({ concierge: CONCIERGE });
+    const resolved = catalog.agentForRole('overview');
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) throw new Error('unreachable');
+    expect(resolved.problem.code).toBe('no-agent-for-role');
+    expect(resolved.problem.role).toBe('overview');
+    expect(resolved.problem.message).toContain('roles: [overview]');
+    expect(catalog.agentsWithRole('overview')).toEqual([]);
+  });
+
+  it('rejects a role that is not kebab-case', () => {
+    const bad = agentFile(
+      ['id: alpha', 'handle: alpha', 'name: A', 'description: d.', 'tools: []', 'roles: [Not Kebab]'].join('\n'),
+      'You are alpha.',
+    );
+    expect(() => load({ alpha: bad })).toThrow(/kebab-case/);
   });
 
   it('resolves an id, and the default when none is given', () => {

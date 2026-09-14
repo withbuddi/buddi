@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DB_UNREACHABLE, DOCKER_DOWN } from './db-cmd.js';
 import {
+  checkAgents,
   checkNodeVersion,
   checkVault,
   collectChecks,
@@ -24,6 +25,7 @@ function fakeProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     migrations: async () => ok('6 applied, none pending'),
     vault: async () => ok('keychain — from the vault: ANTHROPIC_API_KEY'),
     modelCredential: async () => ok('api-key accepted'),
+    agents: async () => ok('5 agents — 5 anthropic (claude-sonnet-5)'),
     botToken: async () => ok('@buddi_bot'),
     pairedDevices: async () => ok('telegram:phone'),
     queue: async () => ok('running — 0 pending, 0 running, 0 suspended, 0 failed, 3 succeeded'),
@@ -45,6 +47,7 @@ describe('collectChecks', () => {
       'migrations',
       'vault',
       'model credential',
+      'agents',
       'telegram bot',
       'paired devices',
       'queue',
@@ -65,6 +68,7 @@ describe('collectChecks', () => {
       'migrations',
       'vault',
       'model credential',
+      'agents',
     ]);
   });
 
@@ -256,5 +260,63 @@ describe('the table when Docker is not running', () => {
     const checks = await collectChecks(fakeProbes(dockerDown()));
     expect(exitCodeFor(checks)).toBe(1);
     expect(summarize(checks)).toContain('postgres');
+  });
+});
+
+describe('the agents row', () => {
+  const agent = (over: Partial<Parameters<typeof checkAgents>[0][number]> = {}) => ({
+    id: 'ledger',
+    handle: 'ledger',
+    provider: 'anthropic',
+    model: 'claude-sonnet-5',
+    available: true,
+    isDefault: false,
+    ...over,
+  });
+
+  it('summarises the engines, grouped by provider and model', () => {
+    const row = checkAgents([
+      agent({ id: 'a', handle: 'a', isDefault: true }),
+      agent({ id: 'b', handle: 'b' }),
+      agent({ id: 'c', handle: 'c' }),
+      agent({ id: 'd', handle: 'd' }),
+      agent({
+        id: 'scout',
+        handle: 'scout',
+        provider: 'openai',
+        model: 'gpt-5',
+        available: false,
+        reason: 'environment variable OPENAI_API_KEY is not set',
+      }),
+    ]);
+    expect(row.detail).toContain('5 agents');
+    expect(row.detail).toContain('4 anthropic (claude-sonnet-5)');
+    expect(row.detail).toContain(
+      '1 openai (gpt-5, unavailable: environment variable OPENAI_API_KEY is not set)',
+    );
+    // One agent on a provider this machine cannot reach is a warning, never a
+    // failed installation: the other four still run.
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('@scout');
+  });
+
+  it('FAILS only when the default agent cannot run', () => {
+    const row = checkAgents([
+      agent({ isDefault: true, available: false, reason: 'ANTHROPIC_API_KEY is not set' }),
+      agent({ id: 'other', handle: 'other' }),
+    ]);
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('the default agent @ledger cannot run');
+  });
+
+  it('is ok when everything installed can run', () => {
+    expect(checkAgents([agent({ isDefault: true })]).status).toBe('ok');
+    expect(checkAgents([agent({ isDefault: true })]).detail).toBe(
+      '1 agent — 1 anthropic (claude-sonnet-5)',
+    );
+  });
+
+  it('fails an installation with no agents at all', () => {
+    expect(checkAgents([]).status).toBe('fail');
   });
 });

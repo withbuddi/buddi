@@ -27,6 +27,7 @@ import {
   localDateTimeString,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
+  roleProblemMessage,
   setActiveAgent,
   setSurfaceCursor,
   touchSurfaceIdentity,
@@ -93,10 +94,11 @@ export function readingText(agentLabel?: string): string {
 }
 
 /**
- * `/status` and `/recap` are finance features: they are answered by this agent
- * whichever one the chat is currently talking to.
+ * `/status` and `/recap` name a **capability**, never an agent. The surface asks
+ * the catalog who claims the role, answers with that agent whichever one the
+ * chat is currently talking to, and says plainly when nobody claims it.
  */
-export const FINANCE_ADVISOR_ID = 'finance-advisor';
+import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -107,7 +109,11 @@ export const FILES_LIMIT = 10;
 /** Progress lines stay short — a long one is truncated with an ellipsis. */
 export const PROGRESS_MAX_CHARS = 200;
 
-/** Tool name → what the owner sees while it runs. */
+/**
+ * Tool name → what the owner sees while it runs. Presentation only, and only
+ * for tools this installation happens to have: an unlisted name degrades to
+ * its own words, so an install with other plugins loses nothing but polish.
+ */
 const TOOL_LABELS: Record<string, string> = {
   'finance.list_accounts': 'checking accounts',
   'finance.project_cashflow': 'projecting cash flow',
@@ -118,7 +124,7 @@ const TOOL_LABELS: Record<string, string> = {
 
 /** Unknown tools degrade to their own name: `finance.list_txns` → `list txns`. */
 export function toolLabel(name: string): string {
-  return TOOL_LABELS[name] ?? name.replace(/^finance\./, '').replace(/_/g, ' ');
+  return TOOL_LABELS[name] ?? name.replace(/^[a-z0-9-]+\./, '').replace(/_/g, ' ');
 }
 
 /** `⏳ Working… (checking accounts, projecting cash flow)`, capped in length. */
@@ -145,8 +151,8 @@ export const HELP = [
   '/use <handle> — switch to an agent, e.g. /use @ledger',
   '@handle … — ask that agent this one message without switching',
   '/whoami — which agent is active here',
-  '/status — where you stand right now (finance advisor)',
-  '/recap — run the weekly recap now (finance advisor)',
+  '/status — where you stand right now',
+  '/recap — run the recap mission now',
   '/files — the last files you sent me',
   '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/approvals — anything waiting for your approval',
@@ -326,16 +332,25 @@ export function parseMention(text: string, botUsername?: string): Mention | unde
   return { handle: m[1] as string, rest: (m[2] as string).trim() };
 }
 
-/** The mission `/recap` runs. Named here so the surface asks for one thing. */
-export const RECAP_MISSION_ID = 'friday-recap';
-
 /** `buddi-telegram` standalone has no scheduler wiring, and says so plainly. */
 export const RECAP_UNAVAILABLE_TEXT =
-  'The weekly recap runs from the scheduler, which is only wired up under `buddi serve`. Start buddi that way and /recap will work here.';
+  'The recap runs from the scheduler, which is only wired up under `buddi serve`. Start buddi that way and /recap will work here.';
 
 /** Nothing to run: the mission has never been registered. */
 export const RECAP_NOT_REGISTERED_TEXT =
-  'The weekly recap mission is not registered yet. Register it with: pnpm missions add-friday-recap';
+  'The recap mission is not registered yet. Register it with: buddi missions add-defaults';
+
+/** No installed plugin suggests a recap mission at all. */
+export const NO_RECAP_MISSION_TEXT =
+  'No installed plugin suggests a recap mission, so there is nothing for me to run here.';
+
+/**
+ * Nobody claims the role a command needs. Not an error and not a dead
+ * reference: a fact about this installation, plus the one line that fixes it.
+ */
+export function roleUnavailableText(role: string): string {
+  return roleProblemMessage(role);
+}
 
 /**
  * The outcome of an inline mission run. `unknown-mission` is not an error: the
@@ -373,8 +388,8 @@ export interface RunRequest {
    */
   attachments?: RunAttachment[];
   /**
-   * The agent this turn belongs to — the chat's active one, except for the
-   * finance-only commands, which name the finance advisor explicitly. The
+   * The agent this turn belongs to — the chat's active one, except for a
+   * role-addressed command (`/status`), which runs the role holder instead. The
    * surface resolves it; the caller never re-decides which agent runs.
    */
   agent: CatalogAgent;
@@ -416,6 +431,12 @@ export interface TelegramSurfaceOptions {
   run(req: RunRequest): Promise<string>;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
   runMission?: RunMission;
+  /**
+   * The mission `/recap` runs, resolved by the composition root from the
+   * installed plugins' suggestions for the `recap` role. Absent: no plugin
+   * suggests one, and the command says exactly that.
+   */
+  recapMissionId?: string;
   /**
    * The approval surface, when this build has the machinery wired up.
    *
@@ -1295,9 +1316,13 @@ export class TelegramSurface {
     }
   }
 
-  /** The finance advisor, for the finance-only commands; default if absent. */
-  #financeAgent(): CatalogAgent {
-    return this.#opts.catalog.get(FINANCE_ADVISOR_ID) ?? this.#opts.catalog.defaultAgent();
+  /**
+   * The agent that answers for a role, or the typed problem. No fallback to the
+   * default agent: a command that needs a capability nobody claims says so.
+   */
+  #agentForRole(role: string): CatalogAgent | undefined {
+    const resolution = this.#opts.catalog.agentForRole(role);
+    return resolution.ok ? resolution.agent : undefined;
   }
 
   /** One accepted owner message: an address, then commands, then a run. */
@@ -1397,12 +1422,20 @@ export class TelegramSurface {
       return;
     }
 
-    // `/status` is a finance feature: it is answered by the finance advisor
-    // whoever the chat is talking to, in that advisor's own conversation, and
-    // the active agent is left exactly as it was.
+    // `/status` names a capability, not an agent: whoever claims the `overview`
+    // role answers it, in that agent's own conversation, whoever the chat is
+    // talking to — and the active agent is left exactly as it was.
     const active = await this.activeAgent(chatId);
     const status = command === '/status';
-    const agent = status ? this.#financeAgent() : active;
+    let agent = active;
+    if (status) {
+      const holder = this.#agentForRole(ROLE_OVERVIEW);
+      if (!holder) {
+        await this.#opts.api.sendMessage(chatId, roleUnavailableText(ROLE_OVERVIEW));
+        return;
+      }
+      agent = holder;
+    }
     const prompt = status ? 'Status' : text;
     const note =
       status && agent.id !== active.id
@@ -1823,10 +1856,24 @@ export class TelegramSurface {
   }
 
   /**
-   * `/recap` — the weekly mission, run now, through the same executor the
+   * `/recap` — the recap mission, run now, through the same executor the
    * scheduler uses. The answer lands in this chat's progress bubble.
+   *
+   * Which mission that is comes from the installed plugins (the suggestion for
+   * the `recap` role); who speaks it comes from the catalog. Neither is named
+   * here, and an installation providing neither is told so plainly.
    */
   async handleRecap(chatId: string): Promise<void> {
+    const speaker = this.#agentForRole(ROLE_RECAP);
+    if (!speaker) {
+      await this.#opts.api.sendMessage(chatId, roleUnavailableText(ROLE_RECAP));
+      return;
+    }
+    const missionId = this.#opts.recapMissionId;
+    if (missionId === undefined) {
+      await this.#opts.api.sendMessage(chatId, NO_RECAP_MISSION_TEXT);
+      return;
+    }
     const runMission = this.#opts.runMission;
     if (!runMission) {
       await this.#opts.api.sendMessage(chatId, RECAP_UNAVAILABLE_TEXT);
@@ -1835,12 +1882,12 @@ export class TelegramSurface {
     await this.#withBubble(
       chatId,
       async (progress) => {
-        const outcome = await runMission(RECAP_MISSION_ID, chatId, (name) =>
+        const outcome = await runMission(missionId, chatId, (name) =>
           progress.noteToolCall(name),
         );
         return outcome.ok ? outcome.text : RECAP_NOT_REGISTERED_TEXT;
       },
-      handleLabel(this.#financeAgent().handle),
+      handleLabel(speaker.handle),
     );
   }
 

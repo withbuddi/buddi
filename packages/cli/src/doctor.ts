@@ -37,6 +37,14 @@ export interface DoctorProbes {
   /** Where this boot's secrets came from — the vault, or `.env`. */
   vault(): Promise<ProbeResult>;
   modelCredential(): Promise<ProbeResult>;
+  /** Which engine each installed agent runs on, and whether it can run here. */
+  agents(): Promise<ProbeResult>;
+  /**
+   * Where agents and skills are loaded from. Optional so that a caller built
+   * before the search path existed still satisfies the interface; a row whose
+   * probe is absent is simply not printed.
+   */
+  config?(): Promise<ProbeResult>;
   botToken(): Promise<ProbeResult>;
   pairedDevices(): Promise<ProbeResult>;
   /** The durable queue: paused or running, and how the jobs stand. */
@@ -56,6 +64,8 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'migrations', critical: true, probe: 'migrations' },
   { name: 'vault', critical: true, probe: 'vault' },
   { name: 'model credential', critical: true, probe: 'modelCredential' },
+  { name: 'config', critical: false, probe: 'config' },
+  { name: 'agents', critical: true, probe: 'agents' },
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
   { name: 'queue', critical: false, probe: 'queue' },
@@ -68,9 +78,11 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
 export async function collectChecks(probes: DoctorProbes): Promise<Check[]> {
   const checks: Check[] = [];
   for (const row of ROWS) {
+    const probe = probes[row.probe] as undefined | (() => ProbeResult | Promise<ProbeResult>);
+    if (probe === undefined) continue;
     let result: ProbeResult;
     try {
-      result = await probes[row.probe]();
+      result = await probe.call(probes);
     } catch (err) {
       result = { status: 'fail', detail: err instanceof Error ? err.message : String(err) };
     }
@@ -186,4 +198,112 @@ export function checkNodeVersion(version: string): ProbeResult {
   return major >= MIN_NODE_MAJOR
     ? { status: 'ok', detail: version }
     : { status: 'fail', detail: `${version} — buddi needs Node ${MIN_NODE_MAJOR} or newer` };
+}
+
+/* ------------------------------------------------------------------ *
+ * The config row
+ * ------------------------------------------------------------------ */
+
+/** The resolved search path, as the doctor needs to see it. */
+export interface ConfigFacts {
+  /** Where the shipped examples live, and how many agents loaded from there. */
+  examplesDir: string;
+  examples: number;
+  /** The owner's own directory, and how many agents came from it. */
+  privateDir: string;
+  private: number;
+  /** True when the owner's agents are still inside the repository. */
+  legacy: boolean;
+}
+
+/**
+ * Where this installation's configuration lives.
+ *
+ * Never critical: an installation running only the examples is a *fresh* one,
+ * not a broken one. It warns in exactly two cases — nothing private yet (say
+ * where to put it) and the pre-split layout (say how to move it) — because both
+ * are one command away from being right.
+ */
+export function checkConfig(facts: ConfigFacts): ProbeResult {
+  const where =
+    `examples ${facts.examplesDir} (${facts.examples}), ` +
+    `private ${facts.privateDir} (${facts.private})`;
+  if (facts.legacy) {
+    return {
+      status: 'warn',
+      detail: `${where}; your agents are still inside the repository — run \`buddi agents migrate\``,
+    };
+  }
+  if (facts.private === 0) {
+    return {
+      status: 'warn',
+      detail: `${where}; no agents of your own yet — add one under ${facts.privateDir}`,
+    };
+  }
+  return { status: 'ok', detail: where };
+}
+
+/* ------------------------------------------------------------------ *
+ * The agents row
+ * ------------------------------------------------------------------ */
+
+/** One agent's engine, as the doctor needs to see it. */
+export interface AgentEngineFact {
+  id: string;
+  handle: string;
+  provider: string;
+  model: string;
+  available: boolean;
+  /** Why it cannot run here. Present only when `available` is false. */
+  reason?: string;
+  isDefault: boolean;
+  /** Which half of the search path it came from. */
+  source?: string;
+}
+
+/**
+ * Engines in one line: how many agents, on which provider and model, and which
+ * of them this machine cannot actually reach.
+ *
+ * It FAILS only when the **default** agent cannot run — that is the one every
+ * surface falls back to, so its credential is the installation's floor. An
+ * unavailable specialist is a warning: the owner who has not signed up for a
+ * second provider still has four agents that work, and taking the whole report
+ * down over the fifth would be a lie about the state of the installation.
+ */
+export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
+  if (agents.length === 0) {
+    return { status: 'fail', detail: 'no agents are installed under agents/' };
+  }
+
+  const groups = new Map<string, { provider: string; model: string; count: number; reason?: string }>();
+  for (const agent of agents) {
+    const key = `${agent.provider}|${agent.model}`;
+    const group = groups.get(key) ?? { provider: agent.provider, model: agent.model, count: 0 };
+    group.count += 1;
+    if (!agent.available && group.reason === undefined) group.reason = agent.reason;
+    groups.set(key, group);
+  }
+
+  const parts = [...groups.values()].map(
+    (g) =>
+      `${g.count} ${g.provider} (${g.model}${g.reason === undefined ? '' : `, unavailable: ${g.reason}`})`,
+  );
+  const detail = `${agents.length} agent${agents.length === 1 ? '' : 's'} — ${parts.join(', ')}`;
+
+  const fallback = agents.find((a) => a.isDefault);
+  if (fallback && !fallback.available) {
+    return {
+      status: 'fail',
+      detail: `${detail}; the default agent @${fallback.handle} cannot run`,
+    };
+  }
+  const blocked = agents.filter((a) => !a.available);
+  if (blocked.length > 0) {
+    return {
+      status: 'warn',
+      detail: `${detail}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
+    };
+  }
+  return { status: 'ok', detail };
 }

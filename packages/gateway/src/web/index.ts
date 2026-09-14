@@ -6,5 +6,6 @@ export * from './sessions.js';
 export * from './http.js';
 export * from './read.js';
 export * from './write.js';
+export * from './agents.js';
 export * from './static.js';
 export * from './server.js';

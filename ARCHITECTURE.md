@@ -53,7 +53,9 @@ their upstream privileges; verified TLS required. The adapter is a plugin
 
 One process, five core modules plus droppable tool plugins, with strict, disjoint ownership:
 
-- **Surfaces** — authenticate the sender, translate presentation. Never create runs.
+- **Surfaces** — authenticate the sender, translate presentation. Never create runs,
+  and never name an agent: a surface command that needs a capability (`/status`,
+  `/recap`) asks the catalog **by role** (see "Agent roles").
 - **Gateway** — map authenticated identity → conversation; submit *commands*; render replies.
 - **Orchestrator** — owns durable runs, scheduling, retries, cancellation, suspension.
 - **Runtime** — the agent loop: proposes tool calls, consumes results. Never executes effects.
@@ -111,6 +113,20 @@ tool; tools import core**, enforced by lint (import boundaries) and a CI check t
 core with the tools directory absent. There is deliberately no runtime plugin framework:
 for a single-owner system, "droppable" means *delete the folder and it still boots*.
 
+Agents and skills are discovered the same way, but from a **search path** rather than one
+directory, because a clone of this repository is two things at once: a platform anybody
+may read, and one owner's private configuration. The platform half ships `examples/agents`
+and `examples/skills`; the owner's half is `BUDDI_AGENTS_DIR` if set, else `<repo>/private/agents`
+when it exists, else `~/.buddi/agents` (skills likewise). Both are loaded, examples first,
+and **later wins**: an agent whose id, or a skill whose name, already appeared is *replaced
+wholesale* — the file, never a merge, because half of one persona blended into half of
+another is a prompt nobody wrote and nobody can review. Each agent records the half it came
+from (`source: 'example' | 'private'`), so the listing can say where a persona lives without
+re-deriving paths, and `default: true` declared in the owner's half beats one declared by an
+example, while two claims *inside one directory* remain a load error. `private/` is gitignored:
+the split is what lets the repository be shared without shipping the owner's agents, and
+`buddi agents migrate` moves a pre-split `<repo>/agents` into place once, idempotently.
+
 Not everything that plugs in is the same kind of thing — there are two plugin contracts:
 
 - **Effect tools** — agent-proposed capabilities (`smtp.send`, `fs.write`, `deploy`).
@@ -127,6 +143,13 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
   capabilities fail closed. This is what makes a broadly privileged drop-in like a
   Chrome MCP connection acceptable: declare `navigate/screenshot/read` at `session`
   tier, `click/type` at `gated`, and the registry enforces the rest.
+- **Suggested missions.** A scheduled mission is domain knowledge, so it travels with
+  the plugin that knows what it means: a manifest may carry `missions` — id, cron,
+  prompt, and the **role** of the agent that should run it. They are suggestions,
+  not installs: `buddi missions add-defaults` is the owner accepting them, resolving
+  each role through the catalog and skipping — out loud, with the line that would fix
+  it — any role no installed agent claims. The gateway ships exactly one mission of
+  its own, `sentinel-wake`, which has no schedule and no domain.
 - **Plugin-owned schema.** A plugin family ships its own migrations in a Postgres schema
   namespace (`email.mailboxes`, `email.email_messages`), registered with core at install;
   core's schema contains no tool-specific tables. Uninstall drops the schema and registry
@@ -150,6 +173,23 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
   automatically**, which is how a house rule reaches agents whose files nobody edited. An
   agent may also name shared skills in its `skills:` frontmatter; an unknown name fails
   the load.
+
+## Agent roles (how a surface asks for a capability)
+
+An agent file may declare `roles: [overview, recap]` — free-form kebab strings whose
+*shape* core validates and whose *meaning* core deliberately does not. A role is the
+only way a surface, or a plugin's suggested mission, is allowed to ask for an agent:
+`/status` runs whoever claims `overview`, `/recap` runs the recap mission with whoever
+claims `recap`, and `sentinel-wake` speaks through the `overview` holder, falling back
+to the default agent only because *something* must answer an urgent finding.
+
+Resolution is a result union, like every other configuration answer here:
+`agentForRole` returns the first claimant in declaration order, or a typed problem.
+A role nobody claims is a **configuration state, not an error** — the surface says so
+in one sentence and names the frontmatter key, never a dead reference to an agent this
+installation does not have. This is principle 6 applied to the surfaces: an owner who
+installs buddi with their own agents and no plugins gets a coherent system, and the
+one thing the gateway must never contain is the name of somebody else's agent.
 
 ## Computer access (host computer-use first, CDP demoted)
 
@@ -438,7 +478,9 @@ buddi/
 2. **Telegram surface + owner identity + the scheduled Friday recap.** One allowlisted
    Telegram surface (numeric user id + private-chat id, update-id dedup) bound to the
    installation owner; missions with materialized **occurrences** and per-mission
-   **misfire policy** — a week asleep does not produce a week of stale recaps.
+   **misfire policy** — a week asleep does not produce a week of stale recaps. The
+   recap itself is the *finance plugin's* suggested mission, reached by role: the
+   gateway schedules it without knowing what a recap contains.
 3. **Effects: queue, vault, approvals — and email as the first effect tool.** Durable
    Postgres queue + leases + startup recovery + pause; keychain vault; the immutable
    action object and approval state machine; the effect ledger. Then the **email**

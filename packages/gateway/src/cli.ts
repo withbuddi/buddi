@@ -33,12 +33,8 @@ import {
 } from '@buddi/core';
 import { createConversation, createProvider, runAgent } from '@buddi/runtime';
 import type { Pool } from 'pg';
-import {
-  AGENTS_DIR,
-  createToolRegistry,
-  loadGatewayCatalog,
-  memoryPreambleFor,
-} from './agents/catalog.js';
+import { AGENTS_DIR, memoryPreambleFor } from './agents/catalog.js';
+import { main as runAgentsCli } from './agents-cli.js';
 import { bindDelegation } from './agents/delegation.js';
 import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
 import { CliApprovals } from './chat/approvals.js';
@@ -48,6 +44,7 @@ import { Spinner, silentSpinner } from './chat/spinner.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 import { describeDatabaseError } from './db-ready.js';
 import { createInlineMissionRunner } from './missions/inline.js';
+import { recapMissionId } from './missions/recap.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { stripToolNames } from './telegram/surface.js';
 
@@ -61,7 +58,9 @@ const USAGE = `buddi — your personal agents
   buddi ask "<question>"     one turn, then exit
   buddi ask "<question>" --agent <handle>
   buddi ask "<question>" --resume <id>
-  buddi agents               every agent installed under agents/
+  buddi agents               every agent, its engine and whether it can run
+  buddi agents show <handle> | set <handle> [--provider p] [--model m]
+  buddi agents models | test <handle>
 
 In chat: /help lists every command. Exit codes for ask: 0 answered, 1 failed,
 2 stopped awaiting your approval.`;
@@ -256,6 +255,16 @@ async function page(text: string): Promise<boolean> {
  * calls this function instead of re-implementing it.
  */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // `agents` is a command group of its own (list, show, set, models, test) and
+  // owns everything after its own word — including flags this parser would
+  // reject. It needs no database and no pool, so it is dispatched before any
+  // wiring exists.
+  if (argv[0] === 'agents') {
+    const code = await runAgentsCli(argv.slice(1));
+    if (code !== 0) process.exitCode = code;
+    return;
+  }
+
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -271,24 +280,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   loadEnv();
 
   const style = styleFor(process.env, process.stdout);
-
-  if (args.command === 'agents') {
-    // Listing agents needs no database and no credential: build the catalog
-    // alone rather than the whole wiring.
-    const catalog = loadGatewayCatalog({ env: process.env, registry: createToolRegistry() });
-    for (const a of catalog.list()) {
-      console.log(
-        `${bold(`@${a.handle}`, style.color)} ${dim(a.id, style.color)}${
-          a.isDefault ? dim(' (default)', style.color) : ''
-        } ${dim(`[${a.providerKind}]`, style.color)} — ${a.name}: ${a.description}`,
-      );
-      // An agent whose credential this machine does not have is listed, not
-      // hidden: the owner should see what they have installed and what it
-      // would take to run it.
-      if (!a.available) console.log(`  ${dim(`unavailable: ${a.unavailableReason}`, style.color)}`);
-    }
-    return;
-  }
 
   if (args.command === 'ask' && !args.question) {
     console.error('buddi ask needs a question: buddi ask "can I afford a bike?"');
@@ -526,6 +517,9 @@ async function chat(
     artifacts,
     approvals,
     runMission,
+    // Which mission `/recap` runs is the installed plugins' suggestion for the
+    // `recap` role, resolved here at the composition root, never in the surface.
+    ...(recapMissionId() === undefined ? {} : { recapMissionId: recapMissionId() as string }),
     present: async (text) => {
       if (shouldPage(text, style, process.stdout.rows ?? 0)) {
         rl.pause();

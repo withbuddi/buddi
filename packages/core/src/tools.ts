@@ -4,6 +4,7 @@
  */
 import type { Pool } from 'pg';
 import type { ZodType } from 'zod';
+import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
 
 /** UX tier labels. v1 executes `auto` only; everything else fails closed. */
@@ -140,6 +141,39 @@ export interface Source {
   poll(ctx: SourceContext): Promise<void>;
 }
 
+/**
+ * A scheduled mission a plugin *suggests*, not one it installs.
+ *
+ * Default missions are domain knowledge — "every Friday, recap the week" is the
+ * finance plugin's idea, not the gateway's — so they travel with the plugin
+ * that knows what they mean. `buddi missions add-defaults` is the owner's act
+ * of accepting the suggestion; nothing is scheduled by installing a plugin.
+ *
+ * The agent is named by **role** wherever possible (`agentRole: 'recap'`), so
+ * the same plugin lands on whichever agent this installation gave that role. An
+ * `agentId` pins one agent by name; a suggestion whose role nobody claims is
+ * skipped with a printed reason, never silently registered on the default.
+ */
+export interface SuggestedMission {
+  /** Stable mission id, e.g. `friday-recap`. */
+  id: string;
+  name: string;
+  /** Which agent runs it, by capability. Resolved through the agent catalog. */
+  agentRole?: string;
+  /** Or by name, when the mission is meaningless on any other agent. */
+  agentId?: string;
+  /** Five-field cron. Missions with no schedule are infrastructure, not this. */
+  cron: string;
+  /** IANA zone; the installation's own (`BUDDI_TZ`) when omitted. */
+  timezone?: string;
+  misfirePolicy?: MisfirePolicy;
+  prompt: string;
+  /** Speaks whether or not the run decided to. Default false. */
+  alwaysDeliver?: boolean;
+  /** Registered enabled. Default true; false ships a placeholder switched off. */
+  enabledByDefault?: boolean;
+}
+
 export interface PluginManifest {
   /** Plugin family name, e.g. 'finance'. */
   name: string;
@@ -162,4 +196,10 @@ export interface PluginManifest {
    * the normal case — simply omits the field.
    */
   sources?: Source[];
+  /**
+   * Scheduled missions this plugin suggests (optional). Suggestions only:
+   * `buddi missions add-defaults` registers them, resolving `agentRole`
+   * through the agent catalog and skipping — out loud — any role nobody claims.
+   */
+  missions?: SuggestedMission[];
 }
