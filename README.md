@@ -57,6 +57,13 @@ empty. If `CLAUDE_CODE_OAUTH_TOKEN` is set the agent uses the subscription
 token; otherwise it uses `ANTHROPIC_API_KEY`. Pin a different model with
 `BUDDI_MODEL` (default `claude-sonnet-5`).
 
+**Secrets.** `.env` is the day-1 fallback; the OS keychain is the real home.
+`buddi vault import-env` moves every known secret into it and rewrites each line
+in `.env` to `NAME="<vault>"` — a marker, not a value, which resolution treats as
+absent so the vault answers instead. The quotes matter: unquoted, `<` is a shell
+redirection and `set -a; . ./.env` would fail. `buddi vault list | get | set |
+delete` manage the keychain directly, and no command ever prints a value back.
+
 **Port note.** The container publishes `${BUDDI_DB_PORT:-5432}`. If 5432 is already taken on
 your machine, set `BUDDI_DB_PORT` **and** the port in `DATABASE_URL` together, e.g.:
 

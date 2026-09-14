@@ -19,6 +19,37 @@ import { VaultLockedError, VaultUnavailableError, type Vault } from './types.js'
 export const VAULT_PLACEHOLDER = '<vault>';
 
 /**
+ * How the marker is *written* into `.env`: quoted.
+ *
+ * Bare `<vault>` is a here-document redirection to `sh`/`zsh`, so a `.env`
+ * holding `NAME=<vault>` blows up under `set -a; . ./.env` — the shell
+ * incantation every CI script and half the docs use. Double quotes cost
+ * nothing (`dotenv` strips them) and keep the file sourceable.
+ */
+export const VAULT_PLACEHOLDER_LINE = `"${VAULT_PLACEHOLDER}"`;
+
+/**
+ * Is this value the marker rather than a secret?
+ *
+ * Both spellings count: `dotenv` hands back `<vault>` with the quotes already
+ * stripped, while anything reading the file's text raw (`init`, `import-env`)
+ * still sees `"<vault>"`. Older files written before the quoting fix are the
+ * unquoted form, and stay readable.
+ */
+export function isVaultPlaceholder(value: string): boolean {
+  return unquote(value.trim()) === VAULT_PLACEHOLDER;
+}
+
+/** Strip one matching pair of surrounding quotes, the way `dotenv` does. */
+function unquote(value: string): string {
+  const first = value[0];
+  if ((first === '"' || first === "'") && value.length >= 2 && value.endsWith(first)) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+/**
  * The secrets buddi knows how to move into the keychain. `import-env` walks
  * this list; nothing else in `.env` (a database URL, a timezone) is a secret.
  */
@@ -51,7 +82,7 @@ export function envValue(env: NodeJS.ProcessEnv, name: string): string | undefin
   const raw = env[name];
   if (raw === undefined) return undefined;
   const value = raw.trim();
-  if (value === '' || value === VAULT_PLACEHOLDER) return undefined;
+  if (value === '' || isVaultPlaceholder(value)) return undefined;
   return value;
 }
 

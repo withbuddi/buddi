@@ -5,7 +5,15 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createFileVault } from './file.js';
 import { createKeychainVault, INDEX_ACCOUNT, type RunResult } from './keychain.js';
 import { createMemoryVault } from './memory.js';
-import { KNOWN_SECRETS, VAULT_PLACEHOLDER, resolveSecret, resolveSecrets } from './resolve.js';
+import {
+  KNOWN_SECRETS,
+  VAULT_PLACEHOLDER,
+  VAULT_PLACEHOLDER_LINE,
+  envValue,
+  isVaultPlaceholder,
+  resolveSecret,
+  resolveSecrets,
+} from './resolve.js';
 import { VaultLockedError, VaultUnavailableError, createVault, vaultSelection } from './index.js';
 
 const dirs: string[] = [];
@@ -183,6 +191,28 @@ describe('resolveSecret', () => {
     });
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.problem.code).toBe('missing-secret');
+  });
+
+  // `import-env` writes the marker quoted so `. ./.env` does not read `<` as a
+  // redirection; `dotenv` strips the quotes, a raw read of the file does not.
+  it.each([VAULT_PLACEHOLDER, VAULT_PLACEHOLDER_LINE, "'<vault>'", '  "<vault>"  '])(
+    'treats %j as the placeholder, not a token',
+    async (written) => {
+      expect(isVaultPlaceholder(written)).toBe(true);
+      expect(envValue({ TELEGRAM_BOT_TOKEN: written }, 'TELEGRAM_BOT_TOKEN')).toBeUndefined();
+      const res = await resolveSecret('TELEGRAM_BOT_TOKEN', {
+        vault: createMemoryVault(),
+        env: { TELEGRAM_BOT_TOKEN: written },
+      });
+      expect(res).toMatchObject({ ok: false });
+    },
+  );
+
+  it('writes the marker quoted, and a real value is never mistaken for it', () => {
+    expect(VAULT_PLACEHOLDER_LINE).toBe('"<vault>"');
+    expect(isVaultPlaceholder('123:abc')).toBe(false);
+    expect(isVaultPlaceholder('"<vault>')).toBe(false);
+    expect(isVaultPlaceholder('<vault>x')).toBe(false);
   });
 
   it('fails closed on a locked vault instead of using .env', async () => {

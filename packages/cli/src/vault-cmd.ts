@@ -19,11 +19,12 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import {
   KNOWN_SECRETS,
-  VAULT_PLACEHOLDER,
+  VAULT_PLACEHOLDER_LINE,
   VaultLockedError,
   VaultUnavailableError,
   assertSecretName,
   createVault,
+  isVaultPlaceholder,
   vaultSelection,
   type Vault,
 } from '@buddi/core';
@@ -212,7 +213,7 @@ export function plannedImports(
   const parsed = parseEnv(envText);
   return known.filter((name) => {
     const value = (parsed[name] ?? '').trim();
-    return value !== '' && value !== VAULT_PLACEHOLDER;
+    return value !== '' && !isVaultPlaceholder(value);
   });
 }
 
@@ -220,8 +221,10 @@ export function plannedImports(
  * Move every known secret out of `.env` and into the vault.
  *
  * A *move*, not a copy: the line stays, so the file still documents which
- * secrets this installation uses, but its value becomes `<vault>` — a marker
- * `resolveSecret` treats as absent. A half-finished import is safe by
+ * secrets this installation uses, but its value becomes `"<vault>"` — a marker
+ * `resolveSecret` treats as absent. The quotes are load-bearing: unquoted,
+ * `<vault>` is a redirection and `. ./.env` dies with a parse error.
+ * A half-finished import is safe by
  * construction: each secret is written to the vault before `.env` is rewritten,
  * and a secret already in the vault is simply overwritten with the same value.
  */
@@ -247,7 +250,7 @@ async function importEnv(
 
   out(`This will move ${names.length} secret${names.length === 1 ? '' : 's'} into the ${vault.kind} vault:`);
   for (const name of names) out(`  ${name}`);
-  out(`and rewrite each line in ${file} to NAME=${VAULT_PLACEHOLDER}.`);
+  out(`and rewrite each line in ${file} to NAME=${VAULT_PLACEHOLDER_LINE} (quoted, so \`. ./.env\` still works).`);
 
   const confirm = deps.confirm ?? confirmTty;
   if (!(await confirm('Move them now?'))) {
@@ -266,7 +269,7 @@ async function importEnv(
 
   const rewritten = applyEnvEdits(
     text,
-    moved.map((name) => ({ key: name, value: VAULT_PLACEHOLDER })),
+    moved.map((name) => ({ key: name, value: VAULT_PLACEHOLDER_LINE })),
   );
   await writeFile(file, rewritten, { mode: 0o600 });
 
