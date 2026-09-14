@@ -5,7 +5,20 @@ import { materializeOccurrences } from './materialize.js';
 import { getMission } from './missions.js';
 import type { Mission, Occurrence } from './types.js';
 
-export type ExecuteResult = { conversationId?: string };
+export type ExecuteResult = {
+  conversationId?: string;
+  /**
+   * The occurrence was handed to the durable queue rather than run here.
+   *
+   * `buddi serve` returns this: the scheduler's job is to decide *when*, and a
+   * queued job owns the run from then on — including closing the occurrence out
+   * when it finishes. The runner therefore leaves the row `claimed` and records
+   * `occurrence.queued` instead of pretending the mission already succeeded.
+   * A claim that is never closed is not lost: the stale-claim sweep releases it
+   * and the re-enqueue is idempotent (dedup key = occurrence id).
+   */
+  deferred?: boolean;
+};
 
 export type RunSchedulerOptions = {
   pool: Pool;
@@ -98,6 +111,19 @@ export function runScheduler(opts: RunSchedulerOptions): SchedulerHandle {
         const mission = await getMission(pool, occurrence.missionId);
         if (!mission) throw new Error(`mission "${occurrence.missionId}" disappeared`);
         const result = await execute(occurrence, mission);
+        if (result?.deferred) {
+          await appendEvent(
+            pool,
+            'occurrence.queued',
+            {
+              occurrenceId: occurrence.id,
+              missionId: occurrence.missionId,
+              scheduledAt: occurrence.scheduledAt.toISOString(),
+            },
+            result.conversationId ?? undefined,
+          );
+          continue;
+        }
         finished = await finishOccurrence(pool, occurrence.id, {
           state: 'succeeded',
           runConversationId: result?.conversationId ?? null,

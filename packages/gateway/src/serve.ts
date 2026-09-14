@@ -11,33 +11,116 @@
  * Stale claims are released every tick: a claim older than fifteen minutes is a
  * process that died mid-run, and the occurrence goes back to `pending` rather
  * than sitting claimed forever.
+ *
+ * Scheduled missions do not run in the scheduler pass. The scheduler decides
+ * *when* and enqueues a `mission-run` job keyed by the occurrence; a queue
+ * worker in this same process claims it under a lease and runs it. That is what
+ * buys bounded retries with backoff, startup recovery, durable suspension and a
+ * global pause — none of which an inline call can offer. Telegram's interactive
+ * turns stay inline (they are user-facing and already serialized per chat), but
+ * they are gated by the same pause flag.
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  collectSources,
+  countJobsByState,
+  enqueue,
   finishOccurrence,
   getActiveSchedule,
   getMission,
+  getOccurrence,
+  isPaused,
   listMissions,
   nextAfter,
   releaseStaleClaims,
+  resumeJob,
   runScheduler,
   runSentinels,
+  runSources,
+  runWorker,
   collectSentinels,
+  type Job,
+  type JobHandler,
   type Mission,
+  type ActionRecord,
+  type Occurrence,
+  type SourceContext,
+  type Suspension,
 } from '@buddi/core';
 import type { Pool } from 'pg';
-import { createWiring, loadEnv } from './bootstrap.js';
+import type { ApprovalResume } from '@buddi/runtime';
+import { ensureGmailAccount } from '@buddi/tool-email';
+import { createWiringAsync, loadEnv } from './bootstrap.js';
 import { insertOccurrence } from './missions-cli.js';
-import { createMissionExecutor, type MissionExecutorDeps } from './missions/execute.js';
+import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
+import {
+  createMissionExecutor,
+  type MissionExecutorDeps,
+  type MissionRunControl,
+  type MissionRunResult,
+} from './missions/execute.js';
 import { createDigestPrepare } from './missions/recap.js';
-import { notifyOwner } from './telegram/notify.js';
+import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 import type { MissionOutcome, RunMission } from './telegram/surface.js';
 
 /** Scheduler cadence and the age at which a claim is considered abandoned. */
 export const TICK_MS = 30_000;
 export const STALE_CLAIM_MS = 15 * 60_000;
+
+/** The scheduler's kind: run one occurrence of a scheduled mission. */
+export const MISSION_JOB_KIND = 'mission-run';
+
+/** Every kind this process claims. A source's run is a job like any other. */
+export const JOB_KINDS = [MISSION_JOB_KIND, AGENT_RUN_JOB_KIND] as const;
+
+/** Queue worker cadence. The lease is long because a mission run is a model call. */
+export const WORKER_POLL_MS = 1_000;
+export const JOB_LEASE_MS = 10 * 60_000;
+
+/** What a paused installation answers instead of running anything. */
+export const PAUSED_TEXT =
+  'buddi is paused. Nothing will run until you say `buddi resume`.';
+
+/**
+ * The payload a `mission-run` job carries: the occurrence it belongs to, plus —
+ * once the run has stopped on a gated call — what it is waiting for and, after
+ * the owner decides, the decision itself (merged in by `resumeJobForAction`).
+ */
+export interface MissionJobPayload {
+  occurrenceId: string;
+  missionId: string;
+  awaiting?: { actionId: string; conversationId: string };
+  approval?: ApprovalResume;
+}
+
+function missionJobPayload(payload: unknown): MissionJobPayload | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  const { occurrenceId, missionId } = p as Partial<MissionJobPayload>;
+  if (typeof occurrenceId !== 'string' || typeof missionId !== 'string') return null;
+  const awaiting =
+    typeof p.awaiting === 'object' && p.awaiting !== null
+      ? (p.awaiting as { actionId?: unknown; conversationId?: unknown })
+      : null;
+  const approval =
+    typeof p.approval === 'object' && p.approval !== null
+      ? (p.approval as { actionId?: unknown; state?: unknown })
+      : null;
+  return {
+    occurrenceId,
+    missionId,
+    ...(awaiting &&
+    typeof awaiting.actionId === 'string' &&
+    typeof awaiting.conversationId === 'string'
+      ? { awaiting: { actionId: awaiting.actionId, conversationId: awaiting.conversationId } }
+      : {}),
+    ...(approval && typeof approval.actionId === 'string' && typeof approval.state === 'string'
+      ? { approval: approval as unknown as ApprovalResume }
+      : {}),
+  };
+}
 
 export interface MissionLine {
   mission: Mission;
@@ -133,12 +216,120 @@ export function createInlineMissionRunner(base: InlineMissionDeps): RunMission {
   };
 }
 
+/**
+ * Hand one due occurrence to the queue.
+ *
+ * The dedup key *is* the occurrence id, which is what makes the handoff safe to
+ * repeat: a process that dies between claiming and running leaves the claim to
+ * the stale sweep, the occurrence is claimed again, and this enqueue returns the
+ * job that already exists rather than running the mission twice.
+ */
+export async function queueOccurrence(
+  pool: Pool,
+  occurrence: Occurrence,
+  mission: Mission,
+): Promise<Job> {
+  const payload: MissionJobPayload = {
+    occurrenceId: occurrence.id,
+    missionId: mission.id,
+  };
+  return enqueue(pool, {
+    kind: MISSION_JOB_KIND,
+    payload,
+    dedupKey: occurrence.id,
+  });
+}
+
+/**
+ * The `mission-run` handler: the mission executor, plus closing the occurrence.
+ *
+ * The occurrence is *this* handler's to finish — the scheduler only decided the
+ * instant. A failure is left open until the job has spent its attempts, so a
+ * retry finds the occurrence still claimed and runs it again; once the budget is
+ * gone the occurrence is marked failed and stays that way for `buddi jobs`.
+ */
+export function createMissionJobHandler(deps: {
+  pool: Pool;
+  execute: (
+    occurrence: Occurrence,
+    mission: Mission,
+    control?: MissionRunControl,
+  ) => Promise<MissionRunResult>;
+  log?: (line: string) => void;
+}): JobHandler {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  return async function handle(job): Promise<unknown> {
+    const payload = missionJobPayload(job.payload);
+    if (!payload) throw new Error(`mission-run job ${job.id}: payload is not an occurrence`);
+
+    const occurrence = await getOccurrence(deps.pool, payload.occurrenceId);
+    if (!occurrence) return { skipped: 'occurrence no longer exists' };
+    // Already closed out — a duplicate delivery of the same job is a no-op,
+    // never a second run of the mission.
+    if (occurrence.state !== 'claimed') return { skipped: `occurrence is ${occurrence.state}` };
+
+    const mission = await getMission(deps.pool, occurrence.missionId);
+    if (!mission) throw new Error(`mission "${occurrence.missionId}" disappeared`);
+
+    // A job coming back from an approval carries the decision in its payload.
+    // The run continues in the conversation it suspended in; the occurrence was
+    // deliberately left claimed while it waited.
+    const control: MissionRunControl = {
+      jobId: job.id,
+      ...(payload.approval && payload.awaiting
+        ? {
+            resume: {
+              conversationId: payload.awaiting.conversationId,
+              approval: payload.approval,
+            },
+          }
+        : {}),
+    };
+
+    try {
+      const result = await deps.execute(occurrence, mission, control);
+
+      // Stopped on a gated call: park the job, leave the occurrence claimed,
+      // and record what it waits for. Nothing is held open.
+      if (result.awaiting) {
+        log(
+          `mission ${mission.id}: suspended on action ${result.awaiting.actionId} — waiting for the owner`,
+        );
+        return {
+          suspended: `awaiting-approval:${result.awaiting.actionId}`,
+          payloadPatch: { awaiting: result.awaiting },
+        } satisfies Suspension;
+      }
+      await finishOccurrence(deps.pool, occurrence.id, {
+        state: 'succeeded',
+        runConversationId: result.conversationId,
+      });
+      log(
+        result.delivered
+          ? `mission ${mission.id} delivered (${result.text.length} chars) → conversation ${result.conversationId}`
+          : `mission ${mission.id} stayed silent (${result.reason ?? result.decision}) → conversation ${result.conversationId}`,
+      );
+      return {
+        conversationId: result.conversationId,
+        delivered: result.delivered,
+        chars: result.text.length,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (job.attempts >= job.maxAttempts) {
+        await finishOccurrence(deps.pool, occurrence.id, { state: 'failed', error: message });
+      }
+      throw err;
+    }
+  };
+}
+
 export async function main(): Promise<void> {
   loadEnv();
 
   let wiring;
   try {
-    wiring = createWiring(process.env);
+    wiring = await createWiringAsync(process.env);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -146,6 +337,11 @@ export async function main(): Promise<void> {
   const { pool, now } = wiring;
 
   try {
+    // The mail account this installation sends and receives as, from the named
+    // environment variable. Idempotent, and a no-op when none is configured —
+    // an installation with no mailbox is a valid, running one.
+    const account = await ensureGmailAccount(pool, process.env);
+
     const missionDeps = {
       pool,
       registry: wiring.registry,
@@ -156,15 +352,43 @@ export async function main(): Promise<void> {
       now,
     };
 
+    // One gate, two callers: an interactive turn and `/recap` both refuse while
+    // the installation is paused, and say so in one sentence.
+    const gate = async (): Promise<string | null> => ((await isPaused(pool)) ? PAUSED_TEXT : null);
+
+    const inlineMission = createInlineMissionRunner(missionDeps);
     const telegram = await startTelegram({
       ...missionDeps,
-      runMission: createInlineMissionRunner(missionDeps),
+      gate,
+      // The queue this process runs. An approval decided in a chat wakes the
+      // suspended run through exactly this, and through nothing else.
+      jobs: { resumeJob },
+      runMission: async (missionId, chatId, onToolCall) => {
+        const blocked = await gate();
+        if (blocked !== null) return { ok: true, text: blocked };
+        return inlineMission(missionId, chatId, onToolCall);
+      },
     });
+
+    // An unattended run has no chat of its own. When one proposes a gated
+    // effect, the request is posted to the paired owner chat on its behalf —
+    // same preview, same buttons, same bound action as an interactive turn.
+    const askApproval = async (action: ActionRecord): Promise<void> => {
+      const chatId = await ownerChatId(pool);
+      if (!chatId) {
+        console.error(
+          `approval ${action.id} (${action.tool}) is waiting, but no owner chat is paired`,
+        );
+        return;
+      }
+      await telegram.approvals.request(chatId, action);
+    };
 
     const execute = createMissionExecutor({
       ...missionDeps,
       deliver: (text) => notifyOwner(text, { pool, env: process.env }),
       prepare: createDigestPrepare(pool, { now }),
+      askApproval,
     });
 
     // The watchers. They run inside the scheduler tick, before materialization,
@@ -186,6 +410,36 @@ export async function main(): Promise<void> {
       }
     };
 
+    // The sources. A source originates work with no agent in the loop: it polls
+    // the world, and every run it wants becomes a queue job keyed by the dedup
+    // key the source chose — so a poll that crashes after its own commit but
+    // before enqueueing re-enqueues the same key next time and creates nothing
+    // new. Core decides only *when* a source is due (core.source_runs).
+    const sources = collectSources(wiring.registry.manifests());
+    const enqueueRun: SourceContext['enqueueRun'] = async (input) => {
+      const job = await enqueue(pool, {
+        kind: AGENT_RUN_JOB_KIND,
+        payload: {
+          agentId: input.agentId,
+          prompt: input.prompt,
+          ...(input.conversationHint ? { conversationHint: input.conversationHint } : {}),
+        },
+        dedupKey: input.dedupKey,
+      });
+      console.log(`source run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);
+    };
+    const sourceTick = async (): Promise<void> => {
+      const outcomes = await runSources(pool, wiring.registry.manifests(), {
+        now: now(),
+        timezone: wiring.timezone,
+        enqueueRun,
+        log: (line) => console.log(line),
+      });
+      for (const outcome of outcomes) {
+        if (outcome.error) console.error(`source ${outcome.sourceId}: ${outcome.error}`);
+      }
+    };
+
     const sweepStaleClaims = async (): Promise<void> => {
       const released = await releaseStaleClaims(pool, new Date(now().getTime() - STALE_CLAIM_MS));
       if (released > 0) console.error(`scheduler: released ${released} stale claim(s)`);
@@ -198,19 +452,54 @@ export async function main(): Promise<void> {
     }, TICK_MS);
     if (typeof sweep.unref === 'function') sweep.unref();
 
+    // The queue worker is what actually runs a mission. The scheduler decides
+    // *when* and hands the occurrence over; the run itself is a durable job with
+    // a lease, bounded retries and a failed-job inspection path — so a restart
+    // mid-mission resumes instead of losing the work, and a mission that throws
+    // does not take the scheduler pass down with it.
+    const worker = runWorker({
+      pool,
+      worker: `serve:${process.pid}`,
+      kinds: JOB_KINDS,
+      handlers: {
+        [MISSION_JOB_KIND]: createMissionJobHandler({ pool, execute }),
+        // A source's run. Same lease, same retries, same suspension on an
+        // approval — the only difference is that nothing scheduled it.
+        [AGENT_RUN_JOB_KIND]: createAgentRunHandler({
+          pool,
+          registry: wiring.registry,
+          catalog: wiring.catalog,
+          provider: wiring.provider,
+          ctx: wiring.ctx,
+          now,
+          deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+          askApproval,
+        }),
+      },
+      now,
+      pollMs: WORKER_POLL_MS,
+      leaseMs: JOB_LEASE_MS,
+      onError: (err, job) =>
+        console.error(
+          `worker${job ? ` job ${job.id} (${job.kind})` : ''}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+    });
+
     const scheduler = runScheduler({
       pool,
       now,
       tickMs: TICK_MS,
-      sentinelTick,
+      sentinelTick: async () => {
+        await sentinelTick();
+        await sourceTick();
+      },
       execute: async (occurrence, mission) => {
-        const result = await execute(occurrence, mission);
-        console.log(
-          result.delivered
-            ? `mission ${mission.id} delivered (${result.text.length} chars) → conversation ${result.conversationId}`
-            : `mission ${mission.id} stayed silent (${result.reason ?? result.decision}) → conversation ${result.conversationId}`,
-        );
-        return { conversationId: result.conversationId };
+        const job = await queueOccurrence(pool, occurrence, mission);
+        console.log(`mission ${mission.id}: occurrence ${occurrence.id} queued as job ${job.id}`);
+        // The job owns the occurrence from here; the runner must not close it.
+        return { deferred: true };
       },
       onError: (err) =>
         console.error(`scheduler: ${err instanceof Error ? err.message : String(err)}`),
@@ -223,11 +512,27 @@ export async function main(): Promise<void> {
     console.log(`  paired owner ids: ${describePaired(telegram.paired)}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
+    const jobCounts = await countJobsByState(pool);
+    console.log(
+      `  queue: worker for ${JOB_KINDS.join(', ')}, lease ${JOB_LEASE_MS / 60_000}m — ` +
+        `${jobCounts.pending} pending, ${jobCounts.suspended} suspended, ${jobCounts.failed} failed`,
+    );
+    console.log(`  mail account: ${account ? account.address : 'none configured (GMAIL_USER unset)'}`);
+    if (await isPaused(pool)) {
+      console.log('  PAUSED — nothing will run until `buddi resume`');
+    }
     console.log(
       sentinels.length === 0
         ? '  sentinels: none installed'
         : `  sentinels (${sentinels.length}): ${sentinels
             .map((s) => `${s.id} every ${s.every}s`)
+            .join(', ')}`,
+    );
+    console.log(
+      sources.length === 0
+        ? '  sources: none installed'
+        : `  sources (${sources.length}): ${sources
+            .map((src) => `${src.id} every ${src.every}s`)
             .join(', ')}`,
     );
     console.log(
@@ -244,12 +549,12 @@ export async function main(): Promise<void> {
       stopping = true;
       console.log(`\n${signal}: stopping scheduler and telegram surface…`);
       clearInterval(sweep);
-      void Promise.all([scheduler.stop(), telegram.stop()]);
+      void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-    await Promise.all([telegram.done, scheduler.done]);
+    await Promise.all([telegram.done, scheduler.done, worker.done]);
     console.log('buddi serve stopped cleanly');
   } finally {
     await pool.end();

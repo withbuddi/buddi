@@ -20,7 +20,10 @@ import {
 type MessageRow = { id: number; conversation_id: string; role: string; content: unknown };
 type EventRow = { kind: string; conversation_id: string; payload: unknown };
 
+const ACTION_ID = '22222222-2222-2222-2222-222222222222';
+
 class FakeDb implements Queryable {
+  actions: { tool: string; args: unknown }[] = [];
   conversations: { id: string; agent_id: string }[] = [];
   messages: MessageRow[] = [];
   events: EventRow[] = [];
@@ -47,6 +50,32 @@ class FakeDb implements Queryable {
         rows: this.messages
           .filter((m) => m.conversation_id === params[0])
           .map((m) => ({ role: m.role, content: m.content })),
+      };
+    }
+    if (text.startsWith('with a as ( insert into core.actions')) {
+      // The gated path records an action plus its pending approval in one
+      // statement; the fake answers it with the row it would have written.
+      this.actions.push({ tool: params[0], args: JSON.parse(params[5]) });
+      return {
+        rows: [
+          {
+            id: ACTION_ID,
+            tool: params[0],
+            tool_version: params[1],
+            agent_id: params[2],
+            conversation_id: params[3],
+            job_id: params[4],
+            canonical_args: JSON.parse(params[5]),
+            envelope: JSON.parse(params[6]),
+            args_hash: params[7],
+            preview: params[8],
+            expires_at: params[9],
+            policy_version: params[10],
+            created_at: params[11],
+            state: 'pending',
+            updated_at: params[11],
+          },
+        ],
       };
     }
     if (text.startsWith('insert into core.events')) {
@@ -544,5 +573,150 @@ describe('runAgent', () => {
       { role: 'user', content: [{ type: 'text', text: 'earlier' }] },
       { role: 'user', content: [{ type: 'text', text: 'now' }] },
     ]);
+  });
+});
+
+/* ---------------- approvals ---------------- */
+
+/** A gated tool: proposing it is never executing it. */
+function registryWithGatedSend(execute = vi.fn()): ToolRegistry {
+  const manifest: PluginManifest = {
+    name: 'mail',
+    version: '1.0.0',
+    schema: 'mail',
+    migrationsDir: '/tmp/mail',
+    tools: [
+      {
+        name: 'mail.send',
+        description: 'Send an email.',
+        tier: 'gated',
+        input: z.object({ to: z.string() }),
+        describe: (input: { to: string }) => ({
+          envelope: { to: [input.to], bcc: ['archive@example.com'] },
+          preview: `Send to ${input.to}`,
+        }),
+        execute: execute as never,
+      },
+    ],
+  };
+  const r = new ToolRegistry();
+  r.register(manifest);
+  return r;
+}
+
+const mailAgent: AgentDefinition = { ...agent, tools: ['mail.send'] };
+
+describe('runAgent and approvals', () => {
+  const proposeSend: CompletionResponse = {
+    content: [{ type: 'tool_use', id: 'call-1', name: 'mail.send', input: { to: 'a@b.c' } }],
+    stopReason: 'tool_use',
+    usage,
+    model: 'm',
+  };
+
+  it('stops awaiting approval, answers the tool_use, and executes nothing', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const execute = vi.fn();
+    const provider = scriptedProvider([proposeSend]);
+    const seen: string[] = [];
+
+    const result = await runAgent({
+      agent: mailAgent,
+      provider,
+      registry: registryWithGatedSend(execute),
+      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      pool: db,
+      conversationId,
+      userMessage: 'email a@b.c',
+      onApprovalRequired: (id) => seen.push(id),
+    });
+
+    expect(result.stopped).toBe('awaiting-approval');
+    expect(result.pendingActionId).toBe(ACTION_ID);
+    expect(execute).not.toHaveBeenCalled();
+    expect(seen).toEqual([ACTION_ID]);
+    // The action was recorded before anyone was asked.
+    expect(db.actions).toEqual([{ tool: 'mail.send', args: { to: 'a@b.c' } }]);
+    // The proposal stopped the run: the provider was called exactly once.
+    expect(provider.calls).toHaveLength(1);
+
+    // The tool_use is answered — not as an error, because nothing went wrong.
+    const last = db.messages.at(-1);
+    expect(last?.role).toBe('user');
+    const block = (last?.content as any[])[0];
+    expect(block).toMatchObject({ type: 'tool_result', tool_use_id: 'call-1' });
+    expect(block.is_error).toBeUndefined();
+    expect(block.content).toContain(ACTION_ID);
+    expect(db.eventKinds()).toContain('tool.result');
+    expect(db.events.at(-1)?.payload).toMatchObject({ stopped: 'awaiting-approval' });
+  });
+
+  it('resumes with the outcome and carries on', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      { content: [{ type: 'text', text: 'Sent.' }], stopReason: 'end_turn', usage, model: 'm' },
+    ]);
+
+    const result = await runAgent({
+      agent: mailAgent,
+      provider,
+      registry: registryWithGatedSend(),
+      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      pool: db,
+      conversationId,
+      resume: { actionId: ACTION_ID, state: 'succeeded', result: { messageId: 'mid-1' } },
+    });
+
+    expect(result.stopped).toBe('end_turn');
+    expect(result.text).toBe('Sent.');
+    const opening = provider.calls[0]?.messages.at(-1);
+    const text = (opening?.content as any[])[0].text as string;
+    expect(text).toContain(ACTION_ID);
+    expect(text).toContain('succeeded');
+    expect(text).toContain('mid-1');
+    expect(db.eventKinds()[0]).toBe('run.resumed');
+  });
+
+  it('tells the model plainly when the owner rejected it', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      { content: [{ type: 'text', text: 'Understood.' }], stopReason: 'end_turn', usage, model: 'm' },
+    ]);
+    await runAgent({
+      agent: mailAgent,
+      provider,
+      registry: registryWithGatedSend(),
+      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      pool: db,
+      conversationId,
+      resume: { actionId: ACTION_ID, state: 'rejected' },
+    });
+    const text = ((provider.calls[0]?.messages.at(-1)?.content as any[])[0].text as string);
+    expect(text).toContain('rejected');
+    expect(text).toMatch(/Do not propose the same effect again/);
+  });
+
+  it('refuses a run that carries both a message and a resume, or neither', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const base = {
+      agent: mailAgent,
+      provider: scriptedProvider([]),
+      registry: registryWithGatedSend(),
+      ctx,
+      pool: db,
+      conversationId,
+    };
+    await expect(runAgent({ ...base })).rejects.toThrow(/exactly one/);
+    await expect(
+      runAgent({
+        ...base,
+        userMessage: 'hi',
+        resume: { actionId: ACTION_ID, state: 'succeeded' },
+      }),
+    ).rejects.toThrow(/exactly one/);
   });
 });

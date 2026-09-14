@@ -18,8 +18,22 @@ export class UsageError extends Error {
 export const SERVICE_ACTIONS = ['install', 'uninstall', 'status', 'logs', 'restart'] as const;
 export type ServiceAction = (typeof SERVICE_ACTIONS)[number];
 
+export const VAULT_ACTIONS = ['set', 'get', 'delete', 'list', 'import-env'] as const;
+export type VaultAction = (typeof VAULT_ACTIONS)[number];
+
 export const TELEGRAM_ACTIONS = ['pair', 'devices', 'unpair'] as const;
 export type TelegramAction = (typeof TELEGRAM_ACTIONS)[number];
+
+/** Job states `buddi jobs --state` accepts; the same set core's queue uses. */
+export const JOB_STATE_NAMES = [
+  'pending',
+  'leased',
+  'succeeded',
+  'failed',
+  'suspended',
+  'cancelled',
+] as const;
+export type JobStateName = (typeof JOB_STATE_NAMES)[number];
 
 export type Command =
   | { kind: 'help' }
@@ -33,7 +47,14 @@ export type Command =
   | { kind: 'init' }
   | { kind: 'doctor' }
   | { kind: 'service'; action: ServiceAction }
-  | { kind: 'telegram'; action: TelegramAction; deviceId?: string };
+  | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
+  /** Secrets in the OS keychain; the name is optional only for `list`. */
+  | { kind: 'vault'; action: VaultAction; name?: string }
+  /** Global pause control (ARCHITECTURE.md, "Queue, concurrency, recovery"). */
+  | { kind: 'pause' }
+  | { kind: 'resume' }
+  | { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number }
+  | { kind: 'jobs'; action: 'retry' | 'cancel'; jobId: string };
 
 /** Commands the gateway's chat CLI owns; it re-parses the whole slice. */
 const CHAT_COMMANDS = new Set(['chat', 'ask', 'agents']);
@@ -56,6 +77,16 @@ export function parseArgs(argv: string[]): Command {
   if (head === 'init') return { kind: 'init' };
   if (head === 'doctor') return { kind: 'doctor' };
 
+  if (head === 'pause') {
+    if (rest.length > 0) throw new UsageError(`buddi pause takes no arguments (got ${rest[0]})`);
+    return { kind: 'pause' };
+  }
+  if (head === 'resume') {
+    if (rest.length > 0) throw new UsageError(`buddi resume takes no arguments (got ${rest[0]})`);
+    return { kind: 'resume' };
+  }
+  if (head === 'jobs') return parseJobs(rest);
+
   if (head === 'service') {
     const action = rest[0];
     if (action === undefined) {
@@ -68,6 +99,26 @@ export function parseArgs(argv: string[]): Command {
     }
     if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
     return { kind: 'service', action: action as ServiceAction };
+  }
+
+  if (head === 'vault') {
+    const action = rest[0];
+    if (action === undefined) {
+      throw new UsageError(`buddi vault needs one of: ${VAULT_ACTIONS.join(', ')}`);
+    }
+    if (!(VAULT_ACTIONS as readonly string[]).includes(action)) {
+      throw new UsageError(
+        `unknown vault action: ${action} (expected ${VAULT_ACTIONS.join(', ')})`,
+      );
+    }
+    const needsName = action === 'set' || action === 'get' || action === 'delete';
+    const name = rest[1];
+    if (needsName && !name) throw new UsageError(`buddi vault ${action} needs a secret name`);
+    if (!needsName && name) throw new UsageError(`unexpected argument: ${name}`);
+    if (rest.length > 2) throw new UsageError(`unexpected argument: ${rest[2]}`);
+    // A value is never an argument: it would land in shell history. `set`
+    // prompts with the terminal's echo off instead.
+    return { kind: 'vault', action: action as VaultAction, ...(name ? { name } : {}) };
   }
 
   if (head === 'telegram') {
@@ -93,6 +144,50 @@ export function parseArgs(argv: string[]): Command {
   throw new UsageError(`unknown command: ${head} (run "buddi help")`);
 }
 
+/**
+ * `buddi jobs` — a listing by default, or one of the two verbs that take an id.
+ * Ids may be abbreviated to the prefix the listing prints.
+ */
+function parseJobs(rest: string[]): Command {
+  const [verb, ...args] = rest;
+
+  if (verb === 'retry' || verb === 'cancel') {
+    const jobId = args[0];
+    if (!jobId) throw new UsageError(`buddi jobs ${verb} needs a job id`);
+    if (args.length > 1) throw new UsageError(`unexpected argument: ${args[1]}`);
+    return { kind: 'jobs', action: verb, jobId };
+  }
+
+  const command: { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number } =
+    { kind: 'jobs', action: 'list' };
+  const argv = verb === undefined ? [] : rest;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--state' || arg === '--kind' || arg === '--limit') {
+      const value = argv[i + 1];
+      if (value === undefined) throw new UsageError(`${arg} needs a value`);
+      i += 1;
+      if (arg === '--state') {
+        if (!(JOB_STATE_NAMES as readonly string[]).includes(value)) {
+          throw new UsageError(
+            `unknown job state: ${value} (expected ${JOB_STATE_NAMES.join(', ')})`,
+          );
+        }
+        command.state = value as JobStateName;
+      } else if (arg === '--kind') {
+        command.kind_ = value;
+      } else {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 1) throw new UsageError(`--limit needs a positive integer`);
+        command.limit = n;
+      }
+      continue;
+    }
+    throw new UsageError(`unknown option for buddi jobs: ${arg}`);
+  }
+  return command;
+}
+
 export const USAGE = `buddi — your personal agents, one command
 
   buddi init                 set this machine up (interactive, idempotent)
@@ -111,6 +206,15 @@ export const USAGE = `buddi — your personal agents, one command
   buddi telegram pair        a QR code + deep link that pairs a device
   buddi telegram devices     every paired device
   buddi telegram unpair <id>
+
+  buddi pause                stop claiming work (running jobs finish)
+  buddi resume               start claiming again
+  buddi jobs [--state <s>] [--kind <k>] [--limit <n>]
+  buddi jobs retry <id> | buddi jobs cancel <id>
+
+  buddi vault set <NAME>      keep a secret in the OS keychain (prompts, hidden)
+  buddi vault get <NAME>|delete <NAME>|list
+  buddi vault import-env      move .env secrets into the keychain
 
   buddi missions list|add-defaults|add-friday-recap|run-now <id>|enable <id>|disable <id>
   buddi migrate              apply core + plugin migrations

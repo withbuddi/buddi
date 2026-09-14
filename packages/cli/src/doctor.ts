@@ -37,6 +37,8 @@ export interface DoctorProbes {
   modelCredential(): Promise<ProbeResult>;
   botToken(): Promise<ProbeResult>;
   pairedDevices(): Promise<ProbeResult>;
+  /** The durable queue: paused or running, and how the jobs stand. */
+  queue(): Promise<ProbeResult>;
   service(): Promise<ProbeResult>;
   timezone(): ProbeResult;
 }
@@ -51,6 +53,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'model credential', critical: true, probe: 'modelCredential' },
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
+  { name: 'queue', critical: false, probe: 'queue' },
   { name: 'service', critical: false, probe: 'service' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];

@@ -14,9 +14,12 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ensureOwner,
+  getAction,
   getSurfaceCursor,
   listSurfaceIdentities,
   pairSurfaceIdentity,
+  resumeJob,
+  type JobControl,
   type SurfaceIdentity,
   type ToolContext,
   type ToolRegistry,
@@ -24,7 +27,8 @@ import {
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
-import { createWiring, loadEnv } from '../bootstrap.js';
+import { createWiringAsync, loadEnv } from '../bootstrap.js';
+import { TelegramApprovals } from './approvals.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
 import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surface.js';
@@ -43,6 +47,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'use', description: 'Switch agent' },
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
+  { command: 'approvals', description: 'Anything waiting for your approval' },
   { command: 'files', description: 'The last files you sent me' },
   { command: 'devices', description: 'Devices paired to this installation' },
   { command: 'new', description: 'Start a fresh conversation' },
@@ -101,6 +106,13 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * What the chat is told when a run stops on an approval and the model said
+ * nothing else. The request itself arrives as its own message, with buttons.
+ */
+export const AWAITING_APPROVAL_REPLY =
+  'I need your approval before I can do that — see the request just below.';
+
 /** Numeric ids only: a username is not an identity. */
 export function numericId(value: string | undefined, label: string): string | undefined {
   const raw = (value ?? '').trim();
@@ -130,11 +142,30 @@ export interface TelegramDeps {
    * passes it; the standalone surface has no scheduler and leaves it out.
    */
   runMission?: RunMission;
+  /**
+   * The queue, for waking a run that suspended awaiting an approval. Defaults
+   * to core's own `resumeJob`; a build with no queue passes `null`.
+   */
+  jobs?: JobControl | null;
+  /**
+   * Asked before every interactive turn. A string is the answer the owner gets
+   * *instead of* a run — `buddi serve` uses it for the global pause, so a paused
+   * installation says so rather than quietly doing the work anyway. Null means
+   * carry on. Absent: nothing is gated.
+   */
+  gate?: () => Promise<string | null>;
 }
 
 export interface TelegramHandle {
   botUsername: string | undefined;
   botId: number;
+  /**
+   * The approval surface this process runs. Exposed so an *unattended* run —
+   * a scheduled mission, a source's run — can ask the owner too: the run has
+   * no chat of its own, but the request must still arrive with buttons bound
+   * to the one action it authorizes.
+   */
+  approvals: TelegramApprovals;
   /** Owner identities paired for this surface at startup. */
   paired: SurfaceIdentity[];
   /** The persisted polling offset as it stood at startup. */
@@ -182,6 +213,21 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   // asks for them back when a run needs to look at one.
   const artifacts = deps.artifacts ?? createCoreArtifactStore({ pool, env });
 
+  // Approvals: the surface routes a tap here, and every decision, execution and
+  // resume happens inside core. The queue is wired in so a decided action wakes
+  // the run that was suspended waiting for it.
+  const jobs = deps.jobs === null ? undefined : (deps.jobs ?? { resumeJob });
+  const approvals = new TelegramApprovals({
+    api,
+    pool,
+    registry: deps.registry,
+    ctx: deps.ctx,
+    timezone: deps.ctx.timezone,
+    ...(jobs ? { jobs } : {}),
+    log,
+    now,
+  });
+
   const surface = new TelegramSurface({
     api,
     pool,
@@ -194,10 +240,16 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     log,
     setChatMenu,
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
+    approvals,
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: async ({ conversationId, text, agent, attachments, onToolCall }) => {
+    run: async ({ conversationId, chatId, text, agent, attachments, onToolCall }) => {
+      // Interactive turns stay inline — they are user-facing and already
+      // serialized per chat — but they are not exempt from a global pause.
+      const blocked = deps.gate ? await deps.gate() : null;
+      if (blocked !== null) return blocked;
+
       const options: RunAgentOptions = {
         agent: deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone),
         provider: deps.provider,
@@ -221,6 +273,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         options.loadArtifact = (id) => artifacts.load(id);
       }
       const result = await runAgent(options);
+
+      // The run proposed a gated effect and stopped. The owner is asked in this
+      // same chat, with the preview the *tool* rendered and buttons bound to
+      // that one action — no message here can approve anything by itself.
+      if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
+        const action = await getAction(pool, result.pendingActionId);
+        if (action) await approvals.request(chatId, action);
+        return result.text.trim() === '' ? AWAITING_APPROVAL_REPLY : result.text;
+      }
       return result.text;
     },
   });
@@ -238,6 +299,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   return {
     botUsername: me.username ?? undefined,
     botId: me.id,
+    approvals,
     paired,
     cursor,
     done,
@@ -263,7 +325,7 @@ export async function main(): Promise<void> {
 
   let wiring;
   try {
-    wiring = createWiring(process.env);
+    wiring = await createWiringAsync(process.env);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -285,6 +347,12 @@ export async function main(): Promise<void> {
     console.log(`  paired owner ids: ${describePaired(handle.paired)}`);
     console.log(`  last cursor: ${handle.cursor ?? '(none)'}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
+    if (wiring.secrets) {
+      const sources = Object.entries(wiring.secrets.sources)
+        .map(([name, source]) => `${name}<-${source}`)
+        .join(', ');
+      console.log(`  vault: ${wiring.secrets.vault}${sources ? ` (${sources})` : ''}`);
+    }
 
     let stopping = false;
     const shutdown = (signal: string): void => {

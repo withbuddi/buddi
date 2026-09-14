@@ -41,7 +41,8 @@ export interface RunAgentOptions {
   ctx: ToolContext;
   pool: Queryable;
   conversationId: string;
-  userMessage: string;
+  /** The owner's turn. Omitted only when `resume` carries the turn instead. */
+  userMessage?: string;
   /**
    * An extra system line appended to the agent's prompt for this run only —
    * how the surface tells the agent about its own rendering constraints
@@ -74,13 +75,70 @@ export interface RunAgentOptions {
   loadArtifact?: LoadArtifact;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
+  /**
+   * Resuming a run that stopped awaiting an approval.
+   *
+   * The tool_use that asked for it was already answered (with "awaiting owner
+   * approval"), so the outcome comes back as this run's opening turn instead —
+   * a tool result delivered late, and said in those words. Exactly one of
+   * `userMessage` and `resume` carries the turn; both, or neither, is a defect.
+   */
+  resume?: ApprovalResume;
+  /** Called the moment a tool call becomes a pending approval. */
+  onApprovalRequired?: (actionId: string, preview: string) => void;
+}
+
+/** How a decided action comes back into the run that proposed it. */
+export interface ApprovalResume {
+  actionId: string;
+  /** The approval's state now: 'succeeded', 'failed', 'rejected', 'unknown'… */
+  state: string;
+  /** What the effect returned, when it ran. */
+  result?: unknown;
+  error?: string;
 }
 
 export interface RunResult {
   text: string;
   turns: number;
-  stopped: 'end_turn' | 'max_turns' | 'max_tokens';
+  /**
+   * `awaiting-approval` is not an end: the run is suspendable at that point and
+   * `pendingActionId` names what it is waiting for. Everything durable has
+   * already been written, so no worker and no transaction stays open.
+   */
+  stopped: 'end_turn' | 'max_turns' | 'max_tokens' | 'awaiting-approval';
   usage: Usage;
+  /** Set only when `stopped === 'awaiting-approval'`. */
+  pendingActionId?: string;
+}
+
+/**
+ * What the model is told while it waits. It names the action, so the transcript
+ * carries the link between the proposal and the decision that follows it.
+ */
+export function awaitingApprovalText(actionId: string): string {
+  return `awaiting owner approval (action ${actionId}); this effect has not happened`;
+}
+
+/**
+ * The tool result that comes back late, once the owner has decided.
+ *
+ * Written as a plain user turn because the tool_use it belongs to was already
+ * answered before the run suspended: the API requires that, and inventing a
+ * second result for the same call would be a lie about what happened.
+ */
+export function approvalOutcomeText(resume: ApprovalResume): string {
+  const head = `tool result (deferred) for action ${resume.actionId}: ${resume.state}`;
+  if (resume.state === 'succeeded') {
+    return `${head}\nresult: ${JSON.stringify(resume.result ?? null)}`;
+  }
+  if (resume.state === 'rejected') {
+    return `${head}\nThe owner rejected it. Do not propose the same effect again unless asked; say what you will do instead.`;
+  }
+  if (resume.state === 'unknown') {
+    return `${head}\nThe effect was dispatched and never confirmed. Do not retry it: say plainly that it is unresolved.`;
+  }
+  return `${head}${resume.error ? `\nerror: ${resume.error}` : ''}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -214,6 +272,14 @@ export function composeSystem(
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const { agent, provider, registry, ctx, pool, conversationId, userMessage } = opts;
+  const resume = opts.resume;
+
+  // A turn comes from the owner or from a decided approval — never from both,
+  // and never from neither.
+  if ((userMessage === undefined) === (resume === undefined)) {
+    throw new Error('runAgent: pass exactly one of userMessage and resume');
+  }
+  const openingText = resume ? approvalOutcomeText(resume) : (userMessage as string);
 
   // Fail closed: unknown tool names are a configuration defect, not a runtime
   // refusal — and they are caught before a single token is sent anywhere.
@@ -223,6 +289,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
   // Provenance for every tool call this run makes. The caller's context is not
   // mutated: it is shared across runs, and a run's identity is its own.
+  // Provenance rides along: a gated call records the job it belongs to on the
+  // action, which is how the decision later finds the run that is suspended.
   const toolCtx: ToolContext = { ...ctx, conversationId, agentId: agent.id };
 
   // Attachments: cap first, hydrate second, persist third. The caps fail closed
@@ -235,7 +303,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 
   const userBlocks: ContentBlock[] = [
-    { type: 'text', text: userMessage },
+    { type: 'text', text: openingText },
     ...toArtifactRefBlocks(attachments),
   ];
   const sentUserBlocks = await hydrateContent(userBlocks, opts.loadArtifact, {
@@ -250,8 +318,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
   await appendEvent(
     pool,
-    'run.started',
-    { agentId: agent.id, tools: agent.tools, maxTurns: agent.maxTurns },
+    resume ? 'run.resumed' : 'run.started',
+    {
+      agentId: agent.id,
+      tools: agent.tools,
+      maxTurns: agent.maxTurns,
+      ...(resume ? { actionId: resume.actionId, approvalState: resume.state } : {}),
+    },
     conversationId,
   );
 
@@ -259,6 +332,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   let turns = 0;
   let stopped: RunResult['stopped'] = 'max_turns';
   let text = '';
+  /** The action this run is waiting on, once one exists. */
+  let pendingActionId: string | undefined;
 
   while (turns < agent.maxTurns) {
     turns++;
@@ -312,6 +387,32 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
           { name: call.name, ok: true },
           conversationId,
         );
+      } else if (outcome.reason === 'approval-required') {
+        // Not a refusal: the call was recorded as an action and the owner has
+        // been asked. The tool_use is answered so the transcript stays valid,
+        // and it is answered *without* `is_error` — nothing went wrong.
+        //
+        // Every remaining call in this turn is still answered (the API requires
+        // one result per tool_use), and the run then stops: it is resumable
+        // from durable state alone, with no worker and no transaction held.
+        if (pendingActionId === undefined) pendingActionId = outcome.actionId;
+        results.push({
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: awaitingApprovalText(outcome.actionId),
+        });
+        opts.onApprovalRequired?.(outcome.actionId, outcome.preview);
+        await appendEvent(
+          pool,
+          'tool.result',
+          {
+            name: call.name,
+            ok: false,
+            reason: outcome.reason,
+            actionId: outcome.actionId,
+          },
+          conversationId,
+        );
       } else {
         // The model gets to see refusals, verbatim reason included.
         results.push({
@@ -331,9 +432,25 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
     messages.push({ role: 'user', content: results });
     await persistMessage(pool, conversationId, 'user', results);
+
+    if (pendingActionId !== undefined) {
+      stopped = 'awaiting-approval';
+      break;
+    }
   }
 
-  await appendEvent(pool, 'run.finished', { turns, stopped, usage }, conversationId);
+  await appendEvent(
+    pool,
+    'run.finished',
+    { turns, stopped, usage, ...(pendingActionId ? { actionId: pendingActionId } : {}) },
+    conversationId,
+  );
 
-  return { text, turns, stopped, usage };
+  return {
+    text,
+    turns,
+    stopped,
+    usage,
+    ...(pendingActionId ? { pendingActionId } : {}),
+  };
 }

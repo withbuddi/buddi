@@ -1,0 +1,446 @@
+/**
+ * The authorization boundary, against a real Postgres.
+ *
+ * Skipped unless DATABASE_URL is set. The suite creates a throwaway database,
+ * runs core's migrations into it and drops it at the end: the owner's real
+ * actions are never touched.
+ */
+import type { Pool } from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
+import { ToolRegistry } from '../registry.js';
+import type { PluginManifest, Tier, ToolContext } from '../tools.js';
+import { decideApproval } from './approvals.js';
+import { executeApproved } from './execute.js';
+import { createAction, expireDueApprovals, getAction, listEffectAttempts, listPendingActions } from './store.js';
+import { hashArgs } from './types.js';
+
+const databaseUrl = process.env.DATABASE_URL;
+const suite = databaseUrl ? describe : describe.skip;
+
+const TEST_DB = `buddi_actions_test_${process.pid}`;
+
+suite('actions and approvals (postgres)', () => {
+  let admin: Pool;
+  let pool: Pool;
+
+  beforeAll(async () => {
+    admin = createPool(databaseUrl as string);
+    await admin.query(`drop database if exists ${TEST_DB}`);
+    await admin.query(`create database ${TEST_DB}`);
+    const testUrl = new URL(databaseUrl as string);
+    testUrl.pathname = `/${TEST_DB}`;
+    pool = createPool(testUrl.toString());
+    await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    if (admin) {
+      await admin.query(`drop database if exists ${TEST_DB}`);
+      await admin.end();
+    }
+  });
+
+  beforeEach(async () => {
+    await pool.query('truncate core.actions cascade');
+    await pool.query('truncate core.events cascade');
+  });
+
+  const ctx = (): ToolContext => ({
+    db: pool,
+    ownerId: 'owner',
+    now: () => new Date(),
+    timezone: 'UTC',
+    agentId: 'mailer',
+    conversationId: undefined,
+  });
+
+  /** A gated tool that records every call it actually makes. */
+  function sendManifest(opts: {
+    tier?: Tier;
+    execute?: (input: any) => Promise<unknown>;
+    describe?: boolean;
+    timeoutMs?: number;
+  } = {}): { manifest: PluginManifest; sent: unknown[] } {
+    const sent: unknown[] = [];
+    const manifest: PluginManifest = {
+      name: 'mail',
+      version: '1.2.3',
+      schema: 'mail',
+      migrationsDir: '/tmp/mail',
+      tools: [
+        {
+          name: 'mail.send',
+          description: 'Send an email.',
+          tier: opts.tier ?? 'gated',
+          input: z.object({ to: z.string(), subject: z.string() }),
+          ...(opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+          execute: async (input: any) => {
+            sent.push(input);
+            return opts.execute ? await opts.execute(input) : { messageId: 'mid-1' };
+          },
+          ...(opts.describe === false
+            ? {}
+            : {
+                describe: (input: any) => ({
+                  envelope: { to: [input.to], bcc: ['archive@example.com'], subject: input.subject },
+                  preview: `Send "${input.subject}" to ${input.to} (bcc archive@example.com)`,
+                }),
+              }),
+        },
+      ],
+    };
+    return { manifest, sent };
+  }
+
+  describe('the registry gate', () => {
+    it('turns a gated call into an action plus a pending approval, and executes nothing', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+
+      const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'Hi' }, ctx());
+      expect(res.ok).toBe(false);
+      if (res.ok) throw new Error('unreachable');
+      expect(res.reason).toBe('approval-required');
+      if (res.reason !== 'approval-required') throw new Error('unreachable');
+      expect(sent).toEqual([]);
+
+      const action = await getAction(pool, res.actionId);
+      expect(action).toBeDefined();
+      expect(action?.state).toBe('pending');
+      expect(action?.tool).toBe('mail.send');
+      expect(action?.toolVersion).toBe('1.2.3');
+      expect(action?.agentId).toBe('mailer');
+      // The envelope is the tool's, not the model's: the BCC nobody mentioned
+      // is in the object the owner is approving.
+      expect(action?.envelope).toMatchObject({ bcc: ['archive@example.com'] });
+      expect(res.preview).toContain('bcc archive@example.com');
+      expect(action?.expiresAt.getTime()).toBeGreaterThan(Date.now());
+      expect(await listPendingActions(pool)).toHaveLength(1);
+    });
+
+    it('falls back to canonical args when a tool describes nothing', async () => {
+      const { manifest } = sendManifest({ describe: false });
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const res = await registry.invoke('mail.send', { subject: 'S', to: 'a@b.c' }, ctx());
+      if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+      const action = await getAction(pool, res.actionId);
+      expect(action?.envelope).toEqual({ subject: 'S', to: 'a@b.c' });
+      expect(action?.preview).toContain('mail.send');
+    });
+
+    it('still refuses draft and session outright', async () => {
+      for (const tier of ['draft', 'session'] as Tier[]) {
+        const { manifest, sent } = sendManifest({ tier });
+        const registry = new ToolRegistry();
+        registry.register(manifest);
+        const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'x' }, ctx());
+        expect(res).toMatchObject({ ok: false, reason: 'tier-not-executable' });
+        expect(sent).toEqual([]);
+      }
+    });
+  });
+
+  describe('decideApproval', () => {
+    const pending = async (): Promise<string> => {
+      const action = await createAction(pool, {
+        tool: 'mail.send',
+        toolVersion: '1.2.3',
+        agentId: 'mailer',
+        canonicalArgs: { subject: 'Hi', to: 'a@b.c' },
+        envelope: { to: ['a@b.c'] },
+        preview: 'Send "Hi" to a@b.c',
+      });
+      return action.id;
+    };
+
+    it('moves pending to approved, once', async () => {
+      const id = await pending();
+      const first = await decideApproval(pool, {
+        actionId: id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'telegram',
+      });
+      expect(first).toMatchObject({ ok: true });
+      if (!first.ok) throw new Error('unreachable');
+      expect(first.action.state).toBe('approved');
+      expect(first.action.decidedBy).toBe('owner');
+      expect(first.action.decidedVia).toBe('telegram');
+
+      const second = await decideApproval(pool, {
+        actionId: id,
+        decision: 'rejected',
+        by: 'owner',
+        via: 'telegram',
+      });
+      expect(second).toMatchObject({ ok: false, reason: 'already-decided', state: 'approved' });
+    });
+
+    it('rejects, and a rejection is equally final', async () => {
+      const id = await pending();
+      expect(
+        await decideApproval(pool, { actionId: id, decision: 'rejected', by: 'owner', via: 'cli' }),
+      ).toMatchObject({ ok: true });
+      expect(
+        await decideApproval(pool, { actionId: id, decision: 'approved', by: 'owner', via: 'cli' }),
+      ).toMatchObject({ ok: false, reason: 'already-decided', state: 'rejected' });
+    });
+
+    it('only one of two racing decisions wins', async () => {
+      const id = await pending();
+      const [a, b] = await Promise.all([
+        decideApproval(pool, { actionId: id, decision: 'approved', by: 'owner', via: 'telegram' }),
+        decideApproval(pool, { actionId: id, decision: 'rejected', by: 'owner', via: 'cli' }),
+      ]);
+      expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    });
+
+    it('expires instead of deciding once the deadline has passed', async () => {
+      const action = await createAction(pool, {
+        tool: 'mail.send',
+        toolVersion: '1.2.3',
+        agentId: 'mailer',
+        canonicalArgs: {},
+        envelope: {},
+        preview: 'p',
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const res = await decideApproval(pool, {
+        actionId: action.id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'telegram',
+      });
+      expect(res).toMatchObject({ ok: false, reason: 'expired' });
+      expect((await getAction(pool, action.id))?.state).toBe('expired');
+    });
+
+    it('sweeps due approvals to expired', async () => {
+      const action = await createAction(pool, {
+        tool: 'mail.send',
+        toolVersion: '1.2.3',
+        agentId: 'mailer',
+        canonicalArgs: {},
+        envelope: {},
+        preview: 'p',
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      expect(await expireDueApprovals(pool)).toEqual([action.id]);
+      expect((await getAction(pool, action.id))?.state).toBe('expired');
+    });
+
+    it('says so plainly when the action does not exist', async () => {
+      const res = await decideApproval(pool, {
+        actionId: '00000000-0000-0000-0000-000000000000',
+        decision: 'approved',
+        by: 'owner',
+        via: 'telegram',
+      });
+      expect(res).toMatchObject({ ok: false, reason: 'not-found' });
+    });
+  });
+
+  describe('executeApproved', () => {
+    const approved = async (args: Record<string, unknown> = { subject: 'Hi', to: 'a@b.c' }) => {
+      const action = await createAction(pool, {
+        tool: 'mail.send',
+        toolVersion: '1.2.3',
+        agentId: 'mailer',
+        canonicalArgs: args,
+        envelope: { to: [args.to], bcc: ['archive@example.com'] },
+        preview: 'Send "Hi" to a@b.c',
+      });
+      await decideApproval(pool, {
+        actionId: action.id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'telegram',
+      });
+      return action.id;
+    };
+
+    it('runs the tool once and records the attempt and the outcome', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+
+      const res = await executeApproved(pool, {
+        actionId: id,
+        registry,
+        ctx: ctx(),
+        worker: 'w1',
+      });
+      expect(res).toMatchObject({ ok: true, state: 'succeeded', attempt: 1 });
+      expect(sent).toEqual([{ subject: 'Hi', to: 'a@b.c' }]);
+
+      const action = await getAction(pool, id);
+      expect(action?.state).toBe('succeeded');
+      expect(action?.claimedBy).toBe('w1');
+      const attempts = await listEffectAttempts(pool, id);
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({ attempt: 1, state: 'succeeded' });
+      // Intent was recorded before dispatch: the envelope hash is on the row.
+      expect(attempts[0]?.envelopeHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('is claimed exactly once when workers race', async () => {
+      const { manifest, sent } = sendManifest({
+        execute: async () => {
+          await new Promise((r) => setTimeout(r, 25));
+          return { messageId: 'mid' };
+        },
+      });
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+
+      const results = await Promise.all(
+        ['w1', 'w2', 'w3', 'w4'].map((worker) =>
+          executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker }),
+        ),
+      );
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      expect(
+        results.filter((r) => !r.ok && r.reason === 'already-claimed'),
+      ).toHaveLength(3);
+      // The effect itself happened exactly once.
+      expect(sent).toHaveLength(1);
+      expect(await listEffectAttempts(pool, id)).toHaveLength(1);
+    });
+
+    it('refuses when the approved arguments no longer hash to the approved value', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+      // Someone edits the row under the standing approval.
+      await pool.query(
+        `update core.actions set canonical_args = $2::jsonb where id = $1`,
+        [id, JSON.stringify({ subject: 'Hi', to: 'attacker@example.com' })],
+      );
+
+      const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(res).toMatchObject({ ok: false, reason: 'args-hash-mismatch', state: 'failed' });
+      expect(sent).toEqual([]);
+      // Nothing was dispatched, so nothing is in the ledger.
+      expect(await listEffectAttempts(pool, id)).toHaveLength(0);
+      expect((await getAction(pool, id))?.state).toBe('failed');
+    });
+
+    it('refuses when the tool moved to another version', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register({ ...manifest, version: '2.0.0' });
+      const id = await approved();
+      const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(res).toMatchObject({ ok: false, reason: 'args-hash-mismatch' });
+      expect(sent).toEqual([]);
+    });
+
+    it('records a timeout as unknown, never as failed and never retried', async () => {
+      const { manifest } = sendManifest({
+        timeoutMs: 20,
+        execute: () => new Promise(() => {}),
+      });
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+
+      const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(res).toMatchObject({ ok: false, state: 'unknown', reason: 'timeout' });
+      expect((await getAction(pool, id))?.state).toBe('unknown');
+      const attempts = await listEffectAttempts(pool, id);
+      expect(attempts[0]).toMatchObject({ state: 'unknown' });
+      // A second call does not re-run it: the approval is no longer approved.
+      const again = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w2' });
+      expect(again).toMatchObject({ ok: false });
+      expect(await listEffectAttempts(pool, id)).toHaveLength(1);
+    });
+
+    it('records a throwing tool as failed, with the error on the attempt', async () => {
+      const { manifest } = sendManifest({
+        execute: async () => {
+          throw new Error('smtp said no');
+        },
+      });
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+      const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(res).toMatchObject({ ok: false, state: 'failed', reason: 'tool-error' });
+      expect((await listEffectAttempts(pool, id))[0]).toMatchObject({
+        state: 'failed',
+        error: 'smtp said no',
+      });
+    });
+
+    it('will not execute an action that was never approved', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const action = await createAction(pool, {
+        tool: 'mail.send',
+        toolVersion: '1.2.3',
+        agentId: 'mailer',
+        canonicalArgs: { subject: 'Hi', to: 'a@b.c' },
+        envelope: {},
+        preview: 'p',
+      });
+      const res = await executeApproved(pool, {
+        actionId: action.id,
+        registry,
+        ctx: ctx(),
+        worker: 'w1',
+      });
+      expect(res).toMatchObject({ ok: false, reason: 'not-approved', state: 'pending' });
+      expect(sent).toEqual([]);
+    });
+
+    it('will not execute an approval that expired while it waited', async () => {
+      const { manifest, sent } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const id = await approved();
+      await pool.query(`update core.actions set expires_at = now() - interval '1 hour' where id = $1`, [id]);
+      const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(res).toMatchObject({ ok: false, reason: 'expired', state: 'expired' });
+      expect(sent).toEqual([]);
+    });
+  });
+
+  it('writes an event for every transition', async () => {
+    const { manifest } = sendManifest();
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+    const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'Hi' }, ctx());
+    if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+    await decideApproval(pool, {
+      actionId: res.actionId,
+      decision: 'approved',
+      by: 'owner',
+      via: 'telegram',
+    });
+    await executeApproved(pool, { actionId: res.actionId, registry, ctx: ctx(), worker: 'w1' });
+
+    const { rows } = await pool.query(`select kind from core.events order by id asc`);
+    expect(rows.map((r) => r.kind)).toEqual([
+      'action.created',
+      'approval.decided',
+      'approval.claimed',
+      'effect.attempted',
+      'effect.succeeded',
+    ]);
+  });
+
+  it('hashes canonically: key order does not change the approved hash', () => {
+    expect(hashArgs('t', '1', { a: 1, b: 2 })).toBe(hashArgs('t', '1', { b: 2, a: 1 }));
+    expect(hashArgs('t', '1', { a: 1 })).not.toBe(hashArgs('t', '2', { a: 1 }));
+    expect(vi.isMockFunction(hashArgs)).toBe(false);
+  });
+});

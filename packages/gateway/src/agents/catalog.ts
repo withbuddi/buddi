@@ -15,6 +15,7 @@ import {
   type PluginManifest,
 } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
+import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from './delegation.js';
@@ -40,6 +41,7 @@ export interface Queryable {
 export function createToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(financeManifest);
+  registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
   // Delegation is registered last and takes the registry itself: the nested run
@@ -52,7 +54,7 @@ export function createToolRegistry(): ToolRegistry {
 
 /** Every plugin manifest installed here — what `db:migrate` walks. */
 export function installedManifests(): PluginManifest[] {
-  return [financeManifest, memoryManifest];
+  return [financeManifest, memoryManifest, emailManifest];
 }
 
 /**
