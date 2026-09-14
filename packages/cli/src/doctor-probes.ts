@@ -21,6 +21,7 @@ import {
 } from '@buddi/core';
 import {
   createToolRegistry,
+  describeDatabaseError,
   hydrateSecrets,
   installedManifests,
   listDevices,
@@ -35,6 +36,7 @@ import {
   type ProbeResult,
   type VaultFacts,
 } from './doctor.js';
+import { DB_UNREACHABLE, dockerState } from './db-cmd.js';
 import { versionOf } from './proc.js';
 import { createServiceManager } from './service/index.js';
 
@@ -123,12 +125,19 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         : { status: 'fail', detail: 'not on PATH — https://pnpm.io/installation' };
     },
 
+    /**
+     * The *daemon*, not the client. `docker --version` answers from the binary
+     * alone and reported a cheerful row with Docker Desktop closed — while
+     * every database row below it failed. A stopped daemon is the cause of all
+     * of them, so it fails, loudly, with the one command that fixes it.
+     */
     async dockerVersion(): Promise<ProbeResult> {
-      const v = await versionOf('docker');
-      if (!v) {
-        return { status: 'warn', detail: 'not on PATH — needed only for the postgres container' };
+      const docker = await dockerState();
+      if (docker.state === 'absent') return { status: 'warn', detail: docker.detail };
+      if (docker.state === 'stopped') {
+        return { status: 'fail', detail: `${docker.detail} — then \`buddi db up\`` };
       }
-      return { status: 'ok', detail: v };
+      return { status: 'ok', detail: docker.detail };
     },
 
     async postgres(): Promise<ProbeResult> {
@@ -141,18 +150,15 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         const version = (rows[0]?.v ?? 'postgres').split(' ').slice(0, 2).join(' ');
         return { status: 'ok', detail: `${version} — ${redactUrl(databaseUrl)}` };
       } catch (err) {
-        return {
-          status: 'fail',
-          detail: `unreachable at ${redactUrl(databaseUrl)}: ${
-            err instanceof Error ? err.message : String(err)
-          } (pnpm db:up)`,
-        };
+        // One sentence, the same one every other entry point prints — never the
+        // empty `AggregateError` pg throws for a refused connection.
+        return { status: 'fail', detail: describeDatabaseError(err, databaseUrl) };
       }
     },
 
     async migrations(): Promise<ProbeResult> {
       const pool = await connected();
-      if (!pool) return { status: 'fail', detail: 'skipped — no database connection' };
+      if (!pool) return { status: 'fail', detail: DB_UNREACHABLE };
       const expected = await expectedMigrations(installedManifests());
       try {
         const { rows } = await pool.query<{ schema: string; filename: string }>(
@@ -262,7 +268,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
 
     async pairedDevices(): Promise<ProbeResult> {
       const pool = await connected();
-      if (!pool) return { status: 'warn', detail: 'skipped — no database connection' };
+      if (!pool) return { status: 'warn', detail: DB_UNREACHABLE };
       const devices = await listDevices(pool);
       return devices.length === 0
         ? { status: 'warn', detail: 'none paired — run `buddi telegram pair`' }
@@ -279,7 +285,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      */
     async queue(): Promise<ProbeResult> {
       const pool = await connected();
-      if (!pool) return { status: 'warn', detail: 'skipped — no database connection' };
+      if (!pool) return { status: 'warn', detail: DB_UNREACHABLE };
       try {
         const counts = await countJobsByState(pool);
         const summary =
@@ -305,7 +311,9 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         return {
           status: 'warn',
           detail: status.installed
-            ? `${manager.kind}: installed but not running — \`buddi service restart\``
+            ? // The unit is on disk and the process is not up — the post-reboot
+              // shape, where launchd gave up after the database kept refusing.
+              `${manager.kind}: ${status.detail} — \`buddi service start\` (logs: \`buddi service logs\`)`
             : `not installed — \`buddi service install\` (or run \`buddi serve\` yourself)`,
         };
       } catch (err) {

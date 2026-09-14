@@ -16,13 +16,16 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createPool, runMigrations } from '@buddi/core';
 import {
+  describeDatabaseError,
   hydrateSecrets,
   installedManifests,
+  requireDatabase,
   runChatCli,
   runMissionsCli,
   runServe,
 } from '@buddi/gateway';
-import { parseArgs, USAGE, UsageError, type Command } from './args.js';
+import { parseArgs, USAGE, UsageError, type Command, type ServiceAction } from './args.js';
+import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
@@ -63,7 +66,7 @@ export async function doctor(): Promise<number> {
   }
 }
 
-async function service(action: 'install' | 'uninstall' | 'status' | 'logs' | 'restart'): Promise<number> {
+async function service(action: ServiceAction): Promise<number> {
   const manager = createServiceManager();
   if (action === 'status') {
     const status = await manager.status();
@@ -81,7 +84,11 @@ async function service(action: 'install' | 'uninstall' | 'status' | 'logs' | 're
       ? await manager.install()
       : action === 'uninstall'
         ? await manager.uninstall()
-        : await manager.restart();
+        : action === 'start'
+          ? await manager.start()
+          : action === 'stop'
+            ? await manager.stop()
+            : await manager.restart();
   for (const note of notes) console.log(note);
   return 0;
 }
@@ -95,21 +102,33 @@ export async function dispatch(command: Command): Promise<number> {
       console.log('buddi 0.1.0');
       return 0;
     }
-    case 'chat-cli':
+    case 'chat-cli': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       await runChatCli(command.argv);
       return 0;
-    case 'missions':
+    }
+    case 'missions': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       await runMissionsCli(command.argv);
       return 0;
+    }
     case 'serve':
       loadEnv();
       await runServe();
       return 0;
-    case 'migrate':
+    case 'migrate': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       return migrate();
+    }
+    case 'db':
+      loadEnv();
+      return runDb(command.action, process.env);
     case 'init':
       loadEnv();
       return runInit();
@@ -119,23 +138,34 @@ export async function dispatch(command: Command): Promise<number> {
     case 'service':
       loadEnv();
       return service(command.action);
-    case 'telegram':
+    case 'telegram': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       // `pair` talks to Telegram, so the bot token has to be a token and not
       // the `<vault>` marker `vault import-env` leaves in `.env`.
       await hydrateSecrets(process.env);
       return runTelegram(command.action, command.deviceId);
+    }
     case 'vault':
       loadEnv();
       return runVault(command.action, command.name);
-    case 'pause':
+    case 'pause': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       return pause();
-    case 'resume':
+    }
+    case 'resume': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       return resume();
+    }
     case 'jobs': {
       loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
       switch (command.action) {
         case 'retry':
           return jobsRetry(command.jobId);
@@ -182,7 +212,9 @@ if (invokedDirectly()) {
       if (code !== 0) process.exitCode = code;
     })
     .catch((err) => {
-      console.error(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+      // A bare `AggregateError:` is what a dead database used to print. Never
+      // again: every throw leaves this binary as a sentence.
+      console.error(describeDatabaseError(err, process.env.DATABASE_URL));
       process.exit(1);
     });
 }

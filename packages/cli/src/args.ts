@@ -15,8 +15,20 @@ export class UsageError extends Error {
   }
 }
 
-export const SERVICE_ACTIONS = ['install', 'uninstall', 'status', 'logs', 'restart'] as const;
+export const SERVICE_ACTIONS = [
+  'install',
+  'uninstall',
+  'start',
+  'stop',
+  'status',
+  'logs',
+  'restart',
+] as const;
 export type ServiceAction = (typeof SERVICE_ACTIONS)[number];
+
+/** The postgres container: `docker compose up -d postgres` and friends. */
+export const DB_ACTIONS = ['up', 'down', 'status'] as const;
+export type DbAction = (typeof DB_ACTIONS)[number];
 
 export const VAULT_ACTIONS = ['set', 'get', 'delete', 'list', 'import-env'] as const;
 export type VaultAction = (typeof VAULT_ACTIONS)[number];
@@ -47,6 +59,7 @@ export type Command =
   | { kind: 'init' }
   | { kind: 'doctor' }
   | { kind: 'service'; action: ServiceAction }
+  | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
@@ -75,7 +88,21 @@ export function parseArgs(argv: string[]): Command {
   if (head === 'missions') return { kind: 'missions', argv: rest };
   if (head === 'migrate') return { kind: 'migrate' };
   if (head === 'init') return { kind: 'init' };
-  if (head === 'doctor') return { kind: 'doctor' };
+  // `status` is what a person types when they want to know if it works; it is
+  // the doctor under another name rather than a second, thinner report.
+  if (head === 'doctor' || head === 'status') return { kind: 'doctor' };
+
+  if (head === 'db') {
+    const action = rest[0];
+    if (action === undefined) {
+      throw new UsageError(`buddi db needs one of: ${DB_ACTIONS.join(', ')}`);
+    }
+    if (!(DB_ACTIONS as readonly string[]).includes(action)) {
+      throw new UsageError(`unknown db action: ${action} (expected ${DB_ACTIONS.join(', ')})`);
+    }
+    if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
+    return { kind: 'db', action: action as DbAction };
+  }
 
   if (head === 'pause') {
     if (rest.length > 0) throw new UsageError(`buddi pause takes no arguments (got ${rest[0]})`);
@@ -192,6 +219,10 @@ export const USAGE = `buddi — your personal agents, one command
 
   buddi init                 set this machine up (interactive, idempotent)
   buddi doctor               check every moving part and say what is wrong
+  buddi status               the same report, under the name you reached for
+
+  buddi db up                start the postgres container (after a reboot)
+  buddi db down|status
 
   buddi chat                 talk to the default agent
   buddi chat --agent <handle>  ... to a specific agent, by @handle or id
@@ -201,6 +232,7 @@ export const USAGE = `buddi — your personal agents, one command
 
   buddi serve                run the Telegram surface + scheduler in this shell
   buddi service install      run it in the background, at login
+  buddi service start|stop   load/unload it without touching the plist
   buddi service uninstall|status|logs|restart
 
   buddi telegram pair        a QR code + deep link that pairs a device

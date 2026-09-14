@@ -56,6 +56,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnv } from './bootstrap.js';
+import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { insertOccurrence } from './missions-cli.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
 import {
@@ -341,11 +342,18 @@ export function createMissionJobHandler(deps: {
 export async function main(): Promise<void> {
   loadEnv();
 
+  // The service waits for the database rather than dying on it. Under launchd's
+  // KeepAlive an exit is an immediate restart, so a stopped Docker used to turn
+  // into a crash loop and, once throttled, a job "loaded but not running".
+  // Waiting here costs nothing and makes the installation self-healing: the
+  // first probe after Docker comes up connects and serve starts.
+  await waitForDatabase({ databaseUrl: process.env.DATABASE_URL });
+
   let wiring;
   try {
     wiring = await createWiringAsync(process.env);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(describeDatabaseError(err, process.env.DATABASE_URL));
     process.exit(1);
   }
   const { pool, now } = wiring;
@@ -618,7 +626,9 @@ function invokedDirectly(): boolean {
 
 if (invokedDirectly()) {
   main().catch((err) => {
-    console.error(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+    // Never a bare `AggregateError:` — that is the message this whole path exists
+    // to replace.
+    console.error(describeDatabaseError(err, process.env.DATABASE_URL));
     process.exit(1);
   });
 }

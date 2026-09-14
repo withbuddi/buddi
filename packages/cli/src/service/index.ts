@@ -43,6 +43,10 @@ export interface ServiceManager {
   readonly errorFile: string;
   install(): Promise<string[]>;
   uninstall(): Promise<string[]>;
+  /** Load the installed unit and run it. Idempotent; never writes the unit. */
+  start(): Promise<string[]>;
+  /** Unload it. The unit file stays, so `start` (or a login) brings it back. */
+  stop(): Promise<string[]>;
   status(): Promise<ServiceStatus>;
   restart(): Promise<string[]>;
 }
@@ -177,6 +181,45 @@ class LaunchdManager implements ServiceManager {
     return notes;
   }
 
+  /**
+   * `bootstrap`, not `kickstart`: after a crash-loop launchd leaves the job
+   * loaded-but-dead, and after `stop` it is not loaded at all. Bootstrapping
+   * covers both, and a job that is already up says so instead of erroring.
+   */
+  async start(): Promise<string[]> {
+    if (!existsSync(this.unitPath)) {
+      throw new Error('the service is not installed — run "buddi service install" first');
+    }
+    const before = await this.status();
+    if (before.running) return [`${SERVICE_LABEL} is already running${before.pid ? ` (pid ${before.pid})` : ''}`];
+    const res = await run('launchctl', ['bootstrap', this.#domain, this.unitPath]);
+    if (res.code !== 0) {
+      // Already loaded but not running (the crash-loop case): kick it.
+      const kick = await run('launchctl', ['kickstart', '-k', this.#target]);
+      if (kick.code !== 0) {
+        throw new Error(
+          `could not start ${SERVICE_LABEL}: ${res.stderr.trim() || res.stdout.trim()}`,
+        );
+      }
+      return [`kickstarted ${SERVICE_LABEL} (it was loaded but not running)`];
+    }
+    return [`launchctl bootstrap ${this.#domain} — ${SERVICE_LABEL} is running`];
+  }
+
+  /**
+   * `bootout` stops it *and* unloads it, which is the only way to stop a job
+   * with `KeepAlive`: anything softer is restarted a second later. The plist
+   * stays where it is — removal is `uninstall`.
+   */
+  async stop(): Promise<string[]> {
+    const res = await run('launchctl', ['bootout', this.#target]);
+    return [
+      res.code === 0
+        ? `launchctl bootout ${this.#target} — stopped (the plist is still there; \`buddi service start\` runs it again)`
+        : `the service was not loaded (${res.stderr.trim() || 'nothing to boot out'})`,
+    ];
+  }
+
   async status(): Promise<ServiceStatus> {
     const installed = existsSync(this.unitPath);
     const res = await run('launchctl', ['print', this.#target]);
@@ -266,6 +309,24 @@ class SystemdManager implements ServiceManager {
     await run('systemctl', ['--user', 'daemon-reload']);
     notes.push(`kept the logs in ${LOG_DIR}`);
     return notes;
+  }
+
+  async start(): Promise<string[]> {
+    if (!existsSync(this.unitPath)) {
+      throw new Error('the service is not installed — run "buddi service install" first');
+    }
+    const res = await run('systemctl', ['--user', 'start', this.unitName]);
+    if (res.code !== 0) throw new Error(`systemctl start failed (${res.code}): ${res.stderr}`);
+    return [`systemctl --user start ${this.unitName}`];
+  }
+
+  async stop(): Promise<string[]> {
+    const res = await run('systemctl', ['--user', 'stop', this.unitName]);
+    return [
+      res.code === 0
+        ? `systemctl --user stop ${this.unitName} (the unit stays enabled)`
+        : `the unit was not running (${res.stderr.trim() || 'nothing to stop'})`,
+    ];
   }
 
   async status(): Promise<ServiceStatus> {
