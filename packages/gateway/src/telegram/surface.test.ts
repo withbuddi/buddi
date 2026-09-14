@@ -28,6 +28,7 @@ import {
   parseStartCode,
   progressLine,
   readingText,
+  senderLabel,
   toPlainText,
   toolLabel,
   type RunMission,
@@ -155,7 +156,11 @@ class FakeDb implements Queryable {
       const row = this.identities.find(
         (i) => i.surface === params[0] && i.external_user_id === params[1],
       );
-      if (row) row.last_seen_at = new Date(this.clock());
+      if (row) {
+        row.last_seen_at = new Date(this.clock());
+        // `label = coalesce(label, $3)`: filled when missing, never replaced.
+        if ((row.label ?? null) === null && params[2]) row.label = params[2];
+      }
       return { rows: [] };
     }
     if (text.startsWith('delete from core.surface_identities')) {
@@ -2005,6 +2010,37 @@ describe('TelegramSurface last seen', () => {
     await surface.processUpdates([message(502, OWNER, OWNER, 'and again')]);
     await surface.drain();
     expect(device()).toEqual(new Date(at));
+  });
+
+  it('names a device paired without a label, and never renames one that has a name', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface } = surfaceWith(db);
+
+    // Paired from the environment allowlist: an id and nothing else. The first
+    // message it sends is where its name honestly comes from.
+    expect(db.identities[0]?.label ?? null).toBeNull();
+    await surface.processUpdates([message(520, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(db.identities[0]?.label).toBe('@someone');
+
+    // A name the owner chose stays theirs, whatever Telegram now reports.
+    (db.identities[0] as { label?: string | null }).label = "Amen's phone";
+    const later = new FakeDb();
+    later.identities = db.identities;
+    const second = surfaceWith(later).surface;
+    await second.processUpdates([message(521, OWNER, OWNER, 'again')]);
+    await second.drain();
+    expect(db.identities[0]?.label).toBe("Amen's phone");
+  });
+
+  it('takes the @username, else the first name, else no label at all', () => {
+    expect(senderLabel({ username: 'TheRealAmenophis', first_name: 'Amen' })).toBe(
+      '@TheRealAmenophis',
+    );
+    expect(senderLabel({ username: '@already' })).toBe('@already');
+    expect(senderLabel({ first_name: 'Amen' })).toBe('Amen');
+    expect(senderLabel({ username: '  ', first_name: '  ' })).toBeNull();
+    expect(senderLabel(undefined)).toBeNull();
   });
 
   it('answers the owner even when last_seen_at cannot be written', async () => {

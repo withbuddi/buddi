@@ -10,7 +10,7 @@
  * The code is a bearer credential for the length of its TTL, so it is printed
  * once, never written to disk, and never logged.
  */
-import { createPool } from '@buddi/core';
+import { createPool, localDateTimeString, timezoneFromEnv } from '@buddi/core';
 import { createPairingCode, listDevices, unpairDevice } from '@buddi/gateway';
 import qrcode from 'qrcode-terminal';
 import type { TelegramAction } from './args.js';
@@ -21,6 +21,37 @@ const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
 
 /** How long a pairing code is worth anything. Short: it is shown, then used. */
 export const PAIRING_TTL_MINUTES = 10;
+
+/* ------------------------------------------------------------------ *
+ * Relative time
+ * ------------------------------------------------------------------ */
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * "3 min ago" — how long ago an instant was, as the owner would say it.
+ *
+ * Pure: the clock is an argument, never `Date.now()` reached for inside. One
+ * unit, never two ("1 hour ago", not "1 hour 4 min ago"), because the question
+ * this answers is *roughly when*, and the exact stamp is printed beside it.
+ * `null` is "never" — a device that has never spoken — and an instant in the
+ * future (a clock that disagrees) is "just now" rather than a negative age.
+ */
+export function relativeTime(at: Date | null | undefined, now: Date = new Date()): string {
+  if (!at || Number.isNaN(at.getTime())) return 'never';
+  const ms = now.getTime() - at.getTime();
+  if (!Number.isFinite(ms) || ms < MINUTE_MS) return 'just now';
+  if (ms < HOUR_MS) return plural(Math.floor(ms / MINUTE_MS), 'min', 'min');
+  if (ms < DAY_MS) return plural(Math.floor(ms / HOUR_MS), 'hour', 'hours');
+  if (ms < 365 * DAY_MS) return plural(Math.floor(ms / DAY_MS), 'day', 'days');
+  return plural(Math.floor(ms / (365 * DAY_MS)), 'year', 'years');
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many} ago`;
+}
 
 export function renderQr(text: string): Promise<string> {
   return new Promise((resolve) => {
@@ -65,13 +96,19 @@ export async function runTelegram(
         console.log('no paired devices — run `buddi telegram pair`');
         return 0;
       }
+      // Every date here is the owner's wall clock (`BUDDI_TZ`): the stamp for
+      // the record, the relative age for the glance.
+      const timezone = timezoneFromEnv(env);
+      const now = new Date();
       for (const d of devices) {
-        const seen = d.lastSeenAt ? `last seen ${d.lastSeenAt.toISOString()}` : 'never seen';
-        const paired = d.pairedAt ? d.pairedAt.toISOString() : 'unknown';
+        const paired = d.pairedAt ? localDateTimeString(d.pairedAt, timezone) : 'unknown';
+        const seen = d.lastSeenAt
+          ? `${localDateTimeString(d.lastSeenAt, timezone)} (${relativeTime(d.lastSeenAt, now)})`
+          : 'never';
         console.log(
-          `${bold(d.id)}  ${d.surface}  ${d.label ?? dim('(no label)')}  ` +
+          `${bold(d.id)}  ${d.surface}  ${d.label === null ? dim('(no label)') : d.label}  ` +
             `user ${d.externalUserId}${d.externalChatId ? ` chat ${d.externalChatId}` : ''}  ` +
-            dim(`paired ${paired}, ${seen}`),
+            dim(`paired ${paired}, last seen ${seen}`),
         );
       }
       return 0;

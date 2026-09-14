@@ -39,6 +39,52 @@ function dateFormatter(timezone: string): Intl.DateTimeFormat {
   return formatter;
 }
 
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dateTimeFormatter(timezone: string): Intl.DateTimeFormat {
+  const cached = dateTimeFormatters.get(timezone);
+  if (cached) return cached;
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      // `h23` rather than `hour12: false`: the latter renders midnight as 24.
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    });
+  } catch {
+    throw new Error(`unknown timezone "${timezone}"`);
+  }
+  dateTimeFormatters.set(timezone, formatter);
+  return formatter;
+}
+
+/**
+ * The instant as the owner's wall clock shows it: `2026-09-13 17:35 EDT`.
+ *
+ * Sortable like the date it extends, minutes only — a paired device is not an
+ * event whose second matters — and always with the zone spelled out, because a
+ * timestamp with no zone is exactly the ambiguity this module exists to remove.
+ */
+export function localDateTimeString(date: Date, timezone: string): string {
+  if (Number.isNaN(date.getTime())) throw new Error('localDateTimeString: invalid date');
+  const parts = dateTimeFormatter(timezone).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  const year = part('year').padStart(4, '0');
+  const month = part('month').padStart(2, '0');
+  const day = part('day').padStart(2, '0');
+  const hour = part('hour').padStart(2, '0');
+  const minute = part('minute').padStart(2, '0');
+  const zone = part('timeZoneName');
+  return `${year}-${month}-${day} ${hour}:${minute}${zone === '' ? '' : ` ${zone}`}`;
+}
+
 /**
  * The calendar date `date` falls on in `timezone`, as `YYYY-MM-DD`.
  *

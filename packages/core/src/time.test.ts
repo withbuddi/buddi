@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TIMEZONE, localDateString, timezoneFromEnv } from './time.js';
+import {
+  DEFAULT_TIMEZONE,
+  localDateString,
+  localDateTimeString,
+  timezoneFromEnv,
+} from './time.js';
 
 describe('localDateString', () => {
   it('renders the owner day, not the UTC day, after 8 PM in New York', () => {
@@ -43,5 +48,31 @@ describe('timezoneFromEnv', () => {
     expect(timezoneFromEnv({ BUDDI_TZ: 'Europe/Paris' } as NodeJS.ProcessEnv)).toBe(
       'Europe/Paris',
     );
+  });
+});
+
+describe('localDateTimeString', () => {
+  it('renders the owner wall clock, to the minute, with the zone named', () => {
+    const instant = new Date('2026-09-13T21:35:00Z');
+    expect(localDateTimeString(instant, 'America/New_York')).toBe('2026-09-13 17:35 EDT');
+    expect(localDateTimeString(instant, 'UTC')).toBe('2026-09-13 21:35 UTC');
+  });
+
+  it('names the standard zone in winter, not the summer one', () => {
+    expect(localDateTimeString(new Date('2026-01-13T22:35:00Z'), 'America/New_York')).toBe(
+      '2026-01-13 17:35 EST',
+    );
+  });
+
+  it('renders midnight as 00:00, never 24:00, on the right day', () => {
+    // 04:00 UTC is midnight in New York, and the day has just turned.
+    expect(localDateTimeString(new Date('2026-09-14T04:00:00Z'), 'America/New_York')).toBe(
+      '2026-09-14 00:00 EDT',
+    );
+  });
+
+  it('refuses an unknown zone and an invalid date', () => {
+    expect(() => localDateTimeString(new Date(), 'Mars/Olympus')).toThrow(/unknown timezone/);
+    expect(() => localDateTimeString(new Date('nope'), 'UTC')).toThrow(/invalid date/);
   });
 });
