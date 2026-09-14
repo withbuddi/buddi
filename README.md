@@ -127,6 +127,8 @@ background and come back at login:
 buddi service install     # macOS: a launchd LaunchAgent, KeepAlive + RunAtLoad
 buddi service status      # installed? running? which pid?
 buddi service logs        # follow data/logs/serve.log and .err
+buddi service start       # load and run it (the plist stays where it is)
+buddi service stop        # unload it; `start`, or the next login, brings it back
 buddi service restart
 buddi service uninstall   # stops it and removes the unit; the logs stay
 ```
@@ -146,6 +148,35 @@ buddi telegram unpair <id>
 
 The pairing code is a bearer credential for the ten minutes it lives: it is
 printed once, and `buddi serve` must be running to receive it.
+
+### After a reboot
+
+Everything here sits on one Postgres container, so if Docker Desktop did not
+start, nothing works. Two things make that a non-event:
+
+- Turn on **Docker Desktop → Settings → General → Start Docker Desktop when you
+  sign in**. The container itself is `restart: unless-stopped`, so it comes back
+  by itself whenever the daemon does.
+- Or start it by hand: `buddi db up` (`buddi db status`, `buddi db down`).
+
+The background service does not need either one to be true *at the moment it
+starts*: with no database it waits and retries — 5s, 10s, 20s, up to a minute —
+instead of exiting, so launchd has nothing to crash-loop on and `serve`
+connects on its own once Docker is up. `buddi service logs` shows it waiting.
+
+The foreground commands do the opposite: `buddi chat`, `buddi ask`,
+`buddi missions` and `buddi jobs` fail immediately with
+
+```
+database not reachable at localhost:55433 — is Docker running? try: buddi db up
+```
+
+`buddi status` (the same report as `buddi doctor`) is the thing to run when
+something is off: the `docker` row says **Docker is not running (open -a
+Docker)** when the daemon is down, the rows under the database say
+`skipped: database unreachable` rather than repeating the same failure, and the
+`service` row points at `buddi service start` when the LaunchAgent is installed
+but the process is not up.
 
 ## Missions
 

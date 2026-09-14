@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DB_UNREACHABLE, DOCKER_DOWN } from './db-cmd.js';
 import {
   checkNodeVersion,
   checkVault,
@@ -200,5 +201,58 @@ describe('checkVault', () => {
       }),
     );
     expect(row.status).toBe('ok');
+  });
+});
+
+
+/**
+ * The shape of a machine that has just rebooted with Docker Desktop closed:
+ * the daemon is down, so the database is down, so everything under it is.
+ * The table has to make the *cause* obvious and stay quiet about the rest.
+ */
+describe('the table when Docker is not running', () => {
+  const dockerDown = (): Partial<DoctorProbes> => ({
+    dockerVersion: async () => ({ status: 'fail', detail: `${DOCKER_DOWN} — then \`buddi db up\`` }),
+    postgres: async () => ({
+      status: 'fail',
+      detail: 'database not reachable at localhost:55433 — is Docker running? try: buddi db up',
+    }),
+    migrations: async () => ({ status: 'fail', detail: DB_UNREACHABLE }),
+    queue: async () => ({ status: 'warn', detail: DB_UNREACHABLE }),
+    pairedDevices: async () => ({ status: 'warn', detail: DB_UNREACHABLE }),
+    service: async () => ({
+      status: 'warn',
+      detail: 'launchd: loaded but not running — `buddi service start` (logs: `buddi service logs`)',
+    }),
+  });
+
+  it('fails the docker row with the command that fixes it', async () => {
+    const checks = await collectChecks(fakeProbes(dockerDown()));
+    const docker = checks.find((c) => c.name === 'docker');
+    expect(docker?.status).toBe('fail');
+    expect(docker?.detail).toContain('Docker is not running (open -a Docker)');
+  });
+
+  it('says the database is unreachable once, and skips the rows under it', async () => {
+    const checks = await collectChecks(fakeProbes(dockerDown()));
+    expect(checks.find((c) => c.name === 'postgres')?.detail).toBe(
+      'database not reachable at localhost:55433 — is Docker running? try: buddi db up',
+    );
+    for (const name of ['migrations', 'queue', 'paired devices']) {
+      expect(checks.find((c) => c.name === name)?.detail).toBe('skipped: database unreachable');
+    }
+    // Nothing in the table is a stack trace or a bare AggregateError.
+    expect(renderTable(checks)).not.toMatch(/AggregateError|\bat \//);
+  });
+
+  it('points at `buddi service start` when the plist is loaded but dead', async () => {
+    const checks = await collectChecks(fakeProbes(dockerDown()));
+    expect(checks.find((c) => c.name === 'service')?.detail).toContain('buddi service start');
+  });
+
+  it('exits 1, because postgres and migrations are critical', async () => {
+    const checks = await collectChecks(fakeProbes(dockerDown()));
+    expect(exitCodeFor(checks)).toBe(1);
+    expect(summarize(checks)).toContain('postgres');
   });
 });

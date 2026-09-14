@@ -32,15 +32,24 @@ describe('parseArgs', () => {
     expect(parseArgs(['migrate'])).toEqual({ kind: 'migrate' });
   });
 
-  it('parses every service action', () => {
-    for (const action of ['install', 'uninstall', 'status', 'logs', 'restart'] as const) {
+  it('parses every service action, start and stop included', () => {
+    for (const action of [
+      'install',
+      'uninstall',
+      'start',
+      'stop',
+      'status',
+      'logs',
+      'restart',
+    ] as const) {
       expect(parseArgs(['service', action])).toEqual({ kind: 'service', action });
     }
+    expect(() => parseArgs(['service', 'begin'])).toThrow(/unknown service action: begin/);
   });
 
   it('refuses a service action it does not have', () => {
     expect(() => parseArgs(['service'])).toThrow(UsageError);
-    expect(() => parseArgs(['service', 'start'])).toThrow(/unknown service action/);
+    expect(() => parseArgs(['service', 'begin'])).toThrow(/unknown service action/);
     expect(() => parseArgs(['service', 'status', 'extra'])).toThrow(/unexpected argument/);
   });
 
@@ -124,5 +133,27 @@ describe('buddi vault', () => {
     // A secret is never an argument: it would land in shell history.
     expect(() => parseArgs(['vault', 'set', 'A_KEY', 'the-secret'])).toThrow(/unexpected argument/);
     expect(() => parseArgs(['vault', 'list', 'A_KEY'])).toThrow(/unexpected argument/);
+  });
+});
+
+
+describe('buddi db', () => {
+  it('parses the three container actions', () => {
+    for (const action of ['up', 'down', 'status'] as const) {
+      expect(parseArgs(['db', action])).toEqual({ kind: 'db', action });
+    }
+  });
+
+  it('names the actions it accepts instead of guessing one', () => {
+    expect(() => parseArgs(['db'])).toThrow(/buddi db needs one of: up, down, status/);
+    expect(() => parseArgs(['db', 'start'])).toThrow(/unknown db action: start/);
+    expect(() => parseArgs(['db', 'up', 'postgres'])).toThrow(/unexpected argument/);
+  });
+});
+
+describe('buddi status', () => {
+  it('is the doctor under the name a person reaches for', () => {
+    expect(parseArgs(['status'])).toEqual({ kind: 'doctor' });
+    expect(parseArgs(['doctor'])).toEqual({ kind: 'doctor' });
   });
 });

@@ -25,6 +25,7 @@ import {
 } from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
 import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
+import { describeDatabaseError } from './db-ready.js';
 
 const ESC = '\u001b[';
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
@@ -142,7 +143,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   try {
     wiring = await createWiringAsync(process.env);
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    // A person is waiting at a prompt: fail fast, with the sentence that says
+    // what to do about it.
+    console.error(describeDatabaseError(err, process.env.DATABASE_URL));
     process.exit(1);
   }
   const { pool, registry, catalog, now, timezone, ctx } = wiring;
@@ -268,7 +271,7 @@ function invokedDirectly(): boolean {
 
 if (invokedDirectly()) {
   main().catch((err) => {
-    console.error(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+    console.error(describeDatabaseError(err, process.env.DATABASE_URL));
     process.exit(1);
   });
 }

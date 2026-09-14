@@ -28,6 +28,7 @@ import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
+import { describeDatabaseError, probeDatabase } from './db-ready.js';
 
 export { REPO_ROOT };
 
@@ -118,6 +119,10 @@ export async function createWiringAsync(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Wiring> {
   const secrets = await hydrateSecrets(env);
+  // The database comes before everything else it is under: with Docker stopped,
+  // a provider or catalog error is a distraction and the pg failure that
+  // follows is an empty `AggregateError`. One probe, one sentence.
+  await probeDatabase(env.DATABASE_URL);
   return { ...createWiring(env), secrets };
 }
 
@@ -144,6 +149,12 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   }
 
   const pool = createPool(databaseUrl);
+  // The synchronous path cannot probe, but it can make sure the failure it
+  // eventually hits is legible: an idle client that loses the server throws on
+  // the pool, and `pg`'s own error there is the empty `AggregateError`.
+  pool.on('error', (err) => {
+    console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
+  });
   const provider = createAnthropicProvider(resolution.provider);
   // Delegation can only be wired once both exist; before this call the tool
   // refuses rather than reaching for an ambient catalog.
