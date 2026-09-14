@@ -432,9 +432,20 @@ suite('queue (postgres)', () => {
     }, 20_000);
 
     it('releases stale leases at startup (Phase 1 recovery)', async () => {
-      const job = await enqueue(pool, { kind: 'mission-run' });
-      // A process that died holding the lease.
-      await claimJob(pool, { worker: 'dead', now: new Date(), leaseMs: 1 });
+      // `run_after` is supplied instead of being left to the database's own
+      // `now()`: both claims below are made at the *test's* clock, so a
+      // Postgres clock running a second or two ahead of Node's — the database
+      // here lives in a VM — cannot turn a claim into a silent no-op. Every
+      // other claim in this file is anchored at T0 for the same reason.
+      const job = await enqueue(pool, {
+        kind: 'mission-run',
+        runAfter: new Date(Date.now() - 60_000),
+      });
+
+      // A process that died holding the lease, with the lease already over.
+      const dead = await claimJob(pool, { worker: 'dead', now: new Date(), leaseMs: 1 });
+      expect(dead?.id).toBe(job.id);
+      expect(dead?.leaseOwner).toBe('dead');
       expect((await getJob(pool, job.id))?.state).toBe('leased');
       await new Promise((r) => setTimeout(r, 50));
 
@@ -448,9 +459,22 @@ suite('queue (postgres)', () => {
         leaseMs: 5_000,
         handlers: { 'mission-run': async (j) => { ran.push(j.id); return null; } },
       });
+      // `succeeded` is terminal and reachable from `leased` only by way of
+      // `pending`, so the wait is unambiguous: nothing else could have run it.
       await waitFor(async () => (await getJob(pool, job.id))?.state === 'succeeded');
       await worker.stop();
+
       expect(ran).toEqual([job.id]);
+      const after = await getJob(pool, job.id);
+      expect(after?.leaseOwner).toBeNull();
+      // The dead worker's attempt stays spent — recovery is not a refund — so
+      // the finished job carries one attempt for the process that died and one
+      // for the process that picked the work back up.
+      expect(after?.attempts).toBe(2);
+      // And recovery is recorded as a fact, once, for the job that was stranded.
+      expect(await events('job.lease_expired')).toEqual([
+        { jobId: job.id, kind: 'mission-run', attempts: 1 },
+      ]);
     }, 20_000);
   });
 });
