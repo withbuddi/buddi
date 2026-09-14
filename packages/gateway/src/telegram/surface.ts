@@ -25,6 +25,25 @@ import {
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
 import { MAX_MESSAGE_CHARS, type TelegramApi, type TelegramUpdate } from './api.js';
+import {
+  attachmentNote,
+  extractAttachment,
+  filesText,
+  formatBytes,
+  getLastAttachment,
+  gotAudioText,
+  gotFileText,
+  isViewable,
+  listChatAttachments,
+  MAX_ATTACHMENT_BYTES,
+  ATTACHMENT_RECENCY_MS,
+  oversizeText,
+  recordChatAttachment,
+  referencesAttachment,
+  type ArtifactRow,
+  type ArtifactStore,
+  type IncomingAttachment,
+} from './attachments.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 
 export const SURFACE = 'telegram';
@@ -32,10 +51,29 @@ export const SURFACE = 'telegram';
 /** The bubble posted when the agent that is working is not known by name. */
 export const PLACEHOLDER_TEXT = '⏳ Working on it…';
 
-/** `⏳ Finance Advisor is working…` — the owner sees *who* they are waiting on. */
-export function placeholderText(agentName?: string): string {
-  const name = (agentName ?? '').trim();
+/**
+ * The name the bubble uses: the handle, capitalized — `ledger` → `Ledger`.
+ *
+ * The owner addresses agents by handle, so the progress line answers in the
+ * same currency. The long `name` stays where there is room for it: the command
+ * menu and `/agents`.
+ */
+export function handleLabel(handle?: string): string {
+  const raw = (handle ?? '').trim().replace(/^@/, '');
+  if (raw === '') return '';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+/** `⏳ Ledger is working…` — the owner sees *who* they are waiting on. */
+export function placeholderText(agentLabel?: string): string {
+  const name = (agentLabel ?? '').trim();
   return name === '' ? PLACEHOLDER_TEXT : `⏳ ${name} is working…`;
+}
+
+/** `⏳ Ledger is reading your file…` — a file run says what it is doing. */
+export function readingText(agentLabel?: string): string {
+  const name = (agentLabel ?? '').trim();
+  return name === '' ? '⏳ Reading your file…' : `⏳ ${name} is reading your file…`;
 }
 
 /**
@@ -46,6 +84,9 @@ export const FINANCE_ADVISOR_ID = 'finance-advisor';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
+
+/** `/files` never floods the chat: the tail of the history, newest first. */
+export const FILES_LIMIT = 10;
 
 /** Progress lines stay short — a long one is truncated with an ellipsis. */
 export const PROGRESS_MAX_CHARS = 200;
@@ -81,22 +122,87 @@ export const SURFACE_HINT =
 export const HELP = [
   'buddi on Telegram.',
   '',
+  'Send a statement, a receipt photo or a CSV and tell me what to do with it.',
+  '',
   'Just write your question. Commands:',
   '/agents — list the agents you can talk to',
-  '/use <id> — switch to an agent',
+  '/use <handle> — switch to an agent, e.g. /use @ledger',
+  '@handle … — ask that agent this one message without switching',
   '/whoami — which agent is active here',
   '/status — where you stand right now (finance advisor)',
   '/recap — run the weekly recap now (finance advisor)',
+  '/files — the last files you sent me',
   '/new — start a fresh conversation with the active agent',
   '/id — your numeric user id and this chat id',
   '/help — this message',
 ].join('\n');
 
+/**
+ * A file arrived in a build with no artifact store wired up. Not an error the
+ * owner caused, and said as a fact about the installation rather than a stack.
+ */
+export const FILES_UNAVAILABLE_TEXT =
+  'I can read files only when the artifact store is wired up, and it is not in this build. Paste the numbers instead and I can still help.';
+
+/** Download or storage failed. The owner is told, and can simply resend. */
+export const FILE_FAILED_TEXT =
+  "I couldn't save that file — send it again and I'll retry.";
+
 /** `/use` with an id the catalog does not know. Never an error to the owner. */
 export const UNKNOWN_AGENT_TEXT = 'Unknown agent. Send /agents to see the list.';
 
 /** `/use` with no argument at all. */
-export const USE_WITHOUT_ID_TEXT = 'Send /use <id>, for example /use finance-advisor. Send /agents to see the list.';
+export const USE_WITHOUT_ID_TEXT = 'Send /use <handle>, for example /use @ledger. Send /agents to see the list.';
+
+/** A message addressed to `@nobody`. Named back, so the typo is visible. */
+export function unknownHandleText(handle: string): string {
+  return `No agent called @${handle}. Send /agents.`;
+}
+
+/** `@ledger` and nothing else: there is no question to route. */
+export function emptyMentionText(handle: string): string {
+  return `What would you like to ask @${handle}?`;
+}
+
+/* ------------------------------------------------------------------ *
+ * @mentions
+ * ------------------------------------------------------------------ */
+
+/**
+ * A message addressed to one agent: `@ledger can I afford a bike?`.
+ *
+ * Telegram itself may put its own mention first — tapping the bot in a group
+ * list, or an autocompleted `@buddi_agent_bot` — so the bot's own username is
+ * stripped before anything is parsed. It is a routing prefix, never part of the
+ * question, and it is removed from the text the agent is given either way.
+ */
+export function stripBotMention(text: string, botUsername?: string): string {
+  const bot = (botUsername ?? '').trim().replace(/^@/, '');
+  if (bot === '') return text;
+  const re = new RegExp(`^\\s*@${bot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[:,]?\\s*`, 'i');
+  return text.replace(re, '');
+}
+
+export interface Mention {
+  /** The handle as typed, without the `@`. Resolution is the catalog's job. */
+  handle: string;
+  /** What is left of the message once the address is taken off the front. */
+  rest: string;
+}
+
+/**
+ * Parse a leading `@handle`, optionally followed by `:` or `,`.
+ *
+ * Only at the very start: `@ledger what now?` addresses an agent, `pay @ledger`
+ * is a sentence. An email address or a handle glued to other text matches
+ * nothing, so a message is never rerouted by accident.
+ */
+export function parseMention(text: string, botUsername?: string): Mention | undefined {
+  const stripped = stripBotMention(text, botUsername).trimStart();
+  const m = /^@([A-Za-z][A-Za-z0-9-]{1,19})\s*[:,]?[ \t]*([\s\S]*)$/.exec(stripped);
+  if (!m) return undefined;
+  return { handle: m[1] as string, rest: (m[2] as string).trim() };
+}
 
 /** The mission `/recap` runs. Named here so the surface asks for one thing. */
 export const RECAP_MISSION_ID = 'friday-recap';
@@ -127,10 +233,23 @@ export type RunMission = (
   onToolCall?: (name: string, input: unknown) => void,
 ) => Promise<MissionOutcome>;
 
+/** One artifact handed to the model as a content block, not as prose. */
+export interface RunAttachment {
+  artifactId: string;
+  mime: string;
+  kind: string;
+}
+
 export interface RunRequest {
   conversationId: string;
   chatId: string;
   text: string;
+  /**
+   * Files this turn can *see* — images and PDFs. Saved-but-unviewable files
+   * (a CSV) are named in `text` with their artifact id instead, so the agent
+   * reaches them through a tool rather than pretending to have read them.
+   */
+  attachments?: RunAttachment[];
   /**
    * The agent this turn belongs to — the chat's active one, except for the
    * finance-only commands, which name the finance advisor explicitly. The
@@ -150,6 +269,17 @@ export interface TelegramSurfaceOptions {
   pool: Queryable;
   /** Every agent this installation can talk to; the surface only reads it. */
   catalog: AgentCatalog;
+  /**
+   * The bot's own @username, as `getMe` reports it. Used for one thing: taking
+   * Telegram's own mention off the front of a message before the owner's
+   * `@handle` is read.
+   */
+  botUsername?: string;
+  /**
+   * Where an incoming file is put. Absent: files are declined in one sentence
+   * and nothing else about the surface changes.
+   */
+  artifacts?: ArtifactStore;
   /** Submits one turn and returns the reply text. */
   run(req: RunRequest): Promise<string>;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
@@ -391,16 +521,21 @@ export async function startNewConversationForChat(
   return id;
 }
 
-/** `• finance-advisor — Finance Advisor (active)`, one line per agent. */
+/** `• @ledger — Finance Advisor (active)`, one line per agent. */
 export function agentsText(
-  agents: readonly { id: string; name: string }[],
+  agents: readonly { id: string; handle: string; name: string }[],
   activeId: string,
 ): string {
   if (agents.length === 0) return 'No agents are installed.';
   const lines = agents.map(
-    (a) => `• ${a.id} — ${a.name}${a.id === activeId ? ' (active)' : ''}`,
+    (a) => `• @${a.handle} — ${a.name}${a.id === activeId ? ' (active)' : ''}`,
   );
-  return ['Agents:', ...lines, '', 'Send /use <id> to switch.'].join('\n');
+  return [
+    'Agents:',
+    ...lines,
+    '',
+    'Send /use @handle to switch, or start a message with @handle to ask that one just this once.',
+  ].join('\n');
 }
 
 async function appendSurfaceEvent(
@@ -527,10 +662,21 @@ export class TelegramSurface {
       return;
     }
 
+    // A file takes the same authorized path a sentence does — it is queued on
+    // this chat's chain, so a document and the message after it cannot race.
+    const incoming = extractAttachment(message);
+    if (incoming) {
+      const messageId = String(message.message_id);
+      this.enqueue(chatId, () =>
+        this.handleAttachment(chatId, resolution.ownerId, messageId, incoming),
+      );
+      return;
+    }
+
     const text = (message.text ?? '').trim();
     if (text === '') {
       this.enqueue(chatId, async () => {
-        await this.#opts.api.sendMessage(chatId, 'I can only read text messages for now.');
+        await this.#opts.api.sendMessage(chatId, 'I can only read text and files for now.');
       });
       return;
     }
@@ -589,8 +735,28 @@ export class TelegramSurface {
     return this.#opts.catalog.get(FINANCE_ADVISOR_ID) ?? this.#opts.catalog.defaultAgent();
   }
 
-  /** One accepted owner message: commands first, then a run. */
-  async handleText(chatId: string, userId: string, text: string): Promise<void> {
+  /** One accepted owner message: an address, then commands, then a run. */
+  async handleText(chatId: string, userId: string, raw: string): Promise<void> {
+    // Telegram's own mention is a routing prefix, never part of the question.
+    const text = stripBotMention(raw, this.#opts.botUsername).trim();
+
+    // `@ledger can I afford it?` — this one message goes to that agent, in that
+    // agent's own conversation, and the chat keeps the agent it was talking to.
+    const mention = parseMention(text);
+    if (mention) {
+      const addressed = this.#opts.catalog.byHandle(mention.handle);
+      if (!addressed) {
+        await this.#opts.api.sendMessage(chatId, unknownHandleText(mention.handle));
+        return;
+      }
+      if (mention.rest === '') {
+        await this.#opts.api.sendMessage(chatId, emptyMentionText(addressed.handle));
+        return;
+      }
+      await this.#runFor(chatId, addressed, mention.rest);
+      return;
+    }
+
     const command = text.startsWith('/') ? (text.split(/\s+/)[0] as string).toLowerCase() : '';
 
     if (command === '/id') {
@@ -620,7 +786,7 @@ export class TelegramSurface {
       const active = await this.activeAgent(chatId);
       await this.#opts.api.sendMessage(
         chatId,
-        `You are talking to ${active.name} (${active.id}).`,
+        `You are talking to ${active.name} (@${active.handle}).`,
       );
       return;
     }
@@ -637,6 +803,11 @@ export class TelegramSurface {
       await this.handleRecap(chatId);
       return;
     }
+    if (command === '/files') {
+      const rows = await listChatAttachments(this.#opts.pool, SURFACE, chatId, FILES_LIMIT);
+      await this.#opts.api.sendMessage(chatId, filesText(rows));
+      return;
+    }
 
     // `/status` is a finance feature: it is answered by the finance advisor
     // whoever the chat is talking to, in that advisor's own conversation, and
@@ -647,10 +818,30 @@ export class TelegramSurface {
     const prompt = status ? 'Status' : text;
     const note =
       status && agent.id !== active.id
-        ? `(${agent.name} answered this one; you are still talking to ${active.name}.)`
+        ? `(@${agent.handle} answered this one; you are still talking to @${active.handle}.)`
         : undefined;
 
+    await this.#runFor(chatId, agent, prompt, { note, carry: !status });
+  }
+
+  /**
+   * One turn with one agent: its own conversation for this chat, the progress
+   * bubble named after its handle, and the active agent left exactly as it was.
+   */
+  async #runFor(
+    chatId: string,
+    agent: CatalogAgent,
+    prompt: string,
+    opts: { note?: string | undefined; carry?: boolean } = {},
+  ): Promise<void> {
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
+
+    // "import this statement" three minutes after a PDF means that PDF. The
+    // carry is deliberately narrow — a recent file, a sentence that points at
+    // one — and a command never carries anything.
+    const carried =
+      opts.carry === false ? undefined : await this.#carriedAttachment(chatId, prompt);
+    const label = handleLabel(agent.handle);
 
     await this.#withBubble(
       chatId,
@@ -659,17 +850,192 @@ export class TelegramSurface {
           conversationId,
           chatId,
           agent,
-          text: prompt,
+          text: carried ? `${prompt}\n\n${carried.note}` : prompt,
+          ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
           onToolCall: (name) => progress.noteToolCall(name),
         });
-        return note ? `${note}\n\n${reply}` : reply;
+        return opts.note ? `${opts.note}\n\n${reply}` : reply;
       },
-      agent.name,
+      label,
+      carried ? readingText(label) : undefined,
     );
   }
 
-  /** `/use <id>` — switch this chat to another agent, or explain why not. */
+  /**
+   * The file a follow-up sentence is about, if there is one.
+   *
+   * Two conditions, both required: the chat received a file within the last
+   * thirty minutes, and this sentence points at a file at all. Neither is
+   * certain — but the cost of a wrong carry is one extra attachment on a run
+   * the owner was having anyway, and the cost of missing it is re-uploading a
+   * bank statement.
+   */
+  async #carriedAttachment(
+    chatId: string,
+    text: string,
+  ): Promise<{ attachments: RunAttachment[]; note: string } | undefined> {
+    if (!this.#opts.artifacts) return undefined;
+    if (!referencesAttachment(text)) return undefined;
+
+    const last = await getLastAttachment(this.#opts.pool, SURFACE, chatId);
+    if (!last || last.mime === undefined) return undefined;
+    const age = (this.#opts.now ?? (() => Date.now()))() - last.createdAt.getTime();
+    if (!Number.isFinite(age) || age < 0 || age > ATTACHMENT_RECENCY_MS) return undefined;
+
+    return this.#attachmentTurn({
+      artifactId: last.artifactId,
+      mime: last.mime,
+      kind: last.kind ?? 'other',
+      filename: last.filename ?? null,
+      sizeBytes: last.sizeBytes ?? 0,
+    });
+  }
+
+  /**
+   * How one artifact reaches a run: as a viewable block when the model can
+   * actually look at it, and always as a note naming its id.
+   */
+  #attachmentTurn(a: {
+    artifactId: string;
+    mime: string;
+    kind: string;
+    filename: string | null;
+    sizeBytes: number;
+  }): { attachments: RunAttachment[]; note: string } {
+    const viewable = isViewable(a.kind as 'image' | 'document' | 'audio' | 'other', a.mime);
+    return {
+      attachments: viewable
+        ? [{ artifactId: a.artifactId, mime: a.mime, kind: a.kind }]
+        : [],
+      note: attachmentNote({
+        artifactId: a.artifactId,
+        filename: a.filename,
+        mime: a.mime,
+        sizeBytes: a.sizeBytes,
+        viewable,
+      }),
+    };
+  }
+
+  /**
+   * One file from the owner: fetch it, store it, then either answer the caption
+   * that came with it or ask what it is for.
+   *
+   * Nothing about a file is trusted before it is weighed: Telegram's claimed
+   * size, `getFile`'s size and the downloaded length are each checked against
+   * the same ceiling, because only the last one is a fact.
+   */
+  async handleAttachment(
+    chatId: string,
+    ownerId: string,
+    messageId: string,
+    incoming: IncomingAttachment,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const store = this.#opts.artifacts;
+    if (!store) {
+      await api.sendMessage(chatId, FILES_UNAVAILABLE_TEXT);
+      return;
+    }
+
+    const tooBig = async (bytes: number): Promise<void> => {
+      this.#log(`telegram: chat ${chatId} sent ${incoming.filename} at ${formatBytes(bytes)}, over the limit`);
+      await api.sendMessage(chatId, oversizeText(incoming.filename, bytes));
+    };
+
+    if (incoming.sizeBytes !== undefined && incoming.sizeBytes > MAX_ATTACHMENT_BYTES) {
+      await tooBig(incoming.sizeBytes);
+      return;
+    }
+
+    let row: ArtifactRow;
+    try {
+      const file = await api.getFile(incoming.fileId);
+      const claimed = file.file_size ?? incoming.sizeBytes;
+      if (claimed !== undefined && claimed > MAX_ATTACHMENT_BYTES) {
+        await tooBig(claimed);
+        return;
+      }
+      if (!file.file_path) throw new Error('getFile returned no file_path');
+
+      const bytes = await api.downloadFile(file.file_path);
+      if (bytes.length > MAX_ATTACHMENT_BYTES) {
+        await tooBig(bytes.length);
+        return;
+      }
+
+      row = await store.save({
+        bytes,
+        mime: incoming.mime,
+        filename: incoming.filename,
+        source: { surface: SURFACE, chatId, messageId },
+        ...(incoming.caption ? { caption: incoming.caption } : {}),
+        createdBy: ownerId,
+      });
+    } catch (err) {
+      this.#log(`telegram: attachment from chat ${chatId} failed: ${message(err)}`);
+      await appendSurfaceEvent(this.#opts.pool, 'surface.error', {
+        surface: SURFACE,
+        externalChatId: chatId,
+        message: message(err),
+      });
+      await api.sendMessage(chatId, FILE_FAILED_TEXT).catch(() => {});
+      return;
+    }
+
+    const filename = row.filename ?? incoming.filename;
+    await recordChatAttachment(this.#opts.pool, SURFACE, chatId, {
+      artifactId: row.id,
+      messageId,
+      filename,
+      kind: row.kind,
+      mime: row.mime,
+      sizeBytes: row.sizeBytes,
+    });
+
+    // Voice notes are kept, not heard: no run is started over bytes no model
+    // in this build can read, with or without a caption.
+    if (row.kind === 'audio') {
+      await api.sendMessage(chatId, gotAudioText(filename, row.sizeBytes));
+      return;
+    }
+
+    const caption = incoming.caption;
+    if (!caption) {
+      await api.sendMessage(chatId, gotFileText(filename, row.kind, row.sizeBytes));
+      return;
+    }
+
+    const agent = await this.activeAgent(chatId);
+    const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
+    const turn = this.#attachmentTurn({
+      artifactId: row.id,
+      mime: row.mime,
+      kind: row.kind,
+      filename,
+      sizeBytes: row.sizeBytes,
+    });
+
+    await this.#withBubble(
+      chatId,
+      (progress) =>
+        this.#opts.run({
+          conversationId,
+          chatId,
+          agent,
+          text: `${caption}\n\n${turn.note}`,
+          ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
+          onToolCall: (name) => progress.noteToolCall(name),
+        }),
+      handleLabel(agent.handle),
+      readingText(handleLabel(agent.handle)),
+    );
+  }
+
+  /** `/use <handle|id>` — switch this chat to another agent, or explain why not. */
   async handleUse(chatId: string, text: string): Promise<void> {
+    // `@ledger`, `ledger` and `finance-advisor` all name the same agent; the
+    // catalog decides, and the leading `@` is only how the owner types a handle.
     const requested = text.split(/\s+/).slice(1).join(' ').trim();
     if (requested === '') {
       await this.#opts.api.sendMessage(chatId, USE_WITHOUT_ID_TEXT);
@@ -692,7 +1058,10 @@ export class TelegramSurface {
         this.#log(`telegram: menu refresh for chat ${chatId} failed: ${message(err)}`);
       });
     }
-    await this.#opts.api.sendMessage(chatId, `You are now talking to ${agent.name}.`);
+    await this.#opts.api.sendMessage(
+      chatId,
+      `You are now talking to ${agent.name} (@${agent.handle}).`,
+    );
   }
 
   /**
@@ -713,7 +1082,7 @@ export class TelegramSurface {
         );
         return outcome.ok ? outcome.text : RECAP_NOT_REGISTERED_TEXT;
       },
-      this.#financeAgent().name,
+      handleLabel(this.#financeAgent().handle),
     );
   }
 
@@ -726,9 +1095,10 @@ export class TelegramSurface {
     chatId: string,
     produce: (progress: ProgressBubble) => Promise<string>,
     agentName?: string,
+    placeholderOverride?: string,
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
-    const placeholder = placeholderText(agentName);
+    const placeholder = placeholderOverride ?? placeholderText(agentName);
     // An explicit bubble, posted before the provider is called: the owner sees
     // that the question landed, and the same bubble becomes the answer.
     const placeholderId = await this.#opts.api

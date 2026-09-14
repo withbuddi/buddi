@@ -2,7 +2,7 @@ import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 import type { Hypothetical, ProjectionDay, RecurringItem } from '../projection.js';
 import { DAYS_PER_MONTH } from '../baseline.js';
-import { project } from '../projection.js';
+import { addDays, project } from '../projection.js';
 import { baselineOptionsSchema, loadBaseline } from './baseline.js';
 import { findAccount, loadPreferences, num, today, toDateString } from './shared.js';
 
@@ -54,6 +54,12 @@ const input = z.object({
     .describe(
       'How the variable-spending baseline is measured — aggregation, excluded categories, excluded months, month coverage. Same options as finance.spending_baseline; the defaults are the sane ones and only need overriding when the owner has told you something about a specific month.',
     ),
+  includePending: z
+    .boolean()
+    .optional()
+    .describe(
+      'Default true: pending transactions dated inside the horizon are applied as one-off events, because a pending charge is money already committed — the card was swiped, the bank has simply not settled it. Set false only to see the settled picture alone.',
+    ),
   includeP2P: z
     .enum(['none', 'net'])
     .optional()
@@ -73,7 +79,7 @@ function compressDays(days: ProjectionDay[], minBalanceDate: string): Projection
 export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.project_cashflow',
   description:
-    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Add `hypotheticals` to test a purchase before making it. Accounts that are not spendable (retirement, investment, HSA) are left out of the start balance entirely and listed under `startBalanceExcludes`, along with any recurring item attached to one. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
+    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Pending transactions dated inside the horizon are applied too — a pending charge is money already committed — and listed under `pendingEvents`; pass includePending: false to leave them out. Add `hypotheticals` to test a purchase before making it. Accounts that are not spendable (retirement, investment, HSA) are left out of the start balance entirely and listed under `startBalanceExcludes`, along with any recurring item attached to one. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
   tier: 'auto',
   input,
   async execute(args, ctx) {
@@ -139,6 +145,42 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
     const startDate = today(ctx.now);
     const hypotheticals: Hypothetical[] = args.hypotheticals ?? [];
 
+    // Pending money is committed money: the charge exists, the bank has just
+    // not settled it. It is applied as a one-off event on its date, alongside
+    // the hypotheticals, and reported separately so the answer can name it.
+    // A pending row that has already been superseded by its posted twin is
+    // invisible here as everywhere else.
+    const includePending = args.includePending ?? true;
+    const endDate = addDays(startDate, horizonDays - 1);
+    let pendingEvents: Hypothetical[] = [];
+    if (includePending) {
+      const { rows: pendingRows } = accountId
+        ? await ctx.db.query(
+            `select t.occurred_on, t.amount, t.description
+               from finance.transactions t
+              where t.status = 'pending' and t.superseded_by is null
+                and t.account_id = $3
+                and t.occurred_on >= $1::date and t.occurred_on <= $2::date
+              order by t.occurred_on`,
+            [startDate, endDate, accountId],
+          )
+        : await ctx.db.query(
+            `select t.occurred_on, t.amount, t.description
+               from finance.transactions t
+               left join finance.accounts a on a.id = t.account_id
+              where t.status = 'pending' and t.superseded_by is null
+                and (a.id is null or a.include_in_cashflow)
+                and t.occurred_on >= $1::date and t.occurred_on <= $2::date
+              order by t.occurred_on`,
+            [startDate, endDate],
+          );
+      pendingEvents = pendingRows.map((r) => ({
+        name: `${r.description as string} (pending)`,
+        amount: num(r.amount),
+        date: toDateString(r.occurred_on),
+      }));
+    }
+
     const includeBaseline = args.includeBaseline ?? true;
     const includeP2P = args.includeP2P ?? 'none';
     const baselineMonths = args.baselineMonths ?? 3;
@@ -180,7 +222,7 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
       startBalance,
       horizonDays,
       items,
-      hypotheticals,
+      hypotheticals: [...pendingEvents, ...hypotheticals],
       safetyFloor: prefs.safetyFloor,
       dailyBurn,
     });
@@ -201,6 +243,9 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
       startBalanceExcludes,
       includeBaseline,
       baseline,
+      includePending,
+      /** Committed-but-unsettled charges applied inside the horizon. */
+      pendingEvents,
       hypotheticals,
       endBalance: result.endBalance,
       minBalance: result.minBalance,

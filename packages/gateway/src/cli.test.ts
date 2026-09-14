@@ -26,12 +26,17 @@ describe('parseArgs', () => {
     });
   });
 
+  it('reads --agent given a handle, which the catalog resolves like an id', () => {
+    expect(parseArgs(['ask', 'q', '--agent', 'ledger']).agent).toBe('ledger');
+    expect(parseArgs(['chat', '--agent', '@credo']).agent).toBe('@credo');
+  });
+
   it('leaves the agent unset when no --agent is given', () => {
     expect(parseArgs(['chat']).agent).toBeUndefined();
   });
 
   it('refuses --agent without a value', () => {
-    expect(() => parseArgs(['chat', '--agent'])).toThrow(/agent id/);
+    expect(() => parseArgs(['chat', '--agent'])).toThrow(/handle or id/);
   });
 
   it('parses the agents listing command', () => {

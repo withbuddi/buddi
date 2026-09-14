@@ -74,9 +74,10 @@ const PROVIDER = {
   model: 'claude-sonnet-5',
 };
 
-function catalogAgent(id: string, name: string): CatalogAgent {
+function catalogAgent(id: string, handle: string, name: string): CatalogAgent {
   return {
     id,
+    handle,
     name,
     description: `${name}, for testing`,
     isDefault: id === 'finance-advisor',
@@ -100,16 +101,27 @@ function catalogAgent(id: string, name: string): CatalogAgent {
 
 function fakeCatalog(): AgentCatalog {
   const agents = [
-    catalogAgent('finance-advisor', 'Finance Advisor'),
-    catalogAgent('concierge', 'Concierge'),
+    catalogAgent('finance-advisor', 'ledger', 'Finance Advisor'),
+    catalogAgent('concierge', 'buddi', 'Concierge'),
   ];
   return {
     get: (id) => agents.find((a) => a.id === id),
+    byHandle: (handle) =>
+      agents.find((a) => a.handle === handle.replace(/^@/, '').toLowerCase()),
     list: () =>
-      agents.map(({ id, name, description, isDefault }) => ({ id, name, description, isDefault })),
+      agents.map(({ id, handle, name, description, isDefault }) => ({
+        id,
+        handle,
+        name,
+        description,
+        isDefault,
+      })),
     defaultAgent: () => agents[0] as CatalogAgent,
     resolve: (id) => {
-      const found = id === undefined ? agents[0] : agents.find((a) => a.id === id);
+      const found =
+        id === undefined
+          ? agents[0]
+          : agents.find((a) => a.id === id || a.handle === id.replace(/^@/, ''));
       if (!found) throw new Error(`unknown agent ${id}`);
       return found;
     },
@@ -154,6 +166,7 @@ describe('applyCommandMenus', () => {
       'use',
       'status',
       'recap',
+      'files',
       'new',
       'id',
       'help',
@@ -218,7 +231,7 @@ describe('startTelegram', () => {
 
     expect(menu.api.deleteMyCommands).toHaveBeenCalledWith({ type: 'default' });
     // The menu a chat sees names the agent that chat is talking to.
-    expect(menu.api.setMyCommands).toHaveBeenCalledWith(ownerCommandsFor('Finance Advisor'), {
+    expect(menu.api.setMyCommands).toHaveBeenCalledWith(ownerCommandsFor('ledger'), {
       type: 'chat',
       chat_id: '9001',
     });
@@ -228,11 +241,13 @@ describe('startTelegram', () => {
 });
 
 describe('ownerCommandsFor', () => {
-  it('names the active agent in the /use description', () => {
-    const commands = ownerCommandsFor('Concierge');
+  it('names the active agent by handle in the /use description', () => {
+    const commands = ownerCommandsFor('ledger');
     expect(commands.find((c) => c.command === 'use')?.description).toBe(
-      'Switch agent (active: Concierge)',
+      'Switch agent (active: @ledger)',
     );
+    // Typed with or without the @, the menu reads the same.
+    expect(ownerCommandsFor('@ledger')).toEqual(commands);
     // Everything else is the shared menu, unchanged.
     expect(commands.map((c) => c.command)).toEqual(OWNER_COMMANDS.map((c) => c.command));
     expect(commands.filter((c) => c.command !== 'use')).toEqual(
@@ -251,8 +266,8 @@ describe('ownerCommandsFor', () => {
       api as unknown as TelegramApi,
       [identity('4242', '4242')],
       () => {},
-      async () => 'Concierge',
+      async () => 'buddi',
     );
-    expect(calls[1]?.commands).toEqual(ownerCommandsFor('Concierge'));
+    expect(calls[1]?.commands).toEqual(ownerCommandsFor('buddi'));
   });
 });

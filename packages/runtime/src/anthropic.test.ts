@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveProvider, type ProviderRef } from '@buddi/core';
 import {
+  ATTACHMENT_UNAVAILABLE,
   CLAUDE_CODE_SYSTEM_PREFIX,
   ProviderError,
   createAnthropicProvider,
@@ -346,5 +347,61 @@ describe('tool name wire encoding', () => {
       type: 'tool_use',
       name: 'finance.project_cashflow',
     });
+  });
+});
+
+describe('createAnthropicProvider — multimodal blocks', () => {
+  /** Send one user message and return the parsed wire body. */
+  async function wireBodyFor(content: CompletionRequest['messages'][number]['content']) {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+    await provider.complete({ ...request, messages: [{ role: 'user', content }] });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string);
+  }
+
+  it('maps a neutral image block to an Anthropic base64 image source', async () => {
+    const body = await wireBodyFor([
+      { type: 'text', text: 'what is this?' },
+      { type: 'image', mime: 'image/png', data: 'QUJD' },
+    ]);
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: 'what is this?' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+    ]);
+  });
+
+  it('maps a neutral document block to an Anthropic base64 PDF document', async () => {
+    const body = await wireBodyFor([
+      { type: 'document', mime: 'application/pdf', data: 'JVBERi0=', name: 'august.pdf' },
+    ]);
+    expect(body.messages[0].content).toEqual([
+      {
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0=' },
+        title: 'august.pdf',
+      },
+    ]);
+  });
+
+  it('omits the document title when the block carries no name', async () => {
+    const body = await wireBodyFor([
+      { type: 'document', mime: 'application/pdf', data: 'JVBERi0=' },
+    ]);
+    expect(body.messages[0].content[0].title).toBeUndefined();
+  });
+
+  it('never puts a persisted artifact_ref on the wire', async () => {
+    // The loop hydrates refs before calling a provider; if one still arrives,
+    // the model is told the attachment is unavailable rather than shown nothing.
+    const body = await wireBodyFor([
+      { type: 'artifact_ref', artifactId: 'a-1', mime: 'image/png', kind: 'image' },
+    ]);
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: ATTACHMENT_UNAVAILABLE },
+    ]);
   });
 });

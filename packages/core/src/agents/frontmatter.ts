@@ -34,6 +34,17 @@ export type YamlValue = string | number | boolean | string[];
 /** Ids and skill names share one shape: lowercase words joined by hyphens. */
 export const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * A handle is the name the owner types: `@ledger`. Kebab-case like an id, but
+ * it must start with a letter and stay short — it is typed at the head of a
+ * message, not stored in a config file.
+ */
+export const HANDLE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+
+/** Shortest and longest a handle may be, `@` excluded. */
+export const HANDLE_MIN = 2;
+export const HANDLE_MAX = 20;
+
 /** Split `---\n<yaml>\n---\n<body>`. The leading `---` must be the first line. */
 export function splitFrontmatter(source: string, file?: string): {
   frontmatter: string;
@@ -124,6 +135,16 @@ export function parseYamlSubset(source: string, file?: string): Record<string, Y
 export const agentFrontmatterSchema = z
   .object({
     id: z.string().regex(KEBAB, 'id must be kebab-case'),
+    /**
+     * How the owner addresses this agent: `@ledger`. Required, because an agent
+     * nobody can call by name is only half installed; uniqueness across the
+     * catalog is the catalog's business, not one file's.
+     */
+    handle: z
+      .string()
+      .min(HANDLE_MIN, `handle must be at least ${HANDLE_MIN} characters`)
+      .max(HANDLE_MAX, `handle must be at most ${HANDLE_MAX} characters`)
+      .regex(HANDLE, 'handle must be kebab-case and start with a letter'),
     name: z.string().min(1),
     description: z.string().min(1),
     model: z.string().min(1).optional(),

@@ -1,5 +1,6 @@
 ---
 id: concierge
+handle: buddi
 name: Concierge
 description: General assistant — explains what buddi can do and which agent to switch to for domain work.
 tools: [memory.*]

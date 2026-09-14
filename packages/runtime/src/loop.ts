@@ -17,6 +17,14 @@ import type {
   ToolSchema,
   Usage,
 } from './anthropic.js';
+import {
+  assertAttachmentCount,
+  hydrateContent,
+  hydrateMessages,
+  toArtifactRefBlocks,
+  type AttachmentRef,
+  type LoadArtifact,
+} from './attachments.js';
 
 /**
  * The narrow slice of `pg.Pool` the loop needs. Depending on this instead of
@@ -51,6 +59,19 @@ export interface RunAgentOptions {
    * An empty string means "no block", not an empty heading.
    */
   memoryPreamble?: (agentId: string) => Promise<string>;
+  /**
+   * Files handed in with this message — a Telegram photo, a dropped statement.
+   * Metadata only: the bytes are hydrated for the API call and never persisted
+   * into `core.messages`, which stores the reference instead.
+   */
+  attachments?: AttachmentRef[];
+  /**
+   * How the runtime gets an attachment's bytes back. Injected because the
+   * runtime owns no artifact schema — whoever wires the run points it at the
+   * store. Absent means "this run carries no files"; a reference it cannot
+   * resolve becomes a visible placeholder, never a silent omission.
+   */
+  loadArtifact?: LoadArtifact;
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: unknown) => void;
 }
@@ -204,10 +225,28 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // mutated: it is shared across runs, and a run's identity is its own.
   const toolCtx: ToolContext = { ...ctx, conversationId, agentId: agent.id };
 
+  // Attachments: cap first, hydrate second, persist third. The caps fail closed
+  // before anything is written, so an over-limit message leaves no half-state.
+  const attachments = opts.attachments ?? [];
+  assertAttachmentCount(attachments);
+
   const history = await loadMessages(pool, conversationId);
-  const userBlocks: ContentBlock[] = [{ type: 'text', text: userMessage }];
+  // Stored history carries artifact_ref blocks; the provider needs the bytes.
+  const replayed = await hydrateMessages(history, opts.loadArtifact);
+
+  const userBlocks: ContentBlock[] = [
+    { type: 'text', text: userMessage },
+    ...toArtifactRefBlocks(attachments),
+  ];
+  const sentUserBlocks = await hydrateContent(userBlocks, opts.loadArtifact, {
+    enforceCaps: true,
+  });
+  // What is persisted is the reference, never the base64.
   await persistMessage(pool, conversationId, 'user', userBlocks);
-  const messages: NeutralMessage[] = [...history, { role: 'user', content: userBlocks }];
+  const messages: NeutralMessage[] = [
+    ...replayed,
+    { role: 'user', content: sentUserBlocks },
+  ];
 
   await appendEvent(
     pool,

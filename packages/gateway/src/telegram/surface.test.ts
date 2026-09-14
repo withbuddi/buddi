@@ -10,17 +10,36 @@ import {
   PLACEHOLDER_TEXT,
   UNKNOWN_AGENT_TEXT,
   agentsText,
+  emptyMentionText,
+  handleLabel,
+  parseMention,
   placeholderText,
+  stripBotMention,
+  unknownHandleText,
   RECAP_MISSION_ID,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
   SURFACE,
   TelegramSurface,
   progressLine,
+  readingText,
   toPlainText,
   toolLabel,
   type RunMission,
 } from './surface.js';
+import {
+  classifyMime,
+  filesText,
+  formatBytes,
+  largestPhoto,
+  MAX_ATTACHMENT_BYTES,
+  NO_FILES_TEXT,
+  oversizeText,
+  referencesAttachment,
+  type ArtifactRow,
+  type ArtifactStore,
+  type SaveArtifactInput,
+} from './attachments.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
 import { OwnerNotPairedError, notifyOwner, ownerChatId } from './notify.js';
 
@@ -35,6 +54,20 @@ class FakeDb implements Queryable {
   chatConversations = new Map<string, string>();
   activeAgents = new Map<string, string>();
   events: { kind: string; payload: any }[] = [];
+  /** core.surface_attachments, newest last. */
+  attachments: {
+    chat: string;
+    artifact_id: string;
+    filename: string | null;
+    kind: string;
+    mime: string;
+    size_bytes: number;
+    created_at: Date;
+  }[] = [];
+  /** core.surface_last_attachment, one row per chat. */
+  lastAttachment = new Map<string, { artifact_id: string; created_at: Date }>();
+  /** The clock rows are stamped with, so recency is a test input. */
+  clock: () => number = () => Date.now();
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -77,6 +110,55 @@ class FakeDb implements Queryable {
       this.activeAgents.set(params[1], params[2]);
       return { rows: [] };
     }
+    if (text.startsWith('insert into core.surface_attachments')) {
+      const [, chat, artifactId, , filename, kind, mime, size] = params;
+      if (!this.attachments.some((a) => a.chat === chat && a.artifact_id === artifactId)) {
+        this.attachments.push({
+          chat,
+          artifact_id: artifactId,
+          filename: filename ?? null,
+          kind,
+          mime,
+          size_bytes: Number(size),
+          created_at: new Date(this.clock()),
+        });
+      }
+      return { rows: [] };
+    }
+    if (text.startsWith('insert into core.surface_last_attachment')) {
+      this.lastAttachment.set(params[1], {
+        artifact_id: params[2],
+        created_at: new Date(this.clock()),
+      });
+      return { rows: [] };
+    }
+    if (text.startsWith('select l.artifact_id')) {
+      const last = this.lastAttachment.get(params[1]);
+      if (!last) return { rows: [] };
+      const row = this.attachments.find(
+        (a) => a.chat === params[1] && a.artifact_id === last.artifact_id,
+      );
+      return {
+        rows: [
+          {
+            artifact_id: last.artifact_id,
+            created_at: last.created_at,
+            kind: row?.kind,
+            mime: row?.mime,
+            filename: row?.filename ?? null,
+            size_bytes: row?.size_bytes ?? 0,
+          },
+        ],
+      };
+    }
+    if (text.startsWith('select artifact_id, filename, kind, mime, size_bytes')) {
+      const rows = this.attachments
+        .filter((a) => a.chat === params[1])
+        .slice()
+        .reverse()
+        .slice(0, Number(params[2]));
+      return { rows };
+    }
     if (text.startsWith('insert into core.conversations')) {
       const id = `conv-${this.conversations.length + 1}`;
       this.conversations.push({ id, agent_id: params[0] });
@@ -94,7 +176,13 @@ class FakeDb implements Queryable {
 
 type Sent = { method: string; body: any };
 
-function fakeApi(failOn?: (method: string) => boolean): {
+/** What `getFile` should answer for a file id, and what the bytes are. */
+type FakeFile = { size?: number; bytes?: string; path?: string };
+
+function fakeApi(
+  failOn?: (method: string) => boolean,
+  files: Record<string, FakeFile> = {},
+): {
   api: TelegramApi;
   sent: Sent[];
   updateQueue: TelegramUpdate[][];
@@ -102,7 +190,24 @@ function fakeApi(failOn?: (method: string) => boolean): {
   const sent: Sent[] = [];
   const updateQueue: TelegramUpdate[][] = [];
   let nextMessageId = 100;
+  /** What `getFile` will hand out, and what those paths serve. */
+  const pathOf = (fileId: string): string => files[fileId]?.path ?? `documents/${fileId}`;
+  const bytesByPath = new Map(
+    Object.entries(files).map(([id, f]) => [pathOf(id), f.bytes ?? 'PDF-BYTES']),
+  );
   const fetchLike: FetchLike = async (url, init) => {
+    // The file endpoint is a different host path and answers bytes, not JSON.
+    if (url.includes('/file/bot')) {
+      const filePath = url.split('/file/bot')[1]?.split('/').slice(1).join('/') as string;
+      sent.push({ method: 'downloadFile', body: { file_path: filePath } });
+      const bytes = Buffer.from(bytesByPath.get(filePath) ?? 'PDF-BYTES', 'latin1');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => bytes.toString('latin1'),
+        arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) as ArrayBuffer,
+      };
+    }
     const method = url.split('/').pop() as string;
     const body = JSON.parse(init?.body ?? '{}');
     sent.push({ method, body });
@@ -114,12 +219,19 @@ function fakeApi(failOn?: (method: string) => boolean): {
           JSON.stringify({ ok: false, description: 'message to edit not found' }),
       };
     }
+    const file = method === 'getFile' ? (files[body.file_id] ?? {}) : undefined;
     const result =
       method === 'getUpdates'
         ? (updateQueue.shift() ?? [])
         : method === 'sendMessage'
           ? { message_id: nextMessageId++ }
-          : true;
+          : method === 'getFile'
+            ? {
+                file_id: body.file_id,
+                file_path: pathOf(body.file_id),
+                file_size: file?.size ?? (file?.bytes ?? 'PDF-BYTES').length,
+              }
+            : true;
     return {
       ok: true,
       status: 200,
@@ -150,9 +262,15 @@ const PROVIDER = {
   model: MODEL,
 };
 
-function catalogAgent(id: string, name: string, isDefault: boolean): CatalogAgent {
+function catalogAgent(
+  id: string,
+  handle: string,
+  name: string,
+  isDefault: boolean,
+): CatalogAgent {
   return {
     id,
+    handle,
     name,
     description: `${name}, for testing`,
     isDefault,
@@ -174,21 +292,30 @@ function catalogAgent(id: string, name: string, isDefault: boolean): CatalogAgen
   };
 }
 
-const FINANCE = catalogAgent('finance-advisor', 'Finance Advisor', true);
-const CONCIERGE = catalogAgent('concierge', 'Concierge', false);
+const FINANCE = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true);
+const CONCIERGE = catalogAgent('concierge', 'buddi', 'Concierge', false);
 
 /** Two agents, one of them the default — the smallest catalog that can switch. */
 function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalog {
   const first = agents[0] as CatalogAgent;
   const byDefault = agents.find((a) => a.isDefault) ?? first;
+  const handleOf = (raw: string): string => raw.trim().replace(/^@/, '').toLowerCase();
   return {
     get: (id) => agents.find((a) => a.id === id),
+    byHandle: (handle) => agents.find((a) => a.handle === handleOf(handle)),
     list: () =>
-      agents.map(({ id, name, description, isDefault }) => ({ id, name, description, isDefault })),
+      agents.map(({ id, handle, name, description, isDefault }) => ({
+        id,
+        handle,
+        name,
+        description,
+        isDefault,
+      })),
     defaultAgent: () => byDefault,
     resolve: (id) => {
       if (id === undefined) return byDefault;
-      const found = agents.find((a) => a.id === id);
+      const found =
+        agents.find((a) => a.id === id) ?? agents.find((a) => a.handle === handleOf(id));
       if (!found) throw new UnknownAgentError(id, agents.map((a) => a.id));
       return found;
     },
@@ -196,8 +323,8 @@ function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalo
 }
 
 /** The placeholder as each agent renders it. */
-const FINANCE_PLACEHOLDER = placeholderText(FINANCE.name);
-const CONCIERGE_PLACEHOLDER = placeholderText(CONCIERGE.name);
+const FINANCE_PLACEHOLDER = placeholderText(handleLabel(FINANCE.handle));
+const CONCIERGE_PLACEHOLDER = placeholderText(handleLabel(CONCIERGE.handle));
 
 function surfaceWith(
   db: FakeDb,
@@ -207,14 +334,20 @@ function surfaceWith(
     now?: () => number;
     runMission?: RunMission;
     catalog?: AgentCatalog;
+    botUsername?: string;
     setChatMenu?: (chatId: string, agent: CatalogAgent) => Promise<void>;
+    files?: Record<string, FakeFile>;
+    artifacts?: ArtifactStore | null;
   } = {},
 ) {
-  const { api, sent } = fakeApi(extra.failOn);
+  const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
+  const store = extra.artifacts === null ? undefined : (extra.artifacts ?? fakeStore().store);
   const surface = new TelegramSurface({
     api,
     pool: db,
     catalog: extra.catalog ?? fakeCatalog(),
+    ...(extra.botUsername ? { botUsername: extra.botUsername } : {}),
+    ...(store ? { artifacts: store } : {}),
     run,
     log: () => {},
     typingIntervalMs: 60_000,
@@ -222,7 +355,78 @@ function surfaceWith(
     ...(extra.runMission ? { runMission: extra.runMission } : {}),
     ...(extra.setChatMenu ? { setChatMenu: extra.setChatMenu } : {}),
   });
-  return { surface, sent, run, api };
+  return { surface, sent, run, api, store };
+}
+
+/* ---------------- fake artifact store ---------------- */
+
+/** Core's store, in memory: enough to prove what the surface handed over. */
+function fakeStore(): { store: ArtifactStore; saved: SaveArtifactInput[]; rows: ArtifactRow[] } {
+  const saved: SaveArtifactInput[] = [];
+  const rows: ArtifactRow[] = [];
+  return {
+    saved,
+    rows,
+    store: {
+      async save(input) {
+        saved.push(input);
+        const row: ArtifactRow = {
+          id: `art-${rows.length + 1}`,
+          kind: classifyMime(input.mime),
+          mime: input.mime,
+          filename: input.filename ?? null,
+          sizeBytes: input.bytes.length,
+          sha256: `sha-${rows.length + 1}`,
+          storagePath: `artifacts/art-${rows.length + 1}`,
+          caption: input.caption ?? null,
+          createdAt: new Date().toISOString(),
+        };
+        rows.push(row);
+        return row;
+      },
+      async load(id) {
+        const row = rows.find((r) => r.id === id);
+        return row ? { mime: row.mime, data: 'AAAA' } : null;
+      },
+    },
+  };
+}
+
+/* ---------------- attachment updates ---------------- */
+
+function documentUpdate(
+  updateId: number,
+  file: { file_id: string; file_name?: string; mime_type?: string; file_size?: number },
+  caption?: string,
+  userId = OWNER,
+): TelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: userId, is_bot: false },
+      chat: { id: userId === OWNER ? OWNER : userId, type: 'private' },
+      document: file,
+      ...(caption ? { caption } : {}),
+    },
+  };
+}
+
+function photoUpdate(
+  updateId: number,
+  sizes: { file_id: string; file_size?: number; width?: number }[],
+  caption?: string,
+): TelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: OWNER, is_bot: false },
+      chat: { id: OWNER, type: 'private' },
+      photo: sizes,
+      ...(caption ? { caption } : {}),
+    },
+  };
 }
 
 const OWNER = 4242;
@@ -777,8 +981,8 @@ describe('TelegramSurface agents', () => {
 
     const text = sent.find((s) => s.method === 'sendMessage')?.body.text as string;
     expect(text.split('\n').slice(1, 3)).toEqual([
-      '• finance-advisor — Finance Advisor (active)',
-      '• concierge — Concierge',
+      '• @ledger — Finance Advisor (active)',
+      '• @buddi — Concierge',
     ]);
     expect(text).toBe(agentsText(fakeCatalog().list(), 'finance-advisor'));
   });
@@ -794,7 +998,9 @@ describe('TelegramSurface agents', () => {
     await surface.drain();
 
     expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
-    expect(sent.some((s) => s.body.text === 'You are now talking to Concierge.')).toBe(true);
+    expect(
+      sent.some((s) => s.body.text === 'You are now talking to Concierge (@buddi).'),
+    ).toBe(true);
     expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual([
       'finance-advisor',
       'concierge',
@@ -888,7 +1094,9 @@ describe('TelegramSurface agents', () => {
       .filter((s) => s.method === 'sendMessage' && String(s.body.text).startsWith('⏳'))
       .map((s) => s.body.text);
     expect(placeholders).toEqual([FINANCE_PLACEHOLDER, CONCIERGE_PLACEHOLDER]);
-    expect(FINANCE_PLACEHOLDER).toBe('⏳ Finance Advisor is working…');
+    // The bubble names the agent by its handle, capitalized.
+    expect(FINANCE_PLACEHOLDER).toBe('⏳ Ledger is working…');
+    expect(CONCIERGE_PLACEHOLDER).toBe('⏳ Buddi is working…');
     expect(placeholderText()).toBe(PLACEHOLDER_TEXT);
   });
 
@@ -900,7 +1108,7 @@ describe('TelegramSurface agents', () => {
       message(224, OWNER, OWNER, '/whoami'),
     ]);
     await surface.drain();
-    expect(sent.at(-1)?.body.text).toBe('You are talking to Concierge (concierge).');
+    expect(sent.at(-1)?.body.text).toBe('You are talking to Concierge (@buddi).');
   });
 
   it('falls back to the default when the pinned agent is gone', async () => {
@@ -946,7 +1154,7 @@ describe('TelegramSurface /status under another agent', () => {
       .map((s) => s.body.text as string)
       .filter((t) => t.startsWith('('));
     expect(noted).toEqual([
-      '(Finance Advisor answered this one; you are still talking to Concierge.)\n\nyou have $12 left',
+      '(@ledger answered this one; you are still talking to @buddi.)\n\nyou have $12 left',
     ]);
   });
 
@@ -956,5 +1164,514 @@ describe('TelegramSurface /status under another agent', () => {
     await surface.processUpdates([message(234, OWNER, OWNER, '/status')]);
     await surface.drain();
     expect(sent.find((s) => s.method === 'editMessageText')?.body.text).toBe('you have $12 left');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Attachments
+ * ------------------------------------------------------------------ */
+
+describe('attachment helpers', () => {
+  it('picks the largest photo size Telegram offered', () => {
+    const sizes = [
+      { file_id: 'thumb', file_size: 1_200, width: 90 },
+      { file_id: 'full', file_size: 480_000, width: 1280 },
+      { file_id: 'mid', file_size: 40_000, width: 320 },
+    ];
+    expect(largestPhoto(sizes)?.file_id).toBe('full');
+    expect(largestPhoto([])).toBeUndefined();
+    expect(largestPhoto(undefined)).toBeUndefined();
+  });
+
+  it('classifies the mimes the surface actually receives', () => {
+    expect(classifyMime('image/jpeg')).toBe('image');
+    expect(classifyMime('application/pdf')).toBe('document');
+    expect(classifyMime('audio/ogg')).toBe('audio');
+    expect(classifyMime('text/csv')).toBe('other');
+  });
+
+  it('says sizes the way a person would', () => {
+    expect(formatBytes(0)).toBe('0 KB');
+    expect(formatBytes(900)).toBe('900 B');
+    expect(formatBytes(120_000)).toBe('117 KB');
+    expect(formatBytes(3_500_000)).toBe('3.3 MB');
+  });
+
+  it('recognizes a sentence that points at the last file, and one that does not', () => {
+    expect(referencesAttachment('import this statement into PNC Spend')).toBe(true);
+    expect(referencesAttachment('what is that receipt?')).toBe(true);
+    expect(referencesAttachment('file it under groceries')).toBe(true); // "it"
+    expect(referencesAttachment('how much did I spend on groceries?')).toBe(false);
+  });
+});
+
+describe('TelegramSurface attachment ingest', () => {
+  it('downloads a captioned document, saves it, and runs with it attached', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'imported 42 rows'), {
+      artifacts: store.store,
+      files: { 'file-1': { path: 'documents/statement.pdf', bytes: '%PDF-1.7 rows' } },
+    });
+
+    await surface.processUpdates([
+      documentUpdate(
+        400,
+        { file_id: 'file-1', file_name: 'sept.pdf', mime_type: 'application/pdf', file_size: 13 },
+        'import this into PNC Spend',
+      ),
+    ]);
+    await surface.drain();
+
+    const methods = sent.map((s) => s.method);
+    expect(methods).toContain('getFile');
+    expect(methods).toContain('downloadFile');
+    expect(sent.find((s) => s.method === 'getFile')?.body.file_id).toBe('file-1');
+
+    // Saved with the surface provenance and the caption, by the owner.
+    expect(store.saved).toHaveLength(1);
+    const saved = store.saved[0] as SaveArtifactInput;
+    expect(saved.mime).toBe('application/pdf');
+    expect(saved.filename).toBe('sept.pdf');
+    expect(saved.createdBy).toBe('owner');
+    expect(saved.caption).toBe('import this into PNC Spend');
+    expect(saved.source).toEqual({ surface: SURFACE, chatId: String(OWNER), messageId: '400' });
+    expect(saved.bytes.toString('latin1')).toBe('%PDF-1.7 rows');
+
+    // The run gets the caption as the message, the artifact as an attachment,
+    // and a note naming the id so the agent can reach the bytes by tool.
+    expect(run).toHaveBeenCalledTimes(1);
+    const req = run.mock.calls[0]?.[0] as any;
+    expect(req.text.startsWith('import this into PNC Spend')).toBe(true);
+    expect(req.text).toContain('artifact id art-1');
+    expect(req.attachments).toEqual([
+      { artifactId: 'art-1', mime: 'application/pdf', kind: 'document' },
+    ]);
+
+    // And the bubble says what it is doing.
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(
+      readingText(handleLabel(FINANCE.handle)),
+    );
+    expect(sent.at(-1)?.body.text).toBe('imported 42 rows');
+  });
+
+  it('takes the largest size of a photo and attaches it as an image', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'that is a receipt'), {
+      artifacts: store.store,
+      files: { full: { path: 'photos/full.jpg', bytes: 'JPEGBYTES' } },
+    });
+
+    await surface.processUpdates([
+      photoUpdate(
+        401,
+        [
+          { file_id: 'thumb', file_size: 900, width: 90 },
+          { file_id: 'full', file_size: 9, width: 1280 },
+        ],
+        'what is this?',
+      ),
+    ]);
+    await surface.drain();
+
+    expect(sent.find((s) => s.method === 'getFile')?.body.file_id).toBe('full');
+    expect((store.saved[0] as SaveArtifactInput).mime).toBe('image/jpeg');
+    expect((run.mock.calls[0]?.[0] as any).attachments).toEqual([
+      { artifactId: 'art-1', mime: 'image/jpeg', kind: 'image' },
+    ]);
+  });
+
+  it('answers a file with no caption directly, starts no run, and remembers it', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+      artifacts: store.store,
+      files: { 'file-2': { bytes: '%PDF' } },
+    });
+
+    await surface.processUpdates([
+      documentUpdate(402, {
+        file_id: 'file-2',
+        file_name: 'chase.pdf',
+        mime_type: 'application/pdf',
+      }),
+    ]);
+    await surface.drain();
+
+    expect(run).not.toHaveBeenCalled();
+    const texts = sent.filter((s) => s.method === 'sendMessage').map((s) => s.body.text as string);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('Got chase.pdf (document, 4 B)');
+    expect(texts[0]).toContain("import this statement into PNC Spend");
+
+    expect(db.lastAttachment.get(String(OWNER))?.artifact_id).toBe('art-1');
+    expect(db.attachments.map((a) => a.filename)).toEqual(['chase.pdf']);
+  });
+
+  it('attaches the remembered file to a follow-up that points at it', async () => {
+    const db = withOwner(new FakeDb());
+    let clock = 1_700_000_000_000;
+    db.clock = () => clock;
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'imported'), {
+      artifacts: store.store,
+      files: { 'file-3': { bytes: '%PDF' } },
+      now: () => clock,
+    });
+
+    await surface.processUpdates([
+      documentUpdate(403, {
+        file_id: 'file-3',
+        file_name: 'sept.pdf',
+        mime_type: 'application/pdf',
+      }),
+    ]);
+    await surface.drain();
+
+    clock += 5 * 60_000; // five minutes later
+    await surface.processUpdates([message(404, OWNER, OWNER, 'import this statement into PNC Spend')]);
+    await surface.drain();
+
+    expect(run).toHaveBeenCalledTimes(1);
+    const req = run.mock.calls[0]?.[0] as any;
+    expect(req.text.startsWith('import this statement into PNC Spend')).toBe(true);
+    expect(req.text).toContain('artifact id art-1');
+    expect(req.attachments).toEqual([
+      { artifactId: 'art-1', mime: 'application/pdf', kind: 'document' },
+    ]);
+    expect(sent.filter((s) => s.body.text === readingText(handleLabel(FINANCE.handle)))).toHaveLength(1);
+  });
+
+  it('lets the file go once the window has passed, and ignores unrelated questions', async () => {
+    const db = withOwner(new FakeDb());
+    let clock = 1_700_000_000_000;
+    db.clock = () => clock;
+    const { surface, run } = surfaceWith(db, vi.fn(async () => 'ok'), {
+      files: { 'file-4': { bytes: '%PDF' } },
+      now: () => clock,
+    });
+
+    await surface.processUpdates([
+      documentUpdate(405, { file_id: 'file-4', file_name: 'old.pdf', mime_type: 'application/pdf' }),
+    ]);
+    await surface.drain();
+
+    // An unrelated question five minutes later carries nothing…
+    clock += 5 * 60_000;
+    await surface.processUpdates([message(406, OWNER, OWNER, 'how much rent is due?')]);
+    await surface.drain();
+    expect((run.mock.calls[0]?.[0] as any).attachments).toBeUndefined();
+
+    // …and neither does a pointing one, forty minutes on.
+    clock += 40 * 60_000;
+    await surface.processUpdates([message(407, OWNER, OWNER, 'import this statement')]);
+    await surface.drain();
+    expect((run.mock.calls[1]?.[0] as any).attachments).toBeUndefined();
+  });
+
+  it('saves a CSV without attaching it, naming the artifact id instead', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, run } = surfaceWith(db, vi.fn(async () => 'imported'), {
+      artifacts: store.store,
+      files: { 'file-5': { bytes: 'date,amount\n' } },
+    });
+
+    await surface.processUpdates([
+      documentUpdate(
+        408,
+        { file_id: 'file-5', file_name: 'txns.csv', mime_type: 'text/csv' },
+        'import this',
+      ),
+    ]);
+    await surface.drain();
+
+    const req = run.mock.calls[0]?.[0] as any;
+    expect(req.attachments).toBeUndefined();
+    expect(req.text).toContain('artifact id art-1');
+    expect(req.text).toContain('artifacts tools');
+  });
+
+  it('stores a voice note, says it cannot listen, and runs nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+      artifacts: store.store,
+      files: { 'voice-1': { bytes: 'OGG' } },
+    });
+
+    await surface.processUpdates([
+      {
+        update_id: 409,
+        message: {
+          message_id: 409,
+          from: { id: OWNER, is_bot: false },
+          chat: { id: OWNER, type: 'private' },
+          voice: { file_id: 'voice-1', file_unique_id: 'u1', mime_type: 'audio/ogg' },
+          caption: 'listen to this',
+        },
+      },
+    ]);
+    await surface.drain();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(store.saved).toHaveLength(1);
+    const text = sent.filter((s) => s.method === 'sendMessage').at(-1)?.body.text as string;
+    expect(text).toContain("I can't listen to audio yet");
+    expect(db.attachments[0]?.kind).toBe('audio');
+  });
+
+  it('ignores a stranger’s file entirely and records surface.rejected', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+      artifacts: store.store,
+      files: { 'file-x': { bytes: '%PDF' } },
+    });
+
+    await surface.processUpdates([
+      documentUpdate(
+        410,
+        { file_id: 'file-x', file_name: 'payload.pdf', mime_type: 'application/pdf' },
+        'read this',
+        9999,
+      ),
+    ]);
+    await surface.drain();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(store.saved).toHaveLength(0);
+    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(0);
+    expect(sent.filter((s) => s.method === 'getFile')).toHaveLength(0);
+    expect(db.events[0]?.kind).toBe('surface.rejected');
+    expect(db.events[0]?.payload).toMatchObject({ reason: 'unpaired', updateId: '410' });
+  });
+
+  it('refuses a file over Telegram’s limit before downloading it', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+      artifacts: store.store,
+    });
+
+    const huge = MAX_ATTACHMENT_BYTES + 1;
+    await surface.processUpdates([
+      documentUpdate(411, {
+        file_id: 'file-big',
+        file_name: 'year.pdf',
+        mime_type: 'application/pdf',
+        file_size: huge,
+      }),
+    ]);
+    await surface.drain();
+
+    expect(sent.filter((s) => s.method === 'getFile')).toHaveLength(0);
+    expect(sent.filter((s) => s.method === 'downloadFile')).toHaveLength(0);
+    expect(store.saved).toHaveLength(0);
+    expect(run).not.toHaveBeenCalled();
+    expect(sent.at(-1)?.body.text).toBe(oversizeText('year.pdf', huge));
+  });
+
+  it('refuses a file Telegram only admits is oversize at getFile', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'never'), {
+      artifacts: store.store,
+      files: { 'file-6': { size: MAX_ATTACHMENT_BYTES + 10, bytes: '%PDF' } },
+    });
+
+    await surface.processUpdates([
+      documentUpdate(412, { file_id: 'file-6', file_name: 'big.pdf', mime_type: 'application/pdf' }),
+    ]);
+    await surface.drain();
+
+    expect(sent.filter((s) => s.method === 'downloadFile')).toHaveLength(0);
+    expect(store.saved).toHaveLength(0);
+    expect(sent.at(-1)?.body.text).toContain('big.pdf is');
+  });
+});
+
+describe('TelegramSurface /files', () => {
+  it('says so plainly when the chat has sent nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([message(420, OWNER, OWNER, '/files')]);
+    await surface.drain();
+    expect(run).not.toHaveBeenCalled();
+    expect(sent.at(-1)?.body.text).toBe(NO_FILES_TEXT);
+  });
+
+  it('lists the last ten files, newest first, with kind, date and id', async () => {
+    const db = withOwner(new FakeDb());
+    let clock = Date.parse('2026-09-13T10:00:00Z');
+    db.clock = () => clock;
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'ok'), {
+      files: Object.fromEntries(
+        Array.from({ length: 12 }, (_, n) => [`f-${n}`, { bytes: '%PDF' }]),
+      ),
+    });
+
+    for (let n = 0; n < 12; n += 1) {
+      clock += 60_000;
+      await surface.processUpdates([
+        documentUpdate(430 + n, {
+          file_id: `f-${n}`,
+          file_name: `statement-${n}.pdf`,
+          mime_type: 'application/pdf',
+        }),
+      ]);
+      await surface.drain();
+    }
+
+    await surface.processUpdates([message(500, OWNER, OWNER, '/files')]);
+    await surface.drain();
+
+    const text = sent.at(-1)?.body.text as string;
+    expect(text.startsWith('Files in this chat:')).toBe(true);
+    // Ten of twelve, newest first.
+    expect(text.split('•')).toHaveLength(11);
+    expect(text).toContain('statement-11.pdf — document, 4 B, 2026-09-13');
+    expect(text).toContain('art-12');
+    expect(text).not.toContain('statement-1.pdf —');
+  });
+
+  it('renders one row per file from the rows alone', () => {
+    const rows = [
+      {
+        artifactId: 'art-9',
+        filename: 'receipt.jpg',
+        kind: 'image',
+        mime: 'image/jpeg',
+        sizeBytes: 120_000,
+        createdAt: new Date('2026-09-12T08:00:00Z'),
+      },
+    ];
+    expect(filesText(rows)).toBe(
+      ['Files in this chat:', '• receipt.jpg — image, 117 KB, 2026-09-12', '  art-9'].join('\n'),
+    );
+    expect(filesText([])).toBe(NO_FILES_TEXT);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * @mention routing
+ * ------------------------------------------------------------------ */
+
+describe('parseMention', () => {
+  it('reads a leading handle, with or without a separator', () => {
+    expect(parseMention('@ledger can I afford a bike?')).toEqual({
+      handle: 'ledger',
+      rest: 'can I afford a bike?',
+    });
+    expect(parseMention('@ledger: can I afford a bike?')?.rest).toBe('can I afford a bike?');
+    expect(parseMention('@ledger, can I afford a bike?')?.rest).toBe('can I afford a bike?');
+    expect(parseMention('  @credo what now')).toEqual({ handle: 'credo', rest: 'what now' });
+    expect(parseMention('@ledger')).toEqual({ handle: 'ledger', rest: '' });
+  });
+
+  it('is a prefix, never a word in the middle of a sentence', () => {
+    expect(parseMention('ask @ledger about it')).toBeUndefined();
+    expect(parseMention('mail me at a@b.com')).toBeUndefined();
+    expect(parseMention('@ 1ledger hello')).toBeUndefined();
+    expect(parseMention('no handle here')).toBeUndefined();
+  });
+
+  it('strips the bot own username first, wherever Telegram put it', () => {
+    expect(stripBotMention('@buddi_agent_bot hello', 'buddi_agent_bot')).toBe('hello');
+    expect(stripBotMention('@BUDDI_AGENT_BOT: hello', '@buddi_agent_bot')).toBe('hello');
+    expect(stripBotMention('hello @buddi_agent_bot', 'buddi_agent_bot')).toBe(
+      'hello @buddi_agent_bot',
+    );
+    expect(parseMention('@buddi_agent_bot @credo how is my score?', 'buddi_agent_bot')).toEqual({
+      handle: 'credo',
+      rest: 'how is my score?',
+    });
+  });
+});
+
+describe('handleLabel', () => {
+  it('capitalizes the handle and drops a leading @', () => {
+    expect(handleLabel('ledger')).toBe('Ledger');
+    expect(handleLabel('@credo')).toBe('Credo');
+    expect(handleLabel()).toBe('');
+  });
+});
+
+describe('TelegramSurface @mention', () => {
+  it('routes one message to the named agent without switching the chat', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([
+      message(300, OWNER, OWNER, 'hello advisor'),
+      message(301, OWNER, OWNER, '@buddi what can you do?'),
+      message(302, OWNER, OWNER, 'and again'),
+    ]);
+    await surface.drain();
+
+    const calls = run.mock.calls.map((c: any) => c[0]);
+    expect(calls.map((c: any) => c.agent.id)).toEqual([
+      'finance-advisor',
+      'concierge',
+      'finance-advisor',
+    ]);
+    // The address is not part of the question.
+    expect(calls[1]?.text).toBe('what can you do?');
+    // Each agent answered in its own conversation for this chat…
+    expect(calls.map((c: any) => c.conversationId)).toEqual(['conv-1', 'conv-2', 'conv-1']);
+    // …and the chat is still talking to whoever it was talking to.
+    expect(db.activeAgents.get(String(OWNER))).toBeUndefined();
+    expect(
+      sent.some((s) => s.method === 'sendMessage' && s.body.text === CONCIERGE_PLACEHOLDER),
+    ).toBe(true);
+  });
+
+  it('answers an unknown handle without running anything', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([message(303, OWNER, OWNER, '@nobody are you there?')]);
+    await surface.drain();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(sent.map((s) => s.body.text)).toContain(unknownHandleText('nobody'));
+    expect(unknownHandleText('nobody')).toBe('No agent called @nobody. Send /agents.');
+  });
+
+  it('asks for the question when the message is only an address', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent, run } = surfaceWith(db);
+    await surface.processUpdates([message(304, OWNER, OWNER, '@buddi')]);
+    await surface.drain();
+    expect(run).not.toHaveBeenCalled();
+    expect(sent.map((s) => s.body.text)).toContain(emptyMentionText('buddi'));
+  });
+
+  it('sees the handle through Telegram own mention of the bot', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run } = surfaceWith(db, undefined, { botUsername: 'buddi_agent_bot' });
+    await surface.processUpdates([
+      message(305, OWNER, OWNER, '@buddi_agent_bot @buddi what can you do?'),
+      message(306, OWNER, OWNER, '@buddi_agent_bot how much is left?'),
+    ]);
+    await surface.drain();
+
+    const calls = run.mock.calls.map((c: any) => c[0]);
+    expect(calls.map((c: any) => c.agent.id)).toEqual(['concierge', 'finance-advisor']);
+    expect(calls[0]?.text).toBe('what can you do?');
+    // With no handle after it, the bot mention is simply removed.
+    expect(calls[1]?.text).toBe('how much is left?');
+  });
+
+  it('/use takes a handle, with or without the @', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([message(307, OWNER, OWNER, '/use @buddi')]);
+    await surface.drain();
+    expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+
+    await surface.processUpdates([message(308, OWNER, OWNER, '/use ledger')]);
+    await surface.drain();
+    expect(db.activeAgents.get(String(OWNER))).toBe('finance-advisor');
+    expect(sent.at(-1)?.body.text).toBe('You are now talking to Finance Advisor (@ledger).');
   });
 });

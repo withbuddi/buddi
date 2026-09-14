@@ -9,6 +9,8 @@
  *    persona never instructs the model to call something that is not installed;
  *  - two agents claiming `default: true` is a load error — "the agent used when a
  *    chat has no active one" must be unambiguous;
+ *  - two agents answering to one `@handle` (case-insensitively) is a load error:
+ *    the handle is what the owner types, and it must name exactly one agent;
  *  - an unknown id at resolve time throws, it is never coerced to the default.
  *
  * The catalog knows tools only through the registry contract, and never reads
@@ -49,6 +51,7 @@ export class AgentCatalogError extends Error {
     readonly code:
       | 'agents-dir-missing'
       | 'duplicate-agent'
+      | 'duplicate-handle'
       | 'unresolvable-tool'
       | 'multiple-defaults'
       | 'no-default-agent'
@@ -72,9 +75,18 @@ export class UnknownAgentError extends Error {
 
 export interface AgentSummary {
   id: string;
+  /** How the owner addresses it: `@ledger`. Unique across the catalog. */
+  handle: string;
   name: string;
   description: string;
   isDefault: boolean;
+}
+
+/** One colleague as an agent's prompt sees it. */
+export interface AgentRosterEntry {
+  handle: string;
+  name: string;
+  description: string;
 }
 
 /** A skill as the catalog reports it: enough to trace it, not its whole text. */
@@ -103,10 +115,15 @@ export interface CatalogAgent extends AgentSummary {
 
 export interface AgentCatalog {
   get(id: string): CatalogAgent | undefined;
+  /** By `@handle`, case-insensitively and with or without the leading `@`. */
+  byHandle(handle: string): CatalogAgent | undefined;
   list(): AgentSummary[];
   defaultAgent(): CatalogAgent;
-  /** `id` or the default. Unknown ids throw — never silently the default. */
-  resolve(id?: string): CatalogAgent;
+  /**
+   * An id, a handle, or the default when nothing is given. Unknown names throw
+   * — never silently the default.
+   */
+  resolve(idOrHandle?: string): CatalogAgent;
 }
 
 export interface LoadAgentCatalogOptions {
@@ -177,12 +194,31 @@ const LANGUAGE_LINE: Record<AgentLanguage, string> = {
  * than written into the persona, so a file can never claim a tool it was not
  * granted, nor go stale when the plugin ships one more.
  */
-export function generatedSection(tools: readonly string[], language: AgentLanguage): string {
+export function generatedSection(
+  tools: readonly string[],
+  language: AgentLanguage,
+  wiring?: { handle: string; colleagues: readonly AgentRosterEntry[] },
+): string {
   const toolLine =
     tools.length === 0
       ? 'You have no tools in this installation. Answer from the conversation alone, and say plainly when something needs a tool you do not have.'
       : `Tools available to you in this installation: ${tools.join(', ')}.`;
-  return `## Your wiring (generated, authoritative)\n- ${toolLine}\n- ${LANGUAGE_LINE[language]}`;
+  const lines = [`- ${toolLine}`, `- ${LANGUAGE_LINE[language]}`];
+  if (wiring) {
+    lines.push(
+      `- Your handle is @${wiring.handle}. The owner addresses you by writing @${wiring.handle} at the start of a message; refer to yourself as @${wiring.handle} when naming agents.`,
+    );
+    if (wiring.colleagues.length === 0) {
+      lines.push('- You are the only agent installed here. There is nobody to hand work to.');
+    } else {
+      lines.push(
+        '- The owner\'s other agents, and how to name them:',
+        ...wiring.colleagues.map((c) => `  - @${c.handle} — ${c.name}: ${c.description}`),
+        '- Always name another agent by its handle, never by its id.',
+      );
+    }
+  }
+  return `## Your wiring (generated, authoritative)\n${lines.join('\n')}`;
 }
 
 /**
@@ -247,6 +283,7 @@ function buildAgent(
   file: string,
   sharedSkills: readonly Skill[],
   opts: LoadAgentCatalogOptions,
+  roster: readonly AgentRosterEntry[] = [],
 ): CatalogAgent {
   const tools = resolveToolNames(frontmatter.tools, opts.registry, frontmatter.id);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
@@ -254,15 +291,17 @@ function buildAgent(
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
   const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
   const section = skillsSection(skills);
+  const colleagues = roster.filter((entry) => entry.handle !== frontmatter.handle);
   const systemPromptTemplate = [
     body.trimEnd(),
     ...(section === '' ? [] : [section]),
-    generatedSection(tools, language),
+    generatedSection(tools, language, { handle: frontmatter.handle, colleagues }),
   ].join('\n\n');
   const maxTurns = frontmatter.maxTurns ?? DEFAULT_MAX_TURNS;
 
   return {
     id: frontmatter.id,
+    handle: frontmatter.handle,
     name: frontmatter.name,
     description: frontmatter.description,
     isDefault: frontmatter.default === true,
@@ -321,8 +360,11 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     'shared',
   );
 
-  const agents = new Map<string, CatalogAgent>();
-  const defaults: string[] = [];
+  // Two passes: every file is parsed before any prompt is composed, because the
+  // wiring tail names the agent's colleagues and no agent can know them alone.
+  const files: { frontmatter: AgentFrontmatter; body: string; file: string }[] = [];
+  const seenIds = new Set<string>();
+  const seenHandles = new Map<string, string>();
 
   for (const dirName of entries) {
     const file = path.join(opts.dir, dirName, AGENT_FILE);
@@ -338,11 +380,39 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
       if (err instanceof AgentFileError) throw new AgentCatalogError('agent-file', err.message);
       throw err;
     }
-    const agent = buildAgent(parsed.frontmatter, parsed.body, file, sharedSkills, opts);
-    if (agents.has(agent.id)) {
-      throw new AgentCatalogError('duplicate-agent', `duplicate agent id: ${agent.id}`);
+    const { id, handle } = parsed.frontmatter;
+    if (seenIds.has(id)) {
+      throw new AgentCatalogError('duplicate-agent', `duplicate agent id: ${id}`);
     }
+    // Case-insensitively: the owner types `@Ledger` as readily as `@ledger`,
+    // and two agents answering to one spoken name is an ambiguity, not a nuance.
+    const key = handle.toLowerCase();
+    const taken = seenHandles.get(key);
+    if (taken !== undefined) {
+      throw new AgentCatalogError(
+        'duplicate-handle',
+        `duplicate agent handle "@${handle}": ${taken} and ${id} both answer to it`,
+      );
+    }
+    seenIds.add(id);
+    seenHandles.set(key, id);
+    files.push({ frontmatter: parsed.frontmatter, body: parsed.body, file });
+  }
+
+  const roster: AgentRosterEntry[] = files.map(({ frontmatter }) => ({
+    handle: frontmatter.handle,
+    name: frontmatter.name,
+    description: frontmatter.description,
+  }));
+
+  const agents = new Map<string, CatalogAgent>();
+  const byHandle = new Map<string, CatalogAgent>();
+  const defaults: string[] = [];
+
+  for (const { frontmatter, body, file } of files) {
+    const agent = buildAgent(frontmatter, body, file, sharedSkills, opts, roster);
     agents.set(agent.id, agent);
+    byHandle.set(agent.handle.toLowerCase(), agent);
     if (agent.isDefault) defaults.push(agent.id);
   }
 
@@ -353,12 +423,14 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     );
   }
 
-  const ids = [...agents.keys()];
+  const known = [...agents.values()].map((a) => `${a.id} (@${a.handle})`);
   return {
     get: (id) => agents.get(id),
+    byHandle: (handle) => byHandle.get(handle.trim().replace(/^@/, '').toLowerCase()),
     list: () =>
-      [...agents.values()].map(({ id, name, description, isDefault }) => ({
+      [...agents.values()].map(({ id, handle, name, description, isDefault }) => ({
         id,
+        handle,
         name,
         description,
         isDefault,
@@ -373,10 +445,12 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
       }
       return agents.get(id) as CatalogAgent;
     },
-    resolve(id?: string): CatalogAgent {
-      if (id === undefined || id.trim() === '') return this.defaultAgent();
-      const agent = agents.get(id);
-      if (!agent) throw new UnknownAgentError(id, ids);
+    resolve(idOrHandle?: string): CatalogAgent {
+      if (idOrHandle === undefined || idOrHandle.trim() === '') return this.defaultAgent();
+      const wanted = idOrHandle.trim();
+      const agent =
+        agents.get(wanted) ?? byHandle.get(wanted.replace(/^@/, '').toLowerCase());
+      if (!agent) throw new UnknownAgentError(wanted, known);
       return agent;
     },
   };

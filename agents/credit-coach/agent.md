@@ -1,5 +1,6 @@
 ---
 id: credit-coach
+handle: credo
 name: Credit Coach
 description: "Credit score improvement: utilization, payment timing, what to do before each statement"
 tools: [finance.*]

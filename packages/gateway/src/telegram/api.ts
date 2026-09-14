@@ -9,6 +9,9 @@
 /** Telegram rejects messages over 4096 characters; we split well below it. */
 export const MAX_MESSAGE_CHARS = 4000;
 
+/** Telegram refuses to serve a bot any file larger than this. Their limit. */
+export const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
 /** Long-poll timeout, in seconds. Telegram holds the request open that long. */
 export const POLL_TIMEOUT_SECONDS = 25;
 
@@ -28,11 +31,48 @@ export interface TelegramChat {
   type: string;
 }
 
+/** Common head of every file Telegram offers: an id we can ask `getFile` about. */
+export interface TelegramFileRef {
+  file_id: string;
+  file_unique_id?: string;
+  file_size?: number;
+}
+
+export interface TelegramDocument extends TelegramFileRef {
+  file_name?: string;
+  mime_type?: string;
+}
+
+/** One rendition of a photo. Telegram sends every thumbnail it made. */
+export interface TelegramPhotoSize extends TelegramFileRef {
+  width?: number;
+  height?: number;
+}
+
+/** A recorded voice note (`voice`) or a sent audio file (`audio`). */
+export interface TelegramAudio extends TelegramFileRef {
+  file_name?: string;
+  mime_type?: string;
+  duration?: number;
+}
+
+/** What `getFile` answers: a path valid for about an hour, and the real size. */
+export interface TelegramFile extends TelegramFileRef {
+  file_path?: string;
+}
+
 export interface TelegramMessage {
   message_id: number;
   from?: TelegramUser;
   chat: TelegramChat;
   text?: string;
+  /** The text sent *with* a file. The surface treats it as the user message. */
+  caption?: string;
+  document?: TelegramDocument;
+  /** Every size of one photo, smallest first. */
+  photo?: TelegramPhotoSize[];
+  voice?: TelegramAudio;
+  audio?: TelegramAudio;
   date?: number;
   forward_origin?: unknown;
   forward_from?: unknown;
@@ -75,7 +115,13 @@ export class TelegramApiError extends Error {
 export type FetchLike = (
   input: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: any },
-) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+) => Promise<{
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+  /** Only the file endpoint needs bytes; a JSON-only fake may omit it. */
+  arrayBuffer?(): Promise<ArrayBuffer>;
+}>;
 
 export interface TelegramApiOptions {
   token: string;
@@ -119,6 +165,36 @@ export class TelegramApi {
       );
     }
     return parsed.result as T;
+  }
+
+  /**
+   * Resolve a `file_id` into a downloadable path. The path is short-lived, so
+   * it is fetched immediately before the download and never stored.
+   */
+  getFile(fileId: string): Promise<TelegramFile> {
+    return this.call<TelegramFile>('getFile', { file_id: fileId });
+  }
+
+  /**
+   * Download a file by the path `getFile` returned.
+   *
+   * A different host and a different response shape from every other call:
+   * this one answers bytes, not `{ok, result}`, so it does not go through
+   * `call`. Telegram will not serve a bot a file over 20 MB (`MAX_FILE_BYTES`)
+   * — the caller checks the size first and says so in words.
+   */
+  async downloadFile(filePath: string, signal?: any): Promise<Buffer> {
+    const url = `${this.#baseUrl}/file/bot${this.#token}/${filePath}`;
+    const res = await this.#fetch(url, { method: 'GET', signal });
+    if (!res.ok) {
+      throw new TelegramApiError('downloadFile', res.status, `could not download ${filePath}`);
+    }
+    if (typeof res.arrayBuffer === 'function') {
+      return Buffer.from(await res.arrayBuffer());
+    }
+    // A fetch implementation without `arrayBuffer` (a test fake, an old shim):
+    // latin-1 is the one text encoding that round-trips arbitrary bytes.
+    return Buffer.from(await res.text(), 'latin1');
   }
 
   getMe(): Promise<TelegramUser> {

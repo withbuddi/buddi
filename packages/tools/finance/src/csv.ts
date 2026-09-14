@@ -14,6 +14,12 @@ export interface BankCsvRow {
   description: string;
   /** The bank's own category, when the export carries one. */
   category?: string;
+  /**
+   * 'pending' when the export marks the row as an unsettled authorisation —
+   * either in its own status column or as a marker written into the date
+   * column ('PENDING', '09/12/2026 PENDING'). Absent means posted.
+   */
+  status?: 'pending' | 'posted';
 }
 
 export interface BankCsvResult {
@@ -51,6 +57,15 @@ const CATEGORY_HEADERS = [
   'rubrique',
   'classification',
 ];
+const STATUS_HEADERS = [
+  'status',
+  'statut',
+  'state',
+  'etat',
+  'transactionstatus',
+  'transaction status',
+  'postingstatus',
+];
 const DESCRIPTION_HEADERS = [
   'description',
   'libelle',
@@ -66,6 +81,19 @@ const DESCRIPTION_HEADERS = [
   'reference',
   'nature',
 ];
+
+/**
+ * How a bank says "this has not settled yet". Matched against the status
+ * column and against the date cell, because plenty of exports write the marker
+ * where the date belongs and leave the real date to a second column.
+ */
+const PENDING_RE =
+  /(pending|en\s*attente|autoris|authoriz|unposted|not\s*posted|processing|on\s*hold)/i;
+
+/** True when a cell carries a pending marker. */
+export function isPendingMarker(raw: string): boolean {
+  return PENDING_RE.test(raw);
+}
 
 /** Lowercase, strip accents/BOM/punctuation so 'Libellé' matches 'libelle'. */
 function normalizeHeader(h: string): string {
@@ -254,6 +282,10 @@ export function parseBankCsv(text: string): BankCsvResult {
   // mistaken for the free-text one.
   const categoryIdx = matchHeader(headers, CATEGORY_HEADERS, taken);
   if (categoryIdx !== -1) taken.add(categoryIdx);
+  // Status is matched before description so a 'status' column is never read as
+  // the free-text one.
+  const statusIdx = matchHeader(headers, STATUS_HEADERS, taken);
+  if (statusIdx !== -1) taken.add(statusIdx);
   const descIdx = matchHeader(headers, DESCRIPTION_HEADERS, taken);
 
   if (dateIdx === -1) {
@@ -277,9 +309,17 @@ export function parseBankCsv(text: string): BankCsvResult {
     const fields = splitLine(line, delimiter);
     const at = (idx: number): string => (idx >= 0 ? fields[idx] ?? '' : '');
 
-    const date = parseCsvDate(at(dateIdx));
+    // A pending marker can live in its own column or inside the date cell; in
+    // the second case it is stripped back out before the date is parsed.
+    const rawDate = at(dateIdx);
+    const pending = isPendingMarker(rawDate) || isPendingMarker(at(statusIdx));
+    const dateCell = isPendingMarker(rawDate)
+      ? rawDate.replace(PENDING_RE, ' ').replace(/[()[\]]/g, ' ').trim()
+      : rawDate;
+
+    const date = parseCsvDate(dateCell);
     if (date === undefined) {
-      warnings.push(`line ${lineNo}: unparseable date ${JSON.stringify(at(dateIdx))} — skipped`);
+      warnings.push(`line ${lineNo}: unparseable date ${JSON.stringify(rawDate)} — skipped`);
       continue;
     }
 
@@ -303,6 +343,7 @@ export function parseBankCsv(text: string): BankCsvResult {
       amount: Math.round(amount * 100) / 100,
       description: at(descIdx) || '(no description)',
       ...(category === '' ? {} : { category }),
+      ...(pending ? { status: 'pending' as const } : {}),
     });
   }
 

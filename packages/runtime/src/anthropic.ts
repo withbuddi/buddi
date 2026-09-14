@@ -37,6 +37,17 @@ export const ANTHROPIC_VERSION = '2023-06-01';
  * Provider-neutral port
  * ------------------------------------------------------------------ */
 
+/**
+ * Multimodal blocks are provider-neutral: `data` is always base64, `mime` is
+ * always the real media type. An adapter that cannot carry one is expected to
+ * degrade to text rather than invent a wire shape.
+ *
+ * `artifact_ref` is the *persisted* form of an attachment: it is what
+ * `core.messages` stores so a transcript never carries base64, and the loop
+ * hydrates it into an `image` / `document` block before any provider call. An
+ * adapter should never see one; if it does, it renders as a text placeholder
+ * rather than being silently dropped.
+ */
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
@@ -45,7 +56,13 @@ export type ContentBlock =
       tool_use_id: string;
       content: string;
       is_error?: boolean;
-    };
+    }
+  | { type: 'image'; mime: string; data: string }
+  | { type: 'document'; mime: 'application/pdf'; data: string; name?: string }
+  | { type: 'artifact_ref'; artifactId: string; mime: string; kind: string };
+
+/** What the model is shown when an attachment cannot be reconstructed. */
+export const ATTACHMENT_UNAVAILABLE = '[attachment unavailable]';
 
 export type MessageRole = 'user' | 'assistant';
 
@@ -142,7 +159,19 @@ type WireToolResultBlock = {
   content: string;
   is_error?: boolean;
 };
-type WireBlock = WireTextBlock | WireToolUseBlock | WireToolResultBlock;
+type WireBase64Source = { type: 'base64'; media_type: string; data: string };
+type WireImageBlock = { type: 'image'; source: WireBase64Source };
+type WireDocumentBlock = {
+  type: 'document';
+  source: WireBase64Source;
+  title?: string;
+};
+type WireBlock =
+  | WireTextBlock
+  | WireToolUseBlock
+  | WireToolResultBlock
+  | WireImageBlock
+  | WireDocumentBlock;
 
 type WireSystemBlock = { type: 'text'; text: string };
 
@@ -173,6 +202,23 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
         name: wireNameFor(names, block.name),
         input: block.input,
       };
+    case 'image':
+      return {
+        type: 'image',
+        source: { type: 'base64', media_type: block.mime, data: block.data },
+      };
+    case 'document': {
+      const wire: WireDocumentBlock = {
+        type: 'document',
+        source: { type: 'base64', media_type: block.mime, data: block.data },
+      };
+      if (block.name) wire.title = block.name;
+      return wire;
+    }
+    case 'artifact_ref':
+      // The loop hydrates these before calling a provider. Reaching here means
+      // an un-hydrated history — say so rather than dropping the block.
+      return { type: 'text', text: ATTACHMENT_UNAVAILABLE };
     case 'tool_result':
       return block.is_error
         ? {

@@ -28,6 +28,9 @@ import {
   setLiability,
 } from './tools/liabilities.js';
 import { getPreferences, setPreferences } from './tools/preferences.js';
+import { linkReceipt, listReceipts, recordReceipt } from './tools/receipts.js';
+import { reconcile } from './tools/reconcile.js';
+import { commitImport, discardImport, stageImport } from './tools/staging.js';
 import { addRecurring, listRecurring, removeRecurring } from './tools/recurring.js';
 import {
   importCsv,
@@ -60,6 +63,13 @@ export const manifest: PluginManifest = {
     recordTransaction,
     recordContribution,
     importCsv,
+    stageImport,
+    commitImport,
+    discardImport,
+    reconcile,
+    recordReceipt,
+    listReceipts,
+    linkReceipt,
     summary,
     spendingBaseline,
     projectCashflow,
@@ -91,6 +101,13 @@ export {
   recordTransaction,
   recordContribution,
   importCsv,
+  stageImport,
+  commitImport,
+  discardImport,
+  reconcile,
+  recordReceipt,
+  listReceipts,
+  linkReceipt,
   summary,
   spendingBaseline,
   projectCashflow,
@@ -113,3 +130,4 @@ export * from './baseline.js';
 export * from './amortization.js';
 export * from './credit.js';
 export * from './csv.js';
+export * from './merchant.js';
