@@ -60,11 +60,14 @@ export interface MessageRecord {
   attachments: AttachmentInfo[];
   flags: string[];
   fetchedAt: string | null;
+  /** When the body was purged under retention, or null while it is still kept. */
+  bodyPurgedAt: string | null;
 }
 
 export const MESSAGE_COLUMNS =
   'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr, ' +
-  'to_addrs, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at';
+  'to_addrs, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
+  'body_purged_at';
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -94,6 +97,7 @@ export function toMessage(row: Record<string, any>): MessageRecord {
     attachments: Array.isArray(row.attachments) ? (row.attachments as AttachmentInfo[]) : [],
     flags: stringArray(row.flags),
     fetchedAt: iso(row.fetched_at),
+    bodyPurgedAt: iso(row.body_purged_at),
   };
 }
 

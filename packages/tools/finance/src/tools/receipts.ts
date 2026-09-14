@@ -72,7 +72,7 @@ const recordInput = z.object({
 export const recordReceipt: ToolDefinition<z.infer<typeof recordInput>, unknown> = {
   name: 'finance.record_receipt',
   description:
-    "Record a receipt the owner sent — merchant, date, total, and the line items when they are legible. It does NOT create a transaction: the bank charge is the money, the receipt is the detail. After storing it, it looks for the charge it belongs to (same amount, same merchant, within three days either way, posted or still pending) and links them; if nothing matches it stays unlinked and finance.reconcile will try again later. Never invent a total or a line item — if part of the document is unreadable, say so and record only what is legible.",
+    "Record a receipt the owner sent — merchant, date, total, and the line items when they are legible. It does NOT create a transaction: the bank charge is the money, the receipt is the detail. After storing it, it looks for the charge it belongs to (same amount, same merchant, within three days either way, posted or still pending, on a cash account or on a card) and links them — a receipt for something paid by card matches the charge recorded on that card; if nothing matches it stays unlinked and finance.reconcile will try again later. Never invent a total or a line item — if part of the document is unreadable, say so and record only what is legible.",
   tier: 'auto',
   input: recordInput,
   async execute(input, ctx) {
@@ -105,9 +105,11 @@ export const recordReceipt: ToolDefinition<z.infer<typeof recordInput>, unknown>
     let matchedTransaction: Record<string, unknown> | null = null;
     if (match) {
       const { rows: txRows } = await ctx.db.query(
-        `select t.id, t.occurred_on, t.amount, t.description, t.status, a.name as account
+        `select t.id, t.occurred_on, t.amount, t.description, t.status,
+                a.name as account, l.name as liability
            from finance.transactions t
            left join finance.accounts a on a.id = t.account_id
+           left join finance.liabilities l on l.id = t.liability_id
           where t.id = $1`,
         [match.id],
       );
@@ -116,6 +118,8 @@ export const recordReceipt: ToolDefinition<z.infer<typeof recordInput>, unknown>
         matchedTransaction = {
           id: tx.id as string,
           account: (tx.account as string | null) ?? null,
+          /** Set when the charge was paid by card rather than from cash. */
+          liability: (tx.liability as string | null) ?? null,
           occurredOn: toDateString(tx.occurred_on),
           amount: num(tx.amount),
           description: tx.description as string,
@@ -190,9 +194,11 @@ export const linkReceipt: ToolDefinition<z.infer<typeof linkInput>, unknown> = {
   input: linkInput,
   async execute(input, ctx) {
     const { rows: txRows } = await ctx.db.query(
-      `select t.id, t.occurred_on, t.amount, t.description, t.status, a.name as account
+      `select t.id, t.occurred_on, t.amount, t.description, t.status,
+              a.name as account, l.name as liability
          from finance.transactions t
          left join finance.accounts a on a.id = t.account_id
+         left join finance.liabilities l on l.id = t.liability_id
         where t.id = $1`,
       [input.transactionId],
     );
@@ -211,6 +217,7 @@ export const linkReceipt: ToolDefinition<z.infer<typeof linkInput>, unknown> = {
       transaction: {
         id: tx.id as string,
         account: (tx.account as string | null) ?? null,
+        liability: (tx.liability as string | null) ?? null,
         occurredOn: toDateString(tx.occurred_on),
         amount: num(tx.amount),
         description: tx.description as string,

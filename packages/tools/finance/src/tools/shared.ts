@@ -115,10 +115,130 @@ export async function ensureAccount(
   return mapAccountRow(rows[0]);
 }
 
+export interface LiabilityRow {
+  id: string;
+  name: string;
+  kind: 'credit_card' | 'loan' | 'other';
+  /** What is owed, positive. A stated figure the owner confirms, never a running sum. */
+  balance: number;
+  creditLimit: number | null;
+  minimumPayment: number;
+  dueDay: number;
+  statementDay: number | null;
+  apr: number | null;
+  paidFromAccountId: string | null;
+  active: boolean;
+}
+
+export const LIABILITY_COLUMNS =
+  'id, name, kind, balance, credit_limit, minimum_payment, due_day, statement_day, apr, paid_from_account_id, active';
+
+export function mapLiabilityRow(row: Record<string, unknown>): LiabilityRow {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    kind: row.kind as LiabilityRow['kind'],
+    balance: num(row.balance),
+    creditLimit: row.credit_limit === null || row.credit_limit === undefined
+      ? null
+      : num(row.credit_limit),
+    minimumPayment: num(row.minimum_payment),
+    dueDay: Number(row.due_day),
+    statementDay:
+      row.statement_day === null || row.statement_day === undefined
+        ? null
+        : Number(row.statement_day),
+    apr: row.apr === null || row.apr === undefined ? null : num(row.apr),
+    paidFromAccountId: (row.paid_from_account_id as string | null) ?? null,
+    active: row.active !== false,
+  };
+}
+
+/**
+ * A liability by name, case-insensitively, active ones first.
+ *
+ * Unlike an account, a liability is NEVER created on first mention: a debt
+ * without its balance, minimum and due day is not a record, it is a guess, and
+ * those three have to come from the owner.
+ */
+export async function findLiability(db: Pool, name: string): Promise<LiabilityRow | undefined> {
+  const { rows } = await db.query(
+    `select ${LIABILITY_COLUMNS} from finance.liabilities
+      where lower(name) = lower($1)
+      order by active desc, created_at
+      limit 1`,
+    [name],
+  );
+  const row = rows[0];
+  return row ? mapLiabilityRow(row) : undefined;
+}
+
+/**
+ * Which ledger a row belongs to: a cash account, or a liability.
+ *
+ * Exactly one of the two, enforced in the schema as well. A card purchase does
+ * not move cash on the day it is made, so it belongs on the card; the cash
+ * moves later, once, when the card is paid.
+ */
+export interface Ledger {
+  kind: 'account' | 'liability';
+  /** The account or liability id — whichever this ledger is. */
+  id: string;
+  name: string;
+  accountId: string | null;
+  liabilityId: string | null;
+}
+
+export async function resolveLedger(
+  db: Pool,
+  input: { account?: string | undefined; liability?: string | undefined },
+  opts: { createAccount?: boolean; accountKind?: AccountKind } = {},
+): Promise<Ledger> {
+  if (input.account && input.liability) {
+    throw new Error(
+      'pass either account or liability, never both: a row lives on one ledger',
+    );
+  }
+  if (input.liability) {
+    const liability = await findLiability(db, input.liability);
+    if (!liability) {
+      throw new Error(
+        `unknown liability: ${input.liability} — record it first with finance.set_liability (balance, minimum payment, due day)`,
+      );
+    }
+    return {
+      kind: 'liability',
+      id: liability.id,
+      name: liability.name,
+      accountId: null,
+      liabilityId: liability.id,
+    };
+  }
+  if (!input.account) {
+    throw new Error('provide an account (cash) or a liability (card, loan)');
+  }
+  const account =
+    opts.createAccount === false
+      ? await findAccount(db, input.account)
+      : await ensureAccount(
+          db,
+          input.account,
+          opts.accountKind ? { kind: opts.accountKind } : {},
+        );
+  if (!account) throw new Error(`unknown account: ${input.account}`);
+  return {
+    kind: 'account',
+    id: account.id,
+    name: account.name,
+    accountId: account.id,
+    liabilityId: null,
+  };
+}
+
 /**
  * Stable identity for a transaction.
  *
- * Account/date/amount/text alone is not enough: real bank exports contain
+ * Ledger/date/amount/text alone is not enough: real bank exports contain
  * genuinely distinct rows that are identical on all four (three transfers of
  * the same amount on the same day, two identical subscription charges). The
  * `occurrence` index — 0 for the first such row, 1 for the second, … in file
@@ -126,7 +246,8 @@ export async function ensureAccount(
  * onto the same hashes, so it stays a no-op.
  */
 export function dedupHash(
-  account: string,
+  /** The ledger's name — a cash account's, or a liability's. */
+  ledger: string,
   date: string,
   amount: number,
   description: string,
@@ -134,7 +255,7 @@ export function dedupHash(
 ): string {
   return createHash('sha256')
     .update(
-      `${account.trim().toLowerCase()}|${date}|${amount.toFixed(2)}|${description.trim()}|${occurrence}`,
+      `${ledger.trim().toLowerCase()}|${date}|${amount.toFixed(2)}|${description.trim()}|${occurrence}`,
     )
     .digest('hex');
 }

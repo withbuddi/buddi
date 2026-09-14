@@ -12,19 +12,22 @@ import {
   utilizationReport,
   type CreditCard,
 } from '../credit.js';
+import type { StatementForecast } from '../cards.js';
+import { loadStatementForecast } from './cards.js';
 import { loadPreferences, num, today, toDateString } from './shared.js';
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected a YYYY-MM-DD date');
 
 /** Active credit cards, shaped for the pure helpers. */
-async function loadCards(db: Pool): Promise<CreditCard[]> {
+async function loadCards(db: Pool): Promise<(CreditCard & { id: string })[]> {
   const { rows } = await db.query(
-    `select name, balance, credit_limit, apr, minimum_payment, statement_day,
+    `select id, name, balance, credit_limit, apr, minimum_payment, statement_day,
             reported_balance, reported_on, due_day
        from finance.liabilities
       where active and kind = 'credit_card'`,
   );
   return rows.map((r) => ({
+    id: r.id as string,
     name: r.name as string,
     balance: num(r.balance),
     creditLimit: r.credit_limit === null || r.credit_limit === undefined ? null : num(r.credit_limit),
@@ -32,6 +35,28 @@ async function loadCards(db: Pool): Promise<CreditCard[]> {
     minimumPayment: num(r.minimum_payment),
     statementDay: (r.statement_day as number | null) ?? null,
   }));
+}
+
+/**
+ * The expected statement balance per card, by card name.
+ *
+ * A card's balance today is not what it will report: the recurring charges
+ * billed to it between now and the closing day still have to land, and a
+ * scheduled payment may still land first. Where that forecast exists it is
+ * offered alongside the current figure — never instead of it, so the answer can
+ * say both ("you are at 62% today; it closes at 48% if nothing changes").
+ */
+async function loadForecasts(
+  db: Pool,
+  cards: readonly (CreditCard & { id: string })[],
+  asOf: string,
+): Promise<Map<string, StatementForecast>> {
+  const out = new Map<string, StatementForecast>();
+  for (const card of cards) {
+    if (card.statementDay === null) continue;
+    out.set(card.name, await loadStatementForecast(db, { ...card }, asOf));
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ scores */
@@ -313,15 +338,31 @@ const planInput = z.object({
 export const creditPlanTool: ToolDefinition<z.infer<typeof planInput>, unknown> = {
   name: 'finance.credit_plan',
   description:
-    'Allocate a monthly extra-payment budget across the cards: first bring every card under 30% utilization, dearest APR first, then put whatever is left on the highest-APR card. Returns, per card, payment (the amount to PAY on top of the minimum) and balanceAfter (the balance that remains AFTER that payment) — quote both: pay `payment` so the balance becomes `balanceAfter` — plus the utilization each card and the portfolio would land at, and how many months the highest-APR card takes to clear at that pace. Deterministic — this is the only source of truth for the allocation.',
+    'Allocate a monthly extra-payment budget across the cards: first bring every card under 30% utilization, dearest APR first, then put whatever is left on the highest-APR card. Returns, per card, payment (the amount to PAY on top of the minimum) and balanceAfter (the balance that remains AFTER that payment) — quote both: pay `payment` so the balance becomes `balanceAfter` — plus the utilization each card and the portfolio would land at, and how many months the highest-APR card takes to clear at that pace. Each allocation also carries `forecastBalance`: what that card is on course to report at its next close once the charges billed to it have landed — if it is above the balance the plan worked from, say so, because paying to `balanceAfter` will not hold if more is still to post. Deterministic — this is the only source of truth for the allocation.',
   tier: 'auto',
   input: planInput,
   async execute(input, ctx) {
     const prefs = await loadPreferences(ctx.db);
     const cards = await loadCards(ctx.db);
+    const forecasts = await loadForecasts(ctx.db, cards, today(ctx));
     const plan = creditPlan(cards, input.monthlyBudget);
     return {
       ...plan,
+      /**
+       * The allocation is computed off the balance as it stands. Where a card
+       * has a statement day, `forecastBalance` says what it is on course to
+       * REPORT — mention it when it is higher than the balance the plan works
+       * from, because that is the figure utilization is scored on.
+       */
+      allocations: plan.allocations.map((a) => {
+        const forecast = forecasts.get(a.name);
+        return {
+          ...a,
+          forecastBalance: forecast?.forecastBalance ?? null,
+          forecastUtilization: forecast?.forecastUtilization ?? null,
+          statementCloseDate: forecast?.closeDate ?? null,
+        };
+      }),
       currency: prefs.currency,
       message:
         cards.length === 0
@@ -346,7 +387,7 @@ const upcomingInput = z.object({
 export const upcomingStatementsTool: ToolDefinition<z.infer<typeof upcomingInput>, unknown> = {
   name: 'finance.upcoming_statements',
   description:
-    'Cards whose statement closes within the window, soonest first — the closing date, the date to pay by for the payment to post first, and what to pay for the card to report at 30% and at 10%. paymentFor30 = the amount to PAY before the statement closes; targetBalanceFor30 = the balance that would then be reported (same for paymentFor10 / targetBalanceFor10). Quote both: pay paymentFor30 so the reported balance becomes targetBalanceFor30. Utilization is scored off the balance reported at statement close, not off the due date, so this is the calendar that matters.',
+    'Cards whose statement closes within the window, soonest first — the closing date, the date to pay by for the payment to post first, and what to pay for the card to report at 30% and at 10%. paymentFor30 = the amount to PAY before the statement closes; targetBalanceFor30 = the balance that would then be reported (same for paymentFor10 / targetBalanceFor10). Quote both: pay paymentFor30 so the reported balance becomes targetBalanceFor30. Utilization is scored off the balance reported at statement close, not off the due date, so this is the calendar that matters. When recurring charges are billed to the card or a payment is already scheduled, `forecastBalance` is what the card is on course to REPORT on the closing day (with `forecastEvents` naming each movement and its date) — quote it alongside the balance today whenever the two differ, because the forecast is the figure the bureaus will see.',
   tier: 'auto',
   input: upcomingInput,
   async execute(input, ctx) {
@@ -355,11 +396,14 @@ export const upcomingStatementsTool: ToolDefinition<z.infer<typeof upcomingInput
     const cards = await loadCards(ctx.db);
     const from = today(ctx);
     const statements = upcomingStatements(cards, from, days);
+    const forecasts = await loadForecasts(ctx.db, cards, from);
     const noStatementDay = cards.filter((c) => c.statementDay === null).map((c) => c.name);
     return {
       from,
       days,
-      statements: statements.map((s) => ({
+      statements: statements.map((s) => {
+        const forecast = forecasts.get(s.name);
+        return {
         name: s.name,
         statementDate: s.statementDate,
         daysUntil: s.daysUntil,
@@ -368,11 +412,23 @@ export const upcomingStatementsTool: ToolDefinition<z.infer<typeof upcomingInput
         creditLimit: s.creditLimit,
         utilization: s.utilization,
         apr: s.apr,
+        /**
+         * What the card is on course to report on the closing day: the balance
+         * today plus the recurring charges billed to it before the close, less
+         * the payments already scheduled. Null when nothing is scheduled either
+         * way — then the balance IS the forecast. Quote it when it differs.
+         */
+        forecastBalance: forecast?.forecastBalance ?? null,
+        forecastUtilization: forecast?.forecastUtilization ?? null,
+        chargesBeforeClose: forecast?.chargesBeforeClose ?? 0,
+        paymentsBeforeClose: forecast?.paymentsBeforeClose ?? 0,
+        forecastEvents: forecast?.events ?? [],
         paymentFor30: s.paymentFor30,
         targetBalanceFor30: s.targetBalanceFor30,
         paymentFor10: s.paymentFor10,
         targetBalanceFor10: s.targetBalanceFor10,
-      })),
+        };
+      }),
       count: statements.length,
       cardsWithoutStatementDay: noStatementDay,
       currency: prefs.currency,

@@ -20,6 +20,8 @@ import { num, toDateString } from './shared.js';
 
 interface PendingRow extends MatchCandidate {
   accountId: string | null;
+  /** The card this row lives on, when it is a card row rather than a cash one. */
+  liabilityId: string | null;
   description: string;
 }
 
@@ -75,7 +77,8 @@ export interface ReconcileReport {
  */
 export async function runReconcile(db: Pool): Promise<ReconcileReport> {
   const { rows: pendingRows } = await db.query(
-    `select id, account_id, occurred_on, amount, description, coalesce(merchant_norm, '') as merchant_norm
+    `select id, account_id, liability_id, occurred_on, amount, description,
+            coalesce(merchant_norm, '') as merchant_norm
        from finance.transactions
       where status = 'pending' and superseded_by is null
       order by occurred_on, created_at`,
@@ -84,6 +87,7 @@ export async function runReconcile(db: Pool): Promise<ReconcileReport> {
   const pending: PendingRow[] = pendingRows.map((r) => ({
     id: r.id as string,
     accountId: (r.account_id as string | null) ?? null,
+    liabilityId: (r.liability_id as string | null) ?? null,
     occurredOn: toDateString(r.occurred_on),
     amount: num(r.amount),
     description: r.description as string,
@@ -103,10 +107,13 @@ export async function runReconcile(db: Pool): Promise<ReconcileReport> {
         where status = 'posted'
           and superseded_by is null
           and account_id is not distinct from $1::uuid
+          and liability_id is not distinct from $4::uuid
           and occurred_on >= $2::date
           and occurred_on <= ($2::date + make_interval(days => $3::int))
         order by occurred_on`,
-      [p.accountId, p.occurredOn, SUPERSESSION_WINDOW.daysAfter],
+      // Same ledger, both halves: a pending charge on the Mastercard settles
+      // against the Mastercard's posted row, never against a checking one.
+      [p.accountId, p.occurredOn, SUPERSESSION_WINDOW.daysAfter, p.liabilityId],
     );
     const candidates: MatchCandidate[] = candidateRows
       .filter((r) => !claimed.has(r.id as string))
@@ -203,7 +210,10 @@ export async function matchReceipts(db: Pool): Promise<ReconcileReport['receipts
 /**
  * The charge a receipt belongs to, or undefined. A receipt total is written as
  * a positive number but describes money going out, so it is compared against
- * the outflow it would have been. Transactions that already carry a receipt
+ * the outflow it would have been — on EITHER ledger: a receipt for something
+ * paid by card matches the charge on the card exactly as one paid in cash
+ * matches the account row, because the paper says nothing about which card or
+ * account settled it. Transactions that already carry a receipt
  * are out of the running — one piece of paper, one charge.
  */
 export async function findReceiptTransaction(
@@ -244,7 +254,7 @@ const input = z.object({});
 export const reconcile: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.reconcile',
   description:
-    'Settle the ledger: every pending transaction that has since appeared as a posted one is marked as superseded by it (same account, same amount to the cent, same merchant, posted within five days), and every receipt with no charge yet is linked to the transaction it belongs to. A superseded pending row is never deleted — it simply stops counting anywhere, so the money is not double-counted. Runs automatically at the end of every import; call it directly after recording pending rows by hand, or to report what is still outstanding. Returns what was matched and what is still pending or unlinked.',
+    'Settle the ledger: every pending transaction that has since appeared as a posted one is marked as superseded by it (same ledger — the same cash account, or the same card — same amount to the cent, same merchant, posted within five days), and every receipt with no charge yet is linked to the transaction it belongs to. A superseded pending row is never deleted — it simply stops counting anywhere, so the money is not double-counted. Runs automatically at the end of every import; call it directly after recording pending rows by hand, or to report what is still outstanding. Returns what was matched and what is still pending or unlinked.',
   tier: 'auto',
   input,
   async execute(_args, ctx) {

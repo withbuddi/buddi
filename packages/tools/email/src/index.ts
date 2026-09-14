@@ -17,9 +17,11 @@ import type { PluginManifest, Source } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
+import { createRetentionSource } from './sources/retention.js';
 import { draftNew, draftReply } from './tools/drafts.js';
 import { listRecent, readMessage, search } from './tools/read.js';
 import { createSendTool } from './tools/send.js';
+import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
 import type { EnvLike } from './config.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
@@ -56,6 +58,10 @@ export function createEmailSources(opts: EmailPluginOptions = {}): Source[] {
       connect: opts.connect ?? imapflowFactory,
       ...(opts.env ? { env: opts.env } : {}),
     }),
+    // Housekeeping, not ingest: it originates no run and wakes nobody. It
+    // rides the source contract only for the period ledger — see
+    // `sources/retention.ts`.
+    createRetentionSource(),
   ];
 }
 
@@ -74,6 +80,8 @@ export function createEmailManifest(
       triageRecord,
       draftReply,
       draftNew,
+      getSettings,
+      setSettings,
       createSendTool({
         send: opts.send ?? smtpFactory,
         ...(opts.env ? { env: opts.env } : {}),
@@ -93,6 +101,26 @@ export default manifest;
 
 export { listRecent, readMessage, search } from './tools/read.js';
 export { triageRecord } from './tools/triage.js';
+export { getSettings, setSettings } from './tools/settings.js';
+export {
+  DEFAULT_RETENTION_DAYS,
+  MAX_RETENTION_DAYS,
+  MIN_RETENTION_DAYS,
+  PURGE_BATCH,
+  RETENTION_DAYS_KEY,
+  loadSettings,
+  purgeBodies,
+  purgeLogLine,
+  purgedBodyNote,
+  setRetentionDays,
+  type EmailSettings,
+  type PurgeOutcome,
+} from './retention.js';
+export {
+  createRetentionSource,
+  RETENTION_EVERY_SECONDS,
+  RETENTION_SOURCE_ID,
+} from './sources/retention.js';
 export { draftNew, draftReply, draftFilename } from './tools/drafts.js';
 export {
   buildEnvelope,
