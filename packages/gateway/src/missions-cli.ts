@@ -19,16 +19,21 @@ import {
   listOccurrences,
   nextAfter,
   setMissionEnabled,
-  setSchedule,
   toOccurrence,
-  upsertMission,
   type Occurrence,
   type OccurrenceState,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { createWiring, loadEnv } from './bootstrap.js';
+import {
+  addDefaultMissions,
+  DEFAULT_MISSIONS,
+  registerDefault,
+  type RegistrationOutcome,
+} from './missions/defaults.js';
 import { createMissionExecutor } from './missions/execute.js';
 import {
+  createDigestPrepare,
   FRIDAY_RECAP_CRON,
   FRIDAY_RECAP_ID,
   FRIDAY_RECAP_MISSION,
@@ -39,6 +44,7 @@ import { notifyOwner } from './telegram/notify.js';
 const USAGE = `buddi missions — scheduled missions
 
   buddi missions list                     every mission, its schedule and next run
+  buddi missions add-defaults             register every default mission (recap, daily check, sentinel wake)
   buddi missions add-friday-recap         register (or refresh) the weekly recap
   buddi missions run-now <id>             queue an occurrence for now
   buddi missions run-now <id> --inline    run it here and print the text
@@ -49,6 +55,7 @@ Timezone comes from BUDDI_TZ (default America/New_York).`;
 
 export type MissionsCommand =
   | 'list'
+  | 'add-defaults'
   | 'add-friday-recap'
   | 'run-now'
   | 'enable'
@@ -69,6 +76,7 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
   const [raw, ...rest] = argv;
   const commands: MissionsCommand[] = [
     'list',
+    'add-defaults',
     'add-friday-recap',
     'run-now',
     'enable',
@@ -105,7 +113,7 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
  * ------------------------------------------------------------------ */
 
 const OCCURRENCE_COLUMNS =
-  'id, mission_id, schedule_revision, scheduled_at, state, claimed_at, finished_at, run_conversation_id, error';
+  'id, mission_id, schedule_revision, scheduled_at, state, claimed_at, finished_at, run_conversation_id, error, payload';
 
 /**
  * Insert a manual occurrence. The unique key is
@@ -118,14 +126,23 @@ export async function insertOccurrence(
   revision: number,
   at: Date,
   state: OccurrenceState,
+  payload?: unknown,
 ): Promise<Occurrence> {
   const { rows } = await pool.query(
-    `insert into core.occurrences (mission_id, schedule_revision, scheduled_at, state, claimed_at)
-     values ($1, $2, $3, $4, case when $4 = 'claimed' then now() else null end)
+    `insert into core.occurrences (mission_id, schedule_revision, scheduled_at, state, claimed_at, payload)
+     values ($1, $2, $3, $4, case when $4 = 'claimed' then now() else null end, $5::jsonb)
      on conflict (mission_id, schedule_revision, scheduled_at) do update
-       set state = excluded.state, claimed_at = excluded.claimed_at
+       set state = excluded.state,
+           claimed_at = excluded.claimed_at,
+           payload = coalesce(excluded.payload, core.occurrences.payload)
      returning ${OCCURRENCE_COLUMNS}`,
-    [missionId, revision, at.toISOString(), state],
+    [
+      missionId,
+      revision,
+      at.toISOString(),
+      state,
+      payload === undefined ? null : JSON.stringify(payload),
+    ],
   );
   return toOccurrence(rows[0]);
 }
@@ -134,10 +151,40 @@ export async function insertOccurrence(
  * Commands
  * ------------------------------------------------------------------ */
 
+/**
+ * The last time this mission either spoke or deliberately did not.
+ *
+ * Read from the event log rather than a column on the mission: "it stayed
+ * silent because the projection holds" is a fact about a run, and facts about
+ * runs live in `core.events`.
+ */
+export async function lastNotification(
+  pool: Pool,
+  missionId: string,
+): Promise<{ kind: string; at: Date; reason?: string; chars?: number } | null> {
+  const { rows } = await pool.query(
+    `select kind, payload, created_at from core.events
+     where kind in ('mission.delivered', 'mission.silent')
+       and payload->>'missionId' = $1
+     order by created_at desc
+     limit 1`,
+    [missionId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const payload = (row.payload ?? {}) as { reason?: string; chars?: number };
+  return {
+    kind: row.kind,
+    at: row.created_at,
+    ...(payload.reason ? { reason: payload.reason } : {}),
+    ...(typeof payload.chars === 'number' ? { chars: payload.chars } : {}),
+  };
+}
+
 async function commandList(pool: Pool, now: Date): Promise<void> {
   const missions = await listMissions(pool);
   if (missions.length === 0) {
-    console.log('no missions registered (buddi missions add-friday-recap)');
+    console.log('no missions registered (buddi missions add-defaults)');
     return;
   }
   for (const mission of missions) {
@@ -147,6 +194,11 @@ async function commandList(pool: Pool, now: Date): Promise<void> {
     console.log(`${mission.id} — ${mission.name}`);
     console.log(`  agent: ${mission.agentId}`);
     console.log(`  enabled: ${mission.enabled}`);
+    console.log(
+      `  always deliver: ${mission.alwaysDeliver}${
+        mission.alwaysDeliver ? '' : ' (speaks only when it calls mission.report)'
+      }`,
+    );
     if (spec) {
       const next = mission.enabled ? nextAfter(spec.cron, now, spec.timezone) : null;
       console.log(
@@ -156,7 +208,7 @@ async function commandList(pool: Pool, now: Date): Promise<void> {
         `  next run: ${next ? next.toISOString() : mission.enabled ? '(never)' : '(disabled)'}`,
       );
     } else {
-      console.log('  schedule: (none)');
+      console.log('  schedule: (none — enqueued, never scheduled)');
     }
     console.log(
       `  last occurrence: ${
@@ -165,32 +217,39 @@ async function commandList(pool: Pool, now: Date): Promise<void> {
           : '(none)'
       }`,
     );
+    const notification = await lastNotification(pool, mission.id);
+    console.log(
+      `  last notification: ${
+        notification
+          ? notification.kind === 'mission.delivered'
+            ? `delivered ${notification.at.toISOString()} (${notification.chars ?? 0} chars)`
+            : `silent ${notification.at.toISOString()} — ${notification.reason ?? '(no reason)'}`
+          : '(none)'
+      }`,
+    );
   }
 }
 
-async function commandAddFridayRecap(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
-  const timezone = timezoneFromEnv(env);
-  const mission = await upsertMission(pool, FRIDAY_RECAP_MISSION);
-  const existing = await getActiveSchedule(pool, mission.id);
-  if (
-    existing &&
-    existing.cron === FRIDAY_RECAP_CRON &&
-    existing.timezone === timezone &&
-    existing.misfirePolicy === 'coalesce'
-  ) {
-    console.log(
-      `mission ${mission.id} up to date (${existing.cron} ${existing.timezone}, rev ${existing.revision})`,
-    );
-    return;
+function describeOutcome(outcome: RegistrationOutcome): string {
+  if (outcome.schedule === 'none') {
+    return `mission ${outcome.missionId} registered (no schedule — enqueued on demand)`;
   }
-  const spec = await setSchedule(pool, mission.id, {
-    cron: FRIDAY_RECAP_CRON,
-    timezone,
-    misfirePolicy: 'coalesce',
-  });
-  console.log(
-    `mission ${mission.id} registered: ${spec.cron} ${spec.timezone} (rev ${spec.revision}, misfire ${spec.misfirePolicy})`,
-  );
+  if (outcome.schedule === 'up-to-date') {
+    return `mission ${outcome.missionId} up to date (${outcome.cron} ${outcome.timezone}, rev ${outcome.revision})`;
+  }
+  return `mission ${outcome.missionId} registered: ${outcome.cron} ${outcome.timezone} (rev ${outcome.revision})`;
+}
+
+async function commandAddFridayRecap(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
+  const entry = DEFAULT_MISSIONS.find((m) => m.mission.id === FRIDAY_RECAP_ID);
+  if (!entry) throw new Error(`the Friday recap is missing from DEFAULT_MISSIONS`);
+  console.log(describeOutcome(await registerDefault(pool, entry, timezoneFromEnv(env))));
+}
+
+async function commandAddDefaults(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
+  for (const outcome of await addDefaultMissions(pool, env)) {
+    console.log(describeOutcome(outcome));
+  }
 }
 
 function invokedDirectly(): boolean {
@@ -235,6 +294,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       await commandAddFridayRecap(pool, process.env);
       return;
     }
+    if (args.command === 'add-defaults') {
+      await commandAddDefaults(pool, process.env);
+      return;
+    }
 
     const missionId = args.missionId as string;
     if (args.command === 'enable' || args.command === 'disable') {
@@ -276,6 +339,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       now,
       deliver: (text) => notifyOwner(text, { pool, env: process.env }),
       requireDelivery: false,
+      prepare: createDigestPrepare(pool, { now }),
       onToolCall: (name, input) => console.error(`⚙ ${name} ${JSON.stringify(input)}`),
     });
 
@@ -287,13 +351,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       });
       console.log(`\n--- ${mission.id} (${result.text.length} chars) ---\n`);
       console.log(result.text);
-      console.log(
-        `\n--- ${
-          result.delivered
-            ? `delivered to chat ${result.chatId}`
-            : `delivery skipped: ${result.skipped}`
-        } ---`,
-      );
+      const outcome = result.delivered
+        ? `delivered to chat ${result.chatId}`
+        : result.skipped
+          ? `delivery skipped: ${result.skipped}`
+          : `nothing delivered (${result.decision}${result.reason ? `: ${result.reason}` : ''})`;
+      console.log(`\n--- ${outcome} ---`);
       console.log(`conversation: ${result.conversationId}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

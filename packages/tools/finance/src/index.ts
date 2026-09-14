@@ -9,6 +9,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core';
+import { financeSentinels } from './sentinels/index.js';
 import { listAccounts, setBalance, updateAccount } from './tools/accounts.js';
 import { spendingBaseline } from './tools/baseline.js';
 import {
@@ -46,7 +47,12 @@ export const MIGRATIONS_DIR = path.resolve(
   'migrations',
 );
 
-export const manifest: PluginManifest = {
+/**
+ * The manifest, tools and watches together. `sentinels` is core's own optional
+ * field; the intersection only says this plugin always ships some, so the
+ * tests can read `manifest.sentinels` without a null check.
+ */
+export const manifest: PluginManifest & { sentinels: NonNullable<PluginManifest['sentinels']> } = {
   name: 'finance',
   version: '0.1.0',
   schema: 'finance',
@@ -85,6 +91,7 @@ export const manifest: PluginManifest = {
     creditPlanTool,
     upcomingStatementsTool,
   ],
+  sentinels: financeSentinels,
 };
 
 export default manifest;
@@ -123,6 +130,9 @@ export {
   creditPlanTool,
   upcomingStatementsTool,
 };
+
+export { financeSentinels } from './sentinels/index.js';
+export * from './sentinels/helpers.js';
 
 export * from './accounts.js';
 export * from './projection.js';

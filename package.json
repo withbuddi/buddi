@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "node scripts/check-boundaries.mjs && pnpm -r test",
+    "eval": "pnpm -r build && node packages/gateway/dist/evals/golden.js",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "node scripts/migrate.mjs",

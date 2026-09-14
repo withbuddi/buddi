@@ -74,13 +74,55 @@ function fakeProvider(text: string, calls: string[] = []): RuntimeProvider {
   };
 }
 
+/**
+ * A provider that calls one mission tool and then stops — the shape every
+ * unattended run is supposed to have.
+ */
+function decidingProvider(
+  name: 'mission.report' | 'mission.silent',
+  input: unknown,
+  finalText = 'done',
+): RuntimeProvider {
+  let turn = 0;
+  return {
+    async complete(): Promise<CompletionResponse> {
+      turn += 1;
+      if (turn === 1) {
+        return {
+          content: [{ type: 'tool_use', id: 'call-1', name, input }],
+          stopReason: 'tool_use',
+          usage: { input: 10, output: 20 },
+          model: 'claude-test',
+        };
+      }
+      return {
+        content: [{ type: 'text', text: finalText }],
+        stopReason: 'end_turn',
+        usage: { input: 1, output: 1 },
+        model: 'claude-test',
+      };
+    },
+  };
+}
+
+/** The recap: the one mission that speaks whatever the run decided. */
 const mission: Mission = {
   id: 'friday-recap',
   name: 'Friday recap',
   agentId: 'finance-advisor',
   prompt: 'Produce the weekly recap.',
   enabled: true,
+  alwaysDeliver: true,
   createdAt: new Date('2026-09-01T00:00:00Z'),
+};
+
+/** A watcher mission: silent unless it says otherwise. */
+const checkMission: Mission = {
+  ...mission,
+  id: 'daily-check',
+  name: 'Daily check',
+  prompt: 'Run the daily check.',
+  alwaysDeliver: false,
 };
 
 const occurrence: Occurrence = {
@@ -93,6 +135,7 @@ const occurrence: Occurrence = {
   finishedAt: null,
   runConversationId: null,
   error: null,
+  payload: null,
 };
 
 function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = {}) {
@@ -227,5 +270,203 @@ describe('createMissionExecutor', () => {
     const { deps: d } = deps();
     const execute = createMissionExecutor({ ...d, provider: fakeProvider('   ') });
     await expect(execute(occurrence, mission)).rejects.toThrow(/no text to deliver/);
+  });
+});
+
+describe('the notify policy', () => {
+  it('delivers the text passed to mission.report, not the free-form answer', async () => {
+    const { db, deps: d } = deps();
+    const delivered: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider(
+        'mission.report',
+        { urgency: 'urgent', text: 'Floor breaks on 2026-10-02. Move 200 EUR.' },
+        'chatty trailing prose nobody asked for',
+      ),
+      deliver: async (text) => {
+        delivered.push(text);
+        return 'chat-42';
+      },
+    });
+
+    const result = await execute(occurrence, checkMission);
+
+    expect(result.decision).toBe('report');
+    expect(result.urgency).toBe('urgent');
+    expect(result.delivered).toBe(true);
+    expect(delivered).toEqual(['Floor breaks on 2026-10-02. Move 200 EUR.']);
+    expect(db.events.find((e) => e.kind === 'mission.delivered')?.payload).toMatchObject({
+      missionId: 'daily-check',
+      decision: 'report',
+      urgency: 'urgent',
+    });
+  });
+
+  it('delivers nothing and logs the reason when the run calls mission.silent', async () => {
+    const { db, deps: d } = deps();
+    const delivered: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.silent', { reason: 'projection holds' }),
+      deliver: async (text) => {
+        delivered.push(text);
+        return 'chat-42';
+      },
+    });
+
+    const result = await execute(occurrence, checkMission);
+
+    expect(result.decision).toBe('silent');
+    expect(result.delivered).toBe(false);
+    expect(result.reason).toBe('projection holds');
+    expect(delivered).toEqual([]);
+    expect(db.events.find((e) => e.kind === 'mission.silent')?.payload).toMatchObject({
+      missionId: 'daily-check',
+      reason: 'projection holds',
+    });
+    expect(db.events.some((e) => e.kind === 'mission.delivered')).toBe(false);
+  });
+
+  it('treats a run that decided nothing as silent, with a warning', async () => {
+    const { db, deps: d } = deps();
+    const logs: string[] = [];
+    const delivered: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      log: (line) => logs.push(line),
+      deliver: async (text) => {
+        delivered.push(text);
+        return 'chat-42';
+      },
+    });
+
+    const result = await execute(occurrence, checkMission);
+
+    expect(result.decision).toBe('no-decision');
+    expect(result.delivered).toBe(false);
+    expect(delivered).toEqual([]);
+    expect(logs.join('\n')).toMatch(/warning/);
+    expect(db.events.find((e) => e.kind === 'mission.silent')?.payload).toMatchObject({
+      reason: 'no-decision',
+    });
+  });
+
+  it('delivers anyway when the mission is always_deliver (the Friday recap)', async () => {
+    const { deps: d } = deps();
+    const delivered: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.silent', { reason: 'nothing changed' }),
+      deliver: async (text) => {
+        delivered.push(text);
+        return 'chat-42';
+      },
+    });
+
+    const result = await execute(occurrence, mission);
+
+    expect(result.decision).toBe('silent');
+    expect(result.delivered).toBe(true);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('delivers anyway for an interactive run (notifyPolicy: false)', async () => {
+    const { deps: d } = deps();
+    const delivered: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      notifyPolicy: false,
+      provider: decidingProvider('mission.silent', { reason: 'nothing changed' }),
+      deliver: async (text) => {
+        delivered.push(text);
+        return 'chat-42';
+      },
+    });
+    const result = await execute(occurrence, checkMission);
+    expect(result.delivered).toBe(true);
+    expect(delivered).toHaveLength(1);
+  });
+});
+
+describe('a sentinel wake', () => {
+  const wakeOccurrence: Occurrence = {
+    ...occurrence,
+    id: 'occ-wake',
+    missionId: 'sentinel-wake',
+    payload: {
+      finding: {
+        key: 'finance.floor-breach:2026-10-02',
+        sentinelId: 'finance.cashflow',
+        severity: 'urgent',
+        title: 'Safety floor breaks in 19 days',
+        detail: 'Projected minimum 120 EUR on 2026-10-02, floor is 500 EUR.',
+        agentId: 'finance-advisor',
+        data: { minimum: 120, on: '2026-10-02' },
+      },
+    },
+  };
+  const wakeMission: Mission = {
+    ...checkMission,
+    id: 'sentinel-wake',
+    name: 'Sentinel wake',
+    prompt: 'Verify the finding.',
+  };
+
+  it('hands the finding to the agent as part of the prompt', async () => {
+    const { db, deps: d } = deps();
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'urgent', text: 'Move 200 EUR.' }),
+    });
+    await execute(wakeOccurrence, wakeMission);
+    const first = db.messages[0]?.content as { type: string; text: string }[];
+    expect(first[0]?.text).toContain('Verify the finding.');
+    expect(first[0]?.text).toContain('Safety floor breaks in 19 days');
+    expect(first[0]?.text).toContain('finance.cashflow');
+    expect(first[0]?.text).toContain('"minimum":120');
+  });
+});
+
+describe('the weekly digest', () => {
+  it('appends the prepared section and consumes it only after delivery', async () => {
+    const { db, deps: d } = deps();
+    let committed = 0;
+    const execute = createMissionExecutor({
+      ...d,
+      prepare: async () => ({
+        appendix: 'Items noted this week:\n- Subscription doubled: Netflix 12 -> 24 EUR.',
+        commit: async () => {
+          committed += 1;
+        },
+      }),
+    });
+
+    await execute(occurrence, mission);
+
+    const first = db.messages[0]?.content as { type: string; text: string }[];
+    expect(first[0]?.text).toContain('Produce the weekly recap.');
+    expect(first[0]?.text).toContain('Items noted this week:');
+    expect(committed).toBe(1);
+  });
+
+  it('leaves the items pending when delivery fails', async () => {
+    const { deps: d } = deps();
+    let committed = 0;
+    const execute = createMissionExecutor({
+      ...d,
+      prepare: async () => ({
+        appendix: 'Items noted this week:\n- something',
+        commit: async () => {
+          committed += 1;
+        },
+      }),
+      deliver: async () => {
+        throw new Error('telegram 502');
+      },
+    });
+
+    await expect(execute(occurrence, mission)).rejects.toThrow(/telegram 502/);
+    expect(committed).toBe(0);
   });
 });

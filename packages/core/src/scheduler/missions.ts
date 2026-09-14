@@ -17,6 +17,8 @@ export type UpsertMissionInput = {
   agentId: string;
   prompt: string;
   enabled?: boolean;
+  /** Deliver unconditionally (the weekly recap). Default false. */
+  alwaysDeliver?: boolean;
 };
 
 export type SetScheduleInput = {
@@ -26,7 +28,7 @@ export type SetScheduleInput = {
   deadlineMinutes?: number | null;
 };
 
-const MISSION_COLUMNS = 'id, name, agent_id, prompt, enabled, created_at';
+const MISSION_COLUMNS = 'id, name, agent_id, prompt, enabled, always_deliver, created_at';
 const SPEC_COLUMNS =
   'id, mission_id, revision, cron, timezone, misfire_policy, deadline_minutes, active, created_at';
 
@@ -34,15 +36,23 @@ const SPEC_COLUMNS =
 export async function upsertMission(pool: Pool, input: UpsertMissionInput): Promise<Mission> {
   if (!input.id.trim()) throw new Error('upsertMission: id is required');
   const { rows } = await pool.query<MissionRow>(
-    `insert into core.missions (id, name, agent_id, prompt, enabled)
-     values ($1, $2, $3, $4, coalesce($5, true))
+    `insert into core.missions (id, name, agent_id, prompt, enabled, always_deliver)
+     values ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false))
      on conflict (id) do update
        set name = excluded.name,
            agent_id = excluded.agent_id,
            prompt = excluded.prompt,
-           enabled = excluded.enabled
+           enabled = excluded.enabled,
+           always_deliver = excluded.always_deliver
      returning ${MISSION_COLUMNS}`,
-    [input.id, input.name, input.agentId, input.prompt, input.enabled ?? null],
+    [
+      input.id,
+      input.name,
+      input.agentId,
+      input.prompt,
+      input.enabled ?? null,
+      input.alwaysDeliver ?? null,
+    ],
   );
   return toMission(rows[0] as MissionRow);
 }

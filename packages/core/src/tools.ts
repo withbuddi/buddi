@@ -4,6 +4,7 @@
  */
 import type { Pool } from 'pg';
 import type { ZodType } from 'zod';
+import type { Sentinel } from './sentinels/types.js';
 
 /** UX tier labels. v1 executes `auto` only; everything else fails closed. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -55,4 +56,11 @@ export interface PluginManifest {
   /** Absolute path to a directory of *.sql files, applied in filename order. */
   migrationsDir: string;
   tools: ToolDefinition<any, any>[];
+  /**
+   * Deterministic watchers this plugin ships (optional). A sentinel runs on a
+   * period with no model in the loop and returns findings; core decides what a
+   * finding does — see `packages/core/src/sentinels`. A plugin with none is the
+   * normal case.
+   */
+  sentinels?: Sentinel[];
 }
