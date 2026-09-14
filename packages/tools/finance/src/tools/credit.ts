@@ -58,7 +58,7 @@ export const recordCreditScore: ToolDefinition<z.infer<typeof recordScoreInput>,
   tier: 'auto',
   input: recordScoreInput,
   async execute(input, ctx) {
-    const observedOn = input.observedOn ?? today(ctx.now);
+    const observedOn = input.observedOn ?? today(ctx);
     const { rows } = await ctx.db.query(
       `insert into finance.credit_scores (bureau_or_source, score, model, observed_on, note)
        values ($1, $2, $3, $4, $5)
@@ -225,7 +225,7 @@ export const paymentHistory: ToolDefinition<z.infer<typeof paymentHistoryInput>,
         where p.due_on >= ($1::date - make_interval(months => $2::int))
           and ($3::text is null or lower(l.name) = lower($3))
         order by p.due_on desc`,
-      [today(ctx.now), months, input.liability ?? null],
+      [today(ctx), months, input.liability ?? null],
     );
     const payments = rows.map((r) => ({
       id: r.id,
@@ -353,7 +353,7 @@ export const upcomingStatementsTool: ToolDefinition<z.infer<typeof upcomingInput
     const days = input.days ?? 30;
     const prefs = await loadPreferences(ctx.db);
     const cards = await loadCards(ctx.db);
-    const from = today(ctx.now);
+    const from = today(ctx);
     const statements = upcomingStatements(cards, from, days);
     const noStatementDay = cards.filter((c) => c.statementDay === null).map((c) => c.name);
     return {

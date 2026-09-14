@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createPool,
   resolveProvider,
+  timezoneFromEnv,
   UnknownAgentError,
   type CatalogAgent,
   type ToolContext,
@@ -140,6 +141,8 @@ async function main(): Promise<void> {
   }
 
   const now = (): Date => new Date();
+  /** The owner's zone — what makes "today" the owner's day, not UTC's. */
+  const timezone = timezoneFromEnv(process.env);
 
   // Fails closed: an unknown --agent is never coerced into the default. A
   // handle (`--agent ledger`, `--agent @ledger`) names the same agent as its id.
@@ -154,7 +157,7 @@ async function main(): Promise<void> {
     }
     throw err;
   }
-  const agent = selected.definition(now());
+  const agent = selected.definition(now(), timezone);
 
   const resolution = resolveProvider(agent.provider, process.env);
   if (!resolution.ok) {
@@ -171,7 +174,7 @@ async function main(): Promise<void> {
   bindDelegation(registry, { catalog, provider });
 
   const pool = createPool(databaseUrl);
-  const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now };
+  const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now, timezone };
   /** Every run starts with what this agent remembers about the owner. */
   const memoryPreamble = memoryPreambleFor(pool);
 
@@ -188,7 +191,7 @@ async function main(): Promise<void> {
 
     /** One turn. The definition is rebuilt so `{{today}}` stays current. */
     const turn = async (message: string): Promise<void> => {
-      const definition = selected.definition(now());
+      const definition = selected.definition(now(), timezone);
       const result = await runAgent({
         agent: definition,
         provider,

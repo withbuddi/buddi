@@ -11,6 +11,7 @@ import path from 'node:path';
 import {
   createPool,
   resolveProvider,
+  timezoneFromEnv,
   type AgentCatalog,
   type ToolContext,
   type ToolRegistry,
@@ -40,6 +41,8 @@ export interface Wiring {
   model: string;
   credentialKind: string;
   now: () => Date;
+  /** The owner's timezone (`BUDDI_TZ`), the one the scheduler already uses. */
+  timezone: string;
   ctx: ToolContext;
 }
 
@@ -56,6 +59,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   const catalog = loadGatewayCatalog({ env, registry });
 
   const now = (): Date => new Date();
+  const timezone = timezoneFromEnv(env);
   const resolution = resolveProvider(catalog.defaultAgent().provider, env);
   if (!resolution.ok) {
     throw new Error(
@@ -77,6 +81,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     model: resolution.provider.model,
     credentialKind: resolution.provider.credentialKind,
     now,
-    ctx: { db: pool, ownerId: OWNER_ID, now },
+    timezone,
+    ctx: { db: pool, ownerId: OWNER_ID, now, timezone },
   };
 }

@@ -182,6 +182,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     api,
     pool,
     catalog: deps.catalog,
+    timezone: deps.ctx.timezone,
     // The bot's own @username, so Telegram's mention of it is stripped before
     // the owner's `@handle` is read.
     ...(me.username ? { botUsername: me.username } : {}),
@@ -194,7 +195,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // file) without letting the wiring choose a different agent.
     run: async ({ conversationId, text, agent, attachments, onToolCall }) => {
       const options: RunAgentOptions = {
-        agent: deps.catalog.resolve(agent.id).definition(now()),
+        agent: deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone),
         provider: deps.provider,
         registry: deps.registry,
         ctx: deps.ctx,

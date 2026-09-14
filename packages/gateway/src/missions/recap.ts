@@ -6,17 +6,14 @@
  * `SCHEDULED_RUN_SUFFIX`, not here. The two are kept apart on purpose: changing
  * how Telegram renders must not rewrite what the owner asked for weekly.
  */
-import type { UpsertMissionInput } from '@buddi/core';
+import { DEFAULT_TIMEZONE, timezoneFromEnv, type UpsertMissionInput } from '@buddi/core';
+
+// The owner's timezone lives in core (`packages/core/src/time.ts`) now that the
+// tools need it too; re-exported here so every existing caller keeps its import.
+export { DEFAULT_TIMEZONE, timezoneFromEnv };
 
 export const FRIDAY_RECAP_ID = 'friday-recap';
 export const FRIDAY_RECAP_CRON = '0 8 * * FRI';
-export const DEFAULT_TIMEZONE = 'America/New_York';
-
-/** Timezone for scheduled missions: `BUDDI_TZ`, else New York. */
-export function timezoneFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  return (env.BUDDI_TZ ?? '').trim() || DEFAULT_TIMEZONE;
-}
-
 export const FRIDAY_RECAP_PROMPT = `Produce the weekly recap. Use the finance tools for every number; never do the arithmetic yourself.
 
 1. Cash: total across accounts, per account if there are several. If any liability is recorded, add total debt and net worth (cash minus debt).

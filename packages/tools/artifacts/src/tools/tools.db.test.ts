@@ -27,6 +27,7 @@ suite('artifacts tools (postgres)', () => {
     db: pool,
     ownerId: 'test',
     now: () => new Date('2026-09-13T12:00:00Z'),
+    timezone: 'UTC',
     agentId: 'finance-advisor',
   });
 

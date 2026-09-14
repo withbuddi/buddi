@@ -37,7 +37,7 @@ export async function loadBaseline(
   // computeBaseline decides the window; the query only has to be wide enough to
   // contain it, and wide enough for it to see which accounts have data at all.
   const lookbackMonths = coverage === 'any' ? months : months + COVERAGE_LOOKBACK_SLACK;
-  const start = today(ctx.now);
+  const start = today(ctx);
 
   let accountId: string | undefined;
   let scope = 'all cashflow accounts';
@@ -188,7 +188,7 @@ export const spendingBaseline: ToolDefinition<z.infer<typeof input>, unknown> = 
       ...(args.baselineOptions ?? {}),
     });
     return {
-      asOf: today(ctx.now),
+      asOf: today(ctx),
       scope,
       monthsRequested: months,
       currency: prefs.currency,

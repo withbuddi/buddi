@@ -17,6 +17,7 @@
  */
 import {
   getArtifact,
+  localDateString,
   readArtifactBytes,
   saveArtifact,
   type ArtifactKind,
@@ -276,11 +277,15 @@ export function attachmentNote(a: {
 export const NO_FILES_TEXT =
   'No files in this chat yet. Send me a statement, a receipt photo or a CSV and it will land here.';
 
-/** `/files` — name, kind, date, id, newest first. */
-export function filesText(rows: readonly ChatAttachment[]): string {
+/**
+ * `/files` — name, kind, date, id, newest first. The date is the owner's
+ * calendar day in `timezone`: a file sent at 9 PM in New York was sent today,
+ * whatever UTC calls it.
+ */
+export function filesText(rows: readonly ChatAttachment[], timezone: string): string {
   if (rows.length === 0) return NO_FILES_TEXT;
   const lines = rows.map((r) => {
-    const day = r.createdAt.toISOString().slice(0, 10);
+    const day = localDateString(r.createdAt, timezone);
     return `• ${r.filename ?? '(unnamed)'} — ${r.kind}, ${formatBytes(r.sizeBytes)}, ${day}\n  ${r.artifactId}`;
   });
   return ['Files in this chat:', ...lines].join('\n');

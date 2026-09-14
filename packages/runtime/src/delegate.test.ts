@@ -149,6 +149,7 @@ function harness(
     db: db as unknown as ToolContext['db'],
     ownerId: 'owner',
     now: () => new Date('2026-09-13T00:00:00Z'),
+    timezone: 'UTC',
     agentId: 'finance-advisor',
     conversationId: 'conv-caller',
     ...(opts.depth === undefined ? {} : { delegationDepth: opts.depth }),
@@ -300,6 +301,7 @@ describe('agent.delegate', () => {
       db: db as unknown as ToolContext['db'],
       ownerId: 'owner',
       now: () => new Date('2026-09-13T00:00:00Z'),
+      timezone: 'UTC',
       agentId: 'finance-advisor',
     };
 

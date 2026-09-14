@@ -16,6 +16,7 @@
  *    one conversation.
  */
 import {
+  DEFAULT_TIMEZONE,
   getActiveAgent,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
@@ -296,6 +297,8 @@ export interface TelegramSurfaceOptions {
   progressIntervalMs?: number;
   /** Clock, injected in tests. */
   now?: () => number;
+  /** The owner's timezone, for every date this surface renders. */
+  timezone?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -805,7 +808,10 @@ export class TelegramSurface {
     }
     if (command === '/files') {
       const rows = await listChatAttachments(this.#opts.pool, SURFACE, chatId, FILES_LIMIT);
-      await this.#opts.api.sendMessage(chatId, filesText(rows));
+      await this.#opts.api.sendMessage(
+        chatId,
+        filesText(rows, this.#opts.timezone ?? DEFAULT_TIMEZONE),
+      );
       return;
     }
 

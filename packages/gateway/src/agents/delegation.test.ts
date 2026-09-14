@@ -25,6 +25,7 @@ const ctx: ToolContext = {
   db: {} as ToolContext['db'],
   ownerId: 'owner',
   now: () => new Date('2026-09-13T00:00:00Z'),
+  timezone: 'UTC',
   agentId: 'finance-advisor',
 };
 
