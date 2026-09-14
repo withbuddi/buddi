@@ -156,6 +156,14 @@ export const agentFrontmatterSchema = z
     provider: z.enum(['anthropic', 'openai']).optional(),
     model: z.string().min(1).optional(),
     tools: z.array(z.string().min(1)),
+    /**
+     * Capabilities this agent claims, as free-form kebab strings: `overview`,
+     * `recap`, `triage`. A role is how a *surface* asks for an agent without
+     * naming one — `/status` runs whoever claims `overview` — so the shape is
+     * validated and the meaning deliberately is not: core ships no vocabulary
+     * of roles, and an installation with different agents invents its own.
+     */
+    roles: z.array(z.string().regex(KEBAB, 'a role must be kebab-case')).optional(),
     /** Shared skills to load by name; private skills are always loaded. */
     skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),

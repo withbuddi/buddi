@@ -3,7 +3,7 @@
  * Bot API and an in-memory `Queryable` stands in for core's tables.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { UnknownAgentError, type Queryable } from '@buddi/core';
+import { UnknownAgentError, roleProblemMessage, type Queryable } from '@buddi/core';
 import { TelegramApi, splitMessage, type FetchLike, type TelegramUpdate } from './api.js';
 import {
   HELP,
@@ -24,7 +24,6 @@ import {
   placeholderText,
   stripBotMention,
   unknownHandleText,
-  RECAP_MISSION_ID,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
   APPROVALS_UNAVAILABLE_TEXT,
@@ -399,6 +398,7 @@ function catalogAgent(
   handle: string,
   name: string,
   isDefault: boolean,
+  roles: string[] = [],
 ): CatalogAgent {
   return {
     id,
@@ -406,6 +406,7 @@ function catalogAgent(
     name,
     description: `${name}, for testing`,
     isDefault,
+    roles,
     file: `${id}/agent.md`,
     model: MODEL,
     tools: [],
@@ -424,8 +425,14 @@ function catalogAgent(
   };
 }
 
-const FINANCE = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true);
+const FINANCE = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true, [
+  'overview',
+  'recap',
+]);
 const CONCIERGE = catalogAgent('concierge', 'buddi', 'Concierge', false);
+
+/** The mission `/recap` runs here, as the composition root would hand it over. */
+const RECAP_MISSION_ID = 'friday-recap';
 
 /** Two agents, one of them the default — the smallest catalog that can switch. */
 function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalog {
@@ -434,14 +441,29 @@ function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalo
   const handleOf = (raw: string): string => raw.trim().replace(/^@/, '').toLowerCase();
   return {
     get: (id) => agents.find((a) => a.id === id),
+    agentsWithRole: (role) => agents.filter((a) => a.roles.includes(role)),
+    agentForRole: (role) => {
+      const found = agents.find((a) => a.roles.includes(role));
+      return found
+        ? { ok: true as const, agent: found }
+        : {
+            ok: false as const,
+            problem: {
+              code: 'no-agent-for-role' as const,
+              role,
+              message: roleProblemMessage(role),
+            },
+          };
+    },
     byHandle: (handle) => agents.find((a) => a.handle === handleOf(handle)),
     list: () =>
-      agents.map(({ id, handle, name, description, isDefault }) => ({
+      agents.map(({ id, handle, name, description, isDefault, roles }) => ({
         id,
         handle,
         name,
         description,
         isDefault,
+        roles,
       })),
     defaultAgent: () => byDefault,
     resolve: (id) => {
@@ -471,6 +493,7 @@ function surfaceWith(
     files?: Record<string, FakeFile>;
     artifacts?: ArtifactStore | null;
     approvals?: ApprovalHooks;
+    recapMissionId?: string | null;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -482,6 +505,9 @@ function surfaceWith(
     ...(extra.botUsername ? { botUsername: extra.botUsername } : {}),
     ...(store ? { artifacts: store } : {}),
     run,
+    ...(extra.recapMissionId === null
+      ? {}
+      : { recapMissionId: extra.recapMissionId ?? RECAP_MISSION_ID }),
     log: () => {},
     typingIntervalMs: 60_000,
     ...(extra.now ? { now: extra.now } : {}),
@@ -944,7 +970,7 @@ describe('TelegramSurface progress bubble', () => {
     expect(toolLabel('finance.list_liabilities')).toBe('checking debts');
     expect(toolLabel('finance.spending_baseline')).toBe('measuring typical spending');
     expect(toolLabel('finance.list_txns')).toBe('list txns');
-    expect(toolLabel('other.thing_here')).toBe('other.thing here');
+    expect(toolLabel('other.thing_here')).toBe('thing here');
   });
 
   it('keeps the progress line under 200 characters', () => {
@@ -1135,7 +1161,7 @@ describe('TelegramSurface /recap', () => {
     const edits = sent.filter((s) => s.method === 'editMessageText');
     expect(edits).toHaveLength(1);
     expect(edits[0]?.body.text).toBe(RECAP_NOT_REGISTERED_TEXT);
-    expect(edits[0]?.body.text).toContain('pnpm missions add-friday-recap');
+    expect(edits[0]?.body.text).toContain('buddi missions add-defaults');
   });
 
   it('reports a failing mission in the bubble', async () => {

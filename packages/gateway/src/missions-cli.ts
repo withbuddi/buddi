@@ -2,7 +2,7 @@
 /**
  * `buddi missions` — mission registration and manual runs.
  *
- * Registration is idempotent: `add-friday-recap` upserts the mission and points
+ * Registration is idempotent: `add-recap` upserts the mission and points
  * it at a fresh schedule revision, so running it twice leaves one mission and
  * one active schedule. `run-now` writes a pending occurrence and lets the
  * scheduler claim it in the normal way; `--inline` runs it here instead, prints
@@ -24,29 +24,25 @@ import {
   type OccurrenceState,
 } from '@buddi/core';
 import type { Pool } from 'pg';
+import { gatewayCatalog } from './agents/catalog.js';
 import { createWiringAsync, loadEnv } from './bootstrap.js';
 import {
   addDefaultMissions,
-  DEFAULT_MISSIONS,
+  planDefaultMissions,
   registerDefault,
   type RegistrationOutcome,
 } from './missions/defaults.js';
 import { createMissionExecutor } from './missions/execute.js';
 import { missionOwnerAgent } from './missions/reminders.js';
-import {
-  createDigestPrepare,
-  FRIDAY_RECAP_CRON,
-  FRIDAY_RECAP_ID,
-  FRIDAY_RECAP_MISSION,
-  timezoneFromEnv,
-} from './missions/recap.js';
+import { createDigestPrepare, recapMissionId, timezoneFromEnv } from './missions/recap.js';
 import { notifyOwner } from './telegram/notify.js';
 
 const USAGE = `buddi missions — scheduled missions
 
   buddi missions list                     every mission, its schedule and next run
-  buddi missions add-defaults             register every default mission (recap, daily check, sentinel wake)
-  buddi missions add-friday-recap         register (or refresh) the weekly recap
+  buddi missions add-defaults             register every mission the installed plugins suggest
+  buddi missions add-recap                register (or refresh) the recap mission
+  buddi missions add-friday-recap         the same, under its older name
   buddi missions run-now <id>             queue an occurrence for now
   buddi missions run-now <id> --inline    run it here and print the text
   buddi missions enable <id>
@@ -57,6 +53,7 @@ Timezone comes from BUDDI_TZ (default America/New_York).`;
 export type MissionsCommand =
   | 'list'
   | 'add-defaults'
+  | 'add-recap'
   | 'add-friday-recap'
   | 'run-now'
   | 'enable'
@@ -78,6 +75,7 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
   const commands: MissionsCommand[] = [
     'list',
     'add-defaults',
+    'add-recap',
     'add-friday-recap',
     'run-now',
     'enable',
@@ -238,6 +236,9 @@ async function commandList(pool: Pool, now: Date): Promise<void> {
 }
 
 function describeOutcome(outcome: RegistrationOutcome): string {
+  if (outcome.schedule === 'skipped') {
+    return `mission ${outcome.missionId} skipped — ${outcome.reason}`;
+  }
   if (outcome.schedule === 'none') {
     return `mission ${outcome.missionId} registered (no schedule — enqueued on demand)`;
   }
@@ -247,14 +248,34 @@ function describeOutcome(outcome: RegistrationOutcome): string {
   return `mission ${outcome.missionId} registered: ${outcome.cron} ${outcome.timezone} (rev ${outcome.revision})`;
 }
 
-async function commandAddFridayRecap(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
-  const entry = DEFAULT_MISSIONS.find((m) => m.mission.id === FRIDAY_RECAP_ID);
-  if (!entry) throw new Error(`the Friday recap is missing from DEFAULT_MISSIONS`);
+/**
+ * `add-recap` — just the recap mission, whichever one this installation's
+ * plugins suggest for the `recap` role. Nothing here names a domain.
+ */
+async function commandAddRecap(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
+  const missionId = recapMissionId();
+  const plan = planDefaultMissions(gatewayCatalog(env));
+  const entry = plan.entries.find((e) => e.mission.id === missionId);
+  if (!entry) {
+    const skipped = plan.skipped.find((s) => s.missionId === missionId);
+    console.error(
+      skipped
+        ? `recap mission ${skipped.missionId} skipped: ${skipped.reason}`
+        : 'no installed plugin suggests a recap mission for the "recap" role',
+    );
+    process.exitCode = 1;
+    return;
+  }
   console.log(describeOutcome(await registerDefault(pool, entry, timezoneFromEnv(env))));
 }
 
 async function commandAddDefaults(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
-  for (const outcome of await addDefaultMissions(pool, env)) {
+  const outcomes = await addDefaultMissions(pool, env);
+  if (outcomes.length === 0) {
+    console.log('no installed plugin suggests a mission, and nothing was registered');
+    return;
+  }
+  for (const outcome of outcomes) {
     console.log(describeOutcome(outcome));
   }
 }
@@ -297,8 +318,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       await commandList(pool, now());
       return;
     }
-    if (args.command === 'add-friday-recap') {
-      await commandAddFridayRecap(pool, process.env);
+    if (args.command === 'add-recap' || args.command === 'add-friday-recap') {
+      await commandAddRecap(pool, process.env);
       return;
     }
     if (args.command === 'add-defaults') {

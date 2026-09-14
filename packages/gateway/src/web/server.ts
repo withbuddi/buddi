@@ -28,6 +28,12 @@ import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
 import { isJobState } from '@buddi/core';
 import type { Pool } from 'pg';
+import {
+  engineChangeFromBody,
+  readAgentEngines,
+  readEngineOptions,
+  setAgentEngineFromWeb,
+} from './agents.js';
 import { allowedOrigins, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   CSRF_COOKIE,
@@ -85,6 +91,11 @@ export interface WebServerDeps {
   token: string;
   /** The queue, when this process runs one. */
   jobs?: JobControl | undefined;
+  /**
+   * The environment the engine controls resolve credentials against. Passed
+   * explicitly, as everywhere else: nothing here discovers a credential.
+   */
+  env?: NodeJS.ProcessEnv | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   log?: ((line: string) => void) | undefined;
@@ -237,6 +248,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             await readOverview({
               pool: deps.pool,
               registry: deps.registry,
+              catalog: deps.catalog,
               ctx: deps.ctx,
               timezone: deps.timezone,
               now,
@@ -291,7 +303,14 @@ export function createWebApp(deps: WebServerDeps): Server {
             await readSentinels(deps.pool, deps.registry, boundedLimit(q.get('limit'), 50)),
           );
         case '/api/agents':
-          return sendJson(res, 200, { agents: readAgents(deps.catalog) });
+          return sendJson(res, 200, {
+            agents: readAgents(deps.catalog),
+            // The engine half is read from the files, so a change made a
+            // second ago shows even though this process still runs the
+            // catalog it booted with — which `restartRequired` reports.
+            engines: readAgentEngines(deps.catalog, deps.env ?? process.env),
+            providers: readEngineOptions(deps.env ?? process.env),
+          });
         default:
           break;
       }
@@ -367,6 +386,20 @@ export function createWebApp(deps: WebServerDeps): Server {
                 ? body.deadlineMinutes
                 : undefined,
         }),
+      );
+    }
+
+    const engine = /^\/api\/agents\/([^/]+)\/engine$/.exec(path);
+    if (engine) {
+      const change = engineChangeFromBody(body);
+      if (typeof change === 'string') return sendJson(res, 400, { error: change });
+      return finish(
+        res,
+        setAgentEngineFromWeb(
+          { catalog: deps.catalog, env: deps.env ?? process.env },
+          decodeURIComponent(engine[1] as string),
+          change,
+        ),
       );
     }
 

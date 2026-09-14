@@ -4,7 +4,7 @@
  * ports, so everything the owner would see is a string this test can read.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, type Queryable, type ToolContext } from '@buddi/core';
+import { ToolRegistry, roleProblemMessage, type Queryable, type ToolContext } from '@buddi/core';
 import { z } from 'zod';
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { AgentCatalog, CatalogAgent } from '../telegram/types.js';
@@ -167,6 +167,7 @@ function catalogAgent(
   name: string,
   isDefault = false,
   tools: string[] = [],
+  roles: string[] = [],
 ): CatalogAgent {
   return {
     id,
@@ -174,6 +175,7 @@ function catalogAgent(
     name,
     description: `${name}, for testing`,
     isDefault,
+    roles,
     providerKind: 'anthropic',
     available: true,
     file: `${id}/agent.md`,
@@ -201,6 +203,16 @@ function fakeCatalog(agents: CatalogAgent[]): AgentCatalog {
   const handleOf = (raw: string): string => raw.trim().replace(/^@/, '').toLowerCase();
   return {
     get: (id) => agents.find((a) => a.id === id),
+    agentsWithRole: (role: string) => agents.filter((a) => a.roles.includes(role)),
+    agentForRole: (role: string) => {
+      const found = agents.find((a) => a.roles.includes(role));
+      return found
+        ? { ok: true, agent: found }
+        : {
+            ok: false,
+            problem: { code: 'no-agent-for-role', role, message: roleProblemMessage(role) },
+          };
+    },
     byHandle: (handle) => agents.find((a) => a.handle === handleOf(handle)),
     list: () => agents,
     defaultAgent: () => byDefault,
@@ -220,7 +232,10 @@ function fakeCatalog(agents: CatalogAgent[]): AgentCatalog {
 
 /* ---------------- the harness ---------------- */
 
-const LEDGER = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true);
+const LEDGER = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true, [], [
+  'overview',
+  'recap',
+]);
 const SCOUT = catalogAgent('scout', 'scout', 'Scout');
 
 const STYLE: TerminalStyle = { color: false, width: 80, tty: false };

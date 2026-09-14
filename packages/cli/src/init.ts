@@ -9,7 +9,16 @@
  * It installs no system software. Node, pnpm and docker are checked and named;
  * installing them is the owner's call, on the owner's package manager.
  */
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline/promises';
 import {
   KNOWN_SECRETS,
@@ -188,6 +197,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       console.log(`\nOwner: ${env.BUDDI_OWNER_NAME} ${dim('(unchanged)')}`);
     }
 
+    /* 7. Where the owner's own agents and skills live. */
+    await setUpPrivateConfig(ask, { ...env, ...known }, remember);
+
     if (edits.length > 0) {
       text = applyEnvEdits(text, edits);
       writeFileSync(ENV_FILE, text, { mode: 0o600 });
@@ -195,7 +207,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       env = parseEnv(text);
     }
 
-    /* 7. Bring the machine up. */
+    /* 8. Bring the machine up. */
     if (dockerVersion) {
       console.log(bold('\nStarting postgres (docker compose up -d postgres)…'));
       const code = await runInherit('pnpm', ['db:up'], { cwd: REPO_ROOT });
@@ -228,6 +240,96 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   } finally {
     rl?.close();
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Private configuration
+ * ------------------------------------------------------------------ */
+
+/** The default home for the owner's agents and skills: `<repo>/private`. */
+export const DEFAULT_PRIVATE_DIR = path.join(REPO_ROOT, 'private');
+
+/** The example agent this repository ships — the starting point for a copy. */
+export const EXAMPLE_AGENTS_DIR = path.join(REPO_ROOT, 'examples', 'agents');
+
+export const PRIVATE_README = `# Your private configuration
+
+Everything in this directory is **yours**, not the platform's.
+
+- \`agents/<id>/agent.md\` — one folder per agent: frontmatter wires it (handle,
+  tools, model, turn budget), the markdown body is its persona.
+- \`skills/*.md\` — procedures composed into your agents' prompts.
+
+Two things to know:
+
+1. **It is never committed.** \`private/\` is in \`.gitignore\`. Your personas name
+   your bank, your landlord, your inbox; they do not belong in a repository you
+   might share or push.
+2. **It overrides the examples.** buddi loads \`examples/agents\` first and then
+   this directory. An agent here with the same id as an example one *replaces*
+   it wholesale — so to change an example, copy it here and edit the copy. The
+   same holds for a skill, by name.
+
+Add an agent by adding a folder, then restart the service:
+
+    buddi agents           # what loaded, and where each one came from
+    buddi service restart  # the running surfaces reload the catalog
+
+To share a persona with someone, hand them the folder. It is a file.
+`;
+
+/**
+ * Create the private directory and explain what it is for.
+ *
+ * Idempotent: a directory that already holds agents is left completely alone.
+ * An empty one gets the example agent copied in, because the first question
+ * after "where does my configuration live" is always "what does one look like".
+ */
+export async function setUpPrivateConfig(
+  ask: (question: string) => Promise<string>,
+  known: Record<string, string>,
+  remember: (key: string, value: string) => void,
+  io: { log?: (line: string) => void } = {},
+): Promise<string> {
+  const log = io.log ?? ((line: string) => console.log(line));
+  const pinned = known.BUDDI_AGENTS_DIR;
+  let root = DEFAULT_PRIVATE_DIR;
+
+  if (pinned !== undefined && pinned.trim() !== '') {
+    root = path.dirname(pinned.trim());
+    log(`\nPrivate configuration: ${root} ${dim('(BUDDI_AGENTS_DIR)')}`);
+  } else if (existsSync(path.join(root, 'agents'))) {
+    log(`\nPrivate configuration: ${root} ${dim('(unchanged)')}`);
+  } else {
+    log(bold('\nYour agents and skills'));
+    log(
+      'The agents in this repository are examples. Yours live in a private directory\n' +
+        'that is never committed — personas name real accounts, inboxes and people.',
+    );
+    const answer = (await ask(`Where should they live? [${root}] `)).trim();
+    if (answer !== '') {
+      root = path.resolve(answer);
+      if (root !== DEFAULT_PRIVATE_DIR) remember('BUDDI_AGENTS_DIR', path.join(root, 'agents'));
+    }
+  }
+
+  const agentsDir = path.join(root, 'agents');
+  const skillsDir = path.join(root, 'skills');
+  mkdirSync(agentsDir, { recursive: true });
+  mkdirSync(skillsDir, { recursive: true });
+
+  const readme = path.join(root, 'README.md');
+  if (!existsSync(readme)) writeFileSync(readme, PRIVATE_README);
+
+  const empty = readdirSync(agentsDir).filter((name) => !name.startsWith('.')).length === 0;
+  if (empty && existsSync(EXAMPLE_AGENTS_DIR)) {
+    for (const name of readdirSync(EXAMPLE_AGENTS_DIR)) {
+      cpSync(path.join(EXAMPLE_AGENTS_DIR, name), path.join(agentsDir, name), { recursive: true });
+    }
+    log(dim(`  copied the example agent into ${agentsDir} as a starting point`));
+  }
+  log(dim(`  ${root} — yours, gitignored, and it overrides the examples`));
+  return root;
 }
 
 /** Where a resolved secret came from, for a line the owner reads. Never a value. */

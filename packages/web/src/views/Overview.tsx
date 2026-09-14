@@ -93,21 +93,19 @@ export function Overview({
         </div>
       ) : null}
 
-      <div className="cards">
-        <Card
-          label="Cash"
-          value={data.finance.available ? fmtMoney(data.finance.cashTotal, currency) : '—'}
-          note={data.finance.available ? 'spendable accounts' : 'no finance plugin installed'}
-        />
-        <Card label="Net worth" value={fmtMoney(data.finance.netWorth, currency)} note="cash + held − debt" />
-        <Card label="Debt" value={fmtMoney(data.finance.totalDebt, currency)} note="recorded liabilities" />
-        <Card
-          label="Low point (14d)"
-          value={fmtMoney(data.finance.minBalance, currency)}
-          note={data.finance.minBalanceDate ?? ''}
-          tone={data.finance.breachesFloor ? 'bad' : undefined}
-        />
-      </div>
+      {data.finance.available ? (
+        <div className="cards">
+          <Card label="Cash" value={fmtMoney(data.finance.cashTotal, currency)} note="spendable accounts" />
+          <Card label="Net worth" value={fmtMoney(data.finance.netWorth, currency)} note="cash + held − debt" />
+          <Card label="Debt" value={fmtMoney(data.finance.totalDebt, currency)} note="recorded liabilities" />
+          <Card
+            label="Low point (14d)"
+            value={fmtMoney(data.finance.minBalance, currency)}
+            note={data.finance.minBalanceDate ?? ''}
+            tone={data.finance.breachesFloor ? 'bad' : undefined}
+          />
+        </div>
+      ) : null}
 
       <div className="cards">
         <Card
@@ -148,7 +146,8 @@ export function Overview({
           <Empty>
             {data.finance.available
               ? 'Nothing scheduled in the next fortnight.'
-              : (data.finance.note ?? 'The finance plugin is not installed.')}
+              : (data.finance.note ??
+                'Nothing in this installation reports balances yet — install a plugin that provides them.')}
           </Empty>
         ) : (
           <table>

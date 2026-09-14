@@ -7,6 +7,11 @@ node_modules/
 *.pem
 *.key
 
+# the owner's private configuration: agents, skills, anything personal.
+# The platform ships examples/; what is actually installed here never leaves
+# this machine (see README, "Your agents are yours").
+private/
+
 # data dirs (buddi state, logs)
 data/
 *.log

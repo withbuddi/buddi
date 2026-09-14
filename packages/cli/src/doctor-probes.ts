@@ -20,6 +20,7 @@ import {
   type Vault,
 } from '@buddi/core';
 import {
+  agentSearchPath,
   createToolRegistry,
   describeDatabaseError,
   hydrateSecrets,
@@ -35,8 +36,11 @@ import {
 } from '@buddi/gateway';
 import type { Pool } from 'pg';
 import {
+  checkAgents,
+  checkConfig,
   checkNodeVersion,
   checkVault,
+  type AgentEngineFact,
   type DoctorProbes,
   type ProbeResult,
   type VaultFacts,
@@ -248,6 +252,68 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
           }`,
         };
       }
+    },
+
+    /**
+     * Where configuration comes from: the examples this repo ships, and the
+     * owner's private directory, which overrides them and is never committed.
+     * Reads files only — it works with everything else down.
+     */
+    async config(): Promise<ProbeResult> {
+      const search = agentSearchPath(env);
+      let examples = 0;
+      let owned = 0;
+      try {
+        const catalog = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+        for (const summary of catalog.list()) {
+          const source = (summary as { source?: string }).source ?? 'private';
+          if (source === 'example') examples += 1;
+          else owned += 1;
+        }
+      } catch {
+        /* the agents row below says why; this row still names the directories */
+      }
+      return checkConfig({
+        examplesDir: search.examples.dir,
+        examples,
+        privateDir: search.owner.dir,
+        private: owned,
+        legacy: search.legacy,
+      });
+    },
+
+    /**
+     * Every agent's engine, not just the default one's. The row above answers
+     * "can this installation talk to a model at all"; this one answers "and
+     * which of my agents can actually run".
+     */
+    async agents(): Promise<ProbeResult> {
+      await secrets();
+      let facts: AgentEngineFact[];
+      try {
+        const catalog = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+        facts = catalog.list().flatMap((summary) => {
+          const agent = catalog.get(summary.id);
+          if (!agent) return [];
+          return [
+            {
+              id: agent.id,
+              handle: agent.handle,
+              provider: agent.provider.kind,
+              model: agent.model,
+              available: agent.availability.ok,
+              ...(agent.availability.ok ? {} : { reason: agent.availability.problem.message }),
+              isDefault: agent.isDefault,
+            },
+          ];
+        });
+      } catch (err) {
+        return {
+          status: 'fail',
+          detail: `agent catalog will not load: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      return checkAgents(facts);
     },
 
     async botToken(): Promise<ProbeResult> {

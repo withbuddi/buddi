@@ -250,7 +250,12 @@ export const USAGE = `buddi — your personal agents, one command
   buddi chat --agent <handle>  ... to a specific agent, by @handle or id
   buddi chat --resume <id> | --last
   buddi ask "<question>"     one turn, then exit
-  buddi agents               every agent installed under agents/
+  buddi agents               every agent, its engine and whether it can run
+  buddi agents show <handle>   one agent in full: tools, skills, engine, last run
+  buddi agents set <handle> [--provider p] [--model m] [--max-turns n]
+  buddi agents models        the model catalogue, and what this machine can reach
+  buddi agents test <handle> one cheap live turn on that agent's provider
+  buddi agents migrate       move agents/ and skills/ into your private directory
 
   buddi serve                run the Telegram surface + scheduler in this shell
   buddi service install      run it in the background, at login

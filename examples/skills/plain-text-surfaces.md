@@ -4,7 +4,6 @@ description: How to render structure on a surface that shows markdown characters
 provenance: owner
 source: house rule — Telegram renders no markdown
 created: 2026-09-13
-agents: [finance-advisor, credit-coach, concierge]
 ---
 
 Some surfaces display your reply as literal characters. Telegram is one: every asterisk, hash, backtick, pipe and bracket you type is shown to the owner exactly as typed. When the surface hint says plain text, structure is still yours to express — you just express it without markup.

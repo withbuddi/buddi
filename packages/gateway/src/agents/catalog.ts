@@ -10,9 +10,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadAgentCatalog,
+  migrationNotice,
+  resolveAgentSearchPath,
   reminderLimitsFromEnv,
   ToolRegistry,
   type AgentCatalog,
+  type AgentSearchPath,
   type PluginManifest,
 } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -31,8 +34,35 @@ export const REPO_ROOT = path.resolve(
   '..',
 );
 
-/** Agents are files in the repo, auto-discovered (ARCHITECTURE.md, "Drop-in tools and skills"). */
-export const AGENTS_DIR = path.join(REPO_ROOT, 'agents');
+/**
+ * Where agents and skills are looked for, in order (ARCHITECTURE.md, "Drop-in
+ * tools and skills"): the examples this repository ships, then the owner's
+ * private set, which overrides them and is never committed.
+ *
+ * Memoised per `env` object for the same reason the catalog is: the private
+ * half can be pinned with `BUDDI_AGENTS_DIR`, so a different environment is a
+ * different path rather than a stale one.
+ */
+const searchPaths = new WeakMap<NodeJS.ProcessEnv, AgentSearchPath>();
+
+export function agentSearchPath(env: NodeJS.ProcessEnv = process.env): AgentSearchPath {
+  const cached = searchPaths.get(env);
+  if (cached) return cached;
+  const search = resolveAgentSearchPath({ repoRoot: REPO_ROOT, env });
+  searchPaths.set(env, search);
+  return search;
+}
+
+/** The examples shipped with the repository — the platform half of the split. */
+export const EXAMPLES_AGENTS_DIR = path.join(REPO_ROOT, 'examples', 'agents');
+export const EXAMPLES_SKILLS_DIR = path.join(REPO_ROOT, 'examples', 'skills');
+
+/**
+ * The owner's own agents directory: what `buddi agents` points at when it names
+ * a place to put a file, and where `delegates.json` is read from. Resolved once
+ * from `process.env` at import, like `REPO_ROOT` itself.
+ */
+export const AGENTS_DIR = agentSearchPath(process.env).owner.dir;
 
 /** The slice of `pg.Pool` the memory preamble needs. */
 export interface Queryable {
@@ -88,11 +118,27 @@ export interface GatewayCatalogOptions {
   dir?: string;
 }
 
+/** Printed at most once per process: a notice is a nudge, not a log line. */
+let noticed = false;
+
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
+  const env = opts.env ?? process.env;
+  const registry = opts.registry ?? createToolRegistry(env);
+  // An explicit `dir` is a caller that means exactly one directory (a test, a
+  // fixture): honour it literally and skip the search path entirely.
+  if (opts.dir !== undefined) {
+    return loadAgentCatalog({ dir: opts.dir, registry, env });
+  }
+  const search = agentSearchPath(env);
+  if (!noticed) {
+    const notice = migrationNotice(search);
+    if (notice !== undefined) console.error(notice);
+    noticed = true;
+  }
   return loadAgentCatalog({
-    dir: opts.dir ?? AGENTS_DIR,
-    registry: opts.registry ?? createToolRegistry(opts.env ?? process.env),
-    env: opts.env ?? process.env,
+    dirs: search.entries.map(({ dir, skillsDir, source }) => ({ dir, skillsDir, source })),
+    registry,
+    env,
   });
 }
 

@@ -32,6 +32,7 @@ import { resolveProvider, type ProviderKind, type ProviderProblem, type Provider
 import { localDateString, timezoneFromEnv } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
 import { providerFromEnv } from './provider-from-env.js';
+import type { AgentSource } from './search-path.js';
 import {
   loadSkillsDir,
   skillAdmits,
@@ -93,6 +94,14 @@ export interface AgentSummary {
   /** Which company this agent's runs go to. `provider` on a `CatalogAgent`
    * is the whole pinned ref; a summary carries only its kind. */
   providerKind: ProviderKind;
+  /** Capabilities this agent claims (`overview`, `recap`), declaration order. */
+  roles: string[];
+  /**
+   * Which half of the search path this agent came from: an example shipped
+   * with the repo, or the owner's private set. Recorded rather than inferred,
+   * so `buddi agents` can say where a persona lives without re-deriving paths.
+   */
+  source: AgentSource;
   /** False when this machine cannot reach the agent's provider credential. */
   available: boolean;
   /** Why not, in one sentence. Present only when `available` is false. */
@@ -148,8 +157,44 @@ export interface CatalogAgent extends AgentSummary {
   definition(now: Date, timezone?: string): AgentDefinition;
 }
 
+/**
+ * Nobody claims the role a surface asked for. A typed problem, not an error:
+ * an installation whose agents do not do overviews is a *configuration*, and
+ * the surface says so in one sentence instead of throwing.
+ */
+export interface RoleProblem {
+  code: 'no-agent-for-role';
+  role: string;
+  message: string;
+}
+
+/** `{ ok: true; agent }` or the typed problem — never a half-answer. */
+export type RoleResolution =
+  | { ok: true; agent: CatalogAgent }
+  | { ok: false; problem: RoleProblem };
+
+/** The frontmatter key an owner adds to make an agent answer for a role. */
+export const ROLES_KEY = 'roles';
+
+/** One sentence naming the key, for a surface to print verbatim. */
+export function roleProblemMessage(role: string): string {
+  return (
+    `No installed agent provides the "${role}" role. ` +
+    `Add \`${ROLES_KEY}: [${role}]\` to the frontmatter of an agent file ` +
+    `(agents/<id>/agent.md) and it will answer this.`
+  );
+}
+
 export interface AgentCatalog {
   get(id: string): CatalogAgent | undefined;
+  /** Every agent claiming this role, in catalog (declaration) order. */
+  agentsWithRole(role: string): CatalogAgent[];
+  /**
+   * The agent that answers for this role: the first that claims it, in
+   * declaration order. A role nobody claims is a typed problem, never a throw
+   * and never silently the default agent.
+   */
+  agentForRole(role: string): RoleResolution;
   /** By `@handle`, case-insensitively and with or without the leading `@`. */
   byHandle(handle: string): CatalogAgent | undefined;
   list(): AgentSummary[];
@@ -161,15 +206,36 @@ export interface AgentCatalog {
   resolve(idOrHandle?: string): CatalogAgent;
 }
 
-export interface LoadAgentCatalogOptions {
+/** One directory on the search path, and what it contributes. */
+export interface AgentDirSpec {
   /** Directory holding `<id>/agent.md` subdirectories. */
   dir: string;
+  /** Shared skills for this entry. Defaults to `skills/` next to `dir`. */
+  skillsDir?: string;
+  /** Recorded on every agent loaded from here. Defaults to `private`. */
+  source?: AgentSource;
+}
+
+export interface LoadAgentCatalogOptions {
+  /**
+   * A single directory — the original shape, kept because most tests and every
+   * ad-hoc caller means exactly one. A directory that cannot be read is an
+   * error here, as it always was.
+   */
+  dir?: string;
+  /**
+   * The search path, earliest first. A later entry providing the same agent id
+   * *replaces* the earlier one wholesale — the file, never a merge — and the
+   * same holds for a shared skill by name. A directory that is not on disk is
+   * skipped; only a path where *nothing* exists is an error.
+   */
+  dirs?: ReadonlyArray<string | AgentDirSpec>;
   registry: ToolNameSource;
   env: NodeJS.ProcessEnv;
   /**
-   * Directory of shared skills. Defaults to `skills/` next to the agents
-   * directory (so `<repo>/agents` pairs with `<repo>/skills`). A missing
-   * directory simply means no shared skills.
+   * Directory of shared skills for the single-directory form. Defaults to
+   * `skills/` next to the agents directory (so `<repo>/agents` pairs with
+   * `<repo>/skills`). A missing directory simply means no shared skills.
    */
   skillsDir?: string;
 }
@@ -320,6 +386,7 @@ function buildAgent(
   frontmatter: AgentFrontmatter,
   body: string,
   file: string,
+  source: AgentSource,
   sharedSkills: readonly Skill[],
   opts: LoadAgentCatalogOptions,
   roster: readonly AgentRosterEntry[] = [],
@@ -352,6 +419,8 @@ function buildAgent(
     name: frontmatter.name,
     description: frontmatter.description,
     isDefault: frontmatter.default === true,
+    roles: [...(frontmatter.roles ?? [])],
+    source,
     providerKind: provider.kind,
     available: availability.ok,
     ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
@@ -391,34 +460,60 @@ function readSkills(dir: string, scope: 'private' | 'shared'): Skill[] {
   }
 }
 
-/** Read `<dir>/<id>/agent.md` for every subdirectory, in sorted id order. */
-export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
-  let entries: string[];
-  try {
-    entries = readdirSync(opts.dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
-  } catch (err) {
-    throw new AgentCatalogError(
-      'agents-dir-missing',
-      `cannot read agents directory ${opts.dir}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+/**
+ * Normalise whichever shape the caller used into an ordered search path.
+ *
+ * `dir` (one directory, missing is an error) is the original contract and is
+ * kept exactly; `dirs` is the search path, where a directory that is simply
+ * not there is skipped.
+ */
+function searchEntries(opts: LoadAgentCatalogOptions): {
+  specs: Array<Required<Pick<AgentDirSpec, 'dir' | 'skillsDir'>> & { source: AgentSource }>;
+  strict: boolean;
+} {
+  const raw: AgentDirSpec[] =
+    opts.dirs !== undefined
+      ? opts.dirs.map((entry) => (typeof entry === 'string' ? { dir: entry } : entry))
+      : opts.dir !== undefined
+        ? [{ dir: opts.dir, ...(opts.skillsDir === undefined ? {} : { skillsDir: opts.skillsDir }) }]
+        : [];
+  if (raw.length === 0) {
+    throw new AgentCatalogError('agents-dir-missing', 'no agents directory was given (pass dir or dirs)');
   }
+  return {
+    specs: raw.map((spec) => ({
+      dir: spec.dir,
+      skillsDir: spec.skillsDir ?? path.join(path.dirname(path.resolve(spec.dir)), SKILLS_DIR),
+      source: spec.source ?? 'private',
+    })),
+    strict: opts.dirs === undefined,
+  };
+}
 
-  const sharedSkills = readSkills(
-    opts.skillsDir ?? path.join(path.dirname(path.resolve(opts.dir)), SKILLS_DIR),
-    'shared',
-  );
+interface ParsedAgentFile {
+  frontmatter: AgentFrontmatter;
+  body: string;
+  file: string;
+  source: AgentSource;
+  /** Which entry of the search path it came from; later wins. */
+  order: number;
+}
 
-  // Two passes: every file is parsed before any prompt is composed, because the
-  // wiring tail names the agent's colleagues and no agent can know them alone.
-  const files: { frontmatter: AgentFrontmatter; body: string; file: string }[] = [];
+/**
+ * Load one directory. Duplicate ids *within* a directory stay an error — two
+ * files in one folder claiming one id is a mistake, not an override; overriding
+ * is what the next directory on the path is for.
+ */
+function readAgentDir(dir: string, source: AgentSource, order: number): ParsedAgentFile[] {
+  const entries = readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+
+  const files: ParsedAgentFile[] = [];
   const seenIds = new Set<string>();
-  const seenHandles = new Map<string, string>();
-
   for (const dirName of entries) {
-    const file = path.join(opts.dir, dirName, AGENT_FILE);
+    const file = path.join(dir, dirName, AGENT_FILE);
     try {
       statSync(file);
     } catch {
@@ -431,23 +526,74 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
       if (err instanceof AgentFileError) throw new AgentCatalogError('agent-file', err.message);
       throw err;
     }
-    const { id, handle } = parsed.frontmatter;
+    const { id } = parsed.frontmatter;
     if (seenIds.has(id)) {
       throw new AgentCatalogError('duplicate-agent', `duplicate agent id: ${id}`);
     }
-    // Case-insensitively: the owner types `@Ledger` as readily as `@ledger`,
-    // and two agents answering to one spoken name is an ambiguity, not a nuance.
-    const key = handle.toLowerCase();
+    seenIds.add(id);
+    files.push({ frontmatter: parsed.frontmatter, body: parsed.body, file, source, order });
+  }
+  return files;
+}
+
+/**
+ * Read every directory on the search path, later entries overriding earlier
+ * ones by agent id and by skill name.
+ */
+export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
+  const { specs, strict } = searchEntries(opts);
+
+  // Skills first: a private skill replaces an example one of the same name, so
+  // an owner's house rule wins over anything the repo ships.
+  const skillsByName = new Map<string, Skill>();
+  const byId = new Map<string, ParsedAgentFile>();
+  let read = 0;
+
+  for (const [order, spec] of specs.entries()) {
+    let loaded: ParsedAgentFile[];
+    try {
+      loaded = readAgentDir(spec.dir, spec.source, order);
+    } catch (err) {
+      // A parse or duplicate-id failure inside a directory is the owner's
+      // mistake and must stay loud; only an unreadable directory is skippable.
+      if (err instanceof AgentCatalogError) throw err;
+      if (strict) {
+        throw new AgentCatalogError(
+          'agents-dir-missing',
+          `cannot read agents directory ${spec.dir}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      continue; // a search-path directory that is not on disk contributes nothing
+    }
+    read += 1;
+    for (const skill of readSkills(spec.skillsDir, 'shared')) skillsByName.set(skill.name, skill);
+    // Wholesale replacement: the later file, not a merge of two personas.
+    for (const entry of loaded) byId.set(entry.frontmatter.id, entry);
+  }
+
+  if (read === 0) {
+    throw new AgentCatalogError(
+      'agents-dir-missing',
+      `no agents directory exists on the search path: ${specs.map((s) => s.dir).join(', ')}`,
+    );
+  }
+
+  const sharedSkills = [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const files = [...byId.values()].sort((a, b) => a.frontmatter.id.localeCompare(b.frontmatter.id));
+
+  // Handles are checked *after* overriding: an example agent replaced by a
+  // private one of the same id never collides with the file that replaced it.
+  const seenHandles = new Map<string, string>();
+  for (const { frontmatter } of files) {
+    const key = frontmatter.handle.toLowerCase();
     const taken = seenHandles.get(key);
     if (taken !== undefined) {
       throw new AgentCatalogError(
         'duplicate-handle',
-        `duplicate agent handle "@${handle}": ${taken} and ${id} both answer to it`,
+        `duplicate agent handle "@${frontmatter.handle}": ${taken} and ${frontmatter.id} both answer to it`,
       );
     }
-    seenIds.add(id);
-    seenHandles.set(key, id);
-    files.push({ frontmatter: parsed.frontmatter, body: parsed.body, file });
+    seenHandles.set(key, frontmatter.id);
   }
 
   const roster: AgentRosterEntry[] = files.map(({ frontmatter }) => ({
@@ -458,15 +604,29 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
 
   const agents = new Map<string, CatalogAgent>();
   const byHandle = new Map<string, CatalogAgent>();
-  const defaults: string[] = [];
+  const claimed: Array<{ id: string; order: number }> = [];
 
-  for (const { frontmatter, body, file } of files) {
-    const agent = buildAgent(frontmatter, body, file, sharedSkills, opts, roster);
+  for (const { frontmatter, body, file, source, order } of files) {
+    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster);
     agents.set(agent.id, agent);
     byHandle.set(agent.handle.toLowerCase(), agent);
-    if (agent.isDefault) defaults.push(agent.id);
+    if (agent.isDefault) claimed.push({ id: agent.id, order });
   }
 
+  /*
+   * Two directories may both ship a `default: true` — the example agent does,
+   * and so does the owner's front desk. That is not an ambiguity: the later
+   * entry on the search path wins, exactly as it does for a file. Two agents
+   * claiming it *within one directory* is still an error, because there is
+   * nothing to break the tie.
+   */
+  const lastClaim = Math.max(...claimed.map((c) => c.order), -1);
+  const defaults = claimed.filter((c) => c.order === lastClaim).map((c) => c.id);
+  // An example that lost the tie is no longer the default, and must not keep
+  // saying it is: `buddi agents` prints this flag.
+  for (const { id } of claimed) {
+    if (!defaults.includes(id)) (agents.get(id) as { isDefault: boolean }).isDefault = false;
+  }
   if (defaults.length > 1) {
     throw new AgentCatalogError(
       'multiple-defaults',
@@ -485,18 +645,37 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
         name: a.name,
         description: a.description,
         isDefault: a.isDefault,
+        roles: [...a.roles],
+        source: a.source,
         providerKind: a.providerKind,
         available: a.availability.ok,
         ...(a.availability.ok
           ? {}
           : { unavailableReason: a.availability.problem.message }),
       })),
+    agentsWithRole: (role) => {
+      const wanted = role.trim().toLowerCase();
+      return [...agents.values()].filter((a) => a.roles.includes(wanted));
+    },
+    agentForRole(role): RoleResolution {
+      const agent = this.agentsWithRole(role)[0];
+      return agent
+        ? { ok: true, agent }
+        : {
+            ok: false,
+            problem: {
+              code: 'no-agent-for-role',
+              role,
+              message: roleProblemMessage(role),
+            },
+          };
+    },
     defaultAgent(): CatalogAgent {
       const id = defaults[0];
       if (id === undefined) {
         throw new AgentCatalogError(
           'no-default-agent',
-          `no agent in ${opts.dir} declares "default: true"`,
+          `no agent in ${specs.map((entry) => entry.dir).join(', ')} declares "default: true"`,
         );
       }
       return agents.get(id) as CatalogAgent;

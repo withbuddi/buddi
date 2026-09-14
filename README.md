@@ -88,8 +88,10 @@ buddi doctor
 ```
 
 One table: node/pnpm/docker versions, postgres reachability, whether migrations
-are up to date, whether the model credential is actually accepted, whether the
-bot token is valid, how many devices are paired, where the dashboard is bound
+are up to date, whether the model credential is actually accepted, one
+`agents` row summarising which engine each agent runs on and which of them this
+machine can reach (it FAILS only when the *default* agent cannot run), whether
+the bot token is valid, how many devices are paired, where the dashboard is bound
 and whether it has a token yet, whether the background service is running, and
 which timezone is in force. It exits 1 if anything critical is
 broken, so it is usable from a script.
@@ -103,7 +105,102 @@ buddi chat --resume <id>        # continue a conversation
 buddi chat --last               # continue the most recent one
 buddi ask "can I afford a 600 EUR bike on the 20th?"
 buddi ask "..." --resume <id>   # one turn against an existing conversation
-buddi agents                    # every agent installed under agents/
+buddi agents                    # every agent installed, and where it came from
+```
+
+## Your agents are yours
+
+The agents in this repository are **examples**. Your own live in a private
+directory that is never committed — a persona names your bank, your landlord,
+your inbox, and none of that belongs in a repository you might share or push.
+
+Both are loaded, in this order, later winning:
+
+| Order | Agents | Skills |
+| --- | --- | --- |
+| 1. shipped examples | `examples/agents/` | `examples/skills/` |
+| 2. yours | `$BUDDI_AGENTS_DIR`, else `private/agents` if it exists, else `~/.buddi/agents` | `$BUDDI_SKILLS_DIR`, else `private/skills`, else `~/.buddi/skills` |
+
+An agent of yours with the same **id** as an example one *replaces* it wholesale
+— the file, not a merge — so the way to change an example is to copy the folder
+across and edit the copy. A skill of yours with the same **name** as an example
+one replaces it the same way. `buddi agents` prints where each one came from
+(`example` or `private`), and so does the `config` row of `buddi doctor`.
+
+**Adding one.** Make a folder named for the id, put an `agent.md` in it, restart:
+
+```sh
+mkdir -p private/agents/ledger
+$EDITOR private/agents/ledger/agent.md   # id, handle, name, description, tools + persona
+buddi agents                             # confirm it loaded
+buddi service restart                    # the running surfaces reload the catalog
+```
+
+**`private/` is gitignored.** Nothing in it is tracked, and `buddi init` writes a
+`private/README.md` saying so. If you keep your agents somewhere else entirely,
+point `BUDDI_AGENTS_DIR` (and `BUDDI_SKILLS_DIR`) at it.
+
+**Sharing a persona.** Hand somebody the agent's folder. It is a markdown file
+with a frontmatter block — no data, no credentials, nothing machine-specific.
+They drop it into their own private agents directory and restart.
+
+**Upgrading from an older clone.** If your agents are still in `<repo>/agents`,
+buddi keeps loading them and prints a one-line notice. Move them once:
+
+```sh
+buddi agents migrate            # --dry-run to see it first
+buddi service restart
+```
+
+It moves `agents/` and `skills/` into your private directory, never overwrites a
+file already there, leaves `examples/` alone, and does nothing on a second run.
+
+### Choosing the engine
+
+Which provider and model an agent runs on is a line in its own file —
+`<private>/agents/<id>/agent.md` — because an endpoint is a data destination: this line,
+and nothing ambient, decides which company sees that agent's conversations.
+
+```yaml
+provider: anthropic        # or openai; absent means anthropic
+model: claude-sonnet-5     # validated against that provider's catalogue
+maxTurns: 12
+```
+
+You do not have to edit it by hand:
+
+```sh
+buddi agents                                  # handle, id, provider, model, credential, availability, roles
+buddi agents show ledger                      # persona file, tools, skills, capabilities, last run
+buddi agents models                           # the catalogue, per provider, and what this machine can reach
+buddi agents models --provider openai
+buddi agents set ledger --model claude-opus-5 # edits the frontmatter in place
+buddi agents set scout --provider openai --model gpt-5
+buddi agents set ledger --max-turns 8 --language en
+buddi agents test ledger                      # one cheap live turn: provider, served model, latency, tokens, cost
+```
+
+`set` rewrites only the keys you named — the persona body, the comments and the
+key order are left exactly as they were — and it refuses a model the pinned
+provider does not serve, in the catalogue's own words. A model is never migrated
+for you: moving an agent to another provider means naming both, `--provider` and
+`--model`, together. The same controls are on the dashboard's Agents page, which
+writes through `POST /api/agents/:id/engine` and calls the same function.
+
+Where a file pins nothing, the environment decides: `BUDDI_MODEL` (default
+`claude-sonnet-5`) for Anthropic agents and `BUDDI_OPENAI_MODEL` (default
+`gpt-5`) for OpenAI ones — never one for the other. The credential is named, not
+discovered: `CLAUDE_CODE_OAUTH_TOKEN` if you ran `claude setup-token`, otherwise
+`ANTHROPIC_API_KEY`; `OPENAI_API_KEY` for OpenAI, which has no subscription-token
+form and no fallback. An agent whose credential is absent is *listed*, marked
+unavailable with the reason, and every other agent keeps working.
+
+A change reaches the next `buddi chat` or `buddi ask` immediately — they are
+their own processes. The running surfaces (`buddi serve`, Telegram, the
+scheduler, the dashboard) hold the catalog they loaded at boot, so finish with:
+
+```sh
+buddi service restart
 ```
 
 In the REPL: `/tools` lists the registered tools, `/id` prints the conversation id,
@@ -231,11 +328,34 @@ CDN, no web fonts, no telemetry — so it works with the machine offline.
 
 ```sh
 buddi missions list
-buddi missions add-friday-recap
+buddi missions add-defaults     # register every mission the installed plugins suggest
+buddi missions add-recap        # just the recap mission (add-friday-recap still works)
 buddi missions run-now <id> [--inline]
 buddi missions enable <id> | disable <id>
 buddi migrate                   # core + every installed plugin's schema
 ```
+
+A scheduled mission is not something the gateway knows: each plugin *suggests*
+its own (`missions` in its manifest), naming the agent by **role** rather than
+by id. `add-defaults` registers what it can place and prints, for anything it
+cannot, the one line that would fix it — a role no installed agent claims is a
+configuration state, not a failure. The only mission the gateway owns is
+`sentinel-wake`, which has no schedule: a watcher enqueues it.
+
+### Roles
+
+`/status` and `/recap` name a capability, never an agent. An agent claims one in
+its frontmatter:
+
+```yaml
+roles: [overview, recap]        # free-form, kebab-case; core ships no vocabulary
+```
+
+`/status` runs whoever claims `overview` (without switching the agent you are
+talking to); `/recap` runs the recap mission with whoever claims `recap`. If no
+installed agent claims the role, both say so and name the key above. The
+dashboard's money cards follow the same rule: they appear only when an
+`overview` agent and a plugin that reports balances are both installed.
 
 ## Reminders
 
