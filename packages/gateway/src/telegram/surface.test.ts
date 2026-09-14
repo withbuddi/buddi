@@ -40,6 +40,9 @@ import {
   toPlainText,
   toolLabel,
   type RunMission,
+  ORIENTATION,
+  withOrientation,
+  chatIsNew,
 } from './surface.js';
 import {
   classifyMime,
@@ -224,6 +227,11 @@ class FakeDb implements Queryable {
     if (text.startsWith('select cursor from core.surface_cursors')) {
       const cursor = this.cursors.get(params[0]);
       return { rows: cursor === undefined ? [] : [{ cursor }] };
+    }
+    // "has this chat ever been answered?" — any agent, hence the two params.
+    if (text.startsWith('select 1 from core.surface_conversations')) {
+      const seen = [...this.chatConversations.keys()].some((k) => k.startsWith(`${params[1]}::`));
+      return { rows: seen ? [{ '?column?': 1 }] : [] };
     }
     if (text.startsWith('select conversation_id from core.surface_conversations')) {
       const id = this.chatConversations.get(`${params[1]}::${params[2]}`);
@@ -596,6 +604,17 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * A chat that has been answered before, so the one-time first-run orientation
+ * is already behind it. Most tests here are about an established conversation;
+ * the greeting has its own describe block.
+ */
+function alreadyGreeted(db: FakeDb, chatId = OWNER, agentId = 'finance-advisor'): FakeDb {
+  db.conversations.push({ id: 'conv-prior', agent_id: agentId });
+  db.chatConversations.set(`${chatId}::${agentId}`, 'conv-prior');
+  return db;
+}
+
 function withOwner(db: FakeDb, chatId = OWNER): FakeDb {
   db.identities.push({
     owner_id: 'owner',
@@ -899,7 +918,7 @@ describe('TelegramSurface conversation handling', () => {
   });
 
   it('sends the final answer as plain text, markdown markers removed', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const run = vi.fn(async () => '**Status — 2026-09-13**\n\nYou have 1 240,50 € left.');
     const { surface, sent } = surfaceWith(db, run as any);
     await surface.processUpdates([message(65, OWNER, OWNER, 'where do I stand?')]);
@@ -1012,7 +1031,7 @@ describe('TelegramSurface progress bubble', () => {
   });
 
   it('throttles edits to one per 1.5s', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     let clock = 1_000;
     const run = vi.fn(async ({ onToolCall }: any) => {
       onToolCall?.('finance.list_accounts', {});
@@ -1033,7 +1052,7 @@ describe('TelegramSurface progress bubble', () => {
   });
 
   it('edits a progress line again once the throttle window has passed', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     let clock = 1_000;
     const run = vi.fn(async ({ onToolCall }: any) => {
       onToolCall?.('finance.list_accounts', {});
@@ -1054,7 +1073,7 @@ describe('TelegramSurface progress bubble', () => {
   });
 
   it('edits the placeholder into a short final answer', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const { surface, sent } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
     await surface.processUpdates([message(104, OWNER, OWNER, 'hello')]);
     await surface.drain();
@@ -1067,7 +1086,7 @@ describe('TelegramSurface progress bubble', () => {
   });
 
   it('deletes the placeholder and sends chunks for a long answer', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const long = 'w'.repeat(9000);
     const { surface, sent } = surfaceWith(db, vi.fn(async () => long));
     await surface.processUpdates([message(105, OWNER, OWNER, 'hello')]);
@@ -1082,7 +1101,7 @@ describe('TelegramSurface progress bubble', () => {
   });
 
   it('falls back to sendMessage when the final edit fails', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const { surface, sent } = surfaceWith(db, vi.fn(async () => 'the answer'), {
       failOn: (method) => method === 'editMessageText',
     });
@@ -1555,7 +1574,7 @@ describe('TelegramSurface /status under another agent', () => {
   });
 
   it('adds no note when the finance advisor is already active', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const { surface, sent } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
     await surface.processUpdates([message(234, OWNER, OWNER, '/status')]);
     await surface.drain();
@@ -1603,7 +1622,7 @@ describe('attachment helpers', () => {
 
 describe('TelegramSurface attachment ingest', () => {
   it('downloads a captioned document, saves it, and runs with it attached', async () => {
-    const db = withOwner(new FakeDb());
+    const db = alreadyGreeted(withOwner(new FakeDb()));
     const store = fakeStore();
     const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'imported 42 rows'), {
       artifacts: store.store,
@@ -2361,7 +2380,7 @@ describe('devices', () => {
     expect(text).toContain('• 99 (telegram) — paired 2026-09-12, last seen never');
     expect(text).toContain('dev-1');
     // Unpairing stays on the machine that hosts buddi, and the text says so.
-    expect(text).toContain('buddi devices unpair <id>');
+    expect(text).toContain('buddi telegram unpair <id>');
   });
 
   it('says so plainly when nothing is paired', () => {
@@ -2487,5 +2506,93 @@ describe('approvals on the surface', () => {
     await without.surface.dispatch(message(702, OWNER, OWNER, '/approvals'));
     await without.surface.drain();
     expect(without.sent.at(-1)?.body.text).toBe(APPROVALS_UNAVAILABLE_TEXT);
+  });
+});
+
+/* ---------------- first-run orientation ---------------- */
+
+/** The last thing the owner actually read, however it reached the chat. */
+function lastText(sent: { method: string; body: any }[]): string {
+  const said = sent.filter((s) => s.method === 'sendMessage' || s.method === 'editMessageText');
+  return String(said.at(-1)?.body?.text ?? '');
+}
+
+describe('first-message orientation', () => {
+  it('is two lines, and names /agents', () => {
+    const lines = ORIENTATION.split('\n');
+    expect(lines).toHaveLength(2);
+    expect(ORIENTATION).toContain('/agents');
+  });
+
+  it('prepends nothing when the chat is not new', () => {
+    expect(withOrientation('an answer', false)).toBe('an answer');
+  });
+
+  it('is true exactly once: chatIsNew flips after the first answered message', async () => {
+    const db = withOwner(new FakeDb());
+    expect(await chatIsNew(db, String(OWNER))).toBe(true);
+    const { surface } = surfaceWith(db);
+    await surface.processUpdates([message(1, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(await chatIsNew(db, String(OWNER))).toBe(false);
+  });
+
+  it('greets a freshly paired chat above the agent reply, once', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'Hello, I am the assistant.'));
+
+    await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
+    await surface.drain();
+
+    const first = lastText(sent);
+    expect(first.startsWith(ORIENTATION)).toBe(true);
+    expect(first).toContain('Hello, I am the assistant.');
+
+    await surface.processUpdates([message(2, OWNER, OWNER, 'and again')]);
+    await surface.drain();
+
+    expect(lastText(sent)).toBe('Hello, I am the assistant.');
+  });
+
+  it('never repeats it, not even across a /new or an agent switch', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
+
+    await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
+    await surface.drain();
+    expect(lastText(sent)).toContain(ORIENTATION);
+
+    for (const [id, text] of [
+      [2, '/new'],
+      [3, 'after a reset'],
+      [4, '/use @concierge'],
+      [5, 'to the other agent'],
+    ] as const) {
+      await surface.processUpdates([message(id, OWNER, OWNER, text)]);
+      await surface.drain();
+      expect(lastText(sent), text).not.toContain(ORIENTATION);
+    }
+  });
+
+  it('does not greet a chat that was already talking before this shipped', async () => {
+    // A pre-existing mapping is exactly what an upgraded installation has.
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
+    await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
+    await surface.drain();
+    expect(lastText(sent)).toBe('reply');
+  });
+
+  it('leaves /help alone, and does not spend the greeting on it', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'));
+
+    await surface.processUpdates([message(1, OWNER, OWNER, '/help')]);
+    await surface.drain();
+    expect(lastText(sent)).toBe(HELP);
+
+    await surface.processUpdates([message(2, OWNER, OWNER, 'now a real question')]);
+    await surface.drain();
+    expect(lastText(sent)).toContain(ORIENTATION);
   });
 });

@@ -28,6 +28,7 @@ import {
   upsertMission,
   setSchedule,
   createReminder,
+  roleProblemMessage,
   type AgentCatalog,
   type PluginManifest,
   type ToolContext,
@@ -35,9 +36,11 @@ import {
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { TelegramApprovals } from '../telegram/approvals.js';
 import { SURFACE } from '../telegram/surface.js';
 import { webAssetsDir } from './config.js';
+import { FINANCE_PLUGIN_MISSING_NOTE } from './read.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer } from './server.js';
 
@@ -78,7 +81,13 @@ const demoManifest: PluginManifest = {
   ],
 };
 
-/** The catalog the agents endpoint reads. One agent, no files on disk. */
+/**
+ * The catalog the agents endpoint reads. One agent, no files on disk and no
+ * search path: the suite must not depend on this machine having a private
+ * agents directory. The agent claims the `overview` role, so the money block's
+ * role gate is satisfied and `available: false` can only mean the one thing
+ * this installation is actually missing — a plugin that reports balances.
+ */
 const fakeCatalog = (): AgentCatalog => {
   const agent = {
     id: 'demo-agent',
@@ -86,6 +95,11 @@ const fakeCatalog = (): AgentCatalog => {
     name: 'Demo',
     description: 'A test agent.',
     isDefault: true,
+    roles: [ROLE_OVERVIEW],
+    source: 'private' as const,
+    providerKind: 'anthropic' as const,
+    available: true,
+    availability: { ok: true as const },
     file: '/agents/demo/agent.md',
     model: 'claude-test',
     tools: ['demo.send'],
@@ -102,18 +116,30 @@ const fakeCatalog = (): AgentCatalog => {
       throw new Error('not used');
     },
   };
+  const summary = {
+    id: agent.id,
+    handle: agent.handle,
+    name: agent.name,
+    description: agent.description,
+    isDefault: agent.isDefault,
+    roles: [...agent.roles],
+    source: agent.source,
+    providerKind: agent.providerKind,
+    available: agent.available,
+  };
   return {
     get: (id: string) => (id === agent.id ? (agent as never) : undefined),
     byHandle: () => agent as never,
-    list: () => [
-      {
-        id: agent.id,
-        handle: agent.handle,
-        name: agent.name,
-        description: agent.description,
-        isDefault: true,
-      },
-    ],
+    list: () => [summary],
+    agentsWithRole: (role: string) =>
+      agent.roles.includes(role.trim().toLowerCase()) ? [agent as never] : [],
+    agentForRole: (role: string) =>
+      agent.roles.includes(role.trim().toLowerCase())
+        ? { ok: true, agent: agent as never }
+        : {
+            ok: false,
+            problem: { code: 'no-agent-for-role', role, message: roleProblemMessage(role) },
+          },
     defaultAgent: () => agent as never,
     resolve: () => agent as never,
   };
@@ -335,7 +361,9 @@ suite('the dashboard API', () => {
     expect(overview).toMatchObject({
       timezone: 'UTC',
       paused: false,
-      finance: { available: false },
+      // An agent claims the `overview` role, so the only thing missing is a
+      // plugin that reports balances — and the note says which, not zeros.
+      finance: { available: false, note: FINANCE_PLUGIN_MISSING_NOTE },
       approvals: { pending: expect.any(Number) },
       jobs: { pending: expect.any(Number), failed: expect.any(Number) },
       missions: { total: expect.any(Number) },

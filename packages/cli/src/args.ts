@@ -8,6 +8,8 @@
  * this file must not learn `--resume`.
  */
 
+import { DEFAULT_KEEP } from './backup/manifest.js';
+
 export class UsageError extends Error {
   constructor(message: string) {
     super(message);
@@ -40,6 +42,14 @@ export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 export const TELEGRAM_ACTIONS = ['pair', 'devices', 'unpair'] as const;
 export type TelegramAction = (typeof TELEGRAM_ACTIONS)[number];
 
+/** `buddi backup` — the installation's own copy of itself. */
+export const BACKUP_ACTIONS = ['create', 'list', 'verify', 'restore', 'prune', 'schedule'] as const;
+export type BackupAction = (typeof BACKUP_ACTIONS)[number];
+
+/** `buddi backup schedule` — the nightly job, separate from `buddi service`. */
+export const BACKUP_SCHEDULE_ACTIONS = ['install', 'uninstall', 'status'] as const;
+export type BackupScheduleAction = (typeof BACKUP_SCHEDULE_ACTIONS)[number];
+
 /** Job states `buddi jobs --state` accepts; the same set core's queue uses. */
 export const JOB_STATE_NAMES = [
   'pending',
@@ -62,7 +72,8 @@ export type Command =
   /** One-off reminders the agents set. Delegated to the gateway's CLI. */
   | { kind: 'reminders'; argv: string[] }
   | { kind: 'migrate' }
-  | { kind: 'init' }
+  /** `--yes`: ask nothing, take every default, skip what needs typing. */
+  | { kind: 'init'; yes: boolean }
   | { kind: 'doctor' }
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
@@ -75,7 +86,30 @@ export type Command =
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number }
-  | { kind: 'jobs'; action: 'retry' | 'cancel'; jobId: string };
+  | { kind: 'jobs'; action: 'retry' | 'cancel'; jobId: string }
+  /**
+   * Backups. One shape for six verbs: the options are few, they do not overlap,
+   * and a discriminated union per verb would be six types nobody reads.
+   */
+  | {
+      kind: 'backup';
+      action: BackupAction;
+      /** `create --out <dir>`; default `<data dir>/backups`. */
+      out?: string;
+      /** `create --no-artifacts`. */
+      noArtifacts?: boolean;
+      /** `create --prune [n]` — what the nightly job passes. */
+      prune?: number;
+      /** `prune --keep n` / `schedule install --keep n`. */
+      keep?: number;
+      /** The archive `verify` and `restore` act on. */
+      archive?: string;
+      /** `restore --into <database>`. */
+      into?: string;
+      yes?: boolean;
+      force?: boolean;
+      scheduleAction?: BackupScheduleAction;
+    };
 
 /** Commands the gateway's chat CLI owns; it re-parses the whole slice. */
 const CHAT_COMMANDS = new Set(['chat', 'ask', 'agents']);
@@ -96,7 +130,14 @@ export function parseArgs(argv: string[]): Command {
   if (head === 'missions') return { kind: 'missions', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'migrate') return { kind: 'migrate' };
-  if (head === 'init') return { kind: 'init' };
+  if (head === 'init') {
+    let yes = false;
+    for (const arg of rest) {
+      if (arg === '--yes' || arg === '-y') yes = true;
+      else throw new UsageError(`unknown option for buddi init: ${arg} (expected --yes)`);
+    }
+    return { kind: 'init', yes };
+  }
   // `status` is what a person types when they want to know if it works; it is
   // the doctor under another name rather than a second, thinner report.
   if (head === 'doctor' || head === 'status') return { kind: 'doctor' };
@@ -122,6 +163,7 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'resume' };
   }
   if (head === 'jobs') return parseJobs(rest);
+  if (head === 'backup') return parseBackup(rest);
 
   if (head === 'service') {
     const action = rest[0];
@@ -237,9 +279,98 @@ function parseJobs(rest: string[]): Command {
   return command;
 }
 
+/**
+ * `buddi backup <verb> …`.
+ *
+ * `--keep` and `--prune` take an integer of at least 1: `--keep 0` reads like
+ * "delete every backup I have", and a prune that does that on a typo is not a
+ * feature. `--prune` alone means the default retention.
+ */
+function parseBackup(rest: string[]): Command {
+  const action = rest[0];
+  if (action === undefined) {
+    throw new UsageError(`buddi backup needs one of: ${BACKUP_ACTIONS.join(', ')}`);
+  }
+  if (!(BACKUP_ACTIONS as readonly string[]).includes(action)) {
+    throw new UsageError(`unknown backup action: ${action} (expected ${BACKUP_ACTIONS.join(', ')})`);
+  }
+  const command: Extract<Command, { kind: 'backup' }> = {
+    kind: 'backup',
+    action: action as BackupAction,
+  };
+  const args = rest.slice(1);
+
+  const positive = (raw: string | undefined, flag: string): number => {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new UsageError(`${flag} needs an integer of at least 1 (got ${raw ?? 'nothing'})`);
+    }
+    return n;
+  };
+
+  // `verify` and `restore` take the archive as the one positional argument.
+  if (action === 'verify' || action === 'restore') {
+    const archive = args[0];
+    if (archive === undefined || archive.startsWith('-')) {
+      throw new UsageError(`buddi backup ${action} needs the path to an archive`);
+    }
+    command.archive = archive;
+    args.shift();
+  }
+  if (action === 'schedule') {
+    const sub = args[0];
+    if (sub !== undefined && !sub.startsWith('-')) {
+      if (!(BACKUP_SCHEDULE_ACTIONS as readonly string[]).includes(sub)) {
+        throw new UsageError(
+          `unknown backup schedule action: ${sub} (expected ${BACKUP_SCHEDULE_ACTIONS.join(', ')})`,
+        );
+      }
+      command.scheduleAction = sub as BackupScheduleAction;
+      args.shift();
+    } else {
+      command.scheduleAction = 'status';
+    }
+  }
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] as string;
+    if (arg === '--out' && action === 'create') {
+      const value = args[i + 1];
+      if (value === undefined) throw new UsageError('--out needs a directory');
+      command.out = value;
+      i += 1;
+    } else if (arg === '--no-artifacts' && action === 'create') {
+      command.noArtifacts = true;
+    } else if (arg === '--prune' && action === 'create') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('-')) command.prune = DEFAULT_KEEP;
+      else {
+        command.prune = positive(value, '--prune');
+        i += 1;
+      }
+    } else if (arg === '--keep' && (action === 'prune' || action === 'schedule')) {
+      command.keep = positive(args[i + 1], '--keep');
+      i += 1;
+    } else if (arg === '--into' && action === 'restore') {
+      const value = args[i + 1];
+      if (value === undefined) throw new UsageError('--into needs a database name');
+      command.into = value;
+      i += 1;
+    } else if (arg === '--yes' && action === 'restore') {
+      command.yes = true;
+    } else if (arg === '--force' && action === 'restore') {
+      command.force = true;
+    } else {
+      throw new UsageError(`unknown option for buddi backup ${action}: ${arg}`);
+    }
+  }
+  return command;
+}
+
 export const USAGE = `buddi — your personal agents, one command
 
   buddi init                 set this machine up (interactive, idempotent)
+  buddi init --yes           the same, asking nothing: for scripts and CI
   buddi doctor               check every moving part and say what is wrong
   buddi status               the same report, under the name you reached for
 
@@ -274,6 +405,14 @@ export const USAGE = `buddi — your personal agents, one command
   buddi resume               start claiming again
   buddi jobs [--state <s>] [--kind <k>] [--limit <n>]
   buddi jobs retry <id> | buddi jobs cancel <id>
+
+  buddi backup create        one archive: database, private agents, artifacts
+  buddi backup create --out <dir> --no-artifacts
+  buddi backup list          every archive, newest first
+  buddi backup verify <archive>   checksums + manifest, no database needed
+  buddi backup restore <archive> [--into <db>] [--yes] [--force]
+  buddi backup prune [--keep n]   default keep ${DEFAULT_KEEP}
+  buddi backup schedule install|uninstall|status   nightly at 03:30, prune included
 
   buddi vault set <NAME>      keep a secret in the OS keychain (prompts, hidden)
   buddi vault get <NAME>|delete <NAME>|list
