@@ -13,7 +13,7 @@
 import type { ToolDefinition } from '@buddi/core';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { dedupHash, ensureAccount, occurrenceIndexes } from './shared.js';
+import { dedupHash, occurrenceIndexes, resolveLedger, type Ledger } from './shared.js';
 import { insertTransaction, type TransactionSource } from './transactions.js';
 import { runReconcile } from './reconcile.js';
 
@@ -46,16 +46,33 @@ interface StoredRow extends StagedRow {
   isNew: boolean;
 }
 
-const stageInput = z.object({
-  account: z.string().min(1).describe('Account these rows belong to. Created if unknown.'),
-  source: z
-    .enum(['statement', 'csv', 'manual'])
-    .describe(
-      "Where the rows came from: 'statement' for a PDF/image the owner sent, 'csv' for a file, 'manual' for rows dictated to you.",
-    ),
-  artifactId: UUID.optional().describe('The stored document the rows were read from.'),
-  rows: z.array(stagedRow).min(1).max(1000).describe('The extracted rows, in statement order.'),
-});
+const stageInput = z
+  .object({
+    account: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Cash account these rows belong to. Created if unknown. Exactly one of account or liability.',
+      ),
+    liability: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The card or loan these rows belong to, for a credit-card statement. It must already exist (finance.set_liability). On a card, negative is a charge and positive a payment or credit. Exactly one of account or liability.',
+      ),
+    source: z
+      .enum(['statement', 'csv', 'manual'])
+      .describe(
+        "Where the rows came from: 'statement' for a PDF/image the owner sent, 'csv' for a file, 'manual' for rows dictated to you.",
+      ),
+    artifactId: UUID.optional().describe('The stored document the rows were read from.'),
+    rows: z.array(stagedRow).min(1).max(1000).describe('The extracted rows, in statement order.'),
+  })
+  .refine((v) => Boolean(v.account) !== Boolean(v.liability), {
+    message: 'provide exactly one of account (cash) or liability (card, loan)',
+  });
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -64,11 +81,11 @@ function round2(n: number): number {
 export const stageImport: ToolDefinition<z.infer<typeof stageInput>, unknown> = {
   name: 'finance.stage_import',
   description:
-    "Stage rows read off a statement WITHOUT writing them to the ledger. It validates them, works out which are already recorded, and returns a summary — row count, how many are new, how many are duplicates, the date range, money in, money out, and the five biggest categories. Show that summary to the owner in plain words and ask whether to commit; write it with finance.commit_import only after an explicit yes, or drop it with finance.discard_import. The staging expires in two hours. Extract the rows from the document yourself — never invent a row, and if part of the document is unreadable, stage what is legible and say which part you could not read.",
+    "Stage rows read off a statement WITHOUT writing them to the ledger. It validates them, works out which are already recorded, and returns a summary — row count, how many are new, how many are duplicates, the date range, money in, money out, and the five biggest categories. Show that summary to the owner in plain words and ask whether to commit; write it with finance.commit_import only after an explicit yes, or drop it with finance.discard_import. Pass `liability` instead of `account` for a credit-card statement: the rows then live on the card, where a negative amount is a charge and a positive one a payment. The staging expires in two hours. Extract the rows from the document yourself — never invent a row, and if part of the document is unreadable, stage what is legible and say which part you could not read.",
   tier: 'auto',
   input: stageInput,
   async execute(input, ctx) {
-    const account = await ensureAccount(ctx.db, input.account);
+    const ledger = await resolveLedger(ctx.db, input);
 
     // Identical rows inside one batch are distinct transactions, numbered by
     // their position, exactly as a CSV import numbers them — so staging the
@@ -77,7 +94,7 @@ export const stageImport: ToolDefinition<z.infer<typeof stageInput>, unknown> = 
       input.rows.map((r) => ({ date: r.date, amount: r.amount, description: r.description })),
     );
     const hashes = input.rows.map((row, i) =>
-      dedupHash(account.name, row.date, row.amount, row.description, occurrences[i] ?? 0),
+      dedupHash(ledger.name, row.date, row.amount, row.description, occurrences[i] ?? 0),
     );
     const { rows: existingRows } = await ctx.db.query(
       `select dedup_hash from finance.transactions where dedup_hash = any($1::text[])`,
@@ -121,22 +138,26 @@ export const stageImport: ToolDefinition<z.infer<typeof stageInput>, unknown> = 
     };
 
     const { rows } = await ctx.db.query(
-      `insert into finance.import_stagings (account_id, source, artifact_id, rows, summary, expires_at)
-       values ($1, $2, $3, $4, $5, now() + make_interval(hours => $6::int))
+      `insert into finance.import_stagings
+         (account_id, liability_id, source, artifact_id, rows, summary, expires_at)
+       values ($1, $7, $2, $3, $4, $5, now() + make_interval(hours => $6::int))
        returning id, expires_at`,
       [
-        account.id,
+        ledger.accountId,
         input.source,
         input.artifactId ?? null,
         JSON.stringify(stored),
         JSON.stringify(summary),
         STAGING_TTL_HOURS,
+        ledger.liabilityId,
       ],
     );
 
     return {
       stagingId: rows[0].id as string,
-      account: account.name,
+      ledger: ledger.kind,
+      account: ledger.kind === 'account' ? ledger.name : null,
+      liability: ledger.kind === 'liability' ? ledger.name : null,
       source: input.source,
       expiresAt: (rows[0].expires_at as Date).toISOString(),
       summary,
@@ -147,8 +168,8 @@ export const stageImport: ToolDefinition<z.infer<typeof stageInput>, unknown> = 
 
 interface StagingRecord {
   id: string;
-  accountId: string;
-  accountName: string;
+  /** The ledger the rows belong to: a cash account, or a card/loan. */
+  ledger: Ledger;
   source: TransactionSource;
   artifactId: string | null;
   rows: StoredRow[];
@@ -160,19 +181,36 @@ interface StagingRecord {
 
 async function loadStaging(db: Pool, id: string): Promise<StagingRecord> {
   const { rows } = await db.query(
-    `select s.id, s.account_id, a.name as account_name, s.source, s.artifact_id,
+    `select s.id, s.account_id, s.liability_id, a.name as account_name, l.name as liability_name,
+            s.source, s.artifact_id,
             s.rows, s.summary, s.committed_at, s.expires_at, (s.expires_at <= now()) as expired
        from finance.import_stagings s
-       join finance.accounts a on a.id = s.account_id
+       left join finance.accounts a on a.id = s.account_id
+       left join finance.liabilities l on l.id = s.liability_id
       where s.id = $1`,
     [id],
   );
   const row = rows[0];
   if (!row) throw new Error(`unknown staging: ${id}`);
+  const liabilityId = (row.liability_id as string | null) ?? null;
+  const ledger: Ledger = liabilityId
+    ? {
+        kind: 'liability',
+        id: liabilityId,
+        name: row.liability_name as string,
+        accountId: null,
+        liabilityId,
+      }
+    : {
+        kind: 'account',
+        id: row.account_id as string,
+        name: row.account_name as string,
+        accountId: row.account_id as string,
+        liabilityId: null,
+      };
   return {
     id: row.id as string,
-    accountId: row.account_id as string,
-    accountName: row.account_name as string,
+    ledger,
     source: row.source as TransactionSource,
     artifactId: (row.artifact_id as string | null) ?? null,
     rows: row.rows as StoredRow[],
@@ -214,8 +252,9 @@ export const commitImport: ToolDefinition<z.infer<typeof commitInput>, unknown> 
       // otherwise; a row staged as pending stays pending.
       const status = row.status === 'pending' ? 'pending' : 'posted';
       const result = await insertTransaction(ctx.db, {
-        accountId: staging.accountId,
-        accountName: staging.accountName,
+        accountId: staging.ledger.accountId,
+        liabilityId: staging.ledger.liabilityId,
+        ledgerName: staging.ledger.name,
         occurredOn: row.date,
         amount: row.amount,
         description: row.description,
@@ -239,7 +278,9 @@ export const commitImport: ToolDefinition<z.infer<typeof commitInput>, unknown> 
 
     return {
       stagingId: staging.id,
-      account: staging.accountName,
+      ledger: staging.ledger.kind,
+      account: staging.ledger.kind === 'account' ? staging.ledger.name : null,
+      liability: staging.ledger.kind === 'liability' ? staging.ledger.name : null,
       source: staging.source,
       inserted,
       skipped,
@@ -275,7 +316,9 @@ export const discardImport: ToolDefinition<z.infer<typeof discardInput>, unknown
     return {
       discarded: true,
       stagingId: staging.id,
-      account: staging.accountName,
+      ledger: staging.ledger.kind,
+      account: staging.ledger.kind === 'account' ? staging.ledger.name : null,
+      liability: staging.ledger.kind === 'liability' ? staging.ledger.name : null,
       rows: staging.rows.length,
     };
   },

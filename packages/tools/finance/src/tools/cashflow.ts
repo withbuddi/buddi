@@ -79,7 +79,7 @@ function compressDays(days: ProjectionDay[], minBalanceDate: string): Projection
 export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.project_cashflow',
   description:
-    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Pending transactions dated inside the horizon are applied too — a pending charge is money already committed — and listed under `pendingEvents`; pass includePending: false to leave them out. Add `hypotheticals` to test a purchase before making it. Accounts that are not spendable (retirement, investment, HSA) are left out of the start balance entirely and listed under `startBalanceExcludes`, along with any recurring item attached to one. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
+    'Simulate the balance day by day over the coming weeks from the recorded balances, the active recurring items AND the owner\'s typical variable spending, and report the end balance, the minimum balance and the date it happens, and whether it drops below the safety floor. By default the projection includes a daily burn measured from the last 3 complete months of transactions — the MEDIAN monthly total, so one freak month cannot set it, and with credit-card/loan payments left out as debt servicing (see the `baseline` field of the response for what it is and how it was measured, and `baselineOptions` to change it); pass includeBaseline: false to project the recurring items alone. Person-to-person transfers are excluded unless includeP2P is \'net\'. Pending transactions dated inside the horizon are applied too — a pending charge is money already committed — and listed under `pendingEvents`; pass includePending: false to leave them out. Add `hypotheticals` to test a purchase before making it. Accounts that are not spendable (retirement, investment, HSA) are left out of the start balance entirely and listed under `startBalanceExcludes`, along with any recurring item attached to one. Charges billed to a credit card are left out too — they move no cash on their date; the cash moves when the card is paid, and that payment is already a recurring item here. Use finance.statement_forecast for what a card will report, and finance.card_activity for what it has been doing. This is the only source of truth for "will I be short?" — never compute a projection yourself.',
   tier: 'auto',
   input,
   async execute(args, ctx) {
@@ -119,18 +119,24 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
 
     // An item attached to an excluded account (a 401k contribution booked as a
     // recurring income) is excluded with it; an item with no account at all is
-    // assumed to hit the cash.
+    // assumed to hit the cash. An item billed to a CARD is excluded too, and for
+    // a different reason: it never moves cash on its date at all. It raises what
+    // is owed on the card, and the cash leaves once, later, as the card payment
+    // — which is its own recurring item and already in this projection. Counting
+    // both would spend the same money twice.
     const { rows: itemRows } = accountId
       ? await ctx.db.query(
           `select kind, name, amount, cadence, anchor_date from finance.recurring_items
-            where active and account_id = $1 order by anchor_date`,
+            where active and account_id = $1 and liability_id is null
+            order by anchor_date`,
           [accountId],
         )
       : await ctx.db.query(
           `select r.kind, r.name, r.amount, r.cadence, r.anchor_date
              from finance.recurring_items r
              left join finance.accounts a on a.id = r.account_id
-            where r.active and (a.id is null or a.include_in_cashflow)
+            where r.active and r.liability_id is null
+              and (a.id is null or a.include_in_cashflow)
             order by r.anchor_date`,
         );
 
@@ -169,6 +175,7 @@ export const projectCashflow: ToolDefinition<z.infer<typeof input>, unknown> = {
                from finance.transactions t
                left join finance.accounts a on a.id = t.account_id
               where t.status = 'pending' and t.superseded_by is null
+                and t.liability_id is null
                 and (a.id is null or a.include_in_cashflow)
                 and t.occurred_on >= $1::date and t.occurred_on <= $2::date
               order by t.occurred_on`,

@@ -13,6 +13,7 @@
 import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 import { isUnread } from '../mail.js';
+import { loadSettings, purgedBodyNote } from '../retention.js';
 import { MESSAGE_COLUMNS, toMessage } from '../rows.js';
 import {
   boundedLimit,
@@ -95,11 +96,15 @@ const readInput = z.object({
 export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   name: 'email.read',
   description:
-    'Read one message in full: every header that matters, the complete text body, and the attachments it carries (filename, type and size — the bytes are not downloaded). Reading never marks the message as read in the owner\'s mailbox.',
+    'Read one message in full: every header that matters, the complete text body, and the attachments it carries (filename, type and size — the bytes are not downloaded). A body older than the retention window is no longer stored: the headers, the snippet and the triage decision still come back, with a note saying the body was purged. Reading never marks the message as read in the owner\'s mailbox.',
   tier: 'auto',
   input: readInput,
   async execute(input, ctx) {
     const message = await requireMessage(ctx.db, input.id);
+    // A purged body is a fact to state, not a gap to paper over: the tool says
+    // the text is gone and why, and hands back everything that is kept.
+    const purged = message.bodyPurgedAt !== null;
+    const retention = purged ? await loadSettings(ctx.db) : null;
     return {
       id: message.id,
       messageId: message.messageId,
@@ -108,11 +113,21 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
       to: message.to,
       subject: message.subject,
       date: message.date,
+      // Kept forever, and the only text left once a body is purged.
+      snippet: message.snippet,
       unread: isUnread(message.flags),
       flags: message.flags,
       hasAttachments: message.hasAttachments,
       attachments: message.attachments,
-      bodyText: message.bodyText,
+      bodyText: purged ? null : message.bodyText,
+      bodyPurged: purged,
+      ...(purged && retention
+        ? {
+            bodyPurgedAt: message.bodyPurgedAt,
+            retentionDays: retention.retentionDays,
+            note: purgedBodyNote(retention.retentionDays, message.bodyPurgedAt),
+          }
+        : {}),
       triage: await latestTriage(ctx.db, message.id),
     };
   },

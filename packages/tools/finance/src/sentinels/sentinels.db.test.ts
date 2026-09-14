@@ -295,10 +295,13 @@ suite('finance sentinels (postgres)', () => {
     });
 
     it('is quiet once a receipt is linked to its charge', async () => {
+      // Every transaction lives on exactly one ledger, so the fixture names one.
+      const account = await accountId('Receipts checking', 500);
       const { rows } = await pool.query(
         `insert into finance.transactions
-           (occurred_on, amount, description, source, dedup_hash)
-         values ('2026-09-01', -42, 'LIDL', 'manual', 'hash-1') returning id`,
+           (account_id, occurred_on, amount, description, source, dedup_hash)
+         values ($1, '2026-09-01', -42, 'LIDL', 'manual', 'hash-1') returning id`,
+        [account],
       );
       await pool.query(
         `insert into finance.receipts
@@ -338,11 +341,12 @@ suite('finance sentinels (postgres)', () => {
       const one = await artifact('aaa', '2026-09-10T09:00:00Z');
       const two = await artifact('bbb', '2026-09-10T09:00:00Z');
       const three = await artifact('ccc', '2026-09-10T09:00:00Z');
+      const ledger = await accountId('Artifacts checking', 500);
       await pool.query(
         `insert into finance.transactions
-           (occurred_on, amount, description, source, dedup_hash, artifact_id)
-         values ('2026-09-10', -10, 'X', 'statement', 'hash-2', $1)`,
-        [one],
+           (account_id, occurred_on, amount, description, source, dedup_hash, artifact_id)
+         values ($2, '2026-09-10', -10, 'X', 'statement', 'hash-2', $1)`,
+        [one, ledger],
       );
       await pool.query(
         `insert into finance.receipts (merchant, merchant_norm, occurred_on, total, artifact_id)

@@ -191,6 +191,13 @@ export interface ClosingCard {
   balance: number;
   creditLimit: number | null;
   statementDay: number | null;
+  /**
+   * What the card is on course to report on the closing day, when it can be
+   * worked out: the balance today, plus the recurring charges billed to the
+   * card that land before the close, less any payment scheduled before it.
+   * Null falls back to the balance as it stands.
+   */
+  forecastBalance?: number | null;
 }
 
 /**
@@ -206,7 +213,13 @@ export function statementClosingFindings(
   const out: Finding[] = [];
   for (const card of cards) {
     if (card.statementDay === null) continue;
-    const utilization = utilizationPercent(card.balance, card.creditLimit);
+    // The balance the card is on course to REPORT, when it is known: charges
+    // still to post before the close are part of what the bureaus will see, and
+    // a scheduled payment that lands first is part of it too. Utilization is
+    // scored off that figure, so the watch is scored off it as well.
+    const forecast = card.forecastBalance ?? null;
+    const reportedBalance = forecast === null ? card.balance : Math.max(0, forecast);
+    const utilization = utilizationPercent(reportedBalance, card.creditLimit);
     if (utilization === null || utilization <= STATEMENT_UTILIZATION) continue;
     const closeDate = nextDayOfMonth(opts.today, card.statementDay);
     const daysAway = daysBetween(opts.today, closeDate);
@@ -218,7 +231,10 @@ export function statementClosingFindings(
       detail:
         `${card.name} reports its balance on ${closeDate}, ` +
         `${daysAway === 0 ? 'today' : `in ${daysAway} day${daysAway === 1 ? '' : 's'}`}, ` +
-        `and is at ${utilization.toFixed(1)}% of its limit. ` +
+        (forecast === null
+          ? `and is at ${utilization.toFixed(1)}% of its limit. `
+          : `and is on course to report ${money(reportedBalance, opts.currency)} — ` +
+            `${utilization.toFixed(1)}% of its limit — once the charges billed to it have landed. `) +
         'Paying before that day is what changes the reported utilization for this cycle.',
       agentId: 'credit-coach',
       data: {
@@ -227,6 +243,8 @@ export function statementClosingFindings(
         daysAway,
         utilization,
         balance: card.balance,
+        /** Null when no forecast was available; then `balance` is what was scored. */
+        forecastBalance: forecast,
         creditLimit: card.creditLimit,
         currency: opts.currency,
       },

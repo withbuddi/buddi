@@ -8,10 +8,11 @@ import { normalizeMerchant } from '../merchant.js';
 import { runReconcile } from './reconcile.js';
 import {
   dedupHash,
-  ensureAccount,
   findAccount,
+  findLiability,
   num,
   occurrenceIndexes,
+  resolveLedger,
   today,
   toDateString,
 } from './shared.js';
@@ -35,8 +36,11 @@ export type TransactionSource = 'manual' | 'csv' | 'statement';
 export type TransactionStatus = 'pending' | 'posted';
 
 export interface InsertTransactionArgs {
-  accountId: string;
-  accountName: string;
+  /** Exactly one of accountId / liabilityId, as the schema requires. */
+  accountId: string | null;
+  liabilityId?: string | null;
+  /** The ledger's name — an account's or a liability's. It keys the dedup hash. */
+  ledgerName: string;
   occurredOn: string;
   amount: number;
   description: string;
@@ -54,7 +58,7 @@ export async function insertTransaction(
   args: InsertTransactionArgs,
 ): Promise<InsertResult> {
   const hash = dedupHash(
-    args.accountName,
+    args.ledgerName,
     args.occurredOn,
     args.amount,
     args.description,
@@ -62,9 +66,9 @@ export async function insertTransaction(
   );
   const { rows } = await db.query(
     `insert into finance.transactions
-       (account_id, occurred_on, amount, description, category, source, dedup_hash,
+       (account_id, liability_id, occurred_on, amount, description, category, source, dedup_hash,
         status, merchant_norm, artifact_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     values ($1, $11, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      on conflict (dedup_hash) do nothing
      returning id`,
     [
@@ -78,18 +82,32 @@ export async function insertTransaction(
       args.status ?? 'posted',
       normalizeMerchant(args.description),
       args.artifactId ?? null,
+      args.liabilityId ?? null,
     ],
   );
   const row = rows[0];
   return row ? { inserted: true, id: row.id } : { inserted: false };
 }
 
-const recordInput = z.object({
-  account: z.string().min(1).describe('Account name. Created if unknown.'),
+const recordShape = z.object({
+  account: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Cash account name. Created if unknown. Exactly one of account or liability.'),
+  liability: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The card or loan the row belongs to, e.g. 'NFCU Mastercard Platinum 9012' — use this for a purchase made ON a credit card, which moves no cash on the day. The liability must already exist (finance.set_liability). Exactly one of account or liability.",
+    ),
   occurredOn: DATE.describe('Date of the transaction, YYYY-MM-DD.'),
   amount: z
     .number()
-    .describe('Signed amount: positive for money in, negative for money out.'),
+    .describe(
+      'Signed amount. On a cash account: positive money in, negative money out. On a liability: NEGATIVE is a charge (it raises what is owed), POSITIVE is a payment or credit (it lowers it).',
+    ),
   description: z.string().min(1).describe('What it was, as it should read in a recap.'),
   category: z.string().min(1).optional().describe("Free-form category, e.g. 'groceries'."),
   occurrence: z
@@ -108,17 +126,27 @@ const recordInput = z.object({
     ),
 });
 
+/** Exactly one ledger, checked the same way the schema checks it. */
+const oneLedger = {
+  check: (v: { account?: string; liability?: string }): boolean =>
+    Boolean(v.account) !== Boolean(v.liability),
+  message: 'provide exactly one of account (cash) or liability (card, loan)',
+} as const;
+
+const recordInput = recordShape.refine(oneLedger.check, { message: oneLedger.message });
+
 export const recordTransaction: ToolDefinition<z.infer<typeof recordInput>, unknown> = {
   name: 'finance.record_transaction',
   description:
-    "Record one transaction the owner mentions (source: manual). Amount is signed: positive money in, negative money out. Re-recording the same account/date/amount/description is a no-op, so repeating a recap is safe; pass occurrence: 1 (then 2, …) only when the owner really paid the same amount to the same place twice on the same day. Pass status: 'pending' when the charge is an authorisation the bank has not settled: it counts as committed money in a projection, is left out of the monthly summary, and is superseded automatically once the posted row arrives.",
+    "Record one transaction the owner mentions (source: manual), on a cash account OR on a card. Pass `account` for money moving through a checking or savings account; pass `liability` for a purchase made ON a credit card (the GEICO premium billed to the Mastercard, a dinner on the Amex) — that moves no cash on the day, so it belongs on the card and never on an account. On a card the sign is: negative = charge (raises what is owed), positive = payment or credit (lowers it). Re-recording the same ledger/date/amount/description is a no-op, so repeating a recap is safe; pass occurrence: 1 (then 2, …) only when the owner really paid the same amount to the same place twice on the same day. Pass status: 'pending' when the charge is an authorisation the bank has not settled: it counts as committed money in a projection, is left out of the monthly summary, and is superseded automatically once the posted row arrives.",
   tier: 'auto',
   input: recordInput,
   async execute(input, ctx) {
-    const account = await ensureAccount(ctx.db, input.account);
+    const ledger = await resolveLedger(ctx.db, input);
     const result = await insertTransaction(ctx.db, {
-      accountId: account.id,
-      accountName: account.name,
+      accountId: ledger.accountId,
+      liabilityId: ledger.liabilityId,
+      ledgerName: ledger.name,
       occurredOn: input.occurredOn,
       amount: input.amount,
       description: input.description,
@@ -131,11 +159,17 @@ export const recordTransaction: ToolDefinition<z.infer<typeof recordInput>, unkn
       recorded: result.inserted,
       duplicate: !result.inserted,
       id: result.id ?? null,
-      account: account.name,
+      ledger: ledger.kind,
+      account: ledger.kind === 'account' ? ledger.name : null,
+      liability: ledger.kind === 'liability' ? ledger.name : null,
       occurredOn: input.occurredOn,
       amount: input.amount,
       description: input.description,
       status: input.status ?? 'posted',
+      note:
+        ledger.kind === 'liability'
+          ? 'Recorded on the card: it raises or lowers what is owed and moves no cash today. The cash moves when the card is paid.'
+          : undefined,
     };
   },
 };
@@ -190,7 +224,7 @@ export const recordContribution: ToolDefinition<z.infer<typeof contributionInput
     );
     const result = await insertTransaction(ctx.db, {
       accountId: account.id,
-      accountName: account.name,
+      ledgerName: account.name,
       occurredOn,
       amount: input.amount,
       description,
@@ -227,20 +261,33 @@ function resolveCsvPath(raw: string): string {
   return resolved;
 }
 
-const importInput = z.object({
-  path: z
-    .string()
-    .min(1)
-    .describe(
-      'Local CSV file exported from the bank: an absolute path, or a path relative to the working directory. No URLs.',
-    ),
-  account: z.string().min(1).describe('Account these rows belong to. Created if unknown.'),
-});
+const importInput = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .describe(
+        'Local CSV file exported from the bank: an absolute path, or a path relative to the working directory. No URLs.',
+      ),
+    account: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Cash account these rows belong to. Created if unknown. Exactly one of account or liability.'),
+    liability: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The card or loan these rows belong to, for a credit-card export. It must already exist (finance.set_liability). Exactly one of account or liability.',
+      ),
+  })
+  .refine(oneLedger.check, { message: oneLedger.message });
 
 export const importCsv: ToolDefinition<z.infer<typeof importInput>, unknown> = {
   name: 'finance.import_csv',
   description:
-    'Import a bank CSV export into an account. Detects the date/amount/description/category columns, handles ; and , files and comma decimals, skips rows already imported, and returns how many rows were imported, skipped as duplicates, and could not be parsed. A row the export marks PENDING (in its own status column, or as a marker in the date column) is imported as pending, and the import ends by reconciling, so a pending line whose posted twin is in the same file settles immediately instead of being counted twice.',
+    'Import a bank CSV export into a cash account, or a card export into a liability (pass `liability` instead of `account`; on a card, negative is a charge and positive a payment or credit). Detects the date/amount/description/category columns, handles ; and , files and comma decimals, skips rows already imported, and returns how many rows were imported, skipped as duplicates, and could not be parsed. A row the export marks PENDING (in its own status column, or as a marker in the date column) is imported as pending, and the import ends by reconciling, so a pending line whose posted twin is in the same file settles immediately instead of being counted twice.',
   tier: 'auto',
   input: importInput,
   async execute(input, ctx) {
@@ -255,7 +302,7 @@ export const importCsv: ToolDefinition<z.infer<typeof importInput>, unknown> = {
     }
 
     const { rows, warnings } = parseBankCsv(text);
-    const account = await ensureAccount(ctx.db, input.account);
+    const ledger = await resolveLedger(ctx.db, input);
 
     // Identical rows in one file are distinct transactions, so number them by
     // their position in the file before hashing.
@@ -266,8 +313,9 @@ export const importCsv: ToolDefinition<z.infer<typeof importInput>, unknown> = {
     let pending = 0;
     for (const [i, row] of rows.entries()) {
       const result = await insertTransaction(ctx.db, {
-        accountId: account.id,
-        accountName: account.name,
+        accountId: ledger.accountId,
+        liabilityId: ledger.liabilityId,
+        ledgerName: ledger.name,
         occurredOn: row.date,
         amount: row.amount,
         description: row.description,
@@ -289,7 +337,9 @@ export const importCsv: ToolDefinition<z.infer<typeof importInput>, unknown> = {
     const dates = rows.map((r) => r.date).sort();
     return {
       file,
-      account: account.name,
+      ledger: ledger.kind,
+      account: ledger.kind === 'account' ? ledger.name : null,
+      liability: ledger.kind === 'liability' ? ledger.name : null,
       imported,
       skipped,
       pending,
@@ -317,29 +367,81 @@ const summaryInput = z.object({
     .describe(
       'Default false: only settled (posted) money is summarised, because a pending charge may still change amount or vanish. True folds pending rows into the totals as well — say so when you report it.',
     ),
+  account: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Limit to one cash account. Default: every ledger in scope.'),
+  liability: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Summarise ONE card or loan instead of the cash: every charge, payment and credit recorded on it that month. Cannot be combined with `account`.',
+    ),
+  includeCardSpend: z
+    .boolean()
+    .optional()
+    .describe(
+      'Default false. Purchases made on a credit card are recorded on the card, not on the cash, and they are left out of these totals on purpose: that money reaches the cash when the card is paid, which is a separate row already counted. They are always reported under `cardSpend` so the answer can name them; true folds them into the totals as well, and double-counts against the card payment — only do it when the owner asked for total spend regardless of how it was paid, and say so.',
+    ),
 });
 
 export const summary: ToolDefinition<z.infer<typeof summaryInput>, unknown> = {
   name: 'finance.summary',
   description:
-    'Summarise recorded transactions for a month: total money in, total money out, net, a per-category breakdown, and the transaction count. Use it to explain where the money went; it never guesses — only recorded transactions count. Settled money only: pending authorisations are counted separately under `pending` and left out of the totals (pass includePending: true to fold them in), and a pending row that has since posted is never counted twice.',
+    'Summarise recorded transactions for a month: total money in, total money out, net, a per-category breakdown, and the transaction count. Use it to explain where the money went; it never guesses — only recorded transactions count. Settled money only: pending authorisations are counted separately under `pending` and left out of the totals (pass includePending: true to fold them in), and a pending row that has since posted is never counted twice. Card purchases live on the card, not on the cash: they are reported under `cardSpend` and left out of the totals unless includeCardSpend is true, because the money reaches the cash as the card payment, which is its own row. Pass `liability` to summarise one card instead — its charges, payments and credits for the month.',
   tier: 'auto',
   input: summaryInput,
   async execute(input, ctx) {
+    if (input.account && input.liability) {
+      throw new Error('pass either account or liability, never both');
+    }
     const month = input.month ?? ctx.now().toISOString().slice(0, 7);
     const start = `${month}-01`;
     const includePending = input.includePending ?? false;
+    const includeCardSpend = input.includeCardSpend ?? false;
+
+    let scopeAccountId: string | null = null;
+    let scopeLiabilityId: string | null = null;
+    let scope = 'all cash accounts';
+    if (input.account) {
+      const account = await findAccount(ctx.db, input.account);
+      if (!account) throw new Error(`unknown account: ${input.account}`);
+      scopeAccountId = account.id;
+      scope = account.name;
+    } else if (input.liability) {
+      const liability = await findLiability(ctx.db, input.liability);
+      if (!liability) throw new Error(`unknown liability: ${input.liability}`);
+      scopeLiabilityId = liability.id;
+      scope = liability.name;
+    }
+
     // A superseded pending row is invisible everywhere: its posted twin is the
     // row that carries the money now.
-    const { rows: allRows } = await ctx.db.query(
-      `select amount, category, occurred_on, status
+    const { rows: scopedRows } = await ctx.db.query(
+      `select amount, category, occurred_on, status, liability_id
          from finance.transactions
         where occurred_on >= $1::date
           and occurred_on < ($1::date + interval '1 month')
           and superseded_by is null
+          and ($2::uuid is null or account_id = $2::uuid)
+          and ($3::uuid is null or liability_id = $3::uuid)
         order by occurred_on`,
-      [start],
+      [start, scopeAccountId, scopeLiabilityId],
     );
+
+    // On a card ledger every row IS card activity; off it, card rows are the
+    // spend that has not reached the cash yet.
+    const onCard = (r: Record<string, unknown>): boolean =>
+      scopeLiabilityId === null && r.liability_id !== null;
+    const cardRows = scopedRows.filter(onCard);
+    const cardSpendTotal = cardRows.reduce((sum, r) => sum + num(r.amount), 0);
+    const allRows =
+      includeCardSpend || scopeLiabilityId !== null
+        ? scopedRows
+        : scopedRows.filter((r) => !onCard(r));
+
     const rows = includePending
       ? allRows
       : allRows.filter((r) => (r.status as string) !== 'pending');
@@ -370,7 +472,22 @@ export const summary: ToolDefinition<z.infer<typeof summaryInput>, unknown> = {
     return {
       month,
       currency,
+      scope,
+      account: input.account ? scope : null,
+      liability: input.liability ? scope : null,
       includePending,
+      includeCardSpend,
+      /**
+       * Purchases recorded on a card in this month. Counted in the totals only
+       * when includeCardSpend is true; reported either way, because "you spent
+       * X on the cards this month" is a real answer even though that money
+       * leaves the cash later, as the card payment.
+       */
+      cardSpend: {
+        count: cardRows.length,
+        total: round(cardSpendTotal),
+        countedInTotals: includeCardSpend || Boolean(input.liability),
+      },
       /**
        * Committed but unsettled money in this month. Included in the totals
        * above only when includePending is true; reported either way so the

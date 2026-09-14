@@ -12,6 +12,7 @@ import type { PluginManifest } from '@buddi/core';
 import { financeSentinels } from './sentinels/index.js';
 import { listAccounts, setBalance, updateAccount } from './tools/accounts.js';
 import { spendingBaseline } from './tools/baseline.js';
+import { cardActivity, statementForecastTool } from './tools/cards.js';
 import {
   creditPlanTool,
   creditScoreHistory,
@@ -90,6 +91,8 @@ export const manifest: PluginManifest & { sentinels: NonNullable<PluginManifest[
     creditUtilization,
     creditPlanTool,
     upcomingStatementsTool,
+    cardActivity,
+    statementForecastTool,
   ],
   sentinels: financeSentinels,
 };
@@ -129,6 +132,8 @@ export {
   creditUtilization,
   creditPlanTool,
   upcomingStatementsTool,
+  cardActivity,
+  statementForecastTool,
 };
 
 export { financeSentinels } from './sentinels/index.js';
@@ -141,3 +146,5 @@ export * from './amortization.js';
 export * from './credit.js';
 export * from './csv.js';
 export * from './merchant.js';
+export * from './cards.js';
+export { loadStatementForecast } from './tools/cards.js';

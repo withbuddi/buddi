@@ -16,6 +16,11 @@ export interface BaselineToolOptions {
   excludeCategories?: string[];
   excludeMonths?: string[];
   coverage?: BaselineCoverage;
+  /**
+   * Whether purchases made ON a credit card count as variable spending.
+   * Default false — see `includeCardSpend` in the schema below for why.
+   */
+  includeCardSpend?: boolean;
 }
 
 /**
@@ -31,7 +36,12 @@ export const COVERAGE_LOOKBACK_SLACK = 12;
 export async function loadBaseline(
   ctx: ToolContext,
   opts: { months?: number; account?: string } & BaselineToolOptions = {},
-): Promise<{ baseline: BaselineResult; scope: string; months: number }> {
+): Promise<{
+  baseline: BaselineResult;
+  scope: string;
+  months: number;
+  includeCardSpend: boolean;
+}> {
   const months = opts.months ?? 3;
   const coverage: BaselineCoverage = opts.coverage ?? 'all-accounts';
   // computeBaseline decides the window; the query only has to be wide enough to
@@ -51,6 +61,13 @@ export async function loadBaseline(
   // Only the window matters; pulling the whole ledger would grow without bound.
   // Settled rows only: an unsettled authorisation is not yet a measured habit,
   // and a superseded pending row would count its own posted twin twice.
+  //
+  // Card charges are out by default. A purchase on a card does not move cash on
+  // the day it is made: it reaches the cash once, later, as the card payment —
+  // which is already in the ledger, and already excluded from the burn as debt
+  // servicing or modelled as a recurring item. Counting both the purchase and
+  // the payment would bill the same money twice to the same burn.
+  const includeCardSpend = opts.includeCardSpend ?? false;
   const from = `${start.slice(0, 7)}-01`;
   // Non-cashflow accounts are invisible here: a 401k contribution is not
   // variable spending, and a retirement account that only sees one transaction
@@ -74,11 +91,12 @@ export async function loadBaseline(
            left join finance.accounts a on a.id = t.account_id
           where t.occurred_on < $1::date
             and t.occurred_on >= ($1::date - make_interval(months => $2::int))
+            and ($3::boolean or t.liability_id is null)
             and (a.id is null or a.include_in_cashflow)
             and t.status = 'posted'
             and t.superseded_by is null
           order by t.occurred_on`,
-        [from, lookbackMonths],
+        [from, lookbackMonths, includeCardSpend],
       );
 
   const txns: BaselineTransaction[] = rows.map((r) => ({
@@ -119,7 +137,7 @@ export async function loadBaseline(
     coverage,
   });
 
-  return { baseline, scope, months };
+  return { baseline, scope, months, includeCardSpend };
 }
 
 const MONTH = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected a YYYY-MM month');
@@ -149,6 +167,12 @@ export const baselineOptionsSchema = z
       .describe(
         "Months to drop from the window entirely, YYYY-MM, for known one-offs the owner has named. Not defaulted — only use it when you know what happened in that month, and say so in the answer.",
       ),
+    includeCardSpend: z
+      .boolean()
+      .optional()
+      .describe(
+        'Default false: purchases made ON a credit card are NOT counted as variable spending. Card spend reaches the cash only when the card is paid, and that payment is already in the ledger — as a recurring item, and as debt servicing excluded from the burn — so counting the purchases too would charge the same money to the burn twice. Set true only to answer "what do I actually spend, however I pay for it", and say plainly that the figure is not a cash-flow number.',
+      ),
     coverage: z
       .enum(['any', 'all-accounts'])
       .optional()
@@ -177,12 +201,12 @@ const input = z.object({
 export const spendingBaseline: ToolDefinition<z.infer<typeof input>, unknown> = {
   name: 'finance.spending_baseline',
   description:
-    "Measure typical variable spending — everything that is not already a recurring item, not an internal transfer between the owner's own accounts, and not a person-to-person transfer — over the last whole calendar months, and express it as a typical month, a daily burn and a per-category breakdown. The headline `avgMonthlyVariableOut` is by default the MEDIAN of the monthly totals (summed per category), not the mean, so a single freak month cannot set the burn; `meanMonthlyVariableOut` is reported alongside and a large gap between the two is itself the finding. Credit-card and loan payments are excluded as debt servicing (see `excluded.byCategory`) because they settle spending already counted and are modelled by the liabilities and recurring items. Person-to-person rails (Zelle, PayPal, Ria, Lemfi, Moneygram) are reported separately under `p2p` because they can be either spending or money being moved around; never fold them into spending without asking. finance.project_cashflow already applies this daily burn, so use this tool to explain *what* the burn is made of, not to add it on top. Accounts that are not spendable (retirement, investment, HSA) are invisible to this measurement: neither their transactions nor their presence in the coverage roll call count.",
+    "Measure typical variable spending — everything that is not already a recurring item, not an internal transfer between the owner's own accounts, and not a person-to-person transfer — over the last whole calendar months, and express it as a typical month, a daily burn and a per-category breakdown. The headline `avgMonthlyVariableOut` is by default the MEDIAN of the monthly totals (summed per category), not the mean, so a single freak month cannot set the burn; `meanMonthlyVariableOut` is reported alongside and a large gap between the two is itself the finding. Credit-card and loan payments are excluded as debt servicing (see `excluded.byCategory`) because they settle spending already counted and are modelled by the liabilities and recurring items. Person-to-person rails (Zelle, PayPal, Ria, Lemfi, Moneygram) are reported separately under `p2p` because they can be either spending or money being moved around; never fold them into spending without asking. finance.project_cashflow already applies this daily burn, so use this tool to explain *what* the burn is made of, not to add it on top. Accounts that are not spendable (retirement, investment, HSA) are invisible to this measurement: neither their transactions nor their presence in the coverage roll call count. Purchases made ON a credit card are invisible too, unless includeCardSpend is true: that money reaches the cash as the card payment, which is already counted.",
   tier: 'auto',
   input,
   async execute(args, ctx) {
     const prefs = await loadPreferences(ctx.db);
-    const { baseline, scope, months } = await loadBaseline(ctx, {
+    const { baseline, scope, months, includeCardSpend } = await loadBaseline(ctx, {
       months: args.months ?? 3,
       account: args.account,
       ...(args.baselineOptions ?? {}),
@@ -192,6 +216,8 @@ export const spendingBaseline: ToolDefinition<z.infer<typeof input>, unknown> = 
       scope,
       monthsRequested: months,
       currency: prefs.currency,
+      /** False (the default) means card purchases were left out of the burn. */
+      includeCardSpend,
       ...baseline,
     };
   },

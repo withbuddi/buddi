@@ -14,6 +14,7 @@ import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { FakeSmtpServer } from '../smtp/fake.js';
+import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import type { GatedToolDefinition, ToolContext } from '../types.js';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
@@ -80,6 +81,7 @@ suite('email tools (postgres)', () => {
   /** Two ingested messages, through the real source path. */
   async function seed(): Promise<string[]> {
     await pool.query('truncate email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade');
+    await pool.query('delete from email.settings');
     await ensureGmailAccount(pool, ENV);
     const server = new FakeImapServer();
     server.add(
@@ -153,6 +155,59 @@ suite('email tools (postgres)', () => {
     await expect(call('email.read', { id: '00000000-0000-4000-8000-000000000000' })).rejects.toThrow(
       /unknown message/,
     );
+  });
+
+  it('reads the settings, and lets the owner change the retention window', async () => {
+    const initial = await call('email.get_settings', {});
+    expect(initial).toMatchObject({ retentionDays: 90, default: 90, purgedMessages: 0 });
+
+    const updated = await call('email.set_settings', { retentionDays: 30 });
+    expect(updated.retentionDays).toBe(30);
+    expect((await call('email.get_settings', {})).retentionDays).toBe(30);
+    const { rows } = await pool.query(`select value from email.settings where key = 'retention_days'`);
+    expect(rows[0].value).toBe(30);
+
+    // The bounds are the tool's, not a suggestion.
+    await expect(call('email.set_settings', { retentionDays: 0 })).rejects.toThrow(/invalid-args/);
+    await expect(call('email.set_settings', { retentionDays: 99_999 })).rejects.toThrow(/invalid-args/);
+    expect((await call('email.get_settings', {})).retentionDays).toBe(30);
+
+    await call('email.set_settings', { retentionDays: 90 });
+  });
+
+  it('reads a purged message as headers, snippet and a retention note', async () => {
+    // Age the bank notice past the window and run the daily pass over it.
+    await pool.query(`update email.messages set date = $2 where id = $1`, [
+      ids[0],
+      new Date('2026-01-01T08:00:00Z'),
+    ]);
+    await call('email.triage_record', {
+      messageId: ids[0],
+      category: 'payment-failed',
+      urgency: 'urgent',
+      summary: 'A direct debit of 240.00 was returned unpaid.',
+    });
+    const outcome = await purgeBodies(pool, ctx.now());
+    expect(outcome.purged).toBe(1);
+
+    const message = await call('email.read', { id: ids[0] });
+    expect(message.bodyText).toBeNull();
+    expect(message.bodyPurged).toBe(true);
+    expect(message.retentionDays).toBe(90);
+    expect(message.note).toContain('purged');
+    expect(message.note).toContain('90 days');
+    // Everything that is kept forever is still there.
+    expect(message.subject).toBe('Direct debit returned');
+    expect(message.from).toBe('alerts@bank.test');
+    expect(message.snippet).toContain('returned unpaid');
+    expect(message.attachments).toHaveLength(1);
+    expect(message.triage).toMatchObject({ category: 'payment-failed', urgency: 'urgent' });
+
+    // A message inside the window is unaffected, and the count is reported.
+    const fresh = await call('email.read', { id: ids[1] });
+    expect(fresh.bodyPurged).toBe(false);
+    expect(fresh.bodyText).toContain('Everything must go.');
+    expect((await call('email.get_settings', {})).purgedMessages).toBe(1);
   });
 
   it('searches subject, sender and body, and treats wildcards literally', async () => {
