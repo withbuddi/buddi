@@ -6,6 +6,21 @@ describe('parseEnv', () => {
     expect(parseEnv('# a comment\n\nA=1\nB = two \n')).toEqual({ A: '1', B: 'two' });
   });
 
+  it('strips surrounding quotes, as dotenv does — the vault marker is written quoted', () => {
+    expect(parseEnv('TELEGRAM_BOT_TOKEN="<vault>"\nA=\'one\'\n')).toEqual({
+      TELEGRAM_BOT_TOKEN: '<vault>',
+      A: 'one',
+    });
+  });
+
+  it('leaves unmatched or inner quotes alone', () => {
+    expect(parseEnv('A="half\nB=say "hi"\nC="\n')).toEqual({
+      A: '"half',
+      B: 'say "hi"',
+      C: '"',
+    });
+  });
+
   it('keeps an = inside the value', () => {
     expect(parseEnv('DATABASE_URL=postgres://u:p@h:5432/db?x=1')).toEqual({
       DATABASE_URL: 'postgres://u:p@h:5432/db?x=1',
@@ -44,6 +59,14 @@ describe('applyEnvEdits', () => {
   it('is idempotent: writing the same value twice changes nothing', () => {
     const once = applyEnvEdits('A=1\n', [{ key: 'B', value: '2' }]);
     expect(applyEnvEdits(once, [{ key: 'B', value: '2' }])).toBe(once);
+  });
+
+  it('writes the quoted vault marker in place and reads it back unquoted', () => {
+    const out = applyEnvEdits('TELEGRAM_BOT_TOKEN=123:abc\n', [
+      { key: 'TELEGRAM_BOT_TOKEN', value: '"<vault>"' },
+    ]);
+    expect(out).toBe('TELEGRAM_BOT_TOKEN="<vault>"\n');
+    expect(parseEnv(out)).toEqual({ TELEGRAM_BOT_TOKEN: '<vault>' });
   });
 
   it('never drops a key the owner added by hand', () => {

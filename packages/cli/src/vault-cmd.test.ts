@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -77,7 +78,7 @@ describe('buddi vault', () => {
       'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-secret',
       'TELEGRAM_BOT_TOKEN=123:abc',
       'ANTHROPIC_API_KEY=',
-      'GMAIL_APP_PASSWORD=<vault>',
+      'GMAIL_APP_PASSWORD="<vault>"',
       '',
     ].join('\n');
 
@@ -101,7 +102,7 @@ describe('buddi vault', () => {
       expect(lines.join('\n')).toContain('Nothing was changed');
     });
 
-    it('moves secrets into the vault and leaves a <vault> marker behind', async () => {
+    it('moves secrets into the vault and leaves a quoted <vault> marker behind', async () => {
       const file = tmpEnvFile(envText);
       const vault = createMemoryVault();
       const confirm = vi.fn(async () => true);
@@ -115,14 +116,32 @@ describe('buddi vault', () => {
       expect(await vault.get('CLAUDE_CODE_OAUTH_TOKEN')).toBe('sk-ant-oat01-secret');
 
       const rewritten = readFileSync(file, 'utf8');
-      expect(rewritten).toContain('TELEGRAM_BOT_TOKEN=<vault>');
-      expect(rewritten).toContain('CLAUDE_CODE_OAUTH_TOKEN=<vault>');
+      // Quoted: bare `<vault>` is a redirection, and `set -a; . ./.env` dies on it.
+      expect(rewritten).toContain('TELEGRAM_BOT_TOKEN="<vault>"');
+      expect(rewritten).toContain('CLAUDE_CODE_OAUTH_TOKEN="<vault>"');
+      expect(rewritten).not.toMatch(/^[A-Z_]+=<vault>$/m);
       expect(rewritten).not.toContain('123:abc');
       expect(rewritten).not.toContain('sk-ant-oat01-secret');
       // Untouched: not a secret, and an empty one has nothing to move.
       expect(rewritten).toContain('DATABASE_URL=postgres://buddi:buddi@localhost:5432/buddi');
       expect(rewritten).toContain('ANTHROPIC_API_KEY=');
       expect(lines.join('\n')).toContain('Restart buddi');
+    });
+
+    it('leaves a .env that `sh` can still source', async () => {
+      const file = tmpEnvFile(envText);
+      await runVault('import-env', undefined, {
+        vault: createMemoryVault(),
+        envFile: file,
+        confirm: async () => true,
+        out: () => {},
+      });
+      // The whole point of the quotes: unquoted `<vault>` is a here-doc
+      // redirection and this dies with a parse error.
+      const echoed = execFileSync('sh', ['-c', `set -a; . '${file}'; set +a; echo ok`], {
+        encoding: 'utf8',
+      });
+      expect(echoed.trim()).toBe('ok');
     });
 
     it('is idempotent: a second run has nothing left to move', async () => {

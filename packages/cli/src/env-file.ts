@@ -5,8 +5,10 @@
  * regenerating it: a key that is already there is replaced in place, comments
  * and ordering survive, and a key the owner added by hand is never dropped.
  *
- * Values are written raw — no quoting — because that is what `dotenv` reads and
- * what the existing `.env.example` uses. A secret is never echoed back.
+ * Values are written exactly as given — the caller decides about quoting, and
+ * `import-env` quotes its `"<vault>"` marker so the file stays sourceable from
+ * a shell. Reading strips one pair of surrounding quotes, as `dotenv` does, so
+ * both spellings mean the same thing. A secret is never echoed back.
  */
 
 export interface EnvEdit {
@@ -22,9 +24,25 @@ export function parseEnv(text: string): Record<string, string> {
     if (trimmed === '' || trimmed.startsWith('#')) continue;
     const idx = trimmed.indexOf('=');
     if (idx <= 0) continue;
-    out[trimmed.slice(0, idx).trim()] = trimmed.slice(idx + 1).trim();
+    out[trimmed.slice(0, idx).trim()] = unquote(trimmed.slice(idx + 1).trim());
   }
   return out;
+}
+
+/**
+ * Strip one matching pair of surrounding quotes, the way `dotenv` does.
+ *
+ * The file is read raw here, but the running process sees it through `dotenv`,
+ * so `NAME="<vault>"` has to mean the same thing on both paths — otherwise the
+ * quoted vault marker (quoted so `. ./.env` does not read `<` as a redirection)
+ * would look like a value.
+ */
+function unquote(value: string): string {
+  const first = value[0];
+  if ((first === '"' || first === "'") && value.length >= 2 && value.endsWith(first)) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 /** True when the key is absent, empty, or whitespace — i.e. still to be asked for. */
