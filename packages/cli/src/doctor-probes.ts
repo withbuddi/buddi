@@ -11,21 +11,30 @@ import {
   CORE_SCHEMA,
   countJobsByState,
   createPool,
+  createVault,
   isPaused,
   providerAuthHeaders,
   resolveProvider,
   timezoneFromEnv,
   type PluginManifest,
+  type Vault,
 } from '@buddi/core';
 import {
   createToolRegistry,
+  hydrateSecrets,
   installedManifests,
   listDevices,
   loadGatewayCatalog,
   TelegramApi,
 } from '@buddi/gateway';
 import type { Pool } from 'pg';
-import { checkNodeVersion, type DoctorProbes, type ProbeResult } from './doctor.js';
+import {
+  checkNodeVersion,
+  checkVault,
+  type DoctorProbes,
+  type ProbeResult,
+  type VaultFacts,
+} from './doctor.js';
 import { versionOf } from './proc.js';
 import { createServiceManager } from './service/index.js';
 
@@ -68,9 +77,28 @@ export interface Probes extends DoctorProbes {
   close(): Promise<void>;
 }
 
-export function createProbes(env: NodeJS.ProcessEnv = process.env): Probes {
+export interface ProbeOptions {
+  /** This machine's vault. Injected in tests; `BUDDI_VAULT=none` turns it off. */
+  vault?: Vault | undefined;
+}
+
+/**
+ * The doctor checks the installation *as the service sees it*.
+ *
+ * After `buddi vault import-env`, `.env` holds `NAME=<vault>` markers, so a
+ * probe that read `process.env` raw would test the literal string `<vault>` as
+ * if it were a token — and report a broken installation that works perfectly.
+ * Every secret-touching probe waits on this one hydration instead, which is the
+ * same call the running service makes at startup.
+ */
+export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOptions = {}): Probes {
   const lazy = new LazyPool();
   const databaseUrl = env.DATABASE_URL;
+
+  const vault = opts.vault ?? createVault({ env });
+  let hydration: Promise<VaultFacts> | undefined;
+  /** Hydrate once per run: the keychain is a process call, not a getter. */
+  const secrets = (): Promise<VaultFacts> => (hydration ??= hydrateSecrets(env, vault));
 
   const connected = async (): Promise<Pool | null> => {
     if (!databaseUrl) return null;
@@ -148,7 +176,12 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env): Probes {
       }
     },
 
+    async vault(): Promise<ProbeResult> {
+      return checkVault(await secrets());
+    },
+
     async modelCredential(): Promise<ProbeResult> {
+      const facts = await secrets();
       let ref;
       try {
         const registry = createToolRegistry();
@@ -161,9 +194,16 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env): Probes {
       }
       const resolution = resolveProvider(ref, env);
       if (!resolution.ok) {
+        // When the vault could not hand the credential over, say *that*: the
+        // owner's next move is unlocking a keychain, not pasting a key.
+        const blocked = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']
+          .map((name) => facts.problems[name])
+          .find((p) => p !== undefined && p.code !== 'missing-secret');
         return {
           status: 'fail',
-          detail: `${resolution.problem.message} — set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY`,
+          detail: blocked
+            ? `${resolution.problem.message} — the ${facts.vault} vault could not supply it: ${blocked.message}`
+            : `${resolution.problem.message} — set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY`,
         };
       }
       const provider = resolution.provider;
@@ -200,9 +240,17 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env): Probes {
     },
 
     async botToken(): Promise<ProbeResult> {
+      const facts = await secrets();
       const token = env.TELEGRAM_BOT_TOKEN;
       if (!token || token.trim() === '') {
-        return { status: 'warn', detail: 'TELEGRAM_BOT_TOKEN is not set — no Telegram surface' };
+        const problem = facts.problems.TELEGRAM_BOT_TOKEN;
+        return {
+          status: 'warn',
+          detail:
+            problem && problem.code !== 'missing-secret'
+              ? `TELEGRAM_BOT_TOKEN unavailable: ${problem.message} — no Telegram surface`
+              : 'TELEGRAM_BOT_TOKEN is not set — no Telegram surface',
+        };
       }
       try {
         const me = await new TelegramApi({ token }).getMe();

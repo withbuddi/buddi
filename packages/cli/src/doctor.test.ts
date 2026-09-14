@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   checkNodeVersion,
+  checkVault,
   collectChecks,
   exitCodeFor,
   renderTable,
   summarize,
   type DoctorProbes,
   type ProbeResult,
+  type VaultFacts,
 } from './doctor.js';
 
 const ok = (detail = 'fine'): ProbeResult => ({ status: 'ok', detail });
@@ -19,6 +21,7 @@ function fakeProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     dockerVersion: async () => ok('Docker version 29'),
     postgres: async () => ok('PostgreSQL 16'),
     migrations: async () => ok('6 applied, none pending'),
+    vault: async () => ok('keychain — from the vault: ANTHROPIC_API_KEY'),
     modelCredential: async () => ok('api-key accepted'),
     botToken: async () => ok('@buddi_bot'),
     pairedDevices: async () => ok('telegram:phone'),
@@ -38,6 +41,7 @@ describe('collectChecks', () => {
       'docker',
       'postgres',
       'migrations',
+      'vault',
       'model credential',
       'telegram bot',
       'paired devices',
@@ -51,7 +55,14 @@ describe('collectChecks', () => {
   it('marks the checks the installation cannot work without as critical', async () => {
     const checks = await collectChecks(fakeProbes());
     const critical = checks.filter((c) => c.critical).map((c) => c.name);
-    expect(critical).toEqual(['node', 'pnpm', 'postgres', 'migrations', 'model credential']);
+    expect(critical).toEqual([
+      'node',
+      'pnpm',
+      'postgres',
+      'migrations',
+      'vault',
+      'model credential',
+    ]);
   });
 
   it('turns a probe that throws into a failed check rather than crashing', async () => {
@@ -143,5 +154,51 @@ describe('checkNodeVersion', () => {
     const result = checkNodeVersion('20.11.1');
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('Node 22');
+  });
+});
+
+describe('checkVault', () => {
+  const facts = (over: Partial<VaultFacts> = {}): VaultFacts => ({
+    vault: 'keychain',
+    sources: { CLAUDE_CODE_OAUTH_TOKEN: 'vault', TELEGRAM_BOT_TOKEN: 'env' },
+    problems: {},
+    ...over,
+  });
+
+  it('names which secrets came from the vault and which from .env', () => {
+    const row = checkVault(facts());
+    expect(row.status).toBe('ok');
+    expect(row.detail).toBe(
+      'keychain — from the vault: CLAUDE_CODE_OAUTH_TOKEN; from .env: TELEGRAM_BOT_TOKEN',
+    );
+  });
+
+  it('fails on a locked vault, and says so before anything else', () => {
+    const row = checkVault(
+      facts({
+        sources: {},
+        problems: {
+          CLAUDE_CODE_OAUTH_TOKEN: { code: 'vault-locked', message: 'the keychain is locked' },
+        },
+      }),
+    );
+    expect(row.status).toBe('fail');
+    expect(row.detail).toMatch(/locked/);
+  });
+
+  it('fails when no model credential resolved anywhere', () => {
+    const row = checkVault(facts({ sources: { TELEGRAM_BOT_TOKEN: 'env' } }));
+    expect(row.status).toBe('fail');
+    expect(row.detail).toMatch(/no model credential/);
+  });
+
+  it('does not fail over an optional secret nobody set', () => {
+    const row = checkVault(
+      facts({
+        sources: { ANTHROPIC_API_KEY: 'vault' },
+        problems: { GMAIL_APP_PASSWORD: { code: 'missing-secret', message: 'not set' } },
+      }),
+    );
+    expect(row.status).toBe('ok');
   });
 });

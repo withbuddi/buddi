@@ -8,30 +8,23 @@
  * closed with a typed problem.
  */
 import { realpathSync } from 'node:fs';
-import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  createPool,
   resolveProvider,
-  timezoneFromEnv,
   UnknownAgentError,
   type CatalogAgent,
-  type ToolContext,
 } from '@buddi/core';
 import { createAnthropicProvider, createConversation, runAgent } from '@buddi/runtime';
-import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import {
   AGENTS_DIR,
   createToolRegistry,
   loadGatewayCatalog,
   memoryPreambleFor,
-  REPO_ROOT,
 } from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
-
-const OWNER_ID = 'owner';
+import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
 
 const ESC = '\u001b[';
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
@@ -119,12 +112,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  loadDotenv({ path: path.join(REPO_ROOT, '.env') });
-
-  const registry = createToolRegistry();
-  const catalog = loadGatewayCatalog({ env: process.env, registry });
+  loadEnv();
 
   if (args.command === 'agents') {
+    // Listing agents needs no database and no credential: build the catalog
+    // alone rather than the whole wiring.
+    const catalog = loadGatewayCatalog({ env: process.env, registry: createToolRegistry() });
     for (const a of catalog.list()) {
       console.log(
         `${bold(`@${a.handle}`)} ${dim(a.id)}${a.isDefault ? dim(' (default)') : ''} — ` +
@@ -139,15 +132,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     process.exit(1);
   }
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.error('DATABASE_URL is not set (cp .env.example .env, then pnpm db:up)');
+  /*
+   * The composition root, vault included. `createWiringAsync` hydrates the
+   * secrets from the keychain before anything reads them — without it, a
+   * `.env` holding `ANTHROPIC_API_KEY=<vault>` after `buddi vault import-env`
+   * would be sent to the API as if the marker were the key.
+   */
+  let wiring: Wiring;
+  try {
+    wiring = await createWiringAsync(process.env);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-
-  const now = (): Date => new Date();
-  /** The owner's zone — what makes "today" the owner's day, not UTC's. */
-  const timezone = timezoneFromEnv(process.env);
+  const { pool, registry, catalog, now, timezone, ctx } = wiring;
 
   // Fails closed: an unknown --agent is never coerced into the default. A
   // handle (`--agent ledger`, `--agent @ledger`) names the same agent as its id.
@@ -175,11 +173,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     process.exit(1);
   }
   const provider = createAnthropicProvider(resolution.provider);
-  /** Delegation needs both halves; until this call, agent.delegate refuses. */
+  /** Delegation needs both halves; rebound here for the *selected* agent. */
   bindDelegation(registry, { catalog, provider });
 
-  const pool = createPool(databaseUrl);
-  const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now, timezone };
   /** Every run starts with what this agent remembers about the owner. */
   const memoryPreamble = memoryPreambleFor(pool);
 

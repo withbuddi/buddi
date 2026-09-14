@@ -16,6 +16,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createPool, runMigrations } from '@buddi/core';
 import {
+  hydrateSecrets,
   installedManifests,
   runChatCli,
   runMissionsCli,
@@ -120,6 +121,9 @@ export async function dispatch(command: Command): Promise<number> {
       return service(command.action);
     case 'telegram':
       loadEnv();
+      // `pair` talks to Telegram, so the bot token has to be a token and not
+      // the `<vault>` marker `vault import-env` leaves in `.env`.
+      await hydrateSecrets(process.env);
       return runTelegram(command.action, command.deviceId);
     case 'vault':
       loadEnv();
