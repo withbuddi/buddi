@@ -25,6 +25,18 @@ describe('parseArgs', () => {
     expect(parseArgs(['missions'])).toEqual({ kind: 'missions', argv: [] });
   });
 
+  it('hands the reminders slice to the gateway, command word stripped', () => {
+    expect(parseArgs(['reminders'])).toEqual({ kind: 'reminders', argv: [] });
+    expect(parseArgs(['reminders', '--agent', 'credit-coach'])).toEqual({
+      kind: 'reminders',
+      argv: ['--agent', 'credit-coach'],
+    });
+    expect(parseArgs(['reminders', 'cancel', 'r-1'])).toEqual({
+      kind: 'reminders',
+      argv: ['cancel', 'r-1'],
+    });
+  });
+
   it('parses the standalone commands', () => {
     expect(parseArgs(['serve'])).toEqual({ kind: 'serve' });
     expect(parseArgs(['init'])).toEqual({ kind: 'init' });

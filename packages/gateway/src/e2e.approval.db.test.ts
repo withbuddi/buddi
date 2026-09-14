@@ -30,6 +30,7 @@ import {
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
+import { createReminderManifest, createScheduleManifest } from './missions/reminders.js';
 import {
   createEmailManifest,
   ensureGmailAccount,
@@ -253,6 +254,8 @@ suite('end to end: mail in, approved send out', () => {
     registry.register(emailManifest);
     registry.register(memoryManifest);
     registry.register(artifactsManifest);
+    registry.register(createReminderManifest());
+    registry.register(createScheduleManifest());
     registry.register(createDelegationManifest(registry));
     const catalog = loadGatewayCatalog({ env: ENV, registry });
     // The agent a source names is the one the owner types as @postman.

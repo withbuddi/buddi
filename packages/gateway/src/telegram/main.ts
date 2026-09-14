@@ -53,6 +53,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'use', description: 'Switch agent' },
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
+  { command: 'reminders', description: 'What the agents put on the clock' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
   { command: 'files', description: 'The last files you sent me' },
   { command: 'devices', description: 'Devices paired to this installation' },

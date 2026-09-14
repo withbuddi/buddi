@@ -11,6 +11,7 @@ export * from './db.js';
 export * from './events.js';
 export * from './queue/index.js';
 export * from './scheduler/index.js';
+export * from './reminders/index.js';
 export * from './sentinels/index.js';
 export * from './sources/index.js';
 export * from './owner.js';

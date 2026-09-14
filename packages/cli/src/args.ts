@@ -55,6 +55,8 @@ export type Command =
   | { kind: 'chat-cli'; argv: string[] }
   /** Delegated verbatim to the gateway's missions CLI. */
   | { kind: 'missions'; argv: string[] }
+  /** One-off reminders the agents set. Delegated to the gateway's CLI. */
+  | { kind: 'reminders'; argv: string[] }
   | { kind: 'migrate' }
   | { kind: 'init' }
   | { kind: 'doctor' }
@@ -86,6 +88,7 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'serve' };
   }
   if (head === 'missions') return { kind: 'missions', argv: rest };
+  if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'migrate') return { kind: 'migrate' };
   if (head === 'init') return { kind: 'init' };
   // `status` is what a person types when they want to know if it works; it is
@@ -249,6 +252,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi vault import-env      move .env secrets into the keychain
 
   buddi missions list|add-defaults|add-friday-recap|run-now <id>|enable <id>|disable <id>
+  buddi reminders [--agent <id>] [--all]      one-off nudges the agents set
+  buddi reminders cancel <id>
   buddi migrate              apply core + plugin migrations
 
 In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;

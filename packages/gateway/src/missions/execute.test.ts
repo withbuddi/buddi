@@ -6,6 +6,7 @@ import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from '../agents/delegation.js';
+import { createReminderManifest, createScheduleManifest } from './reminders.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
 import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError } from './execute.js';
 
@@ -144,6 +145,8 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
   registry.register(financeManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
+  registry.register(createReminderManifest());
+  registry.register(createScheduleManifest());
   // The finance advisor's file grants agent.delegate, so the registry a mission
   // runs against must carry it too. It is unbound here: delegation refuses.
   registry.register(createDelegationManifest(registry));

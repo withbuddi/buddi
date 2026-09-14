@@ -26,6 +26,7 @@ import {
 import { bindDelegation } from './agents/delegation.js';
 import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
 import { describeDatabaseError } from './db-ready.js';
+import { stripToolNames } from './telegram/surface.js';
 
 const ESC = '\u001b[';
 const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
@@ -209,7 +210,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
           console.error(dim(`⚙ ${name} ${JSON.stringify(input)}`));
         },
       });
-      console.log(result.text);
+      // Tool names are internal: the owner sees what happened, not which
+      // function did it — the same rule the Telegram surface applies.
+      console.log(stripToolNames(result.text));
     };
 
     if (args.command === 'ask') {

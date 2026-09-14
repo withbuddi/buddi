@@ -2,6 +2,7 @@ import { DEFAULT_MODEL } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
+import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 import { describe, expect, it } from 'vitest';
 import {
   createFinanceAdvisor,
@@ -89,6 +90,8 @@ describe('agent definition', () => {
           t.startsWith('finance.') ||
           t.startsWith('memory.') ||
           t.startsWith('artifacts.') ||
+          t.startsWith('reminder.') ||
+          t.startsWith('schedule.') ||
           t === 'agent.delegate',
       ),
     ).toBe(true);
@@ -99,6 +102,8 @@ describe('agent definition', () => {
       financeManifest.tools.length +
         memoryManifest.tools.length +
         artifactsManifest.tools.length +
+        createReminderManifest().tools.length +
+        createScheduleManifest().tools.length +
         1, // + agent.delegate
     );
   });

@@ -37,6 +37,7 @@ import {
   progressLine,
   readingText,
   senderLabel,
+  stripToolNames,
   toPlainText,
   toolLabel,
   type RunMission,
@@ -592,8 +593,14 @@ describe('toPlainText', () => {
   });
 
   it('keeps a lone asterisk in arithmetic and underscores inside words', () => {
-    expect(toPlainText('2 * 3 = 6 and finance.list_accounts ran')).toBe(
-      '2 * 3 = 6 and finance.list_accounts ran',
+    expect(toPlainText('2 * 3 = 6 and my_own_note stayed')).toBe(
+      '2 * 3 = 6 and my_own_note stayed',
+    );
+  });
+
+  it('removes a tool name the model let slip into the answer', () => {
+    expect(toPlainText('Stored it (finance.set_liability). All set.')).toBe(
+      'Stored it. All set.',
     );
   });
 
@@ -633,6 +640,91 @@ describe('toPlainText', () => {
 
   it('is a no-op on an empty string', () => {
     expect(toPlainText('')).toBe('');
+  });
+});
+
+describe('stripToolNames', () => {
+  const BUG =
+    'Every card and loan due date is already stored (finance.set_liability), and ' +
+    'every recurring payment is on the calendar (finance.add_recurring).';
+
+  it('renders the sentence from the bug report clean and still readable', () => {
+    expect(stripToolNames(BUG)).toBe(
+      'Every card and loan due date is already stored, and every recurring payment ' +
+        'is on the calendar.',
+    );
+  });
+
+  it('drops the whole parenthetical, with or without a connector', () => {
+    expect(stripToolNames('I saved it (via finance.set_liability) last night.')).toBe(
+      'I saved it last night.',
+    );
+    expect(stripToolNames('Noted (memory.remember, artifacts.store_file) for you.')).toBe(
+      'Noted for you.',
+    );
+  });
+
+  it('drops a backticked or quoted mention together with its quotes', () => {
+    expect(stripToolNames('I called `finance.add_recurring` for you.')).toBe(
+      'I called for you.',
+    );
+    expect(stripToolNames('I used "email.list_messages" there.')).toBe('I used there.');
+    expect(stripToolNames("I used 'agent.delegate' there.")).toBe('I used there.');
+  });
+
+  it('drops a bare mention mid-sentence and tidies the spacing', () => {
+    expect(stripToolNames('The reminder.create_reminder tool holds it.')).toBe(
+      'The tool holds it.',
+    );
+    expect(stripToolNames('Filed it via schedule.add_event yesterday.')).toBe(
+      'Filed it yesterday.',
+    );
+  });
+
+  it('matches case-insensitively', () => {
+    expect(stripToolNames('Done (Finance.Set_Liability).')).toBe('Done.');
+  });
+
+  it('leaves everything that merely has a dot byte-identical', () => {
+    const survivors = [
+      'Your balance is 1 240,50 € and 3.5% went to fees.',
+      'The renewal is 2026-09-14, not 2026.09.14.',
+      'shotcrisp.app and americanexpress.com both billed you.',
+      'Write to amouzou@gmail.com or check gmail.com.',
+      'I read Statement.pdf and finance.csv this morning.',
+      'See https://example.com/finance.set_liability for the docs.',
+      'We are on v1.2.3 and node 22.11.0.',
+      'The e-mail came from no-reply@finance.americanexpress.com.',
+    ];
+    for (const line of survivors) expect(stripToolNames(line)).toBe(line);
+  });
+
+  it('leaves a paragraph with no tool names exactly as it is', () => {
+    const text = [
+      'You have 1 240,50 € left after rent.',
+      '',
+      'Nothing is due before Friday, and the card statement closes on the 20th.',
+    ].join('\n');
+    expect(stripToolNames(text)).toBe(text);
+  });
+
+  it('is idempotent', () => {
+    const once = stripToolNames(BUG);
+    expect(stripToolNames(once)).toBe(once);
+    expect(stripToolNames(stripToolNames('Saved (memory.write_fact). Done.'))).toBe(
+      stripToolNames('Saved (memory.write_fact). Done.'),
+    );
+  });
+
+  it('keeps the rest of the text when one line was nothing but the mention', () => {
+    const text = ['Here is where you stand.', 'finance.list_accounts.', 'Nothing is due.'].join(
+      '\n',
+    );
+    expect(stripToolNames(text)).toBe(['Here is where you stand.', '', 'Nothing is due.'].join('\n'));
+  });
+
+  it('is a no-op on an empty string', () => {
+    expect(stripToolNames('')).toBe('');
   });
 });
 

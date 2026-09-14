@@ -22,6 +22,7 @@ import {
   requireDatabase,
   runChatCli,
   runMissionsCli,
+  runRemindersCli,
   runServe,
 } from '@buddi/gateway';
 import { parseArgs, USAGE, UsageError, type Command, type ServiceAction } from './args.js';
@@ -115,6 +116,13 @@ export async function dispatch(command: Command): Promise<number> {
       if (blocked !== 0) return blocked;
       await runMissionsCli(command.argv);
       return 0;
+    }
+    case 'reminders': {
+      loadEnv();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
+      await runRemindersCli(command.argv);
+      return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'serve':
       loadEnv();
