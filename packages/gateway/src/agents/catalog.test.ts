@@ -36,7 +36,7 @@ describe('the shipped agents directory', () => {
       .list()
       .map((t) => t.name)
       // ... plus the one agent tool it names explicitly: it may ask a colleague.
-      .filter((n) => n.startsWith('finance.') || n.startsWith('memory.') || n === 'agent.delegate');
+      .filter((n) => n.startsWith('finance.') || n.startsWith('memory.') || n.startsWith('artifacts.') || n === 'agent.delegate');
     expect(catalog.resolve('finance-advisor').tools).toEqual(registered);
     expect(registered).toContain('agent.delegate');
     expect(registered.some((n) => n.startsWith('finance.'))).toBe(true);
@@ -64,6 +64,37 @@ describe('the shipped agents directory', () => {
       expect(definition.systemPrompt).toContain('Today is 2026-09-13.');
       expect(definition.systemPrompt).not.toContain('{{today}}');
     }
+  });
+
+  it('ships the three handles the owner types', () => {
+    expect(
+      Object.fromEntries(catalog.list().map((a) => [a.id, a.handle])),
+    ).toEqual({
+      concierge: 'buddi',
+      'credit-coach': 'credo',
+      'finance-advisor': 'ledger',
+    });
+  });
+
+  it('resolves each agent by its handle as readily as by its id', () => {
+    expect(catalog.resolve('ledger').id).toBe('finance-advisor');
+    expect(catalog.resolve('@credo').id).toBe('credit-coach');
+    expect(catalog.byHandle('BUDDI')?.id).toBe('concierge');
+    expect(catalog.byHandle('ledger')?.id).toBe('finance-advisor');
+  });
+
+  it('tells the finance advisor its handle and names its colleagues by theirs', () => {
+    const prompt = catalog.resolve('finance-advisor').systemPromptTemplate;
+    expect(prompt).toContain('Your handle is @ledger');
+    expect(prompt).toContain('@credo — Credit Coach:');
+    expect(prompt).toContain('@buddi — Concierge:');
+  });
+
+  it('attributes a delegated answer to the credit coach by handle', () => {
+    // The persona must quote the handle, never the catalog id.
+    const prompt = catalog.resolve('finance-advisor').systemPromptTemplate;
+    expect(prompt).toContain('@credo says:');
+    expect(prompt).not.toContain('Credit Coach says:');
   });
 
   it('fails closed on an unknown id rather than falling back to the default', () => {

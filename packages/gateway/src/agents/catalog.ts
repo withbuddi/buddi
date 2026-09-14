@@ -14,6 +14,7 @@ import {
   type AgentCatalog,
   type PluginManifest,
 } from '@buddi/core';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from './delegation.js';
@@ -40,6 +41,7 @@ export function createToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(financeManifest);
   registry.register(memoryManifest);
+  registry.register(artifactsManifest);
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
   // by `bindDelegation` once they exist (the catalog is loaded *against* this

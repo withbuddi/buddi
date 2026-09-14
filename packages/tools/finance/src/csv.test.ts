@@ -151,3 +151,45 @@ describe('parseBankCsv', () => {
     expect(rows).toHaveLength(3);
   });
 });
+
+describe('pending markers', () => {
+  it('reads a status column that says pending', () => {
+    const { rows } = parseBankCsv(
+      [
+        'Date,Description,Amount,Status',
+        '2026-09-12,LIDL,-42.50,Pending',
+        '2026-09-10,MONOPRIX,-20.00,Posted',
+      ].join('\n'),
+    );
+    expect(rows[0]).toMatchObject({ description: 'LIDL', status: 'pending' });
+    expect(rows[1].status).toBeUndefined();
+  });
+
+  it('reads a PENDING marker written into the date column', () => {
+    const { rows } = parseBankCsv(
+      ['date,amount,description', '2026-09-12 PENDING,-42.50,LIDL'].join('\n'),
+    );
+    expect(rows).toEqual([
+      { date: '2026-09-12', amount: -42.5, description: 'LIDL', status: 'pending' },
+    ]);
+  });
+
+  it('recognises the other wordings banks use', () => {
+    const { rows } = parseBankCsv(
+      [
+        'Date,Libelle,Montant,Statut',
+        '12/09/2026,LIDL,-42.50,En attente',
+        '11/09/2026,FNAC,-55.00,Autorisation',
+        '10/09/2026,SPAR,-5.00,Comptabilise',
+      ].join('\n'),
+    );
+    expect(rows.map((r) => r.status)).toEqual(['pending', 'pending', undefined]);
+  });
+
+  it('does not read the status column as the description', () => {
+    const { rows } = parseBankCsv(
+      ['Date,Status,Amount,Memo', '2026-09-13,Pending,-9.99,Bakery'].join('\n'),
+    );
+    expect(rows[0]).toMatchObject({ description: 'Bakery', status: 'pending' });
+  });
+});

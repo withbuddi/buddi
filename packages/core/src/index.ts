@@ -3,6 +3,7 @@ export * from './tools.js';
 export * from './registry.js';
 export * from './agent.js';
 export * from './agents/index.js';
+export * from './artifacts/index.js';
 export * from './db.js';
 export * from './events.js';
 export * from './scheduler/index.js';

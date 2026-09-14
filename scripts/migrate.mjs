@@ -21,14 +21,18 @@ const { createPool, runMigrations } = await import('@buddi/core');
 
 const manifests = [];
 /** Every plugin that is built. Core with zero plugins installed is a valid state. */
-for (const name of ['finance', 'memory']) {
+for (const name of ['finance', 'memory', 'artifacts']) {
   const entry = path.join(repoRoot, 'packages', 'tools', name, 'dist', 'index.js');
   if (!existsSync(entry)) continue;
   const mod = await import(entry);
   const manifest = mod.manifest ?? mod.default;
   if (manifest && typeof manifest === 'object' && 'migrationsDir' in manifest) {
     manifests.push(manifest);
-    console.log(`plugin: ${manifest.name}@${manifest.version} (schema ${manifest.schema})`);
+    console.log(
+      manifest.migrationsDir
+        ? `plugin: ${manifest.name}@${manifest.version} (schema ${manifest.schema})`
+        : `plugin: ${manifest.name}@${manifest.version} (no schema of its own)`,
+    );
   }
 }
 

@@ -49,6 +49,8 @@ export async function loadBaseline(
   }
 
   // Only the window matters; pulling the whole ledger would grow without bound.
+  // Settled rows only: an unsettled authorisation is not yet a measured habit,
+  // and a superseded pending row would count its own posted twin twice.
   const from = `${start.slice(0, 7)}-01`;
   // Non-cashflow accounts are invisible here: a 401k contribution is not
   // variable spending, and a retirement account that only sees one transaction
@@ -61,6 +63,8 @@ export async function loadBaseline(
           where t.occurred_on < $1::date
             and t.occurred_on >= ($1::date - make_interval(months => $2::int))
             and t.account_id = $3
+            and t.status = 'posted'
+            and t.superseded_by is null
           order by t.occurred_on`,
         [from, lookbackMonths, accountId],
       )
@@ -71,6 +75,8 @@ export async function loadBaseline(
           where t.occurred_on < $1::date
             and t.occurred_on >= ($1::date - make_interval(months => $2::int))
             and (a.id is null or a.include_in_cashflow)
+            and t.status = 'posted'
+            and t.superseded_by is null
           order by t.occurred_on`,
         [from, lookbackMonths],
       );

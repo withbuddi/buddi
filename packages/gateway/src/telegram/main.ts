@@ -21,11 +21,12 @@ import {
   type ToolContext,
   type ToolRegistry,
 } from '@buddi/core';
-import { runAgent, type RuntimeProvider } from '@buddi/runtime';
+import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { createWiring, loadEnv } from '../bootstrap.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
+import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
 import { SURFACE, SURFACE_HINT, TelegramSurface, type RunMission } from './surface.js';
 import type { AgentCatalog } from './types.js';
 
@@ -42,20 +43,22 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'use', description: 'Switch agent' },
   { command: 'status', description: 'Where you stand right now' },
   { command: 'recap', description: 'Run the weekly recap now' },
+  { command: 'files', description: 'The last files you sent me' },
   { command: 'new', description: 'Start a fresh conversation' },
   { command: 'id', description: 'Show my Telegram ids' },
   { command: 'help', description: 'What buddi can do' },
 ];
 
 /**
- * The menu as one chat sees it: `use` names the agent that chat is talking to,
- * so the active agent is visible without asking. Everything else is identical.
+ * The menu as one chat sees it: `use` names the agent that chat is talking to
+ * by its handle — `Switch agent (active: @ledger)` — so the active agent is
+ * visible without asking, in the same spelling the owner types.
  */
-export function ownerCommandsFor(activeAgentName?: string): readonly TelegramBotCommand[] {
-  const name = (activeAgentName ?? '').trim();
-  if (name === '') return OWNER_COMMANDS;
+export function ownerCommandsFor(activeAgentHandle?: string): readonly TelegramBotCommand[] {
+  const handle = (activeAgentHandle ?? '').trim().replace(/^@/, '');
+  if (handle === '') return OWNER_COMMANDS;
   return OWNER_COMMANDS.map((c) =>
-    c.command === 'use' ? { ...c, description: `Switch agent (active: ${name})` } : c,
+    c.command === 'use' ? { ...c, description: `Switch agent (active: @${handle})` } : c,
   );
 }
 
@@ -67,7 +70,7 @@ export async function applyCommandMenus(
   api: Pick<TelegramApi, 'setMyCommands' | 'deleteMyCommands'>,
   paired: readonly SurfaceIdentity[],
   log: (line: string) => void,
-  activeAgentName?: (chatId: string) => Promise<string | undefined>,
+  activeAgentHandle?: (chatId: string) => Promise<string | undefined>,
 ): Promise<void> {
   try {
     await api.deleteMyCommands({ type: 'default' });
@@ -77,15 +80,15 @@ export async function applyCommandMenus(
   for (const identity of paired) {
     const chatId = identity.externalChatId;
     if (!chatId) continue;
-    let name: string | undefined;
-    if (activeAgentName) {
-      name = await activeAgentName(chatId).catch((err) => {
+    let handle: string | undefined;
+    if (activeAgentHandle) {
+      handle = await activeAgentHandle(chatId).catch((err) => {
         log(`telegram: active agent for chat ${chatId} unknown: ${errorText(err)}`);
         return undefined;
       });
     }
     try {
-      await api.setMyCommands(ownerCommandsFor(name), { type: 'chat', chat_id: chatId });
+      await api.setMyCommands(ownerCommandsFor(handle), { type: 'chat', chat_id: chatId });
       log(`telegram: menu set for chat ${chatId}`);
     } catch (err) {
       log(`telegram: menu for chat ${chatId} failed: ${errorText(err)}`);
@@ -118,6 +121,8 @@ export interface TelegramDeps {
   now: () => Date;
   /** Injected in tests; built from `TELEGRAM_BOT_TOKEN` otherwise. */
   api?: TelegramApi;
+  /** Injected in tests; bound to core's artifact store otherwise. */
+  artifacts?: ArtifactStore;
   log?: (line: string) => void;
   /**
    * Runs a mission inline for `/recap`. `buddi serve` owns the executor and
@@ -165,22 +170,30 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   const cursor = await getSurfaceCursor(pool, SURFACE);
   const me = await api.getMe();
 
-  const setChatMenu = async (chatId: string, agent: { name: string }): Promise<void> => {
-    await api.setMyCommands(ownerCommandsFor(agent.name), { type: 'chat', chat_id: chatId });
+  const setChatMenu = async (chatId: string, agent: { handle: string }): Promise<void> => {
+    await api.setMyCommands(ownerCommandsFor(agent.handle), { type: 'chat', chat_id: chatId });
   };
+
+  // Files land in core's artifact store; the surface only hands bytes over and
+  // asks for them back when a run needs to look at one.
+  const artifacts = deps.artifacts ?? createCoreArtifactStore({ pool, env });
 
   const surface = new TelegramSurface({
     api,
     pool,
     catalog: deps.catalog,
+    // The bot's own @username, so Telegram's mention of it is stripped before
+    // the owner's `@handle` is read.
+    ...(me.username ? { botUsername: me.username } : {}),
+    artifacts,
     log,
     setChatMenu,
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: async ({ conversationId, text, agent, onToolCall }) => {
-      const result = await runAgent({
+    run: async ({ conversationId, text, agent, attachments, onToolCall }) => {
+      const options: RunAgentOptions = {
         agent: deps.catalog.resolve(agent.id).definition(now()),
         provider: deps.provider,
         registry: deps.registry,
@@ -194,7 +207,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           log(`⚙ ${name} ${JSON.stringify(input)}`);
           onToolCall?.(name, input);
         },
-      });
+      };
+      // Multimodal input is the runtime's business: the surface says *which*
+      // artifacts this turn may see and how to fetch one, and never builds a
+      // provider content block itself.
+      if (attachments && attachments.length > 0) {
+        options.attachments = attachments;
+        options.loadArtifact = (id) => artifacts.load(id);
+      }
+      const result = await runAgent(options);
       return result.text;
     },
   });
@@ -202,7 +223,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   // Only paired chats get a menu; strangers see none. Each chat's menu names
   // the agent that chat is talking to.
   await applyCommandMenus(api, paired, log, async (chatId) =>
-    (await surface.activeAgent(chatId)).name,
+    (await surface.activeAgent(chatId)).handle,
   );
 
   surface.offset = cursor === undefined ? undefined : Number(cursor);

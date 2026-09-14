@@ -39,11 +39,11 @@ const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
 const USAGE = `buddi — your personal agents
 
   buddi chat                 start a new conversation with the default agent
-  buddi chat --agent <id>    ... with a specific agent (buddi agents to list them)
+  buddi chat --agent <handle>  ... with a specific agent, by @handle or id
   buddi chat --resume <id>   continue a conversation
   buddi chat --last          continue the most recent conversation
   buddi ask "<question>"     one turn, then exit
-  buddi ask "<question>" --agent <id>
+  buddi ask "<question>" --agent <handle>
   buddi ask "<question>" --resume <id>
   buddi agents               every agent installed under agents/
 
@@ -53,7 +53,7 @@ export type ParsedArgs = {
   command: 'chat' | 'ask' | 'agents' | 'help';
   question?: string;
   resume?: string;
-  /** Agent id from --agent; undefined means the catalog default. */
+  /** Agent handle or id from --agent; undefined means the catalog default. */
   agent?: string;
   last: boolean;
 };
@@ -67,7 +67,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     const arg = rest[i] as string;
     if (arg === '--agent') {
       const value = rest[++i];
-      if (!value) throw new Error('--agent needs an agent id');
+      if (!value) throw new Error('--agent needs an agent handle or id');
       parsed.agent = value;
     } else if (arg === '--resume') {
       const value = rest[++i];
@@ -121,7 +121,8 @@ async function main(): Promise<void> {
   if (args.command === 'agents') {
     for (const a of catalog.list()) {
       console.log(
-        `${bold(a.id)}${a.isDefault ? dim(' (default)') : ''} — ${a.name}: ${a.description}`,
+        `${bold(`@${a.handle}`)} ${dim(a.id)}${a.isDefault ? dim(' (default)') : ''} — ` +
+          `${a.name}: ${a.description}`,
       );
     }
     return;
@@ -140,7 +141,8 @@ async function main(): Promise<void> {
 
   const now = (): Date => new Date();
 
-  // Fails closed: an unknown --agent is never coerced into the default.
+  // Fails closed: an unknown --agent is never coerced into the default. A
+  // handle (`--agent ledger`, `--agent @ledger`) names the same agent as its id.
   let selected: CatalogAgent;
   try {
     selected = catalog.resolve(args.agent);

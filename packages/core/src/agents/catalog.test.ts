@@ -87,10 +87,10 @@ function skillFile(frontmatter: string, body = 'Do the thing carefully.'): strin
 }
 
 const FINANCE = agentFile(
-  ['id: finance-advisor', 'name: Finance Advisor', 'description: Money.', 'tools: [finance.*]', 'default: true'].join('\n'),
+  ['id: finance-advisor', 'handle: ledger', 'name: Finance Advisor', 'description: Money.', 'tools: [finance.*]', 'default: true'].join('\n'),
 );
 const CONCIERGE = agentFile(
-  ['id: concierge', 'name: Concierge', 'description: Front desk.', 'tools: []'].join('\n'),
+  ['id: concierge', 'handle: buddi', 'name: Concierge', 'description: Front desk.', 'tools: []'].join('\n'),
   'You are the concierge.',
 );
 
@@ -158,28 +158,55 @@ describe('parseAgentFile', () => {
   });
 
   it('refuses a non-kebab-case id', () => {
-    const file = agentFile('id: Finance_Advisor\nname: X\ndescription: d\ntools: []');
+    const file = agentFile('id: Finance_Advisor\nhandle: xx\nname: X\ndescription: d\ntools: []');
     expect(() => parseAgentFile(file)).toThrow(/kebab-case/);
   });
 
   it('refuses a missing required field', () => {
-    expect(() => parseAgentFile(agentFile('id: a\nname: A\ntools: []'))).toThrow(
+    expect(() => parseAgentFile(agentFile('id: a\nhandle: aa\nname: A\ntools: []'))).toThrow(
       /description/,
     );
   });
 
   it('refuses an unknown frontmatter key', () => {
-    const file = agentFile('id: a\nname: A\ndescription: d\ntools: []\ntier: auto');
+    const file = agentFile('id: a\nhandle: aa\nname: A\ndescription: d\ntools: []\ntier: auto');
     expect(() => parseAgentFile(file)).toThrow(/Unrecognized key|unrecognized/i);
   });
 
   it('refuses an unknown language', () => {
-    const file = agentFile('id: a\nname: A\ndescription: d\ntools: []\nlanguage: de');
+    const file = agentFile('id: a\nhandle: aa\nname: A\ndescription: d\ntools: []\nlanguage: de');
     expect(() => parseAgentFile(file)).toThrow(AgentFileError);
   });
 
+  it('refuses a missing handle', () => {
+    const file = agentFile('id: a\nname: A\ndescription: d\ntools: []');
+    expect(() => parseAgentFile(file)).toThrow(/handle/);
+  });
+
+  it.each([
+    ['1ledger', 'does not start with a letter'],
+    ['L', 'too short'],
+    ['l', 'too short'],
+    ['Ledger', 'capitalised'],
+    ['led_ger', 'underscored'],
+    ['led ger', 'spaced'],
+    ['-ledger', 'leading hyphen'],
+    ['a-very-long-handle-indeed', 'over twenty characters'],
+  ])('refuses the handle %s (%s)', (handle) => {
+    const file = agentFile(`id: a\nhandle: ${handle}\nname: A\ndescription: d\ntools: []`);
+    expect(() => parseAgentFile(file)).toThrow(AgentFileError);
+  });
+
+  it.each(['ab', 'ledger', 'credit-coach', 'a1', 'x'.repeat(20)])(
+    'accepts the handle %s',
+    (handle) => {
+      const file = agentFile(`id: a\nhandle: ${handle}\nname: A\ndescription: d\ntools: []`);
+      expect(parseAgentFile(file).frontmatter.handle).toBe(handle);
+    },
+  );
+
   it('refuses an empty persona body', () => {
-    expect(() => parseAgentFile('---\nid: a\nname: A\ndescription: d\ntools: []\n---\n\n')).toThrow(
+    expect(() => parseAgentFile('---\nid: a\nhandle: aa\nname: A\ndescription: d\ntools: []\n---\n\n')).toThrow(
       /body/,
     );
   });
@@ -218,9 +245,16 @@ describe('loadAgentCatalog', () => {
   it('lists every agent with its summary', () => {
     const catalog = load({ 'finance-advisor': FINANCE, concierge: CONCIERGE });
     expect(catalog.list()).toEqual([
-      { id: 'concierge', name: 'Concierge', description: 'Front desk.', isDefault: false },
+      {
+        id: 'concierge',
+        handle: 'buddi',
+        name: 'Concierge',
+        description: 'Front desk.',
+        isDefault: false,
+      },
       {
         id: 'finance-advisor',
+        handle: 'ledger',
         name: 'Finance Advisor',
         description: 'Money.',
         isDefault: true,
@@ -235,6 +269,50 @@ describe('loadAgentCatalog', () => {
     expect(catalog.defaultAgent().id).toBe('finance-advisor');
     expect(catalog.get('concierge')?.name).toBe('Concierge');
     expect(catalog.get('nope')).toBeUndefined();
+  });
+
+  it('resolves a handle, case-insensitively and with or without the @', () => {
+    const catalog = load({ 'finance-advisor': FINANCE, concierge: CONCIERGE });
+    for (const spelling of ['ledger', 'Ledger', 'LEDGER', '@ledger', ' @Ledger ']) {
+      expect(catalog.resolve(spelling).id).toBe('finance-advisor');
+    }
+    expect(catalog.byHandle('BUDDI')?.id).toBe('concierge');
+    expect(catalog.byHandle('@buddi')?.id).toBe('concierge');
+    expect(catalog.byHandle('nobody')).toBeUndefined();
+  });
+
+  it('exposes the handle on the summary and on the agent', () => {
+    const catalog = load({ 'finance-advisor': FINANCE, concierge: CONCIERGE });
+    expect(catalog.list().map((a) => a.handle)).toEqual(['buddi', 'ledger']);
+    expect(catalog.resolve('finance-advisor').handle).toBe('ledger');
+  });
+
+  it('refuses two agents answering to one handle', () => {
+    const clash = CONCIERGE.replace('handle: buddi', 'handle: ledger');
+    let caught: unknown;
+    try {
+      load({ 'finance-advisor': FINANCE, concierge: clash });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(AgentCatalogError);
+    expect((caught as AgentCatalogError).code).toBe('duplicate-handle');
+    expect((caught as Error).message).toMatch(/concierge/);
+  });
+
+  it('tells each agent its own handle and lists its colleagues by handle', () => {
+    const catalog = load({ 'finance-advisor': FINANCE, concierge: CONCIERGE });
+    const prompt = catalog.resolve('finance-advisor').systemPromptTemplate;
+    expect(prompt).toContain('Your handle is @ledger');
+    expect(prompt).toContain('@buddi — Concierge: Front desk.');
+    // Never itself: an agent is not its own colleague.
+    expect(prompt).not.toContain('@ledger — Finance Advisor');
+  });
+
+  it('says so plainly when an agent is the only one installed', () => {
+    const prompt = load({ concierge: CONCIERGE }).resolve('concierge').systemPromptTemplate;
+    expect(prompt).toContain('Your handle is @buddi');
+    expect(prompt).toContain('only agent installed');
   });
 
   it('fails closed on an unknown id instead of falling back to the default', () => {
@@ -255,7 +333,7 @@ describe('loadAgentCatalog', () => {
   });
 
   it('refuses an agent granting a tool the registry does not have', () => {
-    const bad = agentFile('id: mailer\nname: M\ndescription: d\ntools: [email.send]');
+    const bad = agentFile('id: mailer\nhandle: mail\nname: M\ndescription: d\ntools: [email.send]');
     expect(() => load({ mailer: bad })).toThrow(/matches no registered tool/);
   });
 

@@ -47,6 +47,8 @@ export const MAX_DELEGATION_DEPTH = 1;
 /** What delegation needs from an agent in the catalog — `CatalogAgent` satisfies it. */
 export interface DelegateAgent {
   id: string;
+  /** How the owner names it: `@credo`. Returned so the caller can quote it. */
+  handle: string;
   name: string;
   definition(now: Date): AgentDefinition;
 }
@@ -103,6 +105,9 @@ export type DelegateInput = z.infer<typeof delegateInput>;
 
 export interface DelegateOutput {
   agent: string;
+  /** The target's handle, without the `@`: what the answer is attributed to. */
+  handle: string;
+  name: string;
   conversationId: string;
   text: string;
 }
@@ -139,7 +144,8 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       'Ask another of the owner\'s agents a question and get its answer back as text. ' +
       'The colleague answers in its own fresh conversation with its own tools; it cannot ' +
       'see this one. Use it when a question belongs to a specialist you are allowed to ask. ' +
-      'Quote the answer back to the owner and say which agent it came from.',
+      'Quote the answer back to the owner and attribute it by the handle the result ' +
+      'carries, written with an @ — "@credo says: ...".',
     tier: 'auto',
     input: delegateInput,
     async execute(input, ctx): Promise<DelegateOutput> {
@@ -233,7 +239,13 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         ctx.conversationId ?? conversationId,
       );
 
-      return { agent: target.id, conversationId, text: result.text };
+      return {
+        agent: target.id,
+        handle: target.handle,
+        name: target.name,
+        conversationId,
+        text: result.text,
+      };
     },
   };
 }

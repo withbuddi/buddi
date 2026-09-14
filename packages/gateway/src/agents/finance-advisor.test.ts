@@ -1,4 +1,5 @@
 import { DEFAULT_MODEL } from '@buddi/core';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { describe, expect, it } from 'vitest';
@@ -84,14 +85,21 @@ describe('agent definition', () => {
     expect(agent.tools).toContain('agent.delegate');
     expect(
       agent.tools.every(
-        (t) => t.startsWith('finance.') || t.startsWith('memory.') || t === 'agent.delegate',
+        (t) =>
+          t.startsWith('finance.') ||
+          t.startsWith('memory.') ||
+          t.startsWith('artifacts.') ||
+          t === 'agent.delegate',
       ),
     ).toBe(true);
   });
 
   it('never hardcodes how many tools there are', () => {
     expect(FINANCE_TOOLS.length).toBe(
-      financeManifest.tools.length + memoryManifest.tools.length + 1, // + agent.delegate
+      financeManifest.tools.length +
+        memoryManifest.tools.length +
+        artifactsManifest.tools.length +
+        1, // + agent.delegate
     );
   });
 });

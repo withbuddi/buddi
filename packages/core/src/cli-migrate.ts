@@ -17,6 +17,9 @@ export async function runMigrations(
   const applied: AppliedMigration[] = [];
   applied.push(...(await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR })));
   for (const manifest of manifests) {
+    // A plugin may own no schema at all (the artifacts tools read core's own
+    // table). An empty migrationsDir is that statement, not a missing path.
+    if (!manifest.migrationsDir || manifest.migrationsDir.trim() === '') continue;
     applied.push(
       ...(await migrate(pool, {
         schema: manifest.schema,

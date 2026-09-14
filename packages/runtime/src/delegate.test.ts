@@ -87,8 +87,18 @@ function definitionOf(id: string, maxTurns: number): AgentDefinition {
 /** A catalog holding one delegate target, `credit-coach`, with a fat budget. */
 function fakeCatalog(maxTurns = 12): DelegateCatalog {
   const agents: DelegateAgent[] = [
-    { id: 'credit-coach', name: 'Credit Coach', definition: () => definitionOf('credit-coach', maxTurns) },
-    { id: 'concierge', name: 'Concierge', definition: () => definitionOf('concierge', maxTurns) },
+    {
+      id: 'credit-coach',
+      handle: 'credo',
+      name: 'Credit Coach',
+      definition: () => definitionOf('credit-coach', maxTurns),
+    },
+    {
+      id: 'concierge',
+      handle: 'buddi',
+      name: 'Concierge',
+      definition: () => definitionOf('concierge', maxTurns),
+    },
   ];
   return {
     get: (id) => agents.find((a) => a.id === id),
@@ -169,8 +179,11 @@ describe('agent.delegate', () => {
     const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
 
     expect(out.ok).toBe(true);
+    // The handle travels with the answer: the caller quotes "@credo says: …".
     expect(out.ok && out.output).toEqual({
       agent: 'credit-coach',
+      handle: 'credo',
+      name: 'Credit Coach',
       conversationId: 'conv-1',
       text: 'Pay 200 before the 18th.',
     });

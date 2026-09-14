@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type Mission, type Occurrence, type ToolContext } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
+import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from '../agents/delegation.js';
@@ -99,6 +100,7 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
   const registry = new ToolRegistry();
   registry.register(financeManifest);
   registry.register(memoryManifest);
+  registry.register(artifactsManifest);
   // The finance advisor's file grants agent.delegate, so the registry a mission
   // runs against must carry it too. It is unbound here: delegation refuses.
   registry.register(createDelegationManifest(registry));
