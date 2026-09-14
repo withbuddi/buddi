@@ -57,7 +57,6 @@ import {
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnv } from './bootstrap.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
-import { insertOccurrence } from './missions-cli.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
 import {
   createMissionExecutor,
@@ -65,13 +64,20 @@ import {
   type MissionRunControl,
   type MissionRunResult,
 } from './missions/execute.js';
+import { createInlineMissionRunner, type InlineMissionDeps } from './missions/inline.js';
 import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
-import type { MissionOutcome, RunMission } from './telegram/surface.js';
+
+/**
+ * `/recap` now lives in `missions/inline.ts`, so a surface that is not this
+ * process can run a mission on demand. Re-exported under its old name: every
+ * caller that imported it from here still does.
+ */
+export { createInlineMissionRunner, type InlineMissionDeps };
 
 /** Scheduler cadence and the age at which a claim is considered abandoned. */
 export const TICK_MS = 30_000;
@@ -183,61 +189,6 @@ export function formatMissionLine(line: MissionLine): string {
       ? 'next (never)'
       : 'next (disabled)';
   return `  ${mission.id} (${mission.agentId})${state} — ${line.cron} ${line.timezone} — ${next}`;
-}
-
-/** What `createInlineMissionRunner` needs: an executor's deps minus delivery. */
-export type InlineMissionDeps = Omit<
-  MissionExecutorDeps,
-  'deliver' | 'onToolCall' | 'requireDelivery' | 'notifyPolicy' | 'prepare'
->;
-
-/**
- * `/recap` in Telegram: run a mission *now*, through the very executor the
- * scheduler uses, and hand the text back to the chat that asked.
- *
- * The occurrence is written claimed and closed out like any other run, so an
- * on-demand recap shows up in the mission's history. Delivery is a no-op that
- * only names the chat: the surface already owns the bubble the answer lands in,
- * and sending it twice would be the bug.
- */
-export function createInlineMissionRunner(base: InlineMissionDeps): RunMission {
-  return async function runMission(missionId, chatId, onToolCall): Promise<MissionOutcome> {
-    const mission = await getMission(base.pool, missionId);
-    if (!mission) return { ok: false, reason: 'unknown-mission' };
-
-    const spec = await getActiveSchedule(base.pool, mission.id);
-    const occurrence = await insertOccurrence(
-      base.pool,
-      mission.id,
-      spec?.revision ?? 0,
-      base.now(),
-      'claimed',
-    );
-    const execute = createMissionExecutor({
-      ...base,
-      deliver: async () => chatId,
-      // The owner asked for this one, in a chat that is open: the answer belongs
-      // in the bubble whatever the run decided about notifying.
-      notifyPolicy: false,
-      prepare: createDigestPrepare(base.pool, { now: base.now }),
-      ...(onToolCall ? { onToolCall } : {}),
-    });
-
-    try {
-      const result = await execute(occurrence, mission);
-      await finishOccurrence(base.pool, occurrence.id, {
-        state: 'succeeded',
-        runConversationId: result.conversationId,
-      });
-      return { ok: true, text: result.text };
-    } catch (err) {
-      const text = err instanceof Error ? err.message : String(err);
-      await finishOccurrence(base.pool, occurrence.id, { state: 'failed', error: text }).catch(
-        () => {},
-      );
-      throw err;
-    }
-  };
 }
 
 /**
