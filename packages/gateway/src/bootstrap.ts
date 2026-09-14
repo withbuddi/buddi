@@ -135,7 +135,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     throw new Error('DATABASE_URL is not set (cp .env.example .env, then pnpm db:up)');
   }
 
-  const registry = createToolRegistry();
+  const registry = createToolRegistry(env);
   const catalog = loadGatewayCatalog({ env, registry });
 
   const now = (): Date => new Date();

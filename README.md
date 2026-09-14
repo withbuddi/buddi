@@ -188,6 +188,31 @@ buddi missions enable <id> | disable <id>
 buddi migrate                   # core + every installed plugin's schema
 ```
 
+## Reminders
+
+An agent can put one future nudge on its own clock (`reminder.set`): when it
+fires the agent is woken with its own note and checks the fact again before
+saying anything. The firing loop ticks once a minute, so a reminder lands within
+about a minute of its instant. The budget is enforced in code, not in a prompt,
+and every number in it is tunable in `.env`:
+
+| Variable | Default | Range | What it means |
+| --- | --- | --- | --- |
+| `BUDDI_REMINDER_MIN_LEAD_MINUTES` | `5` | 1–1440 | How far out a reminder must be. Below this the agent should just say it now. |
+| `BUDDI_REMINDER_MAX_HORIZON_DAYS` | `365` | 1–3650 | How far out a reminder may be. |
+| `BUDDI_REMINDER_MAX_PENDING_PER_AGENT` | `10` | 1–100 | Pending reminders one agent may hold. |
+| `BUDDI_REMINDER_MAX_PENDING_TOTAL` | `25` | 1–500 | Pending reminders across every agent. |
+
+A value outside its range is clamped and a value that is not a whole number is
+ignored — either way the reason is logged once at startup and the machine still
+comes up. The tool's own description is built from the resolved numbers, so the
+agent is told the limits this installation actually has. Changing any of them
+needs a restart (`buddi service stop && buddi service start`).
+
+```sh
+buddi reminders list
+```
+
 ## Development
 
 ```sh

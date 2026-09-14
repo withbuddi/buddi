@@ -84,7 +84,8 @@ suite('reminders (postgres)', () => {
   });
 
   it(`refuses anything less than ${MIN_LEAD_MINUTES} minutes out`, async () => {
-    const soon = await set({ dueAt: new Date(NOW.getTime() + 20 * 60_000) });
+    // A minute short of the line, whatever the line is set to.
+    const soon = await set({ dueAt: new Date(NOW.getTime() + (MIN_LEAD_MINUTES - 1) * 60_000) });
     expect(soon.ok).toBe(false);
     if (soon.ok) return;
     expect(soon.reason).toBe('too-soon');

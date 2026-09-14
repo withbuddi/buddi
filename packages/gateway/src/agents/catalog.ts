@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadAgentCatalog,
+  reminderLimitsFromEnv,
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
@@ -38,8 +39,15 @@ export interface Queryable {
   query(sql: string, params?: any[]): Promise<{ rows: any[] }>;
 }
 
-/** The plugins installed in this build. Core with zero plugins is still valid. */
-export function createToolRegistry(): ToolRegistry {
+/**
+ * The plugins installed in this build. Core with zero plugins is still valid.
+ *
+ * `env` is read for one thing only: the reminder budget, which the owner can
+ * move (`BUDDI_REMINDER_*`). It is resolved here rather than inside the tool so
+ * that the numbers the store enforces and the numbers the tool *describes* are
+ * the same object, decided once at the composition root.
+ */
+export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(financeManifest);
   registry.register(emailManifest);
@@ -48,7 +56,7 @@ export function createToolRegistry(): ToolRegistry {
   // Reminders and schedules are registered in the *base* registry, unlike the
   // mission tools: an agent can put something on the clock from any run, and a
   // reminder set in a chat is the same object as one set by the daily check.
-  registry.register(createReminderManifest());
+  registry.register(createReminderManifest(reminderLimitsFromEnv(env)));
   registry.register(createScheduleManifest());
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
@@ -83,7 +91,7 @@ export interface GatewayCatalogOptions {
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   return loadAgentCatalog({
     dir: opts.dir ?? AGENTS_DIR,
-    registry: opts.registry ?? createToolRegistry(),
+    registry: opts.registry ?? createToolRegistry(opts.env ?? process.env),
     env: opts.env ?? process.env,
   });
 }

@@ -24,11 +24,15 @@ export const MAX_PENDING_TOTAL = 25;
 /**
  * A reminder must be at least this far out.
  *
- * Not a rate limit: it is the line between a reminder and an answer. "In ten
- * minutes" is something the agent should simply say now, and a nudge that lands
- * while the owner is still reading the reply is noise.
+ * Not a rate limit: it is the line between a reminder and an answer. Something
+ * due in the next minute or two is something the agent should simply say now,
+ * and a nudge that lands while the owner is still reading the reply is noise.
+ * Five minutes is the default line; `BUDDI_REMINDER_MIN_LEAD_MINUTES` moves it
+ * (see `env.ts`). The firing loop ticks once a minute, so a reminder lands
+ * within about a minute of its instant — which is why a lead this short still
+ * means something.
  */
-export const MIN_LEAD_MINUTES = 30;
+export const MIN_LEAD_MINUTES = 5;
 
 /** And at most this far out. A year is already further than any promise holds. */
 export const MAX_HORIZON_DAYS = 365;
@@ -46,7 +50,11 @@ export const MAX_REMINDER_TEXT = 500;
  */
 export const REMINDER_GRACE_MS = 24 * 60 * 60_000;
 
-/** The limits, as one object, so a caller (or a test) can tighten them. */
+/**
+ * The limits, as one object, so a caller (or a test) can tighten them — and so
+ * `reminderLimitsFromEnv` can hand the installation's own numbers to the tool
+ * and to its description in one piece.
+ */
 export interface ReminderLimits {
   maxPendingPerAgent: number;
   maxPendingTotal: number;
