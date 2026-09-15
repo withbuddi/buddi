@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist",
@@ -7,9 +7,5 @@
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [
-    { "path": "../core" },
-    { "path": "../gateway" },
-    { "path": "../tools/web" }
-  ]
+  "references": [{ "path": "../../core" }, { "path": "../../runtime" }]
 }

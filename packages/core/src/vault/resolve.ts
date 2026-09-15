@@ -59,6 +59,11 @@ export const KNOWN_SECRETS: readonly string[] = [
   'OPENAI_API_KEY',
   'TELEGRAM_BOT_TOKEN',
   'GMAIL_APP_PASSWORD',
+  // The web plugin's search backends. Two names because the backend is
+  // swappable; an installation sets whichever one its provider needs, and
+  // neither is required for the system to run.
+  'TAVILY_API_KEY',
+  'BRAVE_SEARCH_API_KEY',
   // The database's own credentials. `DATABASE_URL` is a secret because it
   // *contains* one, so `import-env` moves it and the backup scrubber replaces
   // it with the marker rather than with a `***` that still names the host.

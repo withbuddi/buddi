@@ -13,6 +13,7 @@
     { "path": "../tools/artifacts" },
     { "path": "../tools/email" },
     { "path": "../tools/finance" },
-    { "path": "../tools/memory" }
+    { "path": "../tools/memory" },
+    { "path": "../tools/web" }
   ]
 }
