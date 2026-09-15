@@ -25,7 +25,7 @@ import { openChatStream } from './stream';
 import type { ChatAgent, ChatConversation, ChatEvent } from './types';
 
 const MIN_WIDTH = 320;
-const DEFAULT_WIDTH = 380;
+const DEFAULT_WIDTH = 440;
 const WIDTH_KEY = 'buddi.chatWidth';
 
 export interface ChatPageProps {
@@ -295,10 +295,12 @@ export function ChatPage({
       onActivate={setActiveTab}
       timezone={timezone}
       onDecided={onDecided}
+      descriptors={descriptors}
+      {...(agent ? { agentName: agent.name } : {})}
       emptyHint={
         conversation
-          ? 'This conversation has not produced anything to draw yet.'
-          : 'Ask for something. Whatever the run looks at will be drawn here.'
+          ? 'Nothing in this conversation has produced a view yet. Ask for a number, a list or a document and it lands here beside the answer.'
+          : 'Ask for something. Whatever the run looks at is drawn here, beside the answer rather than inside it.'
       }
     />
   );
@@ -325,6 +327,7 @@ export function ChatPage({
             setActiveTab(toolUseId);
             if (narrow) onOpenCanvas?.();
           }}
+          {...(agent ? { agentName: agent.name } : {})}
           emptyHint={
             agent
               ? `Nothing here yet. Ask ${agent.name} for something — a projection, a document, a decision.`

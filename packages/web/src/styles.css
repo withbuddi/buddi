@@ -13,19 +13,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  /* Tailwind's border utilities assume a default style; preflight is off, so
-     say it once here rather than per-utility. */
-  *,
-  ::before,
-  ::after {
-    border-color: var(--line);
-    border-style: solid;
-  }
-}
-
-* { box-sizing: border-box; }
-
 html, body, #root { height: 100%; }
 
 body {
@@ -53,6 +40,22 @@ code, pre, .mono {
 }
 
 a { color: var(--accent); }
+
+/* ----------------------------------------------------------------- *
+ * The monitoring pages, restored.
+ *
+ * Preflight is on, which is what stops every element being a 3px box and
+ * every form control wearing its user-agent chrome. It also flattens the
+ * document defaults the nine monitoring pages were written against — heading
+ * weight, paragraph rhythm, list markers. Those pages live inside `<main>`
+ * and nothing in the workbench does, so what they relied on is given back
+ * here and nowhere else.
+ * ----------------------------------------------------------------- */
+
+main h1, main h2, main h3, main h4 { font-weight: 650; }
+main p { margin: 0 0 10px; }
+main ul, main ol { list-style: revert; margin: 0 0 10px; padding-left: 20px; }
+main dl { margin: 0 0 10px; }
 
 /* ---- shell ---- */
 
@@ -89,9 +92,9 @@ nav.side a .badge { color: var(--bad); font-variant-numeric: tabular-nums; }
 
 main { flex: 1 1 auto; padding: 22px 26px 60px; min-width: 0; }
 
-h2 { margin: 0 0 4px; font-size: 18px; }
-h3 { margin: 22px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-p.lede { margin: 0 0 18px; color: var(--muted); }
+main h2 { margin: 0 0 4px; font-size: 18px; }
+main h3 { margin: 22px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+main p.lede { margin: 0 0 18px; color: var(--muted); }
 
 /* ---- panels, tables ---- */
 
@@ -121,9 +124,11 @@ p.lede { margin: 0 0 18px; color: var(--muted); }
 .attention.bad { border-left-color: var(--bad); }
 .attention ul { margin: 6px 0 0; padding-left: 18px; }
 
-table { width: 100%; border-collapse: collapse; background: var(--panel); }
+table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.04em; }
+main th { text-transform: uppercase; }
+main table { background: var(--panel); }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--bg); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -146,20 +151,32 @@ pre {
 
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 
-input, select, button, textarea {
+/* Preflight leaves controls transparent and borderless on purpose, so their
+   look is a decision made once, here, in tokens — not inherited from the OS. */
+input, select, textarea {
   font: inherit;
   color: var(--text);
-  background: var(--panel);
+  background: var(--surface-raised);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
+}
+input::placeholder, textarea::placeholder { color: var(--text-faint); }
+
+main button, .drawer button {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
 }
 
 button { cursor: pointer; }
-button:hover { border-color: var(--accent); }
+main button:hover, .drawer button:hover { border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: default; }
-button.primary { border-color: var(--ok); color: var(--ok); }
-button.danger { border-color: var(--bad); color: var(--bad); }
+main button.primary, .drawer button.primary { border-color: var(--ok); color: var(--ok); }
+main button.danger, .drawer button.danger { border-color: var(--bad); color: var(--bad); }
 
 .muted { color: var(--muted); }
 .ok { color: var(--ok); }
@@ -227,6 +244,11 @@ button.danger { border-color: var(--bad); color: var(--bad); }
  *
  * The monitoring pages above still exist and still look like themselves;
  * they are simply no longer the point. Everything below is the new shell.
+ *
+ * One surface, three bands of depth: the rail and the conversation sit on
+ * `--surface`, the canvas on the recessed `--bg`, and the things the canvas
+ * holds come back up to `--surface`. Nothing is outlined that a change of
+ * ground already separates.
  * ================================================================== */
 
 .wb {
@@ -240,50 +262,79 @@ button.danger { border-color: var(--bad); color: var(--bad); }
 
 .wb-rail {
   flex: 0 0 auto;
-  width: 52px;
+  width: 56px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 0;
+  gap: 2px;
+  padding: 12px 0 14px;
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
 
 .wb-rail-mark {
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  color: var(--text);
-  margin-bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 14px;
+  user-select: none;
 }
 
 .wb-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   position: relative;
   padding: 0;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
-.wb-icon-btn:hover { background: var(--surface-sunken); color: var(--text); border-color: var(--line); }
+.wb-icon-btn-sm { width: 30px; height: 30px; }
+
+.wb-icon-btn:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text); }
+.wb-icon-btn:disabled { opacity: 0.4; cursor: default; }
 .wb-icon-btn[data-state='open'] { background: var(--surface-sunken); color: var(--text); }
+
+/* Where you are: filled, accented, and marked on the rail's own edge. */
+.wb-icon-btn[data-active='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.wb-rail .wb-icon-btn[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 7px;
+  bottom: 7px;
+  width: 2.5px;
+  border-radius: 999px;
+  background: var(--accent);
+}
 
 .wb-rail-dot {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: 5px;
+  right: 5px;
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: var(--critical);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 /* ---- the conversation column ---- */
@@ -302,94 +353,192 @@ button.danger { border-color: var(--bad); color: var(--bad); }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 8px 10px 8px 8px;
   border-bottom: 1px solid var(--line);
-  min-height: 48px;
+  min-height: 56px;
 }
 
+/* One control: a monogram, a name, and the chevron that says it opens. */
 .wb-agent-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--line);
+  padding: 6px 8px;
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--surface);
+  background: transparent;
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.wb-agent-btn:hover { border-color: var(--line-strong); background: var(--surface-sunken); }
-.wb-agent-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wb-agent-handle { color: var(--text-muted); font-size: 12px; }
+.wb-agent-btn:hover, .wb-agent-btn[data-state='open'] {
+  background: var(--surface-sunken);
+  border-color: var(--line);
+}
 
-.wb-swatch {
+.wb-agent-mark {
   flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  user-select: none;
 }
+
+.wb-agent-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; gap: 1px; }
+.wb-agent-name {
+  font-size: 13.5px;
+  font-weight: 640;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-agent-meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-agent-chevron { flex: 0 0 auto; color: var(--text-faint); }
+.wb-agent-btn:hover .wb-agent-chevron { color: var(--text-muted); }
+
+.wb-agent-item { gap: 10px; }
+.wb-agent-item[data-unavailable='true'] { opacity: 0.85; }
+.wb-agent-item[data-unavailable='true'] .wb-agent-mark {
+  background: var(--surface-sunken);
+  color: var(--text-faint);
+}
+.wb-agent-item[data-unavailable='true'] .wb-agent-name { color: var(--text-muted); }
+.wb-agent-item[data-unavailable='true'] .wb-agent-meta { color: var(--critical); }
+
+.wb-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.wb-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--critical);
+  background: var(--critical-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+/* ---- the conversation ---- */
 
 .wb-messages {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 14px 12px 20px;
+  padding: 20px 18px 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  scrollbar-gutter: stable;
 }
 
-.wb-msg { display: flex; flex-direction: column; gap: 5px; }
-.wb-msg-role {
-  font-size: 11px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-faint);
+/* The prompt to start sits where the first reply will, not marooned in the
+   middle of an empty column. */
+.wb-chat-empty {
+  margin: 0;
+  color: var(--text-muted);
+  max-width: 44ch;
+  font-size: 13.5px;
+  line-height: 1.6;
 }
+
+.wb-msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+
+/* The agent speaks under its own name, once per run of turns. */
+.wb-msg-who {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+/* What the agent said is prose on the page, at a readable measure. */
 .wb-bubble {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 9px 11px;
-  background: var(--surface-raised);
+  max-width: 68ch;
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.62;
+  font-size: 13.5px;
+  color: var(--text);
 }
+
+/* What the owner said is a tinted block, pushed to the near edge. */
+.wb-msg[data-role='user'] { align-items: flex-end; }
 .wb-msg[data-role='user'] .wb-bubble {
+  max-width: 88%;
   background: var(--accent-soft);
-  border-color: var(--accent-soft);
+  color: var(--text);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  padding: 9px 13px;
 }
 
 /* A tool call, in the chat, as it happens: label, then elapsed seconds. */
 .wb-tool {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: 9px;
+  font-size: 12.5px;
   color: var(--text-muted);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface-sunken);
-  padding: 5px 9px;
+  padding: 6px 9px 6px 11px;
   cursor: pointer;
-  width: 100%;
+  align-self: stretch;
+  max-width: 68ch;
   text-align: left;
+  transition: border-color 120ms ease, background-color 120ms ease;
 }
-.wb-tool:hover { border-color: var(--line-strong); border-left-color: var(--accent); }
-.wb-tool[data-ok='false'] { border-left-color: var(--critical); color: var(--critical); }
-.wb-tool[data-running='true'] { border-left-color: var(--warning); }
-.wb-tool-label { flex: 1 1 auto; color: var(--text); }
-.wb-tool-elapsed { font-variant-numeric: tabular-nums; color: var(--text-faint); }
+.wb-tool:hover { border-color: var(--line-strong); background: var(--surface-raised); }
+.wb-tool-label { flex: 1 1 auto; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-tool-elapsed { font-variant-numeric: tabular-nums; color: var(--text-faint); flex: 0 0 auto; }
+.wb-tool-arrow { flex: 0 0 auto; color: var(--text-faint); }
+.wb-tool:hover .wb-tool-arrow { color: var(--accent); }
+
+.wb-tool-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--good);
+}
+.wb-tool-mark[data-ok='false'] { background: var(--critical); }
+.wb-tool[data-ok='false'] { border-color: var(--critical-soft); color: var(--critical); }
+.wb-tool[data-ok='false'] .wb-tool-label { color: var(--critical); }
 
 /* The pulse marks a live call. Reduced motion gets a static dot instead. */
 .wb-pulse {
-  width: 7px;
-  height: 7px;
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   background: var(--warning);
   animation: wb-pulse 1.4s ease-in-out infinite;
@@ -399,46 +548,92 @@ button.danger { border-color: var(--bad); color: var(--bad); }
   .wb-pulse { animation: none; }
 }
 
-/* ---- composer ---- */
+/* ---- composer: one control, not three stacked ---- */
 
 .wb-composer {
-  border-top: 1px solid var(--line);
-  padding: 10px;
+  padding: 10px 14px 14px;
   background: var(--surface);
 }
-.wb-composer[data-dropping='true'] {
+.wb-composer[data-dropping='true'] .wb-composer-box {
+  border-color: var(--accent);
   background: var(--accent-soft);
-  outline: 2px dashed var(--accent);
-  outline-offset: -6px;
 }
-.wb-composer textarea {
+
+.wb-composer-box {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-panel);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  overflow: hidden;
+}
+.wb-composer-box[data-focused='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wb-composer-box[data-disabled='true'] { opacity: 0.6; }
+
+.wb-composer-box textarea {
+  display: block;
   width: 100%;
   resize: none;
-  min-height: 62px;
+  min-height: 44px;
   max-height: 200px;
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 12px 14px 4px;
+  line-height: 1.55;
+  font-size: 13.5px;
 }
-.wb-composer-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.wb-hint { flex: 1 1 auto; color: var(--text-faint); font-size: 12px; }
+.wb-composer-box textarea:focus { outline: none; }
+
+.wb-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 8px;
+}
+
+/* The hint waits for the placeholder to leave before taking the line. */
+.wb-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.wb-hint[data-shown='true'] { opacity: 1; }
 
 .wb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  padding: 5px 11px;
+  font-size: 12.5px;
+  font-weight: 550;
+  padding: 6px 12px;
   cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
-.wb-btn:hover { border-color: var(--line-strong); }
-.wb-btn:disabled { opacity: 0.5; cursor: default; }
+.wb-btn:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-sunken); }
+.wb-btn:disabled { opacity: 0.45; cursor: default; }
 .wb-btn[data-variant='accent'] { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.wb-btn[data-variant='stop'] { border-color: var(--critical); color: var(--critical); }
+.wb-btn[data-variant='accent']:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); filter: brightness(1.08); }
+.wb-btn[data-variant='stop'] { border-color: var(--critical); color: var(--critical); background: var(--surface); }
 .wb-btn[data-variant='good'] { background: var(--good); border-color: var(--good); color: var(--accent-contrast); }
 .wb-btn[data-variant='danger'] { border-color: var(--critical); color: var(--critical); }
+.wb-send { flex: 0 0 auto; }
 
-.wb-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.wb-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
 .wb-chip {
   display: inline-flex;
   align-items: center;
@@ -447,25 +642,34 @@ button.danger { border-color: var(--bad); color: var(--bad); }
   border-radius: 999px;
   padding: 2px 4px 2px 10px;
   font-size: 12px;
+  color: var(--text);
   background: var(--surface-sunken);
+  max-width: 100%;
 }
 .wb-chip[data-pending='true'] { color: var(--text-muted); }
 .wb-chip[data-failed='true'] { border-color: var(--critical); color: var(--critical); }
-.wb-chip button {
+.wb-chip-kind { color: var(--text-faint); font-size: 11px; }
+.wb-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   border: 0;
+  border-radius: 999px;
   background: transparent;
-  color: inherit;
+  color: var(--text-faint);
   cursor: pointer;
-  padding: 0 6px;
-  line-height: 1;
+  padding: 0;
 }
+.wb-chip-x:hover { background: var(--surface); color: var(--text); }
 
 /* ---- the grip between the two halves ---- */
 
 .wb-grip {
   flex: 0 0 auto;
-  width: 7px;
-  margin-left: -4px;
+  width: 9px;
+  margin-left: -5px;
   cursor: col-resize;
   background: transparent;
   border: 0;
@@ -488,51 +692,86 @@ button.danger { border-color: var(--bad); color: var(--bad); }
 .wb-canvas-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
+  gap: 2px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
-  min-height: 48px;
+  min-height: 56px;
+  scrollbar-width: none;
+}
+.wb-canvas-tabs::-webkit-scrollbar { display: none; }
+
+.wb-canvas-label {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding-left: 4px;
 }
 
 .wb-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   white-space: nowrap;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
   color: var(--text-muted);
-  padding: 4px 10px;
-  font-size: 13px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 550;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 .wb-tab:hover { background: var(--surface-sunken); color: var(--text); }
 .wb-tab[data-state='active'] {
   background: var(--surface);
   border-color: var(--line);
+  box-shadow: var(--shadow-panel);
   color: var(--text);
-  font-weight: 600;
+  font-weight: 650;
 }
 .wb-tab[data-tone='critical'] { color: var(--critical); }
+.wb-tab-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--warning); }
+.wb-tab-dot[data-tone='critical'] { background: var(--critical); }
 
-.wb-canvas-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 18px 20px 40px; }
+.wb-canvas-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 26px 44px; }
+.wb-canvas-body-empty { display: flex; align-items: center; justify-content: center; padding: 24px; }
 
 .wb-panel {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-panel);
-  padding: 16px 18px;
+  padding: 18px 20px 20px;
+  max-width: 1080px;
 }
 .wb-panel + .wb-panel { margin-top: 14px; }
-.wb-panel-title { margin: 0 0 2px; font-size: 15px; font-weight: 650; }
-.wb-panel-sub { margin: 0 0 14px; color: var(--text-muted); font-size: 13px; }
 
-.wb-stats { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; }
-.wb-stat-k { color: var(--text-muted); font-size: 12px; }
-.wb-stat-v { font-size: 19px; font-variant-numeric: tabular-nums; }
+.wb-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.wb-panel-title { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.005em; }
+.wb-panel-tool {
+  color: var(--text-faint);
+  font-size: 11px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+
+.wb-stats { display: flex; flex-wrap: wrap; gap: 18px 26px; margin-bottom: 16px; }
+.wb-stat-k { color: var(--text-muted); font-size: 11.5px; }
+.wb-stat-v { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .wb-stat-v[data-tone='good'] { color: var(--good); }
 .wb-stat-v[data-tone='warning'] { color: var(--warning); }
 .wb-stat-v[data-tone='critical'] { color: var(--critical); }
@@ -549,19 +788,90 @@ button.danger { border-color: var(--bad); color: var(--bad); }
 .wb-meter-fill[data-tone='warning'] { background: var(--warning); }
 .wb-meter-fill[data-tone='critical'] { background: var(--critical); }
 
-.wb-kv { display: grid; grid-template-columns: minmax(120px, 210px) 1fr; gap: 4px 16px; }
+.wb-kv { display: grid; grid-template-columns: minmax(120px, 210px) 1fr; gap: 6px 20px; }
 .wb-kv dt { color: var(--text-muted); font-size: 12px; padding-top: 2px; }
 .wb-kv dd { margin: 0; word-break: break-word; }
+
+/* ---- the empty canvas: what could be here, not an apology ---- */
 
 .wb-empty {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   align-items: flex-start;
-  color: var(--text-muted);
-  padding: 30px 4px;
-  max-width: 46ch;
+  max-width: 400px;
+  margin-bottom: 6vh;
 }
+
+.wb-empty-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-faint);
+  margin-bottom: 14px;
+}
+
+.wb-empty-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.wb-empty-body { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+.wb-empty-lead {
+  margin: 22px 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.wb-empty-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+.wb-empty-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.wb-empty-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.wb-empty-item-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.wb-empty-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-empty-item-shape { font-size: 11.5px; color: var(--text-muted); }
 
 /* ---- the phone: the canvas becomes a sheet the chat opens ---- */
 
@@ -579,32 +889,39 @@ button.danger { border-color: var(--bad); color: var(--bad); }
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 10px 14px;
+  min-height: 56px;
   border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 
 @media (max-width: 900px) {
   .wb-chat { flex: 1 1 auto; width: auto !important; border-right: 0; }
-  .wb-rail { width: 46px; }
+  .wb-rail { width: 50px; }
+  .wb-messages { padding: 16px 14px 20px; }
+  .wb-composer { padding: 8px 12px 12px; }
+  .wb-canvas-body { padding: 16px 14px 32px; }
+  .wb-msg[data-role='user'] .wb-bubble { max-width: 94%; }
 }
 
 /* ---- Radix popovers ---- */
 
 .wb-menu {
-  min-width: 210px;
+  min-width: 212px;
   background: var(--surface-raised);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
-  padding: 5px;
+  padding: 6px;
   z-index: 40;
 }
+.wb-menu-wide { min-width: 272px; }
 .wb-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 9px;
+  padding: 7px 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
   font-size: 13px;
@@ -613,19 +930,34 @@ button.danger { border-color: var(--bad); color: var(--bad); }
   user-select: none;
 }
 .wb-menu-item[data-highlighted] { background: var(--accent-soft); }
-.wb-menu-item[data-disabled] { color: var(--text-faint); cursor: default; }
-.wb-menu-label { padding: 6px 9px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
+.wb-menu-item[data-disabled] { cursor: default; }
+.wb-menu-label {
+  padding: 5px 9px 6px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 650;
+  color: var(--text-faint);
+}
 .wb-menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
 .wb-menu-note { font-size: 11px; color: var(--text-faint); }
+.wb-menu-empty { margin: 0; padding: 6px 9px 8px; font-size: 12px; color: var(--text-muted); }
 
 .wb-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: 220px;
   background: var(--text);
   color: var(--bg);
   font-size: 12px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
   z-index: 40;
 }
+.wb-tip-title { font-weight: 600; }
+.wb-tip-hint { opacity: 0.7; font-size: 11px; }
 
 .wb-toasts {
   position: fixed;

@@ -121,6 +121,7 @@ export function App(): JSX.Element {
           <Rail
             badges={badges}
             onNavigate={navigate}
+            onChat={onChat}
             theme={theme}
             onTheme={setTheme}
             onNewConversation={() => {
