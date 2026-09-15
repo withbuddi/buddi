@@ -99,6 +99,8 @@ class FakeDb implements Queryable {
   chatConversations = new Map<string, string>();
   activeAgents = new Map<string, string>();
   events: { kind: string; payload: any }[] = [];
+  /** core.offers, in the order they were written. */
+  offers: any[] = [];
   /** core.surface_attachments, newest last. */
   attachments: {
     chat: string;
@@ -366,6 +368,25 @@ class FakeDb implements Queryable {
       this.events.push({ kind: params[0], payload: JSON.parse(params[1]) });
       return { rows: [] };
     }
+    // core.offers — what a turn leaves on the table, including the "Try again"
+    // a failed one leaves.
+    if (text.startsWith('insert into core.offers')) {
+      const row = {
+        id: `offer-${this.offers.length + 1}`,
+        agent_id: params[0],
+        conversation_id: params[1],
+        label: params[2],
+        prompt: params[3],
+        created_at: params[4],
+        expires_at: params[5],
+        taken_at: null,
+        taken_via: null,
+        taken_job_id: null,
+      };
+      this.offers.push(row);
+      return { rows: [row] };
+    }
+    if (text.startsWith('update core.offers')) return { rows: [] };
     throw new Error(`FakeDb: unexpected sql: ${text}`);
   }
 }
@@ -1055,17 +1076,62 @@ describe('TelegramSurface conversation handling', () => {
     expect(sent.some((s) => s.method === 'sendChatAction' && s.body.action === 'typing')).toBe(true);
   });
 
-  it('reports a failed run to the owner and logs surface.error', async () => {
+  /**
+   * The owner used to be handed `Something went wrong: fetch failed` — undici's
+   * own wrapper, pasted into a chat window. The raw error belongs in the log
+   * and in the surface event; what he reads is written for a person.
+   */
+  it('tells the owner a failed run failed, without showing him the error', async () => {
     const db = withOwner(new FakeDb());
     const run = vi.fn(async (_req?: any) => {
-      throw new Error('provider exploded');
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+      });
     });
     const { surface, sent } = surfaceWith(db, run as any);
     await surface.processUpdates([message(90, OWNER, OWNER, 'hello')]);
     await surface.drain();
     const edit = sent.find((s) => s.method === 'editMessageText');
-    expect(edit?.body.text).toContain('provider exploded');
-    expect(db.events.map((e) => e.kind)).toContain('surface.error');
+    expect(edit?.body.text).toContain("couldn't reach the model");
+    expect(edit?.body.text).not.toContain('fetch failed');
+    expect(edit?.body.text).not.toContain('UND_ERR_SOCKET');
+    // The cause chain is on the record, in full.
+    const failure = db.events.find((e) => e.kind === 'surface.error');
+    expect(failure).toBeDefined();
+    expect(JSON.stringify(failure?.payload)).toContain('UND_ERR_SOCKET');
+    expect(JSON.stringify(failure?.payload)).toContain('transient');
+  });
+
+  it('offers to run the owner’s own message again', async () => {
+    const db = withOwner(new FakeDb());
+    const run = vi.fn(async (_req?: any) => {
+      throw Object.assign(new Error('fetch failed'), { type: 'transport_error', status: 0 });
+    });
+    const { surface, sent } = surfaceWith(db, run as any);
+    await surface.processUpdates([message(91, OWNER, OWNER, 'draft a reply to Parfait')]);
+    await surface.drain();
+    const edit = sent.find((s) => s.method === 'editMessageText');
+    const keyboard = edit?.body.reply_markup?.inline_keyboard;
+    expect(keyboard?.[0]?.[0]?.text).toBe('Try again');
+    expect(keyboard?.[0]?.[0]?.callback_data).toMatch(/^off:/);
+    // And what it would run is what he typed, not a summary of it.
+    expect(db.offers[0]?.prompt).toBe('draft a reply to Parfait');
+  });
+
+  it('does not offer a retry for a failure that would fail the same way', async () => {
+    const db = withOwner(new FakeDb());
+    const run = vi.fn(async (_req?: any) => {
+      throw Object.assign(new Error('bad request'), {
+        type: 'invalid_request_error',
+        status: 400,
+      });
+    });
+    const { surface, sent } = surfaceWith(db, run as any);
+    await surface.processUpdates([message(92, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    const edit = sent.find((s) => s.method === 'editMessageText');
+    expect(edit?.body.text).toContain('trying again would fail');
+    expect(edit?.body.reply_markup).toBeUndefined();
   });
 });
 
@@ -1282,8 +1348,13 @@ describe('TelegramSurface /recap', () => {
     await surface.processUpdates([message(123, OWNER, OWNER, '/recap')]);
     await surface.drain();
 
-    expect(sent.find((s) => s.method === 'editMessageText')?.body.text).toContain('no provider');
-    expect(db.events.map((e) => e.kind)).toContain('surface.error');
+    // A mission is not the owner's sentence, so there is nothing to offer to
+    // re-run; the failure is still said in words rather than pasted raw.
+    const text = sent.find((s) => s.method === 'editMessageText')?.body.text ?? '';
+    expect(text).not.toContain('no provider');
+    expect(text.length).toBeGreaterThan(20);
+    const failure = db.events.find((e) => e.kind === 'surface.error');
+    expect(JSON.stringify(failure?.payload)).toContain('no provider');
   });
 
   it('answers /help with the same welcome text as /start', async () => {

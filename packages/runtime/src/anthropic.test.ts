@@ -262,6 +262,102 @@ describe('createAnthropicProvider — responses and errors', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * The budget the owner's dead turn was inside. Four seconds across four
+   * attempts was thinner than an ordinary network event; this is thirteen
+   * seconds across six, bounded by a window so the worst case is a number.
+   */
+  it('gives a connection that never came up six attempts over thirteen seconds', async () => {
+    const delays: number[] = [];
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+      });
+    });
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    await expect(provider.complete(request)).rejects.toBeInstanceOf(ProviderError);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(delays).toEqual([250, 750, 2000, 4000, 6000]);
+    expect(delays.reduce((a, b) => a + b, 0)).toBe(13_000);
+  });
+
+  it('stops at the window when the attempts themselves are slow', async () => {
+    // Each attempt burns five seconds before failing. The curve still has
+    // delays left; the twenty-second window ends it anyway, which is the whole
+    // point of having one — the owner is waiting.
+    let clock = 0;
+    const fetchMock = vi.fn(async () => {
+      clock += 5_000;
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+      });
+    });
+    const delays: number[] = [];
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+        delays.push(ms);
+      },
+    });
+
+    await expect(provider.complete(request)).rejects.toBeInstanceOf(ProviderError);
+    expect(clock).toBeLessThanOrEqual(20_000 + 5_000);
+    expect(fetchMock.mock.calls.length).toBeLessThan(6);
+  });
+
+  it('keeps the whole cause chain on the error it throws', async () => {
+    // The line that did not exist: `fetch failed` is the wrapper, and the
+    // thing that actually broke is one link down on `cause`.
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('The session has been destroyed'), {
+          code: 'ERR_HTTP2_INVALID_SESSION',
+        }),
+      });
+    });
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+
+    const err = (await provider.complete(request).catch((e: unknown) => e)) as ProviderError;
+    expect(err.type).toBe('transport_error');
+    expect(err.message).toBe('fetch failed');
+    expect(err.code).toBe('ERR_HTTP2_INVALID_SESSION');
+    expect(err.detail).toContain('ERR_HTTP2_INVALID_SESSION');
+    expect(err.detail).toContain('The session has been destroyed');
+  });
+
+  it('tells the caller about every attempt it retried, with the cause', async () => {
+    const notices: string[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new TypeError('fetch failed', {
+          cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+      onRetry: (notice) => notices.push(`${notice.kind}:${notice.attempt}:${notice.detail}`),
+    });
+
+    await provider.complete(request);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('transport:1:');
+    expect(notices[0]).toContain('ECONNRESET');
+  });
+
   it('honours an explicit base URL without doubling slashes', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
     const provider = createAnthropicProvider(

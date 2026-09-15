@@ -107,6 +107,7 @@ import {
   withdrawTurnOffers,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
+import { failedTurnReply } from '../surfaces/failure.js';
 
 /** The chat id this surface books its inline mission runs against. */
 export const CLI_CHAT_ID = 'cli';
@@ -1082,7 +1083,21 @@ export class ChatSession {
       result = await this.#cancellable(runAgent(options));
     } catch (err) {
       spinner.stop();
-      this.#out(red(`error: ${errorText(err)}`, this.#style().color));
+      // The cause chain goes to stderr, where an operator finds it; the prompt
+      // gets sentences. `renderOffers` reads CLI_SURFACE — nothing to tap here
+      // — so a retry is spelled out as something the owner can ask for.
+      const outcome = await failedTurnReply(deps.pool, {
+        error: err,
+        profile: CLI_SURFACE,
+        agentId: agent.id,
+        agentName: handleLabel(agent.handle),
+        conversationId,
+        ...(turn.userMessage === undefined ? {} : { prompt: turn.userMessage }),
+        toolsCalled: tools,
+        now: deps.now(),
+        log: deps.log ?? ((line) => console.error(line)),
+      });
+      this.#out(red(outcome.rendered.text, this.#style().color));
       return { stopped: 'failed' };
     } finally {
       spinner.stop();

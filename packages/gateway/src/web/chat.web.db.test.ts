@@ -795,6 +795,84 @@ suite('the dashboard chat API', () => {
    * that offered them, one of them can be taken exactly once however many
    * surfaces are looking, and taking one authorizes nothing.
    */
+  /**
+   * The dashboard used to show *nothing* when a turn failed: the spinner
+   * stopped and that was the whole message. The page never sees the raw error
+   * either — `error` is the cause chain, for the record, and `message` is what
+   * a person reads.
+   */
+  describe('a turn that fails', () => {
+    const failing = (err: unknown): Turn => () => {
+      throw err;
+    };
+
+    it('says something human on the stream, keeps the cause chain for the record', async () => {
+      const client = await signedIn();
+      provider.script = [
+        failing(
+          Object.assign(
+            new TypeError('fetch failed', {
+              cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+            }),
+            { type: 'transport_error', status: 0 },
+          ),
+        ),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply to Parfait' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const { rows } = await pool.query(
+        `select payload from core.events
+          where conversation_id = $1::uuid and kind = 'chat.run.failed'`,
+        [conversationId],
+      );
+      const payload = rows[0].payload as Record<string, string>;
+      expect(payload.message).toContain("couldn't reach the model");
+      expect(payload.message).not.toContain('fetch failed');
+      expect(payload.failureClass).toBe('transient');
+      expect(payload.error).toContain('UND_ERR_SOCKET');
+    });
+
+    it('leaves a "Try again" chip that carries the owner\u2019s own words', async () => {
+      const client = await signedIn();
+      provider.script = [
+        failing(Object.assign(new Error('fetch failed'), { type: 'transport_error', status: 0 })),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'what is due today?' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const offers = ((await client.json<any>(`/api/chat/conversations/${conversationId}`))
+        .offers ?? []) as any[];
+      expect(offers.map((o) => o.label)).toEqual(['Try again']);
+      expect(offers[0].prompt).toBe('what is due today?');
+    });
+
+    it('offers nothing when the turn had already called a tool', async () => {
+      const client = await signedIn();
+      provider.script = [
+        call('t-read', 'demo.read', { what: 'the ledger' }),
+        failing(Object.assign(new Error('fetch failed'), { type: 'transport_error', status: 0 })),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'read it for me' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const view = await client.json<any>(`/api/chat/conversations/${conversationId}`);
+      expect(view.offers ?? []).toEqual([]);
+      const { rows } = await pool.query(
+        `select payload from core.events
+          where conversation_id = $1::uuid and kind = 'chat.run.failed'`,
+        [conversationId],
+      );
+      expect((rows[0].payload as Record<string, string>).message).toContain('one step');
+    });
+  });
+
   describe('offered actions', () => {
     const declare = (actions: { label: string; prompt: string }[]) =>
       call('t-offer', 'conversation.offer', { actions });
@@ -842,13 +920,25 @@ suite('the dashboard chat API', () => {
 
     it('adds nothing to a turn that offered nothing', async () => {
       const client = await signedIn();
+      // The database's own clock, for a column the database stamps: what this
+      // test asserts is that *its* turn wrote no offer, not that the table is
+      // empty. A whole-table count would be a claim about its neighbours.
+      const { rows: clock } = await pool.query<{ now: Date }>(
+        'select clock_timestamp() as now',
+      );
+      const before = new Date(clock[0]!.now);
       provider.script = [say('Nothing due.')];
       const { conversationId } = (await (
         await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'anything due?' })
       ).json()) as any;
       await settled(conversationId);
       expect(await offersOf(client, conversationId)).toEqual([]);
-      const { rows } = await pool.query('select count(*)::int as n from core.offers');
+      const { rows } = await pool.query(
+        `select count(*)::int as n from core.offers
+          where created_at > $1::timestamptz
+            and (conversation_id is null or conversation_id = $2::uuid)`,
+        [before.toISOString(), conversationId],
+      );
       expect(rows[0].n).toBe(0);
     });
 

@@ -19,14 +19,25 @@
  *
  * No ambient credentials: everything comes from the already-resolved provider.
  */
-import { providerAuthHeaders, type ResolvedProvider } from '@buddi/core';
+import {
+  describeCause,
+  errorCodes,
+  providerAuthHeaders,
+  type ResolvedProvider,
+} from '@buddi/core';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
   defaultSleep,
   isRetryableStatus,
   nextDelayMs,
+  nextTransportDelayMs,
   RETRY_DELAYS_MS,
 } from './retry.js';
+import {
+  defaultHttpTransport,
+  type HttpTransport,
+  type TransportResponse,
+} from './transport.js';
 
 /**
  * Exact text of the system block the subscription-token path must send first.
@@ -118,23 +129,40 @@ export interface RuntimeProvider {
   readonly capabilities?: ProviderCapabilities;
 }
 
-/** Typed transport/API failure. Never carries the credential. */
+/**
+ * Typed transport/API failure. Never carries the credential.
+ *
+ * `cause`, `code` and `detail` are the answer to a day spent learning nothing
+ * from 129 log lines that all said `fetch failed`. The wrapper's message is
+ * kept as the message, because that is what the caller saw; the error that
+ * actually happened is preserved on `cause`, its identifier is lifted to
+ * `code` so the queue's classifier can read it without walking anything, and
+ * the whole chain is flattened into `detail` for the log.
+ */
 export class ProviderError extends Error {
   readonly status: number;
   readonly type: string;
   readonly requestId: string | null;
+  /** The innermost identifier: `ECONNRESET`, `UND_ERR_SOCKET`, or null. */
+  readonly code: string | null;
+  /** The whole cause chain on one line. For a log, never for a chat window. */
+  readonly detail: string;
 
   constructor(args: {
     status: number;
     type: string;
     message: string;
     requestId?: string | null;
+    cause?: unknown;
   }) {
-    super(args.message);
+    super(args.message, args.cause === undefined ? undefined : { cause: args.cause });
     this.name = 'ProviderError';
     this.status = args.status;
     this.type = args.type;
     this.requestId = args.requestId ?? null;
+    this.code = args.cause === undefined ? null : (errorCodes(args.cause)[0] ?? null);
+    this.detail =
+      args.cause === undefined ? args.message : `${args.message} <- ${describeCause(args.cause)}`;
   }
 }
 
@@ -157,11 +185,36 @@ export class ProviderCapabilityError extends ProviderError {
   }
 }
 
+/**
+ * What a surface or an operator is told while the adapter is still trying.
+ *
+ * It exists so the cause chain of *every* attempt reaches the log, not only
+ * the last one. A failure that healed on the second attempt is exactly the
+ * evidence that says which failure it was.
+ */
+export interface RetryNotice {
+  /** 1 for the failure of the first attempt. */
+  attempt: number;
+  /** How long we are about to wait before the next one. */
+  delayMs: number;
+  /** `transport` (never reached the model) or `status` (it answered). */
+  kind: 'transport' | 'status';
+  /** The whole cause chain on one line. Safe for a log; never for a chat. */
+  detail: string;
+}
+
 export interface AnthropicProviderOptions {
-  /** Injected for tests. Defaults to the global `fetch`. */
-  fetch?: typeof globalThis.fetch;
+  /**
+   * Injected for tests. Defaults to `defaultHttpTransport` — `node:https` with
+   * connection reuse off, not the global `fetch`. See `transport.ts` for why.
+   */
+  fetch?: HttpTransport;
   /** Injected for tests so backoff does not burn wall-clock. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injected for tests: the retry window is measured against this. */
+  now?: () => number;
+  /** Called before each wait, with the cause chain of the attempt that failed. */
+  onRetry?: (notice: RetryNotice) => void;
   /** Default `max_tokens` when a request does not set one. */
   maxTokens?: number;
 }
@@ -366,11 +419,12 @@ export function createAnthropicProvider(
   resolved: ResolvedProvider,
   options: AnthropicProviderOptions = {},
 ): RuntimeProvider {
-  const doFetch = options.fetch ?? globalThis.fetch;
+  const doFetch = options.fetch ?? defaultHttpTransport;
   if (typeof doFetch !== 'function') {
     throw new Error('createAnthropicProvider: no fetch implementation available');
   }
   const sleep = options.sleep ?? defaultSleep;
+  const now = options.now ?? ((): number => Date.now());
   const defaultMaxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const url = `${resolved.baseUrl.replace(/\/+$/, '')}/v1/messages`;
   const isSubscription = resolved.credentialKind === 'subscription-token';
@@ -405,7 +459,7 @@ export function createAnthropicProvider(
     return wire;
   }
 
-  async function errorFrom(res: Response): Promise<ProviderError> {
+  async function errorFrom(res: TransportResponse): Promise<ProviderError> {
     const requestId =
       res.headers?.get?.('request-id') ?? res.headers?.get?.('x-request-id') ?? null;
     let type = 'http_error';
@@ -437,24 +491,41 @@ export function createAnthropicProvider(
     async complete(req: CompletionRequest): Promise<CompletionResponse> {
       const names = toolNameMap(req.tools);
       const payload = JSON.stringify(body(req, names));
+      const startedAt = now();
+      /**
+       * Two budgets, counted separately, because they are answers to two
+       * different questions. A request the provider answered with a 429 or a
+       * 500 gets the short status curve — it reached the model, and the model
+       * said no. A request that never got there gets the wider transport
+       * curve, bounded by its own window.
+       */
+      let statusFailures = 0;
+      let transportFailures = 0;
       let lastError: ProviderError | undefined;
-      /** What the last failure asked us to wait, when it asked. */
-      let delay = 0;
 
-      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-        if (attempt > 0) await sleep(delay);
-
-        let res: Response;
+      for (;;) {
+        let res: TransportResponse;
         try {
           res = await doFetch(url, { method: 'POST', headers: headers(), body: payload });
         } catch (err) {
-          // Transport failure: retryable, same budget as a 5xx.
+          transportFailures += 1;
+          // The message stays the caller's; the cause chain rides along, and
+          // `detail` is the line that finally says what actually broke.
           lastError = new ProviderError({
             status: 0,
             type: 'transport_error',
             message: err instanceof Error ? err.message : String(err),
+            cause: err,
           });
-          delay = nextDelayMs(attempt + 1);
+          const delay = nextTransportDelayMs(transportFailures, now() - startedAt);
+          if (delay === undefined) break;
+          options.onRetry?.({
+            attempt: transportFailures,
+            delayMs: delay,
+            kind: 'transport',
+            detail: lastError.detail,
+          });
+          await sleep(delay);
           continue;
         }
 
@@ -473,11 +544,19 @@ export function createAnthropicProvider(
 
         // Read `Retry-After` before the body is consumed: a 429 that names its
         // own window is the one case where our curve is the wrong answer.
-        const wait = nextDelayMs(attempt + 1, res.headers);
+        statusFailures += 1;
+        const wait = nextDelayMs(statusFailures, res.headers);
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        delay = wait;
+        if (statusFailures > RETRY_DELAYS_MS.length) break;
+        options.onRetry?.({
+          attempt: statusFailures,
+          delayMs: wait,
+          kind: 'status',
+          detail: error.detail,
+        });
+        await sleep(wait);
       }
 
       throw (

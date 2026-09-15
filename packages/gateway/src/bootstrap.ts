@@ -226,6 +226,21 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
    * that were perfectly fine.
    */
   const adapters = new Map<string, RuntimeProvider>();
+  /**
+   * Every attempt that failed, with its whole cause chain, on the process log.
+   *
+   * This is the line that did not exist. A provider call that failed and then
+   * succeeded left no trace at all, and one that failed for good left the word
+   * `fetch failed` — undici's wrapper, with the actual `ERR_HTTP2_INVALID_SESSION`
+   * one link down on `cause`, unread. A day of failures taught us nothing
+   * because of this one missing log line.
+   */
+  const onRetry = (notice: { attempt: number; delayMs: number; kind: string; detail: string }): void => {
+    console.error(
+      `provider: ${notice.kind} attempt ${notice.attempt} failed, retrying in ${notice.delayMs}ms — ${notice.detail}`,
+    );
+  };
+
   const providerFor = (agent: CatalogAgent): RuntimeProvider => {
     const key = `${agent.provider.kind}:${agent.provider.model}:${agent.provider.credential.env}`;
     const cached = adapters.get(key);
@@ -237,7 +252,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
           `${agentResolution.problem.message}`,
       );
     }
-    const built = createProvider(agentResolution.provider);
+    const built = createProvider(agentResolution.provider, { onRetry });
     adapters.set(key, built);
     return built;
   };
@@ -249,7 +264,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
-  const provider = createProvider(resolution.provider);
+  const provider = createProvider(resolution.provider, { onRetry });
   // Delegation can only be wired once both exist; before this call the tool
   // refuses rather than reaching for an ambient catalog. `providerFor` rides
   // along so a colleague pinned to another provider is run on that provider.

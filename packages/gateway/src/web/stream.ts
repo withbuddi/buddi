@@ -121,6 +121,11 @@ export function toStreamEvent(row: LogRow): { event: string; data: Record<string
           turns: typeof p.turns === 'number' ? p.turns : 0,
           stopped: typeof p.stopped === 'string' ? p.stopped : 'unknown',
           usage: usageOf(p.usage),
+          // `message` is the sentence a person reads; `error` is the cause
+          // chain, kept for the record. A page that shows `error` is a page
+          // showing the owner `fetch failed`, which is the bug this replaced.
+          ...(typeof p.message === 'string' ? { message: p.message } : {}),
+          ...(typeof p.failureClass === 'string' ? { failureClass: p.failureClass } : {}),
           ...(typeof p.error === 'string' ? { error: p.error } : {}),
           ...(typeof p.actionId === 'string' ? { actionId: p.actionId } : {}),
         },

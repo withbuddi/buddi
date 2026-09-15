@@ -3,6 +3,7 @@ export * from './openai.js';
 export * from './capabilities.js';
 export * from './create.js';
 export * from './retry.js';
+export * from './transport.js';
 export * from './attachments.js';
 export * from './loop.js';
 export * from './delegate.js';

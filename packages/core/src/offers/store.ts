@@ -8,7 +8,9 @@
  *
  * Validation lives here rather than in a prompt: a label or a prompt over the
  * cap is truncated at the boundary, and a set over `MAX_OFFERS` is cut, because
- * a report that offered nine buttons is a report the owner stops reading.
+ * a report that offered nine buttons is a report the owner stops reading — with
+ * one exception, `maxPromptChars`, for the offer that carries the owner's own
+ * words back to the agent verbatim.
  */
 import type { Queryable } from '../owner.js';
 import {
@@ -23,8 +25,21 @@ import {
   type TakeOfferResult,
 } from './types.js';
 
-function clip(value: string, max: number): string {
+/** A button label: one line, whatever the agent typed. */
+function clipLabel(value: string, max: number): string {
   const text = value.trim().replace(/\s+/g, ' ');
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * A prompt, trimmed and capped but never reflowed.
+ *
+ * A prompt is a sentence sent to an agent, not a caption: nothing renders it on
+ * one line, and a "Try again" offer carries the owner's own message, paragraph
+ * breaks and all. Collapsing its whitespace would quietly rewrite it.
+ */
+function clipPrompt(value: string, max: number): string {
+  const text = value.trim();
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
@@ -33,12 +48,15 @@ function clip(value: string, max: number): string {
  * and never more than `MAX_OFFERS`. Empty entries are dropped rather than
  * stored as a blank button.
  */
-export function normalizeOffers(actions: readonly OfferedAction[]): OfferedAction[] {
+export function normalizeOffers(
+  actions: readonly OfferedAction[],
+  maxPromptChars: number = MAX_OFFER_PROMPT,
+): OfferedAction[] {
   const seen = new Set<string>();
   const out: OfferedAction[] = [];
   for (const action of actions) {
-    const label = clip(action?.label ?? '', MAX_OFFER_LABEL);
-    const prompt = clip(action?.prompt ?? '', MAX_OFFER_PROMPT);
+    const label = clipLabel(action?.label ?? '', MAX_OFFER_LABEL);
+    const prompt = clipPrompt(action?.prompt ?? '', maxPromptChars);
     if (label === '' || prompt === '') continue;
     const key = label.toLowerCase();
     if (seen.has(key)) continue;
@@ -55,6 +73,18 @@ export interface OfferActionsInput {
   actions: readonly OfferedAction[];
   now: Date;
   ttlMs?: number;
+  /**
+   * Raise the prompt cap for this call only.
+   *
+   * `MAX_OFFER_PROMPT` exists to stop an *agent* writing a briefing where a
+   * request belongs, and truncating one at the boundary is the right answer
+   * there. A "Try again" offer is different in kind: its prompt is the owner's
+   * own sentence, and the whole promise of the button is that it re-runs
+   * exactly what they said. A retry that silently ran the first 500 characters
+   * of their message would be worse than no button, so that caller raises the
+   * cap rather than accepting the ellipsis.
+   */
+  maxPromptChars?: number;
 }
 
 /** Store the offers a report carries. Returns them with the ids a surface binds. */
@@ -64,7 +94,7 @@ export async function offerActions(
 ): Promise<Offer[]> {
   const agentId = (input.agentId ?? '').trim();
   if (agentId === '') throw new Error('offerActions: an offer belongs to the agent that made it');
-  const actions = normalizeOffers(input.actions);
+  const actions = normalizeOffers(input.actions, input.maxPromptChars);
   if (actions.length === 0) return [];
 
   const expiresAt = new Date(input.now.getTime() + (input.ttlMs ?? OFFER_TTL_MS));
