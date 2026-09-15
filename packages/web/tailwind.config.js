@@ -9,14 +9,20 @@
  */
 /** @type {import('tailwindcss').Config} */
 export default {
-  // Preflight is off: the nine monitoring pages predate Tailwind and are styled
-  // by hand in `styles.css`. Resetting the document out from under them would
-  // be a redesign nobody asked for, so utilities are added, nothing is taken.
-  corePlugins: { preflight: false },
+  // Preflight is ON. It has to be: without it nothing resets `border-width` to
+  // zero, and the `border-style: solid` that Tailwind's border utilities assume
+  // turns every element on the page into a 3px box — which is exactly what the
+  // workbench shipped as. It also stops `input`, `button`, `select` and
+  // `textarea` rendering with their user-agent chrome. The nine monitoring
+  // pages predate Tailwind and did rely on the document's own defaults; what
+  // they relied on is restored explicitly, scoped to `main`, in `styles.css`.
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   darkMode: ['selector', ':root[data-theme="dark"] &'],
   theme: {
     extend: {
+      // Preflight paints its universal `border-color` from this, so the reset
+      // itself spends a token rather than a literal.
+      borderColor: { DEFAULT: 'var(--line)' },
       colors: {
         bg: 'var(--bg)',
         surface: 'var(--surface)',

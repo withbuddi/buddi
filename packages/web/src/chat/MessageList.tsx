@@ -1,6 +1,13 @@
 /**
  * The conversation itself.
  *
+ * The two turns are told apart by shape, not by a label: what the owner said
+ * is a tinted bubble pushed to the right edge of the column; what the agent
+ * said is prose against the page, under the agent's own name, at a line length
+ * you can actually read. A message that carries only a tool result — which is
+ * how a transcript records the server's half of a call — prints nothing at
+ * all, because "USER" over an empty box is noise.
+ *
  * Tool calls appear inline as they happen — the tool's human label and the
  * seconds it has been running — because a column that goes quiet for forty
  * seconds looks broken, and a spinner does not say what is taking the time.
@@ -9,7 +16,7 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef } from 'react';
 import { labelFor } from '../canvas/renderables';
-import type { ChatMessage } from './types';
+import type { ChatBlock, ChatMessage } from '../chat/types';
 
 /** A tool call that has not come back yet. */
 export interface LiveCall {
@@ -23,6 +30,7 @@ export function MessageList({
   live,
   now,
   onOpen,
+  agentName,
   emptyHint,
 }: {
   messages: ChatMessage[];
@@ -30,6 +38,8 @@ export function MessageList({
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
   now: number;
   onOpen: (toolUseId: string) => void;
+  /** Whose turn the agent's turn is. Shown once per run of its messages. */
+  agentName?: string;
   emptyHint: string;
 }): JSX.Element {
   const bottom = useRef<HTMLDivElement>(null);
@@ -38,61 +48,80 @@ export function MessageList({
     bottom.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, live.length]);
 
+  const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
+
   return (
     <div className="wb-messages" data-testid="messages">
-      {messages.length === 0 && live.length === 0 ? <p className="wb-empty">{emptyHint}</p> : null}
+      {shown.length === 0 && live.length === 0 ? (
+        <p className="wb-chat-empty">{emptyHint}</p>
+      ) : null}
 
-      {messages.map((message) => (
-        <div key={message.id} className="wb-msg" data-role={message.role}>
-          <div className="wb-msg-role">{message.role}</div>
-          {(message.blocks ?? []).map((block, index) => {
-            if (block.type === 'text') {
-              return block.text.trim() === '' ? null : (
-                <div key={index} className="wb-bubble">
-                  {block.text}
-                </div>
-              );
-            }
-            if (block.type === 'attachment') {
-              return (
-                <span key={index} className="wb-chip">
-                  {block.filename}
-                  <span className="wb-menu-note pr-2">{block.kind}</span>
-                </span>
-              );
-            }
-            if (block.type === 'tool_use') {
-              const result = findResult(messages, block.id);
-              return (
-                <ToolRow
-                  key={index}
-                  label={labelFor(block.name)}
-                  tool={block.name}
-                  ok={result?.ok ?? null}
-                  running={result === null}
-                  onOpen={() => onOpen(block.id)}
-                />
-              );
-            }
-            return null;
-          })}
-        </div>
-      ))}
+      {shown.map((message, index) => {
+        const mine = message.role === 'user';
+        // The name is a heading for a run of turns, not a stamp on each one.
+        const opensTurn = index === 0 || shown[index - 1]!.role !== message.role;
+        return (
+          <div key={message.id} className="wb-msg" data-role={mine ? 'user' : 'assistant'}>
+            {opensTurn && !mine ? (
+              <div className="wb-msg-who">{agentName ?? 'Assistant'}</div>
+            ) : null}
+            {(message.blocks ?? []).map((block, blockIndex) => {
+              if (block.type === 'text') {
+                return block.text.trim() === '' ? null : (
+                  <div key={blockIndex} className="wb-bubble">
+                    {block.text}
+                  </div>
+                );
+              }
+              if (block.type === 'attachment') {
+                return (
+                  <span key={blockIndex} className="wb-chip">
+                    <ClipIcon />
+                    {block.filename}
+                    <span className="wb-chip-kind">{block.kind}</span>
+                  </span>
+                );
+              }
+              if (block.type === 'tool_use') {
+                const result = findResult(messages, block.id);
+                return (
+                  <ToolRow
+                    key={blockIndex}
+                    label={labelFor(block.name)}
+                    tool={block.name}
+                    ok={result?.ok ?? null}
+                    running={result === null}
+                    onOpen={() => onOpen(block.id)}
+                  />
+                );
+              }
+              return null;
+            })}
+          </div>
+        );
+      })}
 
       {live.map((call) => (
-        <ToolRow
-          key={call.toolUseId}
-          label={labelFor(call.name)}
-          tool={call.name}
-          ok={null}
-          running
-          elapsed={Math.max(0, Math.round((now - call.startedAt) / 1000))}
-          onOpen={() => onOpen(call.toolUseId)}
-        />
+        <div key={call.toolUseId} className="wb-msg" data-role="assistant">
+          <ToolRow
+            label={labelFor(call.name)}
+            tool={call.name}
+            ok={null}
+            running
+            elapsed={Math.max(0, Math.round((now - call.startedAt) / 1000))}
+            onOpen={() => onOpen(call.toolUseId)}
+          />
+        </div>
       ))}
       <div ref={bottom} />
     </div>
   );
+}
+
+/** A block worth a line on screen. A bare tool result is not one. */
+function isVisible(block: ChatBlock): boolean {
+  if (block.type === 'text') return block.text.trim() !== '';
+  return block.type === 'tool_use' || block.type === 'attachment';
 }
 
 function ToolRow({
@@ -114,18 +143,61 @@ function ToolRow({
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <button className="wb-tool" data-ok={ok === null ? undefined : ok} data-running={running} onClick={onOpen}>
-          {running ? <span className="wb-pulse" aria-hidden="true" /> : null}
+          {running ? (
+            <span className="wb-pulse" aria-hidden="true" />
+          ) : (
+            <span className="wb-tool-mark" data-ok={ok === false ? 'false' : 'true'} aria-hidden="true" />
+          )}
           <span className="wb-tool-label">{label}</span>
           {elapsed === undefined ? null : <span className="wb-tool-elapsed">{elapsed}s</span>}
           {ok === false ? <span className="wb-tool-elapsed">failed</span> : null}
+          <ArrowIcon />
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content className="wb-tip" sideOffset={5}>
-          {tool}
+        <Tooltip.Content className="wb-tip" sideOffset={6}>
+          <span className="wb-tip-title">Open on the canvas</span>
+          <span className="wb-tip-hint mono">{tool}</span>
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+function ArrowIcon(): JSX.Element {
+  return (
+    <svg
+      className="wb-tool-arrow"
+      width="13"
+      height="13"
+      viewBox="0 0 13 13"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4.8 2.6 9 6.5l-4.2 3.9" />
+    </svg>
+  );
+}
+
+function ClipIcon(): JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9.4 5.6 6 9a2.1 2.1 0 0 1-3-3l3.6-3.6a1.4 1.4 0 0 1 2 2L5 8" />
+    </svg>
   );
 }
 
