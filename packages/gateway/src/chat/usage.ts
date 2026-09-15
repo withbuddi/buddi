@@ -52,6 +52,11 @@ export function formatCost(dollars: number): string {
   return `$${dollars.toFixed(4)}`;
 }
 
+/** `3 web searches` — the provider's own, which no token count includes. */
+export function formatWebSearches(count: number): string {
+  return `${formatTokens(count)} web search${count === 1 ? '' : 'es'}`;
+}
+
 /** Thousands separators, because six-digit token counts are unreadable without. */
 export function formatTokens(count: number): string {
   return count.toLocaleString('en-US');
@@ -63,6 +68,16 @@ export interface ModelUsage {
   input: number;
   output: number;
   runs: number;
+  /**
+   * Searches the provider ran on its own servers for this model.
+   *
+   * Counted beside the tokens and priced with neither, because it is a
+   * different meter: under a subscription it comes out of the plan, and on an
+   * API key it is billed per thousand requests, at a rate this table does not
+   * carry. Reporting the count and declining to guess the cost is the same
+   * honesty the unpriced-model row already practises.
+   */
+  webSearches: number;
 }
 
 /**
@@ -93,15 +108,26 @@ export class UsageLedger {
 
   get totals(): Usage {
     return this.models.reduce(
-      (sum, m) => ({ input: sum.input + m.input, output: sum.output + m.output }),
-      { input: 0, output: 0 },
+      (sum, m) => ({
+        input: sum.input + m.input,
+        output: sum.output + m.output,
+        webSearches: (sum.webSearches ?? 0) + m.webSearches,
+      }),
+      { input: 0, output: 0, webSearches: 0 } as Usage,
     );
   }
 
   record(model: string, usage: Usage, turns: number, tools: number): void {
-    const existing = this.#byModel.get(model) ?? { model, input: 0, output: 0, runs: 0 };
+    const existing = this.#byModel.get(model) ?? {
+      model,
+      input: 0,
+      output: 0,
+      runs: 0,
+      webSearches: 0,
+    };
     existing.input += usage.input;
     existing.output += usage.output;
+    existing.webSearches += usage.webSearches ?? 0;
     existing.runs += 1;
     this.#byModel.set(model, existing);
     this.#turns += turns;
@@ -121,6 +147,7 @@ export class UsageLedger {
       lines.push(
         `  ${m.model} — ${m.runs} run${m.runs === 1 ? '' : 's'}, ` +
           `in ${formatTokens(m.input)} / out ${formatTokens(m.output)}` +
+          `${m.webSearches > 0 ? `, ${formatWebSearches(m.webSearches)}` : ''}` +
           `${cost === undefined ? ', cost unknown (no local price)' : `, about ${formatCost(cost)}`}`,
       );
     }
@@ -131,7 +158,8 @@ export class UsageLedger {
       `  ${this.#turns} turn${this.#turns === 1 ? '' : 's'}, ${this.#tools} tool call${
         this.#tools === 1 ? '' : 's'
       }, in ${formatTokens(total.input)} / out ${formatTokens(total.output)}`,
-      `  estimated cost ${formatCost(known)}${unpriced ? ' plus the unpriced models above' : ''}`,
+      `  estimated cost ${formatCost(known)}${unpriced ? ' plus the unpriced models above' : ''}` +
+        `${(total.webSearches ?? 0) > 0 ? `, plus ${formatWebSearches(total.webSearches ?? 0)} metered separately` : ''}`,
       '  Estimates from a local price table — check your provider dashboard for the bill.',
     ].join('\n');
   }

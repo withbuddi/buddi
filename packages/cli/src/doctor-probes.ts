@@ -40,7 +40,12 @@ import {
   WEB_ENABLED_VAR,
   type HttpTransport,
 } from '@buddi/gateway';
-import { resolveKey as resolveSearchKey, searchConfiguration } from '@buddi/tool-web';
+import {
+  NATIVE_BACKEND_ID,
+  PROVIDER_VAR,
+  resolveKey as resolveSearchKey,
+  searchConfiguration,
+} from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { listArchives } from './backup/prune.js';
 import { STALE_AFTER_MS } from './backup/manifest.js';
@@ -389,25 +394,52 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      */
     async webSearch(): Promise<ProbeResult> {
       const facts = await secrets();
-      const { provider, problem } = searchConfiguration(env);
+      const { provider, native, problem } = searchConfiguration(env);
       const key = resolveSearchKey(provider, env);
+      // There are two backends now, and which one an agent gets depends on the
+      // agent: a provider that searches server-side needs no key at all, and
+      // this probe cannot see agents. So it reports what it can see — the key —
+      // and names the half of the installation that is unaffected, rather than
+      // warning about a gap that is not one for most of them.
+      const nativeNote =
+        'agents on a provider with its own server-side search (Anthropic) search without one';
       if (!key.configured) {
         const secretProblem = facts.problems[provider.keyName];
         const because =
           secretProblem && secretProblem.code !== 'missing-secret'
             ? `${provider.keyName} unavailable: ${secretProblem.message}`
             : key.reason;
+        if (native) {
+          return {
+            status: 'ok',
+            detail:
+              `${PROVIDER_VAR}=${NATIVE_BACKEND_ID} — every agent searches through its own provider; ` +
+              `agents on a provider without server-side search can read a page but cannot search`,
+          };
+        }
         return {
           status: 'warn',
           detail:
-            `${because} — agents can read a page but cannot search; ` +
+            `${because} — ${nativeNote}, and agents on any other provider can read a page but cannot search; ` +
             `\`buddi vault set ${provider.keyName}\` (free key: ${provider.signupUrl})`,
         };
       }
       const where = facts.sources[provider.keyName] === 'vault' ? 'vault' : '.env';
+      if (native) {
+        return {
+          status: 'ok',
+          detail:
+            `${PROVIDER_VAR}=${NATIVE_BACKEND_ID} — every agent searches through its own provider; ` +
+            `the ${provider.label} key in the ${where} is unused until that changes`,
+        };
+      }
+      const forced = (env[PROVIDER_VAR] ?? '').trim() !== '';
       return {
         status: 'ok',
-        detail: `${provider.label} — key from the ${where}${problem ? ` (${problem})` : ''}`,
+        detail:
+          `${provider.label} — key from the ${where}` +
+          `${forced ? ` (forced by ${PROVIDER_VAR}, on every provider)` : `; ${nativeNote}`}` +
+          `${problem ? ` (${problem})` : ''}`,
       };
     },
 

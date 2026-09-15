@@ -15,7 +15,14 @@ The honesty was right; the gap was the platform's.
 
 ## 1. Turning it on
 
-Search needs an API key. Reading a page does not — `web.read` works on an
+**On most installations there is nothing to turn on.** An agent running on
+Anthropic searches through the provider itself, on the credential it already
+uses: no second key, no second company, no separate bill. Grant it `web.*` and
+it can look things up. See §1b for what that changes and what it costs.
+
+The rest of this section is about the other case: an agent on a provider with no
+server-side search — Scout, on OpenAI, in this installation. That one needs an
+API key to search. Reading a page never does — `web.read` works on an
 installation that never configures search at all.
 
 ```sh
@@ -35,7 +42,68 @@ memory as though it had. That degraded behaviour is the point: the failure this
 plugin guards against is not "no search", it is "a confident answer that looks
 like a search and is not".
 
-### Choosing a different backend
+---
+
+## 1b. Who actually does the searching
+
+There are three backends, and which one honours a grant depends on the **agent's
+provider**, not on the installation:
+
+| The agent runs on | `web.*` gets it | What the model is shown |
+| --- | --- | --- |
+| Anthropic | the provider's own server-side search | `web.read`, `web.status` — and **no** `web.search` |
+| OpenAI | `web.search` through Tavily (or Brave) | `web.read`, `web.search`, `web.status` |
+
+The grant stays provider-agnostic on purpose. You grant "the web"; the platform
+works out how. Nothing in an agent file names a backend, and moving an agent
+from one provider to another changes nothing in its `tools:` line.
+
+`web.search` is withheld where the provider searches natively because otherwise
+the model has two ways to do one thing — and will sometimes do it twice, once
+natively and once through Tavily, producing two bills and two sets of results to
+reconcile. `web.read` is **never** withheld: the scheme, port, hostname and
+post-DNS address blocking that makes fetching a URL safe lives in this plugin,
+and native search replaces none of it.
+
+**Forcing one.** `BUDDI_SEARCH_PROVIDER` still decides, in both directions:
+
+```sh
+BUDDI_SEARCH_PROVIDER=tavily    # every agent uses web.search, even on Anthropic
+BUDDI_SEARCH_PROVIDER=native    # every agent uses its provider's own search,
+                                # where the provider has one; the rest fall back
+```
+
+**What it costs.** Server-side search is metered, not free: under a Claude
+subscription it counts against the plan, and on an API key it is billed per
+thousand requests. The count is surfaced everywhere tokens are — the chat
+footer, `/usage`, and the `run.finished` event — and bounded per turn by
+`BUDDI_WEB_SEARCH_MAX_USES` (default 3, maximum 10).
+
+**It is still audited.** A native search leaves a row in the same `web.fetches`
+table `web.search` writes to: the agent, the time, the query, the endpoint the
+query was sent to, and the result hosts. One list, not two.
+
+**What is genuinely weaker.** The untrusted-content rule is stated in four
+places for `web.search` (see §3), and the strongest of the four — the notice
+that travels *inside the tool result*, in the same block of text as the content
+it is about — is the one native search cannot have. Results are injected into
+the conversation by the API; nothing of ours sits between the search engine and
+the model. What is left is a paragraph in the run's system prompt, the shared
+skill, and the persona. That is weaker, and it is the reason
+`BUDDI_SEARCH_PROVIDER=tavily` remains a supported answer rather than a legacy
+one.
+
+**OpenAI.** Not implemented, deliberately. Chat Completions' own
+`web_search_options` is accepted only by the `gpt-4o-*-search-preview` models —
+turning it on would silently repin Scout's model — and the Responses API, where
+the general tool lives, is a different wire with a different request shape and
+different content blocks. That is an adapter, not a flag. The seam is in
+`packages/runtime/src/capabilities.ts`: flip `nativeWebSearch` on the `openai`
+row when the adapter exists, and everything else follows.
+
+---
+
+### Choosing a different search company
 
 ```sh
 BUDDI_SEARCH_PROVIDER=brave     # in .env
@@ -60,7 +128,7 @@ A backend that dies does not strand the plugin: the tool reports the failure,
 
 | Tool | Tier | Needs a key | What it gives back |
 | --- | --- | --- | --- |
-| `web.search` | `auto` | yes | A ranked list. Each result: `title`, `url`, `source` (the host), `snippet`, and `published` when the engine claims to know it. |
+| `web.search` | `auto` | yes | A ranked list. Withheld from agents whose provider searches server-side — see §1b. Each result: `title`, `url`, `source` (the host), `snippet`, and `published` when the engine claims to know it. |
 | `web.read` | `auto` | no | One page as text: `url` (the one that *answered*, after redirects), `source`, `title`, `retrievedAt`, `text`, `truncated`. |
 | `web.status` | `auto` | no | Whether search is configured, through whom, and the limits. Touches no network. |
 

@@ -564,3 +564,185 @@ describe('createAnthropicProvider — input_schema on the wire', () => {
     expect(sent.tools[1].input_schema).toEqual(flattenedUnion);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * The provider's own web search
+ * ------------------------------------------------------------------ */
+
+/** A response shaped like the live one verified on 2026-09-15. */
+function searchBody(overrides: Record<string, unknown> = {}) {
+  return okBody({
+    stop_reason: 'end_turn',
+    content: [
+      {
+        type: 'server_tool_use',
+        id: 'srvtoolu_1',
+        name: 'web_search',
+        input: { query: 'used ford bronco price new jersey 2026' },
+      },
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: 'srvtoolu_1',
+        content: [
+          { type: 'web_search_result', url: 'https://www.cargurus.com/a', title: 'CarGurus' },
+          { type: 'web_search_result', url: 'https://www.kbb.com/b', title: 'KBB' },
+          { type: 'web_search_result', url: 'https://www.cargurus.com/c', title: 'CarGurus 2' },
+        ],
+      },
+      { type: 'text', text: 'about $43,753, according to CarGurus' },
+    ],
+    usage: { input_tokens: 11, output_tokens: 3, server_tool_use: { web_search_requests: 1 } },
+    ...overrides,
+  });
+}
+
+describe('createAnthropicProvider — server-side web search', () => {
+  it('declares the server tool alongside buddi\'s own, bounded by max_uses', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('subscription-token'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+
+    await provider.complete({ ...request, nativeSearch: { maxUses: 3 } });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.tools).toEqual([
+      { name: 'finance_balance', description: 'Balance.', input_schema: { type: 'object' } },
+      { type: 'web_search_20250305', name: 'web_search', max_uses: 3 },
+    ]);
+  });
+
+  it('sends no server tool when the loop did not ask for one', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+
+    await provider.complete(request);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).tools).toHaveLength(1);
+  });
+
+  it('never proposes a server tool block as a tool call, and reports the search instead', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, searchBody()));
+    const provider = createAnthropicProvider(resolve('subscription-token'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+
+    const res = await provider.complete({ ...request, nativeSearch: { maxUses: 3 } });
+
+    // The blocks are carried, not dispatched: nothing in `content` is a
+    // `tool_use`, so the loop has nothing to look up in the registry.
+    expect(res.content.filter((b) => b.type === 'tool_use')).toEqual([]);
+    expect(res.content.map((b) => b.type)).toEqual([
+      'provider_native',
+      'provider_native',
+      'text',
+    ]);
+    expect(res.searches).toEqual([
+      {
+        query: 'used ford bronco price new jersey 2026',
+        hosts: ['www.cargurus.com', 'www.kbb.com'],
+        resultCount: 3,
+        outcome: 'ok',
+      },
+    ]);
+    expect(res.usage).toEqual({ input: 11, output: 3, webSearches: 1 });
+  });
+
+  it('records a refused search as a failed row rather than losing it', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(
+        200,
+        searchBody({
+          content: [
+            {
+              type: 'server_tool_use',
+              id: 'srvtoolu_9',
+              name: 'web_search',
+              input: { query: 'anything' },
+            },
+            {
+              type: 'web_search_tool_result',
+              tool_use_id: 'srvtoolu_9',
+              content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' },
+            },
+          ],
+        }),
+      ),
+    );
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+
+    const res = await provider.complete({ ...request, nativeSearch: { maxUses: 1 } });
+    expect(res.searches).toEqual([
+      {
+        query: 'anything',
+        hosts: [],
+        resultCount: 0,
+        outcome: 'error',
+        detail: 'max_uses_exceeded',
+      },
+    ]);
+  });
+
+  it('maps pause_turn, so a paused search turn is continued rather than ended', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, searchBody({ stop_reason: 'pause_turn' })),
+    );
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+    const res = await provider.complete({ ...request, nativeSearch: { maxUses: 3 } });
+    expect(res.stopReason).toBe('pause_turn');
+  });
+
+  it('sends a carried block back verbatim, which is what makes the continuation the same turn', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('api-key'), {
+      fetch: fetchMock as unknown as typeof fetch,
+      sleep: noSleep,
+    });
+    const raw = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'x' } };
+
+    await provider.complete({
+      ...request,
+      nativeSearch: { maxUses: 3 },
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'provider_native', provider: 'anthropic', raw }] },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).messages[1].content).toEqual([raw]);
+  });
+});
+
+describe('toolNameMap — the name the server tool has already taken', () => {
+  it('moves a registry tool out of the way of web_search rather than colliding', () => {
+    // `web.search` encodes to `web_search`, which is exactly the name the
+    // server-side tool uses. Two entries with one name in one `tools` array is
+    // a 400 with the owner's message already in the body.
+    const map = toolNameMap(
+      [{ name: 'web.search', description: 'x', input_schema: {} }],
+      128,
+      ['web_search'],
+    );
+    expect([...map.keys()]).toEqual(['web_search_2']);
+    expect(map.get('web_search_2')).toBe('web.search');
+  });
+
+  it('leaves the mapping alone when nothing is reserved', () => {
+    const map = toolNameMap([{ name: 'web.search', description: 'x', input_schema: {} }]);
+    expect(map.get('web_search')).toBe('web.search');
+  });
+});

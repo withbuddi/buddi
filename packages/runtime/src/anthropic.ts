@@ -77,7 +77,25 @@ export type ContentBlock =
     }
   | { type: 'image'; mime: string; data: string }
   | { type: 'document'; mime: 'application/pdf'; data: string; name?: string }
-  | { type: 'artifact_ref'; artifactId: string; mime: string; kind: string };
+  | { type: 'artifact_ref'; artifactId: string; mime: string; kind: string }
+  /**
+   * A block this port does not model, carried back to the provider that made
+   * it, verbatim.
+   *
+   * It exists for exactly one thing: the provider's own server-side tools. A
+   * `server_tool_use` and its `web_search_tool_result` are not tool calls the
+   * loop dispatches — the API ran them before it answered — but they are part
+   * of the assistant turn the model wrote, and a turn the API paused
+   * (`stop_reason: pause_turn`) has to be handed back with them intact or the
+   * continuation is a different conversation. Opaque on purpose: nothing above
+   * the adapter reads `raw`, and `provider` is there so one vendor's blocks are
+   * never posted to another's endpoint.
+   *
+   * It is never persisted. The loop strips these before writing `core.messages`
+   * — untrusted search results belong in the answer's citations, not in durable
+   * history that gets replayed for ever.
+   */
+  | { type: 'provider_native'; provider: string; raw: unknown };
 
 /** What the model is shown when an attachment cannot be reconstructed. */
 export const ATTACHMENT_UNAVAILABLE = '[attachment unavailable]';
@@ -102,13 +120,60 @@ export interface CompletionRequest {
   messages: NeutralMessage[];
   tools: ToolSchema[];
   maxTokens?: number;
+  /**
+   * Let the provider search the web on its own servers for this request.
+   *
+   * Set by the loop from `planNativeSearch`, never by a caller reaching past
+   * it: whether an agent may search is the owner's grant, and which backend
+   * honours the grant is `BUDDI_SEARCH_PROVIDER`. An adapter whose matrix row
+   * says `nativeWebSearch: false` ignores this field entirely.
+   */
+  nativeSearch?: { maxUses: number };
 }
 
-export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'other';
+/**
+ * `pause_turn` is not an ending. The API stops a long-running server-tool turn
+ * part-way and expects the same turn to be continued — the assistant content
+ * handed straight back, no new user message. The loop does exactly that; see
+ * `provider_native` for why the blocks survive the round trip.
+ */
+export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'pause_turn' | 'other';
 
 export interface Usage {
   input: number;
   output: number;
+  /**
+   * Server-side web searches the provider ran for this request.
+   *
+   * Metered, not free: under a subscription it counts against the plan, and on
+   * an API key it is billed per thousand requests. It is surfaced everywhere
+   * tokens are (`/usage`, the chat footer, the `run.finished` event) for the
+   * same reason tokens are — a capability nobody can count is a capability
+   * nobody can account for.
+   */
+  webSearches?: number;
+}
+
+/**
+ * One server-side search, as the audit trail needs it.
+ *
+ * The claim that native search costs us the audit trail turned out to be
+ * wrong on inspection: the adapter sees the query in the `server_tool_use`
+ * block and the result URLs in the `web_search_tool_result` block that follows
+ * it. That is every column `web.fetches` has — who asked, when, what for,
+ * where it went, how it ended — so a native search leaves the same trace a
+ * `web.search` call does. What is *not* here is the page text, which is the
+ * same thing the plugin's own log refuses to store.
+ */
+export interface NativeSearchRecord {
+  /** What the model asked for, in its own words. */
+  query: string;
+  /** Result hosts, de-duplicated, in the order they ranked. */
+  hosts: string[];
+  resultCount: number;
+  outcome: 'ok' | 'error';
+  /** The provider's error code, when it failed. */
+  detail?: string;
 }
 
 export interface CompletionResponse {
@@ -117,6 +182,8 @@ export interface CompletionResponse {
   usage: Usage;
   /** Concrete model the endpoint reports it served (per-run snapshot input). */
   model: string;
+  /** Every server-side search this response ran. Absent when it ran none. */
+  searches?: NativeSearchRecord[];
 }
 
 export interface RuntimeProvider {
@@ -245,7 +312,19 @@ type WireBlock =
   | WireToolUseBlock
   | WireToolResultBlock
   | WireImageBlock
-  | WireDocumentBlock;
+  | WireDocumentBlock
+  /** A `provider_native` block going straight back out, exactly as it arrived. */
+  | Record<string, unknown>;
+
+/**
+ * The server-side web search tool, as `/v1/messages` takes it.
+ *
+ * It rides in the same `tools` array as buddi's own tools, which is why
+ * `toolNameMap` reserves the name: a registry tool called `web.search` encodes
+ * to `web_search` and would otherwise collide with it on the wire.
+ */
+export const WEB_SEARCH_TOOL_TYPE = 'web_search_20250305';
+export const WEB_SEARCH_TOOL_NAME = 'web_search';
 
 type WireSystemBlock = { type: 'text'; text: string };
 
@@ -255,14 +334,21 @@ type WireRequest = {
   /** A plain string for `api-key`; blocks for `subscription-token`. */
   system: string | WireSystemBlock[];
   messages: { role: MessageRole; content: WireBlock[] }[];
-  tools?: { name: string; description: string; input_schema: Record<string, unknown> }[];
+  tools?: (
+    | { name: string; description: string; input_schema: Record<string, unknown> }
+    | { type: string; name: string; max_uses?: number }
+  )[];
 };
 
 type WireResponse = {
   model?: string;
   stop_reason?: string | null;
   content?: unknown;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    server_tool_use?: { web_search_requests?: number };
+  };
 };
 
 function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock {
@@ -289,6 +375,10 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
       if (block.name) wire.title = block.name;
       return wire;
     }
+    case 'provider_native':
+      // Verbatim, or it is not a continuation of the same turn. `raw` came off
+      // this same endpoint; it is never constructed here and never read.
+      return block.raw as Record<string, unknown>;
     case 'artifact_ref':
       // The loop hydrates these before calling a provider. Reaching here means
       // an un-hydrated history — say so rather than dropping the block.
@@ -335,16 +425,29 @@ export function encodeToolName(name: string, maxLength = ANTHROPIC_TOOL_NAME_MAX
 export function toolNameMap(
   tools: ToolSchema[],
   maxLength = ANTHROPIC_TOOL_NAME_MAX,
+  /**
+   * Wire names the provider has already claimed for this request — today, the
+   * server-side `web_search` tool. Without this a registry tool named
+   * `web.search` would encode to `web_search` and land in the same `tools`
+   * array as the server tool, and the API would answer 400 with the owner's
+   * message already in the body.
+   */
+  reserved: readonly string[] = [],
 ): Map<string, string> {
   const map = new Map<string, string>();
+  const taken = (wire: string): boolean => map.has(wire) || reserved.includes(wire);
   for (const tool of tools) {
-    if (WIRE_TOOL_NAME_CHARS.test(tool.name) && tool.name.length <= maxLength) {
+    if (
+      WIRE_TOOL_NAME_CHARS.test(tool.name) &&
+      tool.name.length <= maxLength &&
+      !reserved.includes(tool.name)
+    ) {
       map.set(tool.name, tool.name);
       continue;
     }
     const base = encodeToolName(tool.name, maxLength);
     let wire = base;
-    for (let n = 2; map.has(wire); n++) wire = `${base.slice(0, maxLength - 4)}_${n}`;
+    for (let n = 2; taken(wire); n++) wire = `${base.slice(0, maxLength - 4)}_${n}`;
     map.set(wire, tool.name);
   }
   return map;
@@ -358,9 +461,26 @@ export function wireToolName(map: Map<string, string>, registryName: string): st
 
 const wireNameFor = wireToolName;
 
-function fromWireBlocks(raw: unknown, names: Map<string, string>): ContentBlock[] {
-  if (!Array.isArray(raw)) return [];
+/**
+ * Wire content -> neutral blocks, plus whatever the provider searched for.
+ *
+ * The one thing this must never do is turn a `server_tool_use` into a
+ * `tool_use`. They are different events wearing similar names: a `tool_use` is
+ * a *proposal* the loop has to execute and answer, a `server_tool_use` is a
+ * report that the API already did something. Dispatching one would send the
+ * loop looking for a tool called `web_search` in a registry that has no such
+ * tool, and answering a `tool_use_id` the API never asked about — so server
+ * blocks become `provider_native`, which the loop carries and never dispatches.
+ */
+function fromWireBlocks(
+  raw: unknown,
+  names: Map<string, string>,
+): { content: ContentBlock[]; searches: NativeSearchRecord[] } {
+  if (!Array.isArray(raw)) return { content: [], searches: [] };
   const out: ContentBlock[] = [];
+  const searches: NativeSearchRecord[] = [];
+  /** `server_tool_use.id` -> the query it asked, so the result can find it. */
+  const queries = new Map<string, string>();
   for (const item of raw) {
     if (typeof item !== 'object' || item === null) continue;
     const b = item as Record<string, unknown>;
@@ -377,10 +497,54 @@ function fromWireBlocks(raw: unknown, names: Map<string, string>): ContentBlock[
         name: names.get(b.name) ?? b.name,
         input: b.input ?? {},
       });
+    } else if (b.type === 'server_tool_use') {
+      if (typeof b.id === 'string') {
+        const input = (b.input ?? {}) as Record<string, unknown>;
+        queries.set(b.id, typeof input.query === 'string' ? input.query : '');
+      }
+      out.push({ type: 'provider_native', provider: 'anthropic', raw: b });
+    } else if (b.type === 'web_search_tool_result') {
+      searches.push(searchRecord(b, queries));
+      out.push({ type: 'provider_native', provider: 'anthropic', raw: b });
     }
-    // Anything else (thinking, server tool blocks) is not part of this port.
+
+    // Everything else — a thinking block, anything a future API version adds —
+    // is still not part of this port and is still dropped. Only the server-tool
+    // pair above is carried, and only because a paused turn cannot be continued
+    // without it.
   }
-  return out;
+  return { content: out, searches };
+}
+
+/** One `web_search_tool_result`, reduced to what the audit log stores. */
+function searchRecord(
+  block: Record<string, unknown>,
+  queries: Map<string, string>,
+): NativeSearchRecord {
+  const query = (typeof block.tool_use_id === 'string' ? queries.get(block.tool_use_id) : '') ?? '';
+  const content = block.content;
+  // The failure shape is `{ type: 'web_search_tool_result_error', error_code }`.
+  if (!Array.isArray(content)) {
+    const code =
+      typeof content === 'object' && content !== null
+        ? String((content as Record<string, unknown>).error_code ?? 'unknown')
+        : 'unknown';
+    return { query, hosts: [], resultCount: 0, outcome: 'error', detail: code };
+  }
+  const hosts: string[] = [];
+  for (const entry of content) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const url = (entry as Record<string, unknown>).url;
+    if (typeof url !== 'string') continue;
+    let host: string;
+    try {
+      host = new URL(url).host;
+    } catch {
+      continue;
+    }
+    if (!hosts.includes(host)) hosts.push(host);
+  }
+  return { query, hosts, resultCount: content.length, outcome: 'ok' };
 }
 
 function mapStopReason(raw: string | null | undefined): StopReason {
@@ -392,6 +556,8 @@ function mapStopReason(raw: string | null | undefined): StopReason {
       return 'end_turn';
     case 'max_tokens':
       return 'max_tokens';
+    case 'pause_turn':
+      return 'pause_turn';
     default:
       return 'other';
   }
@@ -449,13 +615,21 @@ export function createAnthropicProvider(
         content: m.content.map((b) => toWireBlock(b, names)),
       })),
     };
-    if (req.tools.length > 0) {
-      wire.tools = req.tools.map((t) => ({
-        name: wireNameFor(names, t.name),
-        description: t.description,
-        input_schema: t.input_schema,
-      }));
+    const tools: NonNullable<WireRequest['tools']> = req.tools.map((t) => ({
+      name: wireNameFor(names, t.name),
+      description: t.description,
+      input_schema: t.input_schema,
+    }));
+    // The server-side search is declared like any other tool, and bounded per
+    // request: `max_uses` is the only budget the API enforces for us.
+    if (req.nativeSearch && capabilities.nativeWebSearch) {
+      tools.push({
+        type: WEB_SEARCH_TOOL_TYPE,
+        name: WEB_SEARCH_TOOL_NAME,
+        max_uses: req.nativeSearch.maxUses,
+      });
     }
+    if (tools.length > 0) wire.tools = tools;
     return wire;
   }
 
@@ -489,7 +663,11 @@ export function createAnthropicProvider(
   return {
     capabilities,
     async complete(req: CompletionRequest): Promise<CompletionResponse> {
-      const names = toolNameMap(req.tools);
+      const names = toolNameMap(
+        req.tools,
+        ANTHROPIC_TOOL_NAME_MAX,
+        req.nativeSearch ? [WEB_SEARCH_TOOL_NAME] : [],
+      );
       const payload = JSON.stringify(body(req, names));
       const startedAt = now();
       /**
@@ -531,14 +709,18 @@ export function createAnthropicProvider(
 
         if (res.ok) {
           const json = (await res.json()) as WireResponse;
+          const parsed = fromWireBlocks(json.content, names);
+          const webSearches = json.usage?.server_tool_use?.web_search_requests ?? 0;
           return {
-            content: fromWireBlocks(json.content, names),
+            content: parsed.content,
             stopReason: mapStopReason(json.stop_reason),
             usage: {
               input: json.usage?.input_tokens ?? 0,
               output: json.usage?.output_tokens ?? 0,
+              ...(webSearches > 0 ? { webSearches } : {}),
             },
             model: json.model ?? resolved.model,
+            ...(parsed.searches.length > 0 ? { searches: parsed.searches } : {}),
           };
         }
 

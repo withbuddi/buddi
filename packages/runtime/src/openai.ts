@@ -213,6 +213,11 @@ export function toWireMessages(
       case 'tool_use':
         // A tool_use in a user turn is not a shape this port produces.
         break;
+      case 'provider_native':
+        // Another vendor's opaque block. It is not persisted, so it can only
+        // reach here through a hand-built history; dropping it is correct —
+        // posting Anthropic's `server_tool_use` to this endpoint is not.
+        break;
     }
   }
 

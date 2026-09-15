@@ -44,7 +44,10 @@ describe('UsageLedger', () => {
     const ledger = new UsageLedger();
     ledger.record('claude-sonnet-5', { input: 1000, output: 200 }, 2, 3);
     ledger.record('claude-sonnet-5', { input: 500, output: 100 }, 1, 0);
-    expect(ledger.totals).toEqual({ input: 1500, output: 300 });
+    // `webSearches` is always present and always counted, even at zero: it is
+    // a meter, and a meter that only appears once it has moved is one nobody
+    // thinks to look at.
+    expect(ledger.totals).toEqual({ input: 1500, output: 300, webSearches: 0 });
     expect(ledger.turns).toBe(3);
     expect(ledger.tools).toBe(3);
     const text = ledger.text();

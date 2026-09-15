@@ -128,11 +128,16 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     expect(scout.provider.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
     expect(scout.model).toBe('gpt-5');
     expect(scout.isDefault).toBe(false);
-    expect(scout.tools.every((n) => n.startsWith('memory.') || n.startsWith('reminder.'))).toBe(
-      true,
-    );
+    // Narrow is stated as what it may NOT reach, not as an allowlist: which
+    // capabilities the owner grants this agent is the owner's business and
+    // changes (web.* was granted here the day the web plugin shipped). What
+    // the platform owes is that the agent on the second company's endpoint
+    // never carries the owner's own data to it.
     expect(scout.tools.some((n) => n.startsWith('finance.'))).toBe(false);
     expect(scout.tools.some((n) => n.startsWith('email.'))).toBe(false);
+    expect(scout.tools.some((n) => n.startsWith('artifacts.'))).toBe(false);
+    expect(scout.tools.some((n) => n.startsWith('agent.'))).toBe(false);
+    expect(scout.tools.some((n) => n.startsWith('platform.'))).toBe(false);
     // It says so itself, in its own persona.
     expect(scout.systemPromptTemplate).toContain('different AI provider');
   });
