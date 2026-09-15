@@ -16,7 +16,9 @@ Core never imports a plugin. That direction is not a convention:
 
 - `scripts/check-boundaries.mjs` scans `packages/core` and fails the build if any
   source file or `package.json` dependency there names `@buddi/runtime`,
-  `@buddi/gateway` or `@buddi/tool-*`. It runs first in `pnpm test`.
+  `@buddi/gateway` or `@buddi/tool-*`. It runs first in `pnpm test`. The same
+  script also fails the build on outbound HTTP that does not go through the
+  shared transport — see "Outbound HTTP" below.
 - `packages/gateway/src/generic-install.test.ts` boots the system with no plugins
   at all. Core with zero plugins installed is a valid, running state — the
   registry is empty, the sentinel tick returns `[]`, the source tick returns
@@ -659,13 +661,41 @@ export const openMeteo: FetchForecast = async (query) => {
   url.searchParams.set('forecast_days', String(query.days));
   url.searchParams.set('daily', 'temperature_2m_min,temperature_2m_max,weather_code');
 
-  const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  // Never the global `fetch`. See "Outbound HTTP" below.
+  const response = await defaultHttpTransport(url.toString(), {
+    method: 'GET',
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    idleTimeoutMs: FETCH_TIMEOUT_MS,
+  });
   if (!response.ok) {
     throw new Error(`weather: forecast service answered ${response.status}`);
   }
   return toDays(await response.json());
 };
 ```
+
+### Outbound HTTP
+
+A plugin that talks to the network uses `defaultHttpTransport` (or
+`createHttpTransport`) from `@buddi/runtime` — never the global `fetch`, never
+`undici`, never its own `node:http(s)` client with an agent.
+
+The reason is not style. `fetch` is undici, and undici keeps a connection pool
+per origin. When a pooled connection dies — an idle keep-alive socket the far
+end closed, an HTTP/2 session that was destroyed — undici hands the dead one
+back for ever: every later request in the process fails in about a millisecond
+with a bare `fetch failed`, and the process never recovers by itself. In a
+one-shot script that is invisible. Inside `buddi serve`, which runs for weeks
+and whose sentinels and sources fire on a timer, it took the whole assistant
+down for hours and killed twelve unattended jobs in one evening.
+
+The shared transport speaks HTTP/1.1 with `keepAlive: false`: one connection
+per request, nothing held between them, so a failed request cannot poison the
+next one. `scripts/check-boundaries.mjs` fails the build on any other outbound
+client (tests and the browser bundle excepted), and names the file. Pass a fake
+transport in tests rather than stubbing a global — and keep the network behind a
+port like `FetchForecast` anyway, so the plugin's own tests open no socket.
 
 ### `src/tools/forecast.ts` — the read tool
 

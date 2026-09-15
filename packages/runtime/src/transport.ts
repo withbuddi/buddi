@@ -71,6 +71,34 @@
  * reached the server, and `email.send` is downstream of this path. That retry
  * belongs to the adapter's own budget, where it is a deliberate decision about
  * a request that might have landed, not a silent one.
+ *
+ * ## Why it is not only the provider's transport
+ *
+ * The hazard is not a fact about `api.anthropic.com`; it is a fact about a
+ * pooled client inside a process that lives for weeks. Every long-lived
+ * outbound caller in this repo has it, so every one of them sends here — the
+ * Telegram Bot API above all, whose wedge would look like a bot that answers
+ * nothing at all. To carry them honestly the transport grew three things, and
+ * exactly three:
+ *
+ *  - **Bodies that are bytes.** `body` may be a `Buffer`, so a multipart
+ *    upload (a document sent to Telegram) can be assembled by the caller and
+ *    written verbatim, rather than being squeezed through a `string` and
+ *    corrupted by UTF-8.
+ *  - **Responses that are bytes.** `arrayBuffer()` alongside `text()`/`json()`,
+ *    because Telegram's file endpoint answers a PDF, not JSON. The global
+ *    `fetch` still satisfies the interface, so an injected fake stays a fake.
+ *  - **Cancellation, and a per-request silence budget.** A long poll is
+ *    deliberately held open with nothing on the wire for ~25 seconds, which is
+ *    not the same thing as a dead connection; the caller says how long silence
+ *    is allowed, and aborts the request itself on shutdown. An aborted request
+ *    is never retried — it was not a failure, it was an instruction.
+ *
+ * What did **not** grow is the retry rule. It is still exactly one retry, still
+ * only on a socket that came out of a free list with no response byte seen. On
+ * the default agent `reusedSocket` is never true, so `sendMessage` and
+ * `email.send` cannot be duplicated by this file at all; the retry exists only
+ * for a caller who injects a pooling agent.
  */
 import { Agent as HttpAgent, request as httpRequest, type ClientRequest } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
@@ -87,12 +115,28 @@ export interface TransportResponse {
   headers: { get(name: string): string | null };
   text(): Promise<string>;
   json(): Promise<any>;
+  /** The body as bytes. Telegram's file endpoint answers a PDF, not JSON. */
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 export interface TransportRequest {
   method: string;
   headers: Record<string, string>;
-  body: string;
+  /**
+   * A string body is sent as UTF-8; a `Buffer` is sent verbatim, which is what
+   * a `multipart/form-data` upload needs. Omitted for a GET.
+   */
+  body?: string | Buffer | undefined;
+  /**
+   * Abort the request — shutdown, or a caller-side deadline. An aborted request
+   * is never retried here: it was an instruction, not a failure.
+   */
+  signal?: AbortSignal | undefined;
+  /**
+   * How long this one request may go silent, overriding the transport default.
+   * A long poll needs more than a chat message does; see `SOCKET_IDLE_TIMEOUT_MS`.
+   */
+  idleTimeoutMs?: number | undefined;
 }
 
 export type HttpTransport = (
@@ -130,11 +174,21 @@ export class TransportError extends Error {
    * `reusedSocket` for a retry decision — see the header.
    */
   readonly neverSent: boolean;
+  /**
+   * The caller asked for this to stop (shutdown, a cancelled poll). Never a
+   * network fault, and never retried — a retry would restart work somebody
+   * just told us to abandon.
+   */
+  readonly aborted: boolean;
 
-  constructor(message: string, opts: { cause: unknown; reusedSocket: boolean; neverSent: boolean }) {
+  constructor(
+    message: string,
+    opts: { cause: unknown; reusedSocket: boolean; neverSent: boolean; aborted?: boolean },
+  ) {
     super(message, { cause: opts.cause });
     this.reusedSocket = opts.reusedSocket;
     this.neverSent = opts.neverSent;
+    this.aborted = opts.aborted === true;
   }
 }
 
@@ -160,6 +214,11 @@ function responseOf(res: IncomingMessage, body: Buffer): TransportResponse {
     },
     text: async () => text(),
     json: async () => JSON.parse(text()),
+    async arrayBuffer() {
+      // A copy, not a view: `body` may sit inside a larger pooled Buffer, and
+      // handing its backing store out would expose bytes from another response.
+      return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
+    },
   };
 }
 
@@ -174,11 +233,32 @@ function attempt(
   const send = secure ? httpsRequest : httpRequest;
   const agent =
     options.agent ?? (secure ? providerHttpsAgent : providerHttpAgent);
+  const body =
+    init.body === undefined
+      ? undefined
+      : typeof init.body === 'string'
+        ? Buffer.from(init.body, 'utf8')
+        : init.body;
+  const signal = init.signal;
 
   return new Promise<TransportResponse>((resolve, reject) => {
     /** Set the moment any response byte arrives. After this, nothing is safe. */
     let responded = false;
     let settled = false;
+
+    // Already cancelled: open no socket at all. The caller has stopped — the
+    // most honest thing this can do is not knock on the door.
+    if (signal?.aborted === true) {
+      reject(
+        new TransportError('the request was aborted', {
+          cause: Object.assign(new Error('the request was aborted'), { code: 'ABORT_ERR' }),
+          reusedSocket: false,
+          neverSent: true,
+          aborted: true,
+        }),
+      );
+      return;
+    }
 
     const req: ClientRequest = send(
       {
@@ -189,7 +269,9 @@ function attempt(
         method: init.method,
         headers: {
           ...init.headers,
-          'content-length': String(Buffer.byteLength(init.body, 'utf8')),
+          // A GET carries no body and must not claim one: a `content-length: 0`
+          // on a GET is refused outright by some proxies.
+          ...(body === undefined ? {} : { 'content-length': String(body.byteLength) }),
         },
         agent,
       },
@@ -206,30 +288,49 @@ function attempt(
       },
     );
 
-    const fail = (err: unknown): void => {
+    const fail = (err: unknown, aborted = false): void => {
       if (settled) return;
       settled = true;
       const reused = req.reusedSocket === true;
       const message = err instanceof Error ? err.message : String(err);
+      if (signal !== undefined) signal.removeEventListener('abort', onAbort);
       reject(
         new TransportError(message, {
           cause: err,
           reusedSocket: reused,
           neverSent: !responded,
+          aborted,
         }),
       );
       req.destroy();
     };
 
-    req.setTimeout(options.idleTimeoutMs ?? SOCKET_IDLE_TIMEOUT_MS, () => {
+    function onAbort(): void {
+      fail(
+        Object.assign(new Error('the request was aborted'), { code: 'ABORT_ERR' }),
+        true,
+      );
+    }
+
+    // Attached before anything can fail, so a destroyed request is never an
+    // unhandled `error` event.
+    req.on('error', fail);
+
+    if (signal !== undefined) {
+      signal.addEventListener('abort', onAbort, { once: true });
+      // The success path has to let go of the listener too, or a long-lived
+      // AbortController would accumulate one per request it never cancelled.
+      req.on('close', () => signal.removeEventListener('abort', onAbort));
+    }
+
+    req.setTimeout(init.idleTimeoutMs ?? options.idleTimeoutMs ?? SOCKET_IDLE_TIMEOUT_MS, () => {
       fail(
         Object.assign(new Error('the connection went silent'), {
           code: 'ERR_SOCKET_CONNECTION_TIMEOUT',
         }),
       );
     });
-    req.on('error', fail);
-    req.end(init.body);
+    req.end(body);
   });
 }
 
@@ -244,7 +345,7 @@ export function createHttpTransport(options: HttpTransportOptions = {}): HttpTra
     } catch (err) {
       // The one safe retry: an idle pooled socket the far end had already
       // closed, on a request the server provably never acted on.
-      if (err instanceof TransportError && err.reusedSocket && err.neverSent) {
+      if (err instanceof TransportError && err.reusedSocket && err.neverSent && !err.aborted) {
         return attempt(url, init, options);
       }
       throw err;

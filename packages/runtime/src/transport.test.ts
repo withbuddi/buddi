@@ -302,3 +302,150 @@ describe('a connection that goes silent', () => {
     expect((err as TransportError).message).toContain('went silent');
   }, 10_000);
 });
+
+/**
+ * What the transport had to grow to carry every outbound caller in the repo,
+ * and the proof that growing it did not loosen the one rule that matters.
+ */
+describe('bodies and responses that are bytes', () => {
+  /** A server that hands back exactly what it was given, plus what it saw. */
+  async function echo(): Promise<{ url: string; seen: () => { body: Buffer; type: string | undefined; method: string } }> {
+    let last: { body: Buffer; type: string | undefined; method: string } = {
+      body: Buffer.alloc(0),
+      type: undefined,
+      method: '',
+    };
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        last = {
+          body: Buffer.concat(chunks),
+          type: req.headers['content-type'],
+          method: req.method ?? '',
+        };
+        res.writeHead(200, { 'content-type': 'application/octet-stream' });
+        res.end(last.body);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return { url: `http://127.0.0.1:${port}/upload`, seen: () => last };
+  }
+
+  it('sends a multipart upload byte for byte and reads the bytes back', async () => {
+    // Every byte 0..255, which is what makes this a real test: a body squeezed
+    // through a UTF-8 string would come back mangled, and a PDF or a photo on
+    // its way to Telegram is exactly this.
+    const file = Buffer.from(Array.from({ length: 256 }, (_, i) => i));
+    const boundary = '----buddi-test-boundary';
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n42\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="document"; filename="s.bin"\r\n` +
+          `Content-Type: application/octet-stream\r\n\r\n`,
+        'utf8',
+      ),
+      file,
+      Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+    ]);
+
+    const harness = await echo();
+    const res = await defaultHttpTransport(harness.url, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    expect(res.status).toBe(200);
+    // What the server received, and what we read back, are both the exact bytes.
+    expect(harness.seen().body.equals(body)).toBe(true);
+    expect(harness.seen().type).toBe(`multipart/form-data; boundary=${boundary}`);
+    expect(Buffer.from(await res.arrayBuffer()).equals(body)).toBe(true);
+  });
+
+  it('sends a GET with no body and no content-length', async () => {
+    const harness = await echo();
+    const res = await defaultHttpTransport(harness.url, { method: 'GET', headers: {} });
+    expect(res.status).toBe(200);
+    expect(harness.seen().method).toBe('GET');
+    expect(harness.seen().body).toHaveLength(0);
+  });
+});
+
+describe('cancellation', () => {
+  it('abandons the request when the caller aborts, and never retries it', async () => {
+    let requests = 0;
+    const server = createServer(() => {
+      requests += 1;
+      /* never answers: this is the long poll being stopped mid-flight */
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${port}/getUpdates`;
+
+    const controller = new AbortController();
+    // A pooling agent, so the only reason *not* to retry is that it was aborted.
+    const pooled = new Agent({ keepAlive: true });
+    const transport = createHttpTransport({ agent: pooled });
+    const inflight = transport(url, { method: 'POST', headers: {}, body: '{}', signal: controller.signal });
+    await sleep(50);
+    controller.abort();
+
+    const err = await inflight.catch((e) => e);
+    expect(err).toBeInstanceOf(TransportError);
+    expect((err as TransportError).aborted).toBe(true);
+    await sleep(50);
+    // One request, not two: a shutdown is an instruction, not a failure.
+    expect(requests).toBe(1);
+    pooled.destroy();
+  }, 10_000);
+
+  it('refuses immediately when the signal is already aborted', async () => {
+    const harness = await serve(() => ({}));
+    const err = await defaultHttpTransport(harness.url, {
+      method: 'POST',
+      headers: {},
+      body: '{}',
+      signal: AbortSignal.abort(),
+    }).catch((e) => e);
+    expect((err as TransportError).aborted).toBe(true);
+    expect(harness.requests()).toBe(0);
+  });
+});
+
+describe('the silence budget', () => {
+  it('is per request, so a long poll outlives the default', async () => {
+    // The transport default here is 100ms; the server says nothing for 400ms,
+    // which is what a long poll looks like. The request that asks for its own
+    // budget lives; the one that does not, dies. This is the whole reason
+    // `idleTimeoutMs` is on the request and not only on the transport.
+    const server = createServer((req, res) => {
+      req.on('data', () => {});
+      req.on('end', () => {
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"ok":true}');
+        }, 400);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const url = `http://127.0.0.1:${port}/getUpdates`;
+    const transport = createHttpTransport({ idleTimeoutMs: 100 });
+
+    const patient = await transport(url, {
+      method: 'POST',
+      headers: {},
+      body: '{}',
+      idleTimeoutMs: 5_000,
+    });
+    expect(patient.status).toBe(200);
+
+    const impatient = await transport(url, { method: 'POST', headers: {}, body: '{}' }).catch((e) => e);
+    expect(impatient).toBeInstanceOf(TransportError);
+    expect((impatient as TransportError).message).toContain('went silent');
+  }, 10_000);
+});

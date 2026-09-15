@@ -428,7 +428,7 @@ function fakeApi(
       };
     }
     const method = url.split('/').pop() as string;
-    const body = JSON.parse(init?.body ?? '{}');
+    const body = JSON.parse(String(init?.body ?? '{}'));
     sent.push({ method, body });
     if (failOn?.(method)) {
       return {

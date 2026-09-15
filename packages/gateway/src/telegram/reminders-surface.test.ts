@@ -139,7 +139,7 @@ function fakeApi(): { api: TelegramApi; sent: Sent[] } {
   let nextMessageId = 100;
   const fetchLike: FetchLike = async (url, init) => {
     const method = url.split('/').pop() as string;
-    sent.push({ method, body: JSON.parse(init?.body ?? '{}') });
+    sent.push({ method, body: JSON.parse(String(init?.body ?? '{}')) });
     const result =
       method === 'sendMessage' ? { message_id: nextMessageId++ } : method === 'getUpdates' ? [] : true;
     return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, result }) };

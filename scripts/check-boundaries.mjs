@@ -1,10 +1,21 @@
 #!/usr/bin/env node
 /**
- * Dependency-direction check (ARCHITECTURE.md principle 6):
- * core never imports a tool or an upper layer. Tools import core, not the reverse.
+ * Two boundary checks, both lightweight on purpose — no ESLint.
  *
- * Lightweight on purpose — no ESLint. Scans packages/core sources (and its
- * package.json dependencies) for forbidden @buddi/* references.
+ * 1. **Dependency direction** (ARCHITECTURE.md principle 6): core never imports
+ *    a tool or an upper layer. Tools import core, not the reverse. Scans
+ *    packages/core sources and its package.json dependencies.
+ *
+ * 2. **One outbound HTTP transport.** Nothing in this repo may reach the
+ *    network through the global `fetch`, through `undici`, or through its own
+ *    `node:http(s)` client. They all pool connections per origin, and a pooled
+ *    connection the far end has already closed is handed back for ever: every
+ *    subsequent request in the process then fails in a millisecond with a bare
+ *    `fetch failed`, and the process never recovers on its own. That wedged the
+ *    owner's service for hours and killed twelve unattended jobs in one
+ *    evening. The fix was `packages/runtime/src/transport.ts` — one connection
+ *    per request, nothing kept — and it is only a fix while *every* long-lived
+ *    caller uses it, so this check is what stops the next one drifting back.
  */
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -72,4 +83,124 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
+/* ------------------------------------------------------------------ *
+ * 2. One outbound HTTP transport
+ * ------------------------------------------------------------------ */
+
+/**
+ * Where source that runs in Node lives.
+ *
+ * `--http-root <dir>` points the scan somewhere else. That exists for one
+ * reason: the test in `packages/runtime/src/boundaries.test.ts` has to prove
+ * this check still fires on a reintroduced `fetch`, and it must be able to do
+ * that against a fixture tree instead of by writing a violation into the real
+ * repo while other suites are reading it.
+ */
+const rootFlag = process.argv.indexOf('--http-root');
+const HTTP_ROOTS =
+  rootFlag === -1
+    ? [path.join(repoRoot, 'packages'), path.join(repoRoot, 'examples')]
+    : [path.resolve(process.argv[rootFlag + 1])];
+
+/**
+ * Files allowed to speak to the network any other way, and why.
+ *
+ * `packages/web` is the only permanent exemption: it is the dashboard's
+ * browser bundle. `fetch` there is the browser's, on a page that lives for
+ * minutes, with no Node connection pool anywhere near it — converting it would
+ * be symmetry, not safety.
+ */
+const HTTP_EXEMPT = [
+  // The transport itself. It *is* the `node:https` client; that is the point.
+  /^packages\/runtime\/src\/transport\.ts$/,
+  // Browser code. See above.
+  /^packages\/web\//,
+  // Tests may stand up servers, inject pooling agents, and prove the bug. The
+  // rule is about what the *service* does at runtime.
+  /\.test\.(ts|tsx|mts|js|mjs)$/,
+  /\/__fixtures__\//,
+];
+
+/**
+ * Each rule says what it catches and what to do instead. The message is the
+ * whole value of this check: whoever trips it is about to reintroduce a
+ * six-hour outage and needs to know that in one line.
+ */
+const HTTP_RULES = [
+  {
+    /*
+     * A bare `fetch(...)` call.
+     *
+     * Not `this.#fetch(` or `client.fetch(` — a member call on an injected
+     * seam, which is how every test fake and the IMAP client's own `fetch`
+     * command read — and not a `fetch(` that opens a line, which is a method
+     * or interface declaration, not a call.
+     */
+    test(line) {
+      for (const m of line.matchAll(/fetch\s*\(/g)) {
+        const before = line.slice(0, m.index);
+        if (/[.#\w$]$/.test(before)) continue;
+        if (/^\s*$/.test(before)) continue;
+        return true;
+      }
+      return false;
+    },
+    what: 'calls the global `fetch` (undici, which pools connections per origin)',
+  },
+  {
+    re: /globalThis\s*\.\s*fetch/,
+    what: 'reaches for the global `fetch` (undici, which pools connections per origin)',
+  },
+  {
+    re: /from\s*['"]undici['"]/,
+    what: 'imports undici directly',
+  },
+  {
+    // A *client* out of node:http(s). `createServer` and `import type` are the
+    // inbound web server and its types, which pool nothing and are fine.
+    re: /^(?!.*\bimport\s+type\b).*\b(?:request|Agent)\b[^;]*from\s*['"]node:https?['"]/,
+    what: 'builds its own node:http(s) client',
+  },
+];
+
+const httpViolations = [];
+
+for (const root of HTTP_ROOTS) {
+  for await (const file of walk(root)) {
+    const rel = path.relative(rootFlag === -1 ? repoRoot : root, file).split(path.sep).join('/');
+    if (HTTP_EXEMPT.some((re) => re.test(rel))) continue;
+    const lines = (await readFile(file, 'utf8')).split('\n');
+    for (const [i, line] of lines.entries()) {
+      // Comments talk about this bug constantly; only code counts. A whole
+      // comment line is skipped, and a trailing `//` is cut off — without
+      // eating the `//` in a URL.
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      const code = line.replace(/(^|\s)\/\/.*$/, '$1');
+      for (const rule of HTTP_RULES) {
+        const hit = rule.test ? rule.test(code) : rule.re.test(code);
+        if (hit) httpViolations.push(`${rel}:${i + 1} ${rule.what}`);
+      }
+    }
+  }
+}
+
+if (httpViolations.length > 0) {
+  console.error(
+    'Outbound HTTP must go through the shared transport (packages/runtime/src/transport.ts):',
+  );
+  for (const v of httpViolations) console.error(`  - ${v}`);
+  console.error(
+    '\n  Why: undici and any keep-alive agent keep a pool per origin. When a pooled\n' +
+      '  connection dies, it is handed back for ever — every later request in the\n' +
+      '  process fails instantly with a bare `fetch failed` and the process never\n' +
+      '  recovers. That is what wedged `buddi serve` for hours.\n' +
+      '\n  Instead: `defaultHttpTransport(url, { method, headers, body })` from\n' +
+      '  @buddi/runtime (re-exported by @buddi/gateway), or `createHttpTransport()`\n' +
+      '  when you need your own timeout. Pass a fake transport in tests rather than\n' +
+      '  stubbing a global.',
+  );
+  process.exit(1);
+}
+
 console.log('check-boundaries: ok (core imports no runtime/gateway/tool package)');
+console.log('check-boundaries: ok (no outbound HTTP outside the shared transport)');
