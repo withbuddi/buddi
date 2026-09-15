@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { ToolRegistry } from '@buddi/core';
 import { createToolRegistry } from './catalog.js';
 import { createMissionManifest } from '../missions/report.js';
+import { createAskManifest } from '../surfaces/pending-question.js';
 
 /** The base surface: every plugin `createToolRegistry` installs. */
 const base = createToolRegistry();
@@ -48,6 +49,16 @@ describe('the schemas this build sends to a provider', () => {
       expect(spec.inputSchema.allOf).toBeUndefined();
     },
   );
+
+  it('covers the interactive-turn tool, which only exists inside a live turn', () => {
+    const registry = new ToolRegistry();
+    for (const manifest of base.manifests()) registry.register(manifest);
+    registry.register(createAskManifest({}));
+    const spec = registry.list().find((s) => s.name === 'conversation.ask');
+    expect(spec).toBeDefined();
+    expect(spec?.inputSchema).toMatchObject({ type: 'object' });
+    expect(spec?.inputSchema.anyOf).toBeUndefined();
+  });
 
   it('covers the mission tools too, which only exist inside a mission run', () => {
     const specs = missionRegistry().list();
