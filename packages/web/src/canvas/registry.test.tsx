@@ -45,6 +45,9 @@ const inventory: ViewDescriptor = {
   },
 };
 
+/** Three figures: a reading is a thing the canvas lays out, not a sentence. */
+const reading = { celsius: 11, humidity: 62, readAt: '2026-09-14' };
+
 const forecastOutput = {
   place: 'Reykjavík',
   days: [
@@ -120,7 +123,7 @@ describe('descriptors decide what a tool looks like', () => {
 
   it('gives a tool with no descriptor the structured view, not a dump', () => {
     const renderables = renderablesFrom({
-      messages: toolPair('t1', 'shed.temperature', { celsius: 11 }),
+      messages: toolPair('t1', 'shed.temperature', reading),
       descriptors: [forecast],
     });
     expect(renderables).toHaveLength(1);
@@ -178,7 +181,7 @@ describe('precedence', () => {
         at: '2026-09-14T09:01:00Z',
         blocks: [{ type: 'tool_use', id: 'clear-1', name: CANVAS_CLEAR, input: {} }],
       },
-      ...toolPair('t6', 'shed.inventory', { items: [] }),
+      ...toolPair('t6', 'shed.inventory', { items: [{ name: 'Rake', count: 2 }] }),
     ];
     const renderables = renderablesFrom({ messages, descriptors: [forecast, inventory] });
     expect(renderables.map((item) => item.tool)).toEqual(['shed.inventory']);
@@ -201,7 +204,7 @@ describe('precedence', () => {
 
   it('keeps only the last few renderables, so the tabs stay a tab bar', () => {
     const messages = Array.from({ length: MAX_RENDERABLES + 4 }, (_, index) =>
-      toolPair(`many-${index}`, 'shed.temperature', { celsius: index }),
+      toolPair(`many-${index}`, 'shed.temperature', { ...reading, celsius: index }),
     ).flat();
     expect(renderablesFrom({ messages, descriptors: [] })).toHaveLength(MAX_RENDERABLES);
   });

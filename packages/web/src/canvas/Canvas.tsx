@@ -6,19 +6,50 @@
  * were looking at. They are ordered oldest-first, like the conversation, and
  * the newest is selected unless the owner has moved.
  *
+ * **The strip is capped.** A long conversation produces more tabs than fit, and
+ * tabs that do not fit are worse than no tabs: they shrink to nothing, or the
+ * bar scrolls sideways and what is on it stops being visible at a glance. So
+ * the strip holds as many as the width actually has room for — four or five on
+ * a laptop, two on a phone — and the rest go behind one control that names
+ * them. Two things are never pushed off it: what the owner is looking at, and
+ * a decision waiting to be made. A failure can be pushed off, but not
+ * silently: the control wears its dot.
+ *
  * Empty, it teaches rather than apologises. The things it names are the view
  * descriptors actually installed on this machine — real titles from real
  * plugins, arriving as data over `GET /api/chat/views` — so a fresh install
  * with one plugin promises one thing, and this file still knows the name of no
  * tool at all.
  */
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
+import { useCallback, useRef, useState } from 'react';
 import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
+
+/**
+ * The room one tab takes, measured against the titles these actually get —
+ * `Orchard · Forecast`, `Approval` — with the padding and the dot counted in.
+ * A title longer than this ellipsises rather than pushing its neighbours off.
+ */
+const TAB_WIDTH = 152;
+
+/** The room the overflow control takes, reserved whether or not it is shown. */
+const OVERFLOW_WIDTH = 104;
+
+/** The strip's own side padding, which is not available to tabs. */
+const STRIP_PADDING = 28;
+
+/**
+ * Never fewer than two, so a strip still reads as a strip on a phone, and
+ * never more than five, because a sixth tab is further away than the menu.
+ */
+const MIN_TABS = 2;
+const MAX_TABS = 5;
 
 export function Canvas({
   renderables,
@@ -29,6 +60,7 @@ export function Canvas({
   emptyHint,
   descriptors,
   agentName,
+  maxTabs,
 }: {
   renderables: Renderable[];
   activeId: string | null;
@@ -39,11 +71,14 @@ export function Canvas({
   /** The installed view descriptors, used to say what could appear here. */
   descriptors?: ViewDescriptor[];
   agentName?: string;
+  /** Forces how many tabs fit, for tests: jsdom lays nothing out and measures 0. */
+  maxTabs?: number;
 }): JSX.Element {
+  const [strip, fits] = useTabsThatFit(maxTabs);
   if (renderables.length === 0) {
     return (
       <div className="wb-canvas" data-testid="canvas">
-        <div className="wb-canvas-tabs" aria-hidden="true">
+        <div className="wb-canvas-tabs" ref={strip} aria-hidden="true">
           <span className="wb-canvas-label">Canvas</span>
         </div>
         <div className="wb-canvas-body wb-canvas-body-empty">
@@ -68,19 +103,24 @@ export function Canvas({
     ? (activeId as string)
     : (renderables[renderables.length - 1]!.id);
 
+  const { shown, hidden } = splitTabs(renderables, active, fits);
+
   return (
     <div className="wb-canvas" data-testid="canvas">
       <Tabs.Root value={active} onValueChange={onActivate} className="contents">
-        <Tabs.List className="wb-canvas-tabs" aria-label="Canvas">
-          {renderables.map((item) => (
-            <Tabs.Trigger key={item.id} value={item.id} className="wb-tab" data-tone={item.tone}>
-              {item.tone === 'warning' || item.tone === 'critical' ? (
-                <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
-              ) : null}
-              {item.title}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
+        <div className="wb-canvas-tabs" ref={strip}>
+          <Tabs.List className="wb-tabstrip" aria-label="Canvas">
+            {shown.map((item) => (
+              <Tabs.Trigger key={item.id} value={item.id} className="wb-tab" data-tone={item.tone}>
+                {item.tone === 'warning' || item.tone === 'critical' ? (
+                  <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
+                ) : null}
+                <span className="wb-tab-text">{item.title}</span>
+              </Tabs.Trigger>
+            ))}
+          </Tabs.List>
+          <MoreTabs items={hidden} onActivate={onActivate} timezone={timezone} />
+        </div>
         {renderables.map((item) => (
           <Tabs.Content key={item.id} value={item.id} className="wb-canvas-body">
             <section className="wb-panel">
@@ -99,6 +139,160 @@ export function Canvas({
         ))}
       </Tabs.Root>
     </div>
+  );
+}
+
+/**
+ * How many tabs the strip has room for, from the width it actually has.
+ *
+ * Measured rather than assumed, because the canvas shares the window with a
+ * conversation column the owner can drag: the same screen holds five tabs or
+ * three depending on where that grip is. Before layout — and in jsdom, which
+ * never lays out — the width is 0 and the default stands.
+ */
+function useTabsThatFit(forced?: number): [(node: HTMLDivElement | null) => void, number] {
+  const [fits, setFits] = useState(MAX_TABS);
+  const watching = useRef<ResizeObserver | null>(null);
+
+  // A ref callback rather than an effect: the strip is a different element
+  // when the canvas is empty than when it has tabs, and an effect that ran
+  // once on mount would be watching a node React has since replaced.
+  const attach = useCallback(
+    (node: HTMLDivElement | null) => {
+      watching.current?.disconnect();
+      watching.current = null;
+      if (!node || forced !== undefined || typeof ResizeObserver === 'undefined') return;
+      const measure = (): void => {
+        const width = node.clientWidth;
+        if (width === 0) return;
+        const room = Math.floor((width - STRIP_PADDING - OVERFLOW_WIDTH) / TAB_WIDTH);
+        setFits(Math.max(MIN_TABS, Math.min(MAX_TABS, room)));
+      };
+      measure();
+      watching.current = new ResizeObserver(measure);
+      watching.current.observe(node);
+    },
+    [forced],
+  );
+
+  return [attach, forced ?? fits];
+}
+
+/**
+ * Which tabs are on the strip and which are behind the menu.
+ *
+ * The recent ones are on the strip, because that is where the conversation
+ * is. Two claims beat recency: the tab being read, since moving it would move
+ * the screen out from under a reader, and a decision waiting on the owner,
+ * since that is the one thing here they have to answer. Those two can together
+ * exceed the room; they still both show, because the alternative is hiding
+ * one of them.
+ *
+ * A failure is not pinned — it would crowd out the work — but it is never
+ * silent either: the menu carries its red dot, so the strip says a failure is
+ * back there before it is opened.
+ */
+export function splitTabs(
+  renderables: Renderable[],
+  activeId: string,
+  fits: number,
+): { shown: Renderable[]; hidden: Renderable[] } {
+  const pinned = new Set(
+    renderables
+      .filter((item) => item.id === activeId || item.source === 'approval')
+      .map((item) => item.id),
+  );
+
+  const keep = new Set(pinned);
+  for (let index = renderables.length - 1; index >= 0 && keep.size < fits; index -= 1) {
+    keep.add(renderables[index]!.id);
+  }
+
+  return {
+    shown: renderables.filter((item) => keep.has(item.id)),
+    hidden: renderables.filter((item) => !keep.has(item.id)),
+  };
+}
+
+/**
+ * Everything the strip had no room for, named. Newest first — the menu is
+ * reached for to go *back*, and back is the direction it opens in.
+ */
+function MoreTabs({
+  items,
+  onActivate,
+  timezone,
+}: {
+  items: Renderable[];
+  onActivate: (id: string) => void;
+  timezone: string;
+}): JSX.Element | null {
+  if (items.length === 0) return null;
+  const worst = items.some((item) => item.tone === 'critical')
+    ? 'critical'
+    : items.some((item) => item.tone === 'warning')
+      ? 'warning'
+      : null;
+
+  return (
+    // Not modal: this menu names tabs, it does not take the page hostage — the
+    // canvas behind it stays readable and keeps its scroll position.
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          className="wb-tab wb-tab-more"
+          data-tone={worst ?? undefined}
+          aria-label={`${items.length} more ${items.length === 1 ? 'view' : 'views'} in this conversation`}
+        >
+          {worst ? <span className="wb-tab-dot" data-tone={worst} aria-hidden="true" /> : null}
+          <span className="wb-tab-text">{items.length} more</span>
+          <ChevronIcon />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="wb-menu wb-menu-wide" align="end" sideOffset={6}>
+          <DropdownMenu.Label className="wb-menu-label">Earlier in this conversation</DropdownMenu.Label>
+          {[...items].reverse().map((item) => (
+            <DropdownMenu.Item
+              key={item.id}
+              className="wb-menu-item"
+              onSelect={() => onActivate(item.id)}
+            >
+              <span className="wb-menu-item-text">
+                {item.tone === 'warning' || item.tone === 'critical' ? (
+                  <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
+                ) : null}
+                {item.title}
+              </span>
+              {/* The clock, not the tool name: a run that called one tool four
+                  times makes four rows with the same title, and the time is
+                  what tells them apart. */}
+              <span className="wb-menu-note mono">{clock(item.at, timezone) ?? item.tool}</span>
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+/** `09:42` in the owner's zone — a menu row has no space for a date. */
+function clock(at: string | null, timezone: string): string | null {
+  if (!at) return null;
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function ChevronIcon(): JSX.Element {
+  return (
+    <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true" {...stroke}>
+      <path d="M4 5.5 7 8.5l3-3" />
+    </svg>
   );
 }
 

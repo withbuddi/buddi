@@ -343,6 +343,10 @@ export function ChatPage({
           messages={conversation?.messages ?? []}
           live={live}
           now={now}
+          // Which calls the canvas actually kept a panel for. A call whose
+          // result is already in the answer has no panel, and this is what
+          // stops its line offering to open one.
+          opens={new Set(renderables.map((item) => item.id))}
           onOpen={(toolUseId) => {
             setActiveTab(toolUseId);
             if (narrow) onOpenCanvas?.();
