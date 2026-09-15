@@ -66,12 +66,17 @@ export const financeViews: ViewDescriptor[] = [
           key: 'utilization',
           label: 'Used',
           type: 'percent',
+          // The tool reports utilization in percentage points (45.2, not
+          // 0.452), so the bar is scaled against 100 and the thresholds are
+          // the ones the scoring models use, in the same units. Scaling it
+          // against the credit limit — which is money — drew every card at
+          // zero and toned every one of them 'good'.
           bar: {
-            max: { path: 'creditLimit' },
+            max: { const: 100 },
             thresholds: [
               { atLeast: 0, tone: 'good' },
-              { atLeast: 0.3, tone: 'warning' },
-              { atLeast: 0.5, tone: 'critical' },
+              { atLeast: 30, tone: 'warning' },
+              { atLeast: 50, tone: 'critical' },
             ],
           },
         },
@@ -174,6 +179,237 @@ export const financeViews: ViewDescriptor[] = [
         { label: 'Money out', value: { path: 'summary.totalOut' }, unit: 'currency' },
         { label: 'Expires', value: { path: 'expiresAt' }, unit: 'date', tone: 'warning' },
       ],
+    },
+  },
+
+  /*
+   * What repeats, and when. The question behind it is almost always "what is
+   * still to come this month", which is a list you read down — so a table,
+   * with the cash figures above it. `billedTo` earns its column because a
+   * charge billed to a card is the one row in the list that does *not* move
+   * cash on its date, and the owner cannot see that anywhere else.
+   */
+  {
+    tool: 'finance.list_recurring',
+    renderer: 'table',
+    title: 'Recurring items',
+    map: {
+      rows: 'items',
+      groupBy: { key: 'kind', labels: { income: 'Income', charge: 'Charges' } },
+      columns: [
+        { key: 'name', label: 'Item' },
+        { key: 'amount', label: 'Amount', type: 'currency', currency },
+        { key: 'cadence', label: 'Repeats' },
+        { key: 'anchorDate', label: 'Anchor', type: 'date' },
+        { key: 'account', label: 'From account' },
+        { key: 'billedTo', label: 'Billed to card' },
+        { key: 'category', label: 'Category' },
+      ],
+      summary: [
+        { label: 'Items', value: { path: 'count' }, unit: 'number' },
+        { label: 'Monthly net (cash)', value: { path: 'monthlyNet' }, unit: 'currency', currency },
+        { label: 'Billed to a card', value: { path: 'cardBilledCount' }, unit: 'number' },
+      ],
+      empty: 'Nothing recurring is recorded yet.',
+    },
+  },
+
+  /*
+   * The accounts. Split on purpose, because the whole point of this result is
+   * that retirement money is not spendable money: the rows are grouped by
+   * whether they count as cash, and the three totals are named separately
+   * above rather than added into one figure nobody should quote.
+   */
+  {
+    tool: 'finance.list_accounts',
+    renderer: 'table',
+    title: 'Accounts',
+    map: {
+      rows: 'accounts',
+      groupBy: {
+        key: 'includeInCashflow',
+        labels: { true: 'Spendable', false: 'Not spendable' },
+      },
+      columns: [
+        { key: 'name', label: 'Account' },
+        { key: 'kind', label: 'Kind' },
+        { key: 'institution', label: 'Institution' },
+        { key: 'balance', label: 'Balance', type: 'currency', currency },
+        { key: 'balanceAsOf', label: 'As of', type: 'date' },
+      ],
+      summary: [
+        { label: 'Spendable cash', value: { path: 'cashTotal' }, unit: 'currency', currency },
+        { label: 'Not spendable', value: { path: 'excludedTotal' }, unit: 'currency', currency },
+        { label: 'Debts', value: { path: 'totalLiabilities' }, unit: 'currency', currency },
+        { label: 'Net worth', value: { path: 'netWorth' }, unit: 'currency', currency },
+      ],
+      empty: 'No accounts are recorded yet.',
+    },
+  },
+
+  /*
+   * The debts. Utilization is the column that changes a decision, so it is
+   * drawn as a bar against 100% with the scoring thresholds in tone; a loan
+   * has no limit and simply leaves that cell empty.
+   */
+  {
+    tool: 'finance.list_liabilities',
+    renderer: 'table',
+    title: 'Debts',
+    map: {
+      rows: 'liabilities',
+      columns: [
+        { key: 'name', label: 'Debt' },
+        { key: 'kind', label: 'Kind' },
+        { key: 'balance', label: 'Owed', type: 'currency', currency },
+        { key: 'creditLimit', label: 'Limit', type: 'currency', currency },
+        {
+          key: 'utilization',
+          label: 'Used',
+          type: 'percent',
+          bar: {
+            max: { const: 100 },
+            thresholds: [
+              { atLeast: 0, tone: 'good' },
+              { atLeast: 30, tone: 'warning' },
+              { atLeast: 50, tone: 'critical' },
+            ],
+          },
+        },
+        { key: 'minimumPayment', label: 'Minimum', type: 'currency', currency },
+        { key: 'dueDay', label: 'Due day', type: 'number' },
+        { key: 'apr', label: 'APR', type: 'percent' },
+        { key: 'paidFrom', label: 'Paid from' },
+      ],
+      summary: [
+        { label: 'Total owed', value: { path: 'totalDebt' }, unit: 'currency', currency },
+        { label: 'Minimums', value: { path: 'totalMinimumPayments' }, unit: 'currency', currency },
+        { label: 'Card utilization', value: { path: 'creditUtilization' }, unit: 'percent' },
+      ],
+      empty: 'No debts are recorded yet.',
+    },
+  },
+
+  /*
+   * Receipts, newest first, each beside the charge it was matched to. The
+   * empty "Charge" cell is the finding — a receipt with no transaction is
+   * either a charge that has not posted or one that was never billed — so the
+   * column stays even when most of it is full.
+   */
+  {
+    tool: 'finance.list_receipts',
+    renderer: 'table',
+    title: 'Receipts',
+    map: {
+      rows: 'receipts',
+      columns: [
+        { key: 'occurredOn', label: 'Date', type: 'date' },
+        { key: 'merchant', label: 'Merchant' },
+        { key: 'total', label: 'Total', type: 'currency', currency },
+        { key: 'transaction.description', label: 'Charge' },
+        { key: 'transaction.occurredOn', label: 'Charged on', type: 'date' },
+        { key: 'transaction.status', label: 'Status' },
+        { key: 'notes', label: 'Notes' },
+      ],
+      summary: [{ label: 'Receipts', value: { path: 'count' }, unit: 'number' }],
+      empty: 'No receipts have been recorded yet.',
+    },
+  },
+
+  /*
+   * Payment history. The on-time rate is the figure the score actually turns
+   * on, so it leads; the rows below are there to show *which* ones went wrong,
+   * which is the only useful thing a rate cannot tell you.
+   */
+  {
+    tool: 'finance.payment_history',
+    renderer: 'table',
+    title: 'Payment history',
+    map: {
+      rows: 'payments',
+      columns: [
+        { key: 'dueOn', label: 'Due', type: 'date' },
+        { key: 'liability', label: 'Debt' },
+        { key: 'amount', label: 'Amount', type: 'currency', currency },
+        { key: 'status', label: 'Status' },
+        { key: 'paidOn', label: 'Paid', type: 'date' },
+      ],
+      summary: [
+        { label: 'On time', value: { path: 'onTimeRate' }, unit: 'percent', tone: 'good' },
+        { label: 'Late', value: { path: 'late' }, unit: 'number', tone: 'warning' },
+        { label: 'Missed', value: { path: 'missed' }, unit: 'number', tone: 'critical' },
+        { label: 'Still scheduled', value: { path: 'scheduled' }, unit: 'number' },
+        { label: 'Months', value: { path: 'months' }, unit: 'number' },
+      ],
+      empty: 'No payments have been recorded yet.',
+    },
+  },
+
+  /*
+   * The score history is a trend, and a line would be the obvious drawing —
+   * but the result is newest-first and mixes sources (a Experian pull and a
+   * card issuer's estimate are two different series), and a single line
+   * through both, drawn backwards, would be a lie told neatly. A table keeps
+   * the source beside every score and puts the move against the previous
+   * reading from that same source in its own column, which is the number the
+   * owner was asking about.
+   */
+  {
+    tool: 'finance.credit_score_history',
+    renderer: 'table',
+    title: 'Credit scores',
+    map: {
+      rows: 'scores',
+      columns: [
+        { key: 'observedOn', label: 'Observed', type: 'date' },
+        { key: 'source', label: 'Source' },
+        { key: 'score', label: 'Score', type: 'number' },
+        { key: 'delta', label: 'Change', type: 'number' },
+        { key: 'model', label: 'Model' },
+        { key: 'note', label: 'Note' },
+      ],
+      summary: [
+        { label: 'Latest', value: { path: 'latest.score' }, unit: 'number' },
+        { label: 'From', value: { path: 'latest.source' }, unit: 'text' },
+        { label: 'On', value: { path: 'latest.observedOn' }, unit: 'date' },
+        { label: 'Readings', value: { path: 'count' }, unit: 'number' },
+      ],
+      empty: 'No credit score has been recorded yet.',
+    },
+  },
+
+  /*
+   * The baseline. The headline is one figure — what a typical month of
+   * variable spending costs — and the breakdown exists to answer "made of
+   * what". Each category carries a bar against the headline, so the two or
+   * three categories that *are* the burn are visible before they are read.
+   * The median and the mean are both shown because the gap between them is
+   * itself the finding.
+   */
+  {
+    tool: 'finance.spending_baseline',
+    renderer: 'table',
+    title: 'Spending baseline',
+    map: {
+      rows: 'byCategory',
+      columns: [
+        { key: 'category', label: 'Category' },
+        {
+          key: 'avgMonthly',
+          label: 'Typical month',
+          type: 'currency',
+          currency,
+          bar: { max: { path: 'avgMonthlyVariableOut' } },
+        },
+      ],
+      summary: [
+        { label: 'Typical month', value: { path: 'avgMonthlyVariableOut' }, unit: 'currency', currency },
+        { label: 'Mean month', value: { path: 'meanMonthlyVariableOut' }, unit: 'currency', currency },
+        { label: 'Daily burn', value: { path: 'dailyBurn' }, unit: 'currency', currency },
+        { label: 'Months used', value: { path: 'monthsUsed' }, unit: 'number' },
+        { label: 'Transactions', value: { path: 'sampleSize' }, unit: 'number' },
+      ],
+      empty: 'Not enough spending has been recorded to measure a baseline.',
     },
   },
 ];

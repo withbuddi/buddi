@@ -1,22 +1,39 @@
 /**
  * `structured` — the fallback, and the one most tool results will land on.
  *
- * It is a *readable* view of the JSON rather than a dump: keys are given their
- * words back, scalars are typed by colour, arrays say how long they are, and
- * anything deep enough to be noise collapses behind a disclosure the owner can
- * open. The raw text is still one click away, because a dashboard that
- * paraphrases a tool result and hides the original is a dashboard you cannot
- * debug with.
+ * It does not dump a tree. It reads the *shape* of the result first (see
+ * `../infer.ts`) and draws whatever that shape actually is: rows that agree on
+ * their keys become a table with typed columns, the figures sitting beside
+ * those rows become a summary strip above it, one object becomes a list of
+ * facts, a handful of strings becomes a list, a failure states its reason, and
+ * a result with nothing in it says so in one line instead of drawing an empty
+ * grid.
+ *
+ * Only a genuinely irregular result falls to the tree, and it opens a level so
+ * the first screen shows data rather than the word "fields".
+ *
+ * The raw text is always one click away, because a dashboard that paraphrases
+ * a tool result and hides the original is a dashboard you cannot debug with.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { StructuredProps } from '../types';
 import { humanise } from '../resolve';
+import { fmtValue } from '../format';
+import { ROW_CAP, inferShape, isBlank, type Aside, type InferredType, type Stat } from '../infer';
 import { json } from '../../format';
 
 const DEPTH_LIMIT = 2;
 
+/** Longer than this and a cell shows its head, with the whole of it on hover. */
+const CELL_CHARS = 64;
+
 export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   const [raw, setRaw] = useState(false);
+  const shape = useMemo(
+    () => inferShape(props.value, { failed: props.failed ?? false }),
+    [props.value, props.failed],
+  );
+
   return (
     <div>
       <div className="flex justify-end mb-2">
@@ -24,10 +41,242 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
       </div>
-      {raw ? <pre>{json(props.value)}</pre> : <div className="wb-tree">{node(props.value, 0)}</div>}
+      {raw ? <pre>{json(props.value)}</pre> : <Shape shape={shape} />}
     </div>
   );
 }
+
+function Shape({ shape }: { shape: ReturnType<typeof inferShape> }): JSX.Element {
+  switch (shape.kind) {
+    case 'error':
+      return (
+        <div>
+          <p className="wb-fail" role="status">
+            {shape.summary}
+          </p>
+          {shape.detail === null ? null : (
+            <details className="wb-aside">
+              <summary>What came back with it</summary>
+              <div className="wb-tree">{node(shape.detail, 1)}</div>
+            </details>
+          )}
+        </div>
+      );
+
+    case 'empty':
+      return (
+        <div>
+          <Stats stats={shape.stats} />
+          <p className="wb-note">{shape.note}</p>
+        </div>
+      );
+
+    case 'table':
+      return (
+        <div>
+          <Stats stats={shape.stats} />
+          <Notes notes={shape.notes} />
+          <AutoTable
+            label={shape.label}
+            columns={shape.columns}
+            rows={shape.rows}
+            total={shape.total}
+          />
+          <Asides asides={shape.asides} />
+        </div>
+      );
+
+    case 'list':
+      return (
+        <div>
+          <Stats stats={shape.stats} />
+          <Notes notes={shape.notes} />
+          {shape.label ? <h4 className="wb-sub">{shape.label}</h4> : null}
+          <ul className="wb-list">
+            {shape.items.slice(0, 100).map((item, index) => (
+              <li key={index}>{fmtValue(item, 'text', null)}</li>
+            ))}
+          </ul>
+          {shape.total > 100 ? <p className="wb-note">Showing 100 of {shape.total}.</p> : null}
+          <Asides asides={shape.asides} />
+        </div>
+      );
+
+    case 'record':
+      return (
+        <div>
+          <Notes notes={shape.notes} />
+          <Pairs pairs={shape.pairs} />
+          <Asides asides={shape.asides} />
+        </div>
+      );
+
+    default:
+      return <div className="wb-tree">{node(shape.value, 0)}</div>;
+  }
+}
+
+/** The figures that sit beside the rows, said once and said first. */
+function Stats({ stats }: { stats: Stat[] }): JSX.Element | null {
+  if (stats.length === 0) return null;
+  return (
+    <div className="wb-stats">
+      {stats.map((stat) => (
+        <div key={stat.label}>
+          <div className="wb-stat-k">{stat.label}</div>
+          <div className="wb-stat-v">{text(stat.value, stat.type, stat.currency)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Notes({ notes }: { notes: string[] }): JSX.Element | null {
+  if (notes.length === 0) return null;
+  return (
+    <>
+      {notes.map((note) => (
+        <p key={note} className="wb-note">
+          {note}
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** One object, read as the facts it states. */
+function Pairs({ pairs }: { pairs: Stat[] }): JSX.Element {
+  if (pairs.length === 0) return <p className="wb-note">Nothing to show.</p>;
+  return (
+    <dl className="wb-kv">
+      {pairs.map((pair) => (
+        <div key={pair.label} className="contents">
+          <dt>{pair.label}</dt>
+          <dd className={pair.type === 'text' ? undefined : 'tnum'}>
+            {text(pair.value, pair.type, pair.currency)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Branches that are neither the table nor a figure: kept, one click away. */
+function Asides({ asides }: { asides: Aside[] }): JSX.Element | null {
+  if (asides.length === 0) return null;
+  return (
+    <div className="mt-4">
+      {asides.map((aside) => (
+        <details key={aside.label} className="wb-aside">
+          <summary>{aside.label}</summary>
+          <div className="wb-tree">{node(aside.value, 1)}</div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function AutoTable({
+  label,
+  columns,
+  rows,
+  total,
+}: {
+  label: string | null;
+  columns: Array<{ key: string; label: string; type: InferredType; currency: string | null }>;
+  rows: Array<Record<string, unknown>>;
+  total: number;
+}): JSX.Element {
+  const [all, setAll] = useState(false);
+  // Hiding a handful of rows behind a button costs more than showing them.
+  const limit = total <= ROW_CAP + 5 ? total : ROW_CAP;
+  const shown = all ? rows : rows.slice(0, limit);
+
+  return (
+    <div>
+      {label ? <h4 className="wb-sub">{label}</h4> : null}
+      <div className="wrap overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key} className={numeric(column.type) ? 'num' : undefined}>
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row, index) => (
+              <tr key={index}>
+                {columns.map((column) => (
+                  <Cell key={column.key} value={row[column.key]} column={column} />
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {total > shown.length ? (
+        <p className="wb-note wb-note-row">
+          <span>
+            Showing {shown.length} of {total}
+          </span>
+          <button className="wb-btn" onClick={() => setAll(true)}>
+            Show all {total}
+          </button>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function Cell({
+  value,
+  column,
+}: {
+  value: unknown;
+  column: { type: InferredType; currency: string | null };
+}): JSX.Element {
+  if (isBlank(value)) return <td className="wb-cell-soft">—</td>;
+  // A cell holding an object states its size; the raw JSON holds the object.
+  if (value !== null && typeof value === 'object') {
+    const size = Array.isArray(value)
+      ? `${value.length} item${value.length === 1 ? '' : 's'}`
+      : `${Object.keys(value as object).length} fields`;
+    return (
+      <td className="wb-cell-soft" title={json(value)}>
+        {size}
+      </td>
+    );
+  }
+
+  const full = text(value, column.type, column.currency);
+  const clipped = full.length > CELL_CHARS ? `${full.slice(0, CELL_CHARS - 1)}…` : full;
+  return (
+    <td
+      className={numeric(column.type) ? 'num' : 'wb-cell-text'}
+      {...(clipped === full ? {} : { title: full })}
+    >
+      {clipped}
+    </td>
+  );
+}
+
+function numeric(type: InferredType): boolean {
+  return type === 'number' || type === 'currency';
+}
+
+/** The printed form of one value. `boolean` is the one type `fmtValue` spells. */
+function text(value: unknown, type: InferredType, currency: string | null): string {
+  if (value === null || value === undefined) return '—';
+  if (type === 'boolean') return value ? 'yes' : 'no';
+  return fmtValue(value, type === 'text' ? 'text' : type, currency);
+}
+
+/* ------------------------------------------------------------------ *
+ * The tree, for results that have no shape worth naming.
+ * ------------------------------------------------------------------ */
 
 function node(value: unknown, depth: number): JSX.Element {
   if (value === null) return <span className="wb-tree-null">null</span>;
@@ -49,7 +298,13 @@ function node(value: unknown, depth: number): JSX.Element {
         {value.length > 50 ? <div className="wb-tree-key">…and {value.length - 50} more</div> : null}
       </div>
     );
-    return depth >= DEPTH_LIMIT ? <Collapsed summary={`${value.length} items`}>{body}</Collapsed> : body;
+    return depth >= DEPTH_LIMIT ? (
+      <Collapsed summary={`${value.length} items`} open={depth === DEPTH_LIMIT}>
+        {body}
+      </Collapsed>
+    ) : (
+      body
+    );
   }
 
   const entries = Object.entries(value as Record<string, unknown>);
@@ -64,12 +319,28 @@ function node(value: unknown, depth: number): JSX.Element {
       ))}
     </div>
   );
-  return depth >= DEPTH_LIMIT ? <Collapsed summary={`${entries.length} fields`}>{body}</Collapsed> : body;
+  // The first level past the limit opens by default: a screen that starts by
+  // saying "10 fields" has told the owner nothing.
+  return depth >= DEPTH_LIMIT ? (
+    <Collapsed summary={`${entries.length} fields`} open={depth === DEPTH_LIMIT}>
+      {body}
+    </Collapsed>
+  ) : (
+    body
+  );
 }
 
-function Collapsed({ summary, children }: { summary: string; children: JSX.Element }): JSX.Element {
+function Collapsed({
+  summary,
+  open,
+  children,
+}: {
+  summary: string;
+  open: boolean;
+  children: JSX.Element;
+}): JSX.Element {
   return (
-    <details>
+    <details open={open}>
       <summary className="wb-tree-key cursor-pointer">{summary}</summary>
       {children}
     </details>

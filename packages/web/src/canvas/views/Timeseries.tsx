@@ -9,9 +9,18 @@
 import type { TimeseriesProps } from '../types';
 import { fmtDay, fmtValue, niceTicks } from '../format';
 
+/*
+ * The chart's own coordinates. The aspect ratio is the panel's proportions:
+ * the chart is the thing being looked at, so it is given the height, and the
+ * list beside it scrolls within its own box rather than setting how tall the
+ * panel is.
+ */
 const W = 760;
-const H = 280;
-const PAD = { top: 16, right: 18, bottom: 30, left: 66 };
+const H = 400;
+const PAD = { top: 18, right: 18, bottom: 36, left: 66 };
+
+/** X labels wanted across the domain. Enough to read a scale, not a census. */
+const X_TICKS = 5;
 
 export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
   const { points, referenceLines, unit, currency } = props;
@@ -45,7 +54,7 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
     <div>
       {props.label ? <p className="wb-panel-sub">{props.label}</p> : null}
       <div className="flex flex-wrap gap-5 items-start">
-        <div className="flex-1 min-w-[280px]">
+        <div className="wb-chart-plot">
           <svg
             className="wb-chart"
             viewBox={`0 0 ${W} ${H}`}
@@ -109,7 +118,7 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
               </g>
             ) : null}
 
-            {xLabels(points.length, extremeIndex).map((index) => (
+            {xTicks(points.length).map((index) => (
               <text key={`x-${index}`} x={x(index)} y={H - 10} textAnchor="middle">
                 {fmtDay(points[index]!.x)}
               </text>
@@ -118,9 +127,9 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
         </div>
 
         {props.events.length > 0 ? (
-          <aside className="min-w-[180px] max-w-[280px] flex-1">
+          <aside className="wb-chart-events">
             <h4 className="wb-stat-k m-0 mb-2">What happens</h4>
-            <ul className="m-0 p-0 list-none flex flex-col gap-1">
+            <ul className="wb-chart-event-list">
               {props.events.map((event, index) => (
                 <li key={`${event.at}-${event.label}-${index}`} className="flex justify-between gap-3 text-[13px]">
                   <span>
@@ -183,10 +192,21 @@ export function breachBands(values: number[], floor: number): Array<{ from: numb
   return bands;
 }
 
-/** First, last, and the marked point — enough to read the axis, no more. */
-function xLabels(count: number, extreme: number | null): number[] {
-  const wanted = new Set<number>([0, count - 1]);
-  if (extreme !== null) wanted.add(extreme);
-  if (count > 4) wanted.add(Math.floor((count - 1) / 2));
-  return [...wanted].filter((index) => index >= 0 && index < count).sort((a, b) => a - b);
+/**
+ * An axis is a *scale*: evenly spaced ticks from the first day to the last.
+ *
+ * It deliberately does not label the marked minimum. That point already has
+ * its own callout, and adding it to the axis put two labels three days apart
+ * next to one spanning six weeks — which reads as a broken axis rather than as
+ * an emphasis.
+ */
+export function xTicks(count: number, wanted = X_TICKS): number[] {
+  if (count <= 0) return [];
+  if (count <= wanted) return [...Array(count).keys()];
+  const last = count - 1;
+  const ticks = new Set<number>();
+  for (let step = 0; step < wanted; step += 1) {
+    ticks.add(Math.round((step / (wanted - 1)) * last));
+  }
+  return [...ticks].sort((a, b) => a - b);
 }

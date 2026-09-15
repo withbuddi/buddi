@@ -159,6 +159,8 @@ export interface EnvelopeProps {
 
 export interface StructuredProps {
   value: unknown;
+  /** The call failed: draw the reason, not a table of its wreckage. */
+  failed?: boolean;
 }
 
 /** Where a renderable came from, which is also its precedence order. */
@@ -175,4 +177,10 @@ export interface Renderable {
   at: string | null;
   tone?: Tone;
   source: RenderableSource;
+  /**
+   * Whether this has something worth looking at — rows, points, figures, a
+   * document. A result with nothing to draw still gets a tab; it just does not
+   * take the canvas away from what is already on it.
+   */
+  substantial: boolean;
 }

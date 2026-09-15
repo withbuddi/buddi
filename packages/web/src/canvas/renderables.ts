@@ -16,8 +16,14 @@
  * A gated call that is waiting on a human overrides all three with the
  * `envelope` view, because an unapproved action is the most important thing on
  * the screen.
+ *
+ * Every renderable also says whether it is *substantial* — whether it has rows,
+ * points, figures or a document in it. A tool that returned nothing, or failed,
+ * or produced a shape nothing can draw still gets a tab, but the canvas does
+ * not throw away the chart the owner is reading in order to show it.
  */
 import { applyDescriptor } from './resolve';
+import { inferShape } from './infer';
 import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
@@ -81,6 +87,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
           at,
           tone: 'warning',
           source: 'approval',
+          substantial: true,
         });
         continue;
       }
@@ -91,10 +98,13 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
           tool,
           title: labelFor(tool),
           renderer: 'structured',
-          props: { value: block.error ?? block.output ?? 'The call failed with no detail.' },
+          props: { value: block.error ?? block.output ?? null, failed: true },
           at,
           tone: 'critical',
           source: 'fallback',
+          // A failure is news, but it is news the chat already delivered, and
+          // it has nothing to draw. It waits in a tab with a red dot.
+          substantial: false,
         });
         continue;
       }
@@ -110,6 +120,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
           props,
           at,
           source: 'descriptor',
+          substantial: hasSubstance(renderer, props),
         });
         continue;
       }
@@ -122,6 +133,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
         props: { value: block.output },
         at,
         source: 'fallback',
+        substantial: hasSubstance('structured', { value: block.output }),
       });
     }
   }
@@ -145,8 +157,55 @@ function fromCanvasShow(id: string, input: unknown, at: string | null): Renderab
     renderer: name,
     props: name === 'structured' && !isKnownRenderer(String(renderer)) ? { value: data } : data,
     at,
+    // The agent asked for this to be shown. That settles it.
+    substantial: true,
     source: 'canvas',
   };
+}
+
+/**
+ * Is there anything in here worth taking the screen for?
+ *
+ * Shape only: rows, points, bars, pairs, a document body. An empty table and a
+ * chart with no points are both honest results and both worth *keeping* — they
+ * are simply not worth interrupting for.
+ */
+export function hasSubstance(renderer: RendererName, props: unknown): boolean {
+  const record = (props ?? {}) as Record<string, unknown>;
+  switch (renderer) {
+    case 'timeseries':
+      return count(record['points']) > 0;
+    case 'bars':
+      return count(record['bars']) > 0;
+    case 'keyvalue':
+      return count(record['pairs']) > 0;
+    case 'document':
+      return Boolean(record['text']) || Boolean(record['src']);
+    case 'envelope':
+      return true;
+    case 'table': {
+      const groups = Array.isArray(record['groups']) ? (record['groups'] as unknown[]) : [];
+      return groups.some((group) => count((group as Record<string, unknown>)['rows']) > 0);
+    }
+    default: {
+      // The fallback has to read the value, because its whole job is to work
+      // out what the value is.
+      const shape = inferShape(record['value'], { failed: record['failed'] === true });
+      if (shape.kind === 'table') return shape.rows.length > 0;
+      // A descriptor is a plugin author's judgement and is trusted at one row.
+      // An inferred list or record is a *guess*, so it has to carry a few
+      // values before it is allowed to interrupt what is already on screen.
+      if (shape.kind === 'list') return shape.items.length >= 3;
+      // A two-field acknowledgement — `{ok: true, recorded: 1}` — is a receipt
+      // for a write, not a view. It keeps its tab; it does not take the screen.
+      if (shape.kind === 'record') return shape.pairs.length >= 3;
+      return false;
+    }
+  }
+}
+
+function count(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
 }
 
 /**

@@ -202,16 +202,36 @@ export function ChatPage({
     [conversation, descriptors, awaiting],
   );
 
-  // A new renderable is the one you want to see, unless you have gone back to
-  // an older tab on purpose — in which case an approval still interrupts.
-  const lastId = renderables[renderables.length - 1]?.id ?? null;
-  const previousLast = useRef<string | null>(null);
-  useEffect(() => {
-    if (lastId && lastId !== previousLast.current) {
-      previousLast.current = lastId;
-      setActiveTab(lastId);
+  /*
+   * What the canvas turns to on its own.
+   *
+   * Not simply the newest thing: a run that calls six tools to answer one
+   * question would otherwise flick through six panels and land on whichever
+   * happened to be last — often a write that returned `{ok: true}`. So the
+   * canvas follows the newest renderable that has something in it — rows,
+   * points, figures, a document — and a result with nothing to draw takes a
+   * tab and waits there instead of taking the screen. An approval still
+   * interrupts everything; that is handled where it arrives.
+   */
+  const focusId = useMemo(() => {
+    for (let index = renderables.length - 1; index >= 0; index -= 1) {
+      const candidate = renderables[index];
+      if (candidate?.substantial) return candidate.id;
     }
-  }, [lastId]);
+    return null;
+  }, [renderables]);
+
+  const previousFocus = useRef<string | null>(null);
+  const lastId = renderables[renderables.length - 1]?.id ?? null;
+  useEffect(() => {
+    if (focusId && focusId !== previousFocus.current) {
+      previousFocus.current = focusId;
+      setActiveTab(focusId);
+      return;
+    }
+    // Nothing substantial has ever arrived: show the newest tab rather than none.
+    if (activeTab === null && lastId) setActiveTab(lastId);
+  }, [focusId, activeTab, lastId]);
 
   /* ---- actions ---- */
 
@@ -248,7 +268,7 @@ export function ChatPage({
     setLive([]);
     setAwaiting(new Map());
     setActiveTab(null);
-    previousLast.current = null;
+    previousFocus.current = null;
   }, []);
 
   useEffect(() => {
