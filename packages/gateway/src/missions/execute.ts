@@ -21,6 +21,7 @@ import {
   appendEvent,
   getAction,
   markFindingDelivered,
+  offerActions,
   SCHEDULED_SURFACE,
   ToolRegistry,
   UnknownAgentError,
@@ -28,6 +29,7 @@ import {
   type AgentCatalog,
   type Mission,
   type Occurrence,
+  type Offer,
   type ToolContext,
 } from '@buddi/core';
 import {
@@ -66,8 +68,15 @@ export const SCHEDULED_RUN_SUFFIX = [
   NOTIFY_POLICY_SUFFIX,
 ].join(' ');
 
-/** Sends the recap somewhere and returns where it went. */
-export type Deliver = (text: string) => Promise<string>;
+/**
+ * Sends the recap somewhere and returns where it went.
+ *
+ * The second argument is the set of actions the report offered, already stored
+ * and carrying ids. A delivery implementation renders them for *its own*
+ * surface — `renderOffers` reads the profile and decides between controls and
+ * words — so this signature says nothing about buttons and never has to.
+ */
+export type Deliver = (text: string, offers?: readonly Offer[]) => Promise<string>;
 
 /**
  * Context a mission's prompt picks up just before it runs, and what to commit
@@ -165,6 +174,12 @@ export interface MissionRunResult {
    * delivered and no decision was taken: the caller suspends and comes back.
    */
   awaiting?: AwaitingApproval;
+  /**
+   * The actions the report offered, stored and ready to bind. Handed back so a
+   * caller that prints rather than delivers — `--inline` — can render them for
+   * *its* surface instead of being told what Telegram did with them.
+   */
+  offers?: readonly Offer[];
 }
 
 /**
@@ -313,9 +328,14 @@ export function createMissionExecutor(
 
     if (text === '') throw new Error(`mission "${mission.id}" produced no text to deliver`);
 
+    // The offers are stored *before* delivery, so the ids a button binds to
+    // exist whatever the transport then does. A stored offer nobody ever taps
+    // is inert; a button bound to an id that was never written is not.
+    const offers = await storeOffers(deps, decision, mission.agentId, conversationId);
+
     let chatId: string | undefined;
     try {
-      chatId = await deps.deliver(text);
+      chatId = await deps.deliver(text, offers);
     } catch (err) {
       if (!requireDelivery && err instanceof OwnerNotPairedError) {
         log(`mission ${mission.id}: delivery skipped — ${err.message}`);
@@ -325,6 +345,7 @@ export function createMissionExecutor(
           delivered: false,
           decision: kind,
           skipped: err.message,
+          ...(offers.length > 0 ? { offers } : {}),
           ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
         };
       }
@@ -364,6 +385,7 @@ export function createMissionExecutor(
       text,
       delivered: true,
       decision: kind,
+      ...(offers.length > 0 ? { offers } : {}),
       ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
       ...(chatId ? { chatId } : {}),
     };
@@ -371,3 +393,34 @@ export function createMissionExecutor(
 }
 
 export type { FindingPayload };
+
+/**
+ * Persist the actions a report offered, if it offered any.
+ *
+ * Failing to store an offer must never cost the owner the report: a button is
+ * a convenience and the text is the message. So this logs and returns nothing
+ * rather than throwing — the owner gets prose, which is what they got before.
+ */
+export async function storeOffers(
+  deps: Pick<MissionExecutorDeps, 'pool' | 'now' | 'log'>,
+  decision: MissionDecision | undefined,
+  agentId: string,
+  conversationId: string,
+): Promise<Offer[]> {
+  if (decision?.kind !== 'report' || decision.actions.length === 0) return [];
+  try {
+    return await offerActions(deps.pool, {
+      agentId,
+      conversationId,
+      actions: decision.actions,
+      now: deps.now(),
+    });
+  } catch (err) {
+    (deps.log ?? ((line: string) => console.error(line)))(
+      `offers: could not store the actions this report offered: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return [];
+  }
+}

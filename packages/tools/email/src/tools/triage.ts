@@ -16,12 +16,27 @@ const triageRecordInput = z.object({
   category: z
     .enum(CATEGORIES)
     .describe(
-      "What kind of mail this is: 'bill' (something to pay), 'bank-notice' (a bank or lender telling you something), 'payment-failed' (a payment was refused or cancelled), 'statement' (a periodic statement), 'receipt' (proof of something already paid), 'personal' (a human writing to the owner), 'promo' (marketing), 'other'.",
+      'What kind of thing this is to the owner. ' +
+        "'reply-needed' (a person is waiting on an answer or a decision from him); " +
+        "'relationship' (a working or client relationship changes — a counterpart leaves, a new contact is named, an organisation reorganises); " +
+        "'opportunity' (work, a client, an invitation or a proposal offered to him personally); " +
+        "'obligation' (something the owner has to do, with or without a date on it — a document to file, collect or sign, a form to return, a renewal, an appointment, a legal or administrative notice, a step in an application waiting on him; an errand with no deadline is still an errand, not 'other'); " +
+        "'security' (an account or security event, or something claiming to be one); " +
+        "'bill' (something to pay); 'payment-failed' (a payment refused, returned or cancelled); " +
+        "'bank-notice' (a bank or lender telling him something); 'statement' (a periodic statement); " +
+        "'receipt' (proof of something already paid); " +
+        "'service-notice' (a service he uses telling him something operational — a price change, a plan ending, an outage, new terms); " +
+        "'personal' (a human writing to him with nothing waiting on him); 'promo' (marketing); 'other'.",
     ),
   urgency: z
     .enum(URGENCIES)
     .describe(
-      "'urgent' only when the owner would want to be woken for it — money is about to be lost, a deadline is inside a day or two, a payment failed. 'normal' for something that matters this week. 'low' for anything that can wait or be ignored.",
+      "Judged by consequence to the owner, not by how the message is written, and not by whether money is involved. " +
+        "'urgent' — something is lost, missed or damaged if he does not see this within about a day: a person he works with is waiting and the answer stops being worth anything, a relationship or a standing is at stake, an opportunity closes, a deadline lands within a day or two, a security event is happening now, money is about to be lost or has been. This is the only level that interrupts him. " +
+        "'normal' — it matters this week: something is expected of him, or something changed that he will want to know, but nothing is lost by Friday. " +
+        "'low' — nothing is lost if he never reads it: marketing, newsletters, notifications about nothing. " +
+        'If you are about to write a real sentence into actionNeeded, it is not low — something he still has to do sits at normal until it is done. ' +
+        'A stranger selling something is never urgent however loudly the message says it is.',
     ),
   summary: z
     .string()

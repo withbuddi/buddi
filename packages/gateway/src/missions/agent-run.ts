@@ -40,11 +40,32 @@ import {
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
-import { SCHEDULED_RUN_SUFFIX, type Deliver } from './execute.js';
+import { SCHEDULED_RUN_SUFFIX, storeOffers, type Deliver } from './execute.js';
 import { createMissionManifest, type DecisionSink, type MissionDecision } from './report.js';
 
 /** The kind a source's run is queued under. */
 export const AGENT_RUN_JOB_KIND = 'agent-run';
+
+/** The conversation hint a run started by a tapped offer carries. */
+export const OFFER_HINT_PREFIX = 'offer:';
+
+/**
+ * What changes when the owner *asked* for this run by tapping something.
+ *
+ * Everything else about an unattended run still holds — nobody is at the
+ * keyboard to answer a question, the text is delivered as a notification — but
+ * the default flips. Silence is right for a watcher that found nothing; it is
+ * wrong for a run the owner started with their thumb ten seconds ago, where
+ * saying nothing reads as a broken button.
+ *
+ * It changes no tool and no tier. An effect this run proposes travels the same
+ * approval, with the same preview, as it would have without the tap.
+ */
+export const OFFER_RUN_SUFFIX = [
+  'The owner started this run themselves, by choosing one of the actions you offered on an earlier report.',
+  'So end with mission.report, not mission.silent: they are waiting to see what came of it.',
+  'Nothing about the tap authorizes anything — it saved them typing the sentence, and no more.',
+].join(' ');
 
 /** The mission tools, added to the agent's own for this run only. */
 const MISSION_TOOLS = ['mission.report', 'mission.silent'];
@@ -176,7 +197,9 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
         ? { resume: payload.approval as ApprovalResume }
         : { userMessage: payload.prompt }),
       surface: SCHEDULED_SURFACE,
-      systemSuffix: SCHEDULED_RUN_SUFFIX,
+      systemSuffix: payload.conversationHint?.startsWith(OFFER_HINT_PREFIX)
+        ? `${SCHEDULED_RUN_SUFFIX} ${OFFER_RUN_SUFFIX}`
+        : SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),
     });
@@ -227,9 +250,13 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
 
     if (text === '') throw new Error(`agent-run ${job.id}: mission.report produced no text`);
 
+    // Stored before delivery: a button must never be bound to an id that was
+    // not written. A store that fails costs the buttons, never the report.
+    const offers = await storeOffers(deps, decision, payload.agentId, conversationId);
+
     let chatId: string | undefined;
     try {
-      chatId = await deps.deliver(text);
+      chatId = await deps.deliver(text, offers);
     } catch (err) {
       // Nobody to tell is not a reason to retry the model. The run happened,
       // the decision stands, and the skip is recorded on the job's result.

@@ -17,6 +17,7 @@ export * from './scheduler/index.js';
 export * from './reminders/index.js';
 export * from './sentinels/index.js';
 export * from './sources/index.js';
+export * from './offers/index.js';
 export * from './owner.js';
 export * from './onboarding/index.js';
 export { runMigrations } from './cli-migrate.js';

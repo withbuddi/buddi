@@ -24,6 +24,7 @@ import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError } from '
 
 class FakeDb {
   conversations: { id: string; agent_id: string }[] = [];
+  offers: { id: string; agent_id: string; label: string; prompt: string }[] = [];
   messages: { conversation_id: string; role: string; content: unknown }[] = [];
   events: { kind: string; conversation_id: string | null; payload: any }[] = [];
 
@@ -48,6 +49,22 @@ class FakeDb {
           .filter((m) => m.conversation_id === params[0])
           .map((m) => ({ role: m.role, content: m.content })),
       };
+    }
+    if (text.startsWith('insert into core.offers')) {
+      const row = {
+        id: `offer-${this.offers.length + 1}`,
+        agent_id: params[0],
+        conversation_id: params[1],
+        label: params[2],
+        prompt: params[3],
+        created_at: params[4],
+        expires_at: params[5],
+        taken_at: null,
+        taken_via: null,
+        taken_job_id: null,
+      };
+      this.offers.push(row as any);
+      return { rows: [row] };
     }
     if (text.startsWith('insert into core.events')) {
       const row = {
@@ -353,6 +370,55 @@ describe('the notify policy', () => {
       decision: 'report',
       urgency: 'urgent',
     });
+  });
+
+  it('stores what the report offered and hands it to the delivery', async () => {
+    // The offers travel with the text rather than being appended to it: how
+    // they are drawn is the delivering surface's decision, and the executor
+    // must not have made it already.
+    const { db, deps: d } = deps();
+    let seen: { text: string; offers: readonly { label: string }[] } | undefined;
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', {
+        urgency: 'urgent',
+        text: 'Dorothée has retired and named two successors.',
+        actions: [
+          { label: 'Draft a reply', prompt: 'Draft a reply to Dorothée and show it to me.' },
+          { label: 'Remind me tomorrow', prompt: 'Remind me tomorrow about the CdC site.' },
+        ],
+      }),
+      deliver: async (text, offers) => {
+        seen = { text, offers: offers ?? [] };
+        return 'chat-42';
+      },
+    });
+
+    const result = await execute(occurrence, checkMission);
+
+    expect(result.decision).toBe('report');
+    // The text is exactly what was written. Nothing was appended to it here.
+    expect(seen?.text).toBe('Dorothée has retired and named two successors.');
+    expect(seen?.offers.map((o) => o.label)).toEqual(['Draft a reply', 'Remind me tomorrow']);
+    expect(db.offers.map((o) => o.agent_id)).toEqual([MISSION_AGENT, MISSION_AGENT]);
+    expect(db.offers[0]?.prompt).toBe('Draft a reply to Dorothée and show it to me.');
+    expect(result.offers).toHaveLength(2);
+  });
+
+  it('offers nothing when the report offered nothing', async () => {
+    const { db, deps: d } = deps();
+    let seen: readonly unknown[] | undefined;
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'normal', text: 'Nothing to do.' }),
+      deliver: async (_text, offers) => {
+        seen = offers;
+        return 'chat-42';
+      },
+    });
+    await execute(occurrence, checkMission);
+    expect(seen).toEqual([]);
+    expect(db.offers).toHaveLength(0);
   });
 
   it('delivers nothing and logs the reason when the run calls mission.silent', async () => {

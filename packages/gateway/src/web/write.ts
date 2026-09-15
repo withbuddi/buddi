@@ -18,11 +18,14 @@ import {
   cancelJob,
   cancelReminder,
   decideApproval,
+  enqueue,
   executeApproved,
   getAction,
   getMission,
+  recordOfferJob,
   resumeJobForAction,
   retryJob,
+  takeOffer,
   setMissionEnabled,
   setPaused,
   setSchedule,
@@ -285,6 +288,45 @@ export async function cancelReminderFromWeb(
   );
   if (!reminder) return fail(409, 'only a pending reminder can be cancelled');
   return { ok: true, status: 200, body: { id: reminder.id, state: reminder.state } };
+}
+
+/**
+ * The owner chose one of the actions an agent offered, on the dashboard.
+ *
+ * Identical to the Telegram tap in every way that matters, because it is the
+ * same two steps against the same rows: claim the offer atomically, then
+ * enqueue an ordinary agent run with the prompt the *agent* wrote. The request
+ * body names an id and nothing else — there is no way to post a prompt of your
+ * own through here — and the run that starts has the tools, tiers and approval
+ * gate it always had.
+ */
+export async function takeOfferFromWeb(
+  deps: WriteDeps,
+  offerId: string,
+): Promise<WriteResult<{ id: string; label: string; jobId: string | null }>> {
+  const taken = await takeOffer(deps.pool, { id: offerId, via: 'web', now: deps.now() });
+  if (!taken.ok) {
+    return fail(taken.reason === 'unknown' ? 404 : 409, taken.message);
+  }
+  let jobId: string | null = null;
+  if (deps.jobs) {
+    const job = await enqueue(deps.pool, {
+      kind: 'agent-run',
+      payload: {
+        agentId: taken.offer.agentId,
+        prompt: taken.offer.prompt,
+        conversationHint: `offer:${taken.offer.id}`,
+      },
+      dedupKey: `offer:${taken.offer.id}`,
+    });
+    jobId = job.id;
+    await recordOfferJob(deps.pool, taken.offer.id, job.id).catch(() => {});
+  }
+  return {
+    ok: true,
+    status: 200,
+    body: { id: taken.offer.id, label: taken.offer.label, jobId },
+  };
 }
 
 /** Re-exported so the router does not have to reach into core for the cast. */

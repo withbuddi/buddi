@@ -20,6 +20,7 @@ import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
 import { draftNew, draftReply } from './tools/drafts.js';
 import { listRecent, readMessage, search } from './tools/read.js';
+import { senderProfile } from './tools/sender.js';
 import { createSendTool } from './tools/send.js';
 import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
@@ -77,6 +78,7 @@ export function createEmailManifest(
       listRecent,
       readMessage,
       search,
+      senderProfile,
       triageRecord,
       draftReply,
       draftNew,
@@ -100,6 +102,7 @@ export const emailSources: Source[] = manifest.sources ?? [];
 export default manifest;
 
 export { listRecent, readMessage, search } from './tools/read.js';
+export { senderProfile } from './tools/sender.js';
 export { triageRecord } from './tools/triage.js';
 export { getSettings, setSettings } from './tools/settings.js';
 export {
@@ -168,8 +171,14 @@ export * from './mail.js';
 export * from './rows.js';
 export * from './types.js';
 export {
+  categoryLabel,
   CATEGORIES,
+  isKnownCategory,
+  KNOWN_CATEGORIES,
+  latestTriage,
+  LEGACY_CATEGORIES,
   PROCESSING_VERSION,
   URGENCIES,
   type Category,
+  type Urgency,
 } from './tools/shared.js';

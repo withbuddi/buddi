@@ -12,12 +12,14 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  CLI_SURFACE,
   finishOccurrence,
   getActiveSchedule,
   getMission,
   listMissions,
   listOccurrences,
   nextAfter,
+  renderOffers,
   setMissionEnabled,
   toOccurrence,
   type Occurrence,
@@ -365,7 +367,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       ctx: wiring.ctx,
       env: process.env,
       now,
-      deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+      deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
       requireDelivery: false,
       prepare: createDigestPrepare(pool, { now }),
       onToolCall: (name, input) => console.error(`⚙ ${name} ${JSON.stringify(input)}`),
@@ -378,7 +380,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         runConversationId: result.conversationId,
       });
       console.log(`\n--- ${mission.id} (${result.text.length} chars) ---\n`);
-      console.log(result.text);
+      // The terminal has nothing to tap, and `CLI_SURFACE` is what says so.
+      // Rendering goes through the same function every other surface uses, so
+      // the owner reads the offers as words rather than losing them entirely.
+      console.log(renderOffers(CLI_SURFACE, result.text, result.offers ?? []).text);
       const outcome = result.delivered
         ? `delivered to chat ${result.chatId}`
         : result.skipped

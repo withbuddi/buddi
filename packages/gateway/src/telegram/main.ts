@@ -21,6 +21,7 @@ import {
   resumeJob,
   TELEGRAM_SURFACE,
   type JobControl,
+  type Offer,
   type SurfaceIdentity,
   type ToolContext,
   type ToolRegistry,
@@ -222,6 +223,14 @@ export interface TelegramDeps {
    * carry on. Absent: nothing is gated.
    */
   gate?: () => Promise<string | null>;
+  /**
+   * Start the run a tapped offered action asks for, returning the job id.
+   *
+   * `buddi serve` owns the queue and passes it; the standalone surface has no
+   * worker and leaves it out, which means an offer button there is claimed and
+   * answered honestly rather than pretending to have started something.
+   */
+  takeOffer?: (offer: Offer) => Promise<string | undefined>;
 }
 
 export interface TelegramHandle {
@@ -325,6 +334,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       unavailableText: QUIET_UNAVAILABLE_TEXT,
       log,
     }),
+    ...(deps.takeOffer ? { takeOffer: deps.takeOffer } : {}),
     ...(deps.runMission ? { runMission: deps.runMission } : {}),
     ...(deps.recapMissionId === undefined
       ? (() => {

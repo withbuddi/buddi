@@ -24,6 +24,7 @@ import { Events } from './views/Events';
 import { Jobs } from './views/Jobs';
 import { Missions } from './views/Missions';
 import { Overview } from './views/Overview';
+import { Offers } from './views/Offers';
 import { Reminders } from './views/Reminders';
 import { Sentinels } from './views/Sentinels';
 
@@ -199,6 +200,8 @@ function Section({
       return <Approvals timezone={timezone} />;
     case '#/jobs':
       return <Jobs timezone={timezone} />;
+    case '#/offers':
+      return <Offers timezone={timezone} />;
     case '#/reminders':
       return <Reminders timezone={timezone} />;
     case '#/sentinels':

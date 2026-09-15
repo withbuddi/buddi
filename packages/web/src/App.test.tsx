@@ -35,8 +35,11 @@ describe('the shell', () => {
     await act(async () => {
       render(<App />);
     });
-    // Nine pages, still nine pages — behind a menu rather than a sidebar.
-    expect(SECTIONS).toHaveLength(9);
+    // Ten pages now — Offers joined them — and every one of them is still
+    // behind the menu rather than a sidebar. The count is asserted so that
+    // adding a page is a deliberate act rather than a drift.
+    expect(SECTIONS).toHaveLength(10);
+    expect(SECTIONS.map((s) => s.route)).toContain('#/offers');
     expect(screen.getByLabelText('Monitoring sections')).toBeDefined();
     expect(screen.getByLabelText(/theme/i)).toBeDefined();
     vi.unstubAllGlobals();
