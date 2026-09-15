@@ -31,11 +31,12 @@ import {
   WEB_SURFACE,
   getAction,
   getArtifact,
+  listOpenOffers,
+  ToolRegistry,
   type AgentCatalog,
   type ArtifactRow,
   type CatalogAgent,
   type ToolContext,
-  type ToolRegistry,
 } from '@buddi/core';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -48,6 +49,14 @@ import {
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import { listRecentConversations } from '../chat/conversations.js';
+import {
+  OFFER_POLICY_SUFFIX,
+  OFFER_TOOLS,
+  createOfferManifest,
+  storeTurnOffers,
+  withdrawTurnOffers,
+  type OfferSink,
+} from '../surfaces/offered-actions.js';
 import {
   attachmentNote,
   classifyMime,
@@ -179,6 +188,20 @@ export interface ChatRunView {
   resumed: boolean;
 }
 
+/**
+ * One action the last turn offered, as the page draws it.
+ *
+ * The same `core.offers` row Telegram binds to a button and the Offers page
+ * lists. The prompt rides along because the owner should be able to read what
+ * a chip will ask before they click it.
+ */
+export interface ChatOfferView {
+  id: string;
+  label: string;
+  prompt: string;
+  expiresAt: string;
+}
+
 export interface ChatTranscript {
   conversationId: string;
   agentId: string;
@@ -186,6 +209,13 @@ export interface ChatTranscript {
   messages: ChatMessageView[];
   runs: ChatRunView[];
   usage: { input: number; output: number };
+  /**
+   * What is still on the table in this conversation — usually nothing. Read
+   * with the transcript rather than pushed on the stream, so a reloaded page
+   * and a live one show the same chips, and a withdrawn offer simply stops
+   * being returned.
+   */
+  offers: ChatOfferView[];
 }
 
 /**
@@ -203,6 +233,7 @@ export interface ChatTranscript {
 export async function readChatTranscript(
   pool: Pool,
   conversationId: string,
+  now: Date = new Date(),
 ): Promise<ChatTranscript | null> {
   const { rows: head } = await pool.query(
     `select id, agent_id, created_at from core.conversations where id = $1::uuid`,
@@ -240,7 +271,17 @@ export async function readChatTranscript(
   }
   const artifacts = await artifactsById(pool, [...artifactIds]);
 
+  // Untaken, unexpired, this conversation's. A chip the owner clicks goes
+  // through the same claim-once take the Telegram tap does.
+  const open = await listOpenOffers(pool, { now, conversationId, limit: 10 }).catch(() => []);
+
   return {
+    offers: open.map((offer) => ({
+      id: offer.id,
+      label: offer.label,
+      prompt: offer.prompt,
+      expiresAt: offer.expiresAt,
+    })),
     conversationId: String(conversation.id),
     agentId: String(conversation.agent_id),
     startedAt: new Date(conversation.created_at).toISOString(),
@@ -630,17 +671,35 @@ export class WebChat {
       return;
     }
 
+    // `conversation.offer` is registered per run into a copy of the base
+    // registry, the way the mission tools and `conversation.ask` are: nothing
+    // outside an interactive turn can call it, and two conversations never
+    // share a sink. The dashboard has buttons, so what it declares is drawn as
+    // chips — by the profile, not by the surface's name.
+    const offers: OfferSink = {};
+    const registry = new ToolRegistry();
+    for (const manifest of deps.registry.manifests()) registry.register(manifest);
+    registry.register(createOfferManifest(offers));
+
+    // An offer belongs to the turn that made it; this turn retires the last
+    // one's, so a chip cannot still fire after the conversation moved on.
+    await withdrawTurnOffers(deps.pool, conversationId, deps.now(), this.#log);
+
+    const base = agent.definition(deps.now(), deps.timezone);
     const options: RunAgentOptions = {
-      agent: agent.definition(deps.now(), deps.timezone),
+      agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS] },
       provider,
-      registry: deps.registry,
+      registry,
       ctx: deps.ctx,
       pool: deps.pool,
       conversationId,
       surface: WEB_SURFACE,
       runId,
       userMessage,
-      ...(systemSuffix === undefined ? {} : { systemSuffix }),
+      systemSuffix:
+        systemSuffix === undefined
+          ? OFFER_POLICY_SUFFIX
+          : `${OFFER_POLICY_SUFFIX}\n\n${systemSuffix}`,
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),
       ...(deps.artifacts ? { loadArtifact: (id: string) => deps.artifacts!.load(id) } : {}),
@@ -669,6 +728,16 @@ export class WebChat {
       return;
     }
     if (result === undefined) return; // failed; already recorded
+
+    // Stored before the page is told the run is over, so the refresh that
+    // `run.finished` triggers already returns them.
+    await storeTurnOffers(deps.pool, {
+      sink: offers,
+      agentId: agent.id,
+      conversationId,
+      now: deps.now(),
+      log: this.#log,
+    });
 
     if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
       // The run proposed a gated effect and stopped. Nothing is decided here:

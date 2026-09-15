@@ -34,10 +34,23 @@ export interface ChatMessage {
   blocks: ChatBlock[];
 }
 
+/**
+ * One action the last turn offered: a label to click and the sentence it will
+ * ask. The same `core.offers` row Telegram draws as a button.
+ */
+export interface ChatOffer {
+  id: string;
+  label: string;
+  prompt: string;
+  expiresAt: string;
+}
+
 export interface ChatConversation {
   conversationId: string;
   agentId: string;
   messages: ChatMessage[];
+  /** Still on the table in this conversation. Usually empty. */
+  offers?: ChatOffer[];
 }
 
 export interface ConversationListItem {

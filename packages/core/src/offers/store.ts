@@ -95,13 +95,19 @@ export async function getOffer(pool: Queryable, id: string): Promise<Offer | nul
 /** What is still on the table: untaken, unexpired, newest first. */
 export async function listOpenOffers(
   pool: Queryable,
-  opts: { now: Date; limit?: number; agentId?: string },
+  opts: { now: Date; limit?: number; agentId?: string; conversationId?: string },
 ): Promise<Offer[]> {
   const params: unknown[] = [opts.now];
   const where = ['taken_at is null', 'expires_at > $1'];
   if (opts.agentId) {
     params.push(opts.agentId);
     where.push(`agent_id = $${params.length}`);
+  }
+  // What one conversation currently has on the table: the dashboard's chat
+  // draws exactly this set under the turn that offered it.
+  if (opts.conversationId) {
+    params.push(opts.conversationId);
+    where.push(`conversation_id = $${params.length}`);
   }
   params.push(Math.min(Math.max(1, Math.trunc(opts.limit ?? 20)), 100));
   const { rows } = await pool.query(
@@ -168,4 +174,36 @@ export async function recordOfferJob(
   jobId: string,
 ): Promise<void> {
   await pool.query('update core.offers set taken_job_id = $2 where id = $1', [id, jobId]);
+}
+
+/**
+ * Withdraw every offer still open in one conversation.
+ *
+ * An offer belongs to the turn that made it. In a live conversation the turn
+ * ends the moment the owner says the next thing, so the buttons that turn drew
+ * stop being an accurate picture of what is on the table — the owner may have
+ * answered in words, asked for something else, or had a newer turn offer a new
+ * set. Rather than leave a button that still fires hours later, the next turn
+ * of the same conversation withdraws what the previous one offered.
+ *
+ * Withdrawing is expiry, not deletion: the row stays for the record, and a tap
+ * on the dead button gets the ordinary "that option has expired — just ask me
+ * instead" rather than silence or a surprise run. Taken offers are untouched.
+ *
+ * Returns how many were withdrawn.
+ */
+export async function withdrawOffers(
+  pool: Queryable,
+  input: { conversationId: string; now: Date },
+): Promise<number> {
+  const conversationId = (input.conversationId ?? '').trim();
+  if (conversationId === '') return 0;
+  const { rows } = await pool.query(
+    `update core.offers
+        set expires_at = $2
+      where conversation_id = $1 and taken_at is null and expires_at > $2
+      returning id`,
+    [conversationId, input.now],
+  );
+  return rows.length;
 }

@@ -26,6 +26,7 @@ import {
   listSurfaceIdentitiesDetailed,
   localDateString,
   recordOfferJob,
+  renderOffers,
   localDateTimeString,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
@@ -33,9 +34,11 @@ import {
   setActiveAgent,
   setSurfaceCursor,
   takeOffer,
+  TELEGRAM_SURFACE,
   touchSurfaceIdentity,
   type Offer,
   type Queryable,
+  type RenderedOffers,
   type Reminder,
 } from '@buddi/core';
 import { createConversation } from '@buddi/runtime';
@@ -512,6 +515,16 @@ export interface RunReply {
    * surface still applies its text rule (see `turnAskedOwner`).
    */
   askedOwner?: boolean;
+  /**
+   * What the turn offered the owner to do next, already stored in `core.offers`
+   * by the runner — ids and all, because a button is bound to a row.
+   *
+   * Almost always absent: a turn that ends at nothing to decide offers nothing,
+   * and the message the owner gets is exactly what it was before any of this
+   * existed. When present, `renderOffers` decides what happens to them, from
+   * Telegram's declared profile and not from its name.
+   */
+  offers?: readonly Offer[];
 }
 
 /** The text of a reply, whichever shape the runner returned. */
@@ -1902,7 +1915,14 @@ export class TelegramSurface {
           reply,
         );
         const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
-        return note ? `${note}\n\n${reply}` : reply;
+        // The offers this turn stored, drawn the way Telegram's own profile
+        // says they are drawn — buttons here, words on a surface without any.
+        // Nothing offered is the normal case, and then this is the identity.
+        return renderOffers(
+          TELEGRAM_SURFACE,
+          note ? `${note}\n\n${reply}` : reply,
+          typeof produced === 'string' ? [] : (produced.offers ?? []),
+        );
       },
       label,
       carried ? readingText(label) : undefined,
@@ -2069,7 +2089,7 @@ export class TelegramSurface {
     await this.#withBubble(
       chatId,
       async (progress) =>
-        replyText(
+        this.#rendered(
           await this.#opts.run({
             conversationId,
             chatId,
@@ -2443,7 +2463,7 @@ export class TelegramSurface {
    */
   async #withBubble(
     chatId: string,
-    produce: (progress: ProgressBubble) => Promise<string>,
+    produce: (progress: ProgressBubble) => Promise<string | RenderedOffers>,
     agentName?: string,
     placeholderOverride?: string,
   ): Promise<void> {
@@ -2472,9 +2492,16 @@ export class TelegramSurface {
       // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
       // markdown does not render here, and we never send `parse_mode`. This
       // catches the answer of a model that ignored the profile.
-      const reply = toPlainText(await produce(progress));
+      const produced = await produce(progress);
+      const drawn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
+      const reply = toPlainText(drawn.text);
       await progress.settle();
-      await this.#finish(chatId, placeholderId, reply);
+      await this.#finish(
+        chatId,
+        placeholderId,
+        reply,
+        drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
+      );
     } catch (err) {
       this.#log(`telegram: run failed: ${message(err)}`);
       await appendSurfaceEvent(this.#opts.pool, 'surface.error', {
@@ -2499,16 +2526,17 @@ export class TelegramSurface {
     chatId: string,
     placeholderId: number | undefined,
     reply: string,
+    keyboard?: InlineKeyboardMarkup,
   ): Promise<void> {
     const text = reply.trim() === '' ? '(no reply)' : reply;
     if (placeholderId !== undefined && text.length > MAX_MESSAGE_CHARS) {
       await this.#opts.api.deleteMessage(chatId, placeholderId).catch((err) => {
         this.#log(`telegram: placeholder delete failed: ${message(err)}`);
       });
-      await this.#opts.api.sendMessage(chatId, text);
+      await this.#opts.api.sendMessage(chatId, text, keyboard ? { replyMarkup: keyboard } : {});
       return;
     }
-    await this.#replace(chatId, placeholderId, text);
+    await this.#replace(chatId, placeholderId, text, keyboard);
   }
 
   /** Edit the placeholder, falling back to a new message on any edit failure. */
@@ -2516,16 +2544,37 @@ export class TelegramSurface {
     chatId: string,
     placeholderId: number | undefined,
     text: string,
+    keyboard?: InlineKeyboardMarkup,
   ): Promise<void> {
     if (placeholderId !== undefined) {
       try {
-        await this.#opts.api.editMessageText(chatId, placeholderId, text);
+        await this.#opts.api.editMessageText(
+          chatId,
+          placeholderId,
+          text,
+          keyboard ? { replyMarkup: keyboard } : {},
+        );
         return;
       } catch (err) {
         this.#log(`telegram: final edit failed, sending instead: ${message(err)}`);
       }
     }
-    await this.#opts.api.sendMessage(chatId, text);
+    await this.#opts.api.sendMessage(chatId, text, keyboard ? { replyMarkup: keyboard } : {});
+  }
+
+  /**
+   * One turn's reply, with whatever it offered already drawn into the shape
+   * this surface sends: the text, and the controls if there are any.
+   *
+   * It never asks "am I Telegram?" — `renderOffers` reads the declared profile,
+   * which is the one place that fact lives.
+   */
+  #rendered(produced: string | RunReply): RenderedOffers {
+    return renderOffers(
+      TELEGRAM_SURFACE,
+      replyText(produced),
+      typeof produced === 'string' ? [] : (produced.offers ?? []),
+    );
   }
 
   #startTyping(chatId: string): () => void {

@@ -57,6 +57,7 @@ export function ChatPage({
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [takingOffer, setTakingOffer] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
 
@@ -251,6 +252,26 @@ export function ChatPage({
       });
   };
 
+  /**
+   * The owner clicked one of the things this turn offered.
+   *
+   * It is the Telegram tap, in a browser: the request names an **id**, the
+   * server claims that row once and runs the prompt the agent wrote. Nothing
+   * here can carry a prompt of its own, and nothing about the run it starts is
+   * shortened — an effect still comes back as the approval it always was.
+   */
+  const takeOffer = (id: string): void => {
+    setError(null);
+    setTakingOffer(id);
+    api
+      .takeOffer(id)
+      .catch((err: unknown) => setError(message(err)))
+      .finally(() => {
+        setTakingOffer(null);
+        if (conversationId) void refresh(conversationId);
+      });
+  };
+
   const stop = (): void => {
     if (!conversationId) return;
     chatApi
@@ -358,6 +379,22 @@ export function ChatPage({
               : 'Loading agents…'
           }
         />
+
+        {(conversation?.offers ?? []).length > 0 ? (
+          <div className="wb-offers" data-testid="chat-offers">
+            {(conversation?.offers ?? []).map((offer) => (
+              <button
+                key={offer.id}
+                className="wb-btn"
+                disabled={takingOffer !== null}
+                title={offer.prompt}
+                onClick={() => takeOffer(offer.id)}
+              >
+                {offer.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <Composer
           disabled={!agentId}

@@ -9,7 +9,14 @@
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
-import { getOffer, listOpenOffers, offerActions, recordOfferJob, takeOffer } from './store.js';
+import {
+  getOffer,
+  listOpenOffers,
+  offerActions,
+  recordOfferJob,
+  takeOffer,
+  withdrawOffers,
+} from './store.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -121,6 +128,60 @@ suite('offers (postgres)', () => {
     const row = await getOffer(pool, id);
     expect(row?.takenJobId).toBe('11111111-1111-4111-8111-111111111111');
     expect(row?.takenVia).toBe('telegram');
+  });
+
+  /**
+   * An offer made in a live conversation belongs to the turn that made it. The
+   * conversation's next turn withdraws what the last one left on the table, so
+   * a button cannot still fire an hour and three subjects later — and a tap on
+   * the dead one gets the ordinary "expired", never silence and never a
+   * surprise run.
+   */
+  it('withdraws a conversation’s open offers, and a later tap is refused as expired', async () => {
+    const { rows } = await pool.query(
+      `insert into core.conversations (agent_id) values ('mail-triage') returning id`,
+    );
+    const conversationId = String(rows[0].id);
+    const stored = await offerActions(pool, {
+      agentId: 'mail-triage',
+      conversationId,
+      actions: [
+        { label: 'Send it', prompt: 'send the reply I drafted' },
+        { label: 'Edit the draft', prompt: 'change the second paragraph' },
+      ],
+      now: NOW,
+    });
+    // One of them was taken before the turn moved on; withdrawing must not
+    // touch it, and must not un-take it.
+    const takenId = stored[1]?.id as string;
+    await takeOffer(pool, { id: takenId, via: 'telegram', now: NOW });
+
+    expect(
+      await listOpenOffers(pool, { now: later(1000), conversationId }),
+    ).toHaveLength(1);
+
+    expect(await withdrawOffers(pool, { conversationId, now: later(1000) })).toBe(1);
+    expect(await listOpenOffers(pool, { now: later(1000), conversationId })).toEqual([]);
+
+    const late = await takeOffer(pool, {
+      id: stored[0]?.id as string,
+      via: 'web',
+      now: later(2000),
+    });
+    expect(late).toMatchObject({ ok: false, reason: 'expired' });
+    // Withdrawn, not deleted: the row is still there for the record.
+    expect((await getOffer(pool, stored[0]?.id as string))?.takenAt).toBeNull();
+    expect((await getOffer(pool, takenId))?.takenVia).toBe('telegram');
+
+    // Another conversation's offers are nobody else's to retire.
+    const elsewhere = await offerActions(pool, {
+      agentId: 'mail-triage',
+      actions: [{ label: 'Remind me', prompt: 'remind me tomorrow' }],
+      now: NOW,
+    });
+    expect(await withdrawOffers(pool, { conversationId, now: later(3000) })).toBe(0);
+    expect((await getOffer(pool, elsewhere[0]?.id as string))?.takenAt).toBeNull();
+    expect(await listOpenOffers(pool, { now: later(3000) })).toHaveLength(1);
   });
 
   it('keeps the agent that offered it; an offer never changes hands', async () => {

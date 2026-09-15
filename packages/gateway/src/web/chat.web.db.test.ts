@@ -783,6 +783,155 @@ suite('the dashboard chat API', () => {
     expect((await client.get('/api/approvals/00000000-0000-0000-0000-000000000000')).status).toBe(404);
   });
 
+  /* ---------------- offered actions ---------------- */
+
+  /**
+   * The dashboard half of offers in a live conversation.
+   *
+   * Everything here is the *same* mechanism the unattended path already had —
+   * `core.offers`, the atomic claim, the take route — and the only new thing is
+   * that an interactive turn can declare a set. So what these tests are really
+   * about is the three rules that keep it honest: the chips belong to the turn
+   * that offered them, one of them can be taken exactly once however many
+   * surfaces are looking, and taking one authorizes nothing.
+   */
+  describe('offered actions', () => {
+    const declare = (actions: { label: string; prompt: string }[]) =>
+      call('t-offer', 'conversation.offer', { actions });
+
+    const offersOf = async (client: Client, conversationId: string): Promise<any[]> =>
+      ((await client.json<any>(`/api/chat/conversations/${conversationId}`)).offers ?? []);
+
+    it('reads back what the turn offered, and takes one exactly once', async () => {
+      const client = await signedIn();
+      provider.script = [
+        declare([
+          { label: 'Send it', prompt: 'send the reply I drafted to Dorothée' },
+          { label: 'Edit the draft', prompt: 'change the second paragraph of that reply' },
+        ]),
+        say("The draft is ready. It hasn't been sent."),
+      ];
+
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply to Dorothée' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const offers = await offersOf(client, conversationId);
+      expect(offers.map((o) => o.label)).toEqual(['Send it', 'Edit the draft']);
+      // The prompt rides along: the owner can read what a chip will ask before
+      // they click it, which is the whole reason it is safe to click.
+      expect(offers[0].prompt).toBe('send the reply I drafted to Dorothée');
+
+      // Claim-once, across two surfaces: a thumb on Telegram gets there first.
+      const { rows: claimed } = await pool.query(
+        `update core.offers set taken_at = now(), taken_via = 'telegram' where id = $1 returning id`,
+        [offers[0].id],
+      );
+      expect(claimed).toHaveLength(1);
+      const second = await client.post(`/api/offers/${offers[0].id}/take`);
+      expect(second.status).toBe(409);
+      expect(((await second.json()) as any).error).toMatch(/already/i);
+
+      // The other one is still on the table, and the dashboard can take it.
+      const taken = await client.post(`/api/offers/${offers[1].id}/take`);
+      expect(taken.status).toBe(200);
+      expect(((await taken.json()) as any).label).toBe('Edit the draft');
+      expect(await offersOf(client, conversationId)).toHaveLength(0);
+    });
+
+    it('adds nothing to a turn that offered nothing', async () => {
+      const client = await signedIn();
+      provider.script = [say('Nothing due.')];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'anything due?' })
+      ).json()) as any;
+      await settled(conversationId);
+      expect(await offersOf(client, conversationId)).toEqual([]);
+      const { rows } = await pool.query('select count(*)::int as n from core.offers');
+      expect(rows[0].n).toBe(0);
+    });
+
+    it('withdraws them when the conversation moves on, and a late click is refused', async () => {
+      const client = await signedIn();
+      provider.script = [
+        declare([{ label: 'Send it', prompt: 'send the reply I drafted' }]),
+        say('Drafted.'),
+        say('Sure — something else.'),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply' })
+      ).json()) as any;
+      await settled(conversationId);
+      const [offer] = await offersOf(client, conversationId);
+      expect(offer.label).toBe('Send it');
+
+      // The owner ignores the chip and says something else. An offer belongs to
+      // the turn that made it, so the next turn retires it.
+      await client.post(`/api/chat/${AGENT_ID}/messages`, { conversationId, text: 'never mind' });
+      await settled(conversationId, 2);
+
+      expect(await offersOf(client, conversationId)).toEqual([]);
+      const late = await client.post(`/api/offers/${offer.id}/take`);
+      expect(late.status).toBe(409);
+      expect(((await late.json()) as any).error).toMatch(/expired/i);
+      // Withdrawn, not deleted: the row is still there, unclaimed, for the record.
+      const { rows } = await pool.query('select taken_at from core.offers where id = $1', [offer.id]);
+      expect(rows[0].taken_at).toBeNull();
+    });
+
+    it('takes a tapped "Send it" through the ordinary approval, with the whole body', async () => {
+      const client = await signedIn();
+      provider.script = [
+        declare([{ label: 'Send it', prompt: 'send the reply I drafted to dorothee@example.test' }]),
+        say("The draft is ready. It hasn't been sent."),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply' })
+      ).json()) as any;
+      await settled(conversationId);
+      const [offer] = await offersOf(client, conversationId);
+
+      // Taking it claims the row and hands the run the prompt the *agent*
+      // wrote. Nothing in the request could have carried a prompt of its own.
+      expect((await client.post(`/api/offers/${offer.id}/take`)).status).toBe(200);
+      const { rows: row } = await pool.query('select prompt, taken_via from core.offers where id = $1', [
+        offer.id,
+      ]);
+      expect(row[0].prompt).toBe('send the reply I drafted to dorothee@example.test');
+      expect(row[0].taken_via).toBe('web');
+
+      // And that prompt, run, is an ordinary run: `demo.send` is gated, so it
+      // stops dead and the owner is shown every recipient and the whole body.
+      // Nothing was delivered by the tap.
+      provider.script = [
+        call('t-send', 'demo.send', {
+          to: 'dorothee@example.test',
+          body: 'Dear Dorothée, thank you for letting me know.',
+        }),
+      ];
+      const { conversationId: runConversation } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: row[0].prompt })
+      ).json()) as any;
+      await settled(runConversation);
+
+      const { rows: actions } = await pool.query(
+        `select a.id, a.tool, a.preview, a.envelope, ap.state
+           from core.actions a join core.approvals ap on ap.action_id = a.id
+          order by a.created_at desc limit 1`,
+      );
+      expect(actions[0]).toMatchObject({ tool: 'demo.send', state: 'pending' });
+      expect(actions[0].preview).toBe(
+        'Send "Dear Dorothée, thank you for letting me know." to dorothee@example.test',
+      );
+      expect(actions[0].envelope).toEqual({
+        to: 'dorothee@example.test',
+        body: 'Dear Dorothée, thank you for letting me know.',
+      });
+      expect(sent).toEqual([]);
+    });
+  });
+
   /* ---------------- cancel ---------------- */
 
   it('cancels a run in flight, and says so on the stream', async () => {
