@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import type { AgentDefinition, ToolContext, ToolRegistry } from '@buddi/core';
+import { surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NeutralMessage,
@@ -49,11 +49,13 @@ export interface RunAgentOptions {
   /** The owner's turn. Omitted only when `resume` carries the turn instead. */
   userMessage?: string;
   /**
-   * An extra system line appended to the agent's prompt for this run only —
-   * how the surface tells the agent about its own rendering constraints
-   * ("Telegram: plain text, no tables"). Presentation, not policy: it never
-   * changes tools, tiers or authorization, and it is not persisted with the
-   * agent definition.
+   * An extra system line appended to the agent's prompt for this run only.
+   *
+   * Genuinely one-off instructions, and nothing else: "this is the first run,
+   * follow the first-run skill". How the surface *renders* is no longer said
+   * here — that is `surface` below, a declared profile rather than a sentence
+   * each caller writes its own way. Presentation and framing, never policy: it
+   * changes no tool, tier or authorization and is not persisted with the agent.
    */
   systemSuffix?: string;
   /**
@@ -91,6 +93,30 @@ export interface RunAgentOptions {
   resume?: ApprovalResume;
   /** Called the moment a tool call becomes a pending approval. */
   onApprovalRequired?: (actionId: string, preview: string) => void;
+  /**
+   * Which surface this run belongs to, as the profile the surface declares
+   * about itself — `TELEGRAM_SURFACE`, `CLI_SURFACE`, `WEB_SURFACE`,
+   * `SCHEDULED_SURFACE`, or one a host defines.
+   *
+   * Two jobs, and they were one thing all along. Its `id` is the provenance
+   * stamped on this run's events, so a transcript still says where a turn came
+   * from. Its facts become the generated surface paragraph in the system
+   * prompt, so the model knows whether markdown survives, whether the owner can
+   * tap a button, and whether there is a canvas — before it answers, rather
+   * than having the claim stripped out of the answer afterwards.
+   *
+   * Omitted means "no surface declared": no paragraph, no provenance. That is
+   * an eval or an ad-hoc script, not a place a person is reading.
+   */
+  surface?: SurfaceProfile;
+  /**
+   * The caller's own id for this run, recorded alongside the surface.
+   *
+   * The loop does not generate one — a run is identified by its events and its
+   * conversation. This exists so a surface that handed an id to a client
+   * (a browser following a stream) can find its own run in the log.
+   */
+  runId?: string;
 }
 
 /** How a decided action comes back into the run that proposed it. */
@@ -270,21 +296,35 @@ function textOf(content: ContentBlock[]): string {
 }
 
 /**
- * The system prompt for one run: what the agent remembers, then the agent's own
- * prompt, then an optional surface hint.
+ * The system prompt for one run, in one fixed order:
+ *
+ *   memory → the agent's own prompt (persona + generated tail)
+ *          → the generated surface paragraph → the one-off suffix
  *
  * Memory goes first and the persona second on purpose — the persona's rules are
- * the last word the model reads, so a remembered line can never read as an
- * override of them.
+ * the last word the model reads before the generated sections, so a remembered
+ * line can never read as an override of them. The surface paragraph follows the
+ * persona because it is authoritative over it: a persona that likes tables does
+ * not get tables on Telegram. The one-off suffix is last because it is the only
+ * part that is about *this* turn.
+ *
+ * The order is fixed rather than caller-chosen so that two surfaces composing
+ * the same agent produce the same prompt shape, and a diff of two transcripts
+ * is a diff of the facts and not of the assembly.
  */
 export function composeSystem(
   systemPrompt: string,
   systemSuffix?: string,
   memoryPreamble?: string,
+  surface?: SurfaceProfile,
 ): string {
-  const suffix = (systemSuffix ?? '').trim();
   const memory = (memoryPreamble ?? '').trim();
-  const body = suffix === '' ? systemPrompt : `${systemPrompt}\n\n${suffix}`;
+  const parts = [
+    systemPrompt,
+    ...(surface ? [surfaceSection(surface)] : []),
+    ...((systemSuffix ?? '').trim() === '' ? [] : [(systemSuffix as string).trim()]),
+  ];
+  const body = parts.join('\n\n');
   return memory === '' ? body : `${memory}\n\n${body}`;
 }
 
@@ -320,13 +360,20 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   };
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
-  const system = composeSystem(agent.systemPrompt, opts.systemSuffix, memory);
+  const system = composeSystem(agent.systemPrompt, opts.systemSuffix, memory, opts.surface);
 
   // Provenance for every tool call this run makes. The caller's context is not
   // mutated: it is shared across runs, and a run's identity is its own.
   // Provenance rides along: a gated call records the job it belongs to on the
   // action, which is how the decision later finds the run that is suspended.
-  const toolCtx: ToolContext = { ...ctx, conversationId, agentId: agent.id };
+  // The surface rides along too: a delegated run reaches the same screen as the
+  // run that asked for it, so the delegate must be told about that screen.
+  const toolCtx: ToolContext = {
+    ...ctx,
+    conversationId,
+    agentId: agent.id,
+    ...(opts.surface ? { surface: opts.surface } : {}),
+  };
 
   // Attachments: cap first, hydrate second, persist third. The caps fail closed
   // before anything is written, so an over-limit message leaves no half-state.
@@ -369,6 +416,10 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       credentialKind: snapshot.credentialKind,
       model: snapshot.model,
       capabilities: snapshot.capabilities,
+      // The profile's *id*, not the profile: the event log records where the
+      // run came from, and the capability facts are already in the prompt.
+      ...(opts.surface ? { surface: opts.surface.id } : {}),
+      ...(opts.runId ? { runId: opts.runId } : {}),
       ...(resume ? { actionId: resume.actionId, approvalState: resume.state } : {}),
     },
     conversationId,
@@ -499,6 +550,10 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       model: snapshot.model,
       servedModel: snapshot.servedModel ?? null,
       credentialKind: snapshot.credentialKind,
+      // The profile's *id*, not the profile: the event log records where the
+      // run came from, and the capability facts are already in the prompt.
+      ...(opts.surface ? { surface: opts.surface.id } : {}),
+      ...(opts.runId ? { runId: opts.runId } : {}),
       ...(pendingActionId ? { actionId: pendingActionId } : {}),
     },
     conversationId,

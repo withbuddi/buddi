@@ -1,27 +1,51 @@
 /**
- * Two smoke tests: the shell renders its nav with no server behind it, and the
- * Overview renders the numbers it is given — including the "needs attention"
- * block, which is the whole point of the landing page.
+ * The shell, and the page it opens on.
+ *
+ * Chat is the landing route now: with no server behind it the page still
+ * renders a conversation column, a composer and a canvas, rather than an error
+ * screen. The monitoring pages moved behind the rail, so the assertion about
+ * them is that they are *reachable*, not that they are on screen.
  */
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App, NAV } from './App';
+import { App, NARROW_QUERY, SECTIONS, useMediaQuery } from './App';
 import { fmtMoney, truncate } from './format';
 import { Overview } from './views/Overview';
 
 afterEach(cleanup);
 
 describe('the shell', () => {
-  it('renders every section even when the API is unreachable', async () => {
+  it('opens on the workbench, and survives a server that is not there', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
     // Awaited so the first (failing) loads settle inside the act boundary.
     await act(async () => {
       render(<App />);
     });
-    for (const item of NAV) {
-      expect(screen.getByText(item.label)).toBeDefined();
-    }
+
+    // Chat on the left, canvas on the right — both present with no data.
+    expect(screen.getByTestId('chat-column')).toBeDefined();
+    expect(screen.getByTestId('composer')).toBeDefined();
+    expect(screen.getByTestId('canvas')).toBeDefined();
+    expect(screen.getByLabelText('Resize the conversation column')).toBeDefined();
     vi.unstubAllGlobals();
+  });
+
+  it('keeps every monitoring section reachable from the rail', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
+    await act(async () => {
+      render(<App />);
+    });
+    // Nine pages, still nine pages — behind a menu rather than a sidebar.
+    expect(SECTIONS).toHaveLength(9);
+    expect(screen.getByLabelText('Monitoring sections')).toBeDefined();
+    expect(screen.getByLabelText(/theme/i)).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('turns the canvas into a sheet on a phone-width screen', () => {
+    // The breakpoint is a stated number, not a guess made in three places.
+    expect(NARROW_QUERY).toBe('(max-width: 900px)');
+    expect(typeof useMediaQuery).toBe('function');
   });
 });
 
@@ -46,7 +70,7 @@ describe('overview', () => {
     missions: { total: 2, enabled: 1, nextRun: '2026-09-19T13:00:00Z' },
     reminders: { pending: 0, nextDueAt: null },
     sentinels: { lastRunAt: '2026-09-14T08:59:00Z', openUrgent: 1, openInfo: 0, errors: [] },
-    mail: [{ sourceId: 'email.inbox-poll', lastRunAt: '2026-09-14T08:58:00Z', lastError: null }],
+    mail: [{ sourceId: 'demo.inbox-poll', lastRunAt: '2026-09-14T08:58:00Z', lastError: null }],
   };
 
   it('puts what needs a human above the numbers', async () => {

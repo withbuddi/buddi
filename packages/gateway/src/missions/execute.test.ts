@@ -8,6 +8,7 @@ import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from '../agents/delegation.js';
 import { createReminderManifest, createScheduleManifest } from './reminders.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
+import { SCHEDULED_SURFACE, surfaceSection } from '@buddi/core';
 import { createMissionExecutor, SCHEDULED_RUN_SUFFIX, UnknownAgentError } from './execute.js';
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
@@ -205,6 +206,21 @@ describe('createMissionExecutor', () => {
     });
     await execute(occurrence, mission);
     expect(systems[0]).toContain(SCHEDULED_RUN_SUFFIX);
+    // The facts come from the declared profile, not from the suffix.
+    expect(systems[0]).toContain(surfaceSection(SCHEDULED_SURFACE));
+    expect(systems[0]).toContain(
+      'Nobody is here: this text is delivered as a notification and cannot be answered.',
+    );
+    expect(systems[0]).toContain('There is no canvas here');
+  });
+
+  it('keeps in the suffix only what is about being a scheduled run', () => {
+    // Everything about rendering is the profile's job now; a second copy here
+    // would be the one that silently disagrees with it.
+    expect(SCHEDULED_RUN_SUFFIX).toContain('scheduled run');
+    expect(SCHEDULED_RUN_SUFFIX).toContain('mission.report');
+    expect(SCHEDULED_RUN_SUFFIX).not.toMatch(/markdown|tables|plain text/i);
+    expect(SCHEDULED_RUN_SUFFIX).not.toMatch(/Telegram/i);
   });
 
   it('appends mission.delivered with the mission, occurrence and size', async () => {

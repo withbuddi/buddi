@@ -19,8 +19,9 @@ import {
   type Finding,
   type Sentinel,
 } from './types.js';
+import { testDatabaseUrl } from '../testing/database-url.js';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_sentinels_test_${process.pid}`;

@@ -1,6 +1,7 @@
 /**
- * `@buddi/tool-weather` — the smallest plugin that contributes three of the
- * four kinds of thing: a read tool, a sentinel, and a suggested mission.
+ * `@buddi/tool-weather` — the smallest plugin that contributes four of the
+ * five kinds of thing: a read tool, a sentinel, a suggested mission, and a view
+ * descriptor saying how the forecast should be drawn on the canvas.
  *
  * It owns the `weather` schema (one row: where the owner is) and ships its own
  * migration. Core never references these tables; deleting this directory leaves
@@ -14,6 +15,7 @@ import { openMeteo } from './open-meteo.js';
 import type { FetchForecast } from './ports.js';
 import { createFrostSentinel } from './sentinels/frost.js';
 import { createForecastTool } from './tools/forecast.js';
+import { weatherViews } from './views.js';
 
 /** Absolute path to this plugin's migrations, resolved from the *built* file. */
 export const MIGRATIONS_DIR = path.resolve(
@@ -34,6 +36,7 @@ export function createWeatherManifest(
     tools: [createForecastTool(fetchForecast)],
     sentinels: [createFrostSentinel(fetchForecast)],
     missions: weatherMissions,
+    views: weatherViews,
   };
 }
 
@@ -48,4 +51,5 @@ export { frostFinding, FREEZING_C } from './frost.js';
 export { loadLocation, NO_LOCATION, type Location } from './location.js';
 export { describeCode, openMeteo, toDays, OPEN_METEO_URL } from './open-meteo.js';
 export { weatherMissions, MORNING_WEATHER_CRON, MORNING_WEATHER_ID } from './missions.js';
+export { weatherViews } from './views.js';
 export type { DailyForecast, FetchForecast, ForecastQuery } from './ports.js';

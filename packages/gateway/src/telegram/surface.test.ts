@@ -3,6 +3,8 @@
  * Bot API and an in-memory `Queryable` stands in for core's tables.
  */
 import { describe, expect, it, vi } from 'vitest';
+import * as telegramSurface from './surface.js';
+import { TELEGRAM_SURFACE, surfaceSection } from '@buddi/core';
 import { UnknownAgentError, roleProblemMessage, type Queryable } from '@buddi/core';
 import { TelegramApi, splitMessage, type FetchLike, type TelegramUpdate } from './api.js';
 import {
@@ -2723,5 +2725,21 @@ describe('first contact', () => {
     await surface.processUpdates([message(2, OWNER, OWNER, 'now a real question')]);
     await surface.drain();
     expect((run.mock.calls[0]?.[0] as any).systemSuffix).toContain('first run');
+  });
+});
+
+describe('the surface contract on Telegram', () => {
+  it('carries no hand-written surface hint: the profile says it instead', () => {
+    // `SURFACE_HINT` was a sentence this module appended to every run. It is
+    // gone; what the model is told about Telegram is TELEGRAM_SURFACE, which
+    // every other surface reads the same way.
+    expect('SURFACE_HINT' in telegramSurface).toBe(false);
+    expect(surfaceSection(TELEGRAM_SURFACE)).toContain('Markdown is not rendered here');
+  });
+
+  it('still strips markdown on the way out, as a net under the profile', () => {
+    // The profile is the plan; this is what catches a model that ignored it.
+    expect(toPlainText('## Cash\n**1,240** left')).toBe('Cash\n1,240 left');
+    expect(toPlainText('| a | b |\n| --- | --- |\n| 1 | 2 |')).toBe('a — b\n1 — 2');
   });
 });

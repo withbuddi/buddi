@@ -298,6 +298,11 @@ const LANGUAGE_LINE: Record<AgentLanguage, string> = {
  * The generated tail of the system prompt. The tool list is generated rather
  * than written into the persona, so a file can never claim a tool it was not
  * granted, nor go stale when the plugin ships one more.
+ *
+ * Its sibling is `surfaceSection` in `../surfaces.js`, generated from the same
+ * principle and composed immediately after this one at run time. It is not
+ * baked in here because the surface is a property of the *run*, not of the
+ * agent file: one persona answers on Telegram and on the dashboard.
  */
 export function generatedSection(
   tools: readonly string[],

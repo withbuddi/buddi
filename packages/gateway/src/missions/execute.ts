@@ -21,6 +21,7 @@ import {
   appendEvent,
   getAction,
   markFindingDelivered,
+  SCHEDULED_SURFACE,
   ToolRegistry,
   UnknownAgentError,
   type ActionRecord,
@@ -50,15 +51,18 @@ import { findingOf, renderFinding, type FindingPayload } from './sentinel-wake.j
 export { UnknownAgentError };
 
 /**
- * Presentation contract for an unattended run. Presentation only: it changes no
- * tool, tier or authorization, and it is not persisted with the agent.
+ * What is true about being a *scheduled* run, and nothing else.
+ *
+ * Everything about rendering — plain text, no tables, nobody to answer you —
+ * used to be restated here and is now `SCHEDULED_SURFACE`, the profile this
+ * executor passes to the run. What survives is the one thing a surface profile
+ * cannot say: this run does not answer, it *decides*, by calling `mission.report`
+ * or `mission.silent`. Presentation and procedure only: it changes no tool, tier
+ * or authorization, and it is not persisted with the agent.
  */
 export const SCHEDULED_RUN_SUFFIX = [
-  'Surface: Telegram, scheduled unattended run.',
-  'Nobody is at the keyboard: this text is delivered as a notification and cannot be answered.',
-  'Never ask the owner a question and never offer to do something on confirmation.',
+  'This is a scheduled run you started on the clock, not a reply to anything the owner said.',
   'Lead with the verdict, then the numbers it rests on.',
-  'Plain text only: no markdown, no tables, no bullets built from pipes. Short lines.',
   NOTIFY_POLICY_SUFFIX,
 ].join(' ');
 
@@ -240,6 +244,7 @@ export function createMissionExecutor(
       ...(control?.resume
         ? { resume: control.resume.approval }
         : { userMessage }),
+      surface: SCHEDULED_SURFACE,
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),

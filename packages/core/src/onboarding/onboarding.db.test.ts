@@ -20,8 +20,9 @@ import {
   skipOnboarding,
 } from './store.js';
 import { ONBOARDING_STEPS } from './types.js';
+import { testDatabaseUrl } from '../testing/database-url.js';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_onboarding_test_${process.pid}`;
 

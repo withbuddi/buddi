@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   resolveDataDir,
+  CLI_SURFACE,
   resolveProvider,
   UnknownAgentError,
   type CatalogAgent,
@@ -37,7 +38,7 @@ import { AGENTS_DIR, memoryPreambleFor } from './agents/catalog.js';
 import { main as runAgentsCli } from './agents-cli.js';
 import { bindDelegation } from './agents/delegation.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
-import { CLI_SURFACE, shouldStartFirstRun } from './agents/first-run.js';
+import { shouldStartFirstRun } from './agents/first-run.js';
 import { createWiringAsync, loadEnvironment, type Wiring } from './bootstrap.js';
 import { CliApprovals } from './chat/approvals.js';
 import { COMMAND_NAMES } from './chat/commands.js';
@@ -346,7 +347,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     },
   });
 
-  bindOwnerTools(registry, { catalog, surface: CLI_SURFACE });
+  bindOwnerTools(registry, { catalog, surface: CLI_SURFACE.id });
 
   /** Every run starts with what this agent remembers about the owner. */
   const memoryPreamble = memoryPreambleFor(pool);
@@ -405,13 +406,14 @@ async function ask(
     pool: wiring.pool,
     conversationId,
     userMessage: question,
+    surface: CLI_SURFACE,
     memoryPreamble: deps.memoryPreamble,
     onToolCall: (name, input) => {
       console.error(`⚙ ${name} ${JSON.stringify(input)}`);
     },
   });
-  // Tool names are internal: the owner sees what happened, not which function
-  // did it — the same rule the Telegram surface applies.
+  // Safety net, not the mechanism: tool names are internal and nothing asks the
+  // model to print one. This catches the answer of a model that did anyway.
   console.log(stripToolNames(result.text));
 
   if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
@@ -576,7 +578,7 @@ async function chat(
    */
   if (style.tty && !args.quiet) {
     try {
-      if (await shouldStartFirstRun(pool, CLI_SURFACE)) await session.firstRun();
+      if (await shouldStartFirstRun(pool, CLI_SURFACE.id)) await session.firstRun();
     } catch (err) {
       out(dim(`first run unavailable: ${err instanceof Error ? err.message : String(err)}`, style.color));
     }

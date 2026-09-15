@@ -1,0 +1,182 @@
+/*
+ * Every colour in the dashboard, in one file.
+ *
+ * Nothing else in the build is allowed to write a hex value: components name
+ * tokens, Tailwind's palette names tokens, and the charts read tokens off the
+ * computed style. That is what makes the theme a single decision instead of a
+ * hunt.
+ *
+ * Three states, in the order the cascade needs them:
+ *
+ *   :root                                   → light, always defined
+ *   @media (prefers-color-scheme: dark)
+ *     :root:not([data-theme="light"])       → the system's dark, unless the
+ *                                             owner has explicitly said light
+ *   :root[data-theme="dark"]                → the owner's explicit dark, which
+ *                                             wins in a light OS too
+ *
+ * The `:not([data-theme="light"])` guard is the whole trick: without it an
+ * explicit "light" would be overridden by the OS on a dark machine.
+ *
+ * Fonts are the system's own. There is no font file, no CDN, no `@import` —
+ * the page makes no external request, and that is a tested property of the
+ * build, not a promise.
+ */
+
+:root {
+  /* ---- type ---- */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* ---- shape ---- */
+  --radius-sm: 4px;
+  --radius: 7px;
+  --radius-lg: 12px;
+  --shadow-panel: 0 1px 2px rgb(16 15 14 / 6%);
+  --shadow-pop: 0 8px 28px rgb(16 15 14 / 14%);
+
+  /* ---- surfaces ---- */
+  --bg: #f7f6f4;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f1efec;
+  --line: #e3e1dd;
+  --line-strong: #cdc9c2;
+  --overlay: rgb(24 23 21 / 38%);
+
+  /* ---- text ---- */
+  --text: #1b1a18;
+  --text-muted: #6b6862;
+  --text-faint: #96928a;
+
+  /* ---- the one accent hue, used sparingly ---- */
+  --accent: #2f5fa8;
+  --accent-soft: #e6edf8;
+  --accent-contrast: #ffffff;
+
+  /* ---- semantic states, deliberately not the accent ---- */
+  --good: #1f7a46;
+  --good-soft: #e3f3e9;
+  --warning: #8a5a00;
+  --warning-soft: #fbf0d9;
+  --critical: #a52a2a;
+  --critical-soft: #fae7e5;
+
+  /* ---- chart ink ---- */
+  --chart-line: var(--accent);
+  --chart-grid: #e8e6e2;
+  --chart-axis: #b6b1a8;
+  --chart-floor: var(--critical);
+  --chart-breach: rgb(165 42 42 / 12%);
+  --chart-point: var(--accent);
+  --chart-bar: #7a94bd;
+  --chart-bar-negative: #c98a86;
+
+  /* ---- focus ---- */
+  --focus-ring: #2f5fa8;
+
+  /* ---- code ---- */
+  --code-bg: #f3f2ef;
+
+  /* ---- aliases the original monitoring stylesheet still speaks ---- */
+  --panel: var(--surface);
+  --muted: var(--text-muted);
+  --ok: var(--good);
+  --warn: var(--warning);
+  --bad: var(--critical);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-pop: 0 10px 30px rgb(0 0 0 / 52%);
+
+    --bg: #131416;
+    --surface: #1b1d20;
+    --surface-raised: #212429;
+    --surface-sunken: #101113;
+    --line: #2f3238;
+    --line-strong: #464b53;
+    --overlay: rgb(0 0 0 / 58%);
+
+    --text: #e8e6e3;
+    --text-muted: #9c988f;
+    --text-faint: #75716a;
+
+    --accent: #7aa7e8;
+    --accent-soft: #1d2a3d;
+    --accent-contrast: #0e1013;
+
+    --good: #5fc98a;
+    --good-soft: #17301f;
+    --warning: #e0ad4b;
+    --warning-soft: #33280f;
+    --critical: #f0827c;
+    --critical-soft: #3a1c1b;
+
+    --chart-grid: #2a2d32;
+    --chart-axis: #5d6067;
+    --chart-breach: rgb(240 130 124 / 14%);
+    --chart-bar: #6d8cc0;
+    --chart-bar-negative: #b9706c;
+
+    --focus-ring: #9cc0f4;
+
+    --code-bg: #23262b;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / 52%);
+
+  --bg: #131416;
+  --surface: #1b1d20;
+  --surface-raised: #212429;
+  --surface-sunken: #101113;
+  --line: #2f3238;
+  --line-strong: #464b53;
+  --overlay: rgb(0 0 0 / 58%);
+
+  --text: #e8e6e3;
+  --text-muted: #9c988f;
+  --text-faint: #75716a;
+
+  --accent: #7aa7e8;
+  --accent-soft: #1d2a3d;
+  --accent-contrast: #0e1013;
+
+  --good: #5fc98a;
+  --good-soft: #17301f;
+  --warning: #e0ad4b;
+  --warning-soft: #33280f;
+  --critical: #f0827c;
+  --critical-soft: #3a1c1b;
+
+  --chart-grid: #2a2d32;
+  --chart-axis: #5d6067;
+  --chart-breach: rgb(240 130 124 / 14%);
+  --chart-bar: #6d8cc0;
+  --chart-bar-negative: #b9706c;
+
+  --focus-ring: #9cc0f4;
+
+  --code-bg: #23262b;
+
+  color-scheme: dark;
+}
+
+/*
+ * A per-agent accent is welcome as long as it stays quiet: an agent sets
+ * `--accent` on its own subtree and everything downstream follows, including
+ * the charts.
+ */
+[data-agent-accent] {
+  --chart-line: var(--accent);
+  --chart-point: var(--accent);
+}

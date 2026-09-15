@@ -22,6 +22,11 @@
  *    exist and a turn cannot fan out into a tree of runs.
  *  - the nested turn budget is capped (8) whatever the target's file says.
  *
+ * One thing *is* inherited: the caller's surface profile. The delegate's
+ * answer is quoted onto the caller's screen, so it must be composed for that
+ * screen — a colleague writing a markdown table for a Telegram reply is a
+ * broken message, not a broken colleague.
+ *
  * Refusals are thrown: `ToolRegistry.invoke` turns them into an error-flagged
  * tool_result, so the calling model sees *that* it was refused and why.
  */
@@ -88,7 +93,7 @@ export interface DelegateDeps {
   /** The caller's allowlist. Unknown caller or missing file: `[]`. */
   allowlistFor(agentId: string): string[];
   maxNestedTurns?: number;
-  /** Surface hint passed to the nested run, when the host has one. */
+  /** A one-off instruction passed to the nested run, when the host has one. */
   systemSuffix?: string;
   memoryPreamble?: (agentId: string) => Promise<string>;
 }
@@ -210,6 +215,12 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           pool,
           conversationId,
           userMessage: delegationMessage(input, from),
+          // The delegate answers onto the caller's screen: its words are quoted
+          // back verbatim into the same Telegram bubble or the same dashboard
+          // panel. So it inherits the caller's surface profile rather than
+          // being composed with none — a delegate that wrote a markdown table
+          // for Telegram would break the reply that carries it.
+          ...(ctx.surface ? { surface: ctx.surface } : {}),
           systemSuffix: deps.systemSuffix,
           memoryPreamble: deps.memoryPreamble,
         });

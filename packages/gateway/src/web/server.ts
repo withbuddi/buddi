@@ -23,10 +23,11 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
-import { isJobState } from '@buddi/core';
+import { getAction, isJobState } from '@buddi/core';
 import type { Pool } from 'pg';
 import {
   engineChangeFromBody,
@@ -34,6 +35,18 @@ import {
   readEngineOptions,
   setAgentEngineFromWeb,
 } from './agents.js';
+import {
+  ATTACHMENTS_UNAVAILABLE,
+  CHAT_CONVERSATIONS_LIMIT,
+  CHAT_UNAVAILABLE,
+  WEB_CHAT_SURFACE,
+  WebChat,
+  conversationAgent,
+  readChatAgents,
+  readChatConversations,
+  readChatTranscript,
+  type WebChatDeps,
+} from './chat.js';
 import { allowedOrigins, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   CSRF_COOKIE,
@@ -63,10 +76,13 @@ import {
   readOverview,
   readReminders,
   readSentinels,
+  toApprovalView,
 } from './read.js';
-import { RateLimiter, SessionStore, SpentTickets, SESSION_TTL_MS } from './sessions.js';
+import { RateLimiter, SessionStore, SpentTickets, SESSION_TTL_MS, type Session } from './sessions.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
+import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
+import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import {
   cancelJobFromWeb,
   cancelReminderFromWeb,
@@ -99,6 +115,16 @@ export interface WebServerDeps {
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   log?: ((line: string) => void) | undefined;
+  /**
+   * Everything the browser needs to be a *talking* surface: the per-agent
+   * provider adapter, the artifact store, the memory hook, the pause gate.
+   *
+   * Optional, and the optionality is the point. A process that serves the
+   * dashboard but has no provider wired — a test, a read-only deployment —
+   * still serves every read and every existing write; the chat routes answer
+   * 503 with a sentence saying so, rather than the server failing to start.
+   */
+  chat?: Omit<WebChatDeps, 'pool' | 'catalog' | 'registry' | 'ctx' | 'now' | 'timezone' | 'log'>;
 }
 
 export interface WebServer {
@@ -106,7 +132,23 @@ export interface WebServer {
   /** The port actually bound — resolved after `listen`, so `0` works in tests. */
   port: number;
   url: string;
+  /** The chat surface, when this process wired one. */
+  chat?: WebChat | undefined;
   close(): Promise<void>;
+}
+
+/**
+ * Which chat surface belongs to which server.
+ *
+ * A `WeakMap` rather than a second return value from `createWebApp`: every
+ * existing caller keeps its one-line construction, and a server that is
+ * garbage-collected takes its queue with it.
+ */
+const WEB_CHATS = new WeakMap<Server, WebChat>();
+
+/** The chat surface this server is running, if any. */
+export function webChatOf(server: Server): WebChat | undefined {
+  return WEB_CHATS.get(server);
 }
 
 /** The query parameter carrying a one-time ticket. */
@@ -126,6 +168,19 @@ export function createWebApp(deps: WebServerDeps): Server {
     jobs: deps.jobs,
     log,
   };
+  const chat = deps.chat
+    ? new WebChat({
+        pool: deps.pool,
+        catalog: deps.catalog,
+        registry: deps.registry,
+        ctx: deps.ctx,
+        now: deps.now,
+        timezone: deps.timezone,
+        log,
+        ...deps.chat,
+      })
+    : undefined;
+  const streams = new StreamBudget();
 
   /**
    * The origins a write may claim, resolved against the port actually bound.
@@ -143,7 +198,11 @@ export function createWebApp(deps: WebServerDeps): Server {
     return originCache.set;
   };
 
-  const server = createServer((req, res) => {
+  // The chat surface is reachable from the server object it belongs to, so a
+  // caller that needs to drain it on shutdown (or in a test) can, without
+  // `createWebApp` growing a second return value every existing caller would
+  // have to unpack.
+  const server: Server = createServer((req, res) => {
     handle(req, res).catch((err) => {
       // A defect is a 500 with nothing in it. The sentence goes to the log,
       // where only the owner can read it.
@@ -153,6 +212,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
   });
 
+  if (chat) WEB_CHATS.set(server, chat);
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -209,7 +269,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      return api(req, res, url, method, now, session.csrf);
+      return api(req, res, url, method, now, session);
     }
     if (mutating) return sendEmpty(res, 405);
 
@@ -227,7 +287,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     url: URL,
     method: string,
     now: Date,
-    csrf: string,
+    session: Session,
   ): Promise<void> {
     const path = url.pathname.replace(/\/+$/, '') || '/api';
     const q = url.searchParams;
@@ -236,7 +296,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       switch (path) {
         case '/api/session':
           return sendJson(res, 200, {
-            csrf,
+            csrf: session.csrf,
             timezone: deps.timezone,
             host: deps.config.host,
             port: deps.config.port,
@@ -302,6 +362,13 @@ export function createWebApp(deps: WebServerDeps): Server {
             200,
             await readSentinels(deps.pool, deps.registry, boundedLimit(q.get('limit'), 50)),
           );
+        case '/api/chat/agents':
+          return sendJson(res, 200, readChatAgents(deps.catalog));
+        case '/api/chat/views':
+          // How the installed plugins want their tool output drawn. The page
+          // owns the renderers and learns the domain mapping from here, so an
+          // installation without a plugin serves none of that plugin's mapping.
+          return sendJson(res, 200, { views: deps.registry.views() });
         case '/api/agents':
           return sendJson(res, 200, {
             agents: readAgents(deps.catalog),
@@ -322,10 +389,106 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, 200, transcript);
       }
 
+      // One action, whole: the envelope the approval is bound to and the
+      // preview the *tool* rendered. The canvas draws it from this, so it can
+      // show what would actually happen rather than a summary of a summary.
+      const approval = /^\/api\/approvals\/([^/]+)$/.exec(path);
+      if (approval) {
+        const action = await getAction(deps.pool, decodeURIComponent(approval[1] as string));
+        if (!action) return sendJson(res, 404, { error: 'no such action' });
+        return sendJson(res, 200, { action: toApprovalView(action) });
+      }
+
+      /* ---------------- chat ---------------- */
+
+      const chatConversations = /^\/api\/chat\/([^/]+)\/conversations$/.exec(path);
+      if (chatConversations) {
+        const agentId = decodeURIComponent(chatConversations[1] as string);
+        if (!deps.catalog.get(agentId)) {
+          return sendJson(res, 404, { error: `no such agent: ${agentId}` });
+        }
+        return sendJson(res, 200, {
+          conversations: await readChatConversations(
+            deps.pool,
+            agentId,
+            boundedLimit(q.get('limit'), CHAT_CONVERSATIONS_LIMIT),
+          ),
+        });
+      }
+
+      const transcript = /^\/api\/chat\/conversations\/([^/]+)$/.exec(path);
+      if (transcript) {
+        const found = await readChatTranscript(
+          deps.pool,
+          decodeURIComponent(transcript[1] as string),
+        );
+        if (!found) return sendJson(res, 404, { error: 'no such conversation' });
+        return sendJson(res, 200, found);
+      }
+
+      const stream = /^\/api\/chat\/conversations\/([^/]+)\/stream$/.exec(path);
+      if (stream) {
+        const conversationId = decodeURIComponent(stream[1] as string);
+        if ((await conversationAgent(deps.pool, conversationId)) === null) {
+          return sendJson(res, 404, { error: 'no such conversation' });
+        }
+        // One page, many tabs, but not unboundedly many: each stream is a live
+        // socket and a poll, and a leaked EventSource would be both forever.
+        const release = streams.take(session.id);
+        if (release === null) return sendEmpty(res, 429);
+        try {
+          await streamConversation(req, res, {
+            pool: deps.pool,
+            conversationId,
+            since: resumeCursor(req, q.get('since')),
+            now: deps.now,
+          });
+        } finally {
+          release();
+        }
+        return;
+      }
+
       return sendJson(res, 404, { error: 'no such endpoint' });
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
+
+    /*
+     * The upload is handled before the JSON body is read, and it is the only
+     * route that is: everything else on this server is a small object, and
+     * `readJsonBody` caps at 64 KB for exactly that reason. A 20 MB statement
+     * would be refused by that cap before the multipart parser ever saw it.
+     */
+    if (path === '/api/chat/attachments') {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      if (!deps.chat?.artifacts) return sendJson(res, 503, { error: ATTACHMENTS_UNAVAILABLE });
+      const upload = await readUpload(req, MAX_UPLOAD_BYTES);
+      if (!upload.ok) return sendJson(res, upload.status, { error: upload.error });
+      const conversationId = url.searchParams.get('conversationId');
+      const stored = await deps.chat.artifacts.save({
+        bytes: upload.file.bytes,
+        mime: upload.file.mime,
+        filename: upload.file.filename,
+        // The source names the surface and the conversation the file was
+        // dropped into, which is what makes dedup per-chat rather than global:
+        // the same statement dropped in two conversations is two artifacts.
+        source: {
+          surface: WEB_CHAT_SURFACE,
+          chatId: conversationId && conversationId.trim() !== '' ? conversationId : 'web',
+          messageId: randomUUID(),
+        },
+        createdBy: deps.ctx.ownerId,
+        ...(conversationId && conversationId.trim() !== '' ? { conversationId } : {}),
+      });
+      return sendJson(res, 200, {
+        artifactId: stored.id,
+        filename: stored.filename ?? upload.file.filename,
+        mime: stored.mime,
+        kind: stored.kind,
+        sizeBytes: stored.sizeBytes,
+      });
+    }
 
     let body: Record<string, unknown>;
     try {
@@ -426,6 +589,49 @@ export function createWebApp(deps: WebServerDeps): Server {
       );
     }
 
+    /* ---------------- chat ---------------- */
+
+    const newConversation = /^\/api\/chat\/([^/]+)\/conversations$/.exec(path);
+    if (newConversation) {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      const created = await chat.newConversation(decodeURIComponent(newConversation[1] as string));
+      if (!created.ok) return sendJson(res, created.status, { error: created.error });
+      return sendJson(res, 200, { conversationId: created.conversationId });
+    }
+
+    const messages = /^\/api\/chat\/([^/]+)\/messages$/.exec(path);
+    if (messages) {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      if (typeof body.text !== 'string') {
+        return sendJson(res, 400, { error: '`text` must be a string' });
+      }
+      if (body.conversationId !== undefined && typeof body.conversationId !== 'string') {
+        return sendJson(res, 400, { error: '`conversationId` must be a string' });
+      }
+      const ids = body.attachmentIds;
+      if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))) {
+        return sendJson(res, 400, { error: '`attachmentIds` must be an array of artifact ids' });
+      }
+      const sent = await chat.send({
+        agentId: decodeURIComponent(messages[1] as string),
+        ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+        text: body.text,
+        ...(ids ? { attachmentIds: ids as string[] } : {}),
+      });
+      if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
+      // 202: the turn is *accepted*, not answered. What happens next is on the
+      // stream, which is where a run that takes forty seconds belongs.
+      return sendJson(res, 202, { conversationId: sent.conversationId, runId: sent.runId });
+    }
+
+    const cancel = /^\/api\/chat\/conversations\/([^/]+)\/cancel$/.exec(path);
+    if (cancel) {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      return sendJson(res, 200, {
+        cancelled: chat.cancel(decodeURIComponent(cancel[1] as string)),
+      });
+    }
+
     return sendJson(res, 404, { error: 'no such endpoint' });
   }
 
@@ -456,6 +662,7 @@ export async function startWebServer(
     server,
     port,
     url: webUrl({ host: deps.config.host, port }),
+    chat: webChatOf(server),
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

@@ -9,3 +9,6 @@ export * from './write.js';
 export * from './agents.js';
 export * from './static.js';
 export * from './server.js';
+export * from './chat.js';
+export * from './stream.js';
+export * from './upload.js';

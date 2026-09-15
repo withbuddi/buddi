@@ -42,8 +42,9 @@ import {
   createReminderTick,
   reminderDedupKey,
 } from './reminders.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_reminders_gw_test_${process.pid}`;
 

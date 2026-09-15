@@ -23,8 +23,9 @@ import {
 } from '../retention.js';
 import type { SourceContext } from '../types.js';
 import { createRetentionSource, RETENTION_EVERY_SECONDS, RETENTION_SOURCE_ID } from './retention.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_retention_test_${process.pid}`;

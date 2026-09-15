@@ -33,6 +33,7 @@ import {
   type CallbackQuery,
 } from './approvals.js';
 import { MAX_CALLBACK_DATA_BYTES } from './api.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
 const ACTION_ID = '33333333-3333-3333-3333-333333333333';
 
@@ -120,7 +121,7 @@ describe('rendering', () => {
  * Against a real database
  * ------------------------------------------------------------------ */
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_tg_approvals_test_${process.pid}`;
 

@@ -140,10 +140,6 @@ export function progressLine(labels: readonly string[], placeholder = PLACEHOLDE
     : `${line.slice(0, PROGRESS_MAX_CHARS - 1)}…`;
 }
 
-/** Presentation hint passed to the run as `systemSuffix`. Not policy. */
-export const SURFACE_HINT =
-  'Surface: Telegram. Plain text only, no markdown tables, short lines.';
-
 export const HELP = [
   'buddi on Telegram.',
   '',
@@ -1590,6 +1586,8 @@ export class TelegramSurface {
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
     const stopTyping = this.#startTyping(chatId);
     try {
+      // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
+      // markdown does not render here. This catches a model that ignored it.
       const reply = toPlainText(
         await this.#opts.run({
           conversationId,
@@ -2117,8 +2115,9 @@ export class TelegramSurface {
     );
 
     try {
-      // Everything an agent or a mission writes passes the plain-text net: we
-      // never send `parse_mode`, so stray markdown would be shown literally.
+      // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
+      // markdown does not render here, and we never send `parse_mode`. This
+      // catches the answer of a model that ignored the profile.
       const reply = toPlainText(await produce(progress));
       await progress.settle();
       await this.#finish(chatId, placeholderId, reply);

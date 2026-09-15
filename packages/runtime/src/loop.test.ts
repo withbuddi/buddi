@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { ToolRegistry } from '@buddi/core';
+import { CLI_SURFACE, SCHEDULED_SURFACE, TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
 import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
 import type {
   CompletionRequest,
@@ -170,21 +170,23 @@ describe('createConversation / loadMessages', () => {
 });
 
 describe('composeSystem', () => {
-  it('returns the agent prompt untouched when there is no surface hint', () => {
+  it('returns the agent prompt untouched when there is neither surface nor suffix', () => {
     expect(composeSystem('base')).toBe('base');
     expect(composeSystem('base', '   ')).toBe('base');
   });
 
-  it('appends the surface hint last, so it is the final word', () => {
-    expect(composeSystem('base', 'Surface: Telegram.')).toBe('base\n\nSurface: Telegram.');
+  it('appends the one-off suffix last, so it is the final word', () => {
+    expect(composeSystem('base', 'This is the first run.')).toBe(
+      'base\n\nThis is the first run.',
+    );
   });
 
   it('prepends the memory preamble, so the persona still reads last', () => {
     expect(composeSystem('base', undefined, '## What you remember\n- paid biweekly')).toBe(
       '## What you remember\n- paid biweekly\n\nbase',
     );
-    expect(composeSystem('base', 'Surface: Telegram.', 'remembered')).toBe(
-      'remembered\n\nbase\n\nSurface: Telegram.',
+    expect(composeSystem('base', 'first run', 'remembered')).toBe(
+      'remembered\n\nbase\n\nfirst run',
     );
   });
 
@@ -192,10 +194,25 @@ describe('composeSystem', () => {
     expect(composeSystem('base', undefined, '')).toBe('base');
     expect(composeSystem('base', undefined, '  \n ')).toBe('base');
   });
+
+  it('composes memory, persona, surface and suffix in that fixed order', () => {
+    // The order is the contract: the surface paragraph is authoritative over
+    // the persona, and the one-off suffix is the only part about *this* turn.
+    expect(composeSystem('base', 'first run', 'remembered', TELEGRAM_SURFACE)).toBe(
+      `remembered\n\nbase\n\n${surfaceSection(TELEGRAM_SURFACE)}\n\nfirst run`,
+    );
+  });
+
+  it('composes the surface with no suffix, and a suffix with no surface', () => {
+    expect(composeSystem('base', undefined, undefined, CLI_SURFACE)).toBe(
+      `base\n\n${surfaceSection(CLI_SURFACE)}`,
+    );
+    expect(composeSystem('base', 'first run')).toBe('base\n\nfirst run');
+  });
 });
 
 describe('runAgent', () => {
-  it('passes the surface hint to the provider as part of the system prompt', async () => {
+  it('passes the one-off suffix to the provider as part of the system prompt', async () => {
     const db = new FakeDb();
     const conversationId = await createConversation(db, 'finance');
     const provider = scriptedProvider([
@@ -214,13 +231,91 @@ describe('runAgent', () => {
       pool: db,
       conversationId,
       userMessage: 'hi',
-      systemSuffix: 'Surface: Telegram. Plain text only.',
+      systemSuffix: 'This is the first run.',
     });
     expect(provider.calls[0]?.system).toBe(
-      'You advise on money.\n\nSurface: Telegram. Plain text only.',
+      'You advise on money.\n\nThis is the first run.',
     );
     // The agent definition itself is untouched.
     expect(agent.systemPrompt).toBe('You advise on money.');
+  });
+
+  it('composes the declared surface profile into the system prompt', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+      surface: TELEGRAM_SURFACE,
+    });
+    const system = provider.calls[0]?.system ?? '';
+    expect(system).toContain('You are answering on Telegram.');
+    expect(system).toContain('Markdown is not rendered here');
+    expect(system).not.toContain('There is a canvas here');
+  });
+
+  it('tells a scheduled run that nobody is there to answer it', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+      surface: SCHEDULED_SURFACE,
+    });
+    expect(provider.calls[0]?.system).toContain(
+      'Nobody is here: this text is delivered as a notification and cannot be answered.',
+    );
+  });
+
+  it('records the surface id on the run events, as provenance', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stopReason: 'end_turn',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    await runAgent({
+      agent,
+      provider,
+      registry: registryWithDouble(),
+      ctx,
+      pool: db,
+      conversationId,
+      userMessage: 'hi',
+      surface: CLI_SURFACE,
+    });
+    const started = db.events.find((e) => e.kind === 'run.started');
+    expect((started?.payload as { surface?: string }).surface).toBe('cli');
   });
 
   it('asks the memory hook for this agent and prepends what it returns', async () => {

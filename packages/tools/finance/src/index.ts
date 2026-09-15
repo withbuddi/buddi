@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core';
 import { financeMissions } from './missions.js';
 import { financeSentinels } from './sentinels/index.js';
+import { financeViews } from './views.js';
 import { listAccounts, setBalance, updateAccount } from './tools/accounts.js';
 import { spendingBaseline } from './tools/baseline.js';
 import { cardActivity, statementForecastTool } from './tools/cards.js';
@@ -97,6 +98,7 @@ export const manifest: PluginManifest & { sentinels: NonNullable<PluginManifest[
   ],
   sentinels: financeSentinels,
   missions: financeMissions,
+  views: financeViews,
 };
 
 export default manifest;
@@ -151,3 +153,4 @@ export * from './csv.js';
 export * from './merchant.js';
 export * from './cards.js';
 export { loadStatementForecast } from './tools/cards.js';
+export { financeViews } from './views.js';

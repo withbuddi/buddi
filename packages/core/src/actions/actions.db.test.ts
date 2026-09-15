@@ -15,8 +15,9 @@ import { decideApproval } from './approvals.js';
 import { executeApproved } from './execute.js';
 import { createAction, expireDueApprovals, getAction, listEffectAttempts, listPendingActions } from './store.js';
 import { hashArgs } from './types.js';
+import { testDatabaseUrl } from '../testing/database-url.js';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_actions_test_${process.pid}`;

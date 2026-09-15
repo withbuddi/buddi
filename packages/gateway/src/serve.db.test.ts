@@ -22,8 +22,9 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { insertOccurrence } from './missions-cli.js';
 import { createMissionJobHandler, MISSION_JOB_KIND, queueOccurrence } from './serve.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_serve_test_${process.pid}`;
 
