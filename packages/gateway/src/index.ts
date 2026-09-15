@@ -16,6 +16,19 @@ export * from './missions/reminders.js';
 export * from './web/index.js';
 export { startTelegram, describePaired } from './telegram/main.js';
 
+// The one outbound HTTP transport (packages/runtime/src/transport.ts), re-exported
+// because the CLI depends on the gateway and not on the runtime — and every
+// outbound call in this repo has to be able to reach it. `scripts/check-boundaries.mjs`
+// enforces that nothing goes out through the global `fetch` instead.
+export {
+  createHttpTransport,
+  defaultHttpTransport,
+  TransportError,
+  type HttpTransport,
+  type TransportRequest,
+  type TransportResponse,
+} from '@buddi/runtime';
+
 // Entry points, named for the one global binary (@buddi/cli) that calls them.
 // The binary dispatches; the behaviour stays here, where it already lived.
 export { main as runChatCli, parseArgs as parseChatArgs } from './cli.js';

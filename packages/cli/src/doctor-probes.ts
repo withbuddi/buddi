@@ -25,17 +25,20 @@ import {
 import {
   agentSearchPath,
   createToolRegistry,
+  defaultHttpTransport,
   describeDatabaseError,
   hydrateSecrets,
   installedManifests,
   listDevices,
   loadGatewayCatalog,
   TelegramApi,
+  telegramFetchOn,
   webConfig,
   webTokenExists,
   webUrl,
   isLoopback,
   WEB_ENABLED_VAR,
+  type HttpTransport,
 } from '@buddi/gateway';
 import type { Pool } from 'pg';
 import { listArchives } from './backup/prune.js';
@@ -101,6 +104,13 @@ export interface Probes extends DoctorProbes {
 export interface ProbeOptions {
   /** This machine's vault. Injected in tests; `BUDDI_VAULT=none` turns it off. */
   vault?: Vault | undefined;
+  /**
+   * The outbound transport. Defaults to the one every other caller uses
+   * (`node:https`, nothing pooled — packages/runtime/src/transport.ts). Injected
+   * in tests, which is also what keeps a `buddi doctor` test from reaching the
+   * network: there is a seam here rather than a stubbed global.
+   */
+  http?: HttpTransport | undefined;
 }
 
 /**
@@ -117,6 +127,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
   const databaseUrl = env.DATABASE_URL;
 
   const vault = opts.vault ?? createVault({ env });
+  const http = opts.http ?? defaultHttpTransport;
   let hydration: Promise<VaultFacts> | undefined;
   /** Hydrate once per run: the keychain is a process call, not a getter. */
   const secrets = (): Promise<VaultFacts> => (hydration ??= hydrateSecrets(env, vault));
@@ -269,10 +280,15 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       }
       const provider = resolution.provider;
       try {
-        const res = await fetch(`${provider.baseUrl}/v1/models`, {
+        // The same transport the provider adapters use, not the global `fetch`:
+        // `buddi doctor` is one-shot and would never have wedged, but a probe
+        // that reports on the model path should exercise the model path. See
+        // packages/runtime/src/transport.ts.
+        const res = await http(`${provider.baseUrl}/v1/models`, {
           method: 'GET',
           headers: { 'anthropic-version': '2023-06-01', ...providerAuthHeaders(provider) },
           signal: AbortSignal.timeout(15_000),
+          idleTimeoutMs: 15_000,
         });
         if (res.ok) {
           return {
@@ -376,7 +392,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         };
       }
       try {
-        const me = await new TelegramApi({ token }).getMe();
+        const me = await new TelegramApi({ token, fetch: telegramFetchOn(http) }).getMe();
         return { status: 'ok', detail: `@${me.username ?? me.id} (id ${me.id})` };
       } catch (err) {
         return { status: 'fail', detail: err instanceof Error ? err.message : String(err) };

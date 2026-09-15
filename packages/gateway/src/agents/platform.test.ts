@@ -202,7 +202,7 @@ describe('validation happens before the action exists', () => {
   });
 
   it('refuses to touch an agent the repository ships, and offers the copy instead', () => {
-    const message = refusalOf(h, 'platform.update_agent', { id: 'assistant', description: 'mine now' });
+    const message = refusalOf(h, 'platform.update_agent', { id: 'concierge', description: 'mine now' });
     expect(message).toContain('belong to');
     expect(message).toContain('private directory');
     expect(message).toContain('replacesExample');
@@ -220,7 +220,7 @@ describe('validation happens before the action exists', () => {
   });
 
   it('refuses to delete a shipped example', () => {
-    const message = refusalOf(h, 'platform.delete_agent', { id: 'assistant' });
+    const message = refusalOf(h, 'platform.delete_agent', { id: 'concierge' });
     expect(message).toContain('shipped example');
   });
 
@@ -228,7 +228,7 @@ describe('validation happens before the action exists', () => {
     const message = refusalOf(h, 'platform.write_skill', {
       name: 'house-rule',
       scope: 'agent',
-      agentId: 'assistant',
+      agentId: 'concierge',
       description: 'x',
       provenance: 'agent',
       body: 'do the thing',
@@ -361,9 +361,9 @@ describe('an update that widens a grant says so', () => {
 describe('the examples tree belongs to the platform', () => {
   const override = {
     ...baseCreate,
-    id: 'assistant',
-    handle: 'assistant',
-    name: 'My Assistant',
+    id: 'concierge',
+    handle: 'buddi',
+    name: 'My Concierge',
     description: 'Mine, not the repository\'s.',
   };
 
@@ -380,19 +380,19 @@ describe('the examples tree belongs to the platform', () => {
     });
     expect(envelope.replacesExample).toBe(true);
     // Never under examples/, always under the owner's own directory.
-    expect(envelope.file).toBe(path.join(h.agentsDir, 'assistant', 'agent.md'));
+    expect(envelope.file).toBe(path.join(h.agentsDir, 'concierge', 'agent.md'));
     expect(envelope.file.includes(`${path.sep}examples${path.sep}`)).toBe(false);
     expect(preview).toContain('OVERRIDES the shipped example agent');
 
     await h.tool('platform.create_agent').execute({ ...override, replacesExample: true }, h.ctx);
-    const now = h.catalog.resolve('assistant');
+    const now = h.catalog.resolve('concierge');
     expect(now.source).toBe('private');
-    expect(now.name).toBe('My Assistant');
+    expect(now.name).toBe('My Concierge');
     // Replacing the example that claims `default: true` must not leave the
     // installation without a default agent.
-    expect(h.catalog.defaultAgent().id).toBe('assistant');
-    expect(readFileSync(path.join(EXAMPLES_AGENTS_DIR, 'assistant', 'agent.md'), 'utf8')).toContain(
-      'The example agent buddi ships with',
+    expect(h.catalog.defaultAgent().id).toBe('concierge');
+    expect(readFileSync(path.join(EXAMPLES_AGENTS_DIR, 'concierge', 'agent.md'), 'utf8')).toContain(
+      'The agent buddi ships with',
     );
   });
 });
@@ -545,7 +545,7 @@ describe('the read tools', () => {
     const scout = result.agents.find((a) => a.id === 'scout');
     expect(scout?.source).toBe('private');
     expect(scout?.tools).toEqual(['memory.note', 'memory.recall']);
-    expect(result.agents.find((a) => a.id === 'assistant')?.source).toBe('example');
+    expect(result.agents.find((a) => a.id === 'concierge')?.source).toBe('example');
   });
 
   it('reports the tools this installation actually has, by family', async () => {
@@ -572,7 +572,7 @@ describe('the read tools', () => {
   });
 
   it('says a shipped example is not editable', async () => {
-    const result = (await h.tool('platform.read_agent').execute({ id: 'assistant' }, h.ctx)) as {
+    const result = (await h.tool('platform.read_agent').execute({ id: 'concierge' }, h.ctx)) as {
       editable: boolean;
     };
     expect(result.editable).toBe(false);

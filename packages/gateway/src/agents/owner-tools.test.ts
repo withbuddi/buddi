@@ -176,7 +176,7 @@ describe('handleShapeProblem', () => {
 
 describe('insideExamples', () => {
   it('catches a file in the shipped tree and nothing that merely looks like it', () => {
-    expect(insideExamples(path.join(EXAMPLES_AGENTS_DIR, 'assistant', 'agent.md'))).toBe(true);
+    expect(insideExamples(path.join(EXAMPLES_AGENTS_DIR, 'concierge', 'agent.md'))).toBe(true);
     expect(insideExamples('/home/me/examples-of-mine/agents/x/agent.md')).toBe(false);
     expect(insideExamples('/home/me/private/agents/scribe/agent.md')).toBe(false);
   });
@@ -266,7 +266,7 @@ describe('owner.rename_me', () => {
   });
 
   it('refuses entirely when its own file is one of the shipped examples', async () => {
-    const h = harness({ file: path.join(EXAMPLES_AGENTS_DIR, 'assistant', 'agent.md') });
+    const h = harness({ file: path.join(EXAMPLES_AGENTS_DIR, 'concierge', 'agent.md') });
     const before = readFileSync(h.file, 'utf8');
 
     const result = await h.tool('owner.rename_me').execute({ name: 'Ada' }, h.ctx);

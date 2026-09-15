@@ -4,7 +4,7 @@
  * Two claims, and between them they are the feature:
  *
  *  1. the installation a `git clone` produces has an agent that *can* conduct
- *     the interview — the example assistant is the default, it holds the
+ *     the interview — the shipped concierge is the default, it holds the
  *     `owner.*` tools, and the first-run skill is composed into its prompt;
  *  2. the interview begins on first contact, once, whichever surface gets
  *     there first.
@@ -89,13 +89,13 @@ function freshInstall() {
 }
 
 describe('a fresh install', () => {
-  it('answers with the example assistant, and that is who meets the owner', () => {
-    expect(freshInstall().defaultAgent().id).toBe('assistant');
+  it('answers with the shipped concierge, and that is who meets the owner', () => {
+    expect(freshInstall().defaultAgent().id).toBe('concierge');
   });
 
   it('gives that agent both halves of a first run: the tools and the procedure', () => {
-    const assistant = freshInstall().defaultAgent();
-    expect(assistant.tools).toEqual(
+    const shipped = freshInstall().defaultAgent();
+    expect(shipped.tools).toEqual(
       expect.arrayContaining([
         'owner.get_profile',
         'owner.set_profile',
@@ -103,10 +103,10 @@ describe('a fresh install', () => {
         'owner.finish_onboarding',
       ]),
     );
-    expect(assistant.skills.map((s) => s.name)).toContain('first-run');
+    expect(shipped.skills.map((s) => s.name)).toContain('first-run');
     // The skill reaches every agent, not only this one: a private agent an
     // owner writes on day two inherits the same manners.
-    const skill = assistant.skills.find((s) => s.name === 'first-run');
+    const skill = shipped.skills.find((s) => s.name === 'first-run');
     expect(path.basename(skill?.file ?? '')).toBe('first-run.md');
   });
 

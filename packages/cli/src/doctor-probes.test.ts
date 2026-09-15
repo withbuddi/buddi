@@ -10,6 +10,7 @@
 import { VAULT_PLACEHOLDER, createMemoryVault } from '@buddi/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProbes } from './doctor-probes.js';
+import type { HttpTransport } from '@buddi/gateway';
 
 const VAULT_TOKEN = '9999999:telegram-from-the-vault';
 const VAULT_KEY = 'sk-ant-api03-from-the-vault';
@@ -30,17 +31,24 @@ interface Call {
   headers: Record<string, string>;
 }
 
-/** Record every request and answer it, so nothing leaves the machine. */
-function recordFetch(): Call[] {
+/**
+ * Record every request and answer it, so nothing leaves the machine.
+ *
+ * Injected rather than stubbed onto `globalThis`: the probes send on the repo's
+ * one transport now (`node:https`, nothing pooled), and a test that stubbed
+ * `fetch` would no longer intercept anything — it would reach the real network.
+ * A `Response` satisfies `TransportResponse`, so the fake stays this short.
+ */
+function recordHttp(): { calls: Call[]; http: HttpTransport } {
   const calls: Call[] = [];
-  vi.stubGlobal('fetch', async (input: unknown, init: { headers?: Record<string, string> } = {}) => {
-    calls.push({ url: String(input), headers: { ...(init.headers ?? {}) } });
+  const http: HttpTransport = async (url, init) => {
+    calls.push({ url: String(url), headers: { ...(init.headers ?? {}) } });
     return new Response(JSON.stringify({ ok: true, result: { id: 7, username: 'buddi_bot' } }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
-  });
-  return calls;
+  };
+  return { calls, http };
 }
 
 afterEach(() => {
@@ -49,9 +57,9 @@ afterEach(() => {
 
 describe('createProbes with a vault', () => {
   it('probes with the vault value, never the .env placeholder', async () => {
-    const calls = recordFetch();
+    const { calls, http } = recordHttp();
     const env = importedEnv();
-    const probes = createProbes(env, { vault: seeded });
+    const probes = createProbes(env, { vault: seeded, http });
 
     expect(await probes.botToken()).toMatchObject({ status: 'ok' });
     const telegram = calls.find((c) => c.url.includes('api.telegram.org'));
@@ -66,9 +74,9 @@ describe('createProbes with a vault', () => {
   });
 
   it("reports the vault row with each secret's origin, and no values", async () => {
-    recordFetch();
+    const { http } = recordHttp();
     const env = importedEnv();
-    const row = await createProbes(env, { vault: seeded }).vault();
+    const row = await createProbes(env, { vault: seeded, http }).vault();
     expect(row.status).toBe('ok');
     expect(row.detail).toContain('memory');
     expect(row.detail).toContain('from the vault: ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN');
@@ -77,9 +85,9 @@ describe('createProbes with a vault', () => {
   });
 
   it('fails the vault row on a locked vault and probes nothing with the placeholder', async () => {
-    const calls = recordFetch();
+    const { calls, http } = recordHttp();
     const env = importedEnv();
-    const probes = createProbes(env, { vault: createMemoryVault({ locked: true }) });
+    const probes = createProbes(env, { vault: createMemoryVault({ locked: true }), http });
 
     const row = await probes.vault();
     expect(row.status).toBe('fail');

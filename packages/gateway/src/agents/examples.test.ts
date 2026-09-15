@@ -20,42 +20,51 @@ const catalog = () =>
   });
 
 describe('the examples this repository ships', () => {
-  it('load on their own, with @assistant as the default', () => {
+  it('load on their own, with @buddi as the default', () => {
     const loaded = catalog();
     const summaries = loaded.list();
-    expect(summaries.map((a) => a.id)).toContain('assistant');
-    expect(loaded.defaultAgent().id).toBe('assistant');
+    expect(summaries.map((a) => a.id)).toContain('concierge');
+    expect(loaded.defaultAgent().id).toBe('concierge');
+    expect(loaded.defaultAgent().handle).toBe('buddi');
+    // Exactly one default on a fresh clone: two would make which one answers
+    // an accident of load order.
+    expect(summaries.filter((a) => a.isDefault).map((a) => a.id)).toEqual(['concierge']);
     expect(summaries.every((a) => a.source === 'example')).toBe(true);
   });
 
-  it('grant the example agent nothing but memory, reminders, the owner profile, the canvas and a look at the roster', () => {
-    const assistant = catalog().resolve('assistant');
-    expect(assistant.tools.length).toBeGreaterThan(0);
+  it('grant the shipped agent nothing but memory, reminders, schedules, the owner profile, the canvas, a colleague and a look at the roster', () => {
+    const shipped = catalog().resolve('concierge');
+    expect(shipped.tools.length).toBeGreaterThan(0);
     // The canvas is on the list because it is the platform's own, owns no data
     // and reaches nothing outside the page it draws on. Finance, mail and the
     // artifact store are deliberately absent: a fresh clone grants no agent
     // access to anything the owner has not set up.
+    // `agent.delegate` is the platform's own and owns no data: it can only
+    // reach an agent named in this agent's `delegates.json`, and a fresh clone
+    // ships none, so it is fail-closed until the owner wires a colleague.
     expect(
-      assistant.tools.every(
+      shipped.tools.every(
         (name) =>
           name.startsWith('memory.') ||
           name.startsWith('reminder.') ||
+          name.startsWith('schedule.') ||
           name.startsWith('owner.') ||
           name.startsWith('canvas.') ||
-          name.startsWith('platform.'),
+          name.startsWith('platform.') ||
+          name === 'agent.delegate',
       ),
     ).toBe(true);
   });
 
-  it('let the example agent read the roster but never write an agent file', () => {
+  it('let the shipped agent read the roster but never write an agent file', () => {
     // Making an agent is the most dangerous capability here, so it lives with
     // exactly one agent the owner has to switch to deliberately. Everybody else
     // can answer "what agents do I have" and nothing more.
-    const assistant = catalog().resolve('assistant');
-    expect(assistant.tools).toContain('platform.list_agents');
-    expect(assistant.tools).toContain('platform.installed_tools');
+    const shipped = catalog().resolve('concierge');
+    expect(shipped.tools).toContain('platform.list_agents');
+    expect(shipped.tools).toContain('platform.installed_tools');
     for (const write of ['platform.create_agent', 'platform.update_agent', 'platform.write_skill', 'platform.delete_agent']) {
-      expect(assistant.tools).not.toContain(write);
+      expect(shipped.tools).not.toContain(write);
     }
   });
 
@@ -93,18 +102,18 @@ describe('the examples this repository ships', () => {
     expect(loaded.list().filter((a) => a.roles.includes(ROLE_MAKER))).toHaveLength(1);
   });
 
-  it('let the example agent conduct a first run: it has the owner tools and the skill', () => {
+  it('let the shipped agent conduct a first run: it has the owner tools and the skill', () => {
     // The agent a fresh clone answers with is the agent that meets the owner.
     // Both halves have to be there, or first contact is a blank prompt.
-    const assistant = catalog().resolve('assistant');
-    expect(assistant.tools).toContain('owner.get_profile');
-    expect(assistant.tools).toContain('owner.finish_onboarding');
-    expect(assistant.skills.map((s) => s.name)).toContain('first-run');
+    const shipped = catalog().resolve('concierge');
+    expect(shipped.tools).toContain('owner.get_profile');
+    expect(shipped.tools).toContain('owner.finish_onboarding');
+    expect(shipped.skills.map((s) => s.name)).toContain('first-run');
   });
 
   it('carry the shared example skill into the prompt', () => {
-    const assistant = catalog().resolve('assistant');
-    expect(assistant.skills.map((s) => s.name)).toContain('writing-for-the-surface');
+    const shipped = catalog().resolve('concierge');
+    expect(shipped.skills.map((s) => s.name)).toContain('writing-for-the-surface');
   });
 
   it('give every agent the surface skill, with no `skills:` line to remember', () => {

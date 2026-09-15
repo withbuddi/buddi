@@ -30,6 +30,9 @@ importers:
       '@buddi/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@buddi/runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
       pg:
         specifier: ^8.13.1
         version: 8.23.0

@@ -1,10 +1,50 @@
 /**
- * Telegram Bot API client — raw `fetch`, no library.
+ * Telegram Bot API client — no library, and deliberately not `fetch`.
  *
  * The surface is a thin transport: it moves text in and out and reports the
  * numeric ids Telegram asserts. It decides nothing about who the owner is
  * (that is `@buddi/core`'s `resolveOwnerForSurface`) and it executes no tool.
+ *
+ * ## Why not `fetch`
+ *
+ * This client used to call the global `fetch`, which is undici, which keeps a
+ * connection pool per origin. That is the same defect that wedged the provider
+ * path for hours: once a pooled connection is dead, undici keeps handing it
+ * back and every subsequent request fails in a millisecond with a bare `fetch
+ * failed`. It has not bitten here yet only because the poll loop reconnects to
+ * `api.telegram.org` every ~25 seconds and so rarely leaves a socket idling —
+ * luck, not design. The consequence if it did bite is the worst-shaped failure
+ * this assistant has: a bot that is running, reachable, and answers nothing.
+ *
+ * So every Bot API call goes through the same `node:https` transport the
+ * provider adapters use (`@buddi/runtime`'s `createHttpTransport`): HTTP/1.1,
+ * `keepAlive: false`, nothing held between requests, therefore nothing that can
+ * be poisoned. `sendMessage` is never retried by the transport — on an agent
+ * that pools nothing `reusedSocket` is never true — so a message cannot be
+ * delivered twice by this path.
+ *
+ * ## The long poll is its own shape
+ *
+ * `getUpdates` asks Telegram to hold the request open for `POLL_TIMEOUT_SECONDS`
+ * and answer only when something happens. For most of that time the socket is
+ * silent *on purpose*, which is the opposite of the idle-pooled-socket hazard:
+ * the connection is in use, we are simply waiting on the far end. Two decisions
+ * follow, and neither is copied from the provider settings:
+ *
+ *  - **Keep-alive stays off, even for polling.** The reflex would be to keep
+ *    the poll's connection alive since it reconnects every 25 seconds anyway.
+ *    But a reconnect costs one TLS handshake per 25 seconds — nothing — and
+ *    keeping it would recreate the exact free list that wedged the provider,
+ *    shared with `sendMessage`, in the process whose silence is hardest to
+ *    notice. The whole point is that there is no pool to poison.
+ *  - **The silence budget is per request, not global.** A chat call that has
+ *    said nothing for `TELEGRAM_IDLE_TIMEOUT_MS` is broken; a long poll that
+ *    has said nothing for that long is working. `POLL_IDLE_TIMEOUT_MS` is the
+ *    poll's own deadline — Telegram's own timeout plus a margin — so a poll
+ *    that truly dies is dropped and retried within seconds rather than hanging
+ *    the surface until the provider's five-minute default expires.
  */
+import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 
 /** Telegram rejects messages over 4096 characters; we split well below it. */
 export const MAX_MESSAGE_CHARS = 4000;
@@ -14,6 +54,24 @@ export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 /** Long-poll timeout, in seconds. Telegram holds the request open that long. */
 export const POLL_TIMEOUT_SECONDS = 25;
+
+/**
+ * How long an ordinary Bot API call may go silent before it is abandoned.
+ *
+ * Telegram answers `sendMessage` in well under a second; thirty is generous
+ * enough for a bad network and short enough that a dead connection surfaces
+ * while the owner is still looking at the chat.
+ */
+export const TELEGRAM_IDLE_TIMEOUT_MS = 30_000;
+
+/**
+ * The same budget for a long poll, where silence is the expected state.
+ *
+ * Telegram's own `timeout` plus fifteen seconds of margin: a poll that has not
+ * been answered by then is not waiting, it is dead, and the loop should drop it
+ * and open a fresh connection.
+ */
+export const POLL_IDLE_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS + 15) * 1000;
 
 /** The only update kinds this surface asks for. */
 export const ALLOWED_UPDATES = ['message', 'callback_query'] as const;
@@ -142,10 +200,25 @@ export class TelegramApiError extends Error {
   }
 }
 
-/** Minimal `fetch` shape, so tests inject a fake without DOM lib types. */
+/**
+ * Minimal `fetch` shape, so tests inject a fake without DOM lib types.
+ *
+ * The real implementation is `telegramHttp` below, not the global `fetch` — see
+ * the header. The shape is still `fetch`'s because every existing test fake is
+ * written against it, and because a `fetch` really can be injected (the web
+ * test harness does) as long as nothing in the process is long-lived.
+ */
 export type FetchLike = (
   input: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: any },
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    /** A `Buffer` is written verbatim: that is what a multipart upload needs. */
+    body?: string | Buffer;
+    signal?: any;
+    /** How long this request may go silent. A long poll asks for more. */
+    idleTimeoutMs?: number;
+  },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -153,6 +226,32 @@ export type FetchLike = (
   /** Only the file endpoint needs bytes; a JSON-only fake may omit it. */
   arrayBuffer?(): Promise<ArrayBuffer>;
 }>;
+
+/**
+ * The transport every Bot API call goes out on: one connection per request,
+ * nothing pooled, nothing kept. `idleTimeoutMs` is per request, so the long
+ * poll can ask for its own budget without loosening everyone else's.
+ */
+const telegramTransport = createHttpTransport({ idleTimeoutMs: TELEGRAM_IDLE_TIMEOUT_MS });
+
+/**
+ * Adapt a transport to `FetchLike`, so the injection seam and every existing
+ * test fake are unchanged. Exported because the doctor probes the Bot API on a
+ * transport of their own.
+ */
+export function telegramFetchOn(transport: HttpTransport): FetchLike {
+  return (input, init = {}) =>
+    transport(input, {
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      ...(init.body === undefined ? {} : { body: init.body }),
+      ...(init.signal === undefined ? {} : { signal: init.signal as AbortSignal }),
+      ...(init.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: init.idleTimeoutMs }),
+    });
+}
+
+/** The default: one connection per Bot API call, nothing pooled. */
+export const telegramHttp: FetchLike = telegramFetchOn(telegramTransport);
 
 export interface TelegramApiOptions {
   token: string;
@@ -170,16 +269,22 @@ export class TelegramApi {
       throw new Error('TelegramApi: token is required (TELEGRAM_BOT_TOKEN)');
     }
     this.#token = opts.token.trim();
-    this.#fetch = opts.fetch ?? (globalThis.fetch as unknown as FetchLike);
+    this.#fetch = opts.fetch ?? telegramHttp;
     this.#baseUrl = opts.baseUrl ?? 'https://api.telegram.org';
   }
 
-  async call<T>(method: string, body: Record<string, unknown>, signal?: any): Promise<T> {
+  async call<T>(
+    method: string,
+    body: Record<string, unknown>,
+    signal?: any,
+    idleTimeoutMs: number = TELEGRAM_IDLE_TIMEOUT_MS,
+  ): Promise<T> {
     const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/${method}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal,
+      idleTimeoutMs,
     });
     const raw = await res.text();
     let parsed: any;
@@ -239,7 +344,9 @@ export class TelegramApi {
       allowed_updates: ALLOWED_UPDATES,
     };
     if (offset !== undefined) body.offset = offset;
-    return this.call<TelegramUpdate[]>('getUpdates', body, signal);
+    // The poll's own silence budget: this request is *meant* to say nothing for
+    // up to `POLL_TIMEOUT_SECONDS`. See the header.
+    return this.call<TelegramUpdate[]>('getUpdates', body, signal, POLL_IDLE_TIMEOUT_MS);
   }
 
   /**
