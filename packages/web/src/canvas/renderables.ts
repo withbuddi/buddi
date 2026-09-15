@@ -17,10 +17,21 @@
  * `envelope` view, because an unapproved action is the most important thing on
  * the screen.
  *
- * Every renderable also says whether it is *substantial* — whether it has rows,
- * points, figures or a document in it. A tool that returned nothing, or failed,
- * or produced a shape nothing can draw still gets a tab, but the canvas does
- * not throw away the chart the owner is reading in order to show it.
+ * Not every result becomes a tab. A tab is worth having when the canvas can
+ * show something the conversation cannot — a table with rows, a chart with
+ * points, a document, a decision to make. A result whose whole content is a
+ * sentence, and an acknowledgement of a write (`{ok: true, recorded: 1}`), are
+ * already in the answer; drawing them again beside it says nothing twice. That
+ * judgement is `earnsTab`, and it reads the *shape* of the result — this file
+ * knows the name of no tool.
+ *
+ * A failure is the exception in both directions: it always keeps its tab, so
+ * nothing that went wrong is ever hidden, and it never takes the screen away
+ * from the chart the owner is reading.
+ *
+ * Every renderable that does get a tab also says whether it is *substantial* —
+ * whether it has rows, points, figures or a document in it — which is what the
+ * canvas uses to decide where to look.
  */
 import { applyDescriptor } from './resolve';
 import { inferShape } from './infer';
@@ -33,8 +44,12 @@ import type { ChatBlock, ChatMessage } from '../chat/types';
 export const CANVAS_SHOW = 'canvas.show';
 export const CANVAS_CLEAR = 'canvas.clear';
 
-/** How many renderables the tabs hold. Enough to go back to the chart. */
-export const MAX_RENDERABLES = 8;
+/**
+ * How many renderables the canvas keeps. Only the last few are on the strip;
+ * the rest are one click away behind the overflow, so this is how far back the
+ * owner can reach rather than how wide the tab bar is allowed to grow.
+ */
+export const MAX_RENDERABLES = 12;
 
 export interface RenderableInput {
   messages: ChatMessage[];
@@ -112,6 +127,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
       const descriptor = byTool.get(tool);
       if (descriptor) {
         const { renderer, props } = applyDescriptor(descriptor, block.output);
+        if (!earnsTab(renderer, props)) continue;
         collected.push({
           id: block.toolUseId,
           tool,
@@ -125,20 +141,34 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
         continue;
       }
 
+      const props = { value: block.output };
+      if (!earnsTab('structured', props)) continue;
       collected.push({
         id: block.toolUseId,
         tool,
         title: labelFor(tool),
         renderer: 'structured',
-        props: { value: block.output },
+        props,
         at,
         source: 'fallback',
-        substantial: hasSubstance('structured', { value: block.output }),
+        substantial: hasSubstance('structured', props),
       });
     }
   }
 
-  return collected.slice(-MAX_RENDERABLES);
+  return capped(collected);
+}
+
+/**
+ * The last few, plus any decision still waiting further back. A conversation
+ * that ran long is allowed to push a chart off the end; it is not allowed to
+ * push away the one thing the owner has to answer.
+ */
+function capped(collected: Renderable[]): Renderable[] {
+  if (collected.length <= MAX_RENDERABLES) return collected;
+  const cut = collected.length - MAX_RENDERABLES;
+  const rescued = collected.slice(0, cut).filter((item) => item.source === 'approval');
+  return [...rescued, ...collected.slice(cut)];
 }
 
 /**
@@ -161,6 +191,36 @@ function fromCanvasShow(id: string, input: unknown, at: string | null): Renderab
     substantial: true,
     source: 'canvas',
   };
+}
+
+/**
+ * Does this result earn a tab at all?
+ *
+ * The canvas sits beside the answer, not inside it, so a tab is worth having
+ * only when it holds something the answer cannot hold: rows, points, bars,
+ * figures, a document, a decision. Three kinds of result fail that test and
+ * are dropped:
+ *
+ *  - one whose whole content is a string — an agent's prose, quoted back;
+ *  - a receipt for a write, `{ok: true, recorded: 1}`, which states that
+ *    something happened rather than showing what it was;
+ *  - an empty result, and a shape nothing can draw.
+ *
+ * Each of those is already in the conversation, in words, a moment earlier.
+ *
+ * Three kinds always earn one, whatever their shape: a failure — a tab is the
+ * only place a reason can be read in full, and hiding one would be hiding bad
+ * news; a decision waiting on the owner; and anything the agent explicitly
+ * asked to be shown.
+ */
+export function earnsTab(renderer: RendererName, props: unknown): boolean {
+  const record = (props ?? {}) as Record<string, unknown>;
+  if (record['failed'] === true) return true;
+  if (hasSubstance(renderer, props)) return true;
+  // A result that reports its own failure while the call "succeeded" is still
+  // news. The structured view is where its reason can be read in full.
+  if (renderer === 'structured' && inferShape(record['value']).kind === 'error') return true;
+  return false;
 }
 
 /**
@@ -195,10 +255,12 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
       // A descriptor is a plugin author's judgement and is trusted at one row.
       // An inferred list or record is a *guess*, so it has to carry a few
       // values before it is allowed to interrupt what is already on screen.
-      if (shape.kind === 'list') return shape.items.length >= 3;
-      // A two-field acknowledgement — `{ok: true, recorded: 1}` — is a receipt
-      // for a write, not a view. It keeps its tab; it does not take the screen.
-      if (shape.kind === 'record') return shape.pairs.length >= 3;
+      if (shape.kind === 'list') return shape.items.length >= MIN_ITEMS;
+      // One object of facts is a view when it is a set of *figures* — money,
+      // counts, dates, laid out to be read across. An acknowledgement
+      // (`{ok: true, recorded: 1}`), and an answer whose fields are prose and
+      // the names of who said it, are sentences: the chat has them already.
+      if (shape.kind === 'record') return figures(shape.pairs) >= MIN_FIGURES;
       return false;
     }
   }
@@ -206,6 +268,21 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
 
 function count(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
+}
+
+/** Items an inferred list needs before it is a list rather than an aside. */
+const MIN_ITEMS = 3;
+
+/** Figures one object needs before it is a view rather than a receipt. */
+const MIN_FIGURES = 3;
+
+/**
+ * How many of these pairs are figures — an amount, a count, a date. A string
+ * is a word, and words are what the answer is made of; a number laid out
+ * beside other numbers is the thing a paragraph is bad at.
+ */
+function figures(pairs: Array<{ type: string }>): number {
+  return pairs.filter((pair) => pair.type === 'number' || pair.type === 'currency' || pair.type === 'date').length;
 }
 
 /**

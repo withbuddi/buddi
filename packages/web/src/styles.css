@@ -518,6 +518,10 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   transition: border-color 120ms ease, background-color 120ms ease;
 }
 .wb-tool:hover { border-color: var(--line-strong); background: var(--surface-raised); }
+/* A call the canvas has nothing to draw for: it happened, and that is all this
+   line claims — no arrow, no pointer, nothing that promises a panel. */
+.wb-tool[data-static='true'] { cursor: default; background: transparent; }
+.wb-tool[data-static='true']:hover { border-color: var(--line); background: transparent; }
 .wb-tool-label { flex: 1 1 auto; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-tool-elapsed { font-variant-numeric: tabular-nums; color: var(--text-faint); flex: 0 0 auto; }
 .wb-tool-arrow { flex: 0 0 auto; color: var(--text-faint); }
@@ -692,14 +696,22 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 .wb-canvas-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--line);
-  overflow-x: auto;
   min-height: 56px;
-  scrollbar-width: none;
+  overflow: hidden;
 }
-.wb-canvas-tabs::-webkit-scrollbar { display: none; }
+
+/* The tabs themselves. Capped in number by the strip's width, so this never
+   scrolls: what is on it is all visible, and the rest is in the menu. */
+.wb-tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
 
 .wb-canvas-label {
   font-size: 11px;
@@ -715,6 +727,10 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   align-items: center;
   gap: 7px;
   white-space: nowrap;
+  /* Counted to fit, and allowed to shrink anyway: a run of unusually long
+     titles narrows the tabs rather than running off the edge of the strip. */
+  flex: 0 1 auto;
+  min-width: 0;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;
@@ -734,8 +750,43 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   font-weight: 650;
 }
 .wb-tab[data-tone='critical'] { color: var(--critical); }
-.wb-tab-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--warning); }
+.wb-tab-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warning);
+}
 .wb-tab-dot[data-tone='critical'] { background: var(--critical); }
+.wb-tab-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 168px;
+}
+
+/* The overflow: one control naming everything the strip had no room for. */
+.wb-tab-more {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  border-color: var(--line);
+  border-style: dashed;
+}
+.wb-tab-more:hover { color: var(--text); }
+/* The dot says a failure is in there; the whole control turning red would say
+   the control itself is the failure. */
+.wb-tab-more[data-tone] { color: var(--text-faint); }
+.wb-tab-more[data-tone]:hover { color: var(--text); }
+.wb-tab-more[data-state='open'] { background: var(--surface-sunken); color: var(--text); }
+.wb-menu-item-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .wb-canvas-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 26px 44px; }
 .wb-canvas-body-empty { display: flex; align-items: center; justify-content: center; padding: 24px; }
@@ -902,6 +953,11 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   .wb-composer { padding: 8px 12px 12px; }
   .wb-canvas-body { padding: 16px 14px 32px; }
   .wb-msg[data-role='user'] .wb-bubble { max-width: 94%; }
+  /* Two tabs and the menu have to share a phone's width: shorter titles, and
+     a tighter strip, rather than a tab bar that runs off the edge. */
+  .wb-canvas-tabs { padding: 8px 10px; gap: 4px; }
+  .wb-tab { padding: 6px 9px; }
+  .wb-tab-text { max-width: 104px; }
 }
 
 /* ---- Radix popovers ---- */

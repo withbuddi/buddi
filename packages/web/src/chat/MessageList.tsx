@@ -11,7 +11,10 @@
  * Tool calls appear inline as they happen — the tool's human label and the
  * seconds it has been running — because a column that goes quiet for forty
  * seconds looks broken, and a spinner does not say what is taking the time.
- * Clicking one moves the canvas to what it produced.
+ * Clicking one moves the canvas to what it produced — when it produced
+ * something. A call whose result the canvas has nothing to draw for (a written
+ * note, a colleague's answer in prose) still shows that it happened, as a line
+ * rather than a button: an arrow that leads nowhere is worse than no arrow.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef } from 'react';
@@ -30,6 +33,7 @@ export function MessageList({
   live,
   now,
   onOpen,
+  opens,
   agentName,
   emptyHint,
 }: {
@@ -38,6 +42,8 @@ export function MessageList({
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
   now: number;
   onOpen: (toolUseId: string) => void;
+  /** Which calls have something on the canvas. Absent: assume they all do. */
+  opens?: Set<string>;
   /** Whose turn the agent's turn is. Shown once per run of its messages. */
   agentName?: string;
   emptyHint: string;
@@ -91,6 +97,7 @@ export function MessageList({
                     tool={block.name}
                     ok={result?.ok ?? null}
                     running={result === null}
+                    opens={opens ? opens.has(block.id) : true}
                     onOpen={() => onOpen(block.id)}
                   />
                 );
@@ -109,6 +116,7 @@ export function MessageList({
             ok={null}
             running
             elapsed={Math.max(0, Math.round((now - call.startedAt) / 1000))}
+            opens={false}
             onOpen={() => onOpen(call.toolUseId)}
           />
         </div>
@@ -130,6 +138,7 @@ function ToolRow({
   ok,
   running,
   elapsed,
+  opens,
   onOpen,
 }: {
   label: string;
@@ -137,20 +146,36 @@ function ToolRow({
   ok: boolean | null;
   running: boolean;
   elapsed?: number;
+  /** Whether the canvas has a panel for this call. */
+  opens: boolean;
   onOpen: () => void;
 }): JSX.Element {
+  const marks = (
+    <>
+      {running ? (
+        <span className="wb-pulse" aria-hidden="true" />
+      ) : (
+        <span className="wb-tool-mark" data-ok={ok === false ? 'false' : 'true'} aria-hidden="true" />
+      )}
+      <span className="wb-tool-label">{label}</span>
+      {elapsed === undefined ? null : <span className="wb-tool-elapsed">{elapsed}s</span>}
+      {ok === false ? <span className="wb-tool-elapsed">failed</span> : null}
+    </>
+  );
+
+  if (!opens) {
+    return (
+      <span className="wb-tool" data-static="true" data-ok={ok === null ? undefined : ok} data-running={running}>
+        {marks}
+      </span>
+    );
+  }
+
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <button className="wb-tool" data-ok={ok === null ? undefined : ok} data-running={running} onClick={onOpen}>
-          {running ? (
-            <span className="wb-pulse" aria-hidden="true" />
-          ) : (
-            <span className="wb-tool-mark" data-ok={ok === false ? 'false' : 'true'} aria-hidden="true" />
-          )}
-          <span className="wb-tool-label">{label}</span>
-          {elapsed === undefined ? null : <span className="wb-tool-elapsed">{elapsed}s</span>}
-          {ok === false ? <span className="wb-tool-elapsed">failed</span> : null}
+          {marks}
           <ArrowIcon />
         </button>
       </Tooltip.Trigger>
