@@ -10,6 +10,7 @@ import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@bu
 import type { AgentCatalog, CatalogAgent } from '../telegram/types.js';
 import type { ArtifactStore } from '../telegram/attachments.js';
 import type { ApprovalPort } from './approvals.js';
+import { NO_MAKER_TEXT } from '../telegram/surface.js';
 import { ChatSession } from './session.js';
 import { silentSpinner } from './spinner.js';
 import type { TerminalStyle } from './terminal.js';
@@ -237,6 +238,8 @@ const LEDGER = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', true
   'recap',
 ]);
 const SCOUT = catalogAgent('scout', 'scout', 'Scout');
+/** The maker. `/new` reaches it by role; nothing in the session names it. */
+const FATHER = catalogAgent('agent-father', 'father', 'Agent Father', false, [], ['maker']);
 
 const STYLE: TerminalStyle = { color: false, width: 80, tty: false };
 
@@ -691,11 +694,11 @@ describe('the rest of the command table', () => {
     expect(h.text()).toContain('api-key');
   });
 
-  it('/new starts a fresh conversation with the same agent', async () => {
+  it('/reset starts a fresh conversation with the same agent', async () => {
     const h = harness();
     await h.session.handle('hello');
     const first = h.db.conversations.length;
-    await h.session.handle('/new');
+    await h.session.handle('/reset');
     expect(h.db.conversations.length).toBe(first + 1);
   });
 
@@ -754,5 +757,35 @@ describe('multi-line input', () => {
     await h.session.feed('"""');
     expect(h.text()).not.toContain('/agents');
     expect(h.provider.requests).toHaveLength(1);
+  });
+});
+
+describe('/new — the maker, by role', () => {
+  it('switches to the maker and opens with the owner sentence', async () => {
+    const h = harness({ agents: [LEDGER, SCOUT, FATHER] });
+    await h.session.handle('/new');
+
+    const request = h.provider.requests.at(-1) as any;
+    expect(JSON.stringify(request.messages)).toContain('I want to make a new agent.');
+    expect(h.text()).toContain('You are now talking to Agent Father.');
+    // It sticks: the next plain sentence is still the maker's to answer.
+    expect(h.session.agent.id).toBe('agent-father');
+  });
+
+  it('opens with what the owner typed when they said more', async () => {
+    const h = harness({ agents: [LEDGER, SCOUT, FATHER] });
+    await h.session.handle('/new something that watches my GitHub issues');
+    const request = h.provider.requests.at(-1) as any;
+    const sent = JSON.stringify(request.messages);
+    expect(sent).toContain('something that watches my GitHub issues');
+    expect(sent).not.toContain('I want to make a new agent.');
+  });
+
+  it('says so in one line when nobody claims the role, and runs nothing', async () => {
+    const h = harness({ agents: [LEDGER, SCOUT] });
+    await h.session.handle('/new');
+    expect(h.lines).toEqual([NO_MAKER_TEXT]);
+    expect(h.provider.requests).toHaveLength(0);
+    expect(h.session.agent.id).toBe('finance-advisor');
   });
 });

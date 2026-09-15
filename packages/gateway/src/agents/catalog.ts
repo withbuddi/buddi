@@ -212,13 +212,28 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
 export interface ReloadableAgentCatalog extends AgentCatalog {
   /** Rebuild from disk and swap, or throw with the old catalog still serving. */
   reload(): void;
+  /**
+   * Called after a *successful* swap, so a surface that publishes something
+   * derived from the catalog can publish it again. Telegram's command menu is
+   * the case that forced this: `/new` is in the menu only while an agent claims
+   * the `maker` role, and the owner can create that agent's replacement in
+   * session — a menu computed once at boot would then be a lie until restart.
+   *
+   * Returns an unsubscribe. A listener that throws is contained: a write must
+   * not fail because a cosmetic re-publish did.
+   */
+  onReload(listener: () => void): () => void;
   /** The catalog currently behind the façade. For tests and diagnostics. */
   current(): AgentCatalog;
 }
 
 /** Wrap a loader in the façade every surface can keep holding. */
-export function reloadableCatalog(load: () => AgentCatalog): ReloadableAgentCatalog {
+export function reloadableCatalog(
+  load: () => AgentCatalog,
+  onListenerError: (err: unknown) => void = () => {},
+): ReloadableAgentCatalog {
   let inner = load();
+  const listeners = new Set<() => void>();
   return {
     get: (id) => inner.get(id),
     byHandle: (handle) => inner.byHandle(handle),
@@ -228,8 +243,20 @@ export function reloadableCatalog(load: () => AgentCatalog): ReloadableAgentCata
     defaultAgent: () => inner.defaultAgent(),
     resolve: (idOrHandle) => inner.resolve(idOrHandle),
     reload() {
-      // Assigned only after `load()` returned: a throw leaves `inner` alone.
+      // Assigned only after `load()` returned: a throw leaves `inner` alone,
+      // and the listeners are not told about a swap that never happened.
       inner = load();
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch (err) {
+          onListenerError(err);
+        }
+      }
+    },
+    onReload(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     current: () => inner,
   };

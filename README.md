@@ -268,7 +268,8 @@ model: claude-sonnet-5     # optional. validated against that provider's catalog
 tools: [finance.*, memory.*, reminder.*]   # required. globs allowed; nothing else is callable
 maxTurns: 12               # optional. how many model turns one run may take
 language: mirror           # optional. mirror | en | fr — mirror answers in the language you wrote
-roles: [overview, recap]   # optional. free-form capability claims; /status asks for `overview`
+roles: [overview, recap]   # optional. free-form capability claims; /status asks for `overview`,
+                           #           /recap for `recap`, /new for `maker`
 default: true              # optional. the agent a bare `buddi chat` talks to. One per directory
 ---
 
@@ -451,6 +452,7 @@ conversations.
 | Command | |
 | --- | --- |
 | `/agents` | every agent, with a button to switch |
+| `/new [what it is for]` | make a new agent (answered by whoever claims the `maker` role) |
 | `/use <handle>` | switch, e.g. `/use @ledger` |
 | `@handle …` | ask that agent one message without switching |
 | `/whoami` | which agent is active here |
@@ -461,7 +463,7 @@ conversations.
 | `/quiet [1d\|1w\|off]` | stop proactive messages for a while (7 days by default) |
 | `/approvals` | anything waiting for you |
 | `/devices` | the devices paired to this installation |
-| `/new` | a fresh conversation with the active agent |
+| `/reset` | a fresh conversation with the active agent |
 | `/id` | your numeric user id and this chat id |
 | `/help` | the list |
 
@@ -486,13 +488,12 @@ buddi chat [--agent <handle>] [--resume <id>] [--last] [--quiet]
 
 | | | | |
 | --- | --- | --- | --- |
-| `/help` | `/agents` | `/use <handle>` | `/whoami` |
-| `/new` | `/resume [n]` | `/id` | `/tools` |
-| `/model` | `/usage` | `/status` | `/recap` |
-| `/reminders` | `/quiet [1d\|1w\|off]` | `/files [n]` | `/attach <path>` |
-| `/approvals` | | | |
-| `/approve <id>` | `/reject <id>` | `/devices` | `/clear` |
-| `/quit` | | | |
+| `/help` | `/agents` | `/new [what it is for]` | `/use <handle>` |
+| `/whoami` | `/reset` | `/resume [n]` | `/id` |
+| `/tools` | `/model` | `/usage` | `/status` |
+| `/recap` | `/reminders` | `/quiet [1d\|1w\|off]` | `/files [n]` |
+| `/attach <path>` | `/approvals` | `/approve <id>` | `/reject <id>` |
+| `/devices` | `/clear` | `/quit` | |
 
 `@handle …` asks one agent a single message without switching. A line ending in
 `\` continues; `"""` on its own line opens a literal block where nothing,

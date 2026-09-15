@@ -50,6 +50,7 @@ import {
   type ArtifactStore,
 } from '../telegram/attachments.js';
 import {
+  NO_MAKER_TEXT,
   NO_RECAP_MISSION_TEXT,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
@@ -59,12 +60,13 @@ import {
   devicesText,
   emptyMentionText,
   handleLabel,
+  newAgentOpening,
   parseMention,
   stripToolNames,
   unknownHandleText,
   type RunMission,
 } from '../telegram/surface.js';
-import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
+import { ROLE_MAKER, ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 import { isUnknownAgentError } from '../telegram/types.js';
 import { FIRST_RUN_SUFFIX } from '../agents/first-run.js';
 import { attachFile, type PendingAttachment } from './attach.js';
@@ -354,7 +356,10 @@ export class ChatSession {
             `You are the owner of this installation — /agents to switch.`,
         );
         return 'continue';
-      case '/new': {
+      case '/new':
+        await this.newAgent(arg);
+        return 'continue';
+      case '/reset': {
         const id = await createConversation(this.#deps.pool, this.#agent.id);
         this.#conversations.set(this.#agent.id, id);
         this.#out(`New conversation with ${this.#agent.name}.`);
@@ -506,6 +511,37 @@ export class ChatSession {
       );
     }
     this.#out(dim(`conversation ${id}`, this.#style().color));
+  }
+
+  /**
+   * `/new` — switch to whoever claims the `maker` role and open the interview.
+   *
+   * Unlike `/status`, the switch sticks: making an agent is a conversation, and
+   * a session that bounced back to the previous agent after the first question
+   * would strand the owner mid-interview. The opening line is sent as the owner
+   * — they already said what they wanted by typing the command.
+   */
+  async newAgent(arg: string): Promise<void> {
+    const resolution = this.#deps.catalog.agentForRole(ROLE_MAKER);
+    if (!resolution.ok) {
+      this.#out(NO_MAKER_TEXT);
+      return;
+    }
+    const maker = resolution.agent;
+    if (maker.id !== this.#agent.id) {
+      this.#agent = maker;
+      await this.conversationFor(maker);
+      this.#out(`You are now talking to ${maker.name}.`);
+      if (!maker.availability.ok) {
+        this.#out(
+          yellow(
+            `${maker.name} cannot run here: ${maker.availability.problem.message}`,
+            this.#style().color,
+          ),
+        );
+      }
+    }
+    await this.runTurn(maker, newAgentOpening(arg), { carry: false });
   }
 
   /**

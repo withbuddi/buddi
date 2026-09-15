@@ -68,6 +68,7 @@ describe('the command table', () => {
       '/approvals',
       '/devices',
       '/new',
+      '/reset',
       '/id',
     ]) {
       expect(COMMAND_NAMES).toContain(shared);

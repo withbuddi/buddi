@@ -24,9 +24,10 @@ export interface CommandSpec {
 export const COMMANDS: readonly CommandSpec[] = [
   { name: '/help', summary: 'this list' },
   { name: '/agents', summary: 'every agent, with its handle, provider and availability' },
+  { name: '/new', args: '[what it is for]', summary: 'make a new agent: the maker interviews you' },
   { name: '/use', args: '<handle|id>', summary: 'switch the agent this session talks to' },
   { name: '/whoami', summary: 'which agent is active, and who you are to it' },
-  { name: '/new', summary: 'start a fresh conversation with the active agent' },
+  { name: '/reset', summary: 'start a fresh conversation with the active agent' },
   { name: '/resume', args: '[n]', summary: 'pick up a recent conversation with the active agent' },
   { name: '/id', summary: 'the conversation id this session is writing to' },
   { name: '/tools', summary: "the tools the active agent is granted" },

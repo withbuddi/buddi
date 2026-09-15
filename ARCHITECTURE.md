@@ -177,7 +177,8 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
   `delegates.json` may name an agent that holds them** — refused when proposed *and* at catalog
   load, since delegation would otherwise be a corridor from the agent that reads untrusted mail
   straight to `create_agent`. The tools themselves ship with exactly one agent,
-  `examples/agents/agent-father`, which the owner switches to deliberately; every other agent gets
+  `examples/agents/agent-father`, which claims the `maker` role (so `/new` reaches it without any
+  surface naming it) and which the owner switches to deliberately; every other agent gets
   the read half. After an approved write the process catalog is rebuilt and swapped behind the
   façade every surface holds, so the new agent answers on the CLI, Telegram, the dashboard chat and
   the mission runner without a restart.
@@ -206,8 +207,14 @@ An agent file may declare `roles: [overview, recap]` — free-form kebab strings
 *shape* core validates and whose *meaning* core deliberately does not. A role is the
 only way a surface, or a plugin's suggested mission, is allowed to ask for an agent:
 `/status` runs whoever claims `overview`, `/recap` runs the recap mission with whoever
-claims `recap`, and `sentinel-wake` speaks through the `overview` holder, falling back
-to the default agent only because *something* must answer an urgent finding.
+claims `recap`, `/new` hands the chat to whoever claims `maker` and opens the interview
+on the owner's behalf, and `sentinel-wake` speaks through the `overview` holder, falling
+back to the default agent only because *something* must answer an urgent finding.
+
+`maker` is the one whose *absence* is visible: Telegram's command menu carries `/new`
+only while a holder exists and can run on this machine, and the menu is re-published
+when the catalog reloads — the owner can write the maker's replacement in session, so a
+menu frozen at boot would be a lie until the next restart.
 
 Resolution is a result union, like every other configuration answer here:
 `agentForRole` returns the first claimant in declaration order, or a typed problem.

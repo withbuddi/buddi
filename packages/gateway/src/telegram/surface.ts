@@ -101,7 +101,7 @@ export function readingText(agentLabel?: string): string {
  * chat is currently talking to, and says plainly when nobody claims it.
  */
 import type { EngagementHooks } from '../missions/engagement.js';
-import { ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
+import { ROLE_MAKER, ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -157,7 +157,8 @@ export const HELP = [
   '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
   '/approvals — anything waiting for your approval',
   '/devices — the devices paired to this installation',
-  '/new — start a fresh conversation with the active agent',
+  '/new — make a new agent: the maker interviews you and writes the file',
+  '/reset — start a fresh conversation with the active agent',
   '/id — your numeric user id and this chat id',
   '/help — this message',
 ].join('\n');
@@ -400,6 +401,34 @@ export const NO_RECAP_MISSION_TEXT =
  */
 export function roleUnavailableText(role: string): string {
   return roleProblemMessage(role);
+}
+
+/**
+ * `/new` with nobody to make anything.
+ *
+ * The command is keyed to the `maker` role, never to a file, so the honest
+ * answer is a fact about this installation and the one thing that fixes it —
+ * the maker buddi ships. One line, because a menu entry that cannot run should
+ * cost the owner one sentence, not a page.
+ */
+export const NO_MAKER_TEXT =
+  'No installed agent claims the "maker" role, so there is nobody here who makes agents — ' +
+  'the one buddi ships is Agent Father (examples/agents/agent-father, @father); ' +
+  'install or re-enable it and /new will work.';
+
+/**
+ * What `/new` says to the maker on the owner's behalf.
+ *
+ * The owner asked for a new agent by typing the command; making them then type
+ * "I want a new agent" is asking twice. The maker's own persona takes it from
+ * here — its first move is to ask what the agent is for.
+ */
+export const NEW_AGENT_OPENING = 'I want to make a new agent.';
+
+/** `/new` opens with the standard line; `/new <text>` opens with what was typed. */
+export function newAgentOpening(arg: string): string {
+  const said = arg.trim();
+  return said === '' ? NEW_AGENT_OPENING : said;
 }
 
 /**
@@ -1455,7 +1484,14 @@ export class TelegramSurface {
       );
       return;
     }
+    // `/new` names a capability, not an agent: whoever claims `maker` is
+    // switched to and spoken to on the owner's behalf, so the interview has
+    // already started by the time they read the first reply.
     if (command === '/new') {
+      await this.handleNewAgent(chatId, text.slice(command.length).trim());
+      return;
+    }
+    if (command === '/reset') {
       const active = await this.activeAgent(chatId);
       await startNewConversationForChat(this.#opts.pool, chatId, active.id);
       await this.#opts.api.sendMessage(
@@ -2044,6 +2080,31 @@ export class TelegramSurface {
     await this.#opts.setChatMenu(chatId, agent).catch((err) => {
       this.#log(`telegram: menu refresh for chat ${chatId} failed: ${message(err)}`);
     });
+  }
+
+  /**
+   * `/new` — switch this chat to whoever makes agents, and open the interview.
+   *
+   * Two halves, both deliberate. The switch is real: making an agent is a
+   * conversation, not a one-shot, so the chat stays with the maker afterwards
+   * rather than bouncing back mid-interview the way `/status` does. And the
+   * opening line is sent *as the owner*, because the owner already said what
+   * they wanted by typing the command — `/new something that watches my GitHub
+   * issues` is that sentence, and a bare `/new` is the plain one.
+   */
+  async handleNewAgent(chatId: string, arg: string): Promise<void> {
+    const maker = this.#agentForRole(ROLE_MAKER);
+    if (!maker) {
+      await this.#opts.api.sendMessage(chatId, NO_MAKER_TEXT);
+      return;
+    }
+    const active = await this.activeAgent(chatId);
+    if (maker.id !== active.id) {
+      await setActiveAgent(this.#opts.pool, SURFACE, chatId, maker.id);
+      await this.#republishMenu(chatId, maker);
+    }
+    // No carry: a file sent ten minutes ago has nothing to do with this.
+    await this.#runFor(chatId, maker, newAgentOpening(arg), { carry: false });
   }
 
   /**
