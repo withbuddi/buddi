@@ -24,6 +24,12 @@ export const PLATFORM_WRITE_TOOLS: readonly string[] = [
   'platform.update_agent',
   'platform.write_skill',
   'platform.delete_agent',
+  // Accepting a plugin's proposal creates a principal and writes a skill into
+  // the prompt of every agent. They are the same kind of act as the four above
+  // and are confined the same way: grantable only by the owner, by hand, and
+  // never reachable through a delegation corridor.
+  'platform.accept_plugin_agent',
+  'platform.accept_plugin_skill',
 ];
 
 /** The tools that only look. Safe to grant to anybody. */
@@ -32,6 +38,7 @@ export const PLATFORM_READ_TOOLS: readonly string[] = [
   'platform.installed_tools',
   'platform.read_agent',
   'platform.list_skills',
+  'platform.plugin_agents',
 ];
 
 /** Does this grant include any tool that can write the installation? */

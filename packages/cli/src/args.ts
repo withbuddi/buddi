@@ -72,6 +72,8 @@ export type Command =
   | { kind: 'chat-cli'; argv: string[] }
   /** Delegated verbatim to the gateway's missions CLI. */
   | { kind: 'missions'; argv: string[] }
+  /** Install, uninstall, list and inspect plugins. The gateway's CLI owns it. */
+  | { kind: 'plugins'; argv: string[] }
   /** One-off reminders the agents set. Delegated to the gateway's CLI. */
   | { kind: 'reminders'; argv: string[] }
   /** The first-run arc: what it has sent, and the switch. */
@@ -138,6 +140,7 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'serve' };
   }
   if (head === 'missions') return { kind: 'missions', argv: rest };
+  if (head === 'plugins') return { kind: 'plugins', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'nudges') return { kind: 'nudges', argv: rest };
   if (head === 'migrate') return { kind: 'migrate' };
@@ -469,6 +472,9 @@ export const USAGE = `buddi — your personal agents, one command
   buddi reminders [--agent <id>] [--all]      one-off nudges the agents set
   buddi reminders cancel <id>
   buddi nudges status|stop|resume             the first-run arc and its budget
+  buddi plugins list|info <name>            what is installed, and what each one brought
+  buddi plugins install <directory> [--yes] read what a plugin contributes, then install it
+  buddi plugins uninstall <name> [--yes]    remove it; its database schema is kept
   buddi migrate              apply core + plugin migrations
 
 In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;

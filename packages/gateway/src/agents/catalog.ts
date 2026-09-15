@@ -22,6 +22,7 @@ import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
+import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
@@ -87,6 +88,25 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
+  // Everything the owner installed, from `plugins.json`. Empty in any process
+  // that did not await `loadPluginsOnce` — a unit test, a fixture — which is
+  // the honest answer for a process that never read the owner's record.
+  //
+  // A plugin that will not register (a tool name that collides with one
+  // already here, an input schema no provider would accept) is skipped with a
+  // line on the process log rather than thrown: an installation must not stop
+  // answering because a third-party plugin has a bug. `buddi plugins list`
+  // shows the same failure where the owner will look for it.
+  for (const manifest of externalManifests(env)) {
+    try {
+      registry.register(manifest);
+    } catch (err) {
+      console.error(
+        `plugin ${manifest.name}@${manifest.version} did not register and its tools are absent: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   // Reminders and schedules are registered in the *base* registry, unlike the
   // mission tools: an agent can put something on the clock from any run, and a
   // reminder set in a chat is the same object as one set by the daily check.
@@ -113,9 +133,16 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   return registry;
 }
 
-/** Every plugin manifest installed here — what `db:migrate` walks. */
-export function installedManifests(): PluginManifest[] {
-  return [financeManifest, memoryManifest, emailManifest];
+/**
+ * Every plugin manifest installed here — what `db:migrate` walks, what
+ * `missions add-defaults` reads suggestions from, and what a backup enumerates.
+ *
+ * The compiled-in four, then whatever the owner installed. Same list, same
+ * standing: a plugin that arrived through `buddi plugins install` owns a schema
+ * and suggests missions exactly as `finance` does.
+ */
+export function installedManifests(env: NodeJS.ProcessEnv = process.env): PluginManifest[] {
+  return [financeManifest, memoryManifest, emailManifest, ...externalManifests(env)];
 }
 
 /**

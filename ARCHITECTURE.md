@@ -106,15 +106,15 @@ agents cannot read or modify. Consequences:
 
 ## Drop-in tools and skills
 
-> The practical guide to writing one — the four contributions, their real type
+> The practical guide to writing one — every contribution, their real type
 > signatures, and a complete worked example — is [docs/plugins.md](docs/plugins.md).
 
 Tools and skills are files in the repo (`tools/`, `skills/`), auto-discovered — which is
 also what keeps an install reproducible on any machine. The trust lifecycle is the
 point, not the packaging — and so is the dependency direction: **core never imports a
 tool; tools import core**, enforced by lint (import boundaries) and a CI check that boots
-core with the tools directory absent. There is deliberately no runtime plugin framework:
-for a single-owner system, "droppable" means *delete the folder and it still boots*.
+core with the tools directory absent. "Droppable" still means *delete the folder and it
+still boots*: core with zero plugins is a valid, tested state.
 
 Agents and skills are discovered the same way, but from a **search path** rather than one
 directory, because a clone of this repository is two things at once: a platform anybody
@@ -200,6 +200,53 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
   automatically**, which is how a house rule reaches agents whose files nobody edited. An
   agent may also name shared skills in its `skills:` frontmatter; an unknown name fails
   the load.
+
+## Plugin lifecycle (install, propose, uninstall)
+
+Four plugins are compiled into this build. Anybody else's is **installed**, which is a
+record rather than a patch: `plugins.json` in the owner's private directory names each
+plugin, the version, the package directory and the entry point resolved from it. Every
+long-running entry point awaits one load of that record before it builds a registry, and
+the manifests it produces stand exactly where the compiled-in ones do — registered,
+migrated, ticked for sentinels and sources, read for mission suggestions.
+
+The record deliberately does not live in Postgres: "what is installed here" is the
+question an owner asks *when something is broken*, so `buddi plugins list` answers it with
+the database down. Postgres keeps only what it already kept — the plugin's schema and the
+migration ledger — and that split is what makes uninstall recoverable.
+
+**Core does not load plugins.** Resolving a path and importing it is knowing more about a
+plugin than `PluginManifest`, so it happens at the composition root
+(`packages/gateway/src/plugins/load.ts`), and `scripts/check-boundaries.mjs` now fails on a
+dynamic import in core whose specifier is computed rather than literal. One plugin that
+will not load never takes the installation down: it becomes a reported problem and
+everything else loads.
+
+**Installing is running someone else's code, and is treated as such.** It is explicit
+(`--yes`), and before it the owner is shown the complete contribution: every tool with its
+trust tier — with the `auto` ones, which run with nobody asked, counted and listed first —
+the schema it will own, everything that runs on a timer and how often, the hosts it
+declares, and the agents it proposes. The summary is rendered from the manifest by pure
+code in core (`packages/core/src/plugins/contribution.ts`), and it says plainly that
+reading it already imported the module: there is no sandbox and claiming one would be
+worse than the truth.
+
+**A plugin may propose agents and skills; it can never install one.** Creating an agent is
+creating a principal, and the `tools:` line is the only thing that decides what that
+principal reaches, so the proposal is accepted through `platform.accept_plugin_agent` —
+`gated`, validated before the action exists, previewed as the whole grant in the registered
+tools' own words, and refusing the `platform.*` write tools exactly as `create_agent` does.
+The accepted file is written into the owner's own directory and is **theirs**: a sidecar
+records which plugin and version proposed it, and an upgrade reports drift and rewrites
+nothing. A file an upgrade could rewrite is a grant an upgrade could widen.
+
+**Uninstall removes the code and keeps the data.** The plugin's schema is left where it
+is, with its row count printed; `--purge` is a separate, irreversible verb that prints what
+it will destroy first. Uninstall also stands down everything that would otherwise point at
+tools that no longer exist — missions it suggested are disabled, their queued jobs
+cancelled, approvals pending on its tools rejected — and it *refuses* while any agent's
+grant still names those tools, because an unresolvable tool is a catalog load error and the
+installation would not start. A half-removed plugin is worse than one that stays.
 
 ## Agent roles (how a surface asks for a capability)
 

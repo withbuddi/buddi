@@ -53,14 +53,18 @@ import {
   parseSkillFile,
   patchAgentSource,
   resolveToolNames,
+  SKILLS_DIR,
   type FrontmatterPatch,
   type PluginManifest,
   type ProviderKind,
+  type SuggestedAgent,
+  type SuggestedSkill,
   type ToolDefinition,
   type ToolRegistry,
   type ToolSpec,
 } from '@buddi/core';
 import { z } from 'zod';
+import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } from './catalog.js';
 import { DELEGATES_FILE, readDelegates } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
@@ -811,7 +815,7 @@ type SkillInput = z.infer<typeof skillInput>;
 
 function buildSkillEnvelope(
   input: SkillInput,
-  deps: { binding: ResolvedBinding; proposedBy: string },
+  deps: { binding: ResolvedBinding; proposedBy: string; source?: string },
 ): WriteSkillEnvelope {
   const { binding } = deps;
   const name = input.name.trim();
@@ -863,6 +867,7 @@ function buildSkillEnvelope(
     name,
     description: input.description.trim(),
     provenance: input.provenance,
+    ...(deps.source === undefined ? {} : { source: deps.source }),
     body: input.body,
   });
   try {
@@ -929,6 +934,213 @@ function buildDeleteEnvelope(
     tools: [...agent.tools],
     delegatedToBy,
   };
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Agents a plugin proposes
+ * ------------------------------------------------------------------ */
+
+/**
+ * The agents every registered plugin proposes, with the plugin that proposed
+ * each one.
+ *
+ * Read from the registry's own manifests rather than from a list of plugin
+ * names, for the same reason `missions add-defaults` reads its suggestions
+ * there: a plugin that arrived this morning through `buddi plugins install`
+ * proposes its agents exactly as the compiled-in ones do, and nothing here has
+ * heard of any plugin by name.
+ */
+export interface PluginAgentProposal {
+  plugin: string;
+  pluginVersion: string;
+  agent: SuggestedAgent;
+}
+
+export function pluginAgentProposals(registry: ToolRegistry): PluginAgentProposal[] {
+  return registry.manifests().flatMap((m) =>
+    (m.agents ?? []).map((agent) => ({ plugin: m.name, pluginVersion: m.version, agent })),
+  );
+}
+
+export function pluginSkillProposals(
+  registry: ToolRegistry,
+): Array<{ plugin: string; pluginVersion: string; skill: SuggestedSkill }> {
+  return registry.manifests().flatMap((m) =>
+    (m.skills ?? []).map((skill) => ({ plugin: m.name, pluginVersion: m.version, skill })),
+  );
+}
+
+/** One proposal, or a refusal naming what is on offer. */
+function findProposal(registry: ToolRegistry, plugin: string, agentId: string): PluginAgentProposal {
+  const all = pluginAgentProposals(registry);
+  const match = all.find(
+    (p) => p.plugin === plugin.trim() && p.agent.id.toLowerCase() === agentId.trim().toLowerCase(),
+  );
+  if (!match) {
+    refuse(
+      'unknown-proposal',
+      `no installed plugin proposes an agent "${agentId}" under "${plugin}". What is on offer: ` +
+        `${all.map((p) => `${p.plugin}/${p.agent.id}`).join(', ') || 'nothing — no installed plugin proposes an agent'}. ` +
+        'Call platform.plugin_agents to see them.',
+    );
+  }
+  return match;
+}
+
+export interface AcceptPluginAgentEnvelope extends Omit<CreateAgentEnvelope, 'tool'> {
+  tool: 'platform.accept_plugin_agent';
+  /** The plugin whose proposal this is, and the version proposing it. */
+  fromPlugin: { name: string; version: string };
+  /** sha256 of the canonical proposal, recorded beside the file on accept. */
+  proposalChecksum: string;
+  /** Skills written into the new agent's own `skills/` by the same approval. */
+  skills: Array<{ name: string; description: string; file: string; content: string }>;
+}
+
+const acceptAgentInput = z
+  .object({
+    plugin: z.string().min(1).describe('Which plugin proposed it, e.g. "weather".'),
+    agent: z.string().min(1).describe('The proposed agent id, as platform.plugin_agents lists it.'),
+  })
+  .strict();
+
+type AcceptAgentInput = z.infer<typeof acceptAgentInput>;
+
+/**
+ * Build the envelope for accepting a proposal.
+ *
+ * It is `buildCreateEnvelope` with the plugin's own arguments and nothing else:
+ * the same id and handle uniqueness checks, the same `checkTools` — so a plugin
+ * that proposes `platform.create_agent` for its advisor is refused with the
+ * same sentence an agent asking for it would get — the same "would this file
+ * even load" parse, all of it before any approval exists. A plugin gets no
+ * shorter path to a principal than the owner's own agent does.
+ */
+function buildAcceptAgentEnvelope(
+  input: AcceptAgentInput,
+  deps: { binding: ResolvedBinding; registry: ToolRegistry; proposedBy: string },
+): AcceptPluginAgentEnvelope {
+  const proposal = findProposal(deps.registry, input.plugin, input.agent);
+  const suggestion = proposal.agent;
+  const base = buildCreateEnvelope(
+    {
+      id: suggestion.id,
+      handle: suggestion.handle,
+      name: suggestion.name,
+      description: suggestion.description,
+      persona: suggestion.persona,
+      tools: suggestion.tools,
+      ...(suggestion.model === undefined ? {} : { model: suggestion.model }),
+      ...(suggestion.provider === undefined ? {} : { provider: suggestion.provider }),
+      ...(suggestion.maxTurns === undefined ? {} : { maxTurns: suggestion.maxTurns }),
+      ...(suggestion.language === undefined ? {} : { language: suggestion.language }),
+      ...(suggestion.roles === undefined ? {} : { roles: suggestion.roles }),
+    },
+    deps,
+  );
+  const agentDir = path.dirname(base.file);
+  const skills = (suggestion.skills ?? []).map((skill) => {
+    const name = skill.name.trim();
+    if (!KEBAB.test(name)) {
+      refuse(
+        'bad-name',
+        `${proposal.plugin} proposes a skill called "${skill.name}", which is not a usable skill name ` +
+          '(kebab-case, like when-cash-is-short)',
+      );
+    }
+    const content = composeSkillFile({
+      name,
+      description: skill.description.trim(),
+      provenance: 'imported',
+      source: `${proposal.plugin}@${proposal.pluginVersion}`,
+      body: skill.body,
+    });
+    try {
+      parseSkillFile(content, { fileName: name });
+    } catch (err) {
+      refuse(
+        'would-not-load',
+        `${proposal.plugin} proposes a skill the loader refuses: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return {
+      name,
+      description: skill.description.trim(),
+      file: path.join(agentDir, SKILLS_DIR, `${name}.md`),
+      content,
+    };
+  });
+  return {
+    ...base,
+    tool: 'platform.accept_plugin_agent',
+    fromPlugin: { name: proposal.plugin, version: proposal.pluginVersion },
+    proposalChecksum: proposalChecksum(suggestion),
+    skills,
+  };
+}
+
+export function renderAcceptAgentPreview(
+  envelope: AcceptPluginAgentEnvelope,
+  specs: readonly ToolSpec[],
+): string {
+  return [
+    `The ${envelope.fromPlugin.name} plugin (${envelope.fromPlugin.version}) proposes an agent, and this`,
+    'would create it. A plugin cannot create an agent; only this approval can.',
+    '',
+    renderCreatePreview({ ...envelope, tool: 'platform.create_agent' }, specs),
+    '',
+    ...(envelope.skills.length === 0
+      ? []
+      : [
+          `It also arrives with ${envelope.skills.length} skill${envelope.skills.length === 1 ? '' : 's'} of its own ` +
+            '(a procedure in its prompt; it grants no tool and lowers no tier):',
+          ...envelope.skills.map((s) => `  ${s.name} — ${s.description}`),
+          '',
+        ]),
+    `Once you approve, this file is YOURS: it is written into ${path.dirname(envelope.file)} and`,
+    `${envelope.fromPlugin.name} can never rewrite it. Upgrading the plugin will tell you if it starts`,
+    'proposing something different, and change nothing.',
+  ].join('\n');
+}
+
+/* ---- shared skills a plugin proposes ---- */
+
+const acceptSkillInput = z
+  .object({
+    plugin: z.string().min(1).describe('Which plugin proposed it.'),
+    skill: z.string().min(1).describe('The proposed skill name.'),
+  })
+  .strict();
+
+type AcceptSkillInput = z.infer<typeof acceptSkillInput>;
+
+function buildAcceptSkillEnvelope(
+  input: AcceptSkillInput,
+  deps: { binding: ResolvedBinding; registry: ToolRegistry; proposedBy: string },
+): WriteSkillEnvelope & { fromPlugin: { name: string; version: string } } {
+  const all = pluginSkillProposals(deps.registry);
+  const match = all.find(
+    (p) => p.plugin === input.plugin.trim() && p.skill.name.toLowerCase() === input.skill.trim().toLowerCase(),
+  );
+  if (!match) {
+    refuse(
+      'unknown-proposal',
+      `no installed plugin proposes a shared skill "${input.skill}" under "${input.plugin}". On offer: ` +
+        `${all.map((p) => `${p.plugin}/${p.skill.name}`).join(', ') || 'nothing'}.`,
+    );
+  }
+  const envelope = buildSkillEnvelope(
+    {
+      name: match.skill.name,
+      scope: 'shared',
+      description: match.skill.description,
+      provenance: 'imported',
+      body: match.skill.body,
+    },
+    { binding: deps.binding, proposedBy: deps.proposedBy, source: `${match.plugin}@${match.pluginVersion}` },
+  );
+  return { ...envelope, fromPlugin: { name: match.plugin, version: match.pluginVersion } };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1241,6 +1453,160 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     },
   };
 
+  const pluginAgents: ToolDefinition<Record<string, never>, unknown> = {
+    name: 'platform.plugin_agents',
+    description:
+      'Every agent the installed plugins PROPOSE, and every shared skill they propose — what each one ' +
+      'is for, the exact tool grant it asks for, and whether the owner has accepted it yet. A plugin ' +
+      'ships tools; the agent that knows how to use them is an offer, and nothing exists until the ' +
+      'owner approves it. Read this before you offer one, and never describe a proposal you have not read.',
+    tier: 'auto',
+    input: z.object({}).strict(),
+    async execute(_input, _ctx) {
+      const binding = resolved(registry);
+      const installedTools = new Set(registry.list().map((t) => t.name));
+      return {
+        agents: pluginAgentProposals(registry).map((proposal) => {
+          const dir = path.join(binding.agentsDir, proposal.agent.id);
+          const drift = driftFor({
+            agentDir: dir,
+            agentFile: path.join(dir, AGENT_FILE),
+            suggestion: proposal.agent,
+            pluginVersion: proposal.pluginVersion,
+          });
+          return {
+            plugin: proposal.plugin,
+            pluginVersion: proposal.pluginVersion,
+            id: proposal.agent.id,
+            handle: proposal.agent.handle,
+            name: proposal.agent.name,
+            description: proposal.agent.description,
+            proposedTools: proposal.agent.tools,
+            roles: proposal.agent.roles ?? [],
+            skills: (proposal.agent.skills ?? []).map((s) => s.name),
+            accepted: drift.state !== 'not-accepted',
+            status: drift.state,
+            note: drift.message,
+            // A proposal naming a tool this installation does not have is
+            // refused at accept time; say so here rather than there.
+            missingTools: proposal.agent.tools.filter(
+              (name) => !name.endsWith('.*') && !installedTools.has(name),
+            ),
+          };
+        }),
+        skills: pluginSkillProposals(registry).map((p) => ({
+          plugin: p.plugin,
+          pluginVersion: p.pluginVersion,
+          name: p.skill.name,
+          description: p.skill.description,
+        })),
+      };
+    },
+  };
+
+  const acceptPluginAgent: ToolDefinition<AcceptAgentInput, unknown> = {
+    name: 'platform.accept_plugin_agent',
+    description:
+      'Accept an agent one of the installed plugins proposes: it is created in the owner\'s own private ' +
+      'directory, with the grant the plugin asked for. This needs the owner\'s approval, and what they ' +
+      'are approving is ACCESS — the plugin wrote the proposal, but the owner grants the tools, and they ' +
+      'see exactly what those tools reach before saying yes. The file becomes theirs: upgrading the ' +
+      'plugin never rewrites it. ' +
+      CONDUCT,
+    tier: 'gated',
+    input: acceptAgentInput,
+    describe(input, ctx) {
+      const binding = resolved(registry);
+      return describing(
+        (i: AcceptAgentInput) =>
+          buildAcceptAgentEnvelope(i, { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
+        (envelope) => renderAcceptAgentPreview(envelope, specsFor(registry)),
+      )(input);
+    },
+    async execute(input, ctx) {
+      const binding = resolved(registry);
+      const envelope = buildAcceptAgentEnvelope(input, {
+        binding,
+        registry,
+        proposedBy: ctx.agentId ?? 'unknown',
+      });
+      const dir = path.dirname(envelope.file);
+      createAgentDirAtomic(dir, {
+        [AGENT_FILE]: envelope.content,
+        // The sidecar that makes an upgrade honest: which plugin proposed this,
+        // which version, and hashes of the proposal and of the file as written.
+        // It records provenance and authorizes nothing.
+        [PROVENANCE_FILE]: composeProvenance({
+          plugin: envelope.fromPlugin.name,
+          version: envelope.fromPlugin.version,
+          agent: envelope.id,
+          acceptedAt: ctx.now(),
+          proposal: envelope.proposalChecksum,
+          file: envelope.content,
+        }),
+        ...Object.fromEntries(
+          envelope.skills.map((skill) => [path.join(SKILLS_DIR, `${skill.name}.md`), skill.content]),
+        ),
+      });
+      const reload = reloadResult(binding);
+      return {
+        ok: true,
+        id: envelope.id,
+        handle: envelope.handle,
+        file: envelope.file,
+        tools: envelope.tools,
+        fromPlugin: envelope.fromPlugin,
+        skills: envelope.skills.map((s) => s.name),
+        live: reload.reloaded,
+        message:
+          `@${envelope.handle} exists, and it is the owner's file now — ${envelope.fromPlugin.name} cannot ` +
+          `change it. ${reload.message}`,
+      };
+    },
+  };
+
+  const acceptPluginSkill: ToolDefinition<AcceptSkillInput, unknown> = {
+    name: 'platform.accept_plugin_skill',
+    description:
+      'Accept a shared skill one of the installed plugins proposes: a procedure composed into every ' +
+      'agent\'s prompt. It grants no tool and lowers no tier. Needs the owner\'s approval, and the whole ' +
+      'procedure is in the preview. ' +
+      CONDUCT,
+    tier: 'gated',
+    input: acceptSkillInput,
+    describe(input, ctx) {
+      const binding = resolved(registry);
+      return describing(
+        (i: AcceptSkillInput) =>
+          buildAcceptSkillEnvelope(i, { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
+        (envelope) =>
+          [
+            `The ${envelope.fromPlugin.name} plugin (${envelope.fromPlugin.version}) proposes a shared skill.`,
+            '',
+            renderSkillPreview(envelope),
+          ].join('\n'),
+      )(input);
+    },
+    async execute(input, ctx) {
+      const binding = resolved(registry);
+      const envelope = buildAcceptSkillEnvelope(input, {
+        binding,
+        registry,
+        proposedBy: ctx.agentId ?? 'unknown',
+      });
+      writeFilesAtomic([{ path: envelope.file, content: envelope.content }]);
+      const reload = reloadResult(binding);
+      return {
+        ok: true,
+        name: envelope.name,
+        file: envelope.file,
+        fromPlugin: envelope.fromPlugin,
+        live: reload.reloaded,
+        message: `The ${envelope.name} skill is written, and it is the owner's file now. ${reload.message}`,
+      };
+    },
+  };
+
   const deleteAgent: ToolDefinition<z.infer<typeof deleteInput>, unknown> = {
     name: 'platform.delete_agent',
     description:
@@ -1282,6 +1648,18 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     // change is the action ledger core already writes.
     schema: 'core',
     migrationsDir: '',
-    tools: [listAgents, installedTools, readAgent, listSkills, createAgent, updateAgent, writeSkill, deleteAgent],
+    tools: [
+      listAgents,
+      installedTools,
+      readAgent,
+      listSkills,
+      pluginAgents,
+      createAgent,
+      updateAgent,
+      writeSkill,
+      deleteAgent,
+      acceptPluginAgent,
+      acceptPluginSkill,
+    ],
   };
 }

@@ -43,6 +43,7 @@ import { bindDelegation } from './agents/delegation.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
+import { loadPluginsOnce } from './plugins/load.js';
 
 export { REPO_ROOT };
 
@@ -65,6 +66,12 @@ export async function loadEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DatabaseUrlResolution> {
   loadEnv();
+  // And what the owner installed. Every entry point already waits on this call
+  // before it touches `DATABASE_URL`, and it must equally wait on it before it
+  // builds a tool registry or loads the agent catalog: an agent granted an
+  // installed plugin's tools does not load at all if those tools are not
+  // registered. `buddi agents` found that out the hard way.
+  await loadPluginsOnce(env);
   return hydrateDatabaseUrl(env);
 }
 
@@ -184,6 +191,18 @@ export async function createWiringAsync(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Wiring> {
   const secrets = await hydrateSecrets(env);
+  // What the owner installed, before anything that builds a registry. Importing
+  // a plugin's entry point is asynchronous and building the registry is not, so
+  // this is the one await that has to happen first; everything after it reads
+  // the adopted result. A plugin that fails to load is reported by
+  // `buddi plugins list`, never thrown here — see `plugins/load.ts`.
+  const plugins = await loadPluginsOnce(env);
+  for (const problem of plugins.problems) {
+    console.error(
+      `plugin ${problem.name} is installed but did not load: ${problem.message} ` +
+        '(buddi plugins list)',
+    );
+  }
   // The database comes before everything else it is under: with Docker stopped,
   // a provider or catalog error is a distraction and the pg failure that
   // follows is an empty `AggregateError`. One probe, one sentence.

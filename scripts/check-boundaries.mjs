@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 /**
- * Two boundary checks, both lightweight on purpose — no ESLint.
+ * Three boundary checks, all lightweight on purpose — no ESLint.
  *
  * 1. **Dependency direction** (ARCHITECTURE.md principle 6): core never imports
  *    a tool or an upper layer. Tools import core, not the reverse. Scans
  *    packages/core sources and its package.json dependencies.
  *
- * 2. **One outbound HTTP transport.** Nothing in this repo may reach the
+ * 2. **Core never loads code it was handed a path to.** A plugin is installed
+ *    by writing a record and importing its entry point at runtime
+ *    (`packages/gateway/src/plugins/load.ts`). That is the composition root's
+ *    job: core knows a plugin only through `PluginManifest`, and anything that
+ *    resolves an arbitrary specifier and imports it knows more than that. A
+ *    *literal* dynamic import (`await import('dotenv')`) is just a deferred
+ *    static one and stays fine; a computed one is the violation.
+ *
+ * 3. **One outbound HTTP transport.** Nothing in this repo may reach the
  *    network through the global `fetch`, through `undici`, or through its own
  *    `node:http(s)` client. They all pool connections per origin, and a pooled
  *    connection the far end has already closed is handed back for ever: every
@@ -77,14 +85,42 @@ try {
   process.exit(1);
 }
 
+/*
+ * Computed dynamic imports in core. See rule 2 above: `import('dotenv')` is a
+ * literal and fine; `import(entry)`, `import(`${dir}/index.js`)` is core
+ * loading somebody else's code, which belongs in the gateway.
+ */
+const DYNAMIC_IMPORT = /(?<![.\w$])import\s*\(\s*([^)]*)/g;
+
+for await (const file of walk(coreDir)) {
+  const src = await readFile(file, 'utf8');
+  const lines = src.split('\n');
+  for (const [i, line] of lines.entries()) {
+    if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+    const code = line.replace(/(^|\s)\/\/.*$/, '$1');
+    DYNAMIC_IMPORT.lastIndex = 0;
+    let m;
+    while ((m = DYNAMIC_IMPORT.exec(code))) {
+      const arg = m[1].trim();
+      // `import type {...} from` and `import x from` are static forms that this
+      // pattern cannot reach (they have no paren), so anything here is a call.
+      if (/^['"][^'"]*['"]\s*\)?$/.test(arg)) continue;
+      violations.push(
+        `${path.relative(repoRoot, file)}:${i + 1} imports a computed specifier (${arg.slice(0, 60)})`,
+      );
+    }
+  }
+}
+
 if (violations.length > 0) {
-  console.error('Boundary violations (core must never import runtime/gateway/tools):');
+  console.error('Boundary violations (core must never import runtime/gateway/tools,');
+  console.error('and must never import a specifier it computed — that is the gateway\'s job):');
   for (const v of violations) console.error(`  - ${v}`);
   process.exit(1);
 }
 
 /* ------------------------------------------------------------------ *
- * 2. One outbound HTTP transport
+ * 3. One outbound HTTP transport
  * ------------------------------------------------------------------ */
 
 /**
@@ -203,4 +239,5 @@ if (httpViolations.length > 0) {
 }
 
 console.log('check-boundaries: ok (core imports no runtime/gateway/tool package)');
+console.log('check-boundaries: ok (core loads no code from a computed specifier)');
 console.log('check-boundaries: ok (no outbound HTTP outside the shared transport)');
