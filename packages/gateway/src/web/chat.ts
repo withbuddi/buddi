@@ -58,6 +58,7 @@ import {
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
 import {
   attachmentNote,
   classifyMime,
@@ -485,7 +486,18 @@ export interface SendRequest {
 }
 
 export type SendResult =
-  | { ok: true; conversationId: string; runId: string }
+  | {
+      ok: true;
+      conversationId: string;
+      runId: string;
+      /**
+       * Set when the conversation the page asked for had ended and this message
+       * opened a new one. The page follows `conversationId` — it already does,
+       * because a first message returns an id the page did not have — and shows
+       * `note` so the fresh, empty thread is explained rather than surprising.
+       */
+      boundary?: { note: string; previousConversationId: string };
+    }
   | { ok: false; status: number; error: string };
 
 /**
@@ -543,6 +555,8 @@ export class WebChat {
     }
 
     let conversationId = request.conversationId;
+    /** Set when the thread the page was in had ended and this message starts one. */
+    let boundary: { note: string; previousConversationId: string } | undefined;
     if (conversationId === undefined) {
       conversationId = await createConversation(this.#deps.pool, agent.id);
     } else {
@@ -560,6 +574,32 @@ export class WebChat {
           error: `that conversation belongs to ${owner}, not to ${agent.id}`,
         };
       }
+      /*
+       * The page opens on this agent's most recent conversation, which is the
+       * right thing to draw at rest and the wrong thing to *continue* when the
+       * most recent one is yesterday's. The rule is the one Telegram and the
+       * terminal use — three hours idle, or a transcript past the budget — and
+       * here it costs the page nothing: `send` already returns the id to use,
+       * and the page already follows it.
+       */
+      const decided = await conversationForTurn(this.#deps.pool, {
+        current: conversationId,
+        start: () => createConversation(this.#deps.pool, agent.id),
+        now: this.#deps.now(),
+        log: this.#log,
+      });
+      conversationId = decided.conversationId;
+      if (decided.boundary) {
+        boundary = {
+          note: decided.boundary.note,
+          previousConversationId: decided.boundary.previousConversationId,
+        };
+        await this.#event(conversationId, 'chat.conversation.started', {
+          reason: decided.boundary.reason,
+          previousConversationId: decided.boundary.previousConversationId,
+          agentId: agent.id,
+        });
+      }
     }
 
     const files: ArtifactRow[] = [];
@@ -572,7 +612,7 @@ export class WebChat {
     const runId = randomUUID();
     const target = conversationId;
     this.#enqueue(target, () => this.#run({ agent, conversationId: target, runId, text, files }));
-    return { ok: true, conversationId: target, runId };
+    return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
   /**

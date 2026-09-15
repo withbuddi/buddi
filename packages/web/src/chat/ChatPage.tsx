@@ -57,6 +57,8 @@ export function ChatPage({
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** "(New conversation — …)". Said once, above the thread it explains. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [takingOffer, setTakingOffer] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
@@ -245,10 +247,14 @@ export function ChatPage({
   const send = (text: string, attachmentIds: string[]): void => {
     if (!agentId) return;
     setError(null);
+    setNotice(null);
     setRunning(true);
     chatApi
       .send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
       .then((result) => {
+        // The conversation the page was in had ended, and this message opened a
+        // new one. The empty thread is explained rather than surprising.
+        setNotice(result.boundary?.note ?? null);
         if (result.conversationId !== conversationId) setConversationId(result.conversationId);
         else void refresh(result.conversationId);
       })
@@ -365,6 +371,12 @@ export function ChatPage({
         </header>
 
         {error ? <div className="err-banner m-2.5">{error}</div> : null}
+
+        {notice ? (
+          <div className="muted m-2.5 text-xs" data-testid="chat-notice">
+            {notice}
+          </div>
+        ) : null}
 
         <MessageList
           messages={conversation?.messages ?? []}

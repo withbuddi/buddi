@@ -101,6 +101,13 @@ class FakeDb implements Queryable {
   events: { kind: string; payload: any }[] = [];
   /** core.offers, in the order they were written. */
   offers: any[] = [];
+  /** core.messages, oldest first: the transcript every lifetime rule reads. */
+  messages: {
+    conversation_id: string;
+    role: string;
+    content: unknown;
+    created_at: Date;
+  }[] = [];
   /** core.surface_attachments, newest last. */
   attachments: {
     chat: string;
@@ -339,6 +346,36 @@ class FakeDb implements Queryable {
       this.conversations.push({ id, agent_id: params[0] });
       return { rows: [{ id }] };
     }
+    // core.messages — the transcript. The surface itself writes one only when a
+    // failed turn is closed; tests seed the rest to give a conversation an age
+    // and a size, which is what the lifetime rule reads.
+    if (text.startsWith('insert into core.messages')) {
+      this.messages.push({
+        conversation_id: params[0],
+        role: String(params[1]),
+        content: JSON.parse(String(params[2])),
+        created_at: new Date(this.clock()),
+      });
+      return { rows: [] };
+    }
+    if (text.startsWith('select role, content from core.messages')) {
+      const last = this.messages.filter((m) => m.conversation_id === params[0]).at(-1);
+      return { rows: last ? [{ role: last.role, content: last.content }] : [] };
+    }
+    // The lifetime vitals: how much is in it, and when it was last touched.
+    if (text.startsWith('select coalesce(count(m.id), 0) as messages')) {
+      const rows = this.messages.filter((m) => m.conversation_id === params[0]);
+      if (!this.conversations.some((c) => c.id === params[0])) return { rows: [] };
+      return {
+        rows: [
+          {
+            messages: rows.length,
+            last_at: rows.at(-1)?.created_at ?? null,
+            chars: rows.reduce((sum, m) => sum + JSON.stringify(m.content).length, 0),
+          },
+        ],
+      };
+    }
     if (text.startsWith('select owner_id, state, started_at')) {
       return {
         rows: this.onboarding
@@ -385,6 +422,15 @@ class FakeDb implements Queryable {
       };
       this.offers.push(row);
       return { rows: [row] };
+    }
+    // Withdrawal: an offer of a conversation the owner has moved past expires
+    // where it stands, so a tap gets "that option has expired" and no run.
+    if (text.startsWith('update core.offers set expires_at')) {
+      const withdrawn = this.offers.filter(
+        (o) => o.conversation_id === params[0] && o.taken_at === null && o.expires_at > params[1],
+      );
+      for (const offer of withdrawn) offer.expires_at = params[1];
+      return { rows: withdrawn.map((o) => ({ id: o.id })) };
     }
     if (text.startsWith('update core.offers')) return { rows: [] };
     throw new Error(`FakeDb: unexpected sql: ${text}`);
@@ -1480,6 +1526,135 @@ describe('TelegramSurface agents', () => {
       'conv-3', // concierge, after /new
       'conv-1', // the finance advisor thread is untouched
     ]);
+  });
+
+  /*
+   * A Telegram conversation used to be immortal: one row per (chat, agent),
+   * created on first contact and kept for the life of the installation. That is
+   * how conversation `187f53bf` reached 65 messages and a 64,177-token turn,
+   * and how a question from three hours earlier got answered instead of the one
+   * the owner had just asked.
+   */
+  describe('a conversation has a lifetime', () => {
+    /** A chat mid-thread: one message, written `minutesAgo` before now. */
+    function midThread(db: FakeDb, now: number, minutesAgo: number, chars = 200): FakeDb {
+      alreadyGreeted(db);
+      db.messages.push({
+        conversation_id: 'conv-prior',
+        role: 'user',
+        content: [{ type: 'text', text: 'x'.repeat(chars) }],
+        created_at: new Date(now - minutesAgo * 60_000),
+      });
+      return db;
+    }
+
+    const NOW = Date.parse('2026-09-15T20:39:00.000Z');
+
+    it('carries on when the owner finishes a thought ten minutes later', async () => {
+      const db = midThread(withOwner(new FakeDb()), NOW, 10);
+      const { surface, run, sent } = surfaceWith(db, undefined, { now: () => NOW });
+      await surface.processUpdates([message(320, OWNER, OWNER, 'and the other one?')]);
+      await surface.drain();
+
+      expect(run.mock.calls[0]?.[0].conversationId).toBe('conv-prior');
+      expect(sent.map((s) => s.body.text).join('\n')).not.toContain('New conversation');
+    });
+
+    it('starts a fresh one for a message the next morning, and says so once', async () => {
+      const db = midThread(withOwner(new FakeDb()), NOW, 14 * 60);
+      const { surface, run, sent } = surfaceWith(db, undefined, { now: () => NOW });
+      await surface.processUpdates([message(321, OWNER, OWNER, 'any new mail?')]);
+      await surface.drain();
+
+      expect(run.mock.calls[0]?.[0].conversationId).toBe('conv-2');
+      expect(db.chatConversations.get(`${OWNER}::finance-advisor`)).toBe('conv-2');
+      const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+      expect(final?.body.text).toContain(
+        '(New conversation — we last spoke 14 hours ago. What I remember about you carries over.)',
+      );
+      // Said once, above the answer — not instead of it.
+      expect(final?.body.text).toContain('reply');
+    });
+
+    it('starts a fresh one when the transcript has grown past its budget', async () => {
+      // The runaway, in miniature: still live by the clock, far too big to keep
+      // replaying to every turn.
+      const db = midThread(withOwner(new FakeDb()), NOW, 5, 100_000);
+      const { surface, run, sent } = surfaceWith(db, undefined, { now: () => NOW });
+      await surface.processUpdates([message(322, OWNER, OWNER, 'draft a reply to Dorothee')]);
+      await surface.drain();
+
+      expect(run.mock.calls[0]?.[0].conversationId).toBe('conv-2');
+      expect(sent.filter((s) => s.method === 'editMessageText').at(-1)?.body.text).toContain(
+        'the last one had grown long',
+      );
+    });
+
+    it('withdraws what the ended conversation still had on the table', async () => {
+      const db = midThread(withOwner(new FakeDb()), NOW, 14 * 60);
+      db.offers.push({
+        id: 'offer-old',
+        agent_id: 'finance-advisor',
+        conversation_id: 'conv-prior',
+        label: 'Send it',
+        prompt: 'send the draft',
+        created_at: new Date(NOW - 14 * 3_600_000),
+        expires_at: new Date(NOW + 86_400_000),
+        taken_at: null,
+        taken_via: null,
+        taken_job_id: null,
+      });
+      const { surface } = surfaceWith(db, undefined, { now: () => NOW });
+      await surface.processUpdates([message(323, OWNER, OWNER, 'morning')]);
+      await surface.drain();
+
+      expect(db.offers[0]?.expires_at).toEqual(new Date(NOW));
+    });
+
+    it('never lands between a question and the owner’s answer to it', async () => {
+      // @concierge asks something in a transcript that is already over budget;
+      // the answer still reaches it, in the conversation it asked in.
+      const db = withOwner(new FakeDb());
+      alreadyGreeted(db, OWNER, 'concierge');
+      db.messages.push({
+        conversation_id: 'conv-prior',
+        role: 'user',
+        content: [{ type: 'text', text: 'x'.repeat(100_000) }],
+        created_at: new Date(NOW - 60_000),
+      });
+      const run = vi.fn(async (req: any) =>
+        req.agent.id === 'concierge' ? 'What time tonight?' : 'reply',
+      );
+      const { surface } = surfaceWith(db, run as any, { now: () => NOW });
+      await surface.processUpdates([message(324, OWNER, OWNER, '@buddi remind me tonight')]);
+      await surface.drain();
+      await surface.processUpdates([message(325, OWNER, OWNER, '7pm')]);
+      await surface.drain();
+
+      // The question itself crossed the boundary (that transcript was over
+      // budget); what matters is that the answer did not — it landed in the
+      // conversation the question was asked in, not a third one.
+      const asked = run.mock.calls[0]?.[0] as any;
+      const answer = run.mock.calls.at(-1)?.[0] as any;
+      expect(answer.agent.id).toBe('concierge');
+      expect(answer.conversationId).toBe(asked.conversationId);
+    });
+
+    it('closes a failed turn so the next run does not answer it', async () => {
+      // The 17:32 turn, exactly: the message is persisted, the provider call
+      // dies, and without this the next successful run reads it as work owed.
+      const db = midThread(withOwner(new FakeDb()), NOW, 5);
+      const run = vi.fn(async () => {
+        throw Object.assign(new Error('fetch failed'), { name: 'ProviderError', status: 0 });
+      });
+      const { surface } = surfaceWith(db, run as any, { now: () => NOW });
+      await surface.processUpdates([message(326, OWNER, OWNER, 'draft a reply to Parfait Sedjro')]);
+      await surface.drain();
+
+      const marker = db.messages.at(-1);
+      expect(marker?.role).toBe('assistant');
+      expect(JSON.stringify(marker?.content)).toContain('This turn failed before I could answer');
+    });
   });
 
   it('refuses an unknown agent id without switching', async () => {

@@ -116,6 +116,10 @@ import {
   type PendingQuestion,
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import {
+  conversationForTurn,
+  type TurnConversation,
+} from '../surfaces/conversation-lifetime.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -963,6 +967,35 @@ export async function ensureConversationForChat(
   return id;
 }
 
+/**
+ * The conversation this chat's next turn with this agent runs in.
+ *
+ * `ensureConversationForChat` above answers "which conversation is this chat's
+ * thread with this agent" and never lets go of it. This asks the second
+ * question, the one nobody was asking: *is that thread still live?* The rule is
+ * shared with the terminal and the dashboard (`surfaces/conversation-lifetime`)
+ * — three hours idle, or a transcript past the size budget — and when it says
+ * the thread is over, this repoints the chat's row at a fresh conversation and
+ * hands back the line the owner reads above the answer.
+ *
+ * `/reset` is unchanged and still the explicit way to do this in one word.
+ */
+export async function conversationForChatTurn(
+  pool: Queryable,
+  chatId: string,
+  agentId: string,
+  opts: { now: Date; continuation?: boolean | undefined; log?: ((line: string) => void) | undefined },
+): Promise<TurnConversation> {
+  const current = await getConversationForChat(pool, chatId, agentId);
+  return conversationForTurn(pool, {
+    ...(current === undefined ? {} : { current }),
+    start: () => startNewConversationForChat(pool, chatId, agentId),
+    now: opts.now,
+    ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
+    ...(opts.log === undefined ? {} : { log: opts.log }),
+  });
+}
+
 /** Drop the mapping so the next message to this agent starts fresh. */
 export async function startNewConversationForChat(
   pool: Queryable,
@@ -1808,6 +1841,10 @@ export class TelegramSurface {
         error: err,
         profile: TELEGRAM_SURFACE,
         agentId: agent.id,
+        // No `prompt`, so no retry offer — see above. The conversation is still
+        // named, because the greeting's dead turn has to be closed like any
+        // other: `wanted` needs both, and closing needs only this.
+        conversationId,
         now: new Date(this.#now()),
         log: (line) => this.#log(`telegram: first run — ${line}`),
       });
@@ -1880,6 +1917,11 @@ export class TelegramSurface {
     const { askedOwner } = await this.#runFor(chatId, asked, text, {
       note: (again) =>
         capturedNote(taken, { stillAsking: again && this.#renewable(taken) }),
+      // An answer belongs to the turn that asked. A question is at most fifteen
+      // minutes old, so the idle rule could never separate them — but the size
+      // rule could, and an agent handed "7pm" with no memory of asking "what
+      // time?" is the exact failure the pending question exists to prevent.
+      continuation: true,
     });
     // A turn that asks again keeps the claim for one more message, up to the
     // cap; anything else hands the chat back.
@@ -1907,9 +1949,31 @@ export class TelegramSurface {
        */
       note?: string | ((askedOwner: boolean) => string) | undefined;
       carry?: boolean;
+      /**
+       * This message is the second half of a turn that already started — the
+       * owner answering a question an agent asked them. It stays in the
+       * conversation the question was asked in, whatever the lifetime rule
+       * would otherwise say.
+       */
+      continuation?: boolean | undefined;
     } = {},
   ): Promise<{ askedOwner: boolean }> {
-    const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
+    // A conversation has a lifetime now: a chat that has been silent for hours,
+    // or a transcript that has grown past its budget, starts a fresh one here
+    // rather than dragging the whole day into every turn.
+    const { conversationId, boundary } = await conversationForChatTurn(
+      this.#opts.pool,
+      chatId,
+      agent.id,
+      {
+        now: new Date(this.#now()),
+        ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
+        log: (line) => this.#log(`telegram: chat ${chatId} — ${line}`),
+      },
+    );
+    // The thread that question was asked in is over; nothing may still claim
+    // the owner's next message on its behalf.
+    if (boundary) this.#pending.clear(chatId);
 
     // "import this statement" three minutes after a PDF means that PDF. The
     // carry is deliberately narrow — a recent file, a sentence that points at
@@ -1938,7 +2002,10 @@ export class TelegramSurface {
           typeof produced === 'string' ? undefined : produced.askedOwner,
           reply,
         );
-        const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
+        const turnNote = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
+        // One line, above everything, when this turn began a new conversation:
+        // a boundary the owner cannot see is indistinguishable from amnesia.
+        const note = [boundary?.note, turnNote].filter((line) => line).join('\n');
         // The offers this turn stored, drawn the way Telegram's own profile
         // says they are drawn — buttons here, words on a surface without any.
         // Nothing offered is the normal case, and then this is the identity.

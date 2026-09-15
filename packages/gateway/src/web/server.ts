@@ -632,7 +632,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
       // 202: the turn is *accepted*, not answered. What happens next is on the
       // stream, which is where a run that takes forty seconds belongs.
-      return sendJson(res, 202, { conversationId: sent.conversationId, runId: sent.runId });
+      return sendJson(res, 202, {
+        conversationId: sent.conversationId,
+        runId: sent.runId,
+        // Present only when the conversation the page was in had ended and this
+        // message opened a new one. The page follows the id either way; the
+        // note is what stops the empty thread reading as amnesia.
+        ...(sent.boundary ? { boundary: sent.boundary } : {}),
+      });
     }
 
     const cancel = /^\/api\/chat\/conversations\/([^/]+)\/cancel$/.exec(path);

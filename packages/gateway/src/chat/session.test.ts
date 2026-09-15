@@ -22,7 +22,16 @@ const REMINDER_ID = '33333333-3333-3333-3333-333333333333';
 
 class FakeDb implements Queryable {
   conversations: { id: string; agent_id: string }[] = [];
-  messages: { id: number; conversation_id: string; role: string; content: unknown }[] = [];
+  messages: {
+    id: number;
+    conversation_id: string;
+    role: string;
+    content: unknown;
+    /** When it was written, by this fake's clock — the lifetime rule reads it. */
+    at: Date;
+  }[] = [];
+  /** The clock rows are stamped with, so a transcript can be given an age. */
+  clock: () => number = () => Date.now();
   events: { kind: string; payload: unknown }[] = [];
   reminders: Record<string, unknown>[] = [];
   artifacts: Record<string, unknown>[] = [];
@@ -45,14 +54,31 @@ class FakeDb implements Queryable {
         conversation_id: params[0],
         role: params[1],
         content: JSON.parse(params[2]),
+        at: new Date(this.clock()),
       });
       return { rows: [] };
     }
     if (text.startsWith('select role, content from core.messages')) {
+      const rows = this.messages
+        .filter((m) => m.conversation_id === params[0])
+        .map((m) => ({ role: m.role, content: m.content }));
+      // Two readers, one prefix: the runtime replays the whole transcript, and
+      // closing a failed turn asks only what the last message was.
+      return { rows: text.includes('order by created_at desc') ? rows.slice(-1) : rows };
+    }
+    // The lifetime vitals. `at` is the per-message clock this fake stamps, so a
+    // test can age a conversation without sleeping.
+    if (text.startsWith('select coalesce(count(m.id), 0) as messages')) {
+      if (!this.conversations.some((c) => c.id === params[0])) return { rows: [] };
+      const rows = this.messages.filter((m) => m.conversation_id === params[0]);
       return {
-        rows: this.messages
-          .filter((m) => m.conversation_id === params[0])
-          .map((m) => ({ role: m.role, content: m.content })),
+        rows: [
+          {
+            messages: rows.length,
+            last_at: rows.at(-1)?.at ?? null,
+            chars: rows.reduce((sum, m) => sum + JSON.stringify(m.content).length, 0),
+          },
+        ],
       };
     }
     if (text.startsWith('insert into core.events')) {
@@ -388,6 +414,16 @@ describe('a turn that fails at the prompt', () => {
     await h.session.handle('draft a reply to Parfait');
     expect(h.text()).toContain('trying again would fail');
     expect(h.db.offers).toHaveLength(0);
+  });
+
+  it('closes the turn in the transcript instead of leaving it hanging', async () => {
+    const h = harness({ provider: failingProvider(transportFailure()) });
+    await h.session.handle('draft a reply to Parfait');
+    // His message is still there. What follows it is the truth about it.
+    expect(h.db.messages[0]?.role).toBe('user');
+    const marker = h.db.messages[1];
+    expect(marker?.role).toBe('assistant');
+    expect(JSON.stringify(marker?.content)).toContain('This turn failed before I could answer');
   });
 });
 
@@ -1007,5 +1043,90 @@ describe('a turn that offers the owner something to do, at a prompt', () => {
     await h.session.handle('what is my balance?');
     expect(h.db.withdrawn).toContain('offer-1');
     expect(h.db.offers[0]?.expires_at).toEqual(new Date('2026-09-14T12:00:00Z'));
+  });
+});
+
+/*
+ * The terminal keeps one conversation per agent for the length of the process,
+ * which is the right thing for a session and the wrong thing for a session left
+ * open overnight. The rule is the one Telegram and the dashboard use, and it is
+ * applied where the turn starts rather than where the session does.
+ */
+describe('a conversation has a lifetime here too', () => {
+  const NOW = Date.parse('2026-09-14T12:00:00Z');
+
+  /** Backdate everything already written, as if the owner walked away. */
+  function walkAway(h: Harness, hours: number): void {
+    for (const m of h.db.messages) m.at = new Date(NOW - hours * 3_600_000);
+  }
+
+  it('continues the thread when the owner comes back ten minutes later', async () => {
+    const h = harness({ responses: [textResponse('One.'), textResponse('Two.')] });
+    h.db.clock = () => NOW;
+    await h.session.handle('any new mail?');
+    for (const m of h.db.messages) m.at = new Date(NOW - 10 * 60_000);
+
+    await h.session.handle('and the other one?');
+    expect(h.db.conversations).toHaveLength(1);
+    expect(h.text()).not.toContain('New conversation');
+  });
+
+  it('starts a fresh one the next morning, and says why', async () => {
+    const h = harness({ responses: [textResponse('One.'), textResponse('Two.')] });
+    h.db.clock = () => NOW;
+    await h.session.handle('any new mail?');
+    walkAway(h, 14);
+
+    await h.session.handle('any new mail?');
+    expect(h.db.conversations).toHaveLength(2);
+    expect(h.text()).toContain('(New conversation — we last spoke 14 hours ago.');
+    // The second run replayed nothing of the first: that is the whole point.
+    // (The request object is the live message array, so the answer it appended
+    // after the call is in it too — the owner's message is the only history.)
+    const sent = h.provider.requests.at(-1)?.messages ?? [];
+    expect(sent.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+
+  it('starts a fresh one when the transcript has grown past its budget', async () => {
+    const h = harness({
+      responses: [textResponse('x'.repeat(90_000)), textResponse('Two.')],
+    });
+    h.db.clock = () => NOW;
+    await h.session.handle('read me everything');
+    await h.session.handle('and now something else');
+    expect(h.db.conversations).toHaveLength(2);
+    expect(h.text()).toContain('the last one had grown long');
+  });
+
+  it('a failed turn is not answered by the next message', async () => {
+    // The live sequence: the run dies, the owner is told, and hours later he
+    // asks something else. Before this, the dead question came back as the
+    // opening paragraph of the answer to the new one.
+    const requests: CompletionRequest[] = [];
+    let calls = 0;
+    const provider: RuntimeProvider = {
+      async complete(req: CompletionRequest): Promise<CompletionResponse> {
+        requests.push(req);
+        calls += 1;
+        if (calls === 1) throw transportFailure();
+        return textResponse('Here is the Dorothée draft.');
+      },
+    };
+    const h = harness({ provider });
+    h.db.clock = () => NOW;
+
+    await h.session.handle('draft a response to Parfait Sedjro');
+    expect(h.text()).toContain("couldn't reach the model");
+
+    await h.session.handle('can you draft a reply to the mail of Dorothee Tabiou?');
+    const history = requests.at(-1)?.messages ?? [];
+    // Parfait is still in the transcript — the record does not lie — but the
+    // turn after it says it failed, so nothing reads as outstanding work.
+    // The request object is the live array the loop appends to, so the answer
+    // this run produced is on the end of it; the history is what precedes it.
+    const roles = history.map((m) => m.role);
+    expect(roles.slice(0, 3)).toEqual(['user', 'assistant', 'user']);
+    expect(JSON.stringify(history[1])).toContain('This turn failed before I could answer');
+    expect(JSON.stringify(history[2])).toContain('Dorothee');
   });
 });
