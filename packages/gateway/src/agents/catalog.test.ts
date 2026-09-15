@@ -3,10 +3,19 @@
  * installs. These are the tests that fail the moment an agent file and the
  * finance manifest drift apart — a persona granting a tool nobody registered.
  *
- * They describe this owner's private set, which is no longer in the repository
- * (see README, "Your agents are yours"), so on a clone that has only the
- * examples the whole block is skipped rather than failed: a fresh install is
- * not a broken one. `examples.test.ts` covers that case instead.
+ * They run against this owner's private set, which is no longer in the
+ * repository (see README, "Your agents are yours"), so on a clone that has only
+ * the examples the whole block is skipped rather than failed: a fresh install
+ * is not a broken one. `examples.test.ts` covers that case instead.
+ *
+ * Even inside the guard, nothing here may assert *what* the private set
+ * contains — no roster, no handle map, no "exactly N agents". `private/` is
+ * gitignored, and creating an agent is a supported action the owner takes from
+ * a menu; a platform test that fails because the product was used as designed
+ * is worse than no test. So each assertion below is stated as a property that
+ * holds for any private set: roles resolve, handles are unique and round-trip,
+ * a catalog composes, availability is reported. The guard's ids exist only to
+ * decide whether this is the owner's machine at all.
  */
 import { describe, expect, it } from 'vitest';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
@@ -33,12 +42,11 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     }
   });
 
-  it('has exactly one default, the finance advisor', () => {
-    expect(catalog.list().filter((a) => a.isDefault).map((a) => a.id)).toEqual([
-      'finance-advisor',
-    ]);
-    expect(catalog.defaultAgent().id).toBe('finance-advisor');
-    expect(catalog.resolve().id).toBe('finance-advisor');
+  it('has exactly one default, and every way of asking agrees on it', () => {
+    const flagged = catalog.list().filter((a) => a.isDefault);
+    expect(flagged).toHaveLength(1);
+    expect(catalog.defaultAgent().id).toBe(flagged[0]?.id);
+    expect(catalog.resolve().id).toBe(flagged[0]?.id);
   });
 
   it('resolves the finance advisor grant to every registered finance and memory tool', () => {
@@ -93,16 +101,20 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     }
   });
 
-  it('ships the handles the owner types', () => {
-    expect(
-      Object.fromEntries(owned().map((a) => [a.id, a.handle])),
-    ).toEqual({
-      concierge: 'buddi',
-      'credit-coach': 'credo',
-      'finance-advisor': 'ledger',
-      'mail-triage': 'postman',
-      scout: 'scout',
-    });
+  it('gives every installed agent a handle, unique across the whole catalog', () => {
+    // Deliberately *not* a map of this owner's handles. Which personas the
+    // owner keeps is the owner's business and changes the moment they make an
+    // agent — which is a menu item now, and is how this test last broke. What
+    // the platform owes holds for any private set, including none: every agent
+    // the owner installed has a handle, and no two agents anywhere in the
+    // catalog answer to the same one.
+    for (const summary of owned()) {
+      expect(summary.handle, summary.id).not.toBe('');
+      expect(summary.handle, summary.id).not.toContain('@');
+      expect(summary.handle, summary.id).toBe(summary.handle.toLowerCase());
+    }
+    const handles = catalog.list().map((a) => a.handle);
+    expect(new Set(handles).size).toBe(handles.length);
   });
 
   /*
@@ -125,40 +137,56 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     expect(scout.systemPromptTemplate).toContain('different AI provider');
   });
 
-  it('loads the whole catalog with no OPENAI_API_KEY, marking only scout unavailable', () => {
+  it('loads the whole catalog with no OPENAI_API_KEY, marking exactly the OpenAI agents unavailable', () => {
+    // A missing key takes out the agents pinned to that provider and nothing
+    // else — stated over whatever is installed rather than over a count, so an
+    // owner who makes a sixth agent does not break the platform's suite.
     const env = { ANTHROPIC_API_KEY: 'sk-ant-test' };
     const withoutKey = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
     const mine = withoutKey.list().filter((a) => a.source !== 'example');
-    expect(mine).toHaveLength(5);
-    const summaries = Object.fromEntries(mine.map((a) => [a.id, a]));
-    expect(summaries.scout?.available).toBe(false);
-    expect(summaries.scout?.unavailableReason).toContain('OPENAI_API_KEY');
-    for (const id of ['concierge', 'credit-coach', 'finance-advisor', 'mail-triage']) {
-      expect(summaries[id]?.available).toBe(true);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const summary of mine) {
+      if (summary.providerKind === 'openai') {
+        expect(summary.available, summary.id).toBe(false);
+        expect(summary.unavailableReason, summary.id).toContain('OPENAI_API_KEY');
+      } else {
+        expect(summary.available, summary.id).toBe(true);
+      }
     }
-    // And the default agent still resolves and still runs.
-    expect(withoutKey.defaultAgent().id).toBe('finance-advisor');
+    // And the installation still names a default agent that can actually run.
+    const fallback = withoutKey.defaultAgent();
+    expect(withoutKey.list().find((a) => a.id === fallback.id)?.available).toBe(true);
   });
 
-  it('resolves each agent by its handle as readily as by its id', () => {
-    expect(catalog.resolve('ledger').id).toBe('finance-advisor');
-    expect(catalog.resolve('@credo').id).toBe('credit-coach');
-    expect(catalog.byHandle('BUDDI')?.id).toBe('concierge');
-    expect(catalog.byHandle('ledger')?.id).toBe('finance-advisor');
+  it('resolves every agent by its handle as readily as by its id', () => {
+    for (const summary of catalog.list()) {
+      expect(catalog.resolve(summary.handle).id).toBe(summary.id);
+      expect(catalog.resolve(`@${summary.handle}`).id).toBe(summary.id);
+      expect(catalog.byHandle(summary.handle.toUpperCase())?.id).toBe(summary.id);
+    }
   });
 
-  it('tells the finance advisor its handle and names its colleagues by theirs', () => {
+  it('tells each agent its own handle and names its colleagues by theirs', () => {
+    // The roster paragraph is generated, so it is checked against the catalog
+    // that generated it — never against a list of handles typed here.
+    for (const summary of catalog.list()) {
+      const prompt = catalog.resolve(summary.id).systemPromptTemplate;
+      expect(prompt, summary.id).toContain(`Your handle is @${summary.handle}`);
+      for (const other of catalog.list()) {
+        if (other.id === summary.id) continue;
+        expect(prompt, `${summary.id} -> ${other.id}`).toContain(
+          `@${other.handle} — ${other.name}: `,
+        );
+      }
+    }
+  });
+
+  it('attributes a delegated answer to the delegate by handle, never by name', () => {
+    // The persona must quote the handle, never the catalog id or the name.
+    const coach = catalog.resolve('credit-coach');
     const prompt = catalog.resolve('finance-advisor').systemPromptTemplate;
-    expect(prompt).toContain('Your handle is @ledger');
-    expect(prompt).toContain('@credo — Credit Coach:');
-    expect(prompt).toContain('@buddi — Concierge:');
-  });
-
-  it('attributes a delegated answer to the credit coach by handle', () => {
-    // The persona must quote the handle, never the catalog id.
-    const prompt = catalog.resolve('finance-advisor').systemPromptTemplate;
-    expect(prompt).toContain('@credo says:');
-    expect(prompt).not.toContain('Credit Coach says:');
+    expect(prompt).toContain(`@${coach.handle} says:`);
+    expect(prompt).not.toContain(`${coach.name} says:`);
   });
 
   it('fails closed on an unknown id rather than falling back to the default', () => {

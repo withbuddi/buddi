@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type ToolContext } from '@buddi/core';
 import { DELEGATE_TOOL } from '@buddi/runtime';
-import { AGENTS_DIR, createToolRegistry } from './catalog.js';
+import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 import {
   bindDelegation,
   createDelegationManifest,
@@ -51,9 +51,22 @@ describe('readDelegates', () => {
     expect(() => readDelegates('c', dir)).toThrow(/JSON array of agent ids/);
   });
 
-  it('ships finance-advisor -> credit-coach, and nothing for credit-coach', () => {
-    expect(readDelegates('finance-advisor', AGENTS_DIR)).toEqual(['credit-coach']);
-    expect(readDelegates('credit-coach', AGENTS_DIR)).toEqual([]);
+  it('reads the installed allowlists as ids of installed agents, whatever they are', () => {
+    // Not a copy of this owner's allowlist: `private/` is gitignored, a fresh
+    // clone has none of it, and an owner who makes an agent must not break the
+    // platform's suite. What holds for any installation, including one with no
+    // private agents at all: every allowlist next to an installed agent parses,
+    // and every id in one names an agent this catalog knows.
+    const catalog = loadGatewayCatalog({ env: {} });
+    const known = new Set(catalog.list().map((a) => a.id));
+    for (const summary of catalog.list()) {
+      const agentsDir = path.dirname(path.dirname(catalog.resolve(summary.id).file));
+      for (const target of readDelegates(summary.id, agentsDir)) {
+        expect(known, `${summary.id} -> ${target}`).toContain(target);
+      }
+    }
+    // And an agent with no file of its own delegates to nobody.
+    expect(readDelegates('no-such-agent', AGENTS_DIR)).toEqual([]);
   });
 });
 

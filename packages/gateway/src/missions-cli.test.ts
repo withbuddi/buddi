@@ -1,16 +1,35 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ToolRegistry, loadAgentCatalog } from '@buddi/core';
 import { parseMissionsArgs } from './missions-cli.js';
 import {
   DAILY_CHECK_PROMPT,
   FRIDAY_RECAP_PROMPT,
 } from '@buddi/tool-finance';
-import { loadGatewayCatalog } from './agents/catalog.js';
 import { planDefaultMissions } from './missions/defaults.js';
 import { findingOf, renderFinding, sentinelWakeMission } from './missions/sentinel-wake.js';
 import { DEFAULT_TIMEZONE, recapMissionId, timezoneFromEnv } from './missions/recap.js';
 
-/** The plan this installation's plugins and agent files actually produce. */
-const catalog = loadGatewayCatalog({ env: {} });
+/**
+ * One agent, claiming the roles the installed plugins' suggestions name.
+ *
+ * Deliberately a fixture rather than the catalog on this machine: the plan is a
+ * property of the *plugins* and the roles, and a suite that read the owner's
+ * `private/` set would fail on a fresh clone and again the first time the owner
+ * made an agent. `generic-install.test.ts` covers the opposite case — a catalog
+ * where nobody claims a role, and every suggestion is skipped with a reason.
+ */
+const MISSION_AGENT = 'mission-agent';
+const catalog = loadAgentCatalog({
+  dir: path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '__fixtures__',
+    'mission-agents',
+  ),
+  registry: new ToolRegistry(),
+  env: {},
+});
 const plan = planDefaultMissions(catalog);
 const entry = (id: string) => plan.entries.find((e) => e.mission.id === id);
 
@@ -89,7 +108,7 @@ describe('the recap mission', () => {
     expect(recapMissionId()).toBe('friday-recap');
     expect(entry('friday-recap')?.mission).toMatchObject({
       id: 'friday-recap',
-      agentId: 'finance-advisor',
+      agentId: MISSION_AGENT,
       enabled: true,
       alwaysDeliver: true,
     });
@@ -123,8 +142,10 @@ describe('the default missions', () => {
   });
 
   it('resolves every suggested mission through a role, not an agent name', () => {
+    // Whoever claims the role gets the mission — here, the fixture that claims
+    // both. The point is that no mission names an agent.
     for (const id of ['friday-recap', 'daily-check', 'weekly-consolidation']) {
-      expect(entry(id)?.mission.agentId).toBe('finance-advisor');
+      expect(entry(id)?.mission.agentId).toBe(MISSION_AGENT);
     }
   });
 
@@ -140,7 +161,7 @@ describe('the default missions', () => {
   });
 
   it('points the wake mission at the overview role holder', () => {
-    expect(sentinelWakeMission(catalog).agentId).toBe('finance-advisor');
+    expect(sentinelWakeMission(catalog).agentId).toBe(MISSION_AGENT);
   });
 
   it('runs the daily check at 08:00 and tells it to stay silent', () => {

@@ -1,5 +1,14 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry, type Mission, type Occurrence, type ToolContext } from '@buddi/core';
+import {
+  ToolRegistry,
+  loadAgentCatalog,
+  type AgentCatalog,
+  type Mission,
+  type Occurrence,
+  type ToolContext,
+} from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -107,11 +116,34 @@ function decidingProvider(
   };
 }
 
+/**
+ * The agent a mission run resolves.
+ *
+ * A fixture, deliberately. Which agents are installed on the machine running
+ * this suite is the owner's business — `private/` is gitignored, a fresh clone
+ * has none of it, and making one more is a supported action — while what the
+ * executor owes is the same for any of them.
+ */
+const MISSION_AGENT = 'mission-agent';
+
+function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
+  return loadAgentCatalog({
+    dir: path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '__fixtures__',
+      'mission-agents',
+    ),
+    registry,
+    env: { ANTHROPIC_API_KEY: 'test-key' },
+  });
+}
+
 /** The recap: the one mission that speaks whatever the run decided. */
 const mission: Mission = {
   id: 'friday-recap',
   name: 'Friday recap',
-  agentId: 'finance-advisor',
+  agentId: MISSION_AGENT,
   prompt: 'Produce the weekly recap.',
   enabled: true,
   alwaysDeliver: true,
@@ -160,6 +192,7 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
   const base = {
     pool: db as unknown as Pool,
     registry,
+    catalog: fixtureCatalog(registry),
     provider: fakeProvider('Cash 1200 EUR. Minimum 340 EUR on 2026-10-02.'),
     ctx,
     env: { ANTHROPIC_API_KEY: 'test-key' } as NodeJS.ProcessEnv,
@@ -186,7 +219,7 @@ describe('createMissionExecutor', () => {
 
     const result = await execute(occurrence, mission);
 
-    expect(db.conversations).toEqual([{ id: 'conv-1', agent_id: 'finance-advisor' }]);
+    expect(db.conversations).toEqual([{ id: 'conv-1', agent_id: MISSION_AGENT }]);
     expect(result.conversationId).toBe('conv-1');
     expect(result.delivered).toBe(true);
     expect(result.chatId).toBe('chat-42');
@@ -420,7 +453,7 @@ describe('a sentinel wake', () => {
         severity: 'urgent',
         title: 'Safety floor breaks in 19 days',
         detail: 'Projected minimum 120 EUR on 2026-10-02, floor is 500 EUR.',
-        agentId: 'finance-advisor',
+        agentId: MISSION_AGENT,
         data: { minimum: 120, on: '2026-10-02' },
       },
     },

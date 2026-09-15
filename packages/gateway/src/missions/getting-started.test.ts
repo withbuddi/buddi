@@ -1,5 +1,14 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry, type Mission, type Occurrence, type ToolContext } from '@buddi/core';
+import {
+  ToolRegistry,
+  loadAgentCatalog,
+  type AgentCatalog,
+  type Mission,
+  type Occurrence,
+  type ToolContext,
+} from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -137,10 +146,30 @@ class FakeDb {
   }
 }
 
+/**
+ * The agent the arc runs as — a fixture, never whatever this machine has
+ * installed: `private/` is gitignored and the owner may make another agent at
+ * any time, and neither fact changes what the budget owes.
+ */
+const MISSION_AGENT = 'mission-agent';
+
+function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
+  return loadAgentCatalog({
+    dir: path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '__fixtures__',
+      'mission-agents',
+    ),
+    registry,
+    env: { ANTHROPIC_API_KEY: 'test-key' },
+  });
+}
+
 const mission: Mission = {
   id: GETTING_STARTED_ID,
   name: 'Getting started',
-  agentId: 'finance-advisor',
+  agentId: MISSION_AGENT,
   prompt: 'Find one genuinely useful thing.',
   enabled: true,
   alwaysDeliver: false,
@@ -387,6 +416,7 @@ function realExecutorOver(db: FakeDb, provider: RuntimeProvider): MissionExecute
   return createMissionExecutor({
     pool: db as unknown as Pool,
     registry,
+    catalog: fixtureCatalog(registry),
     provider,
     ctx,
     env: { ANTHROPIC_API_KEY: 'test-key' } as NodeJS.ProcessEnv,
