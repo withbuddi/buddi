@@ -1,0 +1,7 @@
+{
+  "name": "@buddi/fixture-test-plugin",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.js"
+}

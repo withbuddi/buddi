@@ -41,7 +41,7 @@ What a plugin is *not*:
 
 ---
 
-## 2. The five contributions
+## 2. The contributions
 
 ```ts
 export interface PluginManifest {
@@ -54,10 +54,16 @@ export interface PluginManifest {
   sources?: Source[];
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
+  agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
+  skills?: SuggestedSkill[];  // shared procedures you propose
+  description?: string;       // one line, shown before anyone installs you
+  network?: NetworkUse[];     // the hosts you intend to reach, and why
 }
 ```
 
-Only `tools` is required, and it may be empty.
+Only `tools` is required, and it may be empty. The last four exist for one
+reason: somebody who is not you has to decide whether to run your code. See
+§2.6 and §8.
 
 ### 2.1 Tools
 
@@ -410,6 +416,102 @@ An agent can also draw deliberately, with the platform's own `canvas.show` — f
 something it worked out that no single tool result covers. Precedence in the
 page is: an explicit `canvas.show` in the run, else a declared descriptor for the
 tool, else `structured`.
+
+
+---
+
+### 2.6 Proposed agents and skills
+
+```ts
+export interface SuggestedAgent {
+  id: string;            // 'meteo' — the directory name too
+  handle: string;        // what the owner types: @meteo
+  name: string;
+  description: string;   // one line; other agents read it to hand it work
+  persona: string;       // the body of the file, in markdown
+  tools: string[];       // THE GRANT. Names or family globs.
+  roles?: string[];
+  model?: string;
+  provider?: 'anthropic' | 'openai';
+  maxTurns?: number;
+  language?: 'mirror' | 'en' | 'fr';
+  skills?: SuggestedSkill[];   // written into this agent's own skills/
+}
+```
+
+Tools without an agent are a box of parts. You know what a useful agent made of
+your tools sounds like, and that knowledge should travel with the plugin exactly
+as a suggested mission does — so a manifest can carry `agents` and, for
+procedures every agent should read, `skills`.
+
+**They are proposals, and a plugin can never create one.** Creating an agent is
+creating a principal, and the `tools:` line in its file is the only thing that
+decides what that principal can reach. So there is no code path anywhere that
+writes an agent file because a plugin was installed. What exists instead:
+
+| | |
+| --- | --- |
+| `platform.plugin_agents` | tier `auto`. Every agent and shared skill the installed plugins propose, with the grant each asks for and whether the owner has accepted it. |
+| `platform.accept_plugin_agent` | tier **`gated`**. Builds exactly the envelope `platform.create_agent` builds, from your proposal's fields. |
+| `platform.accept_plugin_skill` | tier **`gated`**. The same, for a shared skill. |
+
+Accepting reuses `create_agent` wholesale, which is the point — your proposal
+gets no shorter path to a principal than the owner's own agent does:
+
+- **the same validation, before the action exists.** A duplicate id, a taken
+  handle, a tool that is not installed here, a model that does not belong to the
+  provider, a file the loader would refuse: every one of them is a refusal in
+  `describe`, so the owner is never asked to approve something that cannot
+  happen;
+- **the same preview.** It names your plugin and its version, then the whole
+  grant in the *registered tools' own words* — what it reaches, tool by tool,
+  and what it does not reach, named;
+- **the same refusal to hand over the platform's write tools.** A proposal
+  naming `platform.create_agent` — or `platform.*`, which resolves to it — is
+  refused outright. One approval must never buy a second agent that can write
+  the installation for ever after.
+
+#### Whose file is it?
+
+**The owner's, from the moment they accept.** It is written into their private
+agents directory, and your plugin cannot rewrite it, at any version, ever.
+
+That is a decision with a cost — you cannot ship a fix to a persona — and it is
+the right one, because the alternative is worse in a way that matters: a file
+your upgrade could rewrite is a *tool grant* your upgrade could widen, with no
+approval anywhere. It would also mean an owner who improved your persona loses
+the improvement next Tuesday.
+
+So an upgrade tells the truth and changes nothing. A small `plugin.json` beside
+`agent.md` records which plugin proposed it, at which version, with a hash of
+the proposal and a hash of the file as written. `buddi plugins install <dir>`
+on a plugin that is already installed prints, per proposed agent, one of:
+
+```
+  meteo — accepted from weather@0.1.0, unchanged on both sides
+  meteo — the plugin proposes a different meteo now (you accepted 0.1.0, this is
+          0.2.0). Your copy is untouched — accepting again is an approval you
+          make, grant and all.
+  meteo — you have edited your copy; it is yours and nothing will change it
+  meteo — you have not accepted this one
+```
+
+And then it stops. If you have changed the proposal and the owner wants it, they
+accept it again, see the new grant, and approve it — or they do not.
+
+#### Writing a good one
+
+- **Propose the smallest grant that does the job.** `weather.*` and nothing
+  else. An agent that also asks for `memory.*` "for context" is an agent the
+  owner has to think about instead of accept.
+- **Ship its skill with it.** A persona says who it is; a skill says how it
+  works. Skills listed on the agent are written into its own directory by the
+  same approval, and they grant nothing.
+- **Write the persona for someone else's installation.** You do not know what
+  else is installed. Say what the agent cannot see, and what it should do when
+  the answer depends on something it cannot see.
+
+`examples/plugins/weather/src/agents.ts` is the worked example.
 
 ---
 
@@ -868,25 +970,31 @@ export const manifest: PluginManifest = createWeatherManifest();
 export default manifest;
 ```
 
-### Registering it
+### Installing it
 
-One line, in `createToolRegistry` in
-`packages/gateway/src/agents/catalog.ts`:
-
-```ts
-registry.register(weatherManifest);
+```bash
+pnpm build                                  # in your plugin's directory
+buddi plugins install /path/to/weather      # reads what it contributes, installs nothing
+buddi plugins install /path/to/weather --yes
 ```
 
-That is all the tools, the sentinel and (if it had one) the sources need: the
-`serve` loop ticks `runSentinels`/`runSources` over
-`wiring.registry.manifests()`. Two neighbouring lines finish the job:
-`import { manifest as weatherManifest } from '@buddi/tool-weather';` at the top,
-and adding `weatherManifest` to `installedManifests()` in the same file — that
-list is what `buddi migrate` applies schemas from and what
-`buddi missions add-defaults` reads suggestions from.
+That is the whole of it, and none of it touches buddi's source. The record is
+`plugins.json` in the owner's private directory; the next process to start reads
+it, imports your entry point, and registers your manifest alongside the built-in
+ones. Your tools appear in `platform.installed_tools`, the `serve` loop ticks
+your sentinels and sources over `wiring.registry.manifests()`, `buddi migrate`
+applies your schema, `buddi missions add-defaults` reads your suggestions, and
+`platform.plugin_agents` offers your agents. See §8.
 
-**None of this is done for the example.** The `weather` plugin is in the
-workspace so it compiles and is tested against the real types, and nowhere else.
+**The four plugins this repository ships are different**: they are compiled into
+the build, in `createToolRegistry` and `installedManifests()` in
+`packages/gateway/src/agents/catalog.ts`, and they cannot be uninstalled because
+they are part of it. If you are adding a plugin *to buddi itself*, that is the
+one line to add. If you are distributing one, you never touch that file.
+
+**Neither is done for the example.** The `weather` plugin is in the workspace so
+it compiles and is tested against the real types — and it is what the end-to-end
+install is exercised against.
 
 ---
 
@@ -1045,6 +1153,102 @@ third needs a fake transport:
     tools driven through registry.invoke; a gated tool proven not to send.
 [ ] `pnpm -r build && pnpm typecheck && pnpm test` green — check-boundaries
     included.
-[ ] Registered: one register() line in createToolRegistry, plus installedManifests()
-    if it owns a schema or suggests missions.
+[ ] Proposed agents (if any): the smallest grant that does the job; no
+    platform.* write tool and no platform.* glob; a skill shipped with each one;
+    a persona that says what the agent cannot see.
+[ ] `description` and `network` filled in: they are what a stranger reads before
+    they run your code.
+[ ] `buddi plugins install <dir>` (no --yes) read end to end, as the owner will:
+    is the auto-tier list what you meant it to be?
+[ ] `buddi plugins uninstall <name>` read end to end: does anything dangle?
+[ ] Distributed: nothing to register by hand. A register() line in
+    createToolRegistry is only for plugins shipped *inside* buddi.
 ```
+
+---
+
+## 8. Distributing it: install, upgrade, uninstall
+
+### What a plugin *is*, on disk
+
+A built npm-style package directory:
+
+```
+weather/
+  package.json        # "main": "./dist/index.js"  (or exports["."])
+  dist/index.js       # exports `manifest` (or a default export)
+  migrations/*.sql    # if you own tables
+```
+
+`buddi plugins install <directory>` resolves `main` (or the `.` export),
+imports it, and expects `manifest` or `default` to be a `PluginManifest`.
+
+**A local directory is the only source this build installs from.** Deliberately:
+it is the honest first increment — it works for a git clone, a `pnpm pack`
+unpacked, a sibling checkout — and it leaves for later the parts that need real
+thought. Installing from npm means running a package manager on the owner's
+behalf, deciding what happens to transitive dependencies inside a process that
+holds their bank data, and pinning and verifying versions. A signed, verified
+registry is a different feature and it should be built as one.
+
+### What the owner sees before they say yes
+
+`install` with no `--yes` installs nothing and prints the contribution:
+
+- every tool, and — first, and in capitals — **the ones at tier `auto`**, which
+  run the moment a model decides to call them, with nobody asked. A plugin
+  quietly shipping one is exactly what this exists to surface;
+- the Postgres schema it will own;
+- everything that runs on a timer, with its period: "every 6 hours, by itself";
+- the hosts it declares in `network`, and — when it declares none — one line
+  saying that nothing enforces this, so an undeclared host means the author did
+  not write one down, not that the plugin cannot reach the network;
+- the agents it proposes, each with the grant it asks for, and the sentence that
+  nothing is created by installing.
+
+Reading that summary already imported your entry point — there is no way to
+describe a module without loading it, and the CLI says so rather than implying a
+sandbox that does not exist. What `--yes` buys is registration, migration,
+scheduling and the offer of agents.
+
+### Upgrades
+
+Install the same plugin again. The record is replaced; the migrations run
+forward; **no agent file is written**. Per proposed agent you get one line
+saying where the owner's copy stands — untouched, edited by them, or superseded
+by a proposal you have changed. See §2.6.
+
+A version that claims a *different* schema is refused: that is a data move, not
+an upgrade, and it should be decided deliberately.
+
+### Uninstall
+
+```bash
+buddi plugins uninstall weather              # shows what it would do
+buddi plugins uninstall weather --yes        # removes the code, KEEPS the data
+buddi plugins uninstall weather --yes --purge   # ...and drops the schema
+```
+
+The default keeps the data, and the command prints the schema, its tables and
+its row counts so the owner knows exactly what is being kept and where.
+Reinstalling finds it again. For the finance plugin the alternative would be
+every account, transaction and card ledger the owner has, destroyed by a verb
+that sounds like "remove the code" — so destroying is a separate flag that
+prints what it is about to destroy first, and is recoverable only from a backup.
+
+It also stands down everything that would otherwise be left pointing at tools
+that no longer exist, because a half-removed plugin is worse than one that
+stays:
+
+| What | What happens |
+| --- | --- |
+| An agent whose grant names your tools | **Refused**, naming the agents. A `tools:` entry that resolves to nothing is a catalog *load error* — the installation would not start. `--detach-agents` removes those entries first (it only ever removes names). |
+| Missions registered from your suggestions | Disabled, not deleted. A disabled mission is a row the owner can see and re-enable; a deleted one is a mystery next month. |
+| Jobs queued for those missions | Cancelled. |
+| Approvals pending on your tools | Rejected: they could never execute. |
+| Agents the owner accepted from your proposals | Left alone — except for the grant rewrite above. They are the owner's files. |
+| Your schema | Kept, unless `--purge`. |
+| Rows in core's tables (the action ledger, the event log) | Kept. They are the record of what happened, and history does not become false because a plugin left. |
+
+Everything above is planned before anything happens, printed, and only then
+applied — the same shape as an approval.

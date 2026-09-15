@@ -186,6 +186,81 @@ export interface SuggestedMission {
   enabledByDefault?: boolean;
 }
 
+/**
+ * A skill a plugin *suggests*: a procedure, never a privilege.
+ *
+ * Same standing as a suggested mission — installing the plugin proposes it and
+ * nothing more. It is written into the owner's own tree only when the owner
+ * approves the gated `platform.accept_plugin_skill` (or accepts the agent that
+ * carries it), and from that moment the file is the owner's.
+ */
+export interface SuggestedSkill {
+  /** Kebab-case, and also the file name: `staging-an-import`. */
+  name: string;
+  /** One line on when this procedure applies. */
+  description: string;
+  /** The procedure itself, in markdown. */
+  body: string;
+}
+
+/**
+ * An agent a plugin *proposes*.
+ *
+ * Tools without an agent are a box of parts: the finance plugin knows what an
+ * advisor made of its tools should be, and that knowledge travels with the
+ * plugin, exactly as a suggested mission does. What it is **not** is an
+ * install: a plugin can never write an agent file. The fields here are the
+ * arguments of `platform.create_agent`, and the owner approves that tool's
+ * gated action — the same validation, the same preview naming what the grant
+ * reaches, the same refusal to hand over the tools that write the installation.
+ *
+ * The file the owner accepts is written into *their* private agents directory
+ * and belongs to them from that moment. A plugin upgrade never rewrites it; it
+ * can only propose again, out loud (see `docs/plugins.md`, "Upgrades").
+ */
+export interface SuggestedAgent {
+  /** Agent id and directory name, kebab-case. */
+  id: string;
+  /** What the owner types to address it, without the `@`. */
+  handle: string;
+  name: string;
+  /** One line: what it is for. Other agents read this to hand it work. */
+  description: string;
+  /** The persona, in markdown. The body of the file. */
+  persona: string;
+  /**
+   * The proposed grant, as names or family globs. THE PRIVILEGE BOUNDARY —
+   * this is what the owner is shown, tool by tool, before they say yes. A
+   * proposal naming a tool this installation does not have is refused, and one
+   * naming a `platform.*` write tool is refused outright.
+   */
+  tools: string[];
+  /** Capabilities it answers for, e.g. `['overview']`. */
+  roles?: string[];
+  model?: string;
+  provider?: 'anthropic' | 'openai';
+  maxTurns?: number;
+  language?: 'mirror' | 'en' | 'fr';
+  /** Skills written into this agent's own `skills/` when it is accepted. */
+  skills?: SuggestedSkill[];
+}
+
+/**
+ * A host this plugin reaches, and why.
+ *
+ * Declared so that *before* installing someone else's code the owner can read
+ * one line per destination it intends to talk to. It is documentation, not a
+ * sandbox: nothing enforces it at runtime. Saying so plainly is the point — an
+ * undeclared host is a plugin author who did not write this down, not a plugin
+ * that cannot reach the network.
+ */
+export interface NetworkUse {
+  /** `api.open-meteo.com`, or `*.example.com` when it really is several. */
+  host: string;
+  /** One line the owner can weigh: what it sends there and what it fetches. */
+  why: string;
+}
+
 export interface PluginManifest {
   /** Plugin family name, e.g. 'finance'. */
   name: string;
@@ -222,4 +297,27 @@ export interface PluginManifest {
    * falls back to a readable structured view of its JSON.
    */
   views?: ViewDescriptor[];
+  /**
+   * Agents this plugin proposes (optional). Proposals only, exactly like
+   * `missions`: installing a plugin never creates a principal. The owner
+   * accepts one through `platform.accept_plugin_agent`, which is `gated` and
+   * shows the whole tool grant in the granted tools' own words.
+   */
+  agents?: SuggestedAgent[];
+  /**
+   * Shared skills this plugin proposes (optional). Accepted through
+   * `platform.accept_plugin_skill`; a skill grants no tool and lowers no tier.
+   */
+  skills?: SuggestedSkill[];
+  /**
+   * One line on what this plugin is, shown before it is installed. Optional so
+   * every existing manifest still compiles; a plugin meant to be distributed
+   * should write one.
+   */
+  description?: string;
+  /**
+   * Hosts this plugin intends to reach, declared for the pre-install summary.
+   * Documentation, not a sandbox — see `NetworkUse`.
+   */
+  network?: NetworkUse[];
 }

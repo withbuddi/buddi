@@ -414,7 +414,7 @@ so finish with `buddi service restart`.
 ## Tools and plugins
 
 The core is the trust boundary, and **the core has no tools**. Every
-world-touching capability is a plugin, and a plugin can contribute four things:
+world-touching capability is a plugin, and a plugin can contribute six things:
 
 - an **effect tool** — something an agent proposes and the approval machinery
   gates (`email.send`);
@@ -423,7 +423,11 @@ world-touching capability is a plugin, and a plugin can contribute four things:
 - a **sentinel** — a watcher that produces *findings*; core alone decides
   whether a finding is worth waking you for;
 - a **suggested mission** — scheduled work the plugin thinks is worth doing,
-  addressed to a **role** rather than to an agent id.
+  addressed to a **role** rather than to an agent id;
+- a **proposed agent** — the persona that knows what these tools are *for*,
+  with the grant it asks for. A proposal, never an install: you approve it, and
+  the file that appears is yours;
+- a **view descriptor** — data saying how a result is drawn on the dashboard.
 
 Four ship in this repository:
 
@@ -447,6 +451,38 @@ repository is `packages/tools/memory/src/index.ts`: 35 lines, a manifest, five
 tools, one migration. For sources and gated effects, read
 `packages/tools/email/src/index.ts`. Apply your schema with `buddi migrate`,
 which runs core's migrations and every installed plugin's.
+
+**Installing someone else's.** A plugin does not have to be compiled into this
+build. `buddi plugins` is the lifecycle:
+
+```bash
+buddi plugins list                          # what is installed, and whether it is healthy
+buddi plugins info weather                  # what it is, and what it brought
+buddi plugins install ../weather-plugin     # READS what it contributes; installs nothing
+buddi plugins install ../weather-plugin --yes
+buddi plugins uninstall weather --yes       # removes the code; KEEPS the database schema
+buddi plugins uninstall weather --yes --purge   # ...and drops the schema. Irreversible.
+```
+
+Installing a plugin is running somebody else's code inside buddi, so it is
+explicit, and `install` without `--yes` prints the whole contribution first:
+every tool and its trust tier — **loudly, the ones at `auto` that run without
+asking you** — the Postgres schema it will own, everything it will run on a
+timer and how often, the hosts it says it will talk to, and the agents it
+proposes. Nothing is registered, migrated, scheduled or created until you say
+`--yes`.
+
+Uninstalling removes the code and **keeps your data**: the plugin's schema is
+left exactly where it is, with the row count printed, and reinstalling finds it
+again. It also stands down everything that would otherwise be left pointing at
+tools that no longer exist — missions it suggested are disabled, jobs queued for
+them are cancelled, approvals waiting on its tools are rejected — and it refuses
+outright if an agent still names its tools in a grant, because that is an
+installation that would not start. `--detach-agents` takes those entries out of
+the grants first.
+
+The record of what is installed is `plugins.json` in your private directory,
+next to your agents. It is never committed.
 
 ---
 

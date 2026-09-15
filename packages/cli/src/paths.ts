@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hydrateDatabaseUrl, type DatabaseUrlResolution } from '@buddi/core';
+import { loadPluginsOnce } from '@buddi/gateway';
 import { config as loadDotenv } from 'dotenv';
 
 /** `packages/cli/dist` at runtime, `packages/cli/src` under vitest. */
@@ -66,5 +67,9 @@ export async function loadEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<DatabaseUrlResolution> {
   loadEnv();
+  // The installed plugins, for the same reason and at the same moment: a
+  // registry built before the record is read has none of their tools, and an
+  // agent granted one of those tools then fails to load.
+  await loadPluginsOnce(env);
   return hydrateDatabaseUrl(env);
 }

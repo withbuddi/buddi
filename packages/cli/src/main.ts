@@ -23,6 +23,7 @@ import {
   runChatCli,
   runMissionsCli,
   runNudgesCli,
+  runPluginsCli,
   runRemindersCli,
   runServe,
 } from '@buddi/gateway';
@@ -143,6 +144,10 @@ export async function dispatch(command: Command): Promise<number> {
       await loadEnvironment();
       await runServe();
       return 0;
+    case 'plugins': {
+      await loadEnvironment();
+      return runPluginsCli(command.argv);
+    }
     case 'migrate': {
       await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
