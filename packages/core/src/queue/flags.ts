@@ -43,6 +43,20 @@ export async function setPaused(pool: Pool, paused: boolean): Promise<boolean> {
   return paused;
 }
 
+/**
+ * Write any flag. The same one row per key the pause switch uses — this is the
+ * installation's small durable key-value store, and a watcher that must not
+ * repeat itself across restarts keeps its place here.
+ */
+export async function setFlag(pool: Pool, key: string, value: unknown): Promise<void> {
+  await pool.query(
+    `insert into core.system_flags (key, value, updated_at)
+     values ($1, $2::jsonb, now())
+     on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [key, JSON.stringify(value ?? null)],
+  );
+}
+
 /** Read any flag. Absent is `undefined`, never a guessed default. */
 export async function getFlag(pool: Pool, key: string): Promise<unknown> {
   const { rows } = await pool.query<{ value: unknown }>(

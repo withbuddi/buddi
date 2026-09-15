@@ -412,7 +412,15 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
           return { status: 'warn', detail: `PAUSED — ${summary} (\`buddi resume\` to start again)` };
         }
         if (counts.failed > 0) {
-          return { status: 'warn', detail: `${summary} — \`buddi jobs --state failed\`` };
+          // A failed job is not a statistic: it is work that did not happen and
+          // will not happen unless the owner says so. The line says that, and
+          // says how to undo it.
+          return {
+            status: 'warn',
+            detail:
+              `${summary} — ${counts.failed} piece(s) of work gave up and did nothing; ` +
+              '`buddi jobs --state failed` to see them, `buddi jobs retry --all` to run them again',
+          };
         }
         return { status: 'ok', detail: `running — ${summary}` };
       } catch {

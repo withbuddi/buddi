@@ -16,6 +16,12 @@ import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
 import { PAUSED_SQL } from './flags.js';
 import {
+  retryProfileFor,
+  UNATTENDED_JOB_KINDS,
+  UNATTENDED_RETRY_PROFILE,
+  type FailureClass,
+} from './retry-policy.js';
+import {
   JOB_COLUMNS,
   RETRY_BASE_MS,
   RETRY_FACTOR,
@@ -30,6 +36,11 @@ export type EnqueueInput = {
   payload?: unknown;
   priority?: number;
   runAfter?: Date;
+  /**
+   * Cap on attempts. Defaults to the kind's retry profile — three for anything
+   * someone is waiting on, eight for unattended work — rather than to a
+   * constant, so a triage run is not held to a prompt's patience.
+   */
   maxAttempts?: number;
   /**
    * Idempotency. Enqueueing the same key twice returns the job that is already
@@ -53,7 +64,7 @@ export async function enqueue(pool: Pool, input: EnqueueInput): Promise<Job> {
       input.payload === undefined ? null : JSON.stringify(input.payload),
       input.priority ?? 0,
       input.runAfter?.toISOString() ?? null,
-      input.maxAttempts ?? 3,
+      input.maxAttempts ?? retryProfileFor(input.kind).maxAttempts,
       input.dedupKey ?? null,
       input.conversationId ?? null,
     ],
@@ -183,6 +194,12 @@ export type FailInput = {
   retry: boolean;
   /** How long to wait before the next claim. Defaults to 1m, 5m, 25m. */
   backoffMs?: number;
+  /**
+   * Why this attempt failed, as the retry policy read it. Recorded on the
+   * `job.failed` event — `last_error` stays the raw message, so a wave of
+   * failures can still be grouped by the thing that actually broke.
+   */
+  classification?: { class: FailureClass; reason: string };
 };
 
 /**
@@ -229,6 +246,9 @@ export async function failJob(
       error,
       retrying,
       ...(retrying ? { retryAt: job.runAfter.toISOString() } : {}),
+      ...(input.classification
+        ? { failureClass: input.classification.class, failureReason: input.classification.reason }
+        : {}),
     },
     job.conversationId ?? undefined,
   );
@@ -378,12 +398,19 @@ export async function cancelJob(pool: Pool, jobId: string): Promise<Job | null> 
 /**
  * Put a finished job back in line — `buddi jobs retry`. The attempt counter is
  * reset: a human looked at it, so the bound starts over.
+ *
+ * A row enqueued before the unattended profile existed carries the old cap of
+ * three, which would give it six more minutes and then kill it again. Retrying
+ * lifts the cap to the kind's current profile, so the owner's second chance is
+ * the horizon the work should have had the first time.
  */
 export async function retryJob(pool: Pool, jobId: string): Promise<Job | null> {
   const { rows } = await pool.query<JobRow>(
     `update core.jobs
      set state = 'pending',
          attempts = 0,
+         max_attempts = case when kind = any($2::text[])
+           then greatest(max_attempts, $3::int) else max_attempts end,
          run_after = now(),
          lease_owner = null,
          lease_until = null,
@@ -391,7 +418,7 @@ export async function retryJob(pool: Pool, jobId: string): Promise<Job | null> {
          updated_at = now()
      where id = $1::uuid and state in ('failed', 'cancelled', 'suspended')
      returning ${JOB_COLUMNS}`,
-    [jobId],
+    [jobId, [...UNATTENDED_JOB_KINDS], UNATTENDED_RETRY_PROFILE.maxAttempts],
   );
   if (rows.length === 0) return null;
   const job = toJob(rows[0] as JobRow);
@@ -433,6 +460,94 @@ export async function listJobs(pool: Pool, input: ListJobsInput = {}): Promise<J
     [input.state ?? null, input.kind ?? null, Math.max(1, Math.min(input.limit ?? 50, 500))],
   );
   return rows.map(toJob);
+}
+
+export interface ListDeadJobsInput {
+  /** Restrict to these kinds. Defaults to the unattended ones. */
+  kinds?: readonly string[];
+  /** Only jobs that died strictly after this instant. */
+  after: Date;
+  /** Only jobs that died at or before this instant. */
+  until?: Date;
+  limit?: number;
+}
+
+/**
+ * Work that will not happen: jobs that reached `failed` and are waiting for a
+ * human, oldest death first.
+ *
+ * "Died at" is `updated_at` — the moment the last attempt was written off —
+ * which is what a wave is grouped by, not `created_at`.
+ */
+export async function listDeadJobs(pool: Pool, input: ListDeadJobsInput): Promise<Job[]> {
+  const kinds = [...(input.kinds ?? UNATTENDED_JOB_KINDS)];
+  const { rows } = await pool.query<JobRow>(
+    `select ${JOB_COLUMNS} from core.jobs
+     where state = 'failed'
+       and kind = any($1::text[])
+       and updated_at > $2::timestamptz
+       and ($3::timestamptz is null or updated_at <= $3::timestamptz)
+     order by updated_at, id
+     limit $4`,
+    [
+      kinds,
+      input.after.toISOString(),
+      input.until?.toISOString() ?? null,
+      Math.max(1, Math.min(input.limit ?? 500, 1000)),
+    ],
+  );
+  return rows.map(toJob);
+}
+
+/**
+ * Retry every dead job matching a filter — `buddi jobs retry --all`.
+ *
+ * One statement rather than a loop of `retryJob` calls: an outage kills jobs in
+ * waves, and the owner's answer to a wave is a wave. The event per job is still
+ * written, because the queue's history is how anyone reconstructs an evening.
+ */
+export async function retryJobs(
+  pool: Pool,
+  input: { state?: JobState; kind?: string; limit?: number } = {},
+): Promise<Job[]> {
+  const { rows } = await pool.query<JobRow>(
+    `update core.jobs
+     set state = 'pending',
+         attempts = 0,
+         max_attempts = case when kind = any($3::text[])
+           then greatest(max_attempts, $4::int) else max_attempts end,
+         run_after = now(),
+         lease_owner = null,
+         lease_until = null,
+         suspended_reason = null,
+         updated_at = now()
+     where id in (
+       select id from core.jobs
+       where state = coalesce($1::text, 'failed')
+         and ($2::text is null or kind = $2::text)
+         and state in ('failed', 'cancelled', 'suspended')
+       order by updated_at
+       limit $5
+     )
+     returning ${JOB_COLUMNS}`,
+    [
+      input.state ?? null,
+      input.kind ?? null,
+      [...UNATTENDED_JOB_KINDS],
+      UNATTENDED_RETRY_PROFILE.maxAttempts,
+      Math.max(1, Math.min(input.limit ?? 500, 1000)),
+    ],
+  );
+  const jobs = rows.map(toJob);
+  for (const job of jobs) {
+    await appendEvent(
+      pool,
+      'job.enqueued',
+      { jobId: job.id, kind: job.kind, requeued: true, bulk: true },
+      job.conversationId ?? undefined,
+    );
+  }
+  return jobs;
 }
 
 /** How many jobs sit in each state — `buddi doctor` prints exactly this. */

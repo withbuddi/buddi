@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Mission } from '@buddi/core';
-import { formatMissionLine, STALE_CLAIM_MS, TICK_MS } from './serve.js';
+import { UNATTENDED_JOB_KINDS } from '@buddi/core';
+import { formatMissionLine, JOB_KINDS, STALE_CLAIM_MS, TICK_MS } from './serve.js';
 
 const mission: Mission = {
   id: 'friday-recap',
@@ -45,5 +46,15 @@ describe('serve cadence', () => {
   it('ticks every 30s and releases claims older than 15 minutes', () => {
     expect(TICK_MS).toBe(30_000);
     expect(STALE_CLAIM_MS).toBe(900_000);
+  });
+
+  /**
+   * Core names the unattended kinds as strings because it may not import the
+   * gateway that defines them. This is the check that keeps the two honest: a
+   * new kind added here without being classified there would silently get the
+   * interactive six-minute horizon and no dead-letter alert.
+   */
+  it('classifies every kind this process runs as unattended work', () => {
+    expect([...JOB_KINDS].sort()).toEqual([...UNATTENDED_JOB_KINDS].sort());
   });
 });

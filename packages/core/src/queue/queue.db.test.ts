@@ -14,6 +14,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import { isPaused, setPaused } from './flags.js';
+import { listDeadJobs, retryJobs } from './jobs.js';
 import {
   cancelJob,
   claimJob,
@@ -97,9 +98,12 @@ suite('queue (postgres)', () => {
       const job = await enqueue(pool, { kind: 'mission-run', payload: { missionId: 'x' } });
       expect(job.state).toBe('pending');
       expect(job.attempts).toBe(0);
-      expect(job.maxAttempts).toBe(3);
+      // Unattended work gets the unattended profile's cap without anybody
+      // having to remember to ask for it at the call site.
+      expect(job.maxAttempts).toBe(8);
       expect(job.payload).toEqual({ missionId: 'x' });
       expect(await events('job.enqueued')).toHaveLength(1);
+      expect((await enqueue(pool, { kind: 'a-turn-someone-waits-on' })).maxAttempts).toBe(3);
     });
 
     it('is idempotent on a dedup key — the second call returns the first job', async () => {
@@ -487,6 +491,119 @@ suite('queue (postgres)', () => {
         { jobId: job.id, kind: 'mission-run', attempts: 1 },
       ]);
     }, 20_000);
+  });
+  /**
+   * The September 14 incident, in the two places it was decided: how long a
+   * background job keeps trying, and what the owner can find afterwards.
+   */
+  describe('unattended work', () => {
+    it('keeps trying long past the sixth minute, where the triage runs used to die', async () => {
+      const job = await enqueue(pool, {
+        kind: 'agent-run',
+        payload: { agentId: 'mail-triage', prompt: 'triage' },
+      });
+      const worker = runWorker({
+        pool,
+        worker: 'w-transient',
+        kinds: ['agent-run'],
+        now: () => new Date(),
+        pollMs: 5,
+        leaseMs: 5_000,
+        handlers: {
+          'agent-run': async () => {
+            throw new Error('fetch failed');
+          },
+        },
+        onError: () => {},
+      });
+      // The backoff is real minutes, so the test pulls each retry forward
+      // rather than sleeping through it. Five attempts is already two more than
+      // the queue used to allow.
+      for (let n = 1; n <= 5; n += 1) {
+        await waitFor(async () => ((await getJob(pool, job.id))?.attempts ?? 0) >= n);
+        await pool.query(
+          `update core.jobs set run_after = now() where id = $1::uuid and state = 'pending'`,
+          [job.id],
+        );
+      }
+      await worker.stop();
+      const after = await getJob(pool, job.id);
+      expect(after?.state).toBe('pending');
+      expect(after?.attempts).toBeGreaterThanOrEqual(4);
+      expect(after?.maxAttempts).toBe(8);
+    }, 30_000);
+
+    it('kills a permanently broken run on the first attempt instead of chasing it for hours', async () => {
+      const job = await enqueue(pool, {
+        kind: 'agent-run',
+        payload: { agentId: 'mail-triage', prompt: 'triage' },
+      });
+      const worker = runWorker({
+        pool,
+        worker: 'w-permanent',
+        kinds: ['agent-run'],
+        now: () => new Date(),
+        pollMs: 5,
+        leaseMs: 5_000,
+        handlers: {
+          'agent-run': async () => {
+            // What this morning's schema bug looked like on the wire.
+            throw Object.assign(new Error('tools.0.custom.input_schema is invalid'), {
+              name: 'ProviderError',
+              status: 400,
+              type: 'invalid_request_error',
+            });
+          },
+        },
+        onError: () => {},
+      });
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'failed');
+      await worker.stop();
+      const after = await getJob(pool, job.id);
+      expect(after?.attempts).toBe(1);
+      const failures = await events('job.failed');
+      expect(failures.at(-1)).toMatchObject({ retrying: false, failureClass: 'permanent' });
+    }, 30_000);
+
+    it('lists what died, and retries a whole wave at once', async () => {
+      const before = await dbNow();
+      const dead = [];
+      for (let i = 0; i < 3; i += 1) {
+        const job = await enqueue(pool, {
+          kind: 'agent-run',
+          payload: { agentId: 'mail-triage', prompt: `triage ${i}` },
+          maxAttempts: 1,
+          dedupKey: `wave-${i}`,
+        });
+        const claimed = await claimJob(pool, { worker: 'w', now: new Date(), leaseMs: LEASE_MS });
+        await failJob(pool, claimed!.id, 'w', 'fetch failed', { retry: true });
+        dead.push(job.id);
+      }
+      // Something interactive that also died, and must not be swept up.
+      const other = await enqueue(pool, { kind: 'someones-turn', maxAttempts: 1 });
+      const claimedOther = await claimJob(pool, {
+        worker: 'w',
+        kinds: ['someones-turn'],
+        now: new Date(),
+        leaseMs: LEASE_MS,
+      });
+      await failJob(pool, claimedOther!.id, 'w', 'fetch failed', { retry: true });
+
+      const listed = await listDeadJobs(pool, { after: before });
+      expect(listed.map((j) => j.id).sort()).toEqual([...dead].sort());
+
+      const retried = await retryJobs(pool, { kind: 'agent-run' });
+      expect(retried).toHaveLength(3);
+      for (const id of dead) {
+        const job = await getJob(pool, id);
+        expect(job?.state).toBe('pending');
+        expect(job?.attempts).toBe(0);
+        // The second chance gets the horizon the work should have had first.
+        expect(job?.maxAttempts).toBe(8);
+      }
+      expect((await getJob(pool, other.id))?.state).toBe('failed');
+      expect(await listDeadJobs(pool, { after: before })).toHaveLength(0);
+    }, 30_000);
   });
 });
 

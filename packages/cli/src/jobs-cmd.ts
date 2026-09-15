@@ -17,6 +17,7 @@ import {
   isPaused,
   listJobs,
   retryJob,
+  retryJobs,
   setPaused,
   type Job,
   type JobState,
@@ -113,6 +114,15 @@ export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
         .map(([state, n]) => `${n} ${state}`)
         .join(', ')}${paused ? '   [PAUSED]' : ''}`,
     );
+    if (counts.failed > 0) {
+      // Say what a failed job *means*. "12 failed" is a number; "twelve pieces
+      // of work that did not happen and will not happen on their own" is the
+      // thing the owner needs to act on.
+      console.log(
+        `  ${counts.failed} job(s) gave up and will not run again on their own — ` +
+          'nothing was done for them.',
+      );
+    }
     if (jobs.length === 0) {
       console.log(opts.state ? `  no ${opts.state} jobs` : '  no jobs');
       return 0;
@@ -120,6 +130,7 @@ export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
     const now = new Date();
     for (const job of jobs) console.log(formatJobLine(job, now));
     console.log('\n  buddi jobs retry <id> | buddi jobs cancel <id>');
+    if (counts.failed > 0) console.log('  buddi jobs retry --all   run every dead job again');
     return 0;
   }, 1);
 }
@@ -172,6 +183,45 @@ export async function jobsCancel(idOrPrefix: string): Promise<number> {
       return 1;
     }
     console.log(`job ${job.id} (${job.kind}) cancelled.`);
+    return 0;
+  }, 1);
+}
+
+
+export interface RetryAllOptions {
+  /** Which dead state to sweep. Defaults to `failed`. */
+  state?: JobState;
+  kind?: string;
+  limit?: number;
+}
+
+/**
+ * `buddi jobs retry --all` — the owner's answer to a wave.
+ *
+ * An outage does not kill one job, it kills a dozen, and an inspection path
+ * that makes the owner retype a dozen ids is not one. Attempts are reset and,
+ * for unattended kinds, the attempt cap is lifted to the current profile: the
+ * second chance gets the horizon the work should have had the first time.
+ */
+export async function jobsRetryAll(opts: RetryAllOptions = {}): Promise<number> {
+  return withPool(async (pool) => {
+    const jobs = await retryJobs(pool, {
+      state: opts.state ?? 'failed',
+      ...(opts.kind ? { kind: opts.kind } : {}),
+      ...(opts.limit ? { limit: opts.limit } : {}),
+    });
+    if (jobs.length === 0) {
+      console.log(`no ${opts.state ?? 'failed'} jobs${opts.kind ? ` of kind ${opts.kind}` : ''} to retry.`);
+      return 0;
+    }
+    const byKind = new Map<string, number>();
+    for (const job of jobs) byKind.set(job.kind, (byKind.get(job.kind) ?? 0) + 1);
+    console.log(
+      `${jobs.length} job(s) are queued again: ${[...byKind]
+        .map(([kind, n]) => `${n} ${kind}`)
+        .join(', ')}.`,
+    );
+    console.log('  they run as soon as a worker picks them up — `buddi jobs` to watch.');
     return 0;
   }, 1);
 }
