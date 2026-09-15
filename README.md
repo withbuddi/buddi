@@ -101,13 +101,34 @@ run with no TTY behaves the same way.
 600 and are never printed back. `buddi vault import-env` later moves them into
 the OS keychain.
 
-**Port note.** The container publishes `${BUDDI_DB_PORT:-5432}`. If 5432 is
-already taken, set `BUDDI_DB_PORT` **and** the port in `DATABASE_URL` together:
+**The database password.** You never type one. `buddi init` generates 32 random
+characters, hands them to Postgres, and keeps them in the OS keychain under
+`BUDDI_DB_PASSWORD`; `DATABASE_URL` is assembled around that at runtime and is
+**not** in `.env` — the file holds `DATABASE_URL="<vault>"`, a marker. If you
+already run buddi with the old defaults, `buddi db secure` does the migration:
+it rotates the password in the running server, stores it, rewrites `.env`, and
+puts the old one back if anything fails.
+
+The escape hatch: set `DATABASE_URL` in `.env` and it wins over everything. That
+is for running your own Postgres — buddi then neither generates nor rotates a
+password it did not issue.
+
+**Port note.** The container publishes on **`127.0.0.1:${BUDDI_DB_PORT:-5432}`**
+and nothing else. If 5432 is already taken, set `BUDDI_DB_PORT` alone — the
+assembled URL reads it:
 
 ```sh
 BUDDI_DB_PORT=55433
-DATABASE_URL=postgres://buddi:buddi@localhost:55433/buddi
 ```
+
+The `127.0.0.1` in `docker-compose.yml` is load-bearing. Without it Docker binds
+`0.0.0.0` and your database — every conversation, every transaction, every mail
+body — is reachable from every other machine on the network you happen to be on.
+The one legitimate reason to change it is reaching this database from another
+machine **of your own over a private network**: a Tailscale or WireGuard
+address, named explicitly (`100.x.y.z:${BUDDI_DB_PORT:-5432}:5432`). Never bind
+it to `0.0.0.0` on a network you do not control. `buddi doctor` fails the
+`database exposure` row if you do.
 
 ### 2. `buddi doctor`
 
@@ -121,7 +142,8 @@ buddi doctor — /Users/you/buddi
   ok    node              26.2.0
   ok    pnpm              11.0.0
   ok    docker            Docker version 27.4.0
-  ok    postgres          reachable at localhost:55433
+  ok    postgres          reachable at 127.0.0.1:55433
+  ok    database exposure 127.0.0.1:55433 (loopback only); password in the vault
   ok    migrations        up to date (23 applied)
   ok    vault             keychain (3 secrets)
   ok    model credential  CLAUDE_CODE_OAUTH_TOKEN accepted by anthropic
@@ -653,6 +675,7 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi db up` | start the postgres container (after a reboot) |
 | `buddi db down` | stop it |
 | `buddi db status` | is it up? |
+| `buddi db secure` | give it a generated password, kept in the vault (idempotent) |
 
 **Talking to agents**
 
@@ -782,6 +805,27 @@ check `BUDDI_WEB` is not `0` and that `buddi serve` is running.
 clone, and `docker compose down -v` (or Docker Desktop's *Clean / Purge data*)
 deletes it outright. A backup is the only copy of it that survives that — see
 [docs/operations.md](./docs/operations.md).
+
+**Where the database listens, and what protects it.** The container publishes
+`127.0.0.1:${BUDDI_DB_PORT:-5432}` — loopback, so only this machine can open a
+connection at all; nothing on your network can reach it, not the router, not the
+other laptop, not the café. The password is 32 random characters generated at
+`buddi init`, kept in the OS keychain as `BUDDI_DB_PASSWORD`, and never written
+to any file: `.env` holds the marker `DATABASE_URL="<vault>"`, and the
+connection string is assembled in memory at startup. `buddi doctor` has a
+`database exposure` row that fails — critically, so the command exits 1 — if the
+port is bound to anything but a loopback address, or if the password is still
+the literal `buddi` this project once shipped with. `buddi db secure` fixes both
+and is safe to run twice.
+
+**A backup holds the data and never the credentials.** An archive contains the
+`pg_dump`, your private agents and skills, and the artifact files. It contains
+no model credential, no bot token, no app password, and no database password:
+`.env` is scrubbed to `NAME="<vault>"` markers before it is written, and the
+scrubbed text is scanned for every secret value the original held — if one
+survived, no archive is written at all. The manifest lists the *names* you will
+have to set again after a restore, and the exact `buddi vault set …` commands
+that do it. So a backup on a USB stick is your data, not a way into it.
 
 **What leaves.** Prompts, and only prompts. Each agent's file pins a provider —
 Anthropic or OpenAI — and that agent's conversation, including whatever its

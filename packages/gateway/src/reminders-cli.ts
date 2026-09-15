@@ -13,7 +13,7 @@ import {
   type Reminder,
 } from '@buddi/core';
 import type { Pool } from 'pg';
-import { createWiringAsync, loadEnv } from './bootstrap.js';
+import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 
 export const USAGE = `buddi reminders — one-off nudges the agents set
 
@@ -105,7 +105,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  loadEnv();
+  await loadEnvironment();
   const wiring = await createWiringAsync(process.env);
   const { pool } = wiring;
   const timezone = timezoneFromEnv(process.env);

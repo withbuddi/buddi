@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DB_UNREACHABLE, DOCKER_DOWN } from './db-cmd.js';
 import {
   checkAgents,
+  checkDatabaseExposure,
   checkNodeVersion,
   checkVault,
   collectChecks,
@@ -318,5 +319,118 @@ describe('the agents row', () => {
 
   it('fails an installation with no agents at all', () => {
     expect(checkAgents([]).status).toBe('fail');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * database exposure
+ * ------------------------------------------------------------------ */
+
+describe('checkDatabaseExposure', () => {
+  const secure = {
+    composeManaged: true,
+    published: '127.0.0.1:55433',
+    legacyPassword: false,
+    passwordInVault: true,
+  };
+
+  it('passes on a loopback binding with a real password', () => {
+    const row = checkDatabaseExposure(secure);
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('127.0.0.1:55433');
+    expect(row.detail).toContain('loopback');
+  });
+
+  it('accepts every spelling of loopback docker prints', () => {
+    for (const published of ['127.0.0.1:5432', 'localhost:5432', '[::1]:5432', '127.1.2.3:5432']) {
+      expect(checkDatabaseExposure({ ...secure, published }).status).toBe('ok');
+    }
+  });
+
+  it('FAILS when the port is published on 0.0.0.0', () => {
+    // The real exposure: `"${BUDDI_DB_PORT:-5432}:5432"` with no host, which
+    // docker reads as every interface on the machine.
+    const row = checkDatabaseExposure({ ...secure, published: '0.0.0.0:55433' });
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('0.0.0.0:55433');
+    expect(row.detail).toContain('NOT loopback');
+    expect(row.detail).toContain('buddi db secure');
+    // The binding is only fixed by re-creating the container, so say so.
+    expect(row.detail).toContain('buddi db down && buddi db up');
+  });
+
+  it('FAILS on the IPv6 wildcard too', () => {
+    expect(checkDatabaseExposure({ ...secure, published: '[::]:55433' }).status).toBe('fail');
+  });
+
+  it('FAILS when the password is the literal `buddi`', () => {
+    const row = checkDatabaseExposure({ ...secure, legacyPassword: true, passwordInVault: false });
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('literal `buddi`');
+    expect(row.detail).toContain('buddi db secure');
+  });
+
+  it('FAILS when compose expects a password the vault does not hold', () => {
+    const row = checkDatabaseExposure({ ...secure, passwordInVault: false });
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('BUDDI_DB_PASSWORD');
+    expect(row.detail).toContain('buddi db secure');
+  });
+
+  it('reports both problems at once when both are true', () => {
+    const row = checkDatabaseExposure({
+      composeManaged: true,
+      published: '0.0.0.0:55433',
+      legacyPassword: true,
+      passwordInVault: false,
+    });
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('NOT loopback');
+    expect(row.detail).toContain('literal `buddi`');
+  });
+
+  it('warns rather than guesses when the docker daemon is unreachable', () => {
+    // Nothing can be said about a binding that cannot be read — but a secured
+    // password is still a secured password, so this is not a failure.
+    const row = checkDatabaseExposure({
+      composeManaged: true,
+      bindingError: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock.',
+      legacyPassword: false,
+      passwordInVault: true,
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('Cannot connect to the Docker daemon');
+  });
+
+  it('still FAILS on the shipped password with the daemon down', () => {
+    const row = checkDatabaseExposure({
+      composeManaged: true,
+      bindingError: 'Cannot connect to the Docker daemon',
+      legacyPassword: true,
+      passwordInVault: false,
+    });
+    expect(row.status).toBe('fail');
+  });
+
+  it("says nothing about someone else's postgres", () => {
+    const row = checkDatabaseExposure({
+      composeManaged: false,
+      legacyPassword: false,
+      passwordInVault: false,
+    });
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('your own postgres');
+  });
+
+  it('is a critical row: a failure makes `buddi doctor` exit 1', async () => {
+    const checks = await collectChecks(
+      fakeProbes({
+        databaseExposure: async () =>
+          checkDatabaseExposure({ ...secure, published: '0.0.0.0:5432' }),
+      }),
+    );
+    const row = checks.find((c) => c.name === 'database exposure');
+    expect(row?.critical).toBe(true);
+    expect(exitCodeFor(checks)).toBe(1);
   });
 });

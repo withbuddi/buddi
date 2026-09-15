@@ -12,7 +12,7 @@
  */
 import { getMission, localDateTimeString, setMissionEnabled, timezoneFromEnv } from '@buddi/core';
 import type { Pool } from 'pg';
-import { createWiringAsync, loadEnv } from './bootstrap.js';
+import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { GETTING_STARTED_ID } from './missions/getting-started.js';
 import {
   arcWindow,
@@ -120,7 +120,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  loadEnv();
+  await loadEnvironment();
   const wiring = await createWiringAsync(process.env);
   const { pool, now } = wiring;
   const timezone = timezoneFromEnv(process.env);

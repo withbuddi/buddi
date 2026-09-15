@@ -34,7 +34,7 @@ import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js'
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
 import { jobsCancel, jobsList, jobsRetry, pause, resume } from './jobs-cmd.js';
-import { loadEnv, REPO_ROOT } from './paths.js';
+import { loadEnvironment, REPO_ROOT } from './paths.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
 import { runVault } from './vault-cmd.js';
@@ -107,7 +107,7 @@ export async function dispatch(command: Command): Promise<number> {
       return 0;
     }
     case 'chat-cli': {
-      loadEnv();
+      await loadEnvironment();
       // `buddi agents` reads files and edits files: it is the one command in
       // this group that must still work with the database down — that is often
       // exactly when an owner is trying to see what is configured.
@@ -119,60 +119,60 @@ export async function dispatch(command: Command): Promise<number> {
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'missions': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       await runMissionsCli(command.argv);
       return 0;
     }
     case 'reminders': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       await runRemindersCli(command.argv);
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'nudges': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       await runNudgesCli(command.argv);
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
     }
     case 'serve':
-      loadEnv();
+      await loadEnvironment();
       await runServe();
       return 0;
     case 'migrate': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       return migrate();
     }
     case 'db':
-      loadEnv();
+      await loadEnvironment();
       return runDb(command.action, process.env);
     case 'backup':
       // No `requireDatabase` gate: `list`, `verify` and `prune` are exactly the
       // commands an owner reaches for when the database is down, and `create`
       // and `restore` talk to Postgres through the container themselves and say
       // so in their own words.
-      loadEnv();
+      await loadEnvironment();
       return runBackup(command, process.env);
     case 'init':
-      loadEnv();
+      await loadEnvironment();
       return runInit({ yes: command.yes });
     case 'doctor':
-      loadEnv();
+      await loadEnvironment();
       return doctor();
     case 'service':
-      loadEnv();
+      await loadEnvironment();
       return service(command.action);
     case 'dashboard':
-      loadEnv();
+      await loadEnvironment();
       return runDashboard(command.action);
     case 'telegram': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       // `pair` talks to Telegram, so the bot token has to be a token and not
@@ -181,22 +181,22 @@ export async function dispatch(command: Command): Promise<number> {
       return runTelegram(command.action, command.deviceId);
     }
     case 'vault':
-      loadEnv();
+      await loadEnvironment();
       return runVault(command.action, command.name);
     case 'pause': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       return pause();
     }
     case 'resume': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       return resume();
     }
     case 'jobs': {
-      loadEnv();
+      await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       switch (command.action) {

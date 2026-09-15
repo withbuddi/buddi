@@ -55,7 +55,7 @@ import {
   ensureGmailAccount,
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
-import { createWiringAsync, loadEnv } from './bootstrap.js';
+import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
 import {
@@ -301,7 +301,7 @@ export function createMissionJobHandler(deps: {
 }
 
 export async function main(): Promise<void> {
-  loadEnv();
+  await loadEnvironment();
 
   // The service waits for the database rather than dying on it. Under launchd's
   // KeepAlive an exit is an immediate restart, so a stopped Docker used to turn

@@ -83,7 +83,13 @@ describe('buddi vault', () => {
     ].join('\n');
 
     it('plans only the secrets that are actually there', () => {
-      expect(plannedImports(envText)).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'TELEGRAM_BOT_TOKEN']);
+      // DATABASE_URL is a known secret now: it *contains* the database
+      // password, so `import-env` moves it like any other credential.
+      expect(plannedImports(envText)).toEqual([
+        'CLAUDE_CODE_OAUTH_TOKEN',
+        'TELEGRAM_BOT_TOKEN',
+        'DATABASE_URL',
+      ]);
     });
 
     it('changes nothing when the owner says no', async () => {
@@ -122,8 +128,12 @@ describe('buddi vault', () => {
       expect(rewritten).not.toMatch(/^[A-Z_]+=<vault>$/m);
       expect(rewritten).not.toContain('123:abc');
       expect(rewritten).not.toContain('sk-ant-oat01-secret');
-      // Untouched: not a secret, and an empty one has nothing to move.
-      expect(rewritten).toContain('DATABASE_URL=postgres://buddi:buddi@localhost:5432/buddi');
+      // The connection string goes too: the password is inside it, and buddi
+      // assembles the URL from the vault at runtime.
+      expect(await vault.get('DATABASE_URL')).toBe('postgres://buddi:buddi@localhost:5432/buddi');
+      expect(rewritten).toContain('DATABASE_URL="<vault>"');
+      expect(rewritten).not.toContain('postgres://buddi:buddi@');
+      // Untouched: an empty one has nothing to move.
       expect(rewritten).toContain('ANTHROPIC_API_KEY=');
       expect(lines.join('\n')).toContain('Restart buddi');
     });

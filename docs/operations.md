@@ -27,6 +27,66 @@ Four places, and only two of them are in a backup.
 | Your private agents and skills | `private/agents` + `private/skills` at the repo root, or `~/.buddi/agents` + `~/.buddi/skills`, or wherever `BUDDI_AGENTS_DIR` / `BUDDI_SKILLS_DIR` point. `buddi doctor` prints the resolved paths in the `config` row | Yes |
 | Secrets | The **macOS keychain** (service `buddi`), or the encrypted file vault at `~/.buddi/vault.json`, or `.env` on a day-1 installation | **No. Never.** |
 
+### Where the database listens, and what protects it
+
+The `buddi-postgres` container publishes **`127.0.0.1:${BUDDI_DB_PORT:-5432}`**
+and nothing else. Loopback: only this machine can open a connection at all.
+
+That is one line in `docker-compose.yml` and it is load-bearing. A published
+port written as `"5432:5432"` — with no host — is bound by Docker to `0.0.0.0`,
+which means every host on whatever network the laptop has joined can reach the
+database directly, bypassing every approval gate buddi has, because those live
+in the application and this is the storage underneath it.
+
+The **one** legitimate reason to change the address is reaching this database
+from another machine of your own over a *private* network — a Tailscale or
+WireGuard interface. Name that interface's address explicitly:
+
+```yaml
+ports:
+  - "100.x.y.z:${BUDDI_DB_PORT:-5432}:5432"   # a tailnet address, not 0.0.0.0
+```
+
+Never bind it to `0.0.0.0` on a network you do not control: a café, an office
+LAN, a hotel, a conference. There is no configuration elsewhere in buddi that
+makes that safe.
+
+The **password** is 32 random URL-safe characters (192 bits), generated once by
+`buddi init` — or by the first `buddi db up` — and kept in the OS keychain under
+`BUDDI_DB_PASSWORD`. It is never written to a file. `DATABASE_URL` is assembled
+from it in memory at startup, in this precedence:
+
+1. an explicit `DATABASE_URL` in the environment or in `.env` — the escape hatch
+   for running your own Postgres; buddi will not generate or rotate a credential
+   it did not issue;
+2. a whole `DATABASE_URL` you put in the vault yourself;
+3. `BUDDI_DB_PASSWORD` from the vault, wrapped around `buddi@127.0.0.1:<port>/buddi`;
+4. the day-1 default, password and all, so an installation that predates this
+   keeps running — loudly: `buddi doctor` fails on it.
+
+`buddi doctor` has a `database exposure` row, and it is **critical** — a failure
+exits 1. It fails when the published port is bound to anything but a loopback
+address, and when the password is the literal `buddi` or is missing from the
+vault while compose expects it. The message names the fix.
+
+### Migrating an installation that predates this
+
+```sh
+buddi db secure        # rotate, store, rewrite .env — idempotent
+buddi db down && buddi db up   # re-create the container on 127.0.0.1
+buddi service restart  # the running process is holding the old password
+```
+
+`buddi db secure` changes the password inside the running server with `ALTER
+ROLE`, proves the new one connects, and only then writes it to the vault and
+rewrites `.env` to `DATABASE_URL="<vault>"`. If any step fails it puts the old
+password back and says so: the installation is left working on the old
+credential rather than half-migrated. Run it twice and the second run rotates
+nothing.
+
+The `down`/`up` is separate because a published port is fixed at container
+creation: your data is in the named volume and survives it.
+
 Two things follow from the first row that are worth saying plainly:
 
 - **The Docker volume is not yours to copy.** `docker compose down` leaves it alone,
@@ -73,7 +133,10 @@ artifacts/…            the artifact store files (omitted with --no-artifacts)
 ## What is deliberately NOT in a backup, and why
 
 **Secrets. All of them.** No model credential, no bot token, no app password, no
-`BUDDI_VAULT_KEY`. This is not an oversight and it is not configurable.
+database password, no `BUDDI_VAULT_KEY`. This is not an oversight and it is not
+configurable. An archive is your **data** and never a way into it: it holds the
+`pg_dump` of everything the agents know, and nothing that would let a finder
+connect to the live database or speak as you to a provider.
 
 - A backup is a file that gets copied to a USB stick, an external disk, a cloud sync
   folder, a second laptop. Every one of those copies is a place a credential would
@@ -88,8 +151,10 @@ artifacts/…            the artifact store files (omitted with --no-artifacts)
   `…_SESSION`.
 
 So `env.scrubbed` has every such line rewritten to `NAME="<vault>"` — the same marker
-`buddi vault import-env` writes, which buddi reads as "ask the vault". A password
-embedded in a non-secret URL (the one in `DATABASE_URL`) is replaced with `***`.
+`buddi vault import-env` writes, which buddi reads as "ask the vault". `DATABASE_URL`
+and `BUDDI_DB_PASSWORD` are on that list by name, so a connection string with a
+password in it becomes the marker rather than a URL with a `***` in the middle; a
+password embedded in some *other* non-secret URL is still replaced with `***`.
 Before an archive is written at all, the scrubbed text is scanned for every value the
 original file held under a secret-shaped name; if any survived, **no archive is
 written**. That check is a test, not a comment.

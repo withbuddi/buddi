@@ -28,8 +28,11 @@ export const SERVICE_ACTIONS = [
 ] as const;
 export type ServiceAction = (typeof SERVICE_ACTIONS)[number];
 
-/** The postgres container: `docker compose up -d postgres` and friends. */
-export const DB_ACTIONS = ['up', 'down', 'status'] as const;
+/**
+ * The postgres container: `docker compose up -d postgres` and friends, plus
+ * `secure` — the one-time migration off the shipped password.
+ */
+export const DB_ACTIONS = ['up', 'down', 'status', 'secure'] as const;
 export type DbAction = (typeof DB_ACTIONS)[number];
 
 export const VAULT_ACTIONS = ['set', 'get', 'delete', 'list', 'import-env'] as const;
@@ -379,6 +382,7 @@ export const USAGE = `buddi — your personal agents, one command
 
   buddi db up                start the postgres container (after a reboot)
   buddi db down|status
+  buddi db secure            give the database a generated password, kept in the vault
 
   buddi chat                 talk to the default agent
   buddi chat --agent <handle>  ... to a specific agent, by @handle or id

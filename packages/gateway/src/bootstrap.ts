@@ -9,13 +9,17 @@
  */
 import path from 'node:path';
 import {
+  DATABASE_URL_VAR,
   KNOWN_SECRETS,
   createPool,
   createVault,
+  hydrateDatabaseUrl,
+  resolveDatabaseUrl,
   resolveProvider,
   resolveSecrets,
   timezoneFromEnv,
   vaultSelection,
+  type DatabaseUrlResolution,
   type AgentCatalog,
   type CatalogAgent,
   type SecretProblem,
@@ -42,6 +46,21 @@ export function loadEnv(): void {
 }
 
 /**
+ * `.env`, and then the one variable that is no longer *in* it.
+ *
+ * `DATABASE_URL` used to be a plain line in `.env` with the password in clear;
+ * now it is assembled from the vault, which is a keychain call and therefore
+ * async. Every entry point that reads `process.env.DATABASE_URL` before it
+ * builds its wiring waits on this instead of on `loadEnv` alone.
+ */
+export async function loadEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DatabaseUrlResolution> {
+  loadEnv();
+  return hydrateDatabaseUrl(env);
+}
+
+/**
  * The secrets this installation keeps in the vault.
  *
  * Everything downstream still reads a *named environment variable* — the
@@ -50,7 +69,12 @@ export function loadEnv(): void {
  * anything is built. That keeps "no ambient credentials" true: a component is
  * handed its credential by name, and never goes looking for one.
  */
-export const WIRED_SECRETS: readonly string[] = KNOWN_SECRETS;
+export const WIRED_SECRETS: readonly string[] = KNOWN_SECRETS.filter(
+  // `DATABASE_URL` is in `KNOWN_SECRETS` so `import-env` moves it and the
+  // backup scrubber blanks it, but it is not hydrated by name: it is
+  // *assembled* below from whichever of its four sources answers first.
+  (name) => name !== DATABASE_URL_VAR,
+);
 
 export interface SecretHydration {
   /** Which vault this machine uses: 'keychain', 'file', 'memory' or 'none'. */
@@ -59,6 +83,8 @@ export interface SecretHydration {
   sources: Record<string, SecretSource>;
   /** Secrets neither the vault nor the environment could supply. */
   problems: Record<string, SecretProblem>;
+  /** Where this boot's `DATABASE_URL` came from. Never the URL itself. */
+  database: { source: DatabaseUrlResolution['source']; legacyPassword: boolean };
 }
 
 /**
@@ -83,7 +109,15 @@ export async function hydrateSecrets(
     if (value === undefined) delete env[name];
     else env[name] = value;
   }
+  // The connection string is assembled last, from the environment the loop
+  // above just finished filling in: an explicit `DATABASE_URL` still wins, and
+  // otherwise the password the vault holds is wrapped around this
+  // installation's own host, port and database name.
+  const database = await resolveDatabaseUrl({ env, vault });
+  env[DATABASE_URL_VAR] = database.url;
+  if (database.problem) resolved.problems[DATABASE_URL_VAR] = database.problem;
   return {
+    database: { source: database.source, legacyPassword: database.legacyPassword },
     // The vault that actually answered, not the one the environment selects —
     // they differ only when a caller injected one (a test, the doctor).
     vault: vault?.kind ?? vaultSelection({ env }),

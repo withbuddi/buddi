@@ -39,7 +39,7 @@ import {
 import { createProvider, providerCapabilities } from '@buddi/runtime';
 import { createToolRegistry, loadGatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
 import { migrateAgents, renderMigration } from './agents/migrate.js';
-import { hydrateSecrets, loadEnv } from './bootstrap.js';
+import { hydrateSecrets, loadEnvironment } from './bootstrap.js';
 import { estimateCost, formatCost, formatTokens } from './chat/usage.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 
@@ -612,7 +612,7 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
     return 1;
   }
 
-  loadEnv();
+  await loadEnvironment();
   // Every command below reads a credential *name* and asks whether this
   // machine can supply it, so the vault has to answer first: after `buddi vault
   // import-env`, `.env` holds `<vault>` markers, and a listing that called

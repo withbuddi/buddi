@@ -38,7 +38,7 @@ import { main as runAgentsCli } from './agents-cli.js';
 import { bindDelegation } from './agents/delegation.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
 import { CLI_SURFACE, shouldStartFirstRun } from './agents/first-run.js';
-import { createWiringAsync, loadEnv, type Wiring } from './bootstrap.js';
+import { createWiringAsync, loadEnvironment, type Wiring } from './bootstrap.js';
 import { CliApprovals } from './chat/approvals.js';
 import { COMMAND_NAMES } from './chat/commands.js';
 import { ChatSession, QUIET_UNAVAILABLE_TEXT } from './chat/session.js';
@@ -280,7 +280,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  loadEnv();
+  await loadEnvironment();
 
   const style = styleFor(process.env, process.stdout);
 
