@@ -121,6 +121,23 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['jobs', 'retry'])).toThrow(/needs a job id/);
   });
 
+  it('retries a whole wave, because an outage does not kill one job', () => {
+    expect(parseArgs(['jobs', 'retry', '--all'])).toEqual({ kind: 'jobs', action: 'retry-all' });
+    expect(parseArgs(['jobs', 'retry', '--all', '--kind', 'agent-run'])).toEqual({
+      kind: 'jobs',
+      action: 'retry-all',
+      kind_: 'agent-run',
+    });
+    expect(parseArgs(['jobs', 'retry', '--all', '--state', 'cancelled', '--limit', '5'])).toEqual({
+      kind: 'jobs',
+      action: 'retry-all',
+      state: 'cancelled',
+      limit: 5,
+    });
+    expect(() => parseArgs(['jobs', 'retry', '--all', '--everything'])).toThrow(/unknown option/);
+    expect(() => parseArgs(['jobs', 'retry', '--all', '--kind'])).toThrow(/needs a value/);
+  });
+
   it('rejects an unknown command rather than guessing one', () => {
     expect(() => parseArgs(['chatt'])).toThrow(/unknown command: chatt/);
     expect(() => parseArgs(['serve', '--port', '3000'])).toThrow(/takes no arguments/);

@@ -93,6 +93,11 @@ export type Command =
   | { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number }
   | { kind: 'jobs'; action: 'retry' | 'cancel'; jobId: string }
   /**
+   * `buddi jobs retry --all` — the answer to a wave. An outage kills jobs in
+   * bulk and retyping twelve ids is not an inspection path.
+   */
+  | { kind: 'jobs'; action: 'retry-all'; state?: JobStateName; kind_?: string; limit?: number }
+  /**
    * Backups. One shape for six verbs: the options are few, they do not overlap,
    * and a discriminated union per verb would be six types nobody reads.
    */
@@ -247,6 +252,40 @@ export function parseArgs(argv: string[]): Command {
  */
 function parseJobs(rest: string[]): Command {
   const [verb, ...args] = rest;
+
+  if (verb === 'retry' && args[0] === '--all') {
+    const command: {
+      kind: 'jobs';
+      action: 'retry-all';
+      state?: JobStateName;
+      kind_?: string;
+      limit?: number;
+    } = { kind: 'jobs', action: 'retry-all' };
+    for (let i = 1; i < args.length; i += 1) {
+      const arg = args[i];
+      const value = args[i + 1];
+      if (arg !== '--state' && arg !== '--kind' && arg !== '--limit') {
+        throw new UsageError(`unknown option for buddi jobs retry --all: ${arg}`);
+      }
+      if (value === undefined) throw new UsageError(`${arg} needs a value`);
+      i += 1;
+      if (arg === '--state') {
+        if (!(JOB_STATE_NAMES as readonly string[]).includes(value)) {
+          throw new UsageError(
+            `unknown job state: ${value} (expected ${JOB_STATE_NAMES.join(', ')})`,
+          );
+        }
+        command.state = value as JobStateName;
+      } else if (arg === '--kind') {
+        command.kind_ = value;
+      } else {
+        const n = Number(value);
+        if (!Number.isInteger(n) || n < 1) throw new UsageError(`--limit needs a positive integer`);
+        command.limit = n;
+      }
+    }
+    return command;
+  }
 
   if (verb === 'retry' || verb === 'cancel') {
     const jobId = args[0];
@@ -412,6 +451,7 @@ export const USAGE = `buddi — your personal agents, one command
   buddi resume               start claiming again
   buddi jobs [--state <s>] [--kind <k>] [--limit <n>]
   buddi jobs retry <id> | buddi jobs cancel <id>
+  buddi jobs retry --all [--kind <k>]   run every dead job again
 
   buddi backup create        one archive: database, private agents, artifacts
   buddi backup create --out <dir> --no-artifacts

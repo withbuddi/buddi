@@ -33,7 +33,7 @@ import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
-import { jobsCancel, jobsList, jobsRetry, pause, resume } from './jobs-cmd.js';
+import { jobsCancel, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
 import { loadEnvironment, REPO_ROOT } from './paths.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
@@ -202,6 +202,12 @@ export async function dispatch(command: Command): Promise<number> {
       switch (command.action) {
         case 'retry':
           return jobsRetry(command.jobId);
+        case 'retry-all':
+          return jobsRetryAll({
+            ...(command.state ? { state: command.state } : {}),
+            ...(command.kind_ ? { kind: command.kind_ } : {}),
+            ...(command.limit ? { limit: command.limit } : {}),
+          });
         case 'cancel':
           return jobsCancel(command.jobId);
         default:

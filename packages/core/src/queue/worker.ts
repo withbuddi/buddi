@@ -29,6 +29,7 @@ import {
   releaseStaleLeases,
   suspendJob,
 } from './jobs.js';
+import { decideRetry } from './retry-policy.js';
 import type { Job } from './types.js';
 
 /** What a handler may return instead of a result: park the job, durably. */
@@ -177,7 +178,23 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
       onError(err, job);
       if (lost) return job;
       const message = err instanceof Error ? err.message : String(err);
-      await failJob(pool, job.id, worker, message, { retry: true }).catch((e) => onError(e, job));
+      // The retry policy, not the loop, decides whether there is any point.
+      // A permanent failure — a rejected schema, an auth error, a 400 — dies
+      // here on the first attempt; a transport error or a 429 gets the kind's
+      // horizon, which for unattended work is hours rather than minutes.
+      const decision = decideRetry({
+        kind: job.kind,
+        attempts: job.attempts,
+        maxAttempts: job.maxAttempts,
+        createdAt: job.createdAt,
+        now: now(),
+        error: err,
+      });
+      await failJob(pool, job.id, worker, message, {
+        retry: decision.retry,
+        ...(decision.backoffMs === undefined ? {} : { backoffMs: decision.backoffMs }),
+        classification: { class: decision.failureClass, reason: decision.reason },
+      }).catch((e) => onError(e, job));
     }
     return job;
   };

@@ -65,6 +65,7 @@ import {
   type MissionRunResult,
 } from './missions/execute.js';
 import { withNudgeBudget } from './missions/getting-started.js';
+import { createDeadLetterWatch } from './missions/dead-letter.js';
 import { createInlineMissionRunner, type InlineMissionDeps } from './missions/inline.js';
 import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
@@ -101,6 +102,12 @@ export const SOURCE_TICK_MS = 30_000;
  * cheaper clock would mean a reminder set for 09:00 arriving at 09:29.
  */
 export const REMINDER_TICK_MS = 60_000;
+
+/**
+ * The dead-letter watch. A minute is fine: the watch does not decide when to
+ * speak, it only notices — the aggregation window inside it decides that.
+ */
+export const DEAD_LETTER_TICK_MS = 60_000;
 
 /** The scheduler's kind: run one occurrence of a scheduled mission. */
 export const MISSION_JOB_KIND = 'mission-run';
@@ -543,6 +550,27 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
+    // Work that died and will not be retried must reach the owner. Its own
+    // loop, off the scheduler's critical path, and it delivers down the same
+    // path a mission report takes rather than inventing a second one.
+    const deadLetterTick = createDeadLetterWatch({
+      pool,
+      now,
+      timezone: wiring.timezone,
+      deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+      log: (line) => console.error(line),
+    });
+    const deadLetterLoop = startLoop({
+      name: 'dead-letter',
+      everyMs: DEAD_LETTER_TICK_MS,
+      abortAfterMs: DEAD_LETTER_TICK_MS * 2,
+      run: async () => {
+        const outcome = await deadLetterTick();
+        if (outcome.reported) console.error('dead-letter: told the owner about a wave of dead jobs');
+      },
+      log: (line) => console.error(line),
+    });
+
     const scheduler = runScheduler({
       pool,
       now,
@@ -655,6 +683,7 @@ export async function main(): Promise<void> {
       sentinelLoop.stop();
       sourceLoop.stop();
       reminderLoop.stop();
+      deadLetterLoop.stop();
       void dashboard?.close();
       void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
