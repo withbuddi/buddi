@@ -111,6 +111,9 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
       threadKey: message.threadKey,
       from: message.from,
       to: message.to,
+      // Who else is on this message. It decides whether a reply to the sender
+      // alone is the right one, so it is part of reading the message.
+      cc: message.cc,
       subject: message.subject,
       date: message.date,
       // Kept forever, and the only text left once a body is purged.

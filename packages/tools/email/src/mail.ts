@@ -28,6 +28,67 @@ export function normalizeAddresses(raw: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * Domains where Gmail's local-part rules apply: dots are ignored, and
+ * `googlemail.com` is the same mailbox as `gmail.com`.
+ */
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
+
+/**
+ * The mailbox an address delivers to, with every form of the same mailbox
+ * collapsed onto one key.
+ *
+ * This exists for exactly one question — "is this the owner?" — and it is the
+ * question that decides whether buddi mails him his own reply. Case is already
+ * handled by `normalizeAddress`; what is left is the two forms that reach the
+ * same inbox while spelling it differently:
+ *
+ *  - **plus addressing** (`amouzou+cdc@gmail.com`), which every major provider
+ *    routes to `amouzou@gmail.com`, and which a correspondent may well have in
+ *    their address book;
+ *  - **Gmail's dots and its second domain** (`a.mouzou@googlemail.com`), which
+ *    Gmail itself treats as the same account.
+ *
+ * It deliberately narrows *only*. A key never becomes a recipient — it is
+ * compared, and the address that travels is the one the original carried.
+ */
+export function mailboxKey(raw: string): string {
+  const bare = normalizeAddress(raw);
+  const at = bare.lastIndexOf('@');
+  if (at <= 0) return bare;
+  let local = bare.slice(0, at);
+  const domain = bare.slice(at + 1);
+  const plus = local.indexOf('+');
+  if (plus > 0) local = local.slice(0, plus);
+  if (GMAIL_DOMAINS.has(domain)) return `${local.replace(/\./g, '')}@gmail.com`;
+  return `${local}@${domain}`;
+}
+
+/** True when two addresses reach the same mailbox. Empty matches nothing. */
+export function isSameMailbox(a: string, b: string): boolean {
+  const left = mailboxKey(a);
+  return left !== '' && left === mailboxKey(b);
+}
+
+/**
+ * Local parts that mean "nothing you send here will be read".
+ *
+ * Replying to one is not dangerous, it is useless — and on a reply-all it is
+ * the tell that the message was a broadcast rather than a conversation. It is
+ * reported, never enforced: the agent and the owner decide, this only makes
+ * sure neither has to notice it on their own.
+ */
+const UNREPLYABLE =
+  /^(no[.\-_]?reply|do[.\-_]?not[.\-_]?reply|mailer[.\-_]?daemon|postmaster|bounces?|notifications?|automated)([.\-_+].*)?$/;
+
+/** True when the address looks like a machine that does not read its mail. */
+export function looksUnreplyable(raw: string): boolean {
+  const bare = normalizeAddress(raw);
+  const at = bare.lastIndexOf('@');
+  if (at <= 0) return false;
+  return UNREPLYABLE.test(bare.slice(0, at));
+}
+
 /** A `<...>` Message-ID, normalized to its bracketed form. Null when absent. */
 export function normalizeMessageId(raw: string | null | undefined): string | null {
   const value = raw?.trim();
@@ -74,6 +135,123 @@ export function replySubject(subject: string): string {
   return stripped === '' ? 'Re:' : `Re: ${stripped}`;
 }
 
+/**
+ * Who a reply goes to.
+ *
+ * ## The two shapes, and why they are the only two
+ *
+ * "Reply to everyone" is not one thing, so this names what it actually means
+ * here rather than leaving it to be guessed:
+ *
+ *  - **`sender`** — the sender alone. The default, always, and what every
+ *    reply was before this existed. Nothing an agent omits can widen it.
+ *  - **`everyone`** — the audience the original had, minus the owner. The
+ *    sender leads the `To` line, the rest of the original's `To` follows it
+ *    there (they were addressed, so they stay addressed), and the original's
+ *    `Cc` stays in `Cc` (they were copied, so they stay copied). That mapping
+ *    is the honest one: it reproduces the original's own idea of who is in the
+ *    conversation and who is watching it, instead of flattening both into one
+ *    line the owner then has to read carefully.
+ *
+ * `alsoTo` / `alsoCc` are the third case that is not a shape: the owner wants
+ * the sender plus one named colleague. They are appended after the audience is
+ * built, under exactly the same rules.
+ *
+ * ## The rules that hold whatever is asked for
+ *
+ *  - **The owner is never a recipient.** Every address is compared by
+ *    `mailboxKey`, so a plus-tag, a different case or Gmail's dots cannot slip
+ *    his own address past the filter. This applies to `from` too: a reply to
+ *    something he sent has nobody to reply to, and that is said out loud rather
+ *    than turning into mail addressed to himself.
+ *  - **Nothing is duplicated**, and an address that would appear in both lines
+ *    stays in `To` — the stronger of the two.
+ *  - **Order is the original's.** People read a recipient list as a sentence
+ *    about who this concerns; re-sorting it loses that.
+ *  - **A reply never carries a blind copy.** Not `bcc` from the original —
+ *    which is not stored, was never visible, and must not be resurrected — and
+ *    not a new one either. A widened reply is a visible act or it is nothing.
+ */
+export type ReplyAudience = 'sender' | 'everyone';
+
+export interface ReplyRecipientsInput {
+  /** The original's From. */
+  from: string;
+  /** The original's To, in its own order. */
+  to: readonly string[];
+  /** The original's Cc, in its own order. */
+  cc?: readonly string[];
+  /** Every address that reaches the owner. Never a recipient. */
+  owner: readonly string[];
+  /** Which shape. Absent means `sender`; only an explicit ask widens. */
+  audience?: ReplyAudience | undefined;
+  alsoTo?: readonly string[] | undefined;
+  alsoCc?: readonly string[] | undefined;
+}
+
+export interface ReplyRecipients {
+  to: string[];
+  cc: string[];
+  /** Always empty. A reply has no blind copies — see above. */
+  bcc: never[];
+  audience: ReplyAudience;
+  /** The sender, as the reply addresses them. */
+  sender: string;
+  /** Everyone on the reply who is not the sender. Empty is the default shape. */
+  beyondSender: string[];
+  /** The owner's own addresses that were on the original and were left off. */
+  excludedOwn: string[];
+  /** True when the sender looks like a machine that will not read a reply. */
+  senderLooksUnreplyable: boolean;
+}
+
+export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
+  const ownKeys = new Set(input.owner.map(mailboxKey).filter((k) => k !== ''));
+  const isOwn = (address: string): boolean => ownKeys.has(mailboxKey(address));
+
+  const excludedOwn: string[] = [];
+  const seen = new Set<string>();
+  const to: string[] = [];
+  const cc: string[] = [];
+
+  /** Add one address to a line, unless it is the owner's or already placed. */
+  const add = (line: string[], raw: string): void => {
+    const address = normalizeAddress(raw);
+    if (address === '') return;
+    const key = mailboxKey(address);
+    if (isOwn(address)) {
+      if (!excludedOwn.includes(address)) excludedOwn.push(address);
+      return;
+    }
+    if (seen.has(key)) return;
+    seen.add(key);
+    line.push(address);
+  };
+
+  const sender = normalizeAddress(input.from);
+  add(to, sender);
+
+  const audience: ReplyAudience = input.audience ?? 'sender';
+  if (audience === 'everyone') {
+    for (const address of input.to) add(to, address);
+    for (const address of input.cc ?? []) add(cc, address);
+  }
+  for (const address of input.alsoTo ?? []) add(to, address);
+  for (const address of input.alsoCc ?? []) add(cc, address);
+
+  const senderKey = mailboxKey(sender);
+  return {
+    to,
+    cc,
+    bcc: [],
+    audience,
+    sender,
+    beyondSender: [...to, ...cc].filter((a) => mailboxKey(a) !== senderKey),
+    excludedOwn,
+    senderLooksUnreplyable: looksUnreplyable(sender),
+  };
+}
+
 /** True when the mailbox has not marked the message `\Seen`. */
 export function isUnread(flags: readonly string[]): boolean {
   return !flags.some((f) => f.toLowerCase() === '\\seen');
@@ -91,6 +269,7 @@ export function triagePrompt(input: {
   messageId: string;
   from: string;
   to: readonly string[];
+  cc?: readonly string[];
   subject: string;
   date: string | null;
   hasAttachments: boolean;
@@ -115,6 +294,10 @@ export function triagePrompt(input: {
     `Message id (for the tools): ${input.messageId}`,
     `From: ${input.from}`,
     `To: ${input.to.join(', ') || '(none)'}`,
+    // Who else is on it. A message addressed to five people is a different
+    // message from one addressed to the owner alone, and the agent cannot see
+    // that unless it is put in front of it.
+    `Cc: ${(input.cc ?? []).join(', ') || '(none)'}`,
     `Subject: ${input.subject || '(no subject)'}`,
     `Date: ${input.date ?? '(unknown)'}`,
     `Attachments: ${attachments}`,

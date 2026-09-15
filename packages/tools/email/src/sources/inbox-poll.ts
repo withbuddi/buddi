@@ -190,8 +190,9 @@ async function commitBatch(
       const { rows } = await client.query(
         `insert into email.messages
            (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr,
-            to_addrs, subject, date, snippet, body_text, has_attachments, attachments, flags)
-         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb)
+            to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb,
+                 $16::jsonb)
          on conflict (account_id, mailbox_id, uidvalidity, uid) do nothing
          returning id`,
         [
@@ -203,6 +204,7 @@ async function commitBatch(
           message.threadKey,
           message.from,
           JSON.stringify(message.to),
+          JSON.stringify(message.cc),
           message.subject,
           message.date,
           message.snippet,
@@ -220,6 +222,7 @@ async function commitBatch(
           messageId: String(id),
           from: message.from,
           to: message.to,
+          cc: message.cc,
           subject: message.subject,
           date: message.date ? message.date.toISOString() : null,
           hasAttachments: message.hasAttachments,

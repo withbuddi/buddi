@@ -26,12 +26,22 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { currentAccount, resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
+import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
 import { findMessage, requireDraft, UUID } from './shared.js';
 
-/** The implementation version pinned into the action object. */
-export const SEND_TOOL_VERSION = '0.1.0';
+/**
+ * The implementation version pinned into the action object.
+ *
+ * 0.2.0 added `replyAudience`: the envelope now states how a reply's audience
+ * compares with the sender-only default, so the preview can say "four people
+ * beyond the sender" rather than showing one longer list. It is the envelope's
+ * own version and is recorded inside it; the approval is bound to the plugin
+ * manifest's version, which has not moved, so approvals already waiting stay
+ * valid.
+ */
+export const SEND_TOOL_VERSION = '0.2.0';
 
 /** One dispatch's budget. Past it the Executor marks the attempt `unknown`. */
 export const SEND_TIMEOUT_MS = 60_000;
@@ -46,6 +56,23 @@ export interface EnvelopeAttachment {
   mime: string;
   sizeBytes: number;
   sha256: string | null;
+}
+
+/**
+ * How a reply's audience compares with the sender-only default.
+ *
+ * Present only on a reply, because only a reply *has* a default to differ
+ * from. It is derived from the rows, never from anything the model said, and
+ * it exists so the owner reads "this goes to four more people" rather than a
+ * longer list of addresses that looks like every other list of addresses.
+ */
+export interface ReplyAudienceSummary {
+  /** The message this replies to, as the reply addresses them. */
+  sender: string;
+  /** Everyone on the reply who is not the sender, To, Cc and Bcc alike. */
+  beyondSender: string[];
+  /** True when this reply reaches anyone beyond the sender. */
+  widened: boolean;
 }
 
 /** The immutable effect envelope. Everything the owner is approving. */
@@ -66,6 +93,8 @@ export interface SendEnvelope {
   /** Threading headers, so a reply lands in its thread and not in a new one. */
   inReplyTo: string | null;
   references: string[];
+  /** How this reply's audience compares with the default. Null on a new message. */
+  replyAudience: ReplyAudienceSummary | null;
   /** The draft body's artifact version — the preview is rendered from it. */
   artifactId: string | null;
   createdByAgent: string;
@@ -85,6 +114,20 @@ export function renderPreview(envelope: SendEnvelope): string {
     `Bcc:     ${list(envelope.bcc)}`,
     `Subject: ${envelope.subject || '(no subject)'}`,
   ];
+  // The audience line, immediately under the recipients and before anything
+  // else, because a widened reply must not read as a slightly longer list.
+  const audience = envelope.replyAudience;
+  if (audience) {
+    if (!audience.widened) {
+      lines.push('Audience: the sender alone — the default for a reply.');
+    } else {
+      const n = audience.beyondSender.length;
+      lines.push(
+        `Audience: WIDER THAN A REPLY TO THE SENDER — ${n} ${n === 1 ? 'person' : 'people'} beyond ${audience.sender}:`,
+        `         ${audience.beyondSender.join(', ')}`,
+      );
+    }
+  }
   if (envelope.inReplyTo) lines.push(`In-Reply-To: ${envelope.inReplyTo}`);
   lines.push(
     `Attachments: ${
@@ -101,6 +144,21 @@ export function renderPreview(envelope: SendEnvelope): string {
     `recipients: ${envelope.to.length + envelope.cc.length + envelope.bcc.length} (bcc included)`,
   );
   return lines.join('\n');
+}
+
+/**
+ * What this reply's audience is, next to the sender-only default.
+ *
+ * Computed from the draft's own recipient lists rather than from how the draft
+ * was asked for: a widening is a widening however it got there — the audience
+ * argument, a named extra recipient, or a row edited by hand.
+ */
+function replyAudienceOf(from: string, draft: DraftRecord): ReplyAudienceSummary {
+  const senderKey = mailboxKey(from);
+  const beyondSender = [...draft.to, ...draft.cc, ...draft.bcc].filter(
+    (address) => mailboxKey(address) !== senderKey,
+  );
+  return { sender: from, beyondSender, widened: beyondSender.length > 0 };
 }
 
 /** Build the envelope from rows. Pure with respect to the world. */
@@ -139,6 +197,7 @@ export async function buildEnvelope(
     attachments: [],
     inReplyTo: original?.messageId ?? null,
     references,
+    replyAudience: original ? replyAudienceOf(original.from, draft) : null,
     artifactId: draft.artifactId,
     createdByAgent: draft.createdByAgent,
   };
