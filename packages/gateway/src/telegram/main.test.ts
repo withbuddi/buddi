@@ -8,7 +8,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { roleProblemMessage, type Queryable, type SurfaceIdentity } from '@buddi/core';
 import type { TelegramApi } from './api.js';
-import { OWNER_COMMANDS, applyCommandMenus, ownerCommandsFor, startTelegram } from './main.js';
+import { reloadableCatalog } from '../agents/catalog.js';
+import {
+  MAKE_AGENT_COMMAND,
+  OWNER_COMMANDS,
+  applyCommandMenus,
+  canMakeAgents,
+  ownerCommandsFor,
+  startTelegram,
+} from './main.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
 
 /* ---------------- fakes ---------------- */
@@ -74,18 +82,23 @@ const PROVIDER = {
   model: 'claude-sonnet-5',
 };
 
-function catalogAgent(id: string, handle: string, name: string): CatalogAgent {
+function catalogAgent(
+  id: string,
+  handle: string,
+  name: string,
+  extra: { roles?: string[]; availability?: CatalogAgent['availability'] } = {},
+): CatalogAgent {
   return {
     id,
     handle,
     name,
     description: `${name}, for testing`,
     isDefault: id === 'finance-advisor',
-    roles: [],
+    roles: extra.roles ?? [],
     source: 'example',
     providerKind: 'anthropic',
-    available: true,
-    availability: { ok: true },
+    available: extra.availability ? extra.availability.ok : true,
+    availability: extra.availability ?? { ok: true },
     skills: [],
     file: `${id}/agent.md`,
     model: 'claude-sonnet-5',
@@ -105,10 +118,11 @@ function catalogAgent(id: string, handle: string, name: string): CatalogAgent {
   };
 }
 
-function fakeCatalog(): AgentCatalog {
+function fakeCatalog(extras: readonly CatalogAgent[] = []): AgentCatalog {
   const agents = [
     catalogAgent('finance-advisor', 'ledger', 'Finance Advisor'),
     catalogAgent('concierge', 'buddi', 'Concierge'),
+    ...extras,
   ];
   return {
     get: (id) => agents.find((a) => a.id === id),
@@ -193,7 +207,7 @@ describe('applyCommandMenus', () => {
       'approvals',
       'files',
       'devices',
-      'new',
+      'reset',
       'id',
       'help',
     ]);
@@ -264,6 +278,53 @@ describe('startTelegram', () => {
     expect(lines).toContain('telegram: menu set for chat 9001');
     expect(handle.paired.map((p) => p.externalChatId)).toEqual(['9001']);
   });
+
+  it('re-publishes the menu when the catalog reloads a maker into existence', async () => {
+    const db = new FakeDb();
+    const menu = fakeMenuApi();
+    const api = {
+      ...menu.api,
+      getMe: async () => ({ id: 1, username: 'buddibot' }),
+      getUpdates: (_offset: number | undefined, signal?: any) =>
+        new Promise<[]>((resolve) => signal?.addEventListener('abort', () => resolve([]))),
+    };
+
+    // The owner has no maker yet, then writes one and the catalog is swapped
+    // behind the façade every surface holds — exactly what `platform.*` does.
+    let maker: CatalogAgent[] = [];
+    const catalog = reloadableCatalog(() => fakeCatalog(maker));
+
+    const handle = await startTelegram({
+      pool: db as any,
+      registry: {} as any,
+      catalog,
+      provider: {} as any,
+      ctx: {} as any,
+      env: { TELEGRAM_OWNER_USER_ID: '4242', TELEGRAM_OWNER_CHAT_ID: '9001' },
+      now: () => new Date('2026-09-13T00:00:00Z'),
+      api: api as unknown as TelegramApi,
+      log: () => {},
+    });
+
+    const before = menu.calls.filter((c) => c.method === 'setMyCommands').at(-1);
+    expect((before?.commands as any[]).map((c) => c.command)).not.toContain('new');
+
+    maker = [catalogAgent('agent-father', 'father', 'Agent Father', { roles: ['maker'] })];
+    catalog.reload();
+    // The listener publishes without being awaited; let the microtasks drain.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const after = menu.calls.filter((c) => c.method === 'setMyCommands').at(-1);
+    expect((after?.commands as any[]).map((c) => c.command)).toContain('new');
+
+    await handle.stop();
+
+    // Stopped means stopped: a later reload publishes nothing more.
+    const published = menu.calls.filter((c) => c.method === 'setMyCommands').length;
+    catalog.reload();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(menu.calls.filter((c) => c.method === 'setMyCommands')).toHaveLength(published);
+  });
 });
 
 describe('ownerCommandsFor', () => {
@@ -284,6 +345,48 @@ describe('ownerCommandsFor', () => {
   it('falls back to the plain menu when no agent is named', () => {
     expect(ownerCommandsFor()).toBe(OWNER_COMMANDS);
     expect(ownerCommandsFor('  ')).toBe(OWNER_COMMANDS);
+  });
+
+  it('leaves /new out of the menu when nobody claims the maker role', () => {
+    expect(ownerCommandsFor('ledger', false).map((c) => c.command)).not.toContain('new');
+    expect(canMakeAgents(fakeCatalog())).toBe(false);
+  });
+
+  it('offers /new directly after /agents when a maker exists', () => {
+    const maker = catalogAgent('agent-father', 'father', 'Agent Father', { roles: ['maker'] });
+    expect(canMakeAgents(fakeCatalog([maker]))).toBe(true);
+
+    const commands = ownerCommandsFor('ledger', true);
+    expect(commands.map((c) => c.command)).toEqual([
+      'agents',
+      'new',
+      'use',
+      'status',
+      'recap',
+      'reminders',
+      'quiet',
+      'approvals',
+      'files',
+      'devices',
+      'reset',
+      'id',
+      'help',
+    ]);
+    expect(commands.find((c) => c.command === 'new')).toEqual(MAKE_AGENT_COMMAND);
+    expect(MAKE_AGENT_COMMAND.description).toBe('Make a new agent');
+    // The entry is additive: nothing else about the menu moves or is reworded.
+    expect(commands.filter((c) => c.command !== 'new')).toEqual(ownerCommandsFor('ledger'));
+  });
+
+  it('does not offer /new for a maker that cannot run on this machine', () => {
+    const maker = catalogAgent('agent-father', 'father', 'Agent Father', {
+      roles: ['maker'],
+      availability: {
+        ok: false,
+        problem: { code: 'missing-credential', message: 'ANTHROPIC_API_KEY is not set' },
+      } as CatalogAgent['availability'],
+    });
+    expect(canMakeAgents(fakeCatalog([maker]))).toBe(false);
   });
 
   it('publishes a per-chat menu naming that chat active agent', async () => {

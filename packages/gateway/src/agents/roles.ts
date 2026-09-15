@@ -3,7 +3,7 @@
  *
  * Core validates the shape of a `roles:` entry and nothing else — it ships no
  * vocabulary, because an installation with different agents invents its own.
- * What is written down here is only what buddi's own surfaces look up: the two
+ * What is written down here is only what buddi's own surfaces look up: the
  * commands every surface offers, and the fallback speaker for an infrastructure
  * mission. A plugin's suggested missions name roles too, by the same strings.
  *
@@ -17,4 +17,12 @@ export const ROLE_OVERVIEW = 'overview';
 /** `/recap`: the agent whose recap mission `/recap` runs on demand. */
 export const ROLE_RECAP = 'recap';
 
-export const SURFACE_ROLES = [ROLE_OVERVIEW, ROLE_RECAP] as const;
+/**
+ * `/new`: the agent that makes other agents. Shipped `agent-father` claims it,
+ * but the command is keyed to the role and not to that file — an installation
+ * that writes its own maker keeps the command by claiming `maker`, and one with
+ * no maker at all has no menu entry for it rather than a dead one.
+ */
+export const ROLE_MAKER = 'maker';
+
+export const SURFACE_ROLES = [ROLE_OVERVIEW, ROLE_RECAP, ROLE_MAKER] as const;

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { loadAgentCatalog } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import { createToolRegistry, EXAMPLES_AGENTS_DIR, EXAMPLES_SKILLS_DIR, REPO_ROOT } from './catalog.js';
+import { ROLE_MAKER } from './roles.js';
 
 const catalog = () =>
   loadAgentCatalog({
@@ -75,6 +76,21 @@ describe('the examples this repository ships', () => {
       .list()
       .filter((a) => (loaded.resolve(a.id).tools ?? []).includes('platform.create_agent'));
     expect(writers.map((a) => a.id)).toEqual(['agent-father']);
+  });
+
+  it('let Agent Father answer for the "maker" role, so /new never names it', () => {
+    // `/new` is keyed to the role, exactly as `/status` is keyed to `overview`.
+    // A fresh clone therefore has the command; an installation that writes its
+    // own maker keeps it by claiming the role, and one with neither has no
+    // menu entry rather than a dead one.
+    const loaded = catalog();
+    const resolution = loaded.agentForRole(ROLE_MAKER);
+    expect(resolution.ok).toBe(true);
+    expect(resolution.ok && resolution.agent.id).toBe('agent-father');
+    expect(loaded.agentsWithRole(ROLE_MAKER).map((a) => a.id)).toEqual(['agent-father']);
+    // Exactly one claimant: a role resolves to the first, and a second maker in
+    // the shipped examples would make which one answers an accident of order.
+    expect(loaded.list().filter((a) => a.roles.includes(ROLE_MAKER))).toHaveLength(1);
   });
 
   it('let the example agent conduct a first run: it has the owner tools and the skill', () => {

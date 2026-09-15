@@ -28,6 +28,7 @@ import {
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
+import { ROLE_MAKER } from '../agents/roles.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
 import { createWiringAsync, loadEnvironment } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
@@ -42,6 +43,7 @@ import {
   handleLabel,
   type RunMission,
 } from './surface.js';
+import type { ReloadableAgentCatalog } from '../agents/catalog.js';
 import type { AgentCatalog } from './types.js';
 
 /**
@@ -62,23 +64,56 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'approvals', description: 'Anything waiting for your approval' },
   { command: 'files', description: 'The last files you sent me' },
   { command: 'devices', description: 'Devices paired to this installation' },
-  { command: 'new', description: 'Start a fresh conversation' },
+  { command: 'reset', description: 'Start a fresh conversation' },
   { command: 'id', description: 'Show my Telegram ids' },
   { command: 'help', description: 'What buddi can do' },
 ];
+
+/**
+ * The entry that is in the menu only while somebody can act on it.
+ *
+ * It sits directly after `/agents`: the two are one thought — what you have,
+ * and how to get another — and a menu that separates them makes the owner hunt
+ * for the thing they just failed to find in the list.
+ */
+export const MAKE_AGENT_COMMAND: TelegramBotCommand = {
+  command: 'new',
+  description: 'Make a new agent',
+};
+
+/**
+ * Is there anyone to run `/new`? A holder that exists but cannot run on this
+ * machine (no credential) is not offered: a menu entry is a promise.
+ */
+export function canMakeAgents(catalog: AgentCatalog): boolean {
+  const resolution = catalog.agentForRole(ROLE_MAKER);
+  return resolution.ok && resolution.agent.availability.ok;
+}
 
 /**
  * The menu as one chat sees it: `use` names the agent that chat is talking to
  * — `Switch agent (active: Ledger)` — so the active agent is visible without
  * asking. No `@`: that spelling is reserved for what the owner types, because
  * Telegram renders it as a link to a user who does not exist.
+ *
+ * `/new` is added only when an agent claims the `maker` role, which is why this
+ * is recomputed per publish rather than frozen at boot — the owner can make the
+ * maker's replacement in session, and the menu follows the catalog reload.
  */
-export function ownerCommandsFor(activeAgentHandle?: string): readonly TelegramBotCommand[] {
+export function ownerCommandsFor(
+  activeAgentHandle?: string,
+  makerAvailable = false,
+): readonly TelegramBotCommand[] {
   const label = handleLabel(activeAgentHandle);
-  if (label === '') return OWNER_COMMANDS;
-  return OWNER_COMMANDS.map((c) =>
-    c.command === 'use' ? { ...c, description: `Switch agent (active: ${label})` } : c,
-  );
+  const named =
+    label === ''
+      ? OWNER_COMMANDS
+      : OWNER_COMMANDS.map((c) =>
+          c.command === 'use' ? { ...c, description: `Switch agent (active: ${label})` } : c,
+        );
+  if (!makerAvailable) return named;
+  const after = named.findIndex((c) => c.command === 'agents') + 1;
+  return [...named.slice(0, after), MAKE_AGENT_COMMAND, ...named.slice(after)];
 }
 
 /**
@@ -90,6 +125,7 @@ export async function applyCommandMenus(
   paired: readonly SurfaceIdentity[],
   log: (line: string) => void,
   activeAgentHandle?: (chatId: string) => Promise<string | undefined>,
+  makerAvailable = false,
 ): Promise<void> {
   try {
     await api.deleteMyCommands({ type: 'default' });
@@ -107,7 +143,10 @@ export async function applyCommandMenus(
       });
     }
     try {
-      await api.setMyCommands(ownerCommandsFor(handle), { type: 'chat', chat_id: chatId });
+      await api.setMyCommands(ownerCommandsFor(handle, makerAvailable), {
+        type: 'chat',
+        chat_id: chatId,
+      });
       log(`telegram: menu set for chat ${chatId}`);
     } catch (err) {
       log(`telegram: menu for chat ${chatId} failed: ${errorText(err)}`);
@@ -117,6 +156,20 @@ export async function applyCommandMenus(
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Subscribe to catalog reloads when the catalog can be reloaded at all.
+ *
+ * Duck-typed on purpose: `TelegramDeps.catalog` is the read-only `AgentCatalog`
+ * every surface holds, and a test (or a build with no `platform.*` tools) may
+ * hand over a plain one. Nothing to subscribe to is not a failure — it is an
+ * installation where the menu cannot go stale.
+ */
+function watchCatalogReloads(catalog: AgentCatalog, listener: () => void): () => void {
+  const reloadable = catalog as Partial<ReloadableAgentCatalog>;
+  if (typeof reloadable.onReload !== 'function') return () => {};
+  return reloadable.onReload(listener);
 }
 
 /**
@@ -220,8 +273,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   const cursor = await getSurfaceCursor(pool, SURFACE);
   const me = await api.getMe();
 
+  // Recomputed per publish, never captured: `/new` is in the menu only while
+  // the `maker` role has a holder, and that can change while the process runs.
   const setChatMenu = async (chatId: string, agent: { handle: string }): Promise<void> => {
-    await api.setMyCommands(ownerCommandsFor(agent.handle), { type: 'chat', chat_id: chatId });
+    await api.setMyCommands(ownerCommandsFor(agent.handle, canMakeAgents(deps.catalog)), {
+      type: 'chat',
+      chat_id: chatId,
+    });
   };
 
   // Files land in core's artifact store; the surface only hands bytes over and
@@ -327,9 +385,26 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
 
   // Only paired chats get a menu; strangers see none. Each chat's menu names
   // the agent that chat is talking to.
-  await applyCommandMenus(api, paired, log, async (chatId) =>
-    (await surface.activeAgent(chatId)).handle,
-  );
+  const publishMenus = async (): Promise<void> => {
+    await applyCommandMenus(
+      api,
+      paired,
+      log,
+      async (chatId) => (await surface.activeAgent(chatId)).handle,
+      canMakeAgents(deps.catalog),
+    );
+  };
+  await publishMenus();
+
+  // The catalog is a façade that can be rebuilt without a restart, and the menu
+  // is derived from it: an owner who makes their own maker in session — or
+  // deletes the one they had — gets the matching menu on the same turn, not on
+  // the next boot. Cosmetic, so a failure is logged and never propagated.
+  const unwatchCatalog = watchCatalogReloads(deps.catalog, () => {
+    publishMenus().catch((err) => {
+      log(`telegram: republishing the command menus after a catalog reload failed: ${errorText(err)}`);
+    });
+  });
 
   surface.offset = cursor === undefined ? undefined : Number(cursor);
 
@@ -343,6 +418,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     cursor,
     done,
     async stop(): Promise<void> {
+      unwatchCatalog();
       surface.stop();
       await done;
     },

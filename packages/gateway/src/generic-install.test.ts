@@ -26,7 +26,7 @@ import { ChatSession } from './chat/session.js';
 import { Spinner } from './chat/spinner.js';
 import { planDefaultMissions } from './missions/defaults.js';
 import { recapMissionId } from './missions/recap.js';
-import { HELP, TelegramSurface } from './telegram/surface.js';
+import { HELP, NO_MAKER_TEXT, TelegramSurface } from './telegram/surface.js';
 import { readFinance } from './web/read.js';
 
 /** One agent, no roles — the fixture is the whole installation. */
@@ -99,6 +99,16 @@ describe('a generic installation: one agent, no roles, no plugins', () => {
     await surface.handleText('42', '42', '/recap');
     expect(said).toEqual([roleProblemMessage(ROLE_RECAP)]);
     expect(said[0]).toContain('roles: [recap]');
+  });
+
+  it('declines /new politely, naming the maker buddi ships', async () => {
+    const catalog = genericCatalog();
+    const { surface, said } = genericSurface(catalog);
+    await surface.handleText('42', '42', '/new');
+    expect(said).toEqual([NO_MAKER_TEXT]);
+    expect(said[0]?.split('\n')).toHaveLength(1);
+    expect(said[0]).toContain('Agent Father');
+    expect(said[0]).not.toMatch(/error|failed|undefined/i);
   });
 
   it('gives the CLI session the same two answers', async () => {

@@ -26,6 +26,9 @@ import {
   placeholderText,
   stripBotMention,
   unknownHandleText,
+  NEW_AGENT_OPENING,
+  NO_MAKER_TEXT,
+  newAgentOpening,
   RECAP_NOT_REGISTERED_TEXT,
   RECAP_UNAVAILABLE_TEXT,
   APPROVALS_UNAVAILABLE_TEXT,
@@ -499,6 +502,8 @@ const FINANCE = catalogAgent('finance-advisor', 'ledger', 'Finance Advisor', tru
   'recap',
 ]);
 const CONCIERGE = catalogAgent('concierge', 'buddi', 'Concierge', false);
+/** The maker. `/new` finds it by its role claim, never by this id. */
+const FATHER = catalogAgent('agent-father', 'father', 'Agent Father', false, ['maker']);
 
 /** The mission `/recap` runs here, as the composition root would hand it over. */
 const RECAP_MISSION_ID = 'friday-recap';
@@ -983,7 +988,7 @@ describe('TelegramSurface conversation handling', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('keeps one conversation per chat and starts a new one on /new', async () => {
+  it('keeps one conversation per chat and starts a new one on /reset', async () => {
     const db = withOwner(new FakeDb());
     const { surface, run } = surfaceWith(db);
     await surface.processUpdates([
@@ -993,7 +998,7 @@ describe('TelegramSurface conversation handling', () => {
     await surface.drain();
     expect(run.mock.calls.map((c: any) => c[0].conversationId)).toEqual(['conv-1', 'conv-1']);
 
-    await surface.processUpdates([message(52, OWNER, OWNER, '/new'), message(53, OWNER, OWNER, 'third')]);
+    await surface.processUpdates([message(52, OWNER, OWNER, '/reset'), message(53, OWNER, OWNER, 'third')]);
     await surface.drain();
     expect(run.mock.calls.at(-1)?.[0].conversationId).toBe('conv-2');
   });
@@ -1202,7 +1207,7 @@ describe('TelegramSurface progress bubble', () => {
     const { surface, sent } = surfaceWith(db);
     await surface.processUpdates([
       message(107, OWNER, OWNER, '/id'),
-      message(108, OWNER, OWNER, '/new'),
+      message(108, OWNER, OWNER, '/reset'),
       message(109, OWNER, OWNER, '/start'),
     ]);
     await surface.drain();
@@ -1383,14 +1388,14 @@ describe('TelegramSurface agents', () => {
     expect(db.conversations).toHaveLength(2);
   });
 
-  it('/new resets only the active agent conversation', async () => {
+  it('/reset resets only the active agent conversation', async () => {
     const db = withOwner(new FakeDb());
     const { surface, run, sent } = surfaceWith(db);
     await surface.processUpdates([
       message(210, OWNER, OWNER, 'advisor one'),
       message(211, OWNER, OWNER, '/use concierge'),
       message(212, OWNER, OWNER, 'concierge one'),
-      message(213, OWNER, OWNER, '/new'),
+      message(213, OWNER, OWNER, '/reset'),
       message(214, OWNER, OWNER, 'concierge two'),
       message(215, OWNER, OWNER, '/use finance-advisor'),
       message(216, OWNER, OWNER, 'advisor two'),
@@ -2760,5 +2765,96 @@ describe('the surface contract on Telegram', () => {
     // The profile is the plan; this is what catches a model that ignored it.
     expect(toPlainText('## Cash\n**1,240** left')).toBe('Cash\n1,240 left');
     expect(toPlainText('| a | b |\n| --- | --- |\n| 1 | 2 |')).toBe('a — b\n1 — 2');
+  });
+});
+
+describe('/new — making an agent is a role, not a name', () => {
+  it('opens the interview with the standard line and switches the chat to the maker', async () => {
+    const db = withOwner(new FakeDb());
+    const menus: { chatId: string; agentId: string }[] = [];
+    const { surface, run, sent } = surfaceWith(db, vi.fn(async () => 'What should it do for you?'), {
+      catalog: fakeCatalog([FINANCE, CONCIERGE, FATHER]),
+      setChatMenu: async (chatId, agent) => {
+        menus.push({ chatId, agentId: agent.id });
+      },
+    });
+
+    await surface.processUpdates([message(300, OWNER, OWNER, '/new')]);
+    await surface.drain();
+
+    // The owner said what they wanted by typing the command; they are not asked
+    // to type it again.
+    const request = run.mock.calls.at(-1)?.[0] as any;
+    expect(request.text).toBe('I want to make a new agent.');
+    expect(request.agent.id).toBe('agent-father');
+
+    // The switch sticks: the interview continues without another /use.
+    expect(db.activeAgents.get(String(OWNER))).toBe('agent-father');
+    expect(menus).toEqual([{ chatId: String(OWNER), agentId: 'agent-father' }]);
+    expect(lastText(sent)).toBe('What should it do for you?');
+  });
+
+  it('uses what the owner typed as the opening line instead', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run } = surfaceWith(db, vi.fn(async () => 'ok'), {
+      catalog: fakeCatalog([FINANCE, CONCIERGE, FATHER]),
+    });
+
+    await surface.processUpdates([
+      message(301, OWNER, OWNER, '/new something that watches my GitHub issues'),
+    ]);
+    await surface.drain();
+
+    expect((run.mock.calls.at(-1)?.[0] as any).text).toBe(
+      'something that watches my GitHub issues',
+    );
+  });
+
+  it('says so in one line when nobody claims the maker role, and runs nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, run, sent } = surfaceWith(db, vi.fn(async () => 'never'), {
+      catalog: fakeCatalog([FINANCE, CONCIERGE]),
+    });
+
+    await surface.processUpdates([message(302, OWNER, OWNER, '/new')]);
+    await surface.drain();
+
+    expect(lastText(sent)).toBe(NO_MAKER_TEXT);
+    expect(NO_MAKER_TEXT.split('\n')).toHaveLength(1);
+    expect(NO_MAKER_TEXT).toContain('Agent Father');
+    expect(NO_MAKER_TEXT).toContain('maker');
+    expect(run).not.toHaveBeenCalled();
+    expect(db.activeAgents.size).toBe(0);
+  });
+
+  it('stays with the maker without a second switch when it is already active', async () => {
+    const db = withOwner(new FakeDb());
+    const menus: string[] = [];
+    const { surface, run } = surfaceWith(db, vi.fn(async () => 'ok'), {
+      catalog: fakeCatalog([FINANCE, CONCIERGE, FATHER]),
+      setChatMenu: async (_chatId, agent) => {
+        menus.push(agent.id);
+      },
+    });
+
+    await surface.processUpdates([
+      message(303, OWNER, OWNER, '/use father'),
+      message(304, OWNER, OWNER, '/new'),
+    ]);
+    await surface.drain();
+
+    expect(menus).toEqual(['agent-father']);
+    expect((run.mock.calls.at(-1)?.[0] as any).agent.id).toBe('agent-father');
+  });
+
+  it('names /new and /reset as two different things in the help', () => {
+    expect(HELP).toContain('/new — make a new agent');
+    expect(HELP).toContain('/reset — start a fresh conversation');
+  });
+
+  it('opens with the owner sentence only when they typed nothing of their own', () => {
+    expect(newAgentOpening('')).toBe(NEW_AGENT_OPENING);
+    expect(newAgentOpening('   ')).toBe(NEW_AGENT_OPENING);
+    expect(newAgentOpening('  a thing that reads my RSS  ')).toBe('a thing that reads my RSS');
   });
 });

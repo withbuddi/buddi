@@ -4,6 +4,7 @@ handle: father
 name: Agent Father
 description: Where agents are made and changed — interviews the owner, proposes the file and the tool grant, and writes it once they approve.
 tools: [platform.*, memory.*]
+roles: [maker]
 maxTurns: 12
 language: mirror
 ---
