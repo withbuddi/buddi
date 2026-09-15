@@ -48,6 +48,12 @@ suite('owner identity (postgres)', () => {
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
   }, 60_000);
 
+  /** The database's clock, which is the one that stamps its own timestamps. */
+  const dbNow = async (): Promise<Date> => {
+    const { rows } = await pool.query<{ now: Date }>('select clock_timestamp() as now');
+    return new Date(rows[0]!.now);
+  };
+
   afterAll(async () => {
     await pool?.end();
     if (admin) {
@@ -80,7 +86,12 @@ suite('owner identity (postgres)', () => {
       externalUserId: '111',
       externalChatId: '111',
     });
-    expect(await listSurfaceIdentities(pool, 'telegram')).toHaveLength(1);
+    // Counted for *this* user, not for the table: a whole-table count is a
+    // claim about every other test in the file as well.
+    const mine = (await listSurfaceIdentities(pool, 'telegram')).filter(
+      (row) => row.externalUserId === '111',
+    );
+    expect(mine).toHaveLength(1);
 
     await expect(
       resolveOwnerForSurface(pool, {
@@ -92,6 +103,15 @@ suite('owner identity (postgres)', () => {
   });
 
   it('refuses an unpaired user and a mismatched chat', async () => {
+    // Paired here rather than inherited from the test above: a test that reads
+    // a row another test happened to leave behind is a test that passes for a
+    // reason it does not state. Re-pairing is idempotent, so this costs nothing.
+    await pairSurfaceIdentity(pool, {
+      surface: 'telegram',
+      externalUserId: '111',
+      externalChatId: '111',
+    });
+
     expect(
       await resolveOwnerForSurface(pool, {
         surface: 'telegram',
@@ -134,7 +154,9 @@ suite('owner identity (postgres)', () => {
   /* ---------------- pairing by one-time code (migration 007) ---------------- */
 
   it('mints a code that is unambiguous, short lived and single use', async () => {
-    const before = Date.now();
+    // Read from the database, not from `Date.now()`: `expires_at` is stamped by
+    // Postgres, and the two clocks are not the same clock.
+    const before = (await dbNow()).getTime();
     const { code, expiresAt } = await createPairingCode(pool, {
       surface: 'telegram',
       ttlMinutes: 10,
@@ -281,15 +303,23 @@ suite('owner identity (postgres)', () => {
     const after = (await listSurfaceIdentitiesDetailed(pool)).find((d) => d.id === identity.id);
     expect(after?.lastSeenAt).toBeInstanceOf(Date);
 
-    // Pairing again from the environment must not relabel how it first arrived.
+    // Pairing again from the environment must not relabel how it first
+    // arrived. The `code` provenance is established here, by this test, rather
+    // than borrowed from the pairing-code test further up the file.
     await pairSurfaceIdentity(pool, {
       surface: 'telegram',
-      externalUserId: '777',
-      externalChatId: '777',
+      externalUserId: '2003',
+      externalChatId: '2003',
+      pairedVia: 'code',
+    });
+    await pairSurfaceIdentity(pool, {
+      surface: 'telegram',
+      externalUserId: '2003',
+      externalChatId: '2003',
       pairedVia: 'env',
     });
     const byCode = (await listSurfaceIdentitiesDetailed(pool)).find(
-      (d) => d.externalUserId === '777',
+      (d) => d.externalUserId === '2003',
     );
     expect(byCode?.pairedVia).toBe('code');
 
@@ -308,6 +338,8 @@ suite('owner identity (postgres)', () => {
   });
 
   it('reads back the owner display name', async () => {
+    // Named here, not by whichever test ran first.
+    await ensureOwner(pool, 'Owner');
     expect(await getOwnerDisplayName(pool)).toBe('Owner');
   });
 });

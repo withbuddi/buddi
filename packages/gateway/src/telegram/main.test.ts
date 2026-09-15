@@ -6,7 +6,7 @@
  * list is published once per paired chat. No network, no database.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Queryable, SurfaceIdentity } from '@buddi/core';
+import { roleProblemMessage, type Queryable, type SurfaceIdentity } from '@buddi/core';
 import type { TelegramApi } from './api.js';
 import { OWNER_COMMANDS, applyCommandMenus, ownerCommandsFor, startTelegram } from './main.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
@@ -81,6 +81,12 @@ function catalogAgent(id: string, handle: string, name: string): CatalogAgent {
     name,
     description: `${name}, for testing`,
     isDefault: id === 'finance-advisor',
+    roles: [],
+    source: 'example',
+    providerKind: 'anthropic',
+    available: true,
+    availability: { ok: true },
+    skills: [],
     file: `${id}/agent.md`,
     model: 'claude-sonnet-5',
     tools: [],
@@ -109,13 +115,29 @@ function fakeCatalog(): AgentCatalog {
     byHandle: (handle) =>
       agents.find((a) => a.handle === handle.replace(/^@/, '').toLowerCase()),
     list: () =>
-      agents.map(({ id, handle, name, description, isDefault }) => ({
-        id,
-        handle,
-        name,
-        description,
-        isDefault,
-      })),
+      agents.map(
+        ({ id, handle, name, description, isDefault, roles, source, providerKind, available }) => ({
+          id,
+          handle,
+          name,
+          description,
+          isDefault,
+          roles,
+          source,
+          providerKind,
+          available,
+        }),
+      ),
+    agentsWithRole: (role: string) => agents.filter((a) => a.roles.includes(role)),
+    agentForRole: (role: string) => {
+      const found = agents.find((a) => a.roles.includes(role));
+      return found
+        ? ({ ok: true, agent: found } as const)
+        : ({
+            ok: false,
+            problem: { code: 'no-agent-for-role', role, message: roleProblemMessage(role) },
+          } as const);
+    },
     defaultAgent: () => agents[0] as CatalogAgent,
     resolve: (id) => {
       const found =

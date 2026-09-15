@@ -408,7 +408,13 @@ suite('actions and approvals (postgres)', () => {
       const registry = new ToolRegistry();
       registry.register(manifest);
       const id = await approved();
-      await pool.query(`update core.actions set expires_at = now() - interval '1 hour' where id = $1`, [id]);
+      // Aged with *this* clock, not the database's: `executeApproved` compares
+      // `expires_at` against the `now` in the ToolContext, and the container's
+      // clock is not the host's.
+      await pool.query(`update core.actions set expires_at = $2 where id = $1`, [
+        id,
+        new Date(Date.now() - 3_600_000),
+      ]);
       const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
       expect(res).toMatchObject({ ok: false, reason: 'expired', state: 'expired' });
       expect(sent).toEqual([]);

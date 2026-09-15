@@ -471,6 +471,11 @@ function catalogAgent(
     description: `${name}, for testing`,
     isDefault,
     roles,
+    source: 'example',
+    providerKind: 'anthropic',
+    available: true,
+    availability: { ok: true },
+    skills: [],
     file: `${id}/agent.md`,
     model: MODEL,
     tools: [],
@@ -521,14 +526,19 @@ function fakeCatalog(agents: CatalogAgent[] = [FINANCE, CONCIERGE]): AgentCatalo
     },
     byHandle: (handle) => agents.find((a) => a.handle === handleOf(handle)),
     list: () =>
-      agents.map(({ id, handle, name, description, isDefault, roles }) => ({
-        id,
-        handle,
-        name,
-        description,
-        isDefault,
-        roles,
-      })),
+      agents.map(
+        ({ id, handle, name, description, isDefault, roles, source, providerKind, available }) => ({
+          id,
+          handle,
+          name,
+          description,
+          isDefault,
+          roles,
+          source,
+          providerKind,
+          available,
+        }),
+      ),
     defaultAgent: () => byDefault,
     resolve: (id) => {
       if (id === undefined) return byDefault;
@@ -546,7 +556,7 @@ const CONCIERGE_PLACEHOLDER = placeholderText(handleLabel(CONCIERGE.handle));
 
 function surfaceWith(
   db: FakeDb,
-  run = vi.fn(async () => 'reply'),
+  run = vi.fn(async (_req?: any) => 'reply'),
   extra: {
     failOn?: (method: string) => boolean;
     now?: () => number;
@@ -657,9 +667,16 @@ function photoUpdate(
 
 const OWNER = 4242;
 
-/** Let queued microtasks (placeholder send, run start) settle. */
-function tick(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+/**
+ * Wait for something to become true, rather than for a fixed slice of time.
+ * One macrotask is enough on an idle machine and is not a guarantee anywhere
+ * else, and "the run has started" is a condition, not a duration.
+ */
+async function until(predicate: () => boolean, what: string): Promise<void> {
+  for (let i = 0; i < 1_000 && !predicate(); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  if (!predicate()) throw new Error(`timed out waiting for ${what}`);
 }
 
 /**
@@ -983,7 +1000,7 @@ describe('TelegramSurface conversation handling', () => {
 
   it('sends the final answer as plain text, markdown markers removed', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
-    const run = vi.fn(async () => '**Status — 2026-09-13**\n\nYou have 1 240,50 € left.');
+    const run = vi.fn(async (_req?: any) => '**Status — 2026-09-13**\n\nYou have 1 240,50 € left.');
     const { surface, sent } = surfaceWith(db, run as any);
     await surface.processUpdates([message(65, OWNER, OWNER, 'where do I stand?')]);
     await surface.drain();
@@ -1016,7 +1033,9 @@ describe('TelegramSurface conversation handling', () => {
       message(71, OWNER, OWNER, 'two'),
     ]);
     await work;
-    await tick(); // the placeholder is posted before the run starts
+    // The placeholder is posted before the run starts; once the first run has
+    // started, the claim is that the second one has not.
+    await until(() => order.length > 0, 'the first run to start');
     expect(order).toEqual(['start:one']);
     release?.();
     await surface.drain();
@@ -1033,7 +1052,7 @@ describe('TelegramSurface conversation handling', () => {
 
   it('reports a failed run to the owner and logs surface.error', async () => {
     const db = withOwner(new FakeDb());
-    const run = vi.fn(async () => {
+    const run = vi.fn(async (_req?: any) => {
       throw new Error('provider exploded');
     });
     const { surface, sent } = surfaceWith(db, run as any);
@@ -1066,7 +1085,7 @@ describe('TelegramSurface progress bubble', () => {
     const db = withOwner(new FakeDb());
     let sentAtRun: Sent[] = [];
     let captured: Sent[] = [];
-    const run = vi.fn(async () => {
+    const run = vi.fn(async (_req?: any) => {
       sentAtRun = [...captured];
       return 'reply';
     });
@@ -1138,7 +1157,7 @@ describe('TelegramSurface progress bubble', () => {
 
   it('edits the placeholder into a short final answer', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'you have $12 left'));
     await surface.processUpdates([message(104, OWNER, OWNER, 'hello')]);
     await surface.drain();
 
@@ -1152,7 +1171,7 @@ describe('TelegramSurface progress bubble', () => {
   it('deletes the placeholder and sends chunks for a long answer', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
     const long = 'w'.repeat(9000);
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => long));
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => long));
     await surface.processUpdates([message(105, OWNER, OWNER, 'hello')]);
     await surface.drain();
 
@@ -1166,7 +1185,7 @@ describe('TelegramSurface progress bubble', () => {
 
   it('falls back to sendMessage when the final edit fails', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'the answer'), {
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'the answer'), {
       failOn: (method) => method === 'editMessageText',
     });
     await surface.processUpdates([message(106, OWNER, OWNER, 'hello')]);
@@ -1201,7 +1220,7 @@ describe('TelegramSurface /recap', () => {
       onToolCall?.('finance.list_accounts', {});
       return { ok: true as const, text: 'cash is fine' };
     });
-    const run = vi.fn(async () => 'reply');
+    const run = vi.fn(async (_req?: any) => 'reply');
     const { surface, sent } = surfaceWith(db, run, { runMission: runMission as any });
     await surface.processUpdates([message(120, OWNER, OWNER, '/recap')]);
     await surface.drain();
@@ -1234,8 +1253,8 @@ describe('TelegramSurface /recap', () => {
 
   it('explains how to register the mission when it is unknown', async () => {
     const db = withOwner(new FakeDb());
-    const runMission = vi.fn(async () => ({ ok: false as const, reason: 'unknown-mission' as const }));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'), {
+    const runMission = vi.fn(async (_req?: any) => ({ ok: false as const, reason: 'unknown-mission' as const }));
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), {
       runMission: runMission as any,
     });
     await surface.processUpdates([message(122, OWNER, OWNER, '/recap')]);
@@ -1249,10 +1268,10 @@ describe('TelegramSurface /recap', () => {
 
   it('reports a failing mission in the bubble', async () => {
     const db = withOwner(new FakeDb());
-    const runMission = vi.fn(async () => {
+    const runMission = vi.fn(async (_req?: any) => {
       throw new Error('no provider');
     });
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'), {
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), {
       runMission: runMission as any,
     });
     await surface.processUpdates([message(123, OWNER, OWNER, '/recap')]);
@@ -1404,7 +1423,7 @@ describe('TelegramSurface agents', () => {
   it('re-publishes the chat menu after a switch', async () => {
     const db = withOwner(new FakeDb());
     const menus: { chatId: string; name: string }[] = [];
-    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), {
+    const { surface } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), {
       setChatMenu: async (chatId, agent) => {
         menus.push({ chatId, name: agent.name });
       },
@@ -1507,7 +1526,7 @@ describe('TelegramSurface agent buttons', () => {
   it('switches on a tap, refreshes the list, answers and re-publishes the menu', async () => {
     const db = withOwner(new FakeDb());
     const menus: { chatId: string; name: string }[] = [];
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'reply'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), {
       setChatMenu: async (chatId, agent) => {
         menus.push({ chatId, name: agent.name });
       },
@@ -1580,9 +1599,9 @@ describe('TelegramSurface agent buttons', () => {
 
   it('never hands a use: tap to the approval machinery', async () => {
     const db = withOwner(new FakeDb());
-    const handleCallback = vi.fn(async () => {});
+    const handleCallback = vi.fn(async (_req?: any) => {});
     const approvals: ApprovalHooks = { handleCallback, pending: async () => 'none' };
-    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+    const { surface } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { approvals });
     await surface.processUpdates([useTap('concierge', OWNER, 305)]);
     await surface.drain();
 
@@ -1603,7 +1622,7 @@ describe('TelegramSurface agent buttons', () => {
 describe('TelegramSurface /status under another agent', () => {
   it('runs the finance advisor for that one message without switching', async () => {
     const db = withOwner(new FakeDb());
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'you have $12 left'));
     await surface.processUpdates([
       message(230, OWNER, OWNER, '/use concierge'),
       message(231, OWNER, OWNER, 'hello'),
@@ -1639,7 +1658,7 @@ describe('TelegramSurface /status under another agent', () => {
 
   it('adds no note when the finance advisor is already active', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'you have $12 left'));
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'you have $12 left'));
     await surface.processUpdates([message(234, OWNER, OWNER, '/status')]);
     await surface.drain();
     expect(sent.find((s) => s.method === 'editMessageText')?.body.text).toBe('you have $12 left');
@@ -1688,7 +1707,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('downloads a captioned document, saves it, and runs with it attached', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'imported 42 rows'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'imported 42 rows'), {
       artifacts: store.store,
       files: { 'file-1': { path: 'documents/statement.pdf', bytes: '%PDF-1.7 rows' } },
     });
@@ -1737,7 +1756,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('takes the largest size of a photo and attaches it as an image', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'that is a receipt'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'that is a receipt'), {
       artifacts: store.store,
       files: { full: { path: 'photos/full.jpg', bytes: 'JPEGBYTES' } },
     });
@@ -1764,7 +1783,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('answers a file with no caption directly, starts no run, and remembers it', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
       artifacts: store.store,
       files: { 'file-2': { bytes: '%PDF' } },
     });
@@ -1793,7 +1812,7 @@ describe('TelegramSurface attachment ingest', () => {
     let clock = 1_700_000_000_000;
     db.clock = () => clock;
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'imported'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'imported'), {
       artifacts: store.store,
       files: { 'file-3': { bytes: '%PDF' } },
       now: () => clock,
@@ -1826,7 +1845,7 @@ describe('TelegramSurface attachment ingest', () => {
     const db = withOwner(new FakeDb());
     let clock = 1_700_000_000_000;
     db.clock = () => clock;
-    const { surface, run } = surfaceWith(db, vi.fn(async () => 'ok'), {
+    const { surface, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'ok'), {
       files: { 'file-4': { bytes: '%PDF' } },
       now: () => clock,
     });
@@ -1852,7 +1871,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('saves a CSV without attaching it, naming the artifact id instead', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, run } = surfaceWith(db, vi.fn(async () => 'imported'), {
+    const { surface, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'imported'), {
       artifacts: store.store,
       files: { 'file-5': { bytes: 'date,amount\n' } },
     });
@@ -1875,7 +1894,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('stores a voice note, says it cannot listen, and runs nothing', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
       artifacts: store.store,
       files: { 'voice-1': { bytes: 'OGG' } },
     });
@@ -1904,7 +1923,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('ignores a stranger’s file entirely and records surface.rejected', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
       artifacts: store.store,
       files: { 'file-x': { bytes: '%PDF' } },
     });
@@ -1930,7 +1949,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('refuses a file over Telegram’s limit before downloading it', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'never'), {
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
       artifacts: store.store,
     });
 
@@ -1955,7 +1974,7 @@ describe('TelegramSurface attachment ingest', () => {
   it('refuses a file Telegram only admits is oversize at getFile', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'never'), {
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
       artifacts: store.store,
       files: { 'file-6': { size: MAX_ATTACHMENT_BYTES + 10, bytes: '%PDF' } },
     });
@@ -1985,7 +2004,7 @@ describe('TelegramSurface /files', () => {
     const db = withOwner(new FakeDb());
     let clock = Date.parse('2026-09-13T10:00:00Z');
     db.clock = () => clock;
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'ok'), {
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'ok'), {
       files: Object.fromEntries(
         Array.from({ length: 12 }, (_, n) => [`f-${n}`, { bytes: '%PDF' }]),
       ),
@@ -2207,7 +2226,7 @@ describe('pairing codes (gateway)', () => {
 
   it('asks Telegram who the bot is when no username is given', async () => {
     const db = new FakeDb();
-    const getMe = vi.fn(async () => ({ id: 1, username: 'buddibot' }));
+    const getMe = vi.fn(async (_req?: any) => ({ id: 1, username: 'buddibot' }));
     const invite = await createPairingCode(db, { api: { getMe } });
     expect(getMe).toHaveBeenCalled();
     expect(invite.deepLink).toBe(`https://t.me/buddibot?start=${invite.code}`);
@@ -2220,8 +2239,8 @@ describe('TelegramSurface pairing', () => {
 
   it('pairs an unpaired user who sends /start with a good code', async () => {
     const db = new FakeDb();
-    const menu = vi.fn(async () => {});
-    const { surface, sent, run } = surfaceWith(db, vi.fn(async () => 'reply'), {
+    const menu = vi.fn(async (_req?: any) => {});
+    const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), {
       setChatMenu: menu,
     });
     const { code } = await createPairingCodeFor(db, 'buddibot');
@@ -2285,7 +2304,7 @@ describe('TelegramSurface pairing', () => {
     const db = new FakeDb();
     let at = Date.parse('2026-09-13T12:00:00Z');
     db.clock = () => at;
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { now: () => at });
     const { code } = await createPairingCodeFor(db, 'buddibot', { ttlMinutes: 10 });
 
     at += 11 * 60_000;
@@ -2300,7 +2319,7 @@ describe('TelegramSurface pairing', () => {
     const db = new FakeDb();
     let at = Date.parse('2026-09-13T12:00:00Z');
     db.clock = () => at;
-    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+    const { surface } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { now: () => at });
 
     for (let i = 0; i < PAIRING_MAX_ATTEMPTS + 1; i += 1) {
       await surface.processUpdates([message(300 + i, STRANGER, STRANGER, '/start WRONGONE')]);
@@ -2348,7 +2367,7 @@ describe('TelegramSurface last seen', () => {
     const db = withOwner(new FakeDb());
     let at = Date.parse('2026-09-13T12:00:00Z');
     db.clock = () => at;
-    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { now: () => at });
+    const { surface } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { now: () => at });
     const device = () => db.identities[0]?.last_seen_at ?? null;
 
     await surface.processUpdates([message(500, OWNER, OWNER, 'hello')]);
@@ -2535,9 +2554,9 @@ describe('approvals on the surface', () => {
 
   it('hands a callback_query to the approval machinery, unchanged', async () => {
     const db = pairedDb();
-    const handleCallback = vi.fn(async () => {});
+    const handleCallback = vi.fn(async (_req?: any) => {});
     const approvals: ApprovalHooks = { handleCallback, pending: async () => 'none' };
-    const { surface } = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+    const { surface } = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { approvals });
 
     const update = callbackUpdate('apr:33333333-3333-3333-3333-333333333333:approve');
     await surface.processUpdates([update]);
@@ -2561,7 +2580,7 @@ describe('approvals on the surface', () => {
       handleCallback: async () => {},
       pending: async () => 'Waiting for you:\n• mail.send',
     };
-    const withHooks = surfaceWith(db, vi.fn(async () => 'reply'), { approvals });
+    const withHooks = surfaceWith(db, vi.fn(async (_req?: any) => 'reply'), { approvals });
     await withHooks.surface.dispatch(message(701, OWNER, OWNER, '/approvals'));
     await withHooks.surface.drain();
     expect(withHooks.sent.at(-1)?.body.text).toContain('mail.send');
@@ -2620,7 +2639,7 @@ describe('first contact', () => {
 
   it('runs the default agent with the first-run instruction, not a canned script', async () => {
     const db = pendingOnboarding(withOwner(new FakeDb()));
-    const run = vi.fn(async () => 'Hi — I am the agent that runs on this machine.');
+    const run = vi.fn(async (_req?: any) => 'Hi — I am the agent that runs on this machine.');
     const { surface, sent } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
@@ -2636,7 +2655,7 @@ describe('first contact', () => {
 
   it('answers the owner\'s own first question instead of a hello', async () => {
     const db = pendingOnboarding(withOwner(new FakeDb()));
-    const run = vi.fn(async () => 'reply');
+    const run = vi.fn(async (_req?: any) => 'reply');
     const { surface } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, 'what is this?')]);
@@ -2647,7 +2666,7 @@ describe('first contact', () => {
 
   it('breaks the answer into messages with the typing indicator between them', async () => {
     const db = pendingOnboarding(withOwner(new FakeDb()));
-    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'one\n\ntwo\n\nthree'), burst);
+    const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => 'one\n\ntwo\n\nthree'), burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
     await surface.drain();
@@ -2662,7 +2681,7 @@ describe('first contact', () => {
 
   it('happens once and never again', async () => {
     const db = pendingOnboarding(withOwner(new FakeDb()));
-    const run = vi.fn(async () => 'hello');
+    const run = vi.fn(async (_req?: any) => 'hello');
     const { surface } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, '/start')]);
@@ -2690,7 +2709,7 @@ describe('first contact', () => {
       quiet_until: null,
       updated_at: new Date(0),
     };
-    const run = vi.fn(async () => 'reply');
+    const run = vi.fn(async (_req?: any) => 'reply');
     const { surface } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
@@ -2702,7 +2721,7 @@ describe('first contact', () => {
 
   it('leaves an installation that was already talking completely alone', async () => {
     const db = withOwner(new FakeDb()); // onboarding: done
-    const run = vi.fn(async () => 'reply');
+    const run = vi.fn(async (_req?: any) => 'reply');
     const { surface, sent } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, 'hi')]);
@@ -2714,7 +2733,7 @@ describe('first contact', () => {
 
   it('does not spend it on a command the owner deliberately typed', async () => {
     const db = pendingOnboarding(withOwner(new FakeDb()));
-    const run = vi.fn(async () => 'hello');
+    const run = vi.fn(async (_req?: any) => 'hello');
     const { surface, sent } = surfaceWith(db, run, burst);
 
     await surface.processUpdates([message(1, OWNER, OWNER, '/help')]);

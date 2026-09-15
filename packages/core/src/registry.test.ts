@@ -142,7 +142,7 @@ describe('ToolRegistry', () => {
         throw new Error('database is down');
       },
     };
-    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db: db as ToolContext['db'] });
+    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db: db as unknown as ToolContext['db'] });
     expect(res).toMatchObject({ ok: false, reason: 'tool-error' });
     expect(execute).not.toHaveBeenCalled();
   });

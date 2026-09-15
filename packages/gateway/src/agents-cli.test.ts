@@ -101,6 +101,7 @@ describe('the listing', () => {
     credential: 'api-key from ANTHROPIC_API_KEY',
     available: true,
     roles: [],
+    source: 'example',
     ...over,
   });
 

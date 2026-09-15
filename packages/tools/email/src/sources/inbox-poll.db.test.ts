@@ -333,8 +333,13 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     };
     const source = createInboxPollSource({ connect, env: ENV, timeoutMs: 10 });
     await expect(source.poll(contextFor())).rejects.toBeInstanceOf(ImapTimeoutError);
-    // The socket we stopped waiting for is not leaked.
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The socket we stopped waiting for is not leaked. Waited for rather than
+    // slept past: the connection this is about lands 40ms from now on an idle
+    // machine and whenever the scheduler gets to it on a loaded one, and a
+    // fixed sleep turns the second case into a failure that is not a bug.
+    for (let i = 0; closed === 0 && i < 400; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     expect(closed).toBe(1);
   });
 

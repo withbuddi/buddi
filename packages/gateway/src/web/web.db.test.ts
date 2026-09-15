@@ -577,7 +577,10 @@ suite('the dashboard API', () => {
     // The dashboard's own action is in the event log.
     const { rows: events } = await pool.query(
       `select count(*)::int as n from core.events
-        where kind = 'approval.decided' and payload->>'decidedVia' = 'web'`,
+        where kind = 'approval.decided'
+          and payload->>'decidedVia' = 'web'
+          and payload->>'actionId' = $1`,
+      [viaWeb],
     );
     expect(events[0].n).toBe(1);
   });
@@ -601,7 +604,15 @@ suite('the dashboard API', () => {
 
   it('pauses the installation, and a paused queue claims nothing', async () => {
     const client = await signedIn();
-    await enqueue(pool, { kind: 'demo', payload: {}, dedupKey: 'pause-test' });
+    // `run_after` is supplied instead of being left to the database's own
+    // `now()`: the two claims below are made at *this* process's clock, and the
+    // database's runs a little ahead of it.
+    await enqueue(pool, {
+      kind: 'demo',
+      payload: {},
+      dedupKey: 'pause-test',
+      runAfter: new Date(Date.now() - 60_000),
+    });
 
     expect((await client.post('/api/pause', { paused: true })).status).toBe(200);
     expect(

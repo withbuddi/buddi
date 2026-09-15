@@ -162,7 +162,7 @@ describe('pending markers', () => {
       ].join('\n'),
     );
     expect(rows[0]).toMatchObject({ description: 'LIDL', status: 'pending' });
-    expect(rows[1].status).toBeUndefined();
+    expect(rows[1]?.status).toBeUndefined();
   });
 
   it('reads a PENDING marker written into the date column', () => {
