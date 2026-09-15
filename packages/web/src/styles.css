@@ -1015,3 +1015,72 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 .wb-tree-num { color: var(--accent); font-variant-numeric: tabular-nums; }
 .wb-tree-bool { color: var(--good); }
 .wb-tree-null { color: var(--text-faint); }
+
+/* ---- the inferred fallback: a table, a list or a reason, never a dump ---- */
+
+.wb-sub {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.wb-note {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.wb-note-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.wb-fail {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--critical);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.wb-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+
+.wb-cell-text { max-width: 320px; }
+.wb-cell-soft { color: var(--text-faint); font-size: 12px; }
+
+.wb-aside {
+  border-top: 1px solid var(--line);
+  padding: 8px 0 2px;
+}
+.wb-aside > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  list-style: none;
+}
+.wb-aside > summary::before { content: '▸ '; }
+.wb-aside[open] > summary::before { content: '▾ '; }
+.wb-aside > summary:hover { color: var(--text); }
+.wb-aside > .wb-tree { padding: 8px 0 6px 4px; }
+
+/* ---- the chart owns the panel; the event list scrolls inside its own box ---- */
+
+.wb-chart-plot { flex: 1 1 520px; min-width: 300px; }
+
+.wb-chart-events {
+  flex: 0 1 250px;
+  min-width: 180px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.wb-chart-event-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.wb-chart-event-list li { padding: 2px 0; border-bottom: 1px solid var(--line); }
+.wb-chart-event-list li:last-child { border-bottom: 0; }
+
+@media (max-width: 720px) {
+  .wb-chart-events { max-height: 240px; flex-basis: 100%; }
+}

@@ -6,9 +6,9 @@
  * scale, a minimum you have to hunt for, a breach that is only mentioned in
  * prose.
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Timeseries, breachBands, markIndex } from './views/Timeseries';
+import { Timeseries, breachBands, markIndex, xTicks } from './views/Timeseries';
 import { niceTicks } from './format';
 import { resolveTimeseries } from './resolve';
 import type { TimeseriesProps } from './types';
@@ -50,10 +50,13 @@ describe('the timeseries chart', () => {
     expect(screen.getByText(/Floor\s+\$500/)).toBeDefined();
     const rule = container.querySelector('.wb-chart-floor');
     expect(rule).toBeTruthy();
-    // On the same scale as the series: the rule's y must fall inside the plot.
+    // On the same scale as the series: the rule's y must fall inside the plot,
+    // wherever the plot's own floor happens to be in this build.
+    const axes = [...container.querySelectorAll('.wb-chart-axis')];
+    const baseline = Math.max(...axes.map((axis) => Number(axis.getAttribute('y1'))));
     const y = Number(rule!.getAttribute('y1'));
     expect(y).toBeGreaterThan(0);
-    expect(y).toBeLessThan(280);
+    expect(y).toBeLessThan(baseline);
   });
 
   it('marks the minimum and prints what it is', () => {
@@ -70,10 +73,20 @@ describe('the timeseries chart', () => {
   });
 
   it('lists the event days beside the chart', () => {
-    render(<Timeseries props={projection} />);
+    const { container } = render(<Timeseries props={projection} />);
     expect(screen.getByText('Rent')).toBeDefined();
+    // Scoped to the list: the axis is a scale and may label the same day.
+    const list = container.querySelector('.wb-chart-events')!;
     // The short month is whatever the runtime's ICU calls it (`Sep` / `Sept`).
-    expect(screen.getByText(/^20 Sept?$/)).toBeDefined();
+    expect(within(list as HTMLElement).getByText(/^20 Sept?$/)).toBeDefined();
+  });
+
+  it('labels the x axis at an even interval rather than at the marks', () => {
+    // Evenly spaced across the domain: no two ticks bunched together because
+    // one of them happens to be the minimum.
+    expect(xTicks(45)).toEqual([0, 11, 22, 33, 44]);
+    expect(xTicks(3)).toEqual([0, 1, 2]);
+    expect(xTicks(1)).toEqual([0]);
   });
 
   it('describes itself for anyone who cannot see it', () => {
