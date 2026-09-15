@@ -644,8 +644,13 @@ export class WebChat {
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),
       ...(deps.artifacts ? { loadArtifact: (id: string) => deps.artifacts!.load(id) } : {}),
-      onText: () => {
-        void this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId });
+      // Awaited: the runtime waits for this row before it writes anything
+      // else, so "the assistant appended a message" is always ordered before
+      // the `run.finished` of the turn that wrote it. Fired and forgotten, the
+      // two inserts race on separate pool connections and the page can be told
+      // the run is over before — or instead of — being told what it said.
+      onText: async () => {
+        await this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId });
       },
     };
 

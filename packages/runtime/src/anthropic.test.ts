@@ -67,7 +67,7 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
     await provider.complete(request);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://api.anthropic.com/v1/messages');
     const headers = init.headers as Record<string, string>;
     expect(headers['anthropic-beta']).toBe('oauth-2025-04-20');
@@ -104,7 +104,7 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
       system: `${CLAUDE_CODE_SYSTEM_PREFIX}\n${AGENT_PROMPT}`,
     });
 
-    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.system).toEqual([
       { type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX },
       { type: 'text', text: AGENT_PROMPT },
@@ -118,7 +118,7 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
       sleep: noSleep,
     });
     await provider.complete({ ...request, system: '' });
-    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.system).toEqual([{ type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX }]);
   });
 });
@@ -133,7 +133,7 @@ describe('createAnthropicProvider — api-key wire requirements', () => {
 
     await provider.complete(request);
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     expect(headers['x-api-key']).toBe('secret-value');
     expect(headers['anthropic-beta']).toBeUndefined();
@@ -269,7 +269,7 @@ describe('createAnthropicProvider — responses and errors', () => {
       { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep },
     );
     await provider.complete(request);
-    expect((fetchMock.mock.calls[0] as [string, RequestInit])[0]).toBe(
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[0]).toBe(
       'https://proxy.internal/v1/messages',
     );
   });
@@ -359,7 +359,7 @@ describe('createAnthropicProvider — multimodal blocks', () => {
       sleep: noSleep,
     });
     await provider.complete({ ...request, messages: [{ role: 'user', content }] });
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     return JSON.parse(init.body as string);
   }
 

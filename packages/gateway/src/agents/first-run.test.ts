@@ -11,9 +11,9 @@
  */
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadAgentCatalog, type Queryable } from '@buddi/core';
+import { CLI_SURFACE, loadAgentCatalog, type Queryable } from '@buddi/core';
 import { EXAMPLES_AGENTS_DIR, EXAMPLES_SKILLS_DIR, createToolRegistry } from './catalog.js';
-import { CLI_SURFACE, FIRST_RUN_SUFFIX, shouldStartFirstRun } from './first-run.js';
+import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from './first-run.js';
 
 /* ---------------- the onboarding table, in memory ---------------- */
 
@@ -134,17 +134,17 @@ describe('starting the first run', () => {
   it('never begins twice, across both surfaces', async () => {
     const db = new FakeOnboardingDb();
     expect(await shouldStartFirstRun(db, 'telegram')).toBe(true);
-    expect(await shouldStartFirstRun(db, CLI_SURFACE)).toBe(false);
+    expect(await shouldStartFirstRun(db, CLI_SURFACE.id)).toBe(false);
     expect(await shouldStartFirstRun(db, 'telegram')).toBe(false);
     expect(db.row?.surface).toBe('telegram');
   });
 
   it('never begins once it is done, whichever surface finished it', async () => {
     const db = new FakeOnboardingDb();
-    db.row = { state: 'done', surface: CLI_SURFACE };
+    db.row = { state: 'done', surface: CLI_SURFACE.id };
     expect(await shouldStartFirstRun(db, 'telegram')).toBe(false);
     // And a machine that declined is a machine that is never asked again.
-    db.row = { state: 'skipped', surface: CLI_SURFACE };
+    db.row = { state: 'skipped', surface: CLI_SURFACE.id };
     expect(await shouldStartFirstRun(db, 'telegram')).toBe(false);
   });
 

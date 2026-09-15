@@ -21,7 +21,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
-const TEST_DB = `buddi_sentinels_test_${process.pid}`;
+const TEST_DB = `buddi_finance_sentinels_test_${process.pid}`;
 /** A Sunday; "today" for every case below. */
 const NOW = new Date('2026-09-13T12:00:00Z');
 

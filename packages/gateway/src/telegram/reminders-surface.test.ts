@@ -9,7 +9,7 @@
  *
  * No network and no database: a fake Bot API and an in-memory `Queryable`.
  */
-import { UnknownAgentError, type Queryable, type Reminder } from '@buddi/core';
+import { roleProblemMessage, UnknownAgentError, type Queryable, type Reminder } from '@buddi/core';
 import { describe, expect, it, vi } from 'vitest';
 import { TelegramApi, type FetchLike, type TelegramUpdate } from './api.js';
 import {
@@ -161,6 +161,7 @@ function fakeCatalog(): AgentCatalog {
         ...a,
         description: 'test',
         isDefault: a.id === 'finance-advisor',
+        roles: [],
       }) as unknown as CatalogAgent,
   );
   const byDefault = agents[0] as CatalogAgent;
@@ -168,6 +169,16 @@ function fakeCatalog(): AgentCatalog {
     get: (id) => agents.find((a) => a.id === id),
     byHandle: (handle) => agents.find((a) => a.handle === handle.replace(/^@/, '')),
     list: () => agents.map((a) => ({ ...a })) as any,
+    agentsWithRole: (role: string) => agents.filter((a) => a.roles.includes(role)),
+    agentForRole: (role: string) => {
+      const found = agents.find((a) => a.roles.includes(role));
+      return found
+        ? ({ ok: true, agent: found } as const)
+        : ({
+            ok: false,
+            problem: { code: 'no-agent-for-role', role, message: roleProblemMessage(role) },
+          } as const);
+    },
     defaultAgent: () => byDefault,
     resolve: (id) => {
       if (id === undefined) return byDefault;
@@ -314,8 +325,8 @@ describe('a tap on Cancel', () => {
     db.reminders = [reminder(ID_ONE, 'finance-advisor', '2026-09-20T13:00:00Z', 'check the card')];
     const { surface } = surfaceWith(db);
     await surface.dispatch({ update_id: 1, callback_query: tap(ID_ONE) } as TelegramUpdate);
-    // Serialized on the chat's own chain: let it drain.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Serialized on the chat's own chain: drained, not slept past.
+    await surface.drain();
     expect(db.reminders[0]?.state).toBe('cancelled');
   });
 });

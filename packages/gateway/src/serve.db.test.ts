@@ -22,6 +22,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { insertOccurrence } from './missions-cli.js';
 import { createMissionJobHandler, MISSION_JOB_KIND, queueOccurrence } from './serve.js';
+import type { MissionRunResult } from './missions/execute.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -67,7 +68,7 @@ suite('scheduled missions run as queue jobs', () => {
     return { occurrence, mission };
   };
 
-  const result = {
+  const result: MissionRunResult = {
     conversationId: '00000000-0000-0000-0000-000000000000',
     text: 'all clear',
     delivered: true,

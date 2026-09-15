@@ -80,7 +80,13 @@ export interface RunAgentOptions {
    * resolve becomes a visible placeholder, never a silent omission.
    */
   loadArtifact?: LoadArtifact;
-  onText?: (text: string) => void;
+  /**
+   * "The assistant said something." Awaited, because a surface that answers it
+   * by writing to the event log has to have that write *land* before the run
+   * moves on — an unawaited write races `run.finished` and can be ordered
+   * after it, or lost to a reader tailing the log by id.
+   */
+  onText?: (text: string) => void | Promise<void>;
   onToolCall?: (name: string, input: unknown) => void;
   /**
    * Resuming a run that stopped awaiting an approval.
@@ -452,7 +458,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     const turnText = textOf(assistantContent);
     if (turnText) {
       text = turnText;
-      opts.onText?.(turnText);
+      await opts.onText?.(turnText);
     }
 
     const toolUses = assistantContent.filter(

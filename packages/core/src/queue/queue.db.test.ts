@@ -70,10 +70,19 @@ suite('queue (postgres)', () => {
   });
 
   beforeEach(async () => {
+    // Resumed *before* the log is truncated, never after: `setPaused` writes a
+    // `system.resumed` event when it changes anything, and a test that counts
+    // those events would otherwise count the cleanup of the test before it.
+    await setPaused(pool, false);
     await pool.query('truncate core.jobs cascade');
     await pool.query('truncate core.events cascade');
-    await setPaused(pool, false);
   });
+
+  /** The database's clock, which is the one that stamps its own timestamps. */
+  const dbNow = async (): Promise<Date> => {
+    const { rows } = await pool.query<{ now: Date }>('select clock_timestamp() as now');
+    return new Date(rows[0]!.now);
+  };
 
   const events = async (kind: string): Promise<any[]> => {
     const { rows } = await pool.query(
@@ -217,11 +226,12 @@ suite('queue (postgres)', () => {
         const after = await failJob(pool, job!.id, 'w', `boom ${n}`, { retry: true });
         if (n < 3) {
           expect(after?.state).toBe('pending');
-          const waited = after!.runAfter.getTime() - Date.now();
-          // 1m then 5m — asserted as the gap from "now", loosely, since the row
-          // clock is the database's.
-          expect(waited).toBeGreaterThan(backoffFor(n) * 0.5);
-          expect(waited).toBeLessThan(backoffFor(n) * 1.5);
+          // 1m then 5m — measured against the *database's* clock, which is the
+          // clock that stamped `run_after`. Measured against Node's it would be
+          // a assertion about how far the container has drifted.
+          const waited = after!.runAfter.getTime() - (await dbNow()).getTime();
+          expect(waited).toBeGreaterThan(backoffFor(n) * 0.9);
+          expect(waited).toBeLessThanOrEqual(backoffFor(n));
         } else {
           expect(after?.state).toBe('failed');
           expect(after?.lastError).toBe('boom 3');
@@ -429,7 +439,7 @@ suite('queue (postgres)', () => {
       const after = await getJob(pool, job.id);
       expect(after?.attempts).toBe(1);
       expect(after?.lastError).toBe('upstream said no');
-      expect(after!.runAfter.getTime()).toBeGreaterThan(Date.now());
+      expect(after!.runAfter.getTime()).toBeGreaterThan((await dbNow()).getTime());
     }, 20_000);
 
     it('releases stale leases at startup (Phase 1 recovery)', async () => {

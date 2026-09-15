@@ -344,21 +344,14 @@ suite('the dashboard chat API', () => {
   let ctx: ToolContext;
   let base: string;
 
-  beforeAll(async () => {
-    admin = createPool(databaseUrl as string);
-    await admin.query(`drop database if exists ${TEST_DB}`);
-    await admin.query(`create database ${TEST_DB}`);
-    const url = new URL(databaseUrl as string);
-    url.pathname = `/${TEST_DB}`;
-    pool = createPool(url.toString());
-    await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
-
-    registry = new ToolRegistry();
-    registry.register(demoManifest);
-    ctx = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-    await ensureOwner(pool, 'owner');
-
-    web = await startWebServer({
+  /**
+   * One server, started the way the composition root starts it. A function
+   * rather than a single instance because the rate limiter and the session
+   * store live in *this process's* memory: a test about being refused needs a
+   * server of its own, or it spends a budget the other tests are counting on.
+   */
+  const startServer = async (): Promise<WebServer> =>
+    startWebServer({
       pool,
       registry,
       catalog: fakeCatalog(),
@@ -374,6 +367,22 @@ suite('the dashboard chat API', () => {
         artifacts: createCoreArtifactStore({ pool, env: process.env }),
       },
     });
+
+  beforeAll(async () => {
+    admin = createPool(databaseUrl as string);
+    await admin.query(`drop database if exists ${TEST_DB}`);
+    await admin.query(`create database ${TEST_DB}`);
+    const url = new URL(databaseUrl as string);
+    url.pathname = `/${TEST_DB}`;
+    pool = createPool(url.toString());
+    await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
+
+    registry = new ToolRegistry();
+    registry.register(demoManifest);
+    ctx = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    await ensureOwner(pool, 'owner');
+
+    web = await startServer();
     base = `http://127.0.0.1:${web.port}`;
   }, 60_000);
 
@@ -843,32 +852,39 @@ suite('the dashboard chat API', () => {
     expect(peek.headers.get('access-control-allow-origin')).toBeNull();
   });
   /*
-   * Deliberately last in the file: ten failed authentications is exactly the
-   * rate limiter's per-address budget, so a test that needs to sign in must
-   * not run after this one.
+   * Ten failed authentications is exactly the rate limiter's per-address
+   * budget, and the limiter lives in this process's memory, per server. So this
+   * test gets a server of its own: the budget it spends is nobody else's, and
+   * the file no longer depends on this test running last.
    */
   it('refuses every chat route without a session', async () => {
-    for (const [method, path] of [
-      ['GET', '/api/chat/agents'],
-      ['GET', '/api/chat/views'],
-      ['GET', `/api/chat/${AGENT_ID}/conversations`],
-      ['GET', '/api/chat/conversations/00000000-0000-0000-0000-000000000000'],
-      ['GET', '/api/chat/conversations/00000000-0000-0000-0000-000000000000/stream'],
-      ['GET', '/api/approvals/00000000-0000-0000-0000-000000000000'],
-      ['POST', `/api/chat/${AGENT_ID}/messages`],
-      ['POST', `/api/chat/${AGENT_ID}/conversations`],
-      ['POST', '/api/chat/attachments'],
-      ['POST', '/api/chat/conversations/00000000-0000-0000-0000-000000000000/cancel'],
-    ] as const) {
-      const res = await fetch(`${base}${path}`, {
-        method,
-        redirect: 'manual',
-        ...(method === 'POST'
-          ? { headers: { origin: base, 'x-buddi-csrf': 'anything' }, body: '{}' }
-          : {}),
-      });
-      expect(res.status, `${method} ${path}`).toBe(401);
-      expect(await res.text()).toBe('');
+    const gated = await startServer();
+    const gatedBase = `http://127.0.0.1:${gated.port}`;
+    try {
+      for (const [method, path] of [
+        ['GET', '/api/chat/agents'],
+        ['GET', '/api/chat/views'],
+        ['GET', `/api/chat/${AGENT_ID}/conversations`],
+        ['GET', '/api/chat/conversations/00000000-0000-0000-0000-000000000000'],
+        ['GET', '/api/chat/conversations/00000000-0000-0000-0000-000000000000/stream'],
+        ['GET', '/api/approvals/00000000-0000-0000-0000-000000000000'],
+        ['POST', `/api/chat/${AGENT_ID}/messages`],
+        ['POST', `/api/chat/${AGENT_ID}/conversations`],
+        ['POST', '/api/chat/attachments'],
+        ['POST', '/api/chat/conversations/00000000-0000-0000-0000-000000000000/cancel'],
+      ] as const) {
+        const res = await fetch(`${gatedBase}${path}`, {
+          method,
+          redirect: 'manual',
+          ...(method === 'POST'
+            ? { headers: { origin: gatedBase, 'x-buddi-csrf': 'anything' }, body: '{}' }
+            : {}),
+        });
+        expect(res.status, `${method} ${path}`).toBe(401);
+        expect(await res.text()).toBe('');
+      }
+    } finally {
+      await gated.close();
     }
   });
 

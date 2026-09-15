@@ -26,6 +26,7 @@ import {
   listReminders,
   runMigrations,
   type Job,
+  type JobContext,
   type ToolContext,
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
@@ -37,6 +38,17 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createToolRegistry, loadGatewayCatalog } from '../agents/catalog.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './agent-run.js';
+
+/**
+ * Just enough `JobContext` to call a handler outside the worker loop. Handed
+ * over explicitly rather than left off: a handler that reaches for `suspend`
+ * would otherwise throw on `undefined` only on the day it started doing so.
+ */
+const jobContext = (): JobContext => ({
+  heartbeat: async () => true,
+  suspend: async () => {},
+  lost: false,
+});
 import {
   agentMissionId,
   createReminderTick,
@@ -187,7 +199,7 @@ suite('reminders and proposed schedules (postgres)', () => {
       log: () => {},
     });
 
-    const outcome = (await handle({ ...job, attempts: 1 } as Job)) as {
+    const outcome = (await handle({ ...job, attempts: 1 } as Job, jobContext())) as {
       decision: string;
       delivered: boolean;
       reason?: string;

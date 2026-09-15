@@ -113,16 +113,19 @@ function stubAgent(id: string, handle: string, name: string, file: string): Cata
 }
 
 function catalogOf(agents: CatalogAgent[]): AgentCatalog {
-  return {
-    get: (id) => agents.find((a) => a.id === id),
-    byHandle: (handle) =>
+  // Annotated, not cast: a catalog that grows a method has to grow it here too,
+  // and the compiler is what says so.
+  const catalog: AgentCatalog = {
+    get: (id: string) => agents.find((a) => a.id === id),
+    byHandle: (handle: string) =>
       agents.find((a) => a.handle.toLowerCase() === handle.replace(/^@/, '').toLowerCase()),
     list: () => agents as never,
     defaultAgent: () => agents[0] as CatalogAgent,
     agentsWithRole: () => [],
     agentForRole: () => ({ ok: false, problem: { code: 'no-agent-for-role', role: '', message: '' } }),
-    resolve: (id) => agents.find((a) => a.id === id) as CatalogAgent,
-  } as unknown as AgentCatalog;
+    resolve: (id?: string) => agents.find((a) => a.id === id) as CatalogAgent,
+  };
+  return catalog;
 }
 
 interface Harness {
