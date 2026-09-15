@@ -25,13 +25,16 @@ import {
   listReminders,
   listSurfaceIdentitiesDetailed,
   localDateString,
+  recordOfferJob,
   localDateTimeString,
   recordSurfaceUpdate,
   resolveOwnerForSurface,
   roleProblemMessage,
   setActiveAgent,
   setSurfaceCursor,
+  takeOffer,
   touchSurfaceIdentity,
+  type Offer,
   type Queryable,
   type Reminder,
 } from '@buddi/core';
@@ -541,6 +544,15 @@ export interface TelegramSurfaceOptions {
    * nothing proactive to quieten, and nothing is counted.
    */
   engagement?: EngagementHooks;
+  /**
+   * Start the run a tapped offer asks for. Absent: an offer button is still
+   * claimed and still answered, it simply wakes nothing — the same shape every
+   * other optional hook here has.
+   *
+   * It takes the *stored* offer, never text off the wire: a tap carries an id
+   * and nothing else, and the prompt that runs is the one the agent wrote.
+   */
+  takeOffer?: (offer: Offer) => Promise<string | undefined>;
   log?: (line: string) => void;
   /** Typing indicator cadence; Telegram's own lasts ~5s. */
   typingIntervalMs?: number;
@@ -1044,16 +1056,66 @@ export const REMINDER_CANCELLED_TEXT = 'Cancelled.';
 /** And when it was already fired, cancelled or expired. */
 export const REMINDER_GONE_TEXT = 'That reminder is no longer pending.';
 
+/* ------------------------------------------------------------------ *
+ * Offered actions
+ * ------------------------------------------------------------------ */
+
+/**
+ * The prefix an "I'll take that one" callback carries.
+ *
+ * Four owners: `apr:` approvals, `use:` agent switching, `rem:` reminders and
+ * `off:` here. An offer button is the weakest of the four — it authorizes
+ * nothing, it only saves the owner typing a sentence — but it is routed and
+ * authenticated exactly like the others, because a callback is a callback.
+ */
+export const OFFER_CALLBACK_PREFIX = 'off';
+
+/** `off:<id>`, refused rather than truncated if it cannot fit. */
+export function offerCallbackData(offerId: string): string {
+  const data = `${OFFER_CALLBACK_PREFIX}:${offerId}`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    throw new Error(`offer callback data is too long for Telegram: ${data.length} bytes`);
+  }
+  return data;
+}
+
+/** The offer id in an `off:` callback, or nothing. Strict on the uuid. */
+export function parseOfferCallback(data: string | undefined): string | undefined {
+  const m = /^off:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+    (data ?? '').trim(),
+  );
+  return m ? (m[1] as string).toLowerCase() : undefined;
+}
+
+/**
+ * The keyboard a report's offers become: one button per offer, one per row.
+ *
+ * One per row because the labels are sentences-in-miniature ("Draft a reply",
+ * "Remind me tomorrow") and Telegram shrinks side-by-side buttons until they
+ * elide. Three of them is the cap, so the column is never long.
+ */
+export function offersKeyboard(offers: readonly Offer[]): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: offers.map((offer) => [
+      { text: offer.label, callback_data: offerCallbackData(offer.id) },
+    ]),
+  };
+}
+
+/** What a tap answers once the run is queued. */
+export const OFFER_TAKEN_TEXT = 'On it.';
+
 /**
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'reminder' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
   const raw = (data ?? '').trim();
   if (raw.startsWith(`${USE_CALLBACK_PREFIX}:`)) return 'agent';
   if (raw.startsWith(`${REMINDER_CALLBACK_PREFIX}:`)) return 'reminder';
+  if (raw.startsWith(`${OFFER_CALLBACK_PREFIX}:`)) return 'offer';
   return 'approval';
 }
 
@@ -1201,6 +1263,10 @@ export class TelegramSurface {
       }
       if (kind === 'reminder') {
         this.enqueue(chain, () => this.handleReminderCallback(callback));
+        return;
+      }
+      if (kind === 'offer') {
+        this.enqueue(chain, () => this.handleOfferCallback(callback));
         return;
       }
       const approvals = this.#opts.approvals;
@@ -2070,6 +2136,92 @@ export class TelegramSurface {
         );
       } catch (err) {
         this.#log(`telegram: refreshing the reminder list failed: ${message(err)}`);
+      }
+    }
+  }
+
+  /**
+   * A tap on an offered action.
+   *
+   * The whole authorization story is: this is the owner, and the owner chose a
+   * sentence the agent had already written. So the tap is authenticated like
+   * every other callback, the offer is claimed atomically (a second thumb gets
+   * "already on it", never a second run), and what runs is the *stored* prompt
+   * — the callback carries an id and nothing else, so nothing off the wire can
+   * steer it.
+   *
+   * It grants nothing. The run it starts has the same tools, the same tiers and
+   * the same approval gate the agent always had: if it proposes to send mail,
+   * the owner sees the ordinary approval with every recipient and the whole
+   * body, exactly as they would have.
+   */
+  async handleOfferCallback(
+    query: NonNullable<TelegramUpdate['callback_query']>,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const offerId = parseOfferCallback(query.data);
+    if (offerId === undefined || userId === '' || chatId === '') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: offer callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendSurfaceEvent(pool, 'surface.rejected', {
+        surface: SURFACE,
+        kind: 'callback',
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        offerId,
+      });
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const taken = await takeOffer(pool, { id: offerId, via: SURFACE, now: new Date(this.#now()) });
+    if (!taken.ok) {
+      await api.answerCallbackQuery(query.id, taken.message).catch(() => {});
+      return;
+    }
+
+    let jobId: string | undefined;
+    try {
+      jobId = await this.#opts.takeOffer?.(taken.offer);
+    } catch (err) {
+      this.#log(`telegram: starting the run for offer ${offerId} failed: ${message(err)}`);
+    }
+    if (jobId !== undefined) {
+      await recordOfferJob(pool, taken.offer.id, jobId).catch(() => {});
+    }
+
+    await api.answerCallbackQuery(query.id, OFFER_TAKEN_TEXT).catch(() => {});
+
+    // The keyboard goes away: an offer is claimed once, and a button still
+    // sitting there says otherwise. Cosmetic, so a failed edit is only logged.
+    if (messageId !== undefined) {
+      try {
+        await api.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+      } catch (err) {
+        this.#log(`telegram: clearing the offer keyboard failed: ${message(err)}`);
+      }
+      try {
+        await api.sendMessage(chatId, `${OFFER_TAKEN_TEXT} ${taken.offer.label}.`);
+      } catch (err) {
+        this.#log(`telegram: acknowledging offer ${offerId} failed: ${message(err)}`);
       }
     }
   }

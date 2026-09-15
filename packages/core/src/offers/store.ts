@@ -1,0 +1,171 @@
+/**
+ * The offer store.
+ *
+ * Two operations matter and both are one statement each. `offerActions` writes
+ * the set a report carries; `takeOffer` claims one *atomically*, so two taps —
+ * an impatient thumb on Telegram, the same offer clicked on the dashboard —
+ * produce one run and one "already taken", never two runs.
+ *
+ * Validation lives here rather than in a prompt: a label or a prompt over the
+ * cap is truncated at the boundary, and a set over `MAX_OFFERS` is cut, because
+ * a report that offered nine buttons is a report the owner stops reading.
+ */
+import type { Queryable } from '../owner.js';
+import {
+  MAX_OFFERS,
+  MAX_OFFER_LABEL,
+  MAX_OFFER_PROMPT,
+  OFFER_COLUMNS,
+  OFFER_TTL_MS,
+  toOffer,
+  type Offer,
+  type OfferedAction,
+  type TakeOfferResult,
+} from './types.js';
+
+function clip(value: string, max: number): string {
+  const text = value.trim().replace(/\s+/g, ' ');
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * Normalize what an agent offered: trimmed, capped, de-duplicated by label,
+ * and never more than `MAX_OFFERS`. Empty entries are dropped rather than
+ * stored as a blank button.
+ */
+export function normalizeOffers(actions: readonly OfferedAction[]): OfferedAction[] {
+  const seen = new Set<string>();
+  const out: OfferedAction[] = [];
+  for (const action of actions) {
+    const label = clip(action?.label ?? '', MAX_OFFER_LABEL);
+    const prompt = clip(action?.prompt ?? '', MAX_OFFER_PROMPT);
+    if (label === '' || prompt === '') continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ label, prompt });
+    if (out.length >= MAX_OFFERS) break;
+  }
+  return out;
+}
+
+export interface OfferActionsInput {
+  agentId: string;
+  conversationId?: string | null;
+  actions: readonly OfferedAction[];
+  now: Date;
+  ttlMs?: number;
+}
+
+/** Store the offers a report carries. Returns them with the ids a surface binds. */
+export async function offerActions(
+  pool: Queryable,
+  input: OfferActionsInput,
+): Promise<Offer[]> {
+  const agentId = (input.agentId ?? '').trim();
+  if (agentId === '') throw new Error('offerActions: an offer belongs to the agent that made it');
+  const actions = normalizeOffers(input.actions);
+  if (actions.length === 0) return [];
+
+  const expiresAt = new Date(input.now.getTime() + (input.ttlMs ?? OFFER_TTL_MS));
+  const stored: Offer[] = [];
+  for (const action of actions) {
+    const { rows } = await pool.query(
+      `insert into core.offers (agent_id, conversation_id, label, prompt, created_at, expires_at)
+       values ($1, $2, $3, $4, $5, $6)
+       returning ${OFFER_COLUMNS}`,
+      [agentId, input.conversationId ?? null, action.label, action.prompt, input.now, expiresAt],
+    );
+    const row = rows[0];
+    if (!row) throw new Error('offerActions: insert returned no row');
+    stored.push(toOffer(row));
+  }
+  return stored;
+}
+
+/** One offer by id, or null. */
+export async function getOffer(pool: Queryable, id: string): Promise<Offer | null> {
+  const { rows } = await pool.query(
+    `select ${OFFER_COLUMNS} from core.offers where id = $1`,
+    [id],
+  );
+  return rows[0] ? toOffer(rows[0]) : null;
+}
+
+/** What is still on the table: untaken, unexpired, newest first. */
+export async function listOpenOffers(
+  pool: Queryable,
+  opts: { now: Date; limit?: number; agentId?: string },
+): Promise<Offer[]> {
+  const params: unknown[] = [opts.now];
+  const where = ['taken_at is null', 'expires_at > $1'];
+  if (opts.agentId) {
+    params.push(opts.agentId);
+    where.push(`agent_id = $${params.length}`);
+  }
+  params.push(Math.min(Math.max(1, Math.trunc(opts.limit ?? 20)), 100));
+  const { rows } = await pool.query(
+    `select ${OFFER_COLUMNS} from core.offers
+      where ${where.join(' and ')}
+      order by created_at desc
+      limit $${params.length}`,
+    params,
+  );
+  return rows.map(toOffer);
+}
+
+export interface TakeOfferInput {
+  id: string;
+  /** The surface the tap came from. Recorded for the record, never trusted. */
+  via: string;
+  now: Date;
+}
+
+/**
+ * Claim an offer, once.
+ *
+ * The UPDATE *is* the claim: `taken_at is null and expires_at > now` in the
+ * WHERE clause means the database decides the race, not a read-then-write here.
+ * Nothing runs as a result — the caller enqueues the run and stamps the job id
+ * with `recordOfferJob`, so a claim that cannot be enqueued is still visibly a
+ * claim rather than a silently repeatable button.
+ */
+export async function takeOffer(pool: Queryable, input: TakeOfferInput): Promise<TakeOfferResult> {
+  const { rows } = await pool.query(
+    `update core.offers
+        set taken_at = $2, taken_via = $3
+      where id = $1 and taken_at is null and expires_at > $2
+      returning ${OFFER_COLUMNS}`,
+    [input.id, input.now, input.via],
+  );
+  const claimed = rows[0];
+  if (claimed) return { ok: true, offer: toOffer(claimed) };
+
+  const existing = await getOffer(pool, input.id);
+  if (!existing) {
+    return { ok: false, reason: 'unknown', message: 'That option is no longer available.' };
+  }
+  if (existing.takenAt !== null) {
+    return {
+      ok: false,
+      reason: 'already-taken',
+      message: 'Already on it.',
+      offer: existing,
+    };
+  }
+  return {
+    ok: false,
+    reason: 'expired',
+    message: 'That option has expired — just ask me instead.',
+    offer: existing,
+  };
+}
+
+/** Stamp the run a taken offer started. Bookkeeping; never fails the tap. */
+export async function recordOfferJob(
+  pool: Queryable,
+  id: string,
+  jobId: string,
+): Promise<void> {
+  await pool.query('update core.offers set taken_job_id = $2 where id = $1', [id, jobId]);
+}

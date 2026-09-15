@@ -28,6 +28,7 @@ import {
   upsertMission,
   setSchedule,
   createReminder,
+  offerActions,
   roleProblemMessage,
   type AgentCatalog,
   type PluginManifest,
@@ -711,6 +712,41 @@ suite('the dashboard API', () => {
 
     const listed = await client.json<any>('/api/reminders');
     expect(listed.reminders.find((r: any) => r.id === id).state).toBe('cancelled');
+  });
+
+  it('lists offered actions, and takes one exactly once', async () => {
+    const client = await signedIn();
+    const stored = await offerActions(pool, {
+      agentId: 'demo-agent',
+      actions: [
+        { label: 'Draft a reply', prompt: 'Draft a reply to Dorothée and show it to me.' },
+        { label: 'Remind me tomorrow', prompt: 'Remind me tomorrow about the CdC site.' },
+      ],
+      now: new Date(),
+    });
+    const id = stored[0]?.id as string;
+
+    const listed = await client.json<any>('/api/offers');
+    expect(listed.offers.map((o: any) => o.label).sort()).toEqual([
+      'Draft a reply',
+      'Remind me tomorrow',
+    ]);
+    // The prompt is shown, not hidden: the owner can read what a chip will ask
+    // before they click it.
+    expect(listed.offers.find((o: any) => o.id === id).prompt).toContain('Draft a reply to');
+
+    const res = await client.post(`/api/offers/${id}/take`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id, label: 'Draft a reply' });
+
+    // A second click — or the same offer tapped on the phone — starts nothing.
+    expect((await client.post(`/api/offers/${id}/take`)).status).toBe(409);
+    expect((await client.post('/api/offers/00000000-0000-4000-8000-000000000000/take')).status).toBe(
+      404,
+    );
+
+    const after = await client.json<any>('/api/offers');
+    expect(after.offers.map((o: any) => o.label)).toEqual(['Remind me tomorrow']);
   });
 
   /* ---------------- the built dashboard ---------------- */

@@ -18,6 +18,7 @@ import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import type { GatedToolDefinition, ToolContext } from '../types.js';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
+import { CATEGORIES, PROCESSING_VERSION } from './shared.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -227,7 +228,11 @@ suite('email tools (postgres)', () => {
       summary: 'A direct debit of 240.00 was returned unpaid.',
       actionNeeded: 'Cover the account before the retry.',
     });
-    expect(decided).toMatchObject({ processingVersion: 1, category: 'payment-failed', urgency: 'urgent' });
+    expect(decided).toMatchObject({
+      processingVersion: PROCESSING_VERSION,
+      category: 'payment-failed',
+      urgency: 'urgent',
+    });
 
     const listed = await call('email.list_recent', {});
     expect(listed.messages[1].triage).toMatchObject({ category: 'payment-failed', urgency: 'urgent' });
@@ -251,6 +256,166 @@ suite('email tools (postgres)', () => {
         summary: 'x',
       }),
     ).rejects.toThrow(/invalid-args/);
+  });
+
+  it('records a relationship change as what it is, and lets a person be urgent', async () => {
+    // The shape of the message that was missed: no amount, no deadline, no
+    // exclamation mark, and the most important thing in the mailbox that day.
+    const decided = await call('email.triage_record', {
+      messageId: ids[0],
+      category: 'relationship',
+      urgency: 'urgent',
+      summary: 'A client contact of many years says she has retired and names her successors.',
+      actionNeeded: 'Reply to acknowledge and get the new contacts on record.',
+    });
+    expect(decided).toMatchObject({ category: 'relationship', urgency: 'urgent' });
+
+    const read = await call('email.read', { id: ids[0] });
+    expect(read.triage).toMatchObject({
+      category: 'relationship',
+      categoryLabel: 'relationship',
+      urgency: 'urgent',
+      policyVersion: PROCESSING_VERSION,
+      currentPolicy: true,
+    });
+  });
+
+  it('accepts every category the new taxonomy offers', async () => {
+    for (const category of CATEGORIES) {
+      const decided = await call('email.triage_record', {
+        messageId: ids[0],
+        category,
+        urgency: 'normal',
+        summary: `a ${category} message`,
+      });
+      expect(decided.category).toBe(category);
+    }
+  });
+
+  it('reads a row written under the old policy back without breaking', async () => {
+    // Exactly what 194 rows in the owner's installation look like: version 1,
+    // a money-only category, decided before any of this existed. Nothing
+    // rewrites them, so everything that reads them has to cope.
+    await pool.query(
+      `insert into email.triage
+         (message_id, processing_version, category, urgency, summary, action_needed, decided_at)
+       values ($1, 1, 'personal', 'low', 'an old verdict', null, now())`,
+      [ids[1]],
+    );
+    const read = await call('email.read', { id: ids[1] });
+    expect(read.triage).toMatchObject({
+      category: 'personal',
+      urgency: 'low',
+      policyVersion: 1,
+      currentPolicy: false,
+    });
+
+    const listed = await call('email.list_recent', {});
+    const row = listed.messages.find((m: any) => m.id === ids[1]);
+    expect(row.triage.summary).toBe('an old verdict');
+  });
+
+  it('reads back a category this build has never heard of, rather than failing', async () => {
+    // Not reachable through the tool — zod refuses it — but reachable through
+    // history, which is the case that matters. A view must render it.
+    await pool.query(
+      `insert into email.triage
+         (message_id, processing_version, category, urgency, summary, decided_at)
+       values ($1, 0, 'a-category-from-2029', 'low', 'from the future', now())`,
+      [ids[1]],
+    );
+    const read = await call('email.read', { id: ids[1] });
+    expect(read.triage).toMatchObject({
+      category: 'a-category-from-2029',
+      categoryLabel: 'a category from 2029',
+      currentPolicy: false,
+    });
+  });
+
+  it('a newer policy decision wins over the one it replaced, and neither is destroyed', async () => {
+    await pool.query(
+      `insert into email.triage
+         (message_id, processing_version, category, urgency, summary, decided_at)
+       values ($1, 1, 'personal', 'low', 'the verdict that missed it', now())`,
+      [ids[1]],
+    );
+    await call('email.triage_record', {
+      messageId: ids[1],
+      category: 'relationship',
+      urgency: 'urgent',
+      summary: 'the verdict that catches it',
+    });
+    const read = await call('email.read', { id: ids[1] });
+    expect(read.triage).toMatchObject({ category: 'relationship', urgency: 'urgent' });
+    const { rows } = await pool.query(
+      `select processing_version from email.triage where message_id = $1 order by processing_version`,
+      [ids[1]],
+    );
+    expect(rows.map((r: any) => Number(r.processing_version))).toEqual([1, PROCESSING_VERSION]);
+  });
+
+  describe('email.sender_profile', () => {
+    it('counts what has arrived from an address, and says nobody has written back', async () => {
+      const profile = await call('email.sender_profile', { address: 'alerts@bank.test' });
+      expect(profile).toMatchObject({
+        address: 'alerts@bank.test',
+        received: 1,
+        ownerHasReplied: false,
+        messagesSent: 0,
+        firstContact: true,
+      });
+    });
+
+    it('knows the owner has replied once a draft to that address has actually gone out', async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: ids[0],
+        bodyText: 'Noted, thank you.',
+      });
+      // A saved draft is not a reply: the owner has not sent anything yet.
+      let profile = await call('email.sender_profile', { address: 'alerts@bank.test' });
+      expect(profile).toMatchObject({ ownerHasReplied: false, draftsWaiting: 1 });
+
+      await pool.query(`update email.drafts set sent_at = now() where id = $1`, [draft.id]);
+      profile = await call('email.sender_profile', { address: 'Alerts@BANK.test' });
+      expect(profile).toMatchObject({ ownerHasReplied: true, messagesSent: 1 });
+    });
+
+    it('hands back how this sender was judged before', async () => {
+      await call('email.triage_record', {
+        messageId: ids[0],
+        category: 'payment-failed',
+        urgency: 'urgent',
+        summary: 'a returned debit',
+      });
+      const profile = await call('email.sender_profile', { address: 'alerts@bank.test' });
+      expect(profile.recentVerdicts[0]).toMatchObject({
+        category: 'payment-failed',
+        urgency: 'urgent',
+      });
+    });
+
+    it('grants no trust: it is a read, it carries no authority, and it says so', async () => {
+      // The whole risk of this tool is that "known sender" quietly becomes
+      // "trusted sender". It is tier `auto` because it only counts rows, it
+      // returns no capability of any kind, and the output states the limit in
+      // words the model will read.
+      const spec = registry.list().find((t) => t.name === 'email.sender_profile');
+      expect(spec?.tier).toBe('auto');
+      const profile = await call('email.sender_profile', { address: 'alerts@bank.test' });
+      expect(profile.note).toMatch(/not a trusted one/i);
+      expect(Object.keys(profile)).not.toContain('trusted');
+      expect(Object.keys(profile)).not.toContain('verified');
+      // Nothing about a known sender can move an urgency by itself: the tool
+      // returns history, never a verdict.
+      expect(Object.keys(profile)).not.toContain('urgency');
+      expect(Object.keys(profile)).not.toContain('category');
+    });
+
+    it('says nothing at all about an address it has never seen', async () => {
+      const profile = await call('email.sender_profile', { address: 'stranger@nowhere.test' });
+      expect(profile).toMatchObject({ received: 0, ownerHasReplied: false, firstContact: true });
+      expect(profile.recentVerdicts).toEqual([]);
+    });
   });
 
   it('drafts a reply threaded to the original, saved as an artifact', async () => {
@@ -309,6 +474,20 @@ suite('email tools (postgres)', () => {
       // Core turns a gated call into an immutable action and waits for the
       // owner; nothing reaches the wire from `invoke`, ever.
       expect(refused).toMatchObject({ ok: false, reason: 'approval-required' });
+      expect(smtp.sent).toHaveLength(before);
+    });
+
+    it('is the only way out: nothing added for offered actions can send', async () => {
+      // An offered action ("Draft a reply") leads, at most, to a draft. This is
+      // the assertion that says so structurally rather than by inspection:
+      // every tool this plugin ships is a read or a write over its own schema
+      // except the one gated tool, so there is no second path to the wire.
+      const gated = registry.list().filter((t) => t.tier !== 'auto');
+      expect(gated.map((t) => t.name)).toEqual(['email.send']);
+
+      // And drafting, the thing a tapped action actually does, sends nothing.
+      const before = smtp.sent.length;
+      await call('email.draft_reply', { inReplyTo: ids[0], bodyText: 'Noted, thank you.' });
       expect(smtp.sent).toHaveLength(before);
     });
 

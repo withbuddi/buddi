@@ -293,6 +293,25 @@ export class TelegramApi {
   }
 
   /**
+   * Take a message's keyboard away (or replace it) without touching its text.
+   *
+   * `editMessageText` would work too, but only by resending text this caller
+   * does not have — an offered action's report was written by an agent in a
+   * previous run, and re-rendering it here would be guessing.
+   */
+  async editMessageReplyMarkup(
+    chatId: string | number,
+    messageId: number,
+    replyMarkup: InlineKeyboardMarkup,
+  ): Promise<void> {
+    await this.call('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+  }
+
+  /**
    * Answer a callback query. Telegram shows a spinner on the button until this
    * arrives, and expires the query after ~15 seconds, so it is sent even when
    * the decision was refused — silence would look like a broken bot.

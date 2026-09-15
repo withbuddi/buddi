@@ -245,6 +245,23 @@ export interface ApprovalRow {
   outcome: unknown;
 }
 
+/**
+ * One action an agent offered the owner, still on the table.
+ *
+ * The same row Telegram draws as a button. `prompt` is shown rather than
+ * hidden: the owner should be able to read what a chip will ask before they
+ * click it, and there is nothing here that is not theirs to see.
+ */
+export interface OfferRow {
+  id: string;
+  agentId: string;
+  conversationId: string | null;
+  label: string;
+  prompt: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface ReminderRow {
   id: string;
   agentId: string;
@@ -398,6 +415,7 @@ export const api = {
     get<{ action: ApprovalRow }>(`/approvals/${encodeURIComponent(id)}`).then(
       (body) => body.action,
     ),
+  offers: () => get<{ offers: OfferRow[] }>('/offers'),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   agents: () => get<AgentsView>('/agents'),
@@ -420,6 +438,10 @@ export const api = {
     post<{ agent: AgentEngine; changed: string[]; note: string }>(
       `/agents/${encodeURIComponent(id)}/engine`,
       change,
+    ),
+  takeOffer: (id: string) =>
+    post<{ id: string; label: string; jobId: string | null }>(
+      `/offers/${encodeURIComponent(id)}/take`,
     ),
   cancelReminder: (id: string) =>
     post<{ id: string; state: string }>(`/reminders/${encodeURIComponent(id)}/cancel`, {

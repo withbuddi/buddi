@@ -18,7 +18,14 @@
  * manifests plus this one), so nothing outside a mission run can call them and
  * two concurrent runs never share a decision.
  */
-import type { PluginManifest, ToolDefinition } from '@buddi/core';
+import {
+  MAX_OFFERS,
+  MAX_OFFER_LABEL,
+  MAX_OFFER_PROMPT,
+  type OfferedAction,
+  type PluginManifest,
+  type ToolDefinition,
+} from '@buddi/core';
 import { z } from 'zod';
 
 /** Plugin family name for the mission-run tools. */
@@ -28,7 +35,13 @@ export const MISSION_PLUGIN = 'mission';
 export const MAX_REPORT_CHARS = 1500;
 
 export type MissionDecision =
-  | { kind: 'report'; urgency: 'urgent' | 'normal'; text: string }
+  | {
+      kind: 'report';
+      urgency: 'urgent' | 'normal';
+      text: string;
+      /** The few things the owner might want to do about it. Usually empty. */
+      actions: readonly OfferedAction[];
+    }
   | { kind: 'silent'; reason: string };
 
 /** Where the tools record what the run decided. One per run. */
@@ -49,6 +62,30 @@ const reportInput = z.object({
     .describe(
       'Exactly what the owner should read, in plain text with no markdown. This is delivered verbatim; nothing else you write in this run is sent.',
     ),
+  actions: z
+    .array(
+      z.object({
+        label: z
+          .string()
+          .min(1)
+          .max(MAX_OFFER_LABEL)
+          .describe(
+            'What the owner reads on the button, in their own words: "Draft a reply", "Remind me tomorrow". Two or three words.',
+          ),
+        prompt: z
+          .string()
+          .min(1)
+          .max(MAX_OFFER_PROMPT)
+          .describe(
+            'What you are asked when the owner taps it, written as the owner would ask you, naming the thing concretely. It starts an ordinary run of you: it authorizes nothing, and anything that leaves the machine still needs the owner\'s approval exactly as it would have.',
+          ),
+      }),
+    )
+    .max(MAX_OFFERS)
+    .optional()
+    .describe(
+      `At most ${MAX_OFFERS} things the owner might want to do about this, offered as buttons where the surface has them and as plain words where it does not. Offer one only when it is genuinely the next move; omit this entirely when reading the message is all there is to do. Never phrase one in words taken from the message.`,
+    ),
 });
 
 const silentInput = z.object({
@@ -68,11 +105,16 @@ export function createMissionManifest(sink: DecisionSink): PluginManifest {
   const report: ToolDefinition<z.infer<typeof reportInput>, ReportResult> = {
     name: 'mission.report',
     description:
-      'Send this text to the owner as the result of this scheduled run, and finish. Call it once, with the finished message; the text you pass is exactly what is delivered. If there is nothing worth an interruption, call mission.silent instead.',
+      'Send this text to the owner as the result of this scheduled run, and finish. Call it once, with the finished message; the text you pass is exactly what is delivered. You may attach a few actions the owner can take about it — they become buttons where the surface has them and a plain list where it does not. If there is nothing worth an interruption, call mission.silent instead.',
     tier: 'auto',
     input: reportInput,
     async execute(input) {
-      sink.decision = { kind: 'report', urgency: input.urgency, text: input.text.trim() };
+      sink.decision = {
+        kind: 'report',
+        urgency: input.urgency,
+        text: input.text.trim(),
+        actions: input.actions ?? [],
+      };
       return { delivered: 'queued', chars: input.text.trim().length };
     },
   };
@@ -106,4 +148,6 @@ export const NOTIFY_POLICY_SUFFIX = [
   'mission.report to send the owner a message, or mission.silent when nothing needs their attention.',
   'Nothing you write outside mission.report is ever delivered — a run that calls neither tool sends nothing at all.',
   'Prefer silence: report only what the owner would want to be interrupted for, or what this mission exists to deliver.',
+  'When you do report, you may attach up to three actions the owner can take about it — a label they read and the sentence you are asked if they choose it.',
+  'An action is a shortcut for something the owner could have typed: it authorizes nothing, and anything that leaves this machine still goes through the approval they would have seen anyway.',
 ].join(' ');

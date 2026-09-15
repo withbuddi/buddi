@@ -15,6 +15,7 @@ import {
   listMissions,
   listOccurrences,
   listPendingActions,
+  listOpenOffers,
   listReminders,
   countJobsByState,
   isPaused,
@@ -611,6 +612,32 @@ export async function readReminders(pool: Pool, limit = 100): Promise<unknown[]>
     firedAt: r.firedAt ? r.firedAt.toISOString() : null,
     cancelledAt: r.cancelledAt ? r.cancelledAt.toISOString() : null,
     cancelReason: r.cancelReason,
+  }));
+}
+
+/* ------------------------------------------------------------------ *
+ * Offered actions
+ * ------------------------------------------------------------------ */
+
+/**
+ * What an agent has offered the owner and nobody has taken yet.
+ *
+ * The dashboard draws these as chips. Same rows Telegram draws as buttons —
+ * there is one store, not a per-surface copy, so an offer taken on the phone
+ * is gone from the dashboard on its next poll.
+ */
+export async function readOffers(pool: Pool, now: Date, limit = 20): Promise<unknown[]> {
+  const offers = await listOpenOffers(pool, { now, limit });
+  return offers.map((o) => ({
+    id: o.id,
+    agentId: o.agentId,
+    conversationId: o.conversationId,
+    label: o.label,
+    // Shown on hover: the owner should be able to see what tapping it asks for
+    // before they tap it. There is no hidden instruction here.
+    prompt: o.prompt,
+    createdAt: o.createdAt,
+    expiresAt: o.expiresAt,
   }));
 }
 

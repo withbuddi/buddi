@@ -16,6 +16,7 @@ export const SECTIONS = [
   { route: '#/missions', label: 'Missions' },
   { route: '#/approvals', label: 'Approvals' },
   { route: '#/jobs', label: 'Jobs' },
+  { route: '#/offers', label: 'Offers' },
   { route: '#/reminders', label: 'Reminders' },
   { route: '#/sentinels', label: 'Sentinels' },
   { route: '#/agents', label: 'Agents' },

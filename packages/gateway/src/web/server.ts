@@ -74,6 +74,7 @@ import {
   readJobs,
   readMissions,
   readOverview,
+  readOffers,
   readReminders,
   readSentinels,
   toApprovalView,
@@ -91,6 +92,7 @@ import {
   setMissionEnabledFromWeb,
   setPausedFromWeb,
   setScheduleFromWeb,
+  takeOfferFromWeb,
   type WriteDeps,
   type WriteResult,
 } from './write.js';
@@ -352,6 +354,10 @@ export function createWebApp(deps: WebServerDeps): Server {
             200,
             await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50)),
           );
+        case '/api/offers':
+          return sendJson(res, 200, {
+            offers: await readOffers(deps.pool, now, boundedLimit(q.get('limit'))),
+          });
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -575,6 +581,11 @@ export function createWebApp(deps: WebServerDeps): Server {
           ? await retryJobFromWeb(writeDeps, jobId)
           : await cancelJobFromWeb(writeDeps, jobId),
       );
+    }
+
+    const offer = /^\/api\/offers\/([^/]+)\/take$/.exec(path);
+    if (offer) {
+      return finish(res, await takeOfferFromWeb(writeDeps, decodeURIComponent(offer[1] as string)));
     }
 
     const reminder = /^\/api\/reminders\/([^/]+)\/cancel$/.exec(path);

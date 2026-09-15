@@ -57,7 +57,7 @@ import {
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
-import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
+import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
 import {
   createMissionExecutor,
   type MissionExecutorDeps,
@@ -355,6 +355,19 @@ export async function main(): Promise<void> {
       // The queue this process runs. An approval decided in a chat wakes the
       // suspended run through exactly this, and through nothing else.
       jobs: { resumeJob },
+      // A tapped offer starts an ordinary agent run — the same job kind a
+      // source or a reminder originates, with the prompt the agent wrote for
+      // its own future self. It grants nothing: the run's tools, tiers and
+      // approvals are exactly what they were.
+      takeOffer: async (offer) => {
+        const job = await enqueue(pool, {
+          kind: AGENT_RUN_JOB_KIND,
+          payload: { agentId: offer.agentId, prompt: offer.prompt, conversationHint: `${OFFER_HINT_PREFIX}${offer.id}` },
+          dedupKey: `offer:${offer.id}`,
+        });
+        console.log(`offer taken: @${offer.agentId} job ${job.id} (${offer.label})`);
+        return job.id;
+      },
       runMission: async (missionId, chatId, onToolCall) => {
         const blocked = await gate();
         if (blocked !== null) return { ok: true, text: blocked };
@@ -384,14 +397,14 @@ export async function main(): Promise<void> {
     const execute = withNudgeBudget(
       createMissionExecutor({
         ...missionDeps,
-        deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+        deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
         prepare: createDigestPrepare(pool, { now }),
         askApproval,
       }),
       {
         pool,
         now,
-        deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+        deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
         log: (line) => console.error(line),
       },
     );
@@ -506,7 +519,7 @@ export async function main(): Promise<void> {
           provider: wiring.provider,
           ctx: wiring.ctx,
           now,
-          deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+          deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
           askApproval,
         }),
       },
@@ -557,7 +570,7 @@ export async function main(): Promise<void> {
       pool,
       now,
       timezone: wiring.timezone,
-      deliver: (text) => notifyOwner(text, { pool, env: process.env }),
+      deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
       log: (line) => console.error(line),
     });
     const deadLetterLoop = startLoop({

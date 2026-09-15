@@ -5,9 +5,16 @@
  * chat comes from the paired surface identity in core, and if nothing is paired
  * it fails with a typed error rather than sending somewhere plausible.
  */
-import { createPool, listSurfaceIdentities, type Queryable } from '@buddi/core';
+import {
+  createPool,
+  listSurfaceIdentities,
+  renderOffers,
+  TELEGRAM_SURFACE,
+  type Offer,
+  type Queryable,
+} from '@buddi/core';
 import { TelegramApi, type FetchLike } from './api.js';
-import { SURFACE } from './surface.js';
+import { offersKeyboard, SURFACE } from './surface.js';
 
 /** No paired owner chat: there is nowhere to send, and no fallback is invented. */
 export class OwnerNotPairedError extends Error {
@@ -28,6 +35,12 @@ export class TelegramNotConfiguredError extends Error {
 }
 
 export interface NotifyOptions {
+  /**
+   * The actions the report offered, already stored. How they are drawn is not
+   * decided here: `renderOffers` reads Telegram's own profile and says whether
+   * this surface gets controls or words, and this function does what it says.
+   */
+  offers?: readonly Offer[];
   /** Reuse an open pool; otherwise one is created from DATABASE_URL and closed. */
   pool?: Queryable;
   token?: string;
@@ -70,7 +83,14 @@ export async function notifyOwner(text: string, opts: NotifyOptions = {}): Promi
       if (!token) throw new TelegramNotConfiguredError('TELEGRAM_BOT_TOKEN');
       api = new TelegramApi({ token, ...(opts.fetch ? { fetch: opts.fetch } : {}) });
     }
-    await api.sendMessage(chatId, text);
+    const rendered = renderOffers(TELEGRAM_SURFACE, text, opts.offers ?? []);
+    await api.sendMessage(
+      chatId,
+      rendered.text,
+      rendered.controls.length === 0
+        ? {}
+        : { replyMarkup: offersKeyboard(rendered.controls) },
+    );
     return chatId;
   } finally {
     await ownPool?.end();
