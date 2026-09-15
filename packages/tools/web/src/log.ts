@@ -12,7 +12,14 @@
  * **It never stores a body.** The URL and the host, never the page; the query,
  * never the results. See the migration for why.
  */
-import type { Pool } from 'pg';
+/**
+ * The slice of `pg.Pool` this needs. Structural rather than `Pool` itself so a
+ * caller holding the runtime's narrowed `Queryable` — the chat session does —
+ * can record a line without a cast. A real `Pool` satisfies it unchanged.
+ */
+export interface Queryable {
+  query(sql: string, params?: any[]): Promise<{ rows: any[] }>;
+}
 
 export interface FetchLogEntry {
   kind: 'search' | 'read';
@@ -27,7 +34,7 @@ export interface FetchLogEntry {
   bytes?: number | null | undefined;
 }
 
-export async function recordFetch(db: Pool, entry: FetchLogEntry): Promise<void> {
+export async function recordFetch(db: Queryable, entry: FetchLogEntry): Promise<void> {
   try {
     await db.query(
       `insert into web.fetches

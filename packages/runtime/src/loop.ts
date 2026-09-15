@@ -12,11 +12,13 @@
 import { surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
+  NativeSearchRecord,
   NeutralMessage,
   RuntimeProvider,
   ToolSchema,
   Usage,
 } from './anthropic.js';
+import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import {
   degradeMessages,
   DEFAULT_CAPABILITIES,
@@ -100,6 +102,24 @@ export interface RunAgentOptions {
   /** Called the moment a tool call becomes a pending approval. */
   onApprovalRequired?: (actionId: string, preview: string) => void;
   /**
+   * Every web search the *provider* ran for this run, once it has run them.
+   *
+   * The seam that keeps native search accountable. The runtime cannot write to
+   * `web.fetches` — that is a plugin's schema, and the runtime imports no
+   * plugin — so it hands over what it saw and the composition root, which does
+   * know `@buddi/tool-web`, records it. Awaited: an audit line that loses a
+   * race with the end of the run is not an audit line. It never fails a run;
+   * the recorder swallows its own errors, exactly as `recordFetch` already does
+   * for `web.search`.
+   */
+  onNativeSearch?: (searches: readonly NativeSearchEvent[]) => void | Promise<void>;
+  /**
+   * The environment the search-backend decision is read from. Injected by
+   * tests so `BUDDI_SEARCH_PROVIDER` can be forced without touching the
+   * process; defaults to `process.env`, as everything else does.
+   */
+  env?: Record<string, string | undefined>;
+  /**
    * Which surface this run belongs to, as the profile the surface declares
    * about itself — `TELEGRAM_SURFACE`, `CLI_SURFACE`, `WEB_SURFACE`,
    * `SCHEDULED_SURFACE`, or one a host defines.
@@ -123,6 +143,14 @@ export interface RunAgentOptions {
    * (a browser following a stream) can find its own run in the log.
    */
   runId?: string;
+}
+
+/** One server-side search, stamped with the run that caused it. */
+export interface NativeSearchEvent extends NativeSearchRecord {
+  agentId: string;
+  conversationId: string;
+  /** The provider that ran it — which is also where the query text went. */
+  provider: string;
 }
 
 /** How a decided action comes back into the run that proposed it. */
@@ -293,6 +321,21 @@ export function selectTools(registry: ToolRegistry, agent: AgentDefinition): Too
   return selected;
 }
 
+/**
+ * What goes into `core.messages`, which is not quite what went over the wire.
+ *
+ * `provider_native` blocks are dropped. Two reasons, and both matter. They are
+ * one vendor's private shapes, and a conversation can be continued by an agent
+ * on another provider tomorrow — posting Anthropic's `server_tool_use` to
+ * OpenAI is a 400 waiting to happen. And they carry untrusted search results:
+ * page extracts strangers wrote, which would otherwise be replayed into every
+ * future turn of this conversation for ever. The model's answer keeps the
+ * citations; the raw results do not need to outlive the turn that used them.
+ */
+export function persistable(content: readonly ContentBlock[]): ContentBlock[] {
+  return content.filter((b) => b.type !== 'provider_native');
+}
+
 function textOf(content: ContentBlock[]): string {
   return content
     .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
@@ -323,11 +366,19 @@ export function composeSystem(
   systemSuffix?: string,
   memoryPreamble?: string,
   surface?: SurfaceProfile,
+  /**
+   * The generated web-search paragraph, when the provider is doing the
+   * searching. It sits with the surface section rather than with the suffix
+   * because it is the same kind of thing: a platform fact about this run that
+   * the persona does not get to override.
+   */
+  webSearchNote?: string,
 ): string {
   const memory = (memoryPreamble ?? '').trim();
   const parts = [
     systemPrompt,
     ...(surface ? [surfaceSection(surface)] : []),
+    ...((webSearchNote ?? '').trim() === '' ? [] : [(webSearchNote as string).trim()]),
     ...((systemSuffix ?? '').trim() === '' ? [] : [(systemSuffix as string).trim()]),
   ];
   const body = parts.join('\n\n');
@@ -351,7 +402,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
   // Fail closed: unknown tool names are a configuration defect, not a runtime
   // refusal — and they are caught before a single token is sent anywhere.
-  const tools = selectTools(registry, agent);
+  const granted = selectTools(registry, agent);
 
   /*
    * What this provider can carry, asked *before* a request is built rather than
@@ -359,6 +410,28 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
    * that does not declare a matrix is treated as the native wire.
    */
   const capabilities = provider.capabilities ?? DEFAULT_CAPABILITIES;
+
+  /*
+   * Who searches for this agent, decided once, before the first request.
+   *
+   * The owner's grant is provider-agnostic on purpose: `tools: [web.*]` says
+   * "this agent may use the web", and nothing in an agent file names a backend.
+   * What that grant *resolves to* is not: on a provider that searches
+   * server-side the model is shown `web.read` and `web.status` and no
+   * `web.search`, because handing it two ways to do one thing is how a model
+   * ends up doing it twice — once natively, once through Tavily, two bills and
+   * two sets of results to reconcile. On every other provider the grant
+   * resolves exactly as it did before this existed.
+   */
+  const search = planNativeSearch({
+    capabilities,
+    grantedTools: granted.map((t) => t.name),
+    ...(opts.env ? { env: opts.env } : {}),
+  });
+  const tools = search.enabled
+    ? granted.filter((t) => !search.withheld.includes(t.name))
+    : granted;
+
   const snapshot: RunSnapshot = {
     provider: agent.provider.kind,
     credentialKind: agent.provider.credential.kind,
@@ -366,7 +439,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   };
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
-  const system = composeSystem(agent.systemPrompt, opts.systemSuffix, memory, opts.surface);
+  const system = composeSystem(
+    agent.systemPrompt,
+    opts.systemSuffix,
+    memory,
+    opts.surface,
+    search.enabled ? NATIVE_SEARCH_SYSTEM_NOTE : undefined,
+  );
 
   // Provenance for every tool call this run makes. The caller's context is not
   // mutated: it is shared across runs, and a run's identity is its own.
@@ -379,6 +458,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     conversationId,
     agentId: agent.id,
     ...(opts.surface ? { surface: opts.surface } : {}),
+    // So `web.status` can answer "can I search right now?" truthfully for *this*
+    // agent. Without it the plugin would report the Tavily key's state to an
+    // agent whose searches never touch Tavily.
+    ...(search.enabled
+      ? { nativeSearch: { provider: snapshot.provider, maxUses: search.maxUses } }
+      : {}),
   };
 
   // Attachments: cap first, hydrate second, persist third. The caps fail closed
@@ -422,6 +507,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       credentialKind: snapshot.credentialKind,
       model: snapshot.model,
       capabilities: snapshot.capabilities,
+      // Which backend honours this run's web grant, and why. On record before
+      // the first call, like the rest of the snapshot.
+      webSearch: { native: search.enabled, reason: search.reason, maxUses: search.maxUses },
       // The profile's *id*, not the profile: the event log records where the
       // run came from, and the capability facts are already in the prompt.
       ...(opts.surface ? { surface: opts.surface.id } : {}),
@@ -444,16 +532,41 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       system,
       messages,
       tools,
+      ...(search.enabled ? { nativeSearch: { maxUses: search.maxUses } } : {}),
     });
     usage.input += res.usage.input;
     usage.output += res.usage.output;
+    if (res.usage.webSearches) {
+      usage.webSearches = (usage.webSearches ?? 0) + res.usage.webSearches;
+    }
     // The concrete model, as the endpoint reports it — an alias resolving to a
     // dated snapshot is exactly what the pin cannot tell you.
     if (res.model) snapshot.servedModel = res.model;
 
     const assistantContent = res.content;
+    // What is *sent back* keeps the provider's own blocks — a paused turn is
+    // only continuable with them. What is *stored* does not: see `persistable`.
     messages.push({ role: 'assistant', content: assistantContent });
-    await persistMessage(pool, conversationId, 'assistant', assistantContent);
+    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent));
+
+    // The audit line for a search nobody dispatched. Written before the run can
+    // end, and before the next request, so the order in the log is the order it
+    // happened in.
+    if (res.searches && res.searches.length > 0) {
+      const events: NativeSearchEvent[] = res.searches.map((record) => ({
+        ...record,
+        agentId: agent.id,
+        conversationId,
+        provider: snapshot.provider,
+      }));
+      await appendEvent(pool, 'web.searched', { native: true, searches: events }, conversationId);
+      try {
+        await opts.onNativeSearch?.(events);
+      } catch {
+        // An audit sink that throws does not fail a turn the owner is waiting
+        // on — the same rule `recordFetch` applies to its own writes.
+      }
+    }
 
     const turnText = textOf(assistantContent);
     if (turnText) {
@@ -464,6 +577,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     const toolUses = assistantContent.filter(
       (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
     );
+
+    // Not an ending: the API stopped a long server-tool turn part-way and wants
+    // the same turn continued. No user message, no tool results — the assistant
+    // content is already back on `messages`, provider blocks and all.
+    if (res.stopReason === 'pause_turn') continue;
 
     if (res.stopReason !== 'tool_use' || toolUses.length === 0) {
       stopped = res.stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn';

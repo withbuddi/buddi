@@ -13,6 +13,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';
 import { createFetcher } from './http.js';
 import { createWebManifest } from './index.js';
+import { recordNativeSearches } from './native.js';
 import { UNTRUSTED_NOTICE } from './notice.js';
 import { tavily, TAVILY_KEY_NAME } from './providers/index.js';
 import type { SearchProvider } from './ports.js';
@@ -258,6 +259,95 @@ suite('web tools (postgres)', () => {
       expect(out.readAvailable).toBe(true);
       expect(out.reason).toContain(TAVILY_KEY_NAME);
       expect(JSON.stringify(out)).not.toContain('test-key');
+    });
+
+    it('still says searching is possible when the *provider* is the one that can search', async () => {
+      // The exact state this tool exists to get right. No Tavily key, and the
+      // honest answer is nonetheless "yes": the run is on a provider that
+      // searches server-side, and the runtime said so on the context. Answering
+      // "no" here would send the agent to its memory with a straight face.
+      const result = await bare.invoke(
+        'web.status',
+        {},
+        { ...bareCtx, nativeSearch: { provider: 'anthropic', maxUses: 3 } },
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const out = result.output as any;
+      expect(out.searchAvailable).toBe(true);
+      expect(out.provider).toContain('anthropic');
+      expect(out.note).toContain('untrusted');
+      expect(out.note).toContain('web.read');
+      expect(JSON.stringify(out)).not.toContain(TAVILY_KEY_NAME);
+    });
+  });
+
+  describe('a search the provider ran for us', () => {
+    it('lands in the same table web.search writes to, with the same facts', async () => {
+      await recordNativeSearches(pool, [
+        {
+          query: 'used ford bronco price new jersey',
+          hosts: ['www.cargurus.com', 'www.kbb.com'],
+          resultCount: 7,
+          outcome: 'ok',
+          agentId: 'garage',
+          conversationId: '00000000-0000-4000-8000-000000000001',
+          provider: 'anthropic',
+        },
+      ]);
+
+      const rows = await logRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        // 'search', not 'search-native': an owner reviewing what his agents
+        // looked up should not have to know which backend answered.
+        kind: 'search',
+        agent_id: 'garage',
+        target: 'used ford bronco price new jersey',
+        // Where the query text went, exactly as a Tavily row carries api.tavily.com.
+        host: 'api.anthropic.com',
+        outcome: 'ok',
+      });
+      expect(rows[0].detail).toContain('native (anthropic)');
+      expect(rows[0].detail).toContain('7 results');
+      expect(rows[0].detail).toContain('www.cargurus.com');
+    });
+
+    it('records a failed search as a failure rather than dropping it', async () => {
+      await recordNativeSearches(pool, [
+        {
+          query: 'anything',
+          hosts: [],
+          resultCount: 0,
+          outcome: 'error',
+          detail: 'max_uses_exceeded',
+          agentId: 'garage',
+          conversationId: '00000000-0000-4000-8000-000000000001',
+          provider: 'anthropic',
+        },
+      ]);
+      const rows = await logRows();
+      expect(rows[0]).toMatchObject({ kind: 'search', outcome: 'error' });
+      expect(rows[0].detail).toContain('max_uses_exceeded');
+    });
+
+    it('never stores what came back, only where it came from', async () => {
+      await recordNativeSearches(pool, [
+        {
+          query: 'mortgage rates today',
+          hosts: ['bankrate.com'],
+          resultCount: 1,
+          outcome: 'ok',
+          agentId: 'ledger',
+          conversationId: '00000000-0000-4000-8000-000000000001',
+          provider: 'anthropic',
+        },
+      ]);
+      const rows = await logRows();
+      // The table has no column for a body and this adds none: the hosts are
+      // the whole of what the search returned that is kept.
+      expect(Object.keys(rows[0])).not.toContain('body');
+      expect(rows[0].bytes).toBeNull();
     });
   });
 

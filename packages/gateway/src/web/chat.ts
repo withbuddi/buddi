@@ -46,6 +46,7 @@ import {
   type RunAgentOptions,
   type RuntimeProvider,
 } from '@buddi/runtime';
+import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import { listRecentConversations } from '../chat/conversations.js';
@@ -735,6 +736,9 @@ export class WebChat {
       registry,
       ctx: deps.ctx,
       pool: deps.pool,
+      // The provider's own web search leaves the same audit row `web.search`
+      // does; see @buddi/tool-web's native.ts.
+      onNativeSearch: nativeSearchRecorder(deps.pool),
       conversationId,
       surface: WEB_SURFACE,
       runId,

@@ -1,6 +1,7 @@
 export * from './anthropic.js';
 export * from './openai.js';
 export * from './capabilities.js';
+export * from './search.js';
 export * from './create.js';
 export * from './retry.js';
 export * from './transport.js';

@@ -43,6 +43,7 @@ import {
   type RunResult,
   type RuntimeProvider,
 } from '@buddi/runtime';
+import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { approvalRequestText } from '../telegram/approvals.js';
 import {
@@ -87,7 +88,7 @@ import { listRecentConversations, type ConversationLine } from './conversations.
 import { renderMarkdown } from './render.js';
 import type { Spinner } from './spinner.js';
 import { bold, dim, green, red, yellow, type TerminalStyle } from './terminal.js';
-import { UsageLedger } from './usage.js';
+import { formatWebSearches, UsageLedger } from './usage.js';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -1100,6 +1101,9 @@ export class ChatSession {
       registry,
       ctx: deps.ctx,
       pool: deps.pool,
+      // The provider's own web search leaves the same audit row `web.search`
+      // does; see @buddi/tool-web's native.ts.
+      onNativeSearch: nativeSearchRecorder(deps.pool),
       conversationId,
       // The terminal renders markdown, so it declares that it does. The
       // profile is composed into the prompt by the loop; a turn's own
@@ -1232,6 +1236,9 @@ export class ChatSession {
       `${run.turns} turn${run.turns === 1 ? '' : 's'}`,
       `${run.tools} tool${run.tools === 1 ? '' : 's'}`,
       ...(usage ? [`in ${usage.input.toLocaleString('en-US')} / out ${usage.output.toLocaleString('en-US')}`] : []),
+      // Only when there were any: a footer that says "0 web searches" on every
+      // turn is noise, and the meter only matters when it moved.
+      ...(usage?.webSearches ? [formatWebSearches(usage.webSearches)] : []),
       `${seconds}s`,
     ];
     this.#out(dim(parts.join(' · '), this.#style().color));

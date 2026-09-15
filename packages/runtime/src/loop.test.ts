@@ -941,3 +941,268 @@ describe('runAgent — the capability matrix is honoured', () => {
     expect(sent?.messages[0]?.content[1]).toMatchObject({ type: 'document' });
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * One grant, two ways of honouring it
+ * ------------------------------------------------------------------ */
+
+/** The three tools `web.*` resolves to, as the catalog would have resolved it. */
+const WEB_TOOLS = ['web.read', 'web.search', 'web.status'];
+
+function registryWithWeb(searched: string[] = []): ToolRegistry {
+  const tool = (name: string) => ({
+    name,
+    description: `The ${name} tool.`,
+    tier: 'auto' as const,
+    input: z.object({}).passthrough(),
+    execute: async () => {
+      searched.push(name);
+      return { ok: true };
+    },
+  });
+  const manifest: PluginManifest = {
+    name: 'web',
+    version: '0.0.1',
+    schema: 'web',
+    migrationsDir: '/tmp/web',
+    tools: WEB_TOOLS.map(tool),
+  };
+  const r = new ToolRegistry();
+  r.register(manifest);
+  return r;
+}
+
+const webAgent: AgentDefinition = { ...agent, id: 'garage', tools: WEB_TOOLS };
+
+const scoutAgent: AgentDefinition = {
+  ...webAgent,
+  id: 'scout',
+  provider: {
+    kind: 'openai',
+    credential: { kind: 'api-key', env: 'OPENAI_API_KEY' },
+    model: 'gpt-5',
+  },
+};
+
+/** The same script the adapter would produce from a live server-side search. */
+function nativeSearchTurn(): CompletionResponse {
+  return {
+    content: [
+      {
+        type: 'provider_native',
+        provider: 'anthropic',
+        raw: { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'q' } },
+      },
+      {
+        type: 'provider_native',
+        provider: 'anthropic',
+        raw: { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [] },
+      },
+      { type: 'text', text: 'cargurus.com says about $43,753.' },
+    ],
+    stopReason: 'end_turn',
+    usage: { input: 5, output: 2, webSearches: 1 },
+    model: 'claude-sonnet-5',
+    searches: [
+      { query: 'used bronco price nj', hosts: ['www.cargurus.com'], resultCount: 7, outcome: 'ok' },
+    ],
+  };
+}
+
+function endTurn(text = 'done'): CompletionResponse {
+  return { content: [{ type: 'text', text }], stopReason: 'end_turn', usage, model: 'm' };
+}
+
+function openAiProvider(script: CompletionResponse[]): RuntimeProvider & {
+  calls: CompletionRequest[];
+} {
+  return { ...scriptedProvider(script), capabilities: providerCapabilities('openai') };
+}
+
+describe('what an agent granted web.* is actually shown', () => {
+  it('on Anthropic: web.read and web.status, no web.search, and the provider searching instead', async () => {
+    const db = new FakeDb();
+    const provider = scriptedProvider([endTurn()]);
+    await runAgent({
+      agent: webAgent,
+      provider,
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'what is a used bronco worth?',
+      env: {},
+    });
+
+    const shown = provider.calls[0]!.tools.map((t) => t.name);
+    expect(shown).toEqual(['web.read', 'web.status']);
+    expect(provider.calls[0]!.nativeSearch).toEqual({ maxUses: 3 });
+    // The untrusted rule has nowhere else to live on this path, so it is in the
+    // system prompt for the turn that does the searching.
+    expect(provider.calls[0]!.system).toContain('UNTRUSTED CONTENT');
+  });
+
+  it('on OpenAI: all three tools, and no server-side search asked for', async () => {
+    const db = new FakeDb();
+    const provider = openAiProvider([endTurn()]);
+    await runAgent({
+      agent: scoutAgent,
+      provider,
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'what is a used bronco worth?',
+      env: {},
+    });
+
+    expect(provider.calls[0]!.tools.map((t) => t.name)).toEqual(WEB_TOOLS);
+    expect(provider.calls[0]!.nativeSearch).toBeUndefined();
+    expect(provider.calls[0]!.system).not.toContain('UNTRUSTED CONTENT');
+  });
+
+  it('with BUDDI_SEARCH_PROVIDER=tavily: the plugin tool comes back, even on Anthropic', async () => {
+    const db = new FakeDb();
+    const provider = scriptedProvider([endTurn()]);
+    await runAgent({
+      agent: webAgent,
+      provider,
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: { BUDDI_SEARCH_PROVIDER: 'tavily' },
+    });
+
+    expect(provider.calls[0]!.tools.map((t) => t.name)).toEqual(WEB_TOOLS);
+    expect(provider.calls[0]!.nativeSearch).toBeUndefined();
+  });
+
+  it('records which backend honoured the grant, before the first call', async () => {
+    const db = new FakeDb();
+    await runAgent({
+      agent: webAgent,
+      provider: scriptedProvider([endTurn()]),
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: {},
+    });
+    const started = db.events.find((e) => e.kind === 'run.started')!.payload as any;
+    expect(started.webSearch).toMatchObject({ native: true, maxUses: 3 });
+  });
+});
+
+describe('a search the loop did not run', () => {
+  it('dispatches nothing, and leaves the audit trail a web.search call would have left', async () => {
+    const db = new FakeDb();
+    const dispatched: string[] = [];
+    const recorded: unknown[] = [];
+    const result = await runAgent({
+      agent: webAgent,
+      provider: scriptedProvider([nativeSearchTurn()]),
+      registry: registryWithWeb(dispatched),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'what is a used bronco worth?',
+      env: {},
+      onNativeSearch: (events) => {
+        recorded.push(...events);
+      },
+    });
+
+    // Nothing was executed: a server tool block is a report, not a proposal.
+    expect(dispatched).toEqual([]);
+    expect(db.eventKinds()).not.toContain('tool.called');
+    expect(result.stopped).toBe('end_turn');
+    expect(result.text).toContain('$43,753');
+
+    // …and it is still accounted for, with the same facts a `web.fetches` row
+    // needs: who asked, in which conversation, what for, where it went.
+    expect(recorded).toEqual([
+      {
+        query: 'used bronco price nj',
+        hosts: ['www.cargurus.com'],
+        resultCount: 7,
+        outcome: 'ok',
+        agentId: 'garage',
+        conversationId: 'c1',
+        provider: 'anthropic',
+      },
+    ]);
+    expect(db.eventKinds()).toContain('web.searched');
+    expect(result.usage.webSearches).toBe(1);
+  });
+
+  it('keeps the provider blocks out of durable history, and the answer in it', async () => {
+    const db = new FakeDb();
+    await runAgent({
+      agent: webAgent,
+      provider: scriptedProvider([nativeSearchTurn()]),
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: {},
+    });
+
+    const assistant = db.messages.find((m) => m.role === 'assistant')!.content as any[];
+    // Untrusted search results do not get replayed into every future turn of
+    // this conversation, and one vendor's private block shapes never reach
+    // another vendor's endpoint tomorrow.
+    expect(assistant.map((b) => b.type)).toEqual(['text']);
+  });
+
+  it('never fails a turn because the audit sink threw', async () => {
+    const db = new FakeDb();
+    const result = await runAgent({
+      agent: webAgent,
+      provider: scriptedProvider([nativeSearchTurn()]),
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: {},
+      onNativeSearch: () => {
+        throw new Error('the web schema was dropped');
+      },
+    });
+    expect(result.stopped).toBe('end_turn');
+    expect(result.text).toContain('$43,753');
+  });
+
+  it('continues a paused turn instead of ending it, with no user message invented', async () => {
+    const db = new FakeDb();
+    const paused: CompletionResponse = { ...nativeSearchTurn(), stopReason: 'pause_turn' };
+    const provider = scriptedProvider([paused, endTurn('and here is the answer')]);
+    const result = await runAgent({
+      agent: webAgent,
+      provider,
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: {},
+    });
+
+    expect(result.turns).toBe(2);
+    expect(result.stopped).toBe('end_turn');
+    expect(result.text).toBe('and here is the answer');
+    // The continuation carries the paused turn back, provider blocks and all,
+    // and adds nothing from the owner that the owner did not say.
+    const second = provider.calls[1]!.messages;
+    expect(second[second.length - 1]!.role).toBe('assistant');
+    expect(second[second.length - 1]!.content.map((b) => b.type)).toEqual([
+      'provider_native',
+      'provider_native',
+      'text',
+    ]);
+  });
+});

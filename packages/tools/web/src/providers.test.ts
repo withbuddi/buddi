@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import { brave, BRAVE_KEY_NAME } from './providers/brave.js';
 import { tavily, TAVILY_KEY_NAME } from './providers/tavily.js';
 import { DEFAULT_PROVIDER, PROVIDER_VAR, resolveKey, selectProvider } from './providers/index.js';
+import { NATIVE_SEARCH_REPLACES, SEARCH_BACKEND_VAR } from '@buddi/runtime';
+import { createSearchTool } from './tools/search.js';
 import type { SearchDeps } from './ports.js';
 
 const answering = (status: number, body: unknown): SearchDeps => ({
@@ -159,5 +161,41 @@ describe('Brave', () => {
       },
     );
     expect(sentHeaders?.['x-subscription-token']).toBe('secret-token');
+  });
+});
+
+describe('the third backend: the provider\'s own search', () => {
+  it('treats "native" as a real choice rather than a typo', () => {
+    const chosen = selectProvider({ BUDDI_SEARCH_PROVIDER: 'native' });
+    expect(chosen.native).toBe(true);
+    expect(chosen.problem).toBeUndefined();
+    // The HTTP backend still comes back beside it: it is the fallback for an
+    // agent on a provider that cannot search server-side.
+    expect(chosen.provider.id).toBe('tavily');
+  });
+
+  it('still reports a typo, and now lists native among the names it knows', () => {
+    const chosen = selectProvider({ BUDDI_SEARCH_PROVIDER: 'natiev' });
+    expect(chosen.native).toBeUndefined();
+    expect(chosen.problem).toContain('natiev');
+    expect(chosen.problem).toContain('native');
+  });
+
+  it('leaves an explicit tavily choice alone — the override must be able to force it', () => {
+    const chosen = selectProvider({ BUDDI_SEARCH_PROVIDER: 'tavily' });
+    expect(chosen.native).toBeUndefined();
+    expect(chosen.provider.id).toBe('tavily');
+  });
+
+  it('names the same tool the runtime withholds when the provider searches itself', () => {
+    // The one string the runtime has to know about this plugin. If the tool is
+    // ever renamed, this fails here rather than the model quietly being shown
+    // two ways to search.
+    const search = createSearchTool({ fetcher: {} as never, env: {}, provider: tavily });
+    expect(NATIVE_SEARCH_REPLACES).toContain(search.name);
+  });
+
+  it('reads BUDDI_SEARCH_PROVIDER through the runtime\'s parser, so there is one meaning of it', () => {
+    expect(PROVIDER_VAR).toBe(SEARCH_BACKEND_VAR);
   });
 });

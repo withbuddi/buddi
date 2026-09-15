@@ -37,6 +37,7 @@ import {
   type ApprovalResume,
   type RuntimeProvider,
 } from '@buddi/runtime';
+import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { OwnerNotPairedError } from '../telegram/notify.js';
@@ -192,6 +193,9 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       registry,
       ctx,
       pool: deps.pool,
+      // The provider's own web search leaves the same audit row `web.search`
+      // does; see @buddi/tool-web's native.ts.
+      onNativeSearch: nativeSearchRecorder(deps.pool),
       conversationId,
       ...(resuming
         ? { resume: payload.approval as ApprovalResume }

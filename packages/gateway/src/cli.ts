@@ -34,6 +34,7 @@ import {
 } from '@buddi/core';
 import { failedTurnReply } from './surfaces/failure.js';
 import { createConversation, createProvider, runAgent } from '@buddi/runtime';
+import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { AGENTS_DIR, memoryPreambleFor } from './agents/catalog.js';
 import { main as runAgentsCli } from './agents-cli.js';
@@ -414,6 +415,9 @@ async function ask(
       registry: wiring.registry,
       ctx: wiring.ctx,
       pool: wiring.pool,
+      // The provider's own web search leaves the same audit row `web.search`
+      // does; see @buddi/tool-web's native.ts.
+      onNativeSearch: nativeSearchRecorder(wiring.pool),
       conversationId,
       userMessage: question,
       surface: CLI_SURFACE,

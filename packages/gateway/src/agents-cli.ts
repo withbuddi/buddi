@@ -40,7 +40,7 @@ import { createProvider, providerCapabilities } from '@buddi/runtime';
 import { createToolRegistry, loadGatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
 import { migrateAgents, renderMigration } from './agents/migrate.js';
 import { hydrateSecrets, loadEnvironment } from './bootstrap.js';
-import { estimateCost, formatCost, formatTokens } from './chat/usage.js';
+import { estimateCost, formatCost, formatTokens, formatWebSearches } from './chat/usage.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 
 export const USAGE = `buddi agents — which engine each agent runs on
@@ -366,13 +366,14 @@ async function lastRunSnapshot(
     const row = rows[0];
     if (!row) return undefined;
     const p = (row.payload ?? {}) as Record<string, unknown>;
-    const usage = (p.usage ?? {}) as { input?: number; output?: number };
+    const usage = (p.usage ?? {}) as { input?: number; output?: number; webSearches?: number };
     const served = p.servedModel ? ` (served ${String(p.servedModel)})` : '';
     return (
       `${new Date(row.created_at).toISOString()} — ${String(p.provider ?? '?')} · ` +
       `${String(p.model ?? '?')}${served} · ${String(p.credentialKind ?? '?')} · ` +
       `${String(p.turns ?? '?')} turns, ${String(p.stopped ?? '?')}, ` +
-      `in ${usage.input ?? 0} / out ${usage.output ?? 0}`
+      `in ${usage.input ?? 0} / out ${usage.output ?? 0}` +
+      `${usage.webSearches ? `, ${usage.webSearches} provider web search${usage.webSearches === 1 ? '' : 'es'}` : ''}`
     );
   } catch {
     return undefined;
@@ -429,9 +430,12 @@ async function showCommand(
     ['streaming tool args', caps.streamingToolArgs ? 'yes' : 'no'],
     ['cancellation', caps.cancellation ? 'yes' : 'no'],
     ['usage reporting', caps.usageReporting ? 'yes' : 'no'],
+    // What "granted web.*" actually resolves to for this agent: its own
+    // server-side search, or the plugin's web.search through a search company.
+    ['server-side web search', caps.nativeWebSearch ? 'yes' : 'no'],
     ['tool results', caps.toolResultOrdering],
   ];
-  for (const [name, value] of rows) console.log(`    ${name.padEnd(20)} ${value}`);
+  for (const [name, value] of rows) console.log(`    ${name.padEnd(22)} ${value}`);
 
   const snapshot = await lastRunSnapshot(env, agent.id);
   console.log(`\n  ${dim('last run', style.color)}`);
@@ -567,6 +571,7 @@ async function testCommand(
     dim(
       `  served ${answer.model || '(not reported)'} · ${ms} ms · ` +
         `in ${formatTokens(answer.usage.input)} / out ${formatTokens(answer.usage.output)} · ` +
+        `${answer.usage.webSearches ? `${formatWebSearches(answer.usage.webSearches)} · ` : ''}` +
         `${cost === undefined ? 'cost unknown (no local price)' : `about ${formatCost(cost)}`}`,
       style.color,
     ),

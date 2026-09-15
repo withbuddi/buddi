@@ -40,6 +40,18 @@ export interface ProviderCapabilities {
   cancellation: boolean;
   /** Does the response report token usage? */
   usageReporting: boolean;
+  /**
+   * Can the *provider* run a web search on its own servers, inside one
+   * response, on the credential this run already uses?
+   *
+   * Not "does the vendor sell a search product": this is the same honesty rule
+   * as the rest of the matrix — it describes what **this installation's
+   * adapter** implements. OpenAI has server-side search on the Responses API
+   * and on the `-search-preview` chat models; the adapter in this repository
+   * speaks plain Chat Completions and does neither, so its row says `false`
+   * and Scout's `web.*` grant resolves to the plugin's own `web.search`.
+   */
+  nativeWebSearch: boolean;
 }
 
 const MATRIX: Record<ProviderKind, ProviderCapabilities> = {
@@ -54,6 +66,10 @@ const MATRIX: Record<ProviderKind, ProviderCapabilities> = {
     parallelToolCalls: true,
     cancellation: false,
     usageReporting: true,
+    // Verified live against /v1/messages with a subscription token: the
+    // `web_search_20250305` server tool answers on the credential buddi
+    // already holds, with no second key and no second bill. See `search.ts`.
+    nativeWebSearch: true,
   },
   openai: {
     kind: 'openai',
@@ -66,6 +82,15 @@ const MATRIX: Record<ProviderKind, ProviderCapabilities> = {
     parallelToolCalls: true,
     cancellation: false,
     usageReporting: true,
+    // A deliberate `false`, not an oversight. Chat Completions' own
+    // `web_search_options` is accepted only by the `gpt-4o-*-search-preview`
+    // models — turning it on would silently repin Scout's model — and the
+    // Responses API, where the general `web_search` tool lives, is a different
+    // wire with a different request shape, a different content-block model and
+    // different citation objects. That is an adapter, not a flag. Until one
+    // exists this row is the truth, and the loop reads it: Scout keeps
+    // `web.search` through Tavily and nothing is half-built.
+    nativeWebSearch: false,
   },
 };
 

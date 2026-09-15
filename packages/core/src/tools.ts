@@ -49,6 +49,18 @@ export interface ToolContext {
    */
   surface?: SurfaceProfile;
   /**
+   * Set by the runtime when this run's provider is doing the web searching
+   * itself, server-side, instead of a search tool being dispatched.
+   *
+   * It is on the context for one reader: `web.status`, whose whole job is to
+   * answer "can I search right now?" honestly *before* an agent promises the
+   * owner something current. Without it the plugin would answer from the
+   * Tavily key alone and tell an agent on Anthropic that it cannot search,
+   * moments before it searches. Core knows no backend and no vendor here — only
+   * that something other than a tool call is providing the capability.
+   */
+  nativeSearch?: { provider: string; maxUses: number };
+  /**
    * The durable job this run belongs to, when a job started it. The approval
    * machinery records it on the action so the decision can wake exactly the
    * run that is suspended on it; a run the owner is watching live has none.

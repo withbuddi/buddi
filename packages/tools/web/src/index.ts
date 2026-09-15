@@ -19,7 +19,11 @@
  *
  * ## The three tools
  *
- *  - `web.search` — a list of results, each with its own source. Needs a key.
+ *  - `web.search` — a list of results, each with its own source. Needs a key,
+ *    and is **withheld from agents whose provider searches server-side**: the
+ *    runtime shows Anthropic agents the provider's own search instead, on the
+ *    credential they already run on, and records it in the same audit table
+ *    (`native.ts`). One grant — `web.*` — two ways of honouring it.
  *  - `web.read` — one page as text, with the URL that actually answered. Needs
  *    nothing, and works on an installation that never configures search.
  *  - `web.status` — "can I search right now?", free and offline, so an agent
@@ -161,10 +165,17 @@ export {
 } from './guard.js';
 export { decodeEntities, extractTitle, htmlToText, plainToText } from './extract.js';
 export { CITE_NOTICE, NO_SEARCH_KEY_NOTICE, UNTRUSTED_NOTICE } from './notice.js';
-export { recordFetch, type FetchLogEntry } from './log.js';
+export { recordFetch, type FetchLogEntry, type Queryable } from './log.js';
+export {
+  nativeSearchDetail,
+  nativeSearchRecorder,
+  recordNativeSearches,
+  PROVIDER_SEARCH_HOSTS,
+} from './native.js';
 export { webSkills } from './skills.js';
 export {
   DEFAULT_PROVIDER,
+  NATIVE_BACKEND_ID,
   PROVIDER_VAR,
   PROVIDERS,
   SEARCH_KEY_NAMES,
@@ -188,9 +199,19 @@ export type {
   SearchResult,
 } from './ports.js';
 
-/** Convenience for the doctor: which backend and key this environment selects. */
+/**
+ * Convenience for the doctor: which backend and key this environment selects.
+ *
+ * `native: true` means the owner set `BUDDI_SEARCH_PROVIDER=native`, and a
+ * missing Tavily key is then expected rather than a gap. With the variable
+ * unset the answer is "it depends on the agent" — an agent on a provider that
+ * searches server-side needs no key, one on a provider that does not still
+ * does — which is a sentence the doctor has to write, not a boolean this
+ * function can return.
+ */
 export function searchConfiguration(env: EnvLike = process.env): {
   provider: SearchProvider;
+  native?: boolean;
   problem?: string;
 } {
   return selectProvider(env);

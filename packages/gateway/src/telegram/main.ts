@@ -27,6 +27,7 @@ import {
   type ToolContext,
 } from '@buddi/core';
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
+import { nativeSearchRecorder } from '@buddi/tool-web';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -409,6 +410,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           ...(systemSuffix === undefined ? [] : [systemSuffix]),
         ].join('\n\n'),
         memoryPreamble: memoryPreambleFor(pool),
+        // The provider's own web search leaves the same audit row `web.search`
+        // does; see @buddi/tool-web's native.ts.
+        onNativeSearch: nativeSearchRecorder(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);
           onToolCall?.(name, input);
