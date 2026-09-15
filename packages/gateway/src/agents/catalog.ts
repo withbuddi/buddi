@@ -22,6 +22,7 @@ import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
+import { manifest as webManifest } from '@buddi/tool-web';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
@@ -88,6 +89,10 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
+  // Search and page retrieval. Registered like every other plugin, and granted
+  // like every other plugin: being installed gives no agent the capability —
+  // an agent reaches the web only if its own `tools:` line names `web.*`.
+  registry.register(webManifest);
   // Everything the owner installed, from `plugins.json`. Empty in any process
   // that did not await `loadPluginsOnce` — a unit test, a fixture — which is
   // the honest answer for a process that never read the owner's record.
@@ -142,7 +147,7 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
  * and suggests missions exactly as `finance` does.
  */
 export function installedManifests(env: NodeJS.ProcessEnv = process.env): PluginManifest[] {
-  return [financeManifest, memoryManifest, emailManifest, ...externalManifests(env)];
+  return [financeManifest, memoryManifest, emailManifest, webManifest, ...externalManifests(env)];
 }
 
 /**

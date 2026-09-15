@@ -40,6 +40,7 @@ import {
   WEB_ENABLED_VAR,
   type HttpTransport,
 } from '@buddi/gateway';
+import { resolveKey as resolveSearchKey, searchConfiguration } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { listArchives } from './backup/prune.js';
 import { STALE_AFTER_MS } from './backup/manifest.js';
@@ -376,6 +377,38 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         };
       }
       return checkAgents(facts);
+    },
+
+    /**
+     * Can the agents look anything up?
+     *
+     * No network call: the question is whether a key is configured, and asking
+     * the provider would spend one of the owner's free searches on every
+     * `buddi doctor`. It reads the *hydrated* environment, so a key that lives
+     * in the keychain reads as present rather than as the `<vault>` marker.
+     */
+    async webSearch(): Promise<ProbeResult> {
+      const facts = await secrets();
+      const { provider, problem } = searchConfiguration(env);
+      const key = resolveSearchKey(provider, env);
+      if (!key.configured) {
+        const secretProblem = facts.problems[provider.keyName];
+        const because =
+          secretProblem && secretProblem.code !== 'missing-secret'
+            ? `${provider.keyName} unavailable: ${secretProblem.message}`
+            : key.reason;
+        return {
+          status: 'warn',
+          detail:
+            `${because} — agents can read a page but cannot search; ` +
+            `\`buddi vault set ${provider.keyName}\` (free key: ${provider.signupUrl})`,
+        };
+      }
+      const where = facts.sources[provider.keyName] === 'vault' ? 'vault' : '.env';
+      return {
+        status: 'ok',
+        detail: `${provider.label} — key from the ${where}${problem ? ` (${problem})` : ''}`,
+      };
     },
 
     async botToken(): Promise<ProbeResult> {

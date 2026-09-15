@@ -1,5 +1,5 @@
 {
-  "name": "@buddi/gateway",
+  "name": "@buddi/tool-web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,14 +11,6 @@
       "default": "./dist/index.js"
     }
   },
-  "bin": {
-    "buddi-telegram": "./dist/telegram/main.js",
-    "buddi-serve": "./dist/serve.js",
-    "buddi-missions": "./dist/missions-cli.js"
-  },
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --emitDeclarationOnly && tsc -p tsconfig.test.json",
@@ -27,12 +19,6 @@
   "dependencies": {
     "@buddi/core": "workspace:*",
     "@buddi/runtime": "workspace:*",
-    "@buddi/tool-artifacts": "workspace:*",
-    "@buddi/tool-email": "workspace:*",
-    "@buddi/tool-finance": "workspace:*",
-    "@buddi/tool-memory": "workspace:*",
-    "@buddi/tool-web": "workspace:*",
-    "dotenv": "^16.4.7",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },
@@ -41,5 +27,9 @@
     "@types/pg": "^8.11.10",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
-  }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ]
 }

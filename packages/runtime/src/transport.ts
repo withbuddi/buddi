@@ -103,6 +103,7 @@
 import { Agent as HttpAgent, request as httpRequest, type ClientRequest } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import type { IncomingMessage } from 'node:http';
+import type { LookupFunction } from 'node:net';
 
 /**
  * The slice of `Response` an adapter actually uses. Narrow on purpose: the
@@ -137,6 +138,20 @@ export interface TransportRequest {
    * A long poll needs more than a chat message does; see `SOCKET_IDLE_TIMEOUT_MS`.
    */
   idleTimeoutMs?: number | undefined;
+  /**
+   * The most bytes this response may be, refused **while it arrives**.
+   *
+   * A caller can always check `content-length` afterwards, but "afterwards" is
+   * too late: by then the whole body is in this process's memory, and a header
+   * is a claim the server makes rather than a fact. So the cap is enforced on
+   * the byte stream — the moment the total exceeds it the request is destroyed
+   * and the promise rejects with `ERR_RESPONSE_TOO_LARGE`. Nothing is buffered
+   * past the limit.
+   *
+   * Added for the web plugin, which fetches pages nobody in this repository
+   * wrote. Omitted everywhere else: a provider's answer is as long as it is.
+   */
+  maxBytes?: number | undefined;
 }
 
 export type HttpTransport = (
@@ -196,6 +211,21 @@ export interface HttpTransportOptions {
   /** Injected by tests that need a pooling agent or a plain-http server. */
   agent?: HttpsAgent | HttpAgent | undefined;
   idleTimeoutMs?: number | undefined;
+  /**
+   * How the hostname is resolved, handed straight to the socket.
+   *
+   * This exists so a caller can *decide* about the address before a packet is
+   * sent, and have that decision be the one the connection actually uses.
+   * Checking a URL string, or resolving it and then calling `connect(host)`,
+   * leaves a gap: the name can answer differently the second time, and the
+   * second time is the one that counts (DNS rebinding). A `lookup` closes the
+   * gap, because the address this function returns *is* the address dialled.
+   *
+   * The web plugin passes one that refuses loopback, private, link-local and
+   * cloud-metadata addresses. Nothing else sets it, and the default is
+   * `dns.lookup`, exactly as before.
+   */
+  lookup?: LookupFunction | undefined;
 }
 
 function responseOf(res: IncomingMessage, body: Buffer): TransportResponse {
@@ -274,11 +304,30 @@ function attempt(
           ...(body === undefined ? {} : { 'content-length': String(body.byteLength) }),
         },
         agent,
+        // Only present when the caller supplied one; `undefined` here would
+        // override the socket's own default with nothing on some Node versions.
+        ...(options.lookup === undefined ? {} : { lookup: options.lookup }),
       },
       (res) => {
         responded = true;
         const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        let received = 0;
+        const cap = init.maxBytes;
+        res.on('data', (chunk: Buffer) => {
+          received += chunk.byteLength;
+          if (cap !== undefined && received > cap) {
+            // Refused mid-flight: nothing past the cap is kept, and the
+            // connection is torn down rather than drained politely.
+            res.destroy();
+            fail(
+              Object.assign(new Error(`the response exceeded ${cap} bytes`), {
+                code: 'ERR_RESPONSE_TOO_LARGE',
+              }),
+            );
+            return;
+          }
+          chunks.push(chunk);
+        });
         res.on('end', () => {
           if (settled) return;
           settled = true;

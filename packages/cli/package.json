@@ -25,6 +25,7 @@
   "dependencies": {
     "@buddi/core": "workspace:*",
     "@buddi/gateway": "workspace:*",
+    "@buddi/tool-web": "workspace:*",
     "dotenv": "^16.4.7",
     "pg": "^8.13.1",
     "qrcode-terminal": "^0.12.0"

@@ -191,7 +191,12 @@ describe('a manifest can carry suggested agents', () => {
       status: 'not-accepted',
       proposedTools: ['garden.*'],
     });
-    expect(result.skills[0]).toMatchObject({ plugin: 'garden', name: 'reading-a-water-log' });
+    // Found by name rather than by index: every installed plugin may propose a
+    // shared skill (the web plugin does), so position here is not this
+    // fixture's to assume.
+    expect(result.skills).toContainEqual(
+      expect.objectContaining({ plugin: 'garden', name: 'reading-a-water-log' }),
+    );
     expect(existsSync(path.join(h.agentsDir, 'gardener'))).toBe(false);
   });
 
