@@ -61,19 +61,26 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     expect(registered.some((n) => n.startsWith('memory.'))).toBe(true);
   });
 
-  it('ships the concierge with the memory, reminder and schedule tools, and no default flag', () => {
+  it('grants the concierge only registered tools, in registry order, with no finance and no default flag', () => {
+    // Deliberately *not* a copy of the concierge's grant list. Which namespaces
+    // the owner hands this persona is the owner's business and changes when the
+    // owner edits the file — routing, most recently, which is how this test
+    // last broke. What the platform owes is smaller and permanent: every
+    // granted name is a tool that exists, the grant comes back in registry
+    // order, and the prompt the agent reads lists exactly what it was given.
     const registered = createToolRegistry()
       .list()
-      .map((t) => t.name)
-      .filter(
-        (n) => n.startsWith('memory.') || n.startsWith('reminder.') || n.startsWith('schedule.'),
-      );
+      .map((t) => t.name);
     const concierge = catalog.resolve('concierge');
-    expect(concierge.tools).toEqual(registered);
+    expect(concierge.tools.length).toBeGreaterThan(0);
+    expect(registered).toEqual(expect.arrayContaining(concierge.tools));
+    expect(concierge.tools).toEqual(registered.filter((n) => concierge.tools.includes(n)));
+    // The one grant that is a security property rather than a preference: the
+    // concierge is the general-purpose persona and reaches no money tool.
     expect(concierge.tools.some((n) => n.startsWith('finance.'))).toBe(false);
     expect(concierge.isDefault).toBe(false);
     expect(concierge.systemPromptTemplate).toContain(
-      `Tools available to you in this installation: ${registered.join(', ')}.`,
+      `Tools available to you in this installation: ${concierge.tools.join(', ')}.`,
     );
     expect(concierge.file.startsWith(AGENTS_DIR)).toBe(true);
   });
