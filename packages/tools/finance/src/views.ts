@@ -14,6 +14,12 @@
  * "how close to the edge". A summary is a table of categories because the
  * question is "where did it go". Everything else falls back to `structured`,
  * which is a readable view of the JSON and is often the honest answer.
+ *
+ * The order is not arbitrary: the empty canvas introduces the plugin with the
+ * first three descriptors declared here, so those three lead — the projection,
+ * the accounts, the month's spending — one of each shape, and between them the
+ * three questions anyone arrives with (what is coming, where I stand, where it
+ * went). Everything narrower, the credit material included, follows.
  */
 import type { ViewDescriptor } from '@buddi/core';
 
@@ -43,6 +49,56 @@ export const financeViews: ViewDescriptor[] = [
       shadeBelow: { path: 'safetyFloor' },
       mark: 'min',
       events: { parent: 'events', at: 'date', label: 'name', amount: 'amount' },
+    },
+  },
+
+  /*
+   * The accounts. Split on purpose, because the whole point of this result is
+   * that retirement money is not spendable money: the rows are grouped by
+   * whether they count as cash, and the three totals are named separately
+   * above rather than added into one figure nobody should quote.
+   */
+  {
+    tool: 'finance.list_accounts',
+    renderer: 'table',
+    title: 'Accounts',
+    map: {
+      rows: 'accounts',
+      groupBy: {
+        key: 'includeInCashflow',
+        labels: { true: 'Spendable', false: 'Not spendable' },
+      },
+      columns: [
+        { key: 'name', label: 'Account' },
+        { key: 'kind', label: 'Kind' },
+        { key: 'institution', label: 'Institution' },
+        { key: 'balance', label: 'Balance', type: 'currency', currency },
+        { key: 'balanceAsOf', label: 'As of', type: 'date' },
+      ],
+      summary: [
+        { label: 'Spendable cash', value: { path: 'cashTotal' }, unit: 'currency', currency },
+        { label: 'Not spendable', value: { path: 'excludedTotal' }, unit: 'currency', currency },
+        { label: 'Debts', value: { path: 'totalLiabilities' }, unit: 'currency', currency },
+        { label: 'Net worth', value: { path: 'netWorth' }, unit: 'currency', currency },
+      ],
+      empty: 'No accounts are recorded yet.',
+    },
+  },
+
+  /*
+   * Where the money went. Categories are parts of one month, which is what
+   * bars are for; the totals are in the result and the answer quotes them.
+   */
+  {
+    tool: 'finance.summary',
+    renderer: 'bars',
+    title: 'Spending by category',
+    map: {
+      bars: 'byCategory',
+      category: 'category',
+      value: 'total',
+      unit: 'currency',
+      currency,
     },
   },
 
@@ -141,23 +197,6 @@ export const financeViews: ViewDescriptor[] = [
   },
 
   /*
-   * Where the money went. Categories are parts of one month, which is what
-   * bars are for; the totals are in the result and the answer quotes them.
-   */
-  {
-    tool: 'finance.summary',
-    renderer: 'bars',
-    title: 'Spending by category',
-    map: {
-      bars: 'byCategory',
-      category: 'category',
-      value: 'total',
-      unit: 'currency',
-      currency,
-    },
-  },
-
-  /*
    * A staged import is a decision, not a report: nothing has been written, and
    * the owner is being asked. So it is drawn as the handful of figures that
    * decide it — how many rows are new, what they add up to, what window they
@@ -211,39 +250,6 @@ export const financeViews: ViewDescriptor[] = [
         { label: 'Billed to a card', value: { path: 'cardBilledCount' }, unit: 'number' },
       ],
       empty: 'Nothing recurring is recorded yet.',
-    },
-  },
-
-  /*
-   * The accounts. Split on purpose, because the whole point of this result is
-   * that retirement money is not spendable money: the rows are grouped by
-   * whether they count as cash, and the three totals are named separately
-   * above rather than added into one figure nobody should quote.
-   */
-  {
-    tool: 'finance.list_accounts',
-    renderer: 'table',
-    title: 'Accounts',
-    map: {
-      rows: 'accounts',
-      groupBy: {
-        key: 'includeInCashflow',
-        labels: { true: 'Spendable', false: 'Not spendable' },
-      },
-      columns: [
-        { key: 'name', label: 'Account' },
-        { key: 'kind', label: 'Kind' },
-        { key: 'institution', label: 'Institution' },
-        { key: 'balance', label: 'Balance', type: 'currency', currency },
-        { key: 'balanceAsOf', label: 'As of', type: 'date' },
-      ],
-      summary: [
-        { label: 'Spendable cash', value: { path: 'cashTotal' }, unit: 'currency', currency },
-        { label: 'Not spendable', value: { path: 'excludedTotal' }, unit: 'currency', currency },
-        { label: 'Debts', value: { path: 'totalLiabilities' }, unit: 'currency', currency },
-        { label: 'Net worth', value: { path: 'netWorth' }, unit: 'currency', currency },
-      ],
-      empty: 'No accounts are recorded yet.',
     },
   },
 
