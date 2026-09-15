@@ -31,9 +31,17 @@ import {
 import { createProvider, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
-import { createToolRegistry, loadGatewayCatalog, REPO_ROOT } from './agents/catalog.js';
+import {
+  adoptProcessCatalog,
+  createToolRegistry,
+  loadGatewayCatalog,
+  reloadableCatalog,
+  REPO_ROOT,
+  type ReloadableAgentCatalog,
+} from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
+import { bindPlatformTools } from './agents/platform.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 
 export { REPO_ROOT };
@@ -129,8 +137,18 @@ export async function hydrateSecrets(
 export interface Wiring {
   pool: Pool;
   registry: ToolRegistry;
-  /** Every agent installed as a file under `agents/`. */
-  catalog: AgentCatalog;
+  /**
+   * Every agent installed as a file under `agents/`.
+   *
+   * A façade, not a snapshot: `reloadCatalog()` rebuilds what is behind it, and
+   * every surface holding this object sees the new agent on its next turn.
+   */
+  catalog: ReloadableAgentCatalog;
+  /**
+   * Re-read the agent files and swap them in, in this process, now. Throws with
+   * the previous catalog still serving when the tree on disk will not load.
+   */
+  reloadCatalog(): void;
   provider: RuntimeProvider;
   /**
    * The adapter for one agent, built from that agent's own pinned provider.
@@ -183,7 +201,13 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   }
 
   const registry = createToolRegistry(env);
-  const catalog = loadGatewayCatalog({ env, registry });
+  // One catalog per process, behind a façade every surface can keep holding:
+  // `platform.create_agent` swaps what is behind it and the new agent is
+  // reachable from the CLI, Telegram, the web chat and the mission runner on
+  // their next turn, with no restart. `adoptProcessCatalog` makes sure the
+  // runner's own `gatewayCatalog()` is this same object and not a second one.
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry }));
+  adoptProcessCatalog(env, catalog);
 
   const now = (): Date => new Date();
   const timezone = timezoneFromEnv(env);
@@ -241,10 +265,15 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   // catalog for the same reason delegation does. Each surface rebinds with its
   // own name, so a completed first run records where it actually happened.
   bindOwnerTools(registry, { catalog });
+  // The `platform.*` family writes agent files and then reloads this same
+  // façade, which is why it is bound here and not at construction: it needs the
+  // catalog it is about to replace.
+  bindPlatformTools(registry, { catalog, reload: () => catalog.reload() });
   return {
     pool,
     registry,
     catalog,
+    reloadCatalog: () => catalog.reload(),
     provider,
     providerFor,
     model: resolution.provider.model,

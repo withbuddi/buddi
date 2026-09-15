@@ -48,6 +48,7 @@ import { loadGatewayCatalog } from './agents/catalog.js';
 import { createDelegationManifest } from './agents/delegation.js';
 import { createCanvasManifest } from './agents/canvas.js';
 import { createOwnerManifest } from './agents/owner-tools.js';
+import { createPlatformManifest } from './agents/platform.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
 import { approvalCallbackData, TelegramApprovals } from './telegram/approvals.js';
 import { SURFACE } from './telegram/surface.js';
@@ -261,6 +262,7 @@ suite('end to end: mail in, approved send out', () => {
     registry.register(createScheduleManifest());
     registry.register(createCanvasManifest());
     registry.register(createOwnerManifest(registry));
+    registry.register(createPlatformManifest(registry));
     registry.register(createDelegationManifest(registry));
     const catalog = loadGatewayCatalog({ env: ENV, registry });
     // The agent a source names is the one the owner types as @postman.

@@ -158,6 +158,29 @@ Not everything that plugs in is the same kind of thing — there are two plugin 
   core's schema contains no tool-specific tables. Uninstall drops the schema and registry
   rows, nothing else. A mission that requires a missing plugin is *uninstallable* — a
   clean configuration state, not a broken system.
+- **Agent-created agents.** An agent is configuration, not code, so making one does not need the
+  probation lifecycle that agent-written *code* does — but it is still the creation of a principal,
+  and the `tools:` line is the only thing that decides what that principal can reach. So the
+  `platform.*` family follows the same boundary the rest of the system does: the four read tools
+  (roster, one persona, the installed tools, the skills) are `auto`, and **every** write —
+  `create_agent`, `update_agent`, `write_skill`, `delete_agent` — is `gated` with no exceptions.
+  Everything knowable is validated in `describe`, before the action object exists, so a preview
+  never describes something that cannot happen; the envelope carries the complete resulting file
+  and the resolved grant, and the preview leads with what that grant reaches, rendered from the
+  registered tools' own descriptions. An update that *widens* a grant says so and lists what was
+  added separately. `examples/` is never written — an owner who wants a shipped example changed
+  gets the private copy the search path already documents — and an agent proposing a change to its
+  own file is labelled as that in the preview.
+  Two rules are enforced in code rather than in a persona, because they are what makes confining
+  the writes meaningful: **the write tools are not grantable through the write tools** (a glob that
+  resolves to one is refused; they are granted only by the owner editing a file by hand), and **no
+  `delegates.json` may name an agent that holds them** — refused when proposed *and* at catalog
+  load, since delegation would otherwise be a corridor from the agent that reads untrusted mail
+  straight to `create_agent`. The tools themselves ship with exactly one agent,
+  `examples/agents/agent-father`, which the owner switches to deliberately; every other agent gets
+  the read half. After an approved write the process catalog is rebuilt and swapped behind the
+  façade every surface holds, so the new agent answers on the CLI, Telegram, the dashboard chat and
+  the mission runner without a restart.
 - **Agent-created tools** follow a probation lifecycle: *proposed* (code + manifest +
   why) → *owner approval bound to the code hash* → installed with **every call gated** →
   promoted by the owner only after observed behavior. Agent-written code that then

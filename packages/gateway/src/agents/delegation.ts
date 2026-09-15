@@ -29,6 +29,7 @@ import {
   type RuntimeProvider,
 } from '@buddi/runtime';
 import { AGENTS_DIR } from './catalog.js';
+import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 
 /** Plugin family name for the agent-to-agent tools. */
 export const AGENT_PLUGIN = 'agent';
@@ -128,7 +129,24 @@ export function createDelegationManifest(
           return binding.providerFor?.(agent) ?? binding.provider;
         },
         registry,
-        allowlistFor: (agentId) => readDelegates(agentId, agentsDir),
+        /*
+         * The allowlist, with the one entry it may never contain removed at the
+         * point of use as well as at load. An agent that can write the
+         * installation must not be reachable *through* another agent: that
+         * would put `platform.create_agent` one delegation away from the agent
+         * that reads untrusted mail. Caught here too, because a file can change
+         * under a running process.
+         */
+        allowlistFor: (agentId) => {
+          const catalog = boundOrThrow(registry).catalog;
+          return readDelegates(agentId, agentsDir).filter((targetId) => {
+            // `DelegateCatalog` exposes the grant through the definition it
+            // would run with, which is the same resolved list the loader built.
+            const held = writeToolsIn(catalog.get(targetId)?.definition(new Date()).tools ?? []);
+            if (held.length === 0) return true;
+            throw new Error(delegateToWriterRefusal(agentId, targetId, held));
+          });
+        },
       }),
     ],
   };

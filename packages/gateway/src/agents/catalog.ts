@@ -23,8 +23,10 @@ import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { createCanvasManifest } from './canvas.js';
-import { createDelegationManifest } from './delegation.js';
+import { createDelegationManifest, readDelegates } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
+import { createPlatformManifest } from './platform.js';
+import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
@@ -98,6 +100,11 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   // the owner may correct their name or their zone in any conversation, not
   // only in the one that first asked for it.
   registry.register(createOwnerManifest(registry));
+  // The platform family: reading what is installed is tier `auto`, and every
+  // write — a new agent, a changed grant, a skill, a removal — is `gated`. It
+  // takes the registry for two reasons: a proposed grant is resolved against
+  // it, and `platform.installed_tools` is a reflection of it.
+  registry.register(createPlatformManifest(registry));
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
   // by `bindDelegation` once they exist (the catalog is loaded *against* this
@@ -131,13 +138,41 @@ export interface GatewayCatalogOptions {
 /** Printed at most once per process: a notice is a nudge, not a log line. */
 let noticed = false;
 
+/**
+ * Nobody may delegate to an agent that can write the installation.
+ *
+ * Checked at *load*, not only where a grant is proposed, because a
+ * `delegates.json` is a plain file: an owner can write one by hand, a backup
+ * can restore one, and an allowlist that quietly opened a path from the mail
+ * agent to `platform.create_agent` would be the one failure this confinement
+ * exists to prevent. So it is a load error, loud, naming both agents — the
+ * installation refuses to come up rather than come up with the corridor open.
+ */
+export function assertNoDelegationToWriters(catalog: AgentCatalog): void {
+  for (const summary of catalog.list()) {
+    const agent = catalog.get(summary.id);
+    if (!agent) continue;
+    // `delegates.json` sits next to `agent.md`, whichever half of the search
+    // path the agent came from.
+    const agentsDir = path.dirname(path.dirname(agent.file));
+    for (const targetId of readDelegates(agent.id, agentsDir)) {
+      const held = writeToolsIn(catalog.get(targetId)?.tools ?? []);
+      if (held.length > 0) {
+        throw new Error(delegateToWriterRefusal(agent.id, targetId, held));
+      }
+    }
+  }
+}
+
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   const env = opts.env ?? process.env;
   const registry = opts.registry ?? createToolRegistry(env);
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    return loadAgentCatalog({ dir: opts.dir, registry, env });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env });
+    assertNoDelegationToWriters(single);
+    return single;
   }
   const search = agentSearchPath(env);
   if (!noticed) {
@@ -145,23 +180,87 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     if (notice !== undefined) console.error(notice);
     noticed = true;
   }
-  return loadAgentCatalog({
+  const catalog = loadAgentCatalog({
     dirs: search.entries.map(({ dir, skillsDir, source }) => ({ dir, skillsDir, source })),
     registry,
     env,
   });
+  assertNoDelegationToWriters(catalog);
+  return catalog;
 }
 
-let cached: { env: NodeJS.ProcessEnv; catalog: AgentCatalog } | undefined;
+/* ------------------------------------------------------------------ *
+ * Reloading, without a restart
+ * ------------------------------------------------------------------ */
+
+/**
+ * A catalog whose contents can be rebuilt from disk while the process runs.
+ *
+ * Every surface in this build holds *the catalog object* and asks it questions
+ * per turn — `resolve` on each message, `list` for the roster, `get` when a
+ * mission fires. That is the seam: if the object the holders share stays the
+ * same object and only what is *behind* it changes, then an agent written a
+ * second ago is resolvable everywhere at once, with nothing to re-wire and no
+ * holder left pointing at yesterday's map.
+ *
+ * So this is a façade, not a cache: it forwards every call to whichever catalog
+ * is current, and `reload()` swaps that one. A reload that fails — a file the
+ * owner half-wrote, a tool that no longer exists — leaves the previous catalog
+ * in place and throws, because a broken write may never take the installation
+ * down.
+ */
+export interface ReloadableAgentCatalog extends AgentCatalog {
+  /** Rebuild from disk and swap, or throw with the old catalog still serving. */
+  reload(): void;
+  /** The catalog currently behind the façade. For tests and diagnostics. */
+  current(): AgentCatalog;
+}
+
+/** Wrap a loader in the façade every surface can keep holding. */
+export function reloadableCatalog(load: () => AgentCatalog): ReloadableAgentCatalog {
+  let inner = load();
+  return {
+    get: (id) => inner.get(id),
+    byHandle: (handle) => inner.byHandle(handle),
+    list: () => inner.list(),
+    agentsWithRole: (role) => inner.agentsWithRole(role),
+    agentForRole: (role) => inner.agentForRole(role),
+    defaultAgent: () => inner.defaultAgent(),
+    resolve: (idOrHandle) => inner.resolve(idOrHandle),
+    reload() {
+      // Assigned only after `load()` returned: a throw leaves `inner` alone.
+      inner = load();
+    },
+    current: () => inner,
+  };
+}
+
+let cached: { env: NodeJS.ProcessEnv; catalog: ReloadableAgentCatalog } | undefined;
 
 /**
  * The process-wide catalog. Memoised per `env` object: the provider ref is
  * pinned from the environment at load, so a different environment is a
  * different catalog rather than a stale one.
  */
-export function gatewayCatalog(env: NodeJS.ProcessEnv = process.env): AgentCatalog {
+export function gatewayCatalog(env: NodeJS.ProcessEnv = process.env): ReloadableAgentCatalog {
   if (cached && cached.env === env) return cached.catalog;
-  const catalog = loadGatewayCatalog({ env });
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ env }));
   cached = { env, catalog };
   return catalog;
+}
+
+/**
+ * Publish the wiring's catalog as *the* process catalog.
+ *
+ * `createWiring` builds a catalog against the registry it just built, and the
+ * mission runner reaches for `gatewayCatalog()` when nobody handed it one. Two
+ * catalogs in one process would mean a reload that reaches one of them and not
+ * the other, which is exactly the half-working reload this whole mechanism
+ * exists to avoid. So the composition root adopts its own.
+ */
+export function adoptProcessCatalog(
+  env: NodeJS.ProcessEnv,
+  catalog: ReloadableAgentCatalog,
+): void {
+  cached = { env, catalog };
 }
