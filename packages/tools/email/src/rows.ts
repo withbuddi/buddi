@@ -52,6 +52,8 @@ export interface MessageRecord {
   threadKey: string | null;
   from: string;
   to: string[];
+  /** Who was copied. `[]` on rows ingested before the column existed. */
+  cc: string[];
   subject: string;
   date: string | null;
   snippet: string;
@@ -66,7 +68,7 @@ export interface MessageRecord {
 
 export const MESSAGE_COLUMNS =
   'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr, ' +
-  'to_addrs, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
+  'to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
   'body_purged_at';
 
 function iso(value: unknown): string | null {
@@ -89,6 +91,7 @@ export function toMessage(row: Record<string, any>): MessageRecord {
     threadKey: row.thread_key ?? null,
     from: row.from_addr,
     to: stringArray(row.to_addrs),
+    cc: stringArray(row.cc),
     subject: row.subject ?? '',
     date: iso(row.date),
     snippet: row.snippet ?? '',

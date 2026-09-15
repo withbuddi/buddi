@@ -111,6 +111,22 @@ suite('email tools (postgres)', () => {
         date: new Date('2026-09-13T08:00:00Z'),
       }),
     );
+    // A message with an audience: the owner plus two more addressed, two more
+    // copied, and one of the copies is the owner again under a plus-tag. It is
+    // the shape every reply-all question is really about.
+    server.add(
+      'INBOX',
+      fakeMessage({
+        messageId: '<handover-1@client.test>',
+        from: 'Dorothée <TDorothee@Client.TEST>',
+        to: ['owner@example.test', 'successor@client.test', 'colleague@client.test'],
+        cc: ['director@client.test', 'Owner+web@example.test'],
+        subject: 'Handover of the website',
+        bodyText: 'I am retiring. remy and noor take over from me.',
+        flags: ['\\Seen'],
+        date: new Date('2026-09-11T08:00:00Z'),
+      }),
+    );
     // `backfill` is explicit: a first contact starts at *now* by default and
     // fetches no history, so a fixture that seeds through a real poll has to
     // ask for the history it just wrote.
@@ -134,7 +150,11 @@ suite('email tools (postgres)', () => {
   it('lists recent mail, newest first, with unread and attachment flags', async () => {
     const listed = await call('email.list_recent', {});
     expect(listed.account).toBe('owner@example.test');
-    expect(listed.messages.map((m: any) => m.subject)).toEqual(['Weekend sale', 'Direct debit returned']);
+    expect(listed.messages.map((m: any) => m.subject)).toEqual([
+      'Weekend sale',
+      'Direct debit returned',
+      'Handover of the website',
+    ]);
     const bank = listed.messages[1];
     expect(bank).toMatchObject({ from: 'alerts@bank.test', unread: true, hasAttachments: true });
     expect(bank.snippet).toContain('returned unpaid');
@@ -435,6 +455,101 @@ suite('email tools (postgres)', () => {
       draft.artifactId,
     ]);
     expect(rows[0]).toMatchObject({ created_by: 'mail-triage', mime: 'text/plain' });
+  });
+
+  describe("a reply's audience", () => {
+    const handover = (): string => ids[2] as string;
+
+    it('goes to the sender alone when nothing asks for more', async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci Dorothée.',
+      });
+      expect(draft.to).toEqual(['tdorothee@client.test']);
+      expect(draft.cc).toEqual([]);
+      expect(draft.bcc).toEqual([]);
+      expect(draft.audience).toBe('sender');
+      expect(draft.beyondSender).toEqual([]);
+      expect(draft.audienceNote).toMatch(/sender alone/i);
+    });
+
+    it('reaches everyone the message did when it is asked for, To in To and Cc in Cc', async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci Dorothée, et bienvenue à vous deux.',
+        audience: 'everyone',
+      });
+      expect(draft.to).toEqual([
+        'tdorothee@client.test',
+        'successor@client.test',
+        'colleague@client.test',
+      ]);
+      expect(draft.cc).toEqual(['director@client.test']);
+      expect(draft.beyondSender).toHaveLength(3);
+      expect(draft.audienceNote).toMatch(/3 people beyond the sender/);
+    });
+
+    it("leaves the owner off, including the plus-addressed form of his own mailbox", async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Noted.',
+        audience: 'everyone',
+        alsoCc: ['OWNER@example.test'],
+      });
+      const everyone = [...draft.to, ...draft.cc, ...draft.bcc];
+      expect(everyone.some((a: string) => a.startsWith('owner'))).toBe(false);
+      expect(draft.excludedOwnAddresses).toEqual(['owner@example.test', 'owner+web@example.test']);
+    });
+
+    it('never carries a blind copy, and cannot be asked for one', async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Noted.',
+        audience: 'everyone',
+      });
+      expect(draft.bcc).toEqual([]);
+      // There is no argument for one: a blind recipient offered to the tool is
+      // not a recipient, it is a key the schema does not have.
+      const smuggled = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Noted.',
+        bcc: ['quiet@example.test'],
+      });
+      expect(smuggled.bcc).toEqual([]);
+      expect([...smuggled.to, ...smuggled.cc]).not.toContain('quiet@example.test');
+    });
+
+    it('shows the owner a widened audience as a widening when he approves the send', async () => {
+      const wide = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci Dorothée, et bienvenue à vous deux.',
+        audience: 'everyone',
+      });
+      const { envelope, preview } = await sendTool.describe({ draftId: wide.id }, ctx);
+      expect(envelope.replyAudience).toMatchObject({
+        sender: 'tdorothee@client.test',
+        widened: true,
+      });
+      expect(envelope.replyAudience?.beyondSender).toEqual([
+        'successor@client.test',
+        'colleague@client.test',
+        'director@client.test',
+      ]);
+      expect(preview).toContain('WIDER THAN A REPLY TO THE SENDER — 3 people');
+      expect(preview).toContain('successor@client.test, colleague@client.test, director@client.test');
+      expect(preview).toContain('recipients: 4 (bcc included)');
+      // Every recipient is still there in full, line by line.
+      expect(preview).toContain('To:      tdorothee@client.test, successor@client.test, colleague@client.test');
+      expect(preview).toContain('Cc:      director@client.test');
+
+      const narrow = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci Dorothée.',
+      });
+      const sender = await sendTool.describe({ draftId: narrow.id }, ctx);
+      expect(sender.envelope.replyAudience).toMatchObject({ widened: false, beyondSender: [] });
+      expect(sender.preview).toContain('Audience: the sender alone');
+    });
   });
 
   it('refuses to draft without provenance', async () => {

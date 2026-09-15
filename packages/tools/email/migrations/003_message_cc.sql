@@ -1,0 +1,17 @@
+-- Who else was on the message (applied with search_path = email, public).
+--
+-- The IMAP envelope has always carried Cc and the port has always parsed it;
+-- ingest simply dropped it on the floor, because nothing read it. Replying to
+-- everyone is what makes it load-bearing: the To line says who was addressed
+-- and the Cc line says who was copied, and a reply that cannot tell them apart
+-- has to guess at the one thing the owner is being asked to approve.
+--
+-- Rows ingested before this column existed keep `[]`, and that is the honest
+-- value: not "nobody was copied", but "this installation never recorded it".
+-- Nothing backfills it — the mailbox occurrence is immutable history, and a
+-- re-poll of an old UID is a no-op by design.
+--
+-- Bcc is deliberately absent, here and everywhere. A blind recipient of an
+-- incoming message is not visible to us, was not visible to anyone else, and
+-- must never reappear as a recipient of a reply.
+alter table messages add column if not exists cc jsonb not null default '[]'::jsonb;

@@ -132,6 +132,7 @@ export {
   sha256,
   SEND_TIMEOUT_MS,
   SEND_TOOL_VERSION,
+  type ReplyAudienceSummary,
   type SendEnvelope,
   type SendInput,
   type SendResult,

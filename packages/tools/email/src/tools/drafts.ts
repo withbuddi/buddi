@@ -13,7 +13,7 @@
  */
 import { saveArtifact, type ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
-import { normalizeAddress, normalizeAddresses, replySubject } from '../mail.js';
+import { normalizeAddresses, replyRecipients, replySubject } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft } from '../rows.js';
 import { requireAccount, requireAgentId, requireMessage, UUID } from './shared.js';
 import type { Pool } from 'pg';
@@ -104,30 +104,82 @@ const draftReplyInput = z.object({
     .min(1)
     .optional()
     .describe('Use a different subject line instead of "Re: <original>".'),
+  audience: z
+    .enum(['sender', 'everyone'])
+    .optional()
+    .describe(
+      'Who the reply goes to. "sender" (the default, and what you get if you say nothing) is the person who wrote, and nobody else. "everyone" is the audience the original had: the sender plus everyone else it was addressed to, with everyone it copied kept in copy. The owner\'s own addresses are never included, a reply never carries a blind copy, and widening the audience is shown to the owner as a widening when they approve the send — so ask for it when the others genuinely need the answer, not by default.',
+    ),
+  alsoTo: z
+    .array(ADDRESS)
+    .optional()
+    .describe('Named people to address as well, beyond the audience you chose.'),
+  alsoCc: z
+    .array(ADDRESS)
+    .optional()
+    .describe('Named people to copy as well, beyond the audience you chose.'),
 });
 
 export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown> = {
   name: 'email.draft_reply',
   description:
-    'Write a reply to a message and save it as a draft. The recipient and the subject come from the original; the draft is threaded to it. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
+    'Write a reply to a message and save it as a draft. The subject and the threading come from the original, and so does the recipient: by default the reply goes to the sender alone. Use `audience` to reply to everyone the message went to instead. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
   tier: 'auto',
   input: draftReplyInput,
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
-    await requireAccount(ctx.db);
+    const account = await requireAccount(ctx.db);
     const original = await requireMessage(ctx.db, input.inReplyTo);
-    return insertDraft({
+
+    // Every rule about who may be on a reply lives in one pure function, so
+    // the default cannot drift and the exclusions cannot be half-applied.
+    const audience = replyRecipients({
+      from: original.from,
+      to: original.to,
+      cc: original.cc,
+      owner: [account.address],
+      audience: input.audience,
+      alsoTo: input.alsoTo,
+      alsoCc: input.alsoCc,
+    });
+    if (audience.to.length === 0) {
+      throw new Error(
+        `email.draft_reply: message ${original.id} has no one to reply to — every address on it is the owner's own`,
+      );
+    }
+
+    const draft = await insertDraft({
       db: ctx.db,
       inReplyTo: original.id,
-      to: [normalizeAddress(original.from)],
-      cc: [],
-      bcc: [],
+      to: audience.to,
+      cc: audience.cc,
+      bcc: audience.bcc,
       subject: input.subjectOverride ?? replySubject(original.subject),
       bodyText: input.bodyText,
       agentId,
       conversationId: ctx.conversationId,
       now: ctx.now(),
     });
+
+    // What the draft says about its own audience, so the agent can tell the
+    // owner who this would reach without re-deriving it from the original.
+    return {
+      ...draft,
+      audience: audience.audience,
+      beyondSender: audience.beyondSender,
+      ...(audience.excludedOwn.length > 0 ? { excludedOwnAddresses: audience.excludedOwn } : {}),
+      ...(audience.senderLooksUnreplyable
+        ? {
+            senderNote: `${audience.sender} looks like an unattended address; a reply to it is unlikely to be read by anyone.`,
+          }
+        : {}),
+      audienceNote:
+        audience.beyondSender.length === 0
+          ? 'This reply goes to the sender alone.'
+          : `This reply goes to ${audience.beyondSender.length} ${
+              audience.beyondSender.length === 1 ? 'person' : 'people'
+            } beyond the sender: ${audience.beyondSender.join(', ')}. Say so when you show it to the owner — approving the send is the last chance to narrow it.`,
+    };
   },
 };
 
