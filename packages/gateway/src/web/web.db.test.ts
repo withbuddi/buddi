@@ -43,8 +43,9 @@ import { webAssetsDir } from './config.js';
 import { FINANCE_PLUGIN_MISSING_NOTE } from './read.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer } from './server.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_web_test_${process.pid}`;
 
@@ -483,6 +484,30 @@ suite('the dashboard API', () => {
     expect(listed.conversations[0]).toMatchObject({ id, opening: 'hello', runs: 1 });
 
     expect((await client.get('/api/conversations/00000000-0000-0000-0000-000000000000')).status).toBe(404);
+  });
+
+  it('serves one action whole, so the approval canvas need not hunt in the list', async () => {
+    const client = await signedIn();
+    const id = await proposeAction('one@example.test');
+
+    const body = await client.json<any>(`/api/approvals/${id}`);
+    // The envelope the approval is bound to, and the preview the *tool* wrote:
+    // what is approved has to be what is shown.
+    expect(body.action).toMatchObject({
+      id,
+      tool: 'demo.send',
+      state: 'pending',
+      preview: 'Send "hello" to one@example.test',
+      envelope: { to: 'one@example.test', body: 'hello' },
+    });
+    expect(typeof body.action.argsHash).toBe('string');
+    expect(typeof body.action.expiresAt).toBe('string');
+
+    // Same session gate as its neighbours, and an unknown id is a 404 rather
+    // than an empty envelope.
+    expect((await client.get('/api/approvals/00000000-0000-0000-0000-000000000000')).status).toBe(404);
+    const anonymous = await fetch(`${base}/api/approvals/${id}`, { redirect: 'manual' });
+    expect(anonymous.status).toBe(401);
   });
 
   /* ---------------- writes ---------------- */

@@ -22,6 +22,7 @@ import {
   sha256Of,
   storagePathFor,
 } from './store.js';
+import { testDatabaseUrl } from '../testing/database-url.js';
 
 describe('kindForMime', () => {
   it('derives the kind from the media type, never from the sender', () => {
@@ -67,7 +68,7 @@ describe('resolveDataDir', () => {
 
 /* ---------------- postgres-backed ---------------- */
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_artifacts_test_${process.pid}`;
 

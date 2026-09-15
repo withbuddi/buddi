@@ -513,6 +513,26 @@ single-use link, valid five minutes, and opens it. `buddi dashboard --token`
 prints just the ticket, for piping; `buddi dashboard --off` explains the off
 switch.
 
+**It opens on a conversation.** The landing page is a workbench: a chat column
+on the left, a canvas on the right. Ask for something and what the run *looked
+at* is drawn beside what it said — a projection as a chart with its floor and
+its worst day marked, a staged import as its rows, a gated action as its full
+envelope with Approve and Reject under it. The canvas is rendered from the
+conversation's own tool calls, so it fills in live as a run proceeds and works
+just as well on a mission that ran at 6am and on a conversation from last month.
+
+Nothing on the canvas is written for a particular plugin. The dashboard ships
+seven **generic renderers** — `timeseries`, `table`, `bars`, `keyvalue`,
+`document`, `envelope`, `structured` — and a plugin says which one its tool
+output should use by shipping a *view descriptor*: data, not code, fetched from
+`GET /api/chat/views` and applied in the browser (see
+[docs/plugins.md](docs/plugins.md) §2.5). An installation with no finance plugin
+ships no finance code. A tool with no descriptor still gets a readable
+structured view, never a dump. An agent that has something worth showing which
+no tool result covers can say so directly with `canvas.show`.
+
+The monitoring pages are all still there, one click away behind the rail:
+
 | Page | Shows |
 | --- | --- |
 | Overview | Pending approvals, failed jobs and open urgent findings first; the numbers second |
@@ -525,9 +545,15 @@ switch.
 | Sentinels | Installed watchers, last run, open and resolved findings |
 | Agents | Tools, skills, pinned provider and which env var holds the credential — never the credential |
 
-It is read-first: every write it offers calls the same core function the CLI and
-Telegram call, so a decision made here is the same atomic transition. The UI
-makes no external requests at all — no CDN, no web fonts, no telemetry.
+Every write it offers calls the same core function the CLI and Telegram call, so
+a decision made here is the same atomic transition. Light, dark and system are a
+toggle on the rail, remembered in the browser and nowhere else. Below about
+900px the canvas becomes a sheet the chat opens, so the page works from a phone
+over the tailnet.
+
+The UI makes no external requests at all — no CDN, no web fonts, no telemetry.
+Everything is bundled locally and the type stack is the system's own; that is a
+test on both sides of the wire, not a promise.
 
 **How the link works.** A long random token is generated on first run and kept
 in the OS keychain under `BUDDI_WEB_TOKEN` (or `data/web-token`, mode 600, where

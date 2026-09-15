@@ -18,8 +18,9 @@ import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import type { GatedToolDefinition, ToolContext } from '../types.js';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_tools_test_${process.pid}`;

@@ -6,6 +6,13 @@
  * header — the double-submit half of the protection; the server checks the
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
+import type { ViewDescriptor } from './canvas/types';
+import type {
+  AgentsResponse,
+  ChatConversation,
+  ConversationListItem,
+  UploadedAttachment,
+} from './chat/types';
 
 export const CSRF_COOKIE = 'buddi_csrf';
 export const CSRF_HEADER = 'x-buddi-csrf';
@@ -63,6 +70,19 @@ export function get<T>(path: string, query: Record<string, string | number | und
   }
   const qs = params.toString();
   return request<T>(`/api${path}${qs ? `?${qs}` : ''}`);
+}
+
+/**
+ * A multipart upload. Same rules as every other write — same origin, the CSRF
+ * header echoed back — but the browser sets `Content-Type` itself so the
+ * boundary is right.
+ */
+export function upload<T>(path: string, form: FormData): Promise<T> {
+  return request<T>(`/api${path}`, {
+    method: 'POST',
+    headers: { [CSRF_HEADER]: csrfToken() },
+    body: form,
+  });
 }
 
 export function post<T>(path: string, body: unknown = {}): Promise<T> {
@@ -323,6 +343,37 @@ export interface EngineChange {
   language?: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * The chat surface, from `packages/gateway/src/web/chat.ts`.
+ * ------------------------------------------------------------------ */
+
+export const chatApi = {
+  agents: () => get<AgentsResponse>('/chat/agents'),
+  /**
+   * The view descriptors of every installed plugin: data saying how a tool's
+   * result should be drawn. The page ships no plugin code; this is the only
+   * thing that makes a plugin's output look like anything in particular.
+   */
+  views: () => get<{ views: ViewDescriptor[] }>('/chat/views'),
+  conversations: (agentId: string) =>
+    get<{ conversations: ConversationListItem[] }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
+  startConversation: (agentId: string) =>
+    post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
+  conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
+  send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>
+    post<{ conversationId: string; runId: string }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
+  cancel: (conversationId: string) =>
+    post<unknown>(`/chat/conversations/${encodeURIComponent(conversationId)}/cancel`),
+  attach: (file: File) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return upload<UploadedAttachment>('/chat/attachments', form);
+  },
+  /** The SSE endpoint for one conversation's run. */
+  streamUrl: (conversationId: string) =>
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/stream`,
+};
+
 export const api = {
   session: () => get<{ csrf: string; timezone: string; host: string; port: number }>('/session'),
   overview: () => get<Overview>('/overview'),
@@ -334,6 +385,19 @@ export const api = {
   jobs: (q: Record<string, string | undefined> = {}) =>
     get<{ jobs: JobRow[]; counts: Record<string, number>; paused: boolean }>('/jobs', q),
   approvals: () => get<{ pending: ApprovalRow[]; recent: ApprovalRow[] }>('/approvals'),
+  /**
+   * One action by id, whole: the envelope it is bound to and the preview the
+   * tool itself rendered. The approval canvas draws from this rather than
+   * hunting for the row in the list — a decided action leaves the pending list
+   * the moment it is decided, and the canvas still has to show it.
+   *
+   * Wrapped in `{ action }`, the same shape the approve and reject routes
+   * answer with, so the canvas reads one field whichever call produced it.
+   */
+  approval: (id: string): Promise<ApprovalRow> =>
+    get<{ action: ApprovalRow }>(`/approvals/${encodeURIComponent(id)}`).then(
+      (body) => body.action,
+    ),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   agents: () => get<AgentsView>('/agents'),

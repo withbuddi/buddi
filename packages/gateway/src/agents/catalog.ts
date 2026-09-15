@@ -22,6 +22,7 @@ import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
+import { createCanvasManifest } from './canvas.js';
 import { createDelegationManifest } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
@@ -89,6 +90,10 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   // reminder set in a chat is the same object as one set by the daily check.
   registry.register(createReminderManifest(reminderLimitsFromEnv(env)));
   registry.register(createScheduleManifest());
+  // The canvas, for the same reason: what an agent can draw is a property of
+  // the installation, not of one conversation. It owns no data, so it is here
+  // rather than in `installedManifests` — there is nothing to migrate.
+  registry.register(createCanvasManifest());
   // The first-run tools. Registered in the base registry like the reminders:
   // the owner may correct their name or their zone in any conversation, not
   // only in the one that first asked for it.

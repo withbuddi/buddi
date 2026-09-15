@@ -14,8 +14,9 @@ import { ToolRegistry, createPool, migrate } from '@buddi/core';
 import type { ToolContext } from '@buddi/core';
 import { manifest } from '../index.js';
 import { statementClosing } from '../sentinels/statement-closing.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_finance_cards_test_${process.pid}`;

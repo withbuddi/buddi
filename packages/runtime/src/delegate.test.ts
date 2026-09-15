@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry } from '@buddi/core';
+import { TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
 import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from './anthropic.js';
 import type { Queryable, RunAgentOptions } from './loop.js';
@@ -118,6 +118,7 @@ function harness(
     allow?: Record<string, string[]>;
     catalog?: DelegateCatalog;
     depth?: number;
+    surface?: ToolContext['surface'];
   } = {},
 ): Harness {
   const db = new FakeDb();
@@ -153,6 +154,7 @@ function harness(
     agentId: 'finance-advisor',
     conversationId: 'conv-caller',
     ...(opts.depth === undefined ? {} : { delegationDepth: opts.depth }),
+    ...(opts.surface === undefined ? {} : { surface: opts.surface }),
   };
   return { db, registry, ctx, captured };
 }
@@ -194,6 +196,23 @@ describe('agent.delegate', () => {
     const first = db.messages[0];
     expect(first?.conversation_id).toBe('conv-1');
     expect(JSON.stringify(first?.content)).toContain(task.task);
+  });
+
+  it("inherits the caller's surface, because the delegate answers onto the same screen", async () => {
+    const { registry, ctx, captured } = harness({ surface: TELEGRAM_SURFACE });
+    const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
+
+    expect(out.ok).toBe(true);
+    expect(captured[0]?.surface).toBe(TELEGRAM_SURFACE);
+    // And it actually reaches the nested prompt, not just the options object.
+    expect(captured[0]?.agent.systemPrompt).toBe('You are credit-coach.');
+    expect(surfaceSection(captured[0]?.surface!)).toContain('You are answering on Telegram.');
+  });
+
+  it('composes no surface paragraph when the caller declared none', async () => {
+    const { registry, ctx, captured } = harness();
+    await registry.invoke(DELEGATE_TOOL, task, ctx);
+    expect(captured[0]?.surface).toBeUndefined();
   });
 
   it('writes delegation.started and delegation.finished against the caller', async () => {

@@ -46,12 +46,14 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadGatewayCatalog } from './agents/catalog.js';
 import { createDelegationManifest } from './agents/delegation.js';
+import { createCanvasManifest } from './agents/canvas.js';
 import { createOwnerManifest } from './agents/owner-tools.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './missions/agent-run.js';
 import { approvalCallbackData, TelegramApprovals } from './telegram/approvals.js';
 import { SURFACE } from './telegram/surface.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_e2e_test_${process.pid}`;
 
@@ -257,6 +259,7 @@ suite('end to end: mail in, approved send out', () => {
     registry.register(artifactsManifest);
     registry.register(createReminderManifest());
     registry.register(createScheduleManifest());
+    registry.register(createCanvasManifest());
     registry.register(createOwnerManifest(registry));
     registry.register(createDelegationManifest(registry));
     const catalog = loadGatewayCatalog({ env: ENV, registry });

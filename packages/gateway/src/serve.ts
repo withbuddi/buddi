@@ -70,6 +70,8 @@ import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
+import { memoryPreambleFor } from './agents/catalog.js';
+import { createCoreArtifactStore } from './telegram/attachments.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 
@@ -576,6 +578,17 @@ export async function main(): Promise<void> {
           token,
           env: process.env,
           jobs: { resumeJob },
+          // The browser as a talking surface. Every one of these is the object
+          // the other surfaces already use — the per-agent provider adapter,
+          // the shared artifact store, the memory hook, and the same pause gate
+          // an interactive Telegram turn passes through. There is no web-shaped
+          // copy of any of them.
+          chat: {
+            providerFor: wiring.providerFor,
+            artifacts: createCoreArtifactStore({ pool, env: process.env }),
+            memoryPreamble: memoryPreambleFor(pool),
+            gate,
+          },
           log: (line) => console.error(line),
         });
         console.log(

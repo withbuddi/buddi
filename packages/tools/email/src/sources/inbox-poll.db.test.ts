@@ -18,6 +18,7 @@ import {
   MAX_PER_POLL,
   triageDedupKey,
 } from './inbox-poll.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
 /**
  * A backfill large enough to reach UID 1, i.e. "sync the whole mailbox".
@@ -29,7 +30,7 @@ import {
  */
 const FULL_SYNC = 10_000;
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_src_test_${process.pid}`;

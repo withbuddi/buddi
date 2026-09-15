@@ -10,8 +10,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ToolRegistry, createPool, migrate } from '@buddi/core';
 import type { ToolContext } from '@buddi/core';
 import { manifest } from '../index.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_finance_pending_test_${process.pid}`;

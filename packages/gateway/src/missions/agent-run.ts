@@ -23,6 +23,7 @@
 import {
   appendEvent,
   getAction,
+  SCHEDULED_SURFACE,
   ToolRegistry,
   type ActionRecord,
   type AgentCatalog,
@@ -174,6 +175,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       ...(resuming
         ? { resume: payload.approval as ApprovalResume }
         : { userMessage: payload.prompt }),
+      surface: SCHEDULED_SURFACE,
       systemSuffix: SCHEDULED_RUN_SUFFIX,
       memoryPreamble: memoryPreambleFor(deps.pool),
       ...(deps.onToolCall ? { onToolCall: deps.onToolCall } : {}),

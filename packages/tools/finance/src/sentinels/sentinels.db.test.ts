@@ -16,8 +16,9 @@ import { statementClosing } from './statement-closing.js';
 import { staleBalance } from './stale-balance.js';
 import { unmatchedReceipts } from './unmatched-receipts.js';
 import { unprocessedArtifacts } from './unprocessed-artifacts.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_sentinels_test_${process.pid}`;

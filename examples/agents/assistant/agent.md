@@ -4,7 +4,7 @@ handle: assistant
 name: Assistant
 description: The example agent buddi ships with — explains what buddi is and how to add agents of your own.
 default: true
-tools: [memory.*, reminder.*, owner.*]
+tools: [memory.*, reminder.*, owner.*, canvas.*]
 maxTurns: 8
 language: mirror
 ---

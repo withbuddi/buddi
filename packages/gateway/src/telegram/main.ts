@@ -19,6 +19,7 @@ import {
   listSurfaceIdentities,
   pairSurfaceIdentity,
   resumeJob,
+  TELEGRAM_SURFACE,
   type JobControl,
   type SurfaceIdentity,
   type ToolContext,
@@ -37,7 +38,6 @@ import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
 import {
   QUIET_UNAVAILABLE_TEXT,
   SURFACE,
-  SURFACE_HINT,
   TelegramSurface,
   handleLabel,
   type RunMission,
@@ -292,10 +292,12 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         pool,
         conversationId,
         userMessage: text,
-        // The surface hint is always present; a turn may add one instruction of
-        // its own (the first run does). Never a replacement: plain text is a
-        // property of Telegram, not of what this turn happens to be about.
-        systemSuffix: systemSuffix === undefined ? SURFACE_HINT : `${SURFACE_HINT}\n${systemSuffix}`,
+        // The declared profile, not a sentence written here: how Telegram
+        // renders is a property of Telegram, and it belongs in one place that
+        // every surface reads the same way.
+        surface: TELEGRAM_SURFACE,
+        // Only what is genuinely about *this* turn (the first run says so).
+        ...(systemSuffix === undefined ? {} : { systemSuffix }),
         memoryPreamble: memoryPreambleFor(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);

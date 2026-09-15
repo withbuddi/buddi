@@ -6,6 +6,8 @@ import type { Pool } from 'pg';
 import type { ZodType } from 'zod';
 import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
+import type { SurfaceProfile } from './surfaces.js';
+import type { ViewDescriptor } from './views.js';
 
 /** UX tier labels. v1 executes `auto` only; everything else fails closed. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -36,6 +38,16 @@ export interface ToolContext {
    * cannot exist. Optional because every other tool ignores it.
    */
   delegationDepth?: number;
+  /**
+   * The surface this run is answering on, when one was declared.
+   *
+   * On the context rather than on a tool's construction options because a
+   * process wires one registry and answers on several surfaces: the profile is
+   * a property of the *run*, and the loop stamps it here for the same reason it
+   * stamps `agentId`. Delegation is its one reader — a delegate's words reach
+   * the same screen as its caller's, so it must be told about that screen.
+   */
+  surface?: SurfaceProfile;
   /**
    * The durable job this run belongs to, when a job started it. The approval
    * machinery records it on the action so the decision can wake exactly the
@@ -202,4 +214,12 @@ export interface PluginManifest {
    * through the agent catalog and skipping — out loud — any role nobody claims.
    */
   missions?: SuggestedMission[];
+  /**
+   * How this plugin's tool results should be drawn on the dashboard canvas
+   * (optional). Descriptors are **data**: they are serialised to the browser,
+   * which owns a small set of generic renderers and knows nothing about any
+   * plugin's domain. See `views.ts`. A plugin with none — the normal case —
+   * falls back to a readable structured view of its JSON.
+   */
+  views?: ViewDescriptor[];
 }

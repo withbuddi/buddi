@@ -1,7 +1,7 @@
 # Writing a plugin
 
 Everything an agent can actually *do* is a plugin. This document is the guide to
-writing one: the contract, the four things a plugin can contribute, the rules
+writing one: the contract, the five things a plugin can contribute, the rules
 that bite, and a complete worked example you can copy.
 
 Read `packages/core/src/tools.ts` first. It is 200 lines and it is the whole
@@ -39,7 +39,7 @@ What a plugin is *not*:
 
 ---
 
-## 2. The four contributions
+## 2. The five contributions
 
 ```ts
 export interface PluginManifest {
@@ -51,6 +51,7 @@ export interface PluginManifest {
   sentinels?: Sentinel[];
   sources?: Source[];
   missions?: SuggestedMission[];
+  views?: ViewDescriptor[];   // how the dashboard should draw your results
 }
 ```
 
@@ -361,6 +362,52 @@ owner accepting the suggestion.
   and treated as silent. So write the decision into the prompt: say what counts
   as worth speaking, and say "otherwise call mission.silent with the one-line
   reason". A prompt that does not say this produces a mission that never speaks.
+
+### 2.5 View descriptors
+
+```ts
+export interface ViewDescriptor {
+  tool: string;        // 'weather.forecast'
+  renderer: 'timeseries' | 'table' | 'bars' | 'keyvalue' | 'document'
+          | 'envelope' | 'structured';
+  title?: string;      // the canvas panel's heading
+  map: ViewMap;        // declarative: paths, columns, formats. Never a function.
+}
+```
+
+The dashboard has a canvas beside the conversation, and it draws tool results on
+it. The renderers are **shapes, not domains** — a line, a table, a bar, a list of
+figures — and nothing in `packages/web` is allowed to know the word "cashflow".
+A view descriptor is the join between the two: your plugin knows what your output
+means, the page knows how to draw a line, and this says which is which.
+
+- **The mapping is data.** It is serialised to JSON and served to the browser by
+  `GET /api/chat/views`. No plugin code runs in the page, no build step changes
+  when a plugin is installed, and an installation without your plugin ships none
+  of your mapping. That is why `map` holds field paths and column definitions
+  rather than a function: a function cannot cross that boundary.
+- **A path is a path, not an expression.** `days`, `summary.dateRange.from`,
+  `cards[0].name`. If a descriptor needs arithmetic, the *tool* should be
+  returning the number — the owner cannot audit a calculation that happens in a
+  chart.
+- **It is validated at load.** `ToolRegistry.register` parses every descriptor
+  with zod (`packages/core/src/views.ts`), checks the renderer against its own
+  map shape, and refuses a descriptor naming a tool your manifest does not
+  contribute. A typo is a startup error naming the plugin and the tool, not an
+  empty panel nobody can explain.
+- **Not every tool deserves one.** A result whose *shape* carries meaning the
+  digits do not — a balance over time, utilization against its limit, spending
+  by category — earns a descriptor. Everything else falls back to `structured`,
+  a readable view of the JSON, which is often the honest answer.
+
+The shipped example is `examples/plugins/weather/src/views.ts`: eight lines that
+turn a forecast into a line chart with freezing drawn on it. The real thing is
+`packages/tools/finance/src/views.ts`, which has six.
+
+An agent can also draw deliberately, with the platform's own `canvas.show` — for
+something it worked out that no single tool result covers. Precedence in the
+page is: an explicit `canvas.show` in the run, else a declared descriptor for the
+tool, else `structured`.
 
 ---
 

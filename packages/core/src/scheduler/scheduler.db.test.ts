@@ -12,8 +12,9 @@ import { materializeOccurrences } from './materialize.js';
 import { getActiveSchedule, listMissions, setSchedule, upsertMission } from './missions.js';
 import { runScheduler } from './runner.js';
 import type { Mission, Occurrence } from './types.js';
+import { testDatabaseUrl } from '../testing/database-url.js';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_scheduler_test_${process.pid}`;

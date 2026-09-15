@@ -18,6 +18,7 @@
  * agents never share a history.
  */
 import {
+  CLI_SURFACE,
   DEFAULT_TIMEZONE,
   cancelReminder,
   getAction,
@@ -84,11 +85,6 @@ import { renderMarkdown } from './render.js';
 import type { Spinner } from './spinner.js';
 import { bold, dim, green, red, yellow, type TerminalStyle } from './terminal.js';
 import { UsageLedger } from './usage.js';
-
-/** Presentation hint passed to the run as `systemSuffix`. Not policy. */
-export const SURFACE_HINT =
-  'Surface: a terminal. Markdown is rendered: bold, headings, bullets, tables and ' +
-  'code fences are fine. Keep lines under 100 characters.';
 
 /** The chat id this surface books its inline mission runs against. */
 export const CLI_CHAT_ID = 'cli';
@@ -893,7 +889,7 @@ export class ChatSession {
       resume?: ApprovalResume;
       attachments?: AttachmentRef[];
       depth?: number;
-      /** One extra instruction for this turn, after the surface hint. */
+      /** One extra instruction for this turn, after the surface paragraph. */
       systemSuffix?: string;
     },
   ): Promise<TurnOutcome> {
@@ -909,8 +905,11 @@ export class ChatSession {
       ctx: deps.ctx,
       pool: deps.pool,
       conversationId,
-      systemSuffix:
-        turn.systemSuffix === undefined ? SURFACE_HINT : `${SURFACE_HINT}\n${turn.systemSuffix}`,
+      // The terminal renders markdown, so it declares that it does. The
+      // profile is composed into the prompt by the loop; a turn's own
+      // instruction is separate and stays a one-off.
+      surface: CLI_SURFACE,
+      ...(turn.systemSuffix === undefined ? {} : { systemSuffix: turn.systemSuffix }),
       ...(turn.userMessage !== undefined ? { userMessage: turn.userMessage } : {}),
       ...(turn.resume ? { resume: turn.resume } : {}),
       ...(turn.attachments ? { attachments: turn.attachments } : {}),
@@ -939,6 +938,8 @@ export class ChatSession {
       return { stopped: 'cancelled' };
     }
 
+    // Safety net, not the mechanism: CLI_SURFACE says markdown renders here,
+    // and nothing tells the model to name a tool. This catches one that did.
     const text = stripToolNames(result.text).trim();
     if (text !== '') await this.#present(text);
     this.#usage.record(

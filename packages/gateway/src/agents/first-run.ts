@@ -13,9 +13,6 @@
  */
 import { beginOnboarding, getOnboarding, type Queryable } from '@buddi/core';
 
-/** The surface name `buddi chat` records. */
-export const CLI_SURFACE = 'cli';
-
 /**
  * The system suffix a first-run turn carries.
  *

@@ -9,6 +9,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/database-url.d.ts",
+      "default": "./dist/testing/database-url.js"
+    },
+    "./testing/global-setup": {
+      "types": "./dist/testing/global-setup.d.ts",
+      "default": "./dist/testing/global-setup.js"
     }
   },
   "bin": {

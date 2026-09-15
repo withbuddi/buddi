@@ -17,6 +17,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
+import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -70,6 +71,16 @@ export class ToolRegistry {
         );
       }
     }
+    // View descriptors are the one contribution that leaves this process and is
+    // read by code that cannot check it — the browser draws what it is handed.
+    // So they are parsed here, at load, and a bad one is a startup error naming
+    // the plugin and the tool rather than an empty panel in the page.
+    if (manifest.views !== undefined) {
+      parseViewDescriptors(manifest.views, {
+        plugin: manifest.name,
+        tools: manifest.tools.map((t) => t.name),
+      });
+    }
     this.#manifests.set(manifest.name, manifest);
     for (const tool of manifest.tools) {
       this.#tools.set(tool.name, {
@@ -82,6 +93,16 @@ export class ToolRegistry {
 
   manifests(): PluginManifest[] {
     return [...this.#manifests.values()];
+  }
+
+  /**
+   * Every view descriptor the installed plugins contribute, in registration
+   * order. This is what the dashboard asks for: the browser owns the renderers
+   * and learns the domain mapping from here, so an installation with no finance
+   * plugin serves no finance mapping and the page has no idea it ever existed.
+   */
+  views(): ViewDescriptor[] {
+    return [...this.#manifests.values()].flatMap((m) => m.views ?? []);
   }
 
   has(name: string): boolean {

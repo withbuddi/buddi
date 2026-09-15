@@ -31,8 +31,9 @@ import {
   urlForDatabase,
 } from './pg.js';
 import { verifyArchive } from './verify.js';
+import { testDatabaseUrl } from '@buddi/core/testing';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const SOURCE_DB = `buddi_backup_src_${process.pid}`;
