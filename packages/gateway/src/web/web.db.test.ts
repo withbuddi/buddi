@@ -50,7 +50,16 @@ const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_web_test_${process.pid}`;
 
 const TOKEN = 'a-test-dashboard-token-long-enough';
-const NOW = new Date('2026-09-14T09:00:00Z');
+/**
+ * One clock for the whole suite, and it is the wall clock.
+ *
+ * The tool context and the web server must agree about "now" or the suite is a
+ * time bomb: an action is proposed on the context's clock and expires 24h later
+ * (`DEFAULT_APPROVAL_TTL_MS`), while `decideApproval` expires it against the
+ * server's. A frozen date here decided fine on the day it was written and
+ * started answering 409 "already expired" the next.
+ */
+const now = () => new Date();
 
 /* ------------------------------------------------------------------ *
  * A one-tool plugin: `demo.send` is gated, so it exercises the whole
@@ -223,7 +232,7 @@ suite('the dashboard API', () => {
 
     registry = new ToolRegistry();
     registry.register(demoManifest);
-    ctx = { db: pool, ownerId: 'owner', now: () => NOW, timezone: 'UTC' };
+    ctx = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
 
     await ensureOwner(pool, 'owner');
     await pairSurfaceIdentity(pool, {
@@ -239,7 +248,7 @@ suite('the dashboard API', () => {
       catalog: fakeCatalog(),
       ctx,
       timezone: 'UTC',
-      now: () => new Date(),
+      now,
       // Port 0: the OS picks one, so the suite never fights a running service.
       config: { enabled: true, host: '127.0.0.1', port: 0 },
       token: TOKEN,
