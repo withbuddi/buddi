@@ -27,6 +27,8 @@ class FakeDb implements Queryable {
   reminders: Record<string, unknown>[] = [];
   artifacts: Record<string, unknown>[] = [];
   actions: Record<string, unknown>[] = [];
+  offers: Record<string, unknown>[] = [];
+  withdrawn: string[] = [];
   #seq = 0;
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
@@ -114,6 +116,30 @@ class FakeDb implements Queryable {
     }
     if (text.startsWith('select id from core.surface_identities') || text.includes('surface_identities')) {
       return { rows: [] };
+    }
+    if (text.startsWith('insert into core.offers')) {
+      const row = {
+        id: `offer-${this.offers.length + 1}`,
+        agent_id: params[0],
+        conversation_id: params[1],
+        label: params[2],
+        prompt: params[3],
+        created_at: params[4],
+        expires_at: params[5],
+        taken_at: null,
+        taken_via: null,
+        taken_job_id: null,
+      };
+      this.offers.push(row);
+      return { rows: [row] };
+    }
+    if (text.startsWith('update core.offers set expires_at')) {
+      const stale = this.offers.filter(
+        (o) => o.conversation_id === params[0] && o.taken_at === null,
+      );
+      for (const row of stale) row.expires_at = params[1];
+      this.withdrawn.push(...stale.map((o) => o.id as string));
+      return { rows: stale.map((o) => ({ id: o.id })) };
     }
     throw new Error(`FakeDb: unexpected sql: ${text}`);
   }
@@ -852,5 +878,77 @@ describe('/new — the maker, by role', () => {
     expect(h.lines).toEqual([NO_MAKER_TEXT]);
     expect(h.provider.requests).toHaveLength(0);
     expect(h.session.agent.id).toBe('finance-advisor');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Offered actions at a prompt
+ * ------------------------------------------------------------------ */
+
+/**
+ * The terminal has nothing to tap, and that is not a reason to withhold the
+ * tool. The offers a turn declares are real rows — the dashboard can take one,
+ * and the owner can take one here by asking for it in words — so what changes
+ * between surfaces is only how they are *said*. That decision belongs to
+ * `renderOffers` and the declared profile, and this is the half of it the
+ * terminal sees: a short list of things the owner can ask for, under the
+ * answer, and only when the turn genuinely offered something.
+ */
+describe('a turn that offers the owner something to do, at a prompt', () => {
+  const offerCall = (actions: { label: string; prompt: string }[]): CompletionResponse =>
+    toolResponse('conversation.offer', { actions });
+
+  it('says the offers in words, because the terminal has no buttons', async () => {
+    const h = harness({
+      responses: [
+        offerCall([
+          { label: 'Send it', prompt: 'send the reply I drafted to Dorothée' },
+          { label: 'Edit the draft', prompt: 'change the second paragraph of that reply' },
+        ]),
+        textResponse("The draft is ready. It hasn't been sent."),
+      ],
+    });
+    await h.session.handle('draft a reply to Dorothée');
+
+    const shown = h.text();
+    expect(shown).toContain("It hasn't been sent.");
+    expect(shown).toContain('You can ask me to:');
+    expect(shown).toContain('Send it');
+    expect(shown).toContain('Edit the draft');
+
+    // Stored, bound to the agent and this conversation — the same rows the
+    // dashboard lists and Telegram binds a button to.
+    expect(h.db.offers).toHaveLength(2);
+    expect(h.db.offers[0]).toMatchObject({
+      agent_id: 'finance-advisor',
+      conversation_id: 'conv-1',
+      label: 'Send it',
+      prompt: 'send the reply I drafted to Dorothée',
+    });
+  });
+
+  it('adds nothing at all to a turn that offered nothing', async () => {
+    const h = harness();
+    await h.session.handle('anything due?');
+    expect(h.text()).toBe('Here is the answer.');
+    expect(h.db.offers).toEqual([]);
+  });
+
+  it('withdraws the previous turn’s offers when the owner says something else', async () => {
+    const h = harness({
+      responses: [
+        offerCall([{ label: 'Send it', prompt: 'send the reply I drafted' }]),
+        textResponse('Drafted.'),
+        textResponse('Sure, something else.'),
+      ],
+    });
+    await h.session.handle('draft a reply');
+    expect(h.db.offers).toHaveLength(1);
+
+    // The owner ignores the offer and moves on. The turn that moves on is the
+    // turn that retires what the last one left on the table.
+    await h.session.handle('what is my balance?');
+    expect(h.db.withdrawn).toContain('offer-1');
+    expect(h.db.offers[0]?.expires_at).toEqual(new Date('2026-09-14T12:00:00Z'));
   });
 });

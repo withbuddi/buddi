@@ -1140,3 +1140,18 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 @media (max-width: 720px) {
   .wb-chart-events { max-height: 240px; flex-basis: 100%; }
 }
+
+/*
+ * What the last turn offered: chips between the transcript and the composer.
+ *
+ * They sit where a decision sits — under the answer that raised it and above
+ * the box you would otherwise type it into — and they are only ever there when
+ * an agent genuinely ended a turn at a choice. Usually there is nothing here.
+ */
+.wb-offers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}

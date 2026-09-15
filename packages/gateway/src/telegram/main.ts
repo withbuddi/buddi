@@ -33,6 +33,14 @@ import {
   createAskManifest,
   type AskSink,
 } from '../surfaces/pending-question.js';
+import {
+  OFFER_POLICY_SUFFIX,
+  OFFER_TOOLS,
+  createOfferManifest,
+  storeTurnOffers,
+  withdrawTurnOffers,
+  type OfferSink,
+} from '../surfaces/offered-actions.js';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { ROLE_MAKER } from '../agents/roles.js';
@@ -364,13 +372,25 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       // *declares* that it ended on a question, rather than leaving the surface
       // to guess it from prose.
       const sink: AskSink = {};
+      // Its sibling: what this turn *offers* the owner to do next. Same
+      // mechanism, same per-run isolation; the offers themselves are the rows
+      // `core.offers` already holds, and a tap is the `off:` callback that
+      // already exists.
+      const offers: OfferSink = {};
       const registry = new ToolRegistry();
       for (const manifest of deps.registry.manifests()) registry.register(manifest);
       registry.register(createAskManifest(sink));
+      registry.register(createOfferManifest(offers));
+
+      // An offer belongs to the turn that made it: the moment the owner says
+      // the next thing, whatever the last turn offered is withdrawn, so no
+      // button in this conversation can still fire an hour and three subjects
+      // later.
+      await withdrawTurnOffers(pool, conversationId, new Date(now()), log);
 
       const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
       const options: RunAgentOptions = {
-        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS] },
+        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
         provider: deps.provider,
         registry,
         ctx: deps.ctx,
@@ -383,10 +403,11 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         surface: TELEGRAM_SURFACE,
         // The ask policy is about every interactive turn; the first run's
         // instruction is about this one. Both, in that order.
-        systemSuffix:
-          systemSuffix === undefined
-            ? ASK_POLICY_SUFFIX
-            : `${ASK_POLICY_SUFFIX}\n\n${systemSuffix}`,
+        systemSuffix: [
+          ASK_POLICY_SUFFIX,
+          OFFER_POLICY_SUFFIX,
+          ...(systemSuffix === undefined ? [] : [systemSuffix]),
+        ].join('\n\n'),
         memoryPreamble: memoryPreambleFor(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);
@@ -414,7 +435,21 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           text: result.text.trim() === '' ? AWAITING_APPROVAL_REPLY : result.text,
         };
       }
-      return { text: result.text, askedOwner: sink.asked !== undefined };
+      // Stored now, bound to this agent and this conversation, and handed back
+      // as rows: how they are *drawn* is the surface's business, and it reads
+      // the profile rather than its own name to decide.
+      const stored = await storeTurnOffers(pool, {
+        sink: offers,
+        agentId: agent.id,
+        conversationId,
+        now: new Date(now()),
+        log,
+      });
+      return {
+        text: result.text,
+        askedOwner: sink.asked !== undefined,
+        ...(stored.length > 0 ? { offers: stored } : {}),
+      };
     },
   });
 

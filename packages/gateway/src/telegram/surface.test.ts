@@ -3058,3 +3058,89 @@ describe('/new — making an agent is a role, not a name', () => {
     expect(newAgentOpening('  a thing that reads my RSS  ')).toBe('a thing that reads my RSS');
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Offered actions in a live conversation
+ * ------------------------------------------------------------------ */
+
+/**
+ * The gap this closes: until now nothing offered the owner anything in a
+ * *conversation*. A turn could end at a decision — "the draft is ready, shall I
+ * send it?" — and the owner's only move was to type the answer.
+ *
+ * What the surface does with a turn that offered something is not a Telegram
+ * decision: `renderOffers` reads the declared profile, Telegram's says it has
+ * buttons, and so the rows become an inline keyboard bound to the ids the
+ * runner already stored. The rule that matters more is the other one: a turn
+ * that offered nothing sends exactly the message it sent before.
+ */
+describe('a turn that offers the owner something to do', () => {
+  const OFFER_A = '11111111-1111-4111-8111-111111111111';
+  const OFFER_B = '22222222-2222-4222-8222-222222222222';
+
+  const stored = (id: string, label: string, prompt: string) => ({
+    id,
+    agentId: 'agent-finance',
+    conversationId: 'conv-1',
+    label,
+    prompt,
+    createdAt: '2026-09-15T10:00:00.000Z',
+    expiresAt: '2026-09-22T10:00:00.000Z',
+    takenAt: null,
+    takenVia: null,
+    takenJobId: null,
+  });
+
+  it('draws one button per offer under the answer, bound to the stored ids', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(
+      db,
+      vi.fn(async () => ({
+        text: "It hasn't been sent.",
+        offers: [
+          stored(OFFER_A, 'Send it', 'send the reply I drafted to Dorothée'),
+          stored(OFFER_B, 'Edit the draft', 'change the second paragraph'),
+        ],
+      })) as any,
+    );
+
+    await surface.processUpdates([message(600, OWNER, OWNER, 'draft a reply to Dorothée')]);
+    await surface.drain();
+
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    // The text is the turn's text, untouched: the offers are controls here,
+    // not sentences appended to the answer.
+    expect(final?.body.text).toBe("It hasn't been sent.");
+    expect(final?.body.reply_markup).toEqual({
+      inline_keyboard: [
+        [{ text: 'Send it', callback_data: `off:${OFFER_A}` }],
+        [{ text: 'Edit the draft', callback_data: `off:${OFFER_B}` }],
+      ],
+    });
+  });
+
+  it('leaves a turn that offered nothing byte-for-byte what it was', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => ({ text: 'Nothing due.' })) as any);
+
+    await surface.processUpdates([message(601, OWNER, OWNER, 'anything due?')]);
+    await surface.drain();
+
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    expect(final?.body.text).toBe('Nothing due.');
+    // Not an empty keyboard — no keyboard at all, exactly as before.
+    expect('reply_markup' in (final?.body ?? {})).toBe(false);
+  });
+
+  it('keeps the plain-string reply working, offers or not', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => 'plain') as any);
+
+    await surface.processUpdates([message(602, OWNER, OWNER, 'hi')]);
+    await surface.drain();
+
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    expect(final?.body.text).toBe('plain');
+    expect('reply_markup' in (final?.body ?? {})).toBe(false);
+  });
+});

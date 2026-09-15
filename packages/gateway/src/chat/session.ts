@@ -19,6 +19,7 @@
  */
 import {
   CLI_SURFACE,
+  renderOffers,
   DEFAULT_TIMEZONE,
   cancelReminder,
   getAction,
@@ -98,6 +99,14 @@ import {
   type AskSink,
   type PendingQuestion,
 } from '../surfaces/pending-question.js';
+import {
+  OFFER_POLICY_SUFFIX,
+  OFFER_TOOLS,
+  createOfferManifest,
+  storeTurnOffers,
+  withdrawTurnOffers,
+  type OfferSink,
+} from '../surfaces/offered-actions.js';
 
 /** The chat id this surface books its inline mission runs against. */
 export const CLI_CHAT_ID = 'cli';
@@ -1025,13 +1034,23 @@ export class ChatSession {
     // a copy of the base registry, so nothing outside an interactive turn can
     // call it. It is how a turn declares that it ended on a question.
     const sink: AskSink = {};
+    // Its sibling: what this turn offers the owner to do next. The terminal has
+    // nothing to tap, which is not a reason to withhold the tool — the offers
+    // are real rows, the dashboard can take one, and here they are said in
+    // words. That decision is `renderOffers`', from the declared profile.
+    const offers: OfferSink = {};
     const registry = new ToolRegistry();
     for (const manifest of deps.registry.manifests()) registry.register(manifest);
     registry.register(createAskManifest(sink));
+    registry.register(createOfferManifest(offers));
+
+    // An offer belongs to the turn that made it: this turn's first act is to
+    // withdraw whatever the previous one left on the table.
+    await withdrawTurnOffers(deps.pool, conversationId, deps.now());
 
     const base = agent.definition(deps.now(), this.#timezone());
     const options: RunAgentOptions = {
-      agent: { ...base, tools: [...base.tools, ...ASK_TOOLS] },
+      agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
       provider: deps.providerFor(agent),
       registry,
       ctx: deps.ctx,
@@ -1041,10 +1060,11 @@ export class ChatSession {
       // profile is composed into the prompt by the loop; a turn's own
       // instruction is separate and stays a one-off.
       surface: CLI_SURFACE,
-      systemSuffix:
-        turn.systemSuffix === undefined
-          ? ASK_POLICY_SUFFIX
-          : `${ASK_POLICY_SUFFIX}\n\n${turn.systemSuffix}`,
+      systemSuffix: [
+        ASK_POLICY_SUFFIX,
+        OFFER_POLICY_SUFFIX,
+        ...(turn.systemSuffix === undefined ? [] : [turn.systemSuffix]),
+      ].join('\n\n'),
       ...(turn.userMessage !== undefined ? { userMessage: turn.userMessage } : {}),
       ...(turn.resume ? { resume: turn.resume } : {}),
       ...(turn.attachments ? { attachments: turn.attachments } : {}),
@@ -1076,7 +1096,20 @@ export class ChatSession {
     // Safety net, not the mechanism: CLI_SURFACE says markdown renders here,
     // and nothing tells the model to name a tool. This catches one that did.
     const text = stripToolNames(result.text).trim();
-    if (text !== '') await this.#present(text);
+    // Whatever this turn offered, stored and then said. `renderOffers` reads
+    // CLI_SURFACE — no buttons here — and spells them out as things the owner
+    // can ask for, which is what they actually are at a prompt.
+    const stored =
+      result.stopped === 'awaiting-approval'
+        ? []
+        : await storeTurnOffers(deps.pool, {
+            sink: offers,
+            agentId: agent.id,
+            conversationId,
+            now: deps.now(),
+          });
+    const shown = renderOffers(CLI_SURFACE, text, stored).text;
+    if (shown !== '') await this.#present(shown);
     this.#usage.record(
       result.snapshot.servedModel ?? result.snapshot.model,
       result.usage,
