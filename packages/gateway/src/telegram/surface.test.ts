@@ -2181,6 +2181,206 @@ describe('TelegramSurface @mention', () => {
     expect(calls[1]?.text).toBe('how much is left?');
   });
 
+  /* ---------------------------------------------------------------- *
+   * A one-shot that ends in a question owns the answer
+   * ---------------------------------------------------------------- */
+
+  describe('a one-shot that ends by asking the owner something', () => {
+    /** The transcript this rule was written for, agent by agent. */
+    const REMINDER = '@buddi remind me tonight to move EVT and favortrans websites off cloudways to hetzner';
+    const WHAT_TIME = 'What time tonight should I set that for — 8pm, 9pm, something else?';
+
+    /** A run that asks the time once, then confirms. */
+    function asksTheTime() {
+      let turn = 0;
+      return vi.fn(async (_req?: any) => (turn++ === 0 ? WHAT_TIME : 'Set for 7pm tonight.'));
+    }
+
+    it('captures the owner answer, then hands the chat straight back', async () => {
+      const db = withOwner(new FakeDb());
+      const { surface, sent, run } = surfaceWith(db, asksTheTime());
+
+      await surface.processUpdates([message(400, OWNER, OWNER, REMINDER)]);
+      await surface.drain();
+      await surface.processUpdates([message(401, OWNER, OWNER, '7pm')]);
+      await surface.drain();
+      await surface.processUpdates([message(402, OWNER, OWNER, 'Is good')]);
+      await surface.drain();
+
+      const calls = run.mock.calls.map((c: any) => c[0]);
+      // The question and its answer went to the same agent, in its own
+      // conversation; the message after that is the active agent's again.
+      expect(calls.map((c: any) => c.agent.id)).toEqual([
+        'concierge',
+        'concierge',
+        'finance-advisor',
+      ]);
+      expect(calls[1]?.text).toBe('7pm');
+      expect(calls[1]?.conversationId).toBe(calls[0]?.conversationId);
+      // And the chat never changed hands.
+      expect(db.activeAgents.get(String(OWNER))).toBeUndefined();
+
+      // The owner can see where the answer landed without reading carefully:
+      // the bubble is @buddi's, and the answer says where the chat is now.
+      expect(
+        sent.some((s) => s.method === 'sendMessage' && s.body.text === CONCIERGE_PLACEHOLDER),
+      ).toBe(true);
+      const answer = sent
+        .filter((s) => s.method === 'editMessageText')
+        .map((s) => String(s.body.text))
+        .find((text) => text.includes('Set for 7pm'));
+      expect(answer).toBe(
+        '(Concierge asked that, so your answer went there; you are back with Finance Advisor now.)\n\nSet for 7pm tonight.',
+      );
+    });
+
+    it('says so when the agent asks again, and gives up after three', async () => {
+      const db = withOwner(new FakeDb());
+      const { surface, sent, run } = surfaceWith(
+        db,
+        vi.fn(async (_req?: any) => 'Which server do you want them on?'),
+      );
+
+      await surface.processUpdates([message(410, OWNER, OWNER, REMINDER)]);
+      await surface.drain();
+      for (const [i, answer] of ['7pm', 'the big one', 'yes'].entries()) {
+        await surface.processUpdates([message(411 + i, OWNER, OWNER, answer)]);
+        await surface.drain();
+      }
+      // The fourth answer is not captured: three consecutive captures is the cap.
+      await surface.processUpdates([message(420, OWNER, OWNER, 'ok')]);
+      await surface.drain();
+
+      const calls = run.mock.calls.map((c: any) => c[0]);
+      expect(calls.map((c: any) => c.agent.id)).toEqual([
+        'concierge',
+        'concierge',
+        'concierge',
+        'concierge',
+        'finance-advisor',
+      ]);
+      const notes = sent
+        .filter((s) => s.method === 'editMessageText')
+        .map((s) => String(s.body.text))
+        .filter((text) => text.startsWith('(Concierge'));
+      // While it is still asking the owner is told the claim is still open…
+      expect(notes[0]).toContain('still waiting on you');
+      expect(notes[0]).toContain('Finance Advisor is next');
+      // …and on the last one, that the chat is back even though it asked again.
+      expect(notes.at(-1)).toContain('you are back with Finance Advisor now');
+    });
+
+    it('takes the run own word for it when the question is phrased as an instruction', async () => {
+      const db = withOwner(new FakeDb());
+      let turn = 0;
+      const run = vi.fn(async (_req?: any) =>
+        turn++ === 0
+          ? { text: 'Tell me which card to use.', askedOwner: true }
+          : { text: 'Done.' },
+      );
+      const { surface } = surfaceWith(db, run as any);
+
+      await surface.processUpdates([message(430, OWNER, OWNER, '@buddi pay the invoice')]);
+      await surface.drain();
+      await surface.processUpdates([message(431, OWNER, OWNER, 'the amex')]);
+      await surface.drain();
+
+      expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual(['concierge', 'concierge']);
+    });
+
+    it('does nothing when the owner has actually switched with /use', async () => {
+      const db = withOwner(new FakeDb());
+      const { surface, sent, run } = surfaceWith(db, asksTheTime());
+
+      await surface.processUpdates([message(440, OWNER, OWNER, '/use @buddi')]);
+      await surface.drain();
+      await surface.processUpdates([message(441, OWNER, OWNER, 'remind me tonight')]);
+      await surface.drain();
+      await surface.processUpdates([message(442, OWNER, OWNER, '7pm')]);
+      await surface.drain();
+
+      // Both turns are the active agent's, because it *is* the active agent.
+      expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual(['concierge', 'concierge']);
+      expect(db.activeAgents.get(String(OWNER))).toBe('concierge');
+      // And nothing is explained, because nothing unusual happened.
+      expect(sent.some((s) => String(s.body.text ?? '').includes('asked that'))).toBe(false);
+    });
+
+    it('lets a slash command, a third agent and a fresh request escape', async () => {
+      for (const escape of ['/status', '@ledger how much is left?', 'remind me to call the bank']) {
+        const db = withOwner(new FakeDb());
+        const { surface, run } = surfaceWith(db, asksTheTime());
+        await surface.processUpdates([message(450, OWNER, OWNER, REMINDER)]);
+        await surface.drain();
+        await surface.processUpdates([message(451, OWNER, OWNER, escape)]);
+        await surface.drain();
+
+        const second = run.mock.calls.map((c: any) => c[0])[1];
+        expect(second?.agent.id, escape).toBe('finance-advisor');
+      }
+    });
+
+    it('lets a file escape, and ends the claim', async () => {
+      const db = withOwner(new FakeDb());
+      const { surface, run } = surfaceWith(db, asksTheTime(), {
+        files: { 'file-1': { path: 'documents/statement.pdf', bytes: '%PDF-1.4' } },
+      });
+      await surface.processUpdates([message(460, OWNER, OWNER, REMINDER)]);
+      await surface.drain();
+      await surface.processUpdates([
+        documentUpdate(
+          461,
+          {
+            file_id: 'file-1',
+            file_name: 'statement.pdf',
+            mime_type: 'application/pdf',
+            file_size: 8,
+          },
+          'read this',
+        ),
+      ]);
+      await surface.drain();
+      await surface.processUpdates([message(462, OWNER, OWNER, '7pm')]);
+      await surface.drain();
+
+      // The file went to the active agent, and so did everything after it.
+      expect(
+        run.mock.calls.map((c: any) => c[0].agent.id).slice(1),
+      ).toEqual(['finance-advisor', 'finance-advisor']);
+    });
+
+    it('expires: an answer an hour later goes to the active agent', async () => {
+      const db = withOwner(new FakeDb());
+      let clock = 1_000_000;
+      const { surface, run } = surfaceWith(db, asksTheTime(), { now: () => clock });
+
+      await surface.processUpdates([message(470, OWNER, OWNER, REMINDER)]);
+      await surface.drain();
+      clock += 60 * 60_000;
+      await surface.processUpdates([message(471, OWNER, OWNER, '7pm')]);
+      await surface.drain();
+
+      expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual([
+        'concierge',
+        'finance-advisor',
+      ]);
+    });
+
+    it('does not fire when the one-shot simply answered', async () => {
+      const db = withOwner(new FakeDb());
+      const { surface, run } = surfaceWith(db);
+      await surface.processUpdates([message(480, OWNER, OWNER, '@buddi what can you do?')]);
+      await surface.drain();
+      await surface.processUpdates([message(481, OWNER, OWNER, 'thanks')]);
+      await surface.drain();
+
+      expect(run.mock.calls.map((c: any) => c[0].agent.id)).toEqual([
+        'concierge',
+        'finance-advisor',
+      ]);
+    });
+  });
+
   it('/use takes a handle, with or without the @', async () => {
     const db = withOwner(new FakeDb());
     const { surface, sent } = surfaceWith(db);

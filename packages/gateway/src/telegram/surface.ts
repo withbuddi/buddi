@@ -105,6 +105,13 @@ export function readingText(agentLabel?: string): string {
  */
 import type { EngagementHooks } from '../missions/engagement.js';
 import { ROLE_MAKER, ROLE_OVERVIEW, ROLE_RECAP } from '../agents/roles.js';
+import {
+  capturedNote,
+  MAX_CAPTURES,
+  PendingQuestions,
+  turnAskedOwner,
+  type PendingQuestion,
+} from '../surfaces/pending-question.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -491,6 +498,28 @@ export interface RunRequest {
 }
 
 /**
+ * What a turn produced.
+ *
+ * A bare string is still accepted and means "the text, and nothing declared":
+ * a runner that knows nothing about `conversation.ask` keeps working, and the
+ * surface falls back to reading the prose.
+ */
+export interface RunReply {
+  text: string;
+  /**
+   * The run called `conversation.ask`: it ended by asking the owner something.
+   * `false` is not a denial — it only means nothing was declared — so the
+   * surface still applies its text rule (see `turnAskedOwner`).
+   */
+  askedOwner?: boolean;
+}
+
+/** The text of a reply, whichever shape the runner returned. */
+export function replyText(reply: string | RunReply): string {
+  return typeof reply === 'string' ? reply : reply.text;
+}
+
+/**
  * What the surface asks of the approval machinery. A tap and a list; nothing
  * about state, and nothing it could decide on its own.
  */
@@ -516,8 +545,8 @@ export interface TelegramSurfaceOptions {
    * and nothing else about the surface changes.
    */
   artifacts?: ArtifactStore;
-  /** Submits one turn and returns the reply text. */
-  run(req: RunRequest): Promise<string>;
+  /** Submits one turn and returns the reply text, and what it declared. */
+  run(req: RunRequest): Promise<string | RunReply>;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
   runMission?: RunMission;
   /**
@@ -1177,6 +1206,12 @@ export class TelegramSurface {
   readonly #pairingAttempts = new Map<string, number[]>();
   /** When each identity's `last_seen_at` was last written. */
   readonly #lastTouch = new Map<string, number>();
+  /**
+   * Per chat: the one-shot agent that ended its turn asking the owner
+   * something, and so owns the owner's next message. In memory on purpose — a
+   * restart drops it back to ordinary routing, never to a wrong agent.
+   */
+  readonly #pending = new PendingQuestions();
   #offset: number | undefined;
   #running = false;
   #abort: AbortController | undefined;
@@ -1331,6 +1366,9 @@ export class TelegramSurface {
     // this chat's chain, so a document and the message after it cannot race.
     const incoming = extractAttachment(message);
     if (incoming) {
+      // A file arrives with its own intent, caption or not. It is never the
+      // answer to "what time tonight?", so it ends any pending question.
+      this.#pending.clear(chatId);
       const messageId = String(message.message_id);
       this.enqueue(chatId, () =>
         this.handleAttachment(chatId, resolution.ownerId, messageId, incoming),
@@ -1513,8 +1551,41 @@ export class TelegramSurface {
         await this.#opts.api.sendMessage(chatId, emptyMentionText(addressed.handle));
         return;
       }
-      await this.#runFor(chatId, addressed, mention.rest);
+      // An explicit address always wins over a pending question, and ends it:
+      // the owner has said who they are talking to.
+      this.#pending.clear(chatId);
+      const active = await this.activeAgent(chatId);
+      const { askedOwner } = await this.#runFor(chatId, addressed, mention.rest);
+      // The one-shot asked the owner something. It has no claim on the chat —
+      // but it does have a claim on the answer, which is the whole point.
+      if (askedOwner && addressed.id !== active.id) {
+        this.#pending.open(chatId, {
+          askedAgentId: addressed.id,
+          askedAgentName: addressed.name,
+          previousAgentId: active.id,
+          previousAgentName: active.name,
+          at: this.#now(),
+        });
+        this.#log(
+          `telegram: chat ${chatId} — @${addressed.handle} asked the owner something; the next message is theirs`,
+        );
+      }
       return;
+    }
+
+    // An agent that ended a one-shot turn asking the owner something owns the
+    // owner's next message. Decided before commands so that every command —
+    // handled here or further down — escapes the capture and ends it by the
+    // same rule, rather than by each branch remembering to say so.
+    const claimed = this.#pending.claim(chatId, text, this.#now());
+    if (claimed.pending) {
+      await this.#answerPending(chatId, claimed.pending, text);
+      return;
+    }
+    if (claimed.reason !== 'none') {
+      this.#log(
+        `telegram: chat ${chatId} — the pending question ended (${claimed.reason}); this message goes to the active agent`,
+      );
     }
 
     const command = text.startsWith('/') ? (text.split(/\s+/)[0] as string).toLowerCase() : '';
@@ -1691,13 +1762,15 @@ export class TelegramSurface {
       // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
       // markdown does not render here. This catches a model that ignored it.
       const reply = toPlainText(
-        await this.#opts.run({
-          conversationId,
-          chatId,
-          agent,
-          text: prompt,
-          systemSuffix: FIRST_RUN_SUFFIX,
-        }),
+        replyText(
+          await this.#opts.run({
+            conversationId,
+            chatId,
+            agent,
+            text: prompt,
+            systemSuffix: FIRST_RUN_SUFFIX,
+          }),
+        ),
       );
       await this.#sendBurst(chatId, reply);
     } catch (err) {
@@ -1739,6 +1812,49 @@ export class TelegramSurface {
   }
 
   /**
+   * The owner's answer to a question a one-shot agent asked.
+   *
+   * It runs that agent, in that agent's own conversation, with the active agent
+   * untouched — the same shape a one-shot mention has, because that is what
+   * this is: the second half of one the owner already sent. The note says where
+   * the answer went and where the chat is now, in the sentence the surface
+   * already uses when somebody other than the active agent speaks.
+   */
+  async #answerPending(
+    chatId: string,
+    taken: PendingQuestion,
+    text: string,
+  ): Promise<void> {
+    let asked: CatalogAgent;
+    try {
+      asked = this.#opts.catalog.resolve(taken.askedAgentId);
+    } catch (err) {
+      if (!isUnknownAgentError(err)) throw err;
+      // The agent was deleted between the question and the answer. Nothing to
+      // hand the answer to, so it goes to the active agent as it would have.
+      this.#log(`telegram: chat ${chatId} — @${taken.askedAgentName} is gone; the answer goes to the active agent`);
+      await this.#runFor(chatId, await this.activeAgent(chatId), text);
+      return;
+    }
+
+    // The note is written as a function of what the turn did, so the owner is
+    // told where the chat is *after* this message rather than before it: "you
+    // are back with @postman", or "still waiting on you" when it asked again.
+    const { askedOwner } = await this.#runFor(chatId, asked, text, {
+      note: (again) =>
+        capturedNote(taken, { stillAsking: again && this.#renewable(taken) }),
+    });
+    // A turn that asks again keeps the claim for one more message, up to the
+    // cap; anything else hands the chat back.
+    this.#pending.settle(chatId, taken, askedOwner, this.#now());
+  }
+
+  /** Would another question from this agent still be renewed, or is it spent? */
+  #renewable(taken: PendingQuestion): boolean {
+    return taken.captures < MAX_CAPTURES;
+  }
+
+  /**
    * One turn with one agent: its own conversation for this chat, the progress
    * bubble named after its handle, and the active agent left exactly as it was.
    */
@@ -1746,8 +1862,16 @@ export class TelegramSurface {
     chatId: string,
     agent: CatalogAgent,
     prompt: string,
-    opts: { note?: string | undefined; carry?: boolean } = {},
-  ): Promise<void> {
+    opts: {
+      /**
+       * The line prepended to the answer. A function when what it should say
+       * depends on how the turn ended — a pending question that was renewed
+       * reads differently from one that was released.
+       */
+      note?: string | ((askedOwner: boolean) => string) | undefined;
+      carry?: boolean;
+    } = {},
+  ): Promise<{ askedOwner: boolean }> {
     const conversationId = await ensureConversationForChat(this.#opts.pool, chatId, agent.id);
 
     // "import this statement" three minutes after a PDF means that PDF. The
@@ -1757,10 +1881,14 @@ export class TelegramSurface {
       opts.carry === false ? undefined : await this.#carriedAttachment(chatId, prompt);
     const label = handleLabel(agent.handle);
 
+    // Whether this turn ended by asking the owner something. Read out of the
+    // run, not out of what the owner is shown: the note is prepended after.
+    let askedOwner = false;
+
     await this.#withBubble(
       chatId,
       async (progress) => {
-        const reply = await this.#opts.run({
+        const produced = await this.#opts.run({
           conversationId,
           chatId,
           agent,
@@ -1768,11 +1896,19 @@ export class TelegramSurface {
           ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
           onToolCall: (name) => progress.noteToolCall(name),
         });
-        return opts.note ? `${opts.note}\n\n${reply}` : reply;
+        const reply = replyText(produced);
+        askedOwner = turnAskedOwner(
+          typeof produced === 'string' ? undefined : produced.askedOwner,
+          reply,
+        );
+        const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
+        return note ? `${note}\n\n${reply}` : reply;
       },
       label,
       carried ? readingText(label) : undefined,
     );
+
+    return { askedOwner };
   }
 
   /**
@@ -1933,14 +2069,16 @@ export class TelegramSurface {
     await this.#withBubble(
       chatId,
       async (progress) =>
-        this.#opts.run({
-          conversationId,
-          chatId,
-          agent,
-          text: `${caption}\n\n${turn.note}`,
-          ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
-          onToolCall: (name) => progress.noteToolCall(name),
-        }),
+        replyText(
+          await this.#opts.run({
+            conversationId,
+            chatId,
+            agent,
+            text: `${caption}\n\n${turn.note}`,
+            ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
+            onToolCall: (name) => progress.noteToolCall(name),
+          }),
+        ),
       handleLabel(agent.handle),
       readingText(handleLabel(agent.handle)),
     );
@@ -2031,6 +2169,9 @@ export class TelegramSurface {
     }
 
     await setActiveAgent(pool, SURFACE, chatId, agent.id);
+    // Switching agent is the owner saying who they are talking to. Whatever
+    // somebody asked them before this does not outrank that.
+    this.#pending.clear(chatId);
 
     // The list the owner is looking at now names a different active agent, so
     // the message it sits under is refreshed. Cosmetic: a failed edit is logged.

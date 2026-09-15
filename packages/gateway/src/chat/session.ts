@@ -26,11 +26,11 @@ import {
   listReminders,
   listSurfaceIdentitiesDetailed,
   localDateTimeString,
+  ToolRegistry,
   type AgentCatalog,
   type CatalogAgent,
   type Queryable,
   type ToolContext,
-  type ToolRegistry,
 } from '@buddi/core';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -87,6 +87,17 @@ import { renderMarkdown } from './render.js';
 import type { Spinner } from './spinner.js';
 import { bold, dim, green, red, yellow, type TerminalStyle } from './terminal.js';
 import { UsageLedger } from './usage.js';
+import {
+  ASK_POLICY_SUFFIX,
+  ASK_TOOLS,
+  capturedNote,
+  createAskManifest,
+  MAX_CAPTURES,
+  PendingQuestions,
+  turnAskedOwner,
+  type AskSink,
+  type PendingQuestion,
+} from '../surfaces/pending-question.js';
 
 /** The chat id this surface books its inline mission runs against. */
 export const CLI_CHAT_ID = 'cli';
@@ -125,6 +136,11 @@ export type HandleResult = 'continue' | 'quit';
 export interface TurnOutcome {
   stopped: RunResult['stopped'] | 'cancelled' | 'failed';
   pendingActionId?: string;
+  /**
+   * The turn ended by asking the owner something — declared by the run through
+   * `conversation.ask`, or read conservatively out of what it wrote.
+   */
+  askedOwner?: boolean;
 }
 
 export interface ChatSessionDeps {
@@ -178,6 +194,11 @@ export class ChatSession {
   readonly #deps: ChatSessionDeps;
   readonly #conversations = new Map<string, string>();
   readonly #usage = new UsageLedger();
+  /**
+   * The one-shot agent that ended its turn asking the owner something, and so
+   * owns the owner's next line. One session, one key.
+   */
+  readonly #pending = new PendingQuestions();
   readonly multiline = new MultilineInput();
   #agent: CatalogAgent;
   #attachments: PendingAttachment[] = [];
@@ -280,7 +301,20 @@ export class ChatSession {
     await this.#deps.engagement?.noteActivity();
 
     if (opts.literal) {
+      // A """ block is text sent exactly as written, with nothing read out of
+      // it. It is not read as an answer either: it goes to the active agent,
+      // and it ends any pending question.
+      this.#pending.clear(CLI_CHAT_ID);
       await this.runTurn(this.#agent, input);
+      return 'continue';
+    }
+
+    // An agent that ended a one-shot turn asking the owner something owns the
+    // owner's next message. Decided before commands so that every command
+    // escapes the capture and ends it by the same rule.
+    const claimed = this.#pending.claim(CLI_CHAT_ID, text, this.#deps.now().getTime());
+    if (claimed.pending) {
+      await this.#answerPending(claimed.pending, text);
       return 'continue';
     }
 
@@ -302,7 +336,25 @@ export class ChatSession {
         this.#out(emptyMentionText(addressed.handle));
         return 'continue';
       }
-      await this.runTurn(addressed, mention.rest);
+      const previous = this.#agent;
+      const outcome = await this.runTurn(addressed, mention.rest);
+      // The one-shot asked the owner something. It has no claim on the
+      // session — but it does have a claim on the answer.
+      if (outcome.askedOwner === true && addressed.id !== previous.id) {
+        this.#pending.open(CLI_CHAT_ID, {
+          askedAgentId: addressed.id,
+          askedAgentName: addressed.name,
+          previousAgentId: previous.id,
+          previousAgentName: previous.name,
+          at: this.#deps.now().getTime(),
+        });
+        this.#out(
+          dim(
+            `(${addressed.name} asked you something, so your next message goes there.)`,
+            this.#style().color,
+          ),
+        );
+      }
       return 'continue';
     }
 
@@ -498,6 +550,9 @@ export class ChatSession {
       return;
     }
     this.#agent = agent;
+    // Switching agent is the owner saying who they are talking to; a question
+    // somebody asked them before that does not outrank it.
+    this.#pending.clear(CLI_CHAT_ID);
     const id = await this.conversationFor(agent);
     this.#out(`You are now talking to ${agent.name}.`);
     // Listed, not hidden, and said before the first message rather than as an
@@ -866,6 +921,38 @@ export class ChatSession {
    * Runs
    * ---------------------------------------------------------------- */
 
+  /**
+   * The owner's answer to a question a one-shot agent asked.
+   *
+   * It runs that agent, in that agent's own conversation, with the session's
+   * agent untouched — the same shape a one-shot mention has, because that is
+   * what this is: the second half of one the owner already sent. The marker is
+   * the dim aside `/status` already uses when somebody other than the active
+   * agent speaks, printed before the spinner so the owner sees the handle it is
+   * about to run under.
+   */
+  async #answerPending(taken: PendingQuestion, text: string): Promise<void> {
+    const asked = this.#deps.catalog.get(taken.askedAgentId);
+    if (!asked) {
+      // Deleted between the question and the answer: there is nothing to hand
+      // it to, so it goes to the active agent as it would have.
+      await this.runTurn(this.#agent, text);
+      return;
+    }
+
+    const color = this.#style().color;
+    this.#out(
+      dim(
+        `(${taken.askedAgentName} asked that, so this goes there; you are still talking to ${taken.previousAgentName}.)`,
+        color,
+      ),
+    );
+    const outcome = await this.runTurn(asked, text, { carry: false });
+    const again = outcome.askedOwner === true && taken.captures < MAX_CAPTURES;
+    this.#pending.settle(CLI_CHAT_ID, taken, outcome.askedOwner === true, this.#deps.now().getTime());
+    this.#out(dim(capturedNote(taken, { stillAsking: again }), color));
+  }
+
   /** One owner turn with one agent. */
   async runTurn(
     agent: CatalogAgent,
@@ -934,10 +1021,19 @@ export class ChatSession {
     const startedAt = Date.now();
     let tools = 0;
 
+    // `conversation.ask` is registered per run, the way the mission tools are:
+    // a copy of the base registry, so nothing outside an interactive turn can
+    // call it. It is how a turn declares that it ended on a question.
+    const sink: AskSink = {};
+    const registry = new ToolRegistry();
+    for (const manifest of deps.registry.manifests()) registry.register(manifest);
+    registry.register(createAskManifest(sink));
+
+    const base = agent.definition(deps.now(), this.#timezone());
     const options: RunAgentOptions = {
-      agent: agent.definition(deps.now(), this.#timezone()),
+      agent: { ...base, tools: [...base.tools, ...ASK_TOOLS] },
       provider: deps.providerFor(agent),
-      registry: deps.registry,
+      registry,
       ctx: deps.ctx,
       pool: deps.pool,
       conversationId,
@@ -945,7 +1041,10 @@ export class ChatSession {
       // profile is composed into the prompt by the loop; a turn's own
       // instruction is separate and stays a one-off.
       surface: CLI_SURFACE,
-      ...(turn.systemSuffix === undefined ? {} : { systemSuffix: turn.systemSuffix }),
+      systemSuffix:
+        turn.systemSuffix === undefined
+          ? ASK_POLICY_SUFFIX
+          : `${ASK_POLICY_SUFFIX}\n\n${turn.systemSuffix}`,
       ...(turn.userMessage !== undefined ? { userMessage: turn.userMessage } : {}),
       ...(turn.resume ? { resume: turn.resume } : {}),
       ...(turn.attachments ? { attachments: turn.attachments } : {}),
@@ -992,9 +1091,13 @@ export class ChatSession {
       if (resume && depth < MAX_APPROVAL_CONTINUATIONS) {
         return this.#run(agent, conversationId, { resume, depth: depth + 1 });
       }
+      // Waiting on a button, not on an answer: no claim on the next message.
       return { stopped: 'awaiting-approval', pendingActionId: result.pendingActionId };
     }
-    return { stopped: result.stopped };
+    return {
+      stopped: result.stopped,
+      askedOwner: turnAskedOwner(sink.asked !== undefined, text),
+    };
   }
 
   /**

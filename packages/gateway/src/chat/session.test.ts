@@ -394,6 +394,71 @@ describe('@handle', () => {
   });
 });
 
+describe('a one-shot that ends by asking the owner something', () => {
+  const WHAT_TIME = 'What time tonight should I set that for — 8pm, 9pm, something else?';
+
+  it('captures the owner answer, marks where it went, and hands the chat back', async () => {
+    const h = harness({
+      responses: [
+        textResponse(WHAT_TIME),
+        textResponse('Set for 7pm tonight.'),
+        textResponse('Nothing else due today.'),
+      ],
+    });
+
+    await h.session.handle('@scout remind me tonight to move the sites off cloudways');
+    await h.session.handle('7pm');
+    await h.session.handle('and what is due today?');
+
+    // The answer went to the agent that asked, in that agent conversation…
+    expect(h.db.conversations.map((c) => c.agent_id)).toEqual(['scout', 'finance-advisor']);
+    expect(h.text()).toContain('Set for 7pm tonight.');
+    // …the session never changed hands…
+    expect(h.session.agent.id).toBe('finance-advisor');
+    // …and both ends of the detour are said out loud.
+    expect(h.text()).toContain('(Scout asked you something, so your next message goes there.)');
+    expect(h.text()).toContain(
+      '(Scout asked that, so this goes there; you are still talking to Finance Advisor.)',
+    );
+    expect(h.text()).toContain(
+      '(Scout asked that, so your answer went there; you are back with Finance Advisor now.)',
+    );
+    // The message after that is the active agent's again.
+    expect(h.text()).toContain('Nothing else due today.');
+  });
+
+  it('changes nothing when the owner has actually switched with /use', async () => {
+    const h = harness({
+      responses: [textResponse(WHAT_TIME), textResponse('Set for 7pm tonight.')],
+    });
+    await h.session.handle('/use scout');
+    await h.session.handle('remind me tonight to move the sites');
+    await h.session.handle('7pm');
+
+    expect(h.session.agent.id).toBe('scout');
+    expect(h.db.conversations.map((c) => c.agent_id)).toEqual(['scout']);
+    expect(h.text()).not.toContain('asked that');
+  });
+
+  it('lets a command, a third agent and a fresh request escape', async () => {
+    for (const escape of ['/whoami', '@ledger how much is left?', 'remind me to call the bank']) {
+      const h = harness({ responses: [textResponse(WHAT_TIME), textResponse('ok')] });
+      await h.session.handle('@scout remind me tonight');
+      await h.session.handle(escape);
+      expect(h.text(), escape).not.toContain('asked that, so this goes there');
+    }
+  });
+
+  it('does not fire when the one-shot simply answered', async () => {
+    const h = harness({
+      responses: [textResponse('I can do that.'), textResponse('Here is the answer.')],
+    });
+    await h.session.handle('@scout can you do that?');
+    await h.session.handle('thanks');
+    expect(h.db.conversations.map((c) => c.agent_id)).toEqual(['scout', 'finance-advisor']);
+  });
+});
+
 describe('/attach', () => {
   function fakeStore(): ArtifactStore & { saved: unknown[] } {
     const saved: unknown[] = [];

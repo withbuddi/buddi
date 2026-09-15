@@ -20,13 +20,19 @@ import {
   pairSurfaceIdentity,
   resumeJob,
   TELEGRAM_SURFACE,
+  ToolRegistry,
   type JobControl,
   type Offer,
   type SurfaceIdentity,
   type ToolContext,
-  type ToolRegistry,
 } from '@buddi/core';
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
+import {
+  ASK_POLICY_SUFFIX,
+  ASK_TOOLS,
+  createAskManifest,
+  type AskSink,
+} from '../surfaces/pending-question.js';
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { ROLE_MAKER } from '../agents/roles.js';
@@ -352,10 +358,21 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       const blocked = deps.gate ? await deps.gate() : null;
       if (blocked !== null) return blocked;
 
+      // `conversation.ask` is registered per run, exactly as the mission tools
+      // are: a copy of the base registry, so nothing outside an interactive
+      // turn can call it and two chats never share a sink. It is how a turn
+      // *declares* that it ended on a question, rather than leaving the surface
+      // to guess it from prose.
+      const sink: AskSink = {};
+      const registry = new ToolRegistry();
+      for (const manifest of deps.registry.manifests()) registry.register(manifest);
+      registry.register(createAskManifest(sink));
+
+      const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
       const options: RunAgentOptions = {
-        agent: deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone),
+        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS] },
         provider: deps.provider,
-        registry: deps.registry,
+        registry,
         ctx: deps.ctx,
         pool,
         conversationId,
@@ -364,8 +381,12 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // renders is a property of Telegram, and it belongs in one place that
         // every surface reads the same way.
         surface: TELEGRAM_SURFACE,
-        // Only what is genuinely about *this* turn (the first run says so).
-        ...(systemSuffix === undefined ? {} : { systemSuffix }),
+        // The ask policy is about every interactive turn; the first run's
+        // instruction is about this one. Both, in that order.
+        systemSuffix:
+          systemSuffix === undefined
+            ? ASK_POLICY_SUFFIX
+            : `${ASK_POLICY_SUFFIX}\n\n${systemSuffix}`,
         memoryPreamble: memoryPreambleFor(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);
@@ -387,9 +408,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
         const action = await getAction(pool, result.pendingActionId);
         if (action) await approvals.request(chatId, action);
-        return result.text.trim() === '' ? AWAITING_APPROVAL_REPLY : result.text;
+        // A run parked on an approval is waiting on a *button*, not on an
+        // answer: it never owns the owner's next message.
+        return {
+          text: result.text.trim() === '' ? AWAITING_APPROVAL_REPLY : result.text,
+        };
       }
-      return result.text;
+      return { text: result.text, askedOwner: sink.asked !== undefined };
     },
   });
 
