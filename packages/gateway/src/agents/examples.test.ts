@@ -27,7 +27,7 @@ describe('the examples this repository ships', () => {
     expect(summaries.every((a) => a.source === 'example')).toBe(true);
   });
 
-  it('grant the example agent nothing but memory, reminders, the owner profile and the canvas', () => {
+  it('grant the example agent nothing but memory, reminders, the owner profile, the canvas and a look at the roster', () => {
     const assistant = catalog().resolve('assistant');
     expect(assistant.tools.length).toBeGreaterThan(0);
     // The canvas is on the list because it is the platform's own, owns no data
@@ -40,9 +40,41 @@ describe('the examples this repository ships', () => {
           name.startsWith('memory.') ||
           name.startsWith('reminder.') ||
           name.startsWith('owner.') ||
-          name.startsWith('canvas.'),
+          name.startsWith('canvas.') ||
+          name.startsWith('platform.'),
       ),
     ).toBe(true);
+  });
+
+  it('let the example agent read the roster but never write an agent file', () => {
+    // Making an agent is the most dangerous capability here, so it lives with
+    // exactly one agent the owner has to switch to deliberately. Everybody else
+    // can answer "what agents do I have" and nothing more.
+    const assistant = catalog().resolve('assistant');
+    expect(assistant.tools).toContain('platform.list_agents');
+    expect(assistant.tools).toContain('platform.installed_tools');
+    for (const write of ['platform.create_agent', 'platform.update_agent', 'platform.write_skill', 'platform.delete_agent']) {
+      expect(assistant.tools).not.toContain(write);
+    }
+  });
+
+  it('ship Agent Father, the one agent that may write an agent file', () => {
+    const loaded = catalog();
+    const father = loaded.resolve('father');
+    expect(father.id).toBe('agent-father');
+    expect(father.isDefault).toBe(false);
+    expect(father.tools).toContain('platform.create_agent');
+    expect(father.tools).toContain('platform.delete_agent');
+    // Its own grant is the argument it makes to the owner: it writes agents, it
+    // does not read their money or their mail.
+    expect(
+      father.tools.every((name) => name.startsWith('platform.') || name.startsWith('memory.')),
+    ).toBe(true);
+    // Only one agent in a fresh clone may write.
+    const writers = loaded
+      .list()
+      .filter((a) => (loaded.resolve(a.id).tools ?? []).includes('platform.create_agent'));
+    expect(writers.map((a) => a.id)).toEqual(['agent-father']);
   });
 
   it('let the example agent conduct a first run: it has the owner tools and the skill', () => {
