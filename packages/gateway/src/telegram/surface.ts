@@ -115,6 +115,7 @@ import {
   turnAskedOwner,
   type PendingQuestion,
 } from '../surfaces/pending-question.js';
+import { failedTurnReply } from '../surfaces/failure.js';
 
 /** Telegram rate-limits edits; one per this window is plenty for a progress line. */
 export const PROGRESS_EDIT_INTERVAL_MS = 1500;
@@ -855,6 +856,7 @@ export function toPlainText(text: string): string {
  */
 export class ProgressBubble {
   readonly #labels: string[] = [];
+  #calls = 0;
   #chain: Promise<void> = Promise.resolve();
   #lastEditAt = 0;
   #lastText: string;
@@ -873,6 +875,7 @@ export class ProgressBubble {
 
   /** Synchronous: the runtime's callback must never wait on Telegram. */
   noteToolCall(name: string): void {
+    this.#calls += 1;
     const label = toolLabel(name);
     if (!this.#labels.includes(label)) this.#labels.push(label);
     if (this.messageId === undefined) return;
@@ -890,6 +893,17 @@ export class ProgressBubble {
         this.log(`telegram: progress edit failed: ${message(err)}`);
       }),
     );
+  }
+
+  /**
+   * How many tool calls this turn made.
+   *
+   * Read when the turn fails, because it decides whether offering to run it
+   * again is honest: work that already happened cannot be un-happened, and a
+   * retry would ask for it a second time. See `surfaces/failure.ts`.
+   */
+  get toolCalls(): number {
+    return this.#calls;
   }
 
   /** Wait for in-flight edits, so the final answer is the last write. */
@@ -1787,14 +1801,24 @@ export class TelegramSurface {
       );
       await this.#sendBurst(chatId, reply);
     } catch (err) {
-      this.#log(`telegram: first run failed: ${message(err)}`);
+      // No retry offer here: the first run is the machine speaking first, and
+      // a button offering to re-run a greeting the owner never asked for is
+      // noise. They say the next thing and the turn happens anyway.
+      const outcome = await failedTurnReply(this.#opts.pool, {
+        error: err,
+        profile: TELEGRAM_SURFACE,
+        agentId: agent.id,
+        now: new Date(this.#now()),
+        log: (line) => this.#log(`telegram: first run — ${line}`),
+      });
       await appendSurfaceEvent(this.#opts.pool, 'surface.error', {
         surface: SURFACE,
         externalChatId: chatId,
-        message: message(err),
+        failureClass: outcome.failureClass,
+        message: outcome.detail,
       });
       await this.#opts.api
-        .sendMessage(chatId, `Something went wrong: ${message(err)}`)
+        .sendMessage(chatId, toPlainText(outcome.rendered.text))
         .catch(() => {});
     } finally {
       stopTyping();
@@ -1926,6 +1950,7 @@ export class TelegramSurface {
       },
       label,
       carried ? readingText(label) : undefined,
+      { agentId: agent.id, conversationId, prompt },
     );
 
     return { askedOwner };
@@ -2466,6 +2491,13 @@ export class TelegramSurface {
     produce: (progress: ProgressBubble) => Promise<string | RenderedOffers>,
     agentName?: string,
     placeholderOverride?: string,
+    /**
+     * What a failed turn would need to offer to run itself again: whose turn
+     * it was, where, and the owner's own words. Absent for a turn that has no
+     * single message behind it — a `/recap` is the mission's, not the owner's,
+     * and "try again" there would re-run something they never typed.
+     */
+    retry?: { agentId: string; conversationId: string; prompt: string },
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
     const placeholder = placeholderOverride ?? placeholderText(agentName);
@@ -2503,16 +2535,34 @@ export class TelegramSurface {
         drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
       );
     } catch (err) {
-      this.#log(`telegram: run failed: ${message(err)}`);
+      // The raw error goes to the log with its whole cause chain; what reaches
+      // the chat is written for a person, and carries the retry when offering
+      // one is honest. Both decisions live in `failedTurnReply`.
+      const outcome = await failedTurnReply(this.#opts.pool, {
+        error: err,
+        profile: TELEGRAM_SURFACE,
+        agentId: retry?.agentId ?? '',
+        ...(agentName === undefined ? {} : { agentName }),
+        ...(retry ? { conversationId: retry.conversationId, prompt: retry.prompt } : {}),
+        toolsCalled: progress.toolCalls,
+        now: new Date(this.#now()),
+        log: (line) => this.#log(`telegram: ${line}`),
+      });
       await appendSurfaceEvent(this.#opts.pool, 'surface.error', {
         surface: SURFACE,
         externalChatId: chatId,
-        message: message(err),
+        failureClass: outcome.failureClass,
+        message: outcome.detail,
       });
       await progress.settle();
-      await this.#replace(chatId, placeholderId, `Something went wrong: ${message(err)}`).catch(
-        () => {},
-      );
+      await this.#replace(
+        chatId,
+        placeholderId,
+        toPlainText(outcome.rendered.text),
+        outcome.rendered.controls.length === 0
+          ? undefined
+          : offersKeyboard(outcome.rendered.controls),
+      ).catch(() => {});
     } finally {
       stopTyping();
     }

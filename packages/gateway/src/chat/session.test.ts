@@ -290,11 +290,14 @@ function harness(
     files?: Record<string, Buffer>;
     quiet?: boolean;
     clearScreen?: () => void;
+    /** A provider that does something other than answer — a failing one. */
+    provider?: RuntimeProvider;
   } = {},
 ): Harness {
   const db = new FakeDb();
   const lines: string[] = [];
   const provider = scriptedProvider(opts.responses ?? [textResponse('Here is the answer.')]);
+  const adapter = opts.provider ?? provider;
   const answers = opts.answers ?? [];
   const asked: string[] = [];
   const catalog = fakeCatalog(opts.agents ?? [LEDGER, SCOUT]);
@@ -311,7 +314,7 @@ function harness(
     ctx,
     now: () => new Date('2026-09-14T12:00:00Z'),
     timezone: 'America/New_York',
-    providerFor: () => provider,
+    providerFor: () => adapter,
     agent: catalog.defaultAgent(),
     out: (text) => void lines.push(text),
     ask: async (question) => {
@@ -332,7 +335,61 @@ function harness(
   return { session, db, lines, provider, answers, asked, text: () => lines.join('\n') };
 }
 
+/** A provider whose call fails, the way the owner's did. */
+function failingProvider(err: unknown): RuntimeProvider {
+  return {
+    async complete(): Promise<CompletionResponse> {
+      throw err;
+    },
+  } as RuntimeProvider;
+}
+
+/** `fetch failed`, with the fault that actually happened on `cause`. */
+function transportFailure(): Error {
+  return Object.assign(
+    new TypeError('fetch failed', {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    }),
+    { type: 'transport_error', status: 0 },
+  );
+}
+
 /* ---------------- the tests ---------------- */
+
+/**
+ * The terminal used to print `error: fetch failed` — the same non-answer
+ * Telegram gave, in a different colour. It says something now, and because
+ * `CLI_SURFACE` declares it has nothing to tap, the retry is spelled out as a
+ * sentence the owner can ask for rather than a button that is not there.
+ */
+describe('a turn that fails at the prompt', () => {
+  it('says what happened in words, and never the raw error', async () => {
+    const h = harness({ provider: failingProvider(transportFailure()) });
+    await h.session.handle('draft a reply to Parfait');
+    expect(h.text()).toContain("couldn't reach the model");
+    expect(h.text()).not.toContain('fetch failed');
+    expect(h.text()).not.toContain('UND_ERR_SOCKET');
+  });
+
+  it('offers the retry as words, and stores the owner\u2019s own sentence', async () => {
+    const h = harness({ provider: failingProvider(transportFailure()) });
+    await h.session.handle('draft a reply to Parfait');
+    expect(h.text()).toContain('Try again');
+    expect(h.db.offers).toHaveLength(1);
+    expect(h.db.offers[0]?.prompt).toBe('draft a reply to Parfait');
+  });
+
+  it('offers nothing when trying again would fail the same way', async () => {
+    const h = harness({
+      provider: failingProvider(
+        Object.assign(new Error('bad request'), { type: 'invalid_request_error', status: 400 }),
+      ),
+    });
+    await h.session.handle('draft a reply to Parfait');
+    expect(h.text()).toContain('trying again would fail');
+    expect(h.db.offers).toHaveLength(0);
+  });
+});
 
 describe('a plain turn', () => {
   it('runs the active agent and prints the answer', async () => {

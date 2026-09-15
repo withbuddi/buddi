@@ -32,6 +32,13 @@
  * the runtime, so it reads the shape a typed provider error happens to have
  * (`status`, `type`), Node's `code`, and the message as a last resort.
  *
+ * The `code` is read from the **whole cause chain**, not from the error the
+ * caller caught. `fetch failed` is a `TypeError` with no `code` at all; the
+ * `ECONNRESET` that actually happened is one link down, on `err.cause`. Reading
+ * only the top link meant a socket failure was recognised — if at all — by a
+ * regular expression over the word "fetch", which is exactly as precise as it
+ * sounds.
+ *
  * A failure that matches neither list is `unknown`, and that is a third answer
  * rather than a lean towards either. It is retried — a handler that throws has
  * always been retried and usually deserves to be — but only on the short
@@ -39,6 +46,8 @@
  * granted to failures we recognise as "not now"; an unrecognised one is more
  * often a bug in our own code, and spending an afternoon on it helps nobody.
  */
+
+import { errorCodes } from '../failures/cause.js';
 
 export type FailureClass = 'transient' | 'permanent' | 'unknown';
 
@@ -87,9 +96,19 @@ const TRANSIENT_CODES = new Set([
   'ENETDOWN',
   'ENOTFOUND',
   'EAI_AGAIN',
+  'EPROTO',
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_RESPONSE_TIMEOUT',
   'UND_ERR_SOCKET',
+  'ERR_SOCKET_CONNECTION_TIMEOUT',
+  // A pooled HTTP/2 session the far end had already closed. It is the fault
+  // that killed a day of turns, and it is "not now" from the request's point of
+  // view — the remedy is in `runtime/transport.ts`, which no longer pools one.
+  'ERR_HTTP2_INVALID_SESSION',
+  'ERR_HTTP2_GOAWAY_SESSION',
+  'ERR_HTTP2_STREAM_CANCEL',
   // Postgres: admin shutdown, crash shutdown, cannot connect now, too many
   // connections, and the 08xxx connection-exception class.
   '57P01',
@@ -115,6 +134,15 @@ const TRANSIENT_MESSAGES: readonly RegExp[] = [
   /\btimed out after \d+ms\b/i,
 ];
 
+/**
+ * A credential this machine cannot use. `resolveProvider` writes exactly these
+ * sentences, and the gateway wraps them with the problem code in brackets.
+ */
+const CREDENTIAL_MESSAGES: readonly RegExp[] = [
+  /\[(?:missing|empty)-credential\]/i,
+  /environment variable [A-Z][A-Z0-9_]* is (?:not set|empty)/,
+];
+
 /** Errors from our own code. Retrying a `TypeError` is retrying a bug. */
 const PROGRAMMING_ERRORS = new Set(['TypeError', 'ReferenceError', 'SyntaxError', 'RangeError']);
 
@@ -128,6 +156,10 @@ function readNumber(value: unknown, key: string): number | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const raw = (value as Record<string, unknown>)[key];
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : typeof err === 'string' ? err : '';
 }
 
 /**
@@ -157,9 +189,26 @@ export function classifyFailure(err: unknown): FailureVerdict {
     }
   }
 
-  const code = readString(err, 'code');
-  if (code && TRANSIENT_CODES.has(code)) {
-    return { class: 'transient', reason: `the connection failed (${code})` };
+  // The whole chain, outermost first: `fetch failed` carries no code of its
+  // own and the socket error that caused it carries the only one that matters.
+  for (const code of errorCodes(err)) {
+    if (TRANSIENT_CODES.has(code)) {
+      return { class: 'transient', reason: `the connection failed (${code})` };
+    }
+  }
+
+  // A credential that is absent, empty or refused is settled until a person
+  // changes a file. Retrying it for six hours helps nobody and hides it.
+  if (CREDENTIAL_MESSAGES.some((re) => re.test(messageOf(err)))) {
+    return { class: 'permanent', reason: 'the credential it needs is not usable' };
+  }
+
+  // Before the error *class*, because `fetch failed` is a `TypeError` and it is
+  // not a defect in our code. A network phrasing outranks the constructor that
+  // happened to carry it.
+  const message = messageOf(err);
+  if (message !== '' && TRANSIENT_MESSAGES.some((re) => re.test(message))) {
+    return { class: 'transient', reason: 'the connection failed' };
   }
 
   const name = readString(err, 'name');
@@ -168,11 +217,6 @@ export function classifyFailure(err: unknown): FailureVerdict {
   }
   if (name === 'ZodError') {
     return { class: 'permanent', reason: 'the data did not match its schema' };
-  }
-
-  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-  if (message !== '' && TRANSIENT_MESSAGES.some((re) => re.test(message))) {
-    return { class: 'transient', reason: 'the connection failed' };
   }
 
   return { class: 'unknown', reason: 'the failure was not recognised' };

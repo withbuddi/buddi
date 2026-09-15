@@ -37,6 +37,7 @@ import {
   type CompletionResponse,
   type ContentBlock,
   type NeutralMessage,
+  type RetryNotice,
   type RuntimeProvider,
   type StopReason,
   type ToolSchema,
@@ -46,8 +47,14 @@ import {
   defaultSleep,
   isRetryableStatus,
   nextDelayMs,
+  nextTransportDelayMs,
   RETRY_DELAYS_MS,
 } from './retry.js';
+import {
+  defaultHttpTransport,
+  type HttpTransport,
+  type TransportResponse,
+} from './transport.js';
 
 /** Chat Completions path, appended to the resolved base URL. */
 export const CHAT_COMPLETIONS_PATH = '/chat/completions';
@@ -66,10 +73,17 @@ const DEFAULT_MAX_TOKENS = 16000;
 export const MALFORMED_ARGUMENTS_KEY = '__malformed_arguments';
 
 export interface OpenAiProviderOptions {
-  /** Injected for tests. Defaults to the global `fetch`. */
-  fetch?: typeof globalThis.fetch;
+  /**
+   * Injected for tests. Defaults to `defaultHttpTransport` — `node:https` with
+   * connection reuse off, not the global `fetch`. See `transport.ts` for why.
+   */
+  fetch?: HttpTransport;
   /** Injected for tests so backoff does not burn wall-clock. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injected for tests: the transport retry window is measured against this. */
+  now?: () => number;
+  /** Called before each wait, with the cause chain of the attempt that failed. */
+  onRetry?: (notice: RetryNotice) => void;
   /** Default output-token cap when a request does not set one. */
   maxTokens?: number;
 }
@@ -306,11 +320,12 @@ export function createOpenAiProvider(
         'a provider is pinned, never coerced',
     );
   }
-  const doFetch = options.fetch ?? globalThis.fetch;
+  const doFetch = options.fetch ?? defaultHttpTransport;
   if (typeof doFetch !== 'function') {
     throw new Error('createOpenAiProvider: no fetch implementation available');
   }
   const sleep = options.sleep ?? defaultSleep;
+  const now = options.now ?? ((): number => Date.now());
   const defaultMaxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const url = `${resolved.baseUrl.replace(/\/+$/, '')}${CHAT_COMPLETIONS_PATH}`;
   const capabilities = providerCapabilities('openai');
@@ -342,7 +357,7 @@ export function createOpenAiProvider(
     return wire;
   }
 
-  async function errorFrom(res: Response): Promise<ProviderError> {
+  async function errorFrom(res: TransportResponse): Promise<ProviderError> {
     const requestId =
       res.headers?.get?.('x-request-id') ?? res.headers?.get?.('request-id') ?? null;
     let type = 'http_error';
@@ -372,22 +387,33 @@ export function createOpenAiProvider(
       // Built before the first attempt: a capability refusal is a configuration
       // answer, not something to retry three times against a paid endpoint.
       const payload = JSON.stringify(body(req, names));
+      const startedAt = now();
+      // Two budgets, counted apart: see the Anthropic adapter's `complete`.
+      let statusFailures = 0;
+      let transportFailures = 0;
       let lastError: ProviderError | undefined;
-      let delay = 0;
 
-      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-        if (attempt > 0) await sleep(delay);
-
-        let res: Response;
+      for (;;) {
+        let res: TransportResponse;
         try {
           res = await doFetch(url, { method: 'POST', headers: headers(), body: payload });
         } catch (err) {
+          transportFailures += 1;
           lastError = new ProviderError({
             status: 0,
             type: 'transport_error',
             message: err instanceof Error ? err.message : String(err),
+            cause: err,
           });
-          delay = nextDelayMs(attempt + 1);
+          const delay = nextTransportDelayMs(transportFailures, now() - startedAt);
+          if (delay === undefined) break;
+          options.onRetry?.({
+            attempt: transportFailures,
+            delayMs: delay,
+            kind: 'transport',
+            detail: lastError.detail,
+          });
+          await sleep(delay);
           continue;
         }
 
@@ -405,11 +431,19 @@ export function createOpenAiProvider(
           };
         }
 
-        const wait = nextDelayMs(attempt + 1, res.headers);
+        statusFailures += 1;
+        const wait = nextDelayMs(statusFailures, res.headers);
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        delay = wait;
+        if (statusFailures > RETRY_DELAYS_MS.length) break;
+        options.onRetry?.({
+          attempt: statusFailures,
+          delayMs: wait,
+          kind: 'status',
+          detail: error.detail,
+        });
+        await sleep(wait);
       }
 
       throw (

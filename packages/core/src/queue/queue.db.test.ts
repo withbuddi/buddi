@@ -566,6 +566,13 @@ suite('queue (postgres)', () => {
     }, 30_000);
 
     it('lists what died, and retries a whole wave at once', async () => {
+      // `before` is read from the database, because `updated_at` is stamped by
+      // the database — and every claim below is anchored at T0, like every
+      // other claim in this file. Claiming at `new Date()` against a
+      // `run_after` the database stamped with its own microsecond `now()` is a
+      // coin toss the width of a millisecond: Node's clock is truncated to the
+      // millisecond, so whenever the round trip is faster than the fraction the
+      // database kept, `run_after <= now` is false and the claim is a no-op.
       const before = await dbNow();
       const dead = [];
       for (let i = 0; i < 3; i += 1) {
@@ -574,26 +581,40 @@ suite('queue (postgres)', () => {
           payload: { agentId: 'mail-triage', prompt: `triage ${i}` },
           maxAttempts: 1,
           dedupKey: `wave-${i}`,
+          runAfter: T0,
         });
-        const claimed = await claimJob(pool, { worker: 'w', now: new Date(), leaseMs: LEASE_MS });
+        const claimed = await claimJob(pool, {
+          worker: 'w',
+          kinds: ['agent-run'],
+          now: T0,
+          leaseMs: LEASE_MS,
+        });
+        expect(claimed?.id).toBe(job.id);
         await failJob(pool, claimed!.id, 'w', 'fetch failed', { retry: true });
         dead.push(job.id);
       }
       // Something interactive that also died, and must not be swept up.
-      const other = await enqueue(pool, { kind: 'someones-turn', maxAttempts: 1 });
+      const other = await enqueue(pool, {
+        kind: 'someones-turn',
+        maxAttempts: 1,
+        runAfter: T0,
+      });
       const claimedOther = await claimJob(pool, {
         worker: 'w',
         kinds: ['someones-turn'],
-        now: new Date(),
+        now: T0,
         leaseMs: LEASE_MS,
       });
+      expect(claimedOther?.id).toBe(other.id);
       await failJob(pool, claimedOther!.id, 'w', 'fetch failed', { retry: true });
 
       const listed = await listDeadJobs(pool, { after: before });
       expect(listed.map((j) => j.id).sort()).toEqual([...dead].sort());
 
+      // The wave retried is this test's wave, named job by job — not a count of
+      // whatever else the table happens to hold.
       const retried = await retryJobs(pool, { kind: 'agent-run' });
-      expect(retried).toHaveLength(3);
+      expect(retried.map((j) => j.id).sort()).toEqual([...dead].sort());
       for (const id of dead) {
         const job = await getJob(pool, id);
         expect(job?.state).toBe('pending');

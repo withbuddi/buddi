@@ -57,6 +57,7 @@ import {
   withdrawTurnOffers,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
+import { failedTurnReply } from '../surfaces/failure.js';
 import {
   attachmentNote,
   classifyMime,
@@ -620,6 +621,7 @@ export class WebChat {
   }): Promise<void> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
+    let toolsCalled = 0;
 
     const blocked = deps.gate ? await deps.gate() : null;
     if (blocked !== null) {
@@ -665,9 +667,10 @@ export class WebChat {
     try {
       provider = deps.providerFor(agent);
     } catch (err) {
-      // An agent whose credential is missing is a fact about the installation,
-      // said in the sentence the catalog already wrote for it.
-      await this.#failed(conversationId, runId, 'failed', message(err));
+      // An agent whose credential is missing is a fact about the installation.
+      // It is permanent by construction, so nothing is offered: the sentence
+      // names the variable and what to do about it, and the log gets the rest.
+      await this.#failedTurn({ err, agent, conversationId, runId, toolsCalled: 0 });
       return;
     }
 
@@ -711,12 +714,26 @@ export class WebChat {
       onText: async () => {
         await this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId });
       },
+      // Counted only so a failed turn knows whether offering to run it again
+      // would be honest — work that already happened cannot be un-happened.
+      onToolCall: () => {
+        toolsCalled += 1;
+      },
     };
 
     let cancelled = false;
-    const result = await this.#cancellable(conversationId, runId, async () => runAgent(options), () => {
-      cancelled = true;
-    });
+    let failure: unknown;
+    const result = await this.#cancellable(
+      conversationId,
+      runId,
+      async () => runAgent(options),
+      () => {
+        cancelled = true;
+      },
+      (err) => {
+        failure = err;
+      },
+    );
 
     if (cancelled) {
       await this.#failed(
@@ -727,7 +744,20 @@ export class WebChat {
       );
       return;
     }
-    if (result === undefined) return; // failed; already recorded
+    if (result === undefined) {
+      // The run threw. What the owner reads, the cause chain that goes to the
+      // log, and the retry chip when one is honest — all decided in one place,
+      // the same one Telegram and the terminal use.
+      await this.#failedTurn({
+        err: failure,
+        agent,
+        conversationId,
+        runId,
+        prompt: turn.text,
+        toolsCalled,
+      });
+      return;
+    }
 
     // Stored before the page is told the run is over, so the refresh that
     // `run.finished` triggers already returns them.
@@ -765,6 +795,7 @@ export class WebChat {
     runId: string,
     work: () => Promise<T>,
     onCancel: () => void,
+    onError: (err: unknown) => void,
   ): Promise<T | undefined> {
     let resolveCancel!: () => void;
     const cancelled = new Promise<undefined>((resolve) => {
@@ -778,7 +809,7 @@ export class WebChat {
     try {
       return await Promise.race([started, cancelled]);
     } catch (err) {
-      await this.#failed(conversationId, runId, 'failed', message(err));
+      onError(err);
       return undefined;
     } finally {
       this.#running.delete(conversationId);
@@ -797,6 +828,7 @@ export class WebChat {
     runId: string,
     stopped: 'failed' | 'cancelled' | 'refused',
     error: string,
+    owner?: { message: string; failureClass: string },
   ): Promise<void> {
     if (stopped === 'failed') this.#log(`web chat: run ${runId} failed: ${error}`);
     await this.#event(conversationId, 'chat.run.failed', {
@@ -805,7 +837,41 @@ export class WebChat {
       turns: 0,
       stopped,
       usage: { input: 0, output: 0 },
+      // `error` is the whole cause chain and belongs to the record; `message`
+      // is what the page puts in front of a person. They are never the same
+      // string, and the page is never handed the first one.
       error,
+      ...(owner ? { message: owner.message, failureClass: owner.failureClass } : {}),
+    });
+  }
+
+  /**
+   * A turn that threw, rendered once: the cause chain to the log, sentences to
+   * the page, and the retry stored as an ordinary offer so the chip the page
+   * already draws for offers is the chip it draws for this.
+   */
+  async #failedTurn(input: {
+    err: unknown;
+    agent: CatalogAgent;
+    conversationId: string;
+    runId: string;
+    prompt?: string;
+    toolsCalled: number;
+  }): Promise<void> {
+    const outcome = await failedTurnReply(this.#deps.pool, {
+      error: input.err,
+      profile: WEB_SURFACE,
+      agentId: input.agent.id,
+      agentName: `@${input.agent.handle}`,
+      conversationId: input.conversationId,
+      ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
+      toolsCalled: input.toolsCalled,
+      now: this.#deps.now(),
+      log: (line: string) => this.#log(`web chat: ${line}`),
+    });
+    await this.#failed(input.conversationId, input.runId, 'failed', outcome.detail, {
+      message: outcome.rendered.text,
+      failureClass: outcome.failureClass,
     });
   }
 

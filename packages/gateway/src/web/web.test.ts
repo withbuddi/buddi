@@ -22,6 +22,7 @@ import {
 import { cookieHeader, parseCookies } from './http.js';
 import { RateLimiter, SessionStore, SpentTickets } from './sessions.js';
 import { resolveAsset } from './static.js';
+import { toStreamEvent } from './stream.js';
 import { ensureWebToken, mintTicket, verifyTicket, webTokenExists, webTokenFile } from './token.js';
 
 describe('binding', () => {
@@ -217,5 +218,48 @@ describe('static files', () => {
   it('refuse to escape it', () => {
     expect(resolveAsset(root, '/../../../etc/passwd')).toBeNull();
     expect(resolveAsset(root, '/%2e%2e%2f%2e%2e%2fetc/passwd')).toBeNull();
+  });
+});
+
+/**
+ * What a failed run looks like on the wire.
+ *
+ * The page draws `message`. `error` is on the frame for the record — a page
+ * that rendered it would be showing the owner `fetch failed`, which is the
+ * thing this whole change exists to stop.
+ */
+describe('the stream projection of a failed run', () => {
+  const row = (payload: Record<string, unknown>) => ({
+    id: '1',
+    kind: 'chat.run.failed',
+    payload,
+    createdAt: new Date('2026-09-15T17:37:00Z'),
+  });
+
+  it('carries the sentence a person reads, and the class it was', () => {
+    const { event, data } = toStreamEvent(
+      row({
+        runId: 'r1',
+        stopped: 'failed',
+        message: "I couldn't reach the model just now.",
+        failureClass: 'transient',
+        error: 'fetch failed <- Error: other side closed [UND_ERR_SOCKET]',
+      }),
+    );
+    expect(event).toBe('run.finished');
+    expect(data.stopped).toBe('failed');
+    expect(data.message).toBe("I couldn't reach the model just now.");
+    expect(data.failureClass).toBe('transient');
+  });
+
+  it('says nothing about a message on a run that simply ended', () => {
+    const { data } = toStreamEvent({
+      id: '2',
+      kind: 'run.finished',
+      payload: { runId: 'r2', stopped: 'end_turn', turns: 1 },
+      createdAt: new Date('2026-09-15T17:37:00Z'),
+    });
+    expect(data.message).toBeUndefined();
+    expect(data.failureClass).toBeUndefined();
   });
 });

@@ -171,11 +171,17 @@ export function ChatPage({
             void refresh(conversationId);
             break;
           }
-          case 'run.finished':
+          case 'run.finished': {
             setRunning(false);
             setLive([]);
+            // A turn that failed says so in words the server already wrote for
+            // a person. The raw error stays in the log: the page is never
+            // handed it, so it can never put it on the screen.
+            const failed = str(event.data['message']);
+            setError(failed ?? null);
             void refresh(conversationId);
             break;
+          }
           default:
             break;
         }

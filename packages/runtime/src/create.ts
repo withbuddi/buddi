@@ -8,13 +8,28 @@
  * already fails closed — rather than on anything ambient.
  */
 import type { ResolvedProvider } from '@buddi/core';
-import { createAnthropicProvider, type RuntimeProvider } from './anthropic.js';
+import {
+  createAnthropicProvider,
+  type RetryNotice,
+  type RuntimeProvider,
+} from './anthropic.js';
 import { createOpenAiProvider } from './openai.js';
+import type { HttpTransport } from './transport.js';
 
 export interface CreateProviderOptions {
-  /** Injected for tests. Defaults to the global `fetch`. */
-  fetch?: typeof globalThis.fetch;
+  /**
+   * Injected for tests. Defaults to the adapters' own transport — `node:https`
+   * with connection reuse off, never the global `fetch`. See `transport.ts`.
+   */
+  fetch?: HttpTransport;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Called before each backoff, with the whole cause chain of the attempt that
+   * failed. Wired to the process log by the composition root: a failure that
+   * healed on the second attempt is the evidence that names the fault, and
+   * before this existed it was thrown away.
+   */
+  onRetry?: (notice: RetryNotice) => void;
   maxTokens?: number;
 }
 

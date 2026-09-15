@@ -32,6 +32,7 @@ import {
   UnknownAgentError,
   type CatalogAgent,
 } from '@buddi/core';
+import { failedTurnReply } from './surfaces/failure.js';
 import { createConversation, createProvider, runAgent } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { AGENTS_DIR, memoryPreambleFor } from './agents/catalog.js';
@@ -336,7 +337,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     );
     process.exit(1);
   }
-  const provider = createProvider(resolution.provider);
+  // The cause chain of every failed attempt, on stderr. At a terminal that is
+  // where an operator looks, and it is the only record `buddi chat` keeps.
+  const provider = createProvider(resolution.provider, {
+    onRetry: (notice) =>
+      console.error(
+        `provider: ${notice.kind} attempt ${notice.attempt} failed, retrying in ${notice.delayMs}ms — ${notice.detail}`,
+      ),
+  });
   /** Delegation needs both halves; rebound here for the *selected* agent. */
   bindDelegation(registry, {
     catalog,
@@ -398,20 +406,38 @@ async function ask(
 ): Promise<void> {
   const { wiring } = deps;
   console.error(`conversation: ${conversationId}`);
-  const result = await runAgent({
-    agent: deps.agent.definition(wiring.now(), wiring.timezone),
-    provider: deps.provider,
-    registry: wiring.registry,
-    ctx: wiring.ctx,
-    pool: wiring.pool,
-    conversationId,
-    userMessage: question,
-    surface: CLI_SURFACE,
-    memoryPreamble: deps.memoryPreamble,
-    onToolCall: (name, input) => {
-      console.error(`⚙ ${name} ${JSON.stringify(input)}`);
-    },
-  });
+  let result: Awaited<ReturnType<typeof runAgent>>;
+  try {
+    result = await runAgent({
+      agent: deps.agent.definition(wiring.now(), wiring.timezone),
+      provider: deps.provider,
+      registry: wiring.registry,
+      ctx: wiring.ctx,
+      pool: wiring.pool,
+      conversationId,
+      userMessage: question,
+      surface: CLI_SURFACE,
+      memoryPreamble: deps.memoryPreamble,
+      onToolCall: (name, input) => {
+        console.error(`⚙ ${name} ${JSON.stringify(input)}`);
+      },
+    });
+  } catch (err) {
+    // A script still deserves the human sentence: `fetch failed` on stderr and
+    // an exit code is not a diagnosis. The cause chain goes with it, because
+    // the person reading a script's stderr is the person who can act on it.
+    const outcome = await failedTurnReply(wiring.pool, {
+      error: err,
+      profile: CLI_SURFACE,
+      agentId: deps.agent.id,
+      agentName: `@${deps.agent.handle}`,
+      now: wiring.now(),
+      log: (line) => console.error(line),
+    });
+    console.error(outcome.rendered.text);
+    process.exitCode = 1;
+    return;
+  }
   // Safety net, not the mechanism: tool names are internal and nothing asks the
   // model to print one. This catches the answer of a model that did anyway.
   console.log(stripToolNames(result.text));
