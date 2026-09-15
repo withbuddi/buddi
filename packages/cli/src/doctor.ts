@@ -33,6 +33,11 @@ export interface DoctorProbes {
   pnpmVersion(): Promise<ProbeResult>;
   dockerVersion(): Promise<ProbeResult>;
   postgres(): Promise<ProbeResult>;
+  /**
+   * Where the database's port is published, and what protects it. Optional so
+   * that a caller built before this row existed still satisfies the interface.
+   */
+  databaseExposure?(): Promise<ProbeResult>;
   migrations(): Promise<ProbeResult>;
   /** Where this boot's secrets came from — the vault, or `.env`. */
   vault(): Promise<ProbeResult>;
@@ -66,6 +71,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'pnpm', critical: true, probe: 'pnpmVersion' },
   { name: 'docker', critical: false, probe: 'dockerVersion' },
   { name: 'postgres', critical: true, probe: 'postgres' },
+  { name: 'database exposure', critical: true, probe: 'databaseExposure' },
   { name: 'migrations', critical: true, probe: 'migrations' },
   { name: 'vault', critical: true, probe: 'vault' },
   { name: 'model credential', critical: true, probe: 'modelCredential' },
@@ -391,4 +397,108 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
     };
   }
   return { status: 'ok', detail };
+}
+
+/* ------------------------------------------------------------------ *
+ * The database exposure row
+ * ------------------------------------------------------------------ */
+
+/**
+ * What protects the database from the rest of the network.
+ *
+ * This is the row that would have caught the real thing: the compose file
+ * published `"${BUDDI_DB_PORT:-5432}:5432"`, Docker read the missing host as
+ * `0.0.0.0`, and the owner's financial history, mail bodies and conversations
+ * sat on a LAN-reachable port behind the password `buddi`. Two facts, one row,
+ * and `critical` — an installation in that state is not "working with a
+ * warning", it is open.
+ */
+export interface DatabaseExposureFacts {
+  /**
+   * Does buddi own this database? False when an explicit `DATABASE_URL` points
+   * at someone's own Postgres — their binding and their password, not ours.
+   */
+  composeManaged: boolean;
+  /** What `docker compose port postgres 5432` printed, e.g. `127.0.0.1:55433`. */
+  published?: string;
+  /** Why the binding could not be read: a stopped daemon, a stopped container. */
+  bindingError?: string;
+  /** True when the password in use is the literal `buddi` this project shipped. */
+  legacyPassword: boolean;
+  /** True when `BUDDI_DB_PASSWORD` is in the vault, where compose expects it. */
+  passwordInVault: boolean;
+}
+
+/** The command that fixes every failure this row can report. */
+export const SECURE_COMMAND = 'buddi db secure';
+
+/** Loopback, by address. `localhost` counts; a name that is not one does not. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/** The host half of `127.0.0.1:5432` or `[::]:5432`, or null when unparseable. */
+export function publishedHost(published: string): string | null {
+  const bracketed = /^\[(.+)\]:\d+$/.exec(published.trim());
+  if (bracketed) return bracketed[1] as string;
+  const plain = /^(.+):\d+$/.exec(published.trim());
+  return plain ? (plain[1] as string) : null;
+}
+
+export function checkDatabaseExposure(facts: DatabaseExposureFacts): ProbeResult {
+  if (!facts.composeManaged) {
+    return {
+      status: 'ok',
+      detail:
+        'your own postgres (DATABASE_URL is set explicitly) — its binding and its password are yours',
+    };
+  }
+
+  const problems: string[] = [];
+
+  if (facts.published !== undefined) {
+    const host = publishedHost(facts.published);
+    if (host === null) {
+      problems.push(`cannot read the published binding (${facts.published})`);
+    } else if (!isLoopbackHost(host)) {
+      problems.push(
+        `the port is published on ${facts.published} — NOT loopback, so every host on ` +
+          `this network can reach the database`,
+      );
+    }
+  }
+
+  if (facts.legacyPassword) {
+    problems.push('the password is the literal `buddi` this project shipped with');
+  } else if (!facts.passwordInVault) {
+    problems.push(
+      'no BUDDI_DB_PASSWORD in the vault, and compose expects one — the container is ' +
+        'running on whatever password it was created with',
+    );
+  }
+
+  if (problems.length > 0) {
+    const exposed =
+      facts.published !== undefined && !isLoopbackHost(publishedHost(facts.published) ?? '');
+    const fix = exposed
+      ? `run \`${SECURE_COMMAND}\`, then \`buddi db down && buddi db up\` to re-create it on 127.0.0.1`
+      : `run \`${SECURE_COMMAND}\``;
+    return { status: 'fail', detail: `${problems.join('; ')} — ${fix}` };
+  }
+
+  if (facts.bindingError !== undefined) {
+    // The password is fine and the binding is unknown: a stopped container is
+    // not an exposure, and claiming either way would be a guess.
+    return {
+      status: 'warn',
+      detail: `password in the vault; could not read the published port (${facts.bindingError})`,
+    };
+  }
+
+  return {
+    status: 'ok',
+    detail: `${facts.published ?? 'not published'} (loopback only); password in the vault`,
+  };
 }

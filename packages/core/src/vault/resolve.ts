@@ -51,7 +51,7 @@ function unquote(value: string): string {
 
 /**
  * The secrets buddi knows how to move into the keychain. `import-env` walks
- * this list; nothing else in `.env` (a database URL, a timezone) is a secret.
+ * this list; nothing else in `.env` (a timezone, a port) is a secret.
  */
 export const KNOWN_SECRETS: readonly string[] = [
   'ANTHROPIC_API_KEY',
@@ -59,6 +59,11 @@ export const KNOWN_SECRETS: readonly string[] = [
   'OPENAI_API_KEY',
   'TELEGRAM_BOT_TOKEN',
   'GMAIL_APP_PASSWORD',
+  // The database's own credentials. `DATABASE_URL` is a secret because it
+  // *contains* one, so `import-env` moves it and the backup scrubber replaces
+  // it with the marker rather than with a `***` that still names the host.
+  'BUDDI_DB_PASSWORD',
+  'DATABASE_URL',
 ];
 
 export type SecretSource = 'vault' | 'env';

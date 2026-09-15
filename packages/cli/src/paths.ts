@@ -10,6 +10,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hydrateDatabaseUrl, type DatabaseUrlResolution } from '@buddi/core';
 import { config as loadDotenv } from 'dotenv';
 
 /** `packages/cli/dist` at runtime, `packages/cli/src` under vitest. */
@@ -52,4 +53,18 @@ export const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 /** Load `.env` from the repo root. Idempotent; never overrides a real env var. */
 export function loadEnv(): void {
   loadDotenv({ path: ENV_FILE });
+}
+
+/**
+ * `.env`, and then the one variable that is deliberately no longer in it.
+ *
+ * `DATABASE_URL` is assembled from the vault at runtime rather than written
+ * into `.env` with the password in clear, and reading the vault is a keychain
+ * call. Every subcommand waits on this before it touches `process.env.DATABASE_URL`.
+ */
+export async function loadEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<DatabaseUrlResolution> {
+  loadEnv();
+  return hydrateDatabaseUrl(env);
 }

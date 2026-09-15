@@ -28,7 +28,7 @@ import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/run
 import type { Pool } from 'pg';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
-import { createWiringAsync, loadEnv } from '../bootstrap.js';
+import { createWiringAsync, loadEnvironment } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createEngagementHooks } from '../missions/engagement.js';
@@ -358,7 +358,7 @@ export function describePaired(paired: readonly SurfaceIdentity[]): string {
 }
 
 export async function main(): Promise<void> {
-  loadEnv();
+  await loadEnvironment();
 
   let wiring;
   try {

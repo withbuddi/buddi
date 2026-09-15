@@ -25,7 +25,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { gatewayCatalog } from './agents/catalog.js';
-import { createWiringAsync, loadEnv } from './bootstrap.js';
+import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import {
   addDefaultMissions,
   planDefaultMissions,
@@ -303,7 +303,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  loadEnv();
+  await loadEnvironment();
   let wiring;
   try {
     wiring = await createWiringAsync(process.env);

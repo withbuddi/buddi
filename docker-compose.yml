@@ -6,10 +6,30 @@ services:
     environment:
       POSTGRES_DB: buddi
       POSTGRES_USER: buddi
-      POSTGRES_PASSWORD: buddi
+      # The password buddi generated at `buddi init` and keeps in the OS
+      # keychain under BUDDI_DB_PASSWORD; the buddi binary puts it in the
+      # environment before it calls compose. The fallback is the password this
+      # project shipped with, so an installation that predates `buddi db
+      # secure` keeps starting — `buddi doctor` fails loudly until it is run.
+      # Note it is read only by `initdb`, on the very first start of a fresh
+      # volume: rotating the password afterwards is an ALTER ROLE, which is
+      # what `buddi db secure` does.
+      POSTGRES_PASSWORD: ${BUDDI_DB_PASSWORD:-buddi}
     ports:
-      # Host port is overridable: some machines already run postgres on 5432.
-      - "${BUDDI_DB_PORT:-5432}:5432"
+      # 127.0.0.1 is load-bearing. Without it Docker binds 0.0.0.0 and the
+      # database — every conversation, every transaction, every mail body —
+      # is reachable from any host on the same network, behind whatever
+      # password this container happens to have.
+      #
+      # The one legitimate reason to change it is reaching the database from
+      # another machine of your own over a *private* network: a Tailscale or
+      # WireGuard interface, where you can name that interface's address here
+      # (e.g. "100.x.y.z:${BUDDI_DB_PORT:-5432}:5432"). Bind it to 0.0.0.0 on
+      # an untrusted network — a café, an office LAN, a hotel — and you have
+      # published your financial history to it. Never do that.
+      #
+      # The host port is overridable: some machines already run postgres on 5432.
+      - "127.0.0.1:${BUDDI_DB_PORT:-5432}:5432"
     volumes:
       - buddi-pgdata:/var/lib/postgresql/data
     healthcheck:

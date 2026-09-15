@@ -21,15 +21,21 @@ import {
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import {
+  DATABASE_URL_VAR,
+  DB_PASSWORD_VAR,
   KNOWN_SECRETS,
+  assembleDatabaseUrl,
   createPool,
   createVault,
+  databaseDefaults,
+  resolveDatabaseUrl,
   resolveSecrets,
   type Vault,
 } from '@buddi/core';
 import { createPairingCode, listDevices, TelegramApi } from '@buddi/gateway';
 import { getOnboarding } from '@buddi/core';
 import { runDashboard } from './dashboard-cmd.js';
+import { ensureDatabasePassword, shape } from './db-secure.js';
 import { applyEnvEdits, isBlank, maskSecret, parseEnv, type EnvEdit } from './env-file.js';
 import {
   isNoop,
@@ -171,6 +177,18 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     };
 
     /*
+     * 2b. The database's own password.
+     *
+     * Generated here, before anything starts the container, because `initdb`
+     * reads `POSTGRES_PASSWORD` exactly once — on the first start of a fresh
+     * volume. A machine set up by this wizard therefore never has the password
+     * this project used to ship with, and the value never touches `.env`: it
+     * goes into the vault, and `DATABASE_URL` is assembled around it at
+     * runtime. An owner who set `DATABASE_URL` explicitly is left alone.
+     */
+    const databaseUrl = await setUpDatabasePassword(vault, env, { log: console.log });
+
+    /*
      * 3. The plan. Everything above was gathering facts; from here the wizard
      *    is driven by `planInit`, so what it is about to do can be printed
      *    first and asserted in a test without a machine.
@@ -186,10 +204,10 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       hasOwnerName: !isBlank(env, 'BUDDI_OWNER_NAME'),
       hasPrivateAgents: hasPrivateAgents({ ...env, ...known }),
       hasDocker: dockerVersion !== undefined,
-      pairedDevices: await countPairedDevices(env.DATABASE_URL),
+      pairedDevices: await countPairedDevices(databaseUrl),
       serviceInstalled: await serviceIsInstalled(),
       dashboardEnabled: (env.BUDDI_WEB ?? '1').trim() !== '0',
-      onboardingPending: await onboardingIsPending(env.DATABASE_URL),
+      onboardingPending: await onboardingIsPending(databaseUrl),
     });
 
     let plan = planInit(await facts());
@@ -300,7 +318,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
         console.error('`pnpm db:up` failed. Is Docker running? Fix it and re-run `buddi init`.');
         return 1;
       }
-      await waitForPostgres(env.DATABASE_URL);
+      await waitForPostgres(databaseUrl);
     } else {
       console.log(dim('\nSkipping `pnpm db:up` — no docker. DATABASE_URL must point somewhere real.'));
     }
@@ -326,7 +344,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
 
     /* 10a. Pair a device, right here, by QR. */
     if (willRun(plan, 'telegram-pair')) {
-      const paired = await pairHere(confirm, env, {
+      const paired = await pairHere(confirm, { ...env, DATABASE_URL: databaseUrl }, {
         onNeedsService: () => ensureService(confirm),
       });
       if (paired) plan = planInit(await facts());
@@ -528,6 +546,43 @@ export async function pairHere(
   } finally {
     await pool.end();
   }
+}
+
+/**
+ * Make sure this installation has a database password of its own, and hand back
+ * the connection string everything else in the wizard should use.
+ *
+ * Returns whatever `resolveDatabaseUrl` settles on, so an owner who pointed
+ * `DATABASE_URL` at their own Postgres gets exactly that back and nothing is
+ * generated, stored or rewritten.
+ */
+export async function setUpDatabasePassword(
+  vault: Vault | undefined,
+  env: Record<string, string | undefined>,
+  io: { log?: (line: string) => void } = {},
+): Promise<string | undefined> {
+  const log = io.log ?? ((line: string) => console.log(line));
+  const ensured = await ensureDatabasePassword({ env: env as NodeJS.ProcessEnv, vault });
+  if (ensured === null) {
+    const resolution = await resolveDatabaseUrl({ env: env as NodeJS.ProcessEnv, vault });
+    log(`\nDatabase: ${dim('DATABASE_URL is set explicitly — buddi will not touch it')}`);
+    // Compose still needs *something*; the explicit URL's own password is not
+    // ours to hand it, so nothing is exported and compose keeps its default.
+    return resolution.url;
+  }
+
+  // The compose file reads this out of the environment. It is deliberately not
+  // written to `.env`: a password in a file is the thing being fixed.
+  process.env[DB_PASSWORD_VAR] = ensured.password;
+  const url = assembleDatabaseUrl({ ...databaseDefaults(env as NodeJS.ProcessEnv), password: ensured.password });
+  process.env[DATABASE_URL_VAR] = url;
+
+  log(
+    ensured.created
+      ? `\nDatabase password: ${bold('generated')} ${dim(`(${shape(ensured.password)}, stored as ${DB_PASSWORD_VAR} in the vault — never in .env)`)}`
+      : `\nDatabase password: ${dim(`already in the vault as ${DB_PASSWORD_VAR}`)}`,
+  );
+  return url;
 }
 
 /** This machine's IANA zone, with a defined fallback. */

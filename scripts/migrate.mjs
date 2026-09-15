@@ -11,13 +11,16 @@ import { config } from 'dotenv';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 config({ path: path.join(repoRoot, '.env') });
 
-const url = process.env.DATABASE_URL;
+const { createPool, hydrateDatabaseUrl, runMigrations } = await import('@buddi/core');
+
+// `DATABASE_URL` is assembled from the vault rather than written into `.env`
+// with the password in clear. An explicit one in the environment still wins.
+const { url, source } = await hydrateDatabaseUrl(process.env);
 if (!url) {
-  console.error('DATABASE_URL is not set (copy .env.example to .env)');
+  console.error('DATABASE_URL is not set (copy .env.example to .env, then `buddi db up`)');
   process.exit(1);
 }
-
-const { createPool, runMigrations } = await import('@buddi/core');
+console.log(`database: ${source === 'env' ? 'DATABASE_URL from the environment' : `assembled (${source})`}`);
 
 const manifests = [];
 /** Every plugin that is built. Core with zero plugins installed is a valid state. */

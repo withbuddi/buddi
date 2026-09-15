@@ -9,10 +9,13 @@ import { readdir } from 'node:fs/promises';
 import {
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
+  DB_PASSWORD_VAR,
+  LEGACY_DB_PASSWORD,
   countJobsByState,
   createPool,
   createVault,
   isPaused,
+  passwordInDatabaseUrl,
   providerAuthHeaders,
   resolveProvider,
   timezoneFromEnv,
@@ -43,6 +46,7 @@ import {
   checkAgents,
   checkBackups,
   checkConfig,
+  checkDatabaseExposure,
   checkNodeVersion,
   checkVault,
   type AgentEngineFact,
@@ -51,6 +55,7 @@ import {
   type VaultFacts,
 } from './doctor.js';
 import { DB_UNREACHABLE, dockerState } from './db-cmd.js';
+import { explicitUrlInEnvFile, isShippedDefaultUrl, publishedBinding } from './db-secure.js';
 import { versionOf } from './proc.js';
 import { createServiceManager } from './service/index.js';
 
@@ -168,6 +173,42 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         // empty `AggregateError` pg throws for a refused connection.
         return { status: 'fail', detail: describeDatabaseError(err, databaseUrl) };
       }
+    },
+
+    /**
+     * The one row that is about the *network*, not about whether things work.
+     *
+     * Both halves are read from the running system rather than from the compose
+     * file: `docker compose port` says where the port actually landed, and the
+     * password is whatever this process resolved — so an edit nobody applied
+     * still reads as a failure until the container is re-created.
+     */
+    async databaseExposure(): Promise<ProbeResult> {
+      // "Compose-managed" means buddi issued this credential. An explicit
+      // `DATABASE_URL` in `.env` says it did not — and it has to be read from
+      // the file, because by now one has been assembled into the environment.
+      const explicit = await explicitUrlInEnvFile();
+      const composeManaged = explicit === null || isShippedDefaultUrl(explicit, env);
+
+      let passwordInVault = false;
+      if (vault) {
+        try {
+          const stored = await vault.get(DB_PASSWORD_VAR);
+          passwordInVault = stored !== null && stored.trim() !== '';
+        } catch {
+          // A locked or absent vault: the `vault` row above already says so.
+        }
+      }
+      const inUse = databaseUrl === undefined ? null : passwordInDatabaseUrl(databaseUrl);
+      const binding = await publishedBinding();
+
+      return checkDatabaseExposure({
+        composeManaged,
+        legacyPassword: inUse === LEGACY_DB_PASSWORD,
+        passwordInVault,
+        ...(binding.published === undefined ? {} : { published: binding.published }),
+        ...(binding.error === undefined ? {} : { bindingError: binding.error }),
+      });
     },
 
     async migrations(): Promise<ProbeResult> {

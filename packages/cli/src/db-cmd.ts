@@ -11,13 +11,19 @@
  * worth reading, and this is a thin, honest wrapper around it plus one
  * readiness answer.
  */
+import {
+  DATABASE_URL_VAR,
+  DB_PASSWORD_VAR,
+  assembleDatabaseUrl,
+  databaseDefaults,
+} from '@buddi/core';
 import { describeDatabaseError, probeDatabase } from '@buddi/gateway';
 import type { DbAction } from './args.js';
+import { DB_SERVICE, ensureDatabasePassword, runDbSecure } from './db-secure.js';
 import { REPO_ROOT } from './paths.js';
 import { run, runInherit } from './proc.js';
 
-/** The compose service this repo's database is. */
-export const DB_SERVICE = 'postgres';
+export { DB_SERVICE };
 
 /**
  * What the rows downstream of the database say when there is no connection.
@@ -52,7 +58,14 @@ export async function dockerState(
   return { state: 'running', detail: server === '' ? client : `${client} (engine ${server})` };
 }
 
-/** `docker compose …` in the repo, inheriting the terminal so progress shows. */
+/**
+ * `docker compose …` in the repo, inheriting the terminal so progress shows.
+ *
+ * The child inherits this process's environment, which is how the generated
+ * `BUDDI_DB_PASSWORD` reaches `POSTGRES_PASSWORD` in the compose file without
+ * ever being written to `.env` — compose prefers the real environment over the
+ * `.env` it reads for itself.
+ */
 async function compose(args: string[]): Promise<number> {
   return runInherit('docker', ['compose', ...args], { cwd: REPO_ROOT });
 }
@@ -71,7 +84,29 @@ export async function runDb(
     return 1;
   }
 
+  if (action === 'secure') {
+    return runDbSecure({ env });
+  }
+
   if (action === 'up') {
+    // First run on a fresh machine: the container is about to be created, and
+    // `initdb` reads POSTGRES_PASSWORD exactly once. Generate the password
+    // *before* that happens, so a brand-new installation is never built around
+    // the one this project shipped with. A vault that already holds one is
+    // left alone, which is what makes a second `db up` a no-op.
+    const ensured = await ensureDatabasePassword({ env });
+    if (ensured) {
+      env[DB_PASSWORD_VAR] = ensured.password;
+      if (ensured.created) {
+        // Nothing has connected yet, so the URL assembled at startup was built
+        // around the old default. Re-assemble it before the readiness probe.
+        env[DATABASE_URL_VAR] = assembleDatabaseUrl({
+          ...databaseDefaults(env),
+          password: ensured.password,
+        });
+        console.log(`generated a database password and stored it as ${DB_PASSWORD_VAR} in the vault`);
+      }
+    }
     const code = await compose(['up', '-d', DB_SERVICE]);
     if (code !== 0) return code;
     // Started is not the same as accepting connections; wait for the latter,
