@@ -4,7 +4,7 @@
  * copies: validate against the shared schema, and prove the paths actually hit
  * the shape your own tool returns.
  */
-import { parseViewDescriptors } from '@buddi/core';
+import { parseViewDescriptors, ToolRegistry } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import { createWeatherManifest } from './index.js';
 import type { ForecastOutput } from './tools/forecast.js';
@@ -47,5 +47,23 @@ describe('the forecast view descriptor', () => {
         tools: manifest.tools.map((tool) => tool.name),
       }),
     ).toThrow(/does not contribute/);
+  });
+});
+
+/**
+ * The other thing a plugin contributes that leaves this process: the tool's
+ * input schema, which goes to a model provider. Both Anthropic and OpenAI
+ * require it to be an object, so the registry refuses anything else at
+ * registration — and a worked example should be the thing that passes.
+ */
+describe('the tools this example contributes', () => {
+  it('register, and declare object input schemas', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+    const specs = registry.list();
+    expect(specs.map((s) => s.name)).toEqual(manifest.tools.map((t) => t.name));
+    for (const spec of specs) {
+      expect(spec.inputSchema, spec.name).toMatchObject({ type: 'object' });
+    }
   });
 });

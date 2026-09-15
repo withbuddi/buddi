@@ -38,12 +38,15 @@ import {
   FakeSmtpServer,
   fakeMessage,
   GMAIL_SECRET_NAME,
+  TRIAGE_AGENT_ID,
   triageDedupKey,
 } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadGatewayCatalog } from './agents/catalog.js';
 import { createDelegationManifest } from './agents/delegation.js';
 import { createCanvasManifest } from './agents/canvas.js';
@@ -264,9 +267,22 @@ suite('end to end: mail in, approved send out', () => {
     registry.register(createOwnerManifest(registry));
     registry.register(createPlatformManifest(registry));
     registry.register(createDelegationManifest(registry));
-    const catalog = loadGatewayCatalog({ env: ENV, registry });
-    // The agent a source names is the one the owner types as @postman.
-    expect(catalog.resolve('mail-triage').handle).toBe('postman');
+    // A fixture agent under the id the email plugin's source names — never the
+    // catalog on this machine. `private/` is gitignored, a fresh clone has none
+    // of it, and the owner may add or remove a persona at any time; none of
+    // that changes the path this test walks.
+    const catalog = loadGatewayCatalog({
+      dir: path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '__fixtures__',
+        'triage-agents',
+      ),
+      env: ENV,
+      registry,
+    });
+    // The agent a source names is installed here, and is addressable by handle.
+    const triage = catalog.resolve(TRIAGE_AGENT_ID);
+    expect(catalog.byHandle(triage.handle)?.id).toBe(TRIAGE_AGENT_ID);
 
     const outcomes = await runSources(pool, registry.manifests(), {
       now: NOW,

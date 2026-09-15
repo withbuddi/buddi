@@ -25,6 +25,8 @@ import {
   listPendingActions,
   listReminders,
   runMigrations,
+  ToolRegistry,
+  type AgentCatalog,
   type Job,
   type JobContext,
   type ToolContext,
@@ -36,6 +38,8 @@ import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createToolRegistry, loadGatewayCatalog } from '../agents/catalog.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './agent-run.js';
 
@@ -61,6 +65,27 @@ const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_reminders_gw_test_${process.pid}`;
 
 const ENV = { BUDDI_TZ: 'America/New_York' } as NodeJS.ProcessEnv;
+
+/**
+ * The agent a fired reminder wakes — a fixture this repository ships, never
+ * whatever is installed on the machine running the suite: `private/` is
+ * gitignored, a fresh clone has none of it, and making another agent is a
+ * supported action that must not break the platform's own tests.
+ */
+const MISSION_AGENT = 'mission-agent';
+
+function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
+  return loadGatewayCatalog({
+    dir: path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '__fixtures__',
+      'mission-agents',
+    ),
+    env: ENV,
+    registry,
+  });
+}
 const NOW = new Date('2026-09-14T12:00:00Z');
 const TZ = 'America/New_York';
 
@@ -169,7 +194,7 @@ suite('reminders and proposed schedules (postgres)', () => {
 
   it('delivers nothing when the fired run decides the fact no longer matters', async () => {
     const created = await createReminder(pool, {
-      agentId: 'finance-advisor',
+      agentId: MISSION_AGENT,
       dueAt: new Date(NOW.getTime() + 2 * 3_600_000),
       text: 'check whether the card payment went out',
       now: NOW,
@@ -182,7 +207,7 @@ suite('reminders and proposed schedules (postgres)', () => {
     const job = (await listJobs(pool, { kind: AGENT_RUN_JOB_KIND }))[0] as Job;
 
     const registry = createToolRegistry();
-    const catalog = loadGatewayCatalog({ env: ENV, registry });
+    const catalog = fixtureCatalog(registry);
     const delivered: string[] = [];
     const calls: string[] = [];
     const handle = createAgentRunHandler({

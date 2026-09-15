@@ -165,3 +165,155 @@ describe('ToolRegistry', () => {
     expect(res).toMatchObject({ ok: false, reason: 'tool-error', message: 'upstream exploded' });
   });
 });
+
+/**
+ * The provider contract. Anthropic refuses a whole request whose
+ * `input_schema.type` is missing ("tools.N.custom.input_schema.type: Field
+ * required") and OpenAI wants the same of `function.parameters`, so an object
+ * schema is what the registry owes every provider — whatever a plugin wrote.
+ */
+describe('the tool input schema guarantee', () => {
+  function withInput(input: PluginManifest['tools'][number]['input']): PluginManifest {
+    return {
+      name: 'demo',
+      version: '0.0.1',
+      schema: 'demo',
+      migrationsDir: '/tmp/demo-migrations',
+      tools: [
+        {
+          name: 'demo.thing',
+          description: 'A thing.',
+          tier: 'auto',
+          input,
+          execute: (async () => null) as never,
+        },
+      ],
+    };
+  }
+
+  it('flattens a discriminated union into the object schema a provider accepts', async () => {
+    const r = new ToolRegistry();
+    r.register(
+      withInput(
+        z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('a'), n: z.number() }),
+          z.object({ kind: z.literal('b'), s: z.string() }),
+        ]),
+      ),
+    );
+    const schema = r.list()[0]!.inputSchema;
+    // No union at the top level: Anthropic refuses one even with the type
+    // ("input_schema does not support oneOf, allOf, or anyOf at the top level").
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.oneOf).toBeUndefined();
+    expect(schema).toMatchObject({
+      type: 'object',
+      properties: {
+        // The discriminator reads as one enum rather than a pile of consts.
+        kind: { type: 'string', enum: ['a', 'b'] },
+        n: { type: 'number' },
+        s: { type: 'string' },
+      },
+      // Only the key every branch requires — never one that would reject a
+      // call zod accepts.
+      required: ['kind'],
+    });
+
+    // The flattening is a description, not a relaxation: zod still decides.
+    await expect(r.invoke('demo.thing', { kind: 'a', n: 1 }, ctx)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(r.invoke('demo.thing', { kind: 'a', s: 'no' }, ctx)).resolves.toMatchObject({
+      ok: false,
+      reason: 'invalid-args',
+    });
+  });
+
+  it('keeps a property that genuinely differs across branches as alternatives', () => {
+    const r = new ToolRegistry();
+    r.register(
+      withInput(
+        z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('a'), data: z.object({ n: z.number() }) }),
+          z.object({ kind: z.literal('b'), data: z.object({ s: z.string() }) }),
+        ]),
+      ),
+    );
+    const schema = r.list()[0]!.inputSchema as { properties: { data: { anyOf: unknown[] } } };
+    // Legal here — it is the *top level* the API refuses a union at.
+    expect(schema.properties.data.anyOf).toHaveLength(2);
+  });
+
+  it('also flattens a plain union of objects, and a union of unions', () => {
+    const r = new ToolRegistry();
+    r.register(withInput(z.union([z.object({ a: z.number() }), z.object({ b: z.string() })])));
+    expect(r.list()[0]!.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { a: { type: 'number' }, b: { type: 'string' } },
+    });
+    expect(r.list()[0]!.inputSchema.anyOf).toBeUndefined();
+
+    const nested = new ToolRegistry();
+    nested.register(
+      withInput(
+        z.union([
+          z.union([z.object({ a: z.number() }), z.object({ b: z.string() })]),
+          z.object({ c: z.boolean() }),
+        ]),
+      ),
+    );
+    expect(nested.list()[0]!.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { a: {}, b: {}, c: {} },
+    });
+    expect(nested.list()[0]!.inputSchema.anyOf).toBeUndefined();
+  });
+
+  it('leaves an ordinary object schema exactly as zod rendered it', () => {
+    const r = new ToolRegistry();
+    r.register(withInput(z.object({ n: z.number().int().describe('a count') })));
+    expect(r.list()[0]!.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { n: { type: 'integer', description: 'a count' } },
+      required: ['n'],
+    });
+  });
+
+  it.each([
+    ['a top-level string', z.string(), /type 'string'/],
+    ['a top-level array', z.array(z.string()), /type 'array'/],
+    ['a top-level number', z.number(), /type 'number'/],
+    ['an unconstrained input', z.unknown(), /no type at all/],
+    [
+      'a union with a non-object branch',
+      z.union([z.object({ a: z.number() }), z.string()]),
+      /branches are not all objects/,
+    ],
+  ])('refuses %s at registration, naming the tool', (_label, input, message) => {
+    const r = new ToolRegistry();
+    expect(() => r.register(withInput(input as never))).toThrow(/demo\.thing/);
+    expect(() => r.register(withInput(input as never))).toThrow(/plugin demo/);
+    expect(() => r.register(withInput(input as never))).toThrow(message as RegExp);
+  });
+
+  it('registers nothing at all when one tool in the manifest is refused', () => {
+    const r = new ToolRegistry();
+    const bad: PluginManifest = {
+      ...withInput(z.object({ ok: z.boolean() })),
+      tools: [
+        withInput(z.object({ ok: z.boolean() })).tools[0]!,
+        {
+          name: 'demo.bare',
+          description: 'A bare string input.',
+          tier: 'auto',
+          input: z.string() as never,
+          execute: (async () => null) as never,
+        },
+      ],
+    };
+    expect(() => r.register(bad)).toThrow(/demo\.bare/);
+    expect(r.has('demo.thing')).toBe(false);
+    expect(r.list()).toEqual([]);
+    expect(r.manifests()).toEqual([]);
+  });
+});

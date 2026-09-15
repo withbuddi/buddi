@@ -405,3 +405,66 @@ describe('createAnthropicProvider — multimodal blocks', () => {
     ]);
   });
 });
+
+/**
+ * The wire contract that actually broke. The Messages API rejects the whole
+ * request — every turn, before a single token — when a tool's schema has no
+ * `input_schema.type` (`tools.8.custom.input_schema.type: Field required`),
+ * and rejects it again if the schema is a union at the top level even with the
+ * type stated (`input_schema does not support oneOf, allOf, or anyOf at the top
+ * level`). The registry is what guarantees the shape (see `toolInputSchema`);
+ * this is the assertion that the adapter puts it on the wire unaltered.
+ */
+describe('createAnthropicProvider — input_schema on the wire', () => {
+  /**
+   * What the registry produces for a discriminated-union input such as
+   * `canvas.show`: the object type stated alongside the rendered branches.
+   */
+  const flattenedUnion = {
+    type: 'object',
+    properties: {
+      renderer: { type: 'string', enum: ['table', 'bars'] },
+      data: {
+        anyOf: [
+          { type: 'object', properties: { rows: { type: 'array' } } },
+          { type: 'object', properties: { bars: { type: 'array' } } },
+        ],
+      },
+    },
+    required: ['renderer', 'data'],
+  };
+
+  it('sends every tool with an object type, branches intact', async () => {
+    let sent: any;
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(init.body as string);
+      return jsonResponse(200, okBody());
+    });
+    const provider = createAnthropicProvider(
+      {
+        kind: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        credentialKind: 'api-key',
+        secret: 'k',
+        model: 'claude-sonnet-5',
+      },
+      { fetch: fetchMock as any },
+    );
+    await provider.complete({
+      system: 's',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      tools: [
+        { name: 'finance.balance', description: 'd', input_schema: { type: 'object' } },
+        { name: 'canvas.show', description: 'd', input_schema: flattenedUnion },
+      ],
+    });
+    for (const tool of sent.tools) {
+      expect(tool.input_schema.type, tool.name).toBe('object');
+      expect(tool.input_schema.anyOf, tool.name).toBeUndefined();
+      expect(tool.input_schema.oneOf, tool.name).toBeUndefined();
+      expect(tool.input_schema.allOf, tool.name).toBeUndefined();
+    }
+    // Unaltered below the top level, where alternatives are legal.
+    expect(sent.tools[1].input_schema).toEqual(flattenedUnion);
+  });
+});

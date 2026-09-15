@@ -53,7 +53,162 @@ export type InvokeResult<O = unknown> =
       message: string;
     };
 
-type Entry = { tool: ToolDefinition<any, any>; plugin: string; version: string };
+type Entry = {
+  tool: ToolDefinition<any, any>;
+  plugin: string;
+  version: string;
+  /** Derived once at registration — see `toolInputSchema`. */
+  inputSchema: Record<string, unknown>;
+};
+
+/**
+ * Every provider this platform speaks to requires a tool's parameters to be a
+ * plain *object* schema, and both are stricter than JSON Schema itself:
+ * Anthropic refuses a request whose `input_schema.type` is missing
+ * (`tools.N.custom.input_schema.type: Field required`) and refuses it again if
+ * you merely add the type to a union (`input_schema does not support oneOf,
+ * allOf, or anyOf at the top level`); OpenAI wants the same of
+ * `function.parameters`. That requirement is a property of the whole tool
+ * surface, not of one adapter, so it is settled here — the registry is the
+ * single place every provider gets its schemas from, and a third-party plugin
+ * with an exotic zod schema must not be able to break every conversation for
+ * the agent that installs it.
+ *
+ * Two shapes are in play and they are not the same mistake:
+ *
+ *  - A **union of object variants** — `z.discriminatedUnion(...)`, or a
+ *    `z.union([z.object(), z.object()])` — is a legitimate and useful input.
+ *    `zodToJsonSchema` renders it as a bare `anyOf` because there is nothing
+ *    else it could do, but the input *is* an object, so it is flattened into
+ *    one: every branch's properties merged, required narrowed to the keys every
+ *    branch requires, and a key that differs across branches described by the
+ *    alternatives (which are legal *below* the top level). Repaired.
+ *  - A tool whose input genuinely is not an object — a top-level string, array
+ *    or number, or an unconstrained `z.unknown()` — cannot be called through
+ *    any provider at all. There is no honest repair, so it is refused at
+ *    registration, naming the tool and the plugin, which is the last boundary
+ *    where the bug can still be attributed to whoever wrote it.
+ *
+ * The flattening is a *description*, never a relaxation: `invoke` parses every
+ * call with the tool's own zod schema, so a model that mixes two variants is
+ * still refused with zod's message. What it costs is a hint — the JSON Schema
+ * no longer ties one variant's fields to another's — and what it buys is a
+ * request the API will accept at all.
+ */
+type JsonSchema = Record<string, unknown>;
+
+function isPlainObject(value: unknown): value is JsonSchema {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The branch list of a union schema, if this is one. */
+function unionBranches(schema: JsonSchema): JsonSchema[] | undefined {
+  const branches = schema.anyOf ?? schema.oneOf;
+  if (!Array.isArray(branches) || branches.length === 0) return undefined;
+  if (!branches.every(isPlainObject)) return undefined;
+  return branches as JsonSchema[];
+}
+
+/**
+ * Every object variant this schema can be, or undefined if it can be something
+ * that is not an object. Nested unions are flattened as they are walked.
+ */
+function objectVariants(schema: JsonSchema): JsonSchema[] | undefined {
+  if (schema.type === 'object') return [schema];
+  const branches = unionBranches(schema);
+  if (!branches) return undefined;
+  const variants: JsonSchema[] = [];
+  for (const branch of branches) {
+    const nested = objectVariants(branch);
+    if (!nested) return undefined;
+    variants.push(...nested);
+  }
+  return variants;
+}
+
+/** One property schema standing for several — collapsing literals to an enum. */
+function mergeProperty(variants: JsonSchema[]): JsonSchema {
+  const unique: JsonSchema[] = [];
+  for (const variant of variants) {
+    if (!unique.some((seen) => JSON.stringify(seen) === JSON.stringify(variant))) {
+      unique.push(variant);
+    }
+  }
+  if (unique.length === 1) return unique[0]!;
+  // A discriminator: `{type:'string',const:'a'}` per branch reads far better to
+  // a model as one enum than as a pile of one-value alternatives.
+  const consts = unique.map((v) => v.const);
+  if (
+    consts.every((c) => c !== undefined) &&
+    unique.every((v) => Object.keys(v).every((k) => k === 'const' || k === 'type' || k === 'description'))
+  ) {
+    const types = new Set(unique.map((v) => v.type).filter((t) => t !== undefined));
+    const description = unique.find((v) => typeof v.description === 'string')?.description;
+    return {
+      ...(types.size === 1 ? { type: [...types][0] } : {}),
+      enum: consts,
+      ...(description === undefined ? {} : { description }),
+    };
+  }
+  return { anyOf: unique };
+}
+
+/** One object schema covering every variant — see the note above. */
+function flattenVariants(variants: JsonSchema[]): JsonSchema {
+  const properties: Record<string, JsonSchema[]> = {};
+  for (const variant of variants) {
+    const props = isPlainObject(variant.properties) ? variant.properties : {};
+    for (const [key, value] of Object.entries(props)) {
+      if (!isPlainObject(value)) continue;
+      (properties[key] ??= []).push(value);
+    }
+  }
+  // Required only where *every* variant requires it: anything narrower would
+  // have the schema reject a call zod would accept.
+  const required = Object.keys(properties).filter((key) =>
+    variants.every((v) => Array.isArray(v.required) && (v.required as string[]).includes(key)),
+  );
+  const description = variants.find((v) => typeof v.description === 'string')?.description;
+  return {
+    type: 'object',
+    properties: Object.fromEntries(
+      Object.entries(properties).map(([key, vs]) => [key, mergeProperty(vs)]),
+    ),
+    ...(required.length > 0 ? { required } : {}),
+    ...(description === undefined ? {} : { description }),
+  };
+}
+
+/** How a refused schema is described in the error — enough to find the bug. */
+function describeSchema(schema: JsonSchema): string {
+  if (typeof schema.type === 'string') return `type '${schema.type}'`;
+  if (Array.isArray(schema.type)) return `type ${JSON.stringify(schema.type)}`;
+  if (unionBranches(schema)) return 'a union whose branches are not all objects';
+  return `no type at all (${JSON.stringify(schema).slice(0, 120)})`;
+}
+
+/**
+ * The JSON Schema for one tool's input, guaranteed to be a plain object schema
+ * with no union at the top level.
+ *
+ * Throws if it cannot be — the loud failure at the boundary where the offending
+ * plugin can still be named.
+ */
+export function toolInputSchema(tool: ToolDefinition<any, any>, plugin: string): JsonSchema {
+  const schema = zodToJsonSchema(tool.input, {
+    target: 'jsonSchema7',
+    $refStrategy: 'none',
+  }) as JsonSchema;
+
+  if (schema.type === 'object' && !unionBranches(schema)) return schema;
+  const variants = objectVariants(schema);
+  if (variants) return flattenVariants(variants);
+  throw new Error(
+    `tool ${tool.name} (plugin ${plugin}) declares an input that is not an object: ` +
+      `${describeSchema(schema)}. Tool inputs must be an object schema (or a union of ` +
+      `object schemas) — every model provider requires it.`,
+  );
+}
 
 export class ToolRegistry {
   readonly #tools = new Map<string, Entry>();
@@ -63,6 +218,9 @@ export class ToolRegistry {
     if (this.#manifests.has(manifest.name)) {
       throw new Error(`plugin already registered: ${manifest.name}`);
     }
+    // Derived before anything is stored, so a plugin that fails either check
+    // leaves the registry exactly as it was.
+    const schemas = new Map<string, Record<string, unknown>>();
     for (const tool of manifest.tools) {
       const existing = this.#tools.get(tool.name);
       if (existing) {
@@ -70,6 +228,8 @@ export class ToolRegistry {
           `tool name collision: ${tool.name} (${existing.plugin} and ${manifest.name})`,
         );
       }
+      // The provider contract, checked where the plugin can still be named.
+      schemas.set(tool.name, toolInputSchema(tool, manifest.name));
     }
     // View descriptors are the one contribution that leaves this process and is
     // read by code that cannot check it — the browser draws what it is handed.
@@ -87,6 +247,7 @@ export class ToolRegistry {
         tool,
         plugin: manifest.name,
         version: manifest.version,
+        inputSchema: schemas.get(tool.name)!,
       });
     }
   }
@@ -109,16 +270,18 @@ export class ToolRegistry {
     return this.#tools.has(name);
   }
 
-  /** Tool specs for the model, in registration order. */
+  /**
+   * Tool specs for the model, in registration order.
+   *
+   * The schema was derived and checked at `register()`, so what a provider is
+   * handed here is always an object schema — see `toolInputSchema`.
+   */
   list(): ToolSpec[] {
-    return [...this.#tools.values()].map(({ tool }) => ({
+    return [...this.#tools.values()].map(({ tool, inputSchema }) => ({
       name: tool.name,
       description: tool.description,
       tier: tool.tier,
-      inputSchema: zodToJsonSchema(tool.input, {
-        target: 'jsonSchema7',
-        $refStrategy: 'none',
-      }) as Record<string, unknown>,
+      inputSchema,
     }));
   }
 
