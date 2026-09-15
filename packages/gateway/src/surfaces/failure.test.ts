@@ -17,12 +17,40 @@ import {
 } from '@buddi/core';
 import { failedTurnReply } from './failure.js';
 
-/** A pool that records the offers written to it and hands back plausible rows. */
-function fakePool(): Queryable & { inserted: Array<Record<string, unknown>> } {
+/** One stored message, in the shape `core.messages` hands back. */
+type StoredMessage = { role: string; content: unknown };
+
+export type FakePool = Queryable & {
+  /** `core.offers` rows written, in order. */
+  inserted: Array<Record<string, unknown>>;
+  /** `core.messages` rows, oldest first — the transcript. */
+  messages: StoredMessage[];
+};
+
+/**
+ * A pool that knows the three statements a failed turn makes: store the offer,
+ * read the tail of the transcript, close it.
+ *
+ * Seeded with whatever the dead run had already written, because that is the
+ * whole question `closeFailedTurn` answers — a turn ending on the owner's
+ * message is hanging, one ending on an answer is not.
+ */
+function fakePool(seed: StoredMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]): FakePool {
   const inserted: Array<Record<string, unknown>> = [];
+  const messages: StoredMessage[] = [...seed];
   return {
     inserted,
-    query: vi.fn(async (_sql: string, params: unknown[] = []) => {
+    messages,
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      const text = sql.replace(/\s+/g, ' ').trim();
+      if (text.startsWith('select role, content from core.messages')) {
+        const last = messages[messages.length - 1];
+        return { rows: last ? [last] : [] };
+      }
+      if (text.startsWith('insert into core.messages')) {
+        messages.push({ role: String(params[1]), content: JSON.parse(String(params[2])) });
+        return { rows: [] };
+      }
       const row = {
         id: `offer-${inserted.length + 1}`,
         agent_id: params[0],
@@ -38,7 +66,7 @@ function fakePool(): Queryable & { inserted: Array<Record<string, unknown>> } {
       inserted.push(row);
       return { rows: [row] };
     }),
-  } as unknown as Queryable & { inserted: Array<Record<string, unknown>> };
+  } as unknown as FakePool;
 }
 
 const NOW = new Date('2026-09-15T17:37:00.000Z');
@@ -176,6 +204,82 @@ describe('when a retry is not offered', () => {
     const out = await failedTurnReply(pool, turn({ prompt: undefined }));
     expect(pool.inserted).toHaveLength(0);
     expect(out.rendered.controls).toHaveLength(0);
+  });
+});
+
+/*
+ * The defect this half exists for: the owner's message is persisted before the
+ * provider is called, so a dead run leaves a question in the transcript with
+ * nothing after it — and the next run that works answers it. Live, that meant a
+ * question about Parfait Sedjro asked at 17:32 was answered at 20:39, on top of
+ * a question about somebody else.
+ */
+describe('closing the failed turn in the transcript', () => {
+  const owner = { role: 'user', content: [{ type: 'text', text: 'draft a reply to Parfait Sedjro' }] };
+
+  it('marks the owner’s unanswered message as a turn that failed', async () => {
+    const pool = fakePool([owner]);
+    const out = await failedTurnReply(pool, turn());
+    expect(out.closure).toBe('closed');
+    // His message is still there — deleting it would make the record lie the
+    // other way — and it is followed by what actually happened.
+    expect(pool.messages[0]).toBe(owner);
+    const marker = pool.messages[1];
+    expect(marker?.role).toBe('assistant');
+    const text = String((marker?.content as any[])[0].text);
+    expect(text).toContain('This turn failed before I could answer');
+    expect(text).toContain('will not, unless you ask again');
+    // A retry was offered, and the marker says so rather than guessing.
+    expect(text).toContain('try it again');
+  });
+
+  it('says nothing about a retry when none was offered', async () => {
+    const pool = fakePool([owner]);
+    await failedTurnReply(pool, turn({ error: permanentError() }));
+    const text = String((pool.messages[1]?.content as any[])[0].text);
+    expect(text).not.toContain('try it again');
+  });
+
+  it('answers the tool calls the dead run left dangling', async () => {
+    // The 17:33 turn: an assistant message with a tool_use, and a run that
+    // never came back with the result. Sent as-is, the provider rejects it.
+    const pool = fakePool([
+      owner,
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01', name: 'email.search', input: {} }] },
+    ]);
+    const out = await failedTurnReply(pool, turn());
+    expect(out.closure).toBe('closed-with-tool-results');
+    const results = pool.messages[2];
+    expect(results?.role).toBe('user');
+    expect((results?.content as any[])[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'toolu_01',
+      is_error: true,
+    });
+    expect(pool.messages[3]?.role).toBe('assistant');
+  });
+
+  it('leaves an answered turn alone', async () => {
+    // The run answered and then something after it threw. Nothing is hanging,
+    // and a marker would be a failure report for a turn that worked.
+    const pool = fakePool([owner, { role: 'assistant', content: [{ type: 'text', text: 'Here it is.' }] }]);
+    const out = await failedTurnReply(pool, turn());
+    expect(out.closure).toBe('answered');
+    expect(pool.messages).toHaveLength(2);
+  });
+
+  it('closes nothing when the run died before it wrote anything', async () => {
+    const pool = fakePool([]);
+    const out = await failedTurnReply(pool, turn());
+    expect(out.closure).toBe('empty');
+    expect(pool.messages).toHaveLength(0);
+  });
+
+  it('does not touch a transcript it was not given', async () => {
+    const pool = fakePool([owner]);
+    const out = await failedTurnReply(pool, turn({ conversationId: undefined }));
+    expect(out.closure).toBeUndefined();
+    expect(pool.messages).toHaveLength(1);
   });
 });
 

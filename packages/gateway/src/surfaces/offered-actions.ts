@@ -34,6 +34,19 @@
  * only when the turn genuinely ends at a decision that is the owner's to make,
  * at most three, each a real next step, and never a synonym for "ok".
  *
+ * ## Rare is a frequency, not a reluctance
+ *
+ * Which is the failure this had, live: the owner asked for a draft of a reply
+ * to a message four other people were on, the agent wrote it, recognised that
+ * the audience was his to choose — and ended in prose anyway, with "want me to
+ * send this one now?". The restraint had beaten the condition. Turning up the
+ * volume ("offer often") would have traded this bug for the worse one, so the
+ * policy instead names the one signal that settles it: a tool that says in its
+ * own result that it has left the owner a decision, and names the ways it
+ * could go, has already done the judging — see `email.draft_reply`, which
+ * reports who else was on the original even when the draft went narrow. The
+ * restraint is unchanged for every turn where no tool said any such thing.
+ *
  * ## An offer belongs to the turn that made it
  *
  * See `withdrawOffers` in core. The conversation's next turn withdraws what the
@@ -116,7 +129,7 @@ export function createOfferManifest(sink: OfferSink): PluginManifest {
   const offer: ToolDefinition<z.infer<typeof offerInput>, OfferResult> = {
     name: OFFER_TOOL,
     description:
-      'Offer the owner the two or three things they could do next, as buttons where this surface has them and as a short list of sentences where it does not. Call it once, as you finish, and only when your reply genuinely ends at a decision that is theirs to make and that you already know how to carry out — a draft waiting to be sent, a choice between two real options. Do not call it to say "ok" in button form, to offer to keep talking, or when reading the reply is all there is to do; a turn with nothing to decide should offer nothing, and that is the normal case. It sends nothing and authorizes nothing: taking one asks you the sentence you wrote here, and anything with an effect still stops at the owner\'s approval exactly as it would have.',
+      'Offer the owner the two or three things they could do next, as buttons where this surface has them and as a short list of sentences where it does not. Call it once, just before you write the reply that ends the turn, and only when that reply genuinely ends at a decision that is theirs to make and that you already know how to carry out — a draft waiting to be sent, a choice between two real options. One case is not a judgement call at all: when a tool result tells you it has left the owner a decision and names the two ways it could go, offer those two. Do not call it to say "ok" in button form, to offer to keep talking, or when reading the reply is all there is to do; a turn with nothing to decide should offer nothing, and that is the normal case. It sends nothing and authorizes nothing: taking one asks you the sentence you wrote here, and anything with an effect still stops at the owner\'s approval exactly as it would have.',
     tier: 'auto',
     input: offerInput,
     async execute(input) {
@@ -141,9 +154,19 @@ export function createOfferManifest(sink: OfferSink): PluginManifest {
 
 /** The instruction block that tells an interactive turn the tool exists. */
 export const OFFER_POLICY_SUFFIX = [
-  `When a turn of yours ends at a decision the owner has to make, and you already know how to carry out each way it could go, call ${OFFER_TOOL} as you finish with at most ${MAX_OFFERS} of them.`,
+  `When a turn of yours ends at a decision the owner has to make, and you already know how to carry out each way it could go, call ${OFFER_TOOL} with at most ${MAX_OFFERS} of them.`,
+  'Call it *before* you write your reply, and then write the whole reply — the owner is shown the message you write after the call, and only that one, so an answer written before it is an answer they never see.',
   'Each one is a label they read and the sentence you are asked if they choose it.',
   'This is rare. Most turns end with nothing to decide, and they offer nothing — buttons under every answer are noise, and then the owner stops reading the one that mattered.',
+  // Rare is a description of how often the condition holds, and it kept being
+  // read as a discouragement that outranked the condition itself: the model
+  // would reach the decision, recognise it, and still end in prose because
+  // offering "is rare". So the policy names the one signal that settles it
+  // without raising the general volume — a tool that says, in its own result,
+  // that it has left the owner a choice has already done the judging.
+  `Rare describes how often that happens, not how reluctant to be when it does. When a tool you called says in its result that it has left the owner a decision and names the ways it could go, the judgement is already made and you call ${OFFER_TOOL} with those moves — worded as the owner would ask for them.`,
+  'Never end a turn by asking the owner in prose to choose between things you could have handed them: a question they can only answer by typing back what you already knew how to do is the failure this tool exists to prevent.',
+  `A surface with nothing to tap is not a reason to skip it. What you declare is recorded either way and can still be taken; a surface without buttons renders it as a short list under your reply, which the surface writes — so call ${OFFER_TOOL} and do not also spell the options out yourself.`,
   'Never offer a synonym for "ok", an offer to keep talking, or two wordings of the same move; if you cannot name a real next step, do not call it.',
   'It delivers nothing and authorizes nothing: taking one asks you what you wrote, and anything that leaves this machine still goes through the approval the owner would have seen anyway.',
 ].join(' ');

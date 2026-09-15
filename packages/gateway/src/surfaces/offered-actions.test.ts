@@ -127,6 +127,25 @@ describe('an interactive turn declaring the actions it offers', () => {
     expect(OFFER_POLICY_SUFFIX).toMatch(/authorizes nothing/i);
     expect(OFFER_POLICY_SUFFIX).toMatch(/never offer a synonym for "ok"/i);
   });
+
+  it('names the one case that is not a judgement call, without raising the volume', () => {
+    // The live failure: the model reached a decision it could see, and ended in
+    // prose because offering "is rare". Restraint has to survive (the sentence
+    // above still asserts it) while the condition it qualifies wins when a tool
+    // has already done the judging.
+    expect(OFFER_POLICY_SUFFIX).toMatch(/rare describes how often/i);
+    expect(OFFER_POLICY_SUFFIX).toMatch(/left the owner a decision/i);
+    expect(OFFER_POLICY_SUFFIX).toMatch(/never end a turn by asking the owner in prose/i);
+    // And the terminal's "there is no button to tap here" must not read as
+    // permission to skip it: that is exactly how the first fixed build failed.
+    expect(OFFER_POLICY_SUFFIX).toMatch(/nothing to tap is not a reason to skip it/i);
+    // The loop keeps the last assistant text block only: an answer written
+    // before the call is an answer nobody reads.
+    expect(OFFER_POLICY_SUFFIX).toMatch(/before\* you write your reply/i);
+    expect(tool({}).description).toMatch(/left the owner a decision/i);
+    // And the restraint is still the default, in the same breath.
+    expect(OFFER_POLICY_SUFFIX).toMatch(/most turns end with nothing to decide/i);
+  });
 });
 
 describe('storing what a turn offered', () => {

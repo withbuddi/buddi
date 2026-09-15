@@ -123,7 +123,7 @@ const draftReplyInput = z.object({
 export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown> = {
   name: 'email.draft_reply',
   description:
-    'Write a reply to a message and save it as a draft. The subject and the threading come from the original, and so does the recipient: by default the reply goes to the sender alone. Use `audience` to reply to everyone the message went to instead. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
+    'Write a reply to a message and save it as a draft. The subject and the threading come from the original, and so does the recipient: by default the reply goes to the sender alone. Use `audience` to reply to everyone the message went to instead. The result names everyone else who was on the original, and says so even when you chose the narrow shape — read it, because a narrow draft of a message other people were on leaves the owner a decision, and the result tells you what to do with it. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
   tier: 'auto',
   input: draftReplyInput,
   async execute(input, ctx) {
@@ -163,25 +163,88 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
 
     // What the draft says about its own audience, so the agent can tell the
     // owner who this would reach without re-deriving it from the original.
+    //
+    // And — the part that is not decoration — what it says about the audience
+    // it did *not* take. A sender-only draft of a message five people read is
+    // the one moment in this plugin where the turn ends at a decision only the
+    // owner can make, where one of the two outcomes cannot be taken back, and
+    // where the agent already knows how to carry out either one. A persona
+    // paragraph is skimmable; a tool result that states the fact at the exact
+    // moment it becomes true is not. `ownerDecision` is that statement.
+    const decision = describeAudienceDecision(audience);
     return {
       ...draft,
       audience: audience.audience,
       beyondSender: audience.beyondSender,
+      othersOnOriginal: audience.othersOnOriginal,
       ...(audience.excludedOwn.length > 0 ? { excludedOwnAddresses: audience.excludedOwn } : {}),
       ...(audience.senderLooksUnreplyable
         ? {
             senderNote: `${audience.sender} looks like an unattended address; a reply to it is unlikely to be read by anyone.`,
           }
         : {}),
-      audienceNote:
-        audience.beyondSender.length === 0
-          ? 'This reply goes to the sender alone.'
-          : `This reply goes to ${audience.beyondSender.length} ${
-              audience.beyondSender.length === 1 ? 'person' : 'people'
-            } beyond the sender: ${audience.beyondSender.join(', ')}. Say so when you show it to the owner — approving the send is the last chance to narrow it.`,
+      ...(decision ? { ownerDecision: decision } : {}),
+      audienceNote: audienceNoteFor(audience, decision),
     };
   },
 };
+
+/** The two moves, named, when a sender-only draft had a wider audience available. */
+export interface AudienceDecision {
+  /** Stable marker: this turn ends at a decision about who the reply reaches. */
+  decision: 'reply-audience';
+  /** The people a widened reply would add. Never empty when this exists. */
+  others: string[];
+  /** Plain words for what taking each way would mean. */
+  options: [string, string];
+  instruction: string;
+}
+
+/**
+ * Null whenever there is nothing to decide — which is most replies, and which
+ * is what keeps a button from appearing where it would be noise: a reply that
+ * was already widened has made the choice, and a message that was only ever
+ * between the owner and the sender never offered one.
+ */
+export function describeAudienceDecision(audience: {
+  audience: 'sender' | 'everyone';
+  sender: string;
+  othersOnOriginal: readonly string[];
+}): AudienceDecision | null {
+  if (audience.audience !== 'sender') return null;
+  const others = [...audience.othersOnOriginal];
+  if (others.length === 0) return null;
+  const count = `${others.length} other ${others.length === 1 ? 'person' : 'people'}`;
+  return {
+    decision: 'reply-audience',
+    others,
+    options: [
+      `send this draft to ${audience.sender} alone`,
+      `write it again to everyone the original reached — ${others.join(', ')}`,
+    ],
+    instruction:
+      `The message you replied to also went to ${count} (${others.join(', ')}), and the draft you just wrote goes to ${audience.sender} alone. ` +
+      'Show the owner that draft in full, and name those people by address while you do — that part of your reply does not change, and a reply that says only "here are your two options" is not one. ' +
+      'What changes is how the turn ends. Which of the two shapes goes out is the owner\'s to decide, not yours, and the wide one cannot be taken back once it is sent, ' +
+      `so end by offering both as next actions in the language you are writing in — sending it to ${audience.sender} alone first, writing it again to everyone second — ` +
+      'with whatever tool you have for offering the owner what to do next — call that tool first and write the reply after it, so the draft is in the message the owner is actually shown. ' +
+      'Do not end instead with a question in prose ("shall I send it?", "veux-tu que je l\'envoie ?"), and do not also list the two options in your own text: ' +
+      'an offer is recorded and can be taken, on any surface; a sentence you typed cannot.',
+  };
+}
+
+function audienceNoteFor(
+  audience: { beyondSender: readonly string[] },
+  decision: AudienceDecision | null,
+): string {
+  if (decision) return decision.instruction;
+  if (audience.beyondSender.length === 0) {
+    return 'This reply goes to the sender alone, and no one else was on the message it answers — there is no audience choice to put to the owner.';
+  }
+  return `This reply goes to ${audience.beyondSender.length} ${
+    audience.beyondSender.length === 1 ? 'person' : 'people'
+  } beyond the sender: ${audience.beyondSender.join(', ')}. Say so when you show it to the owner — approving the send is the last chance to narrow it.`;
+}
 
 const draftNewInput = z.object({
   to: z

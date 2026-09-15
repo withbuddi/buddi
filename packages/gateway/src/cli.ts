@@ -431,6 +431,11 @@ async function ask(
       profile: CLI_SURFACE,
       agentId: deps.agent.id,
       agentName: `@${deps.agent.handle}`,
+      // No `prompt`, so still no offer — a script has nothing to tap. The
+      // conversation is named so the dead turn is *closed*: `buddi ask --last`
+      // resumes this conversation, and an unanswered question in it would come
+      // back as the next run's opening paragraph.
+      conversationId,
       now: wiring.now(),
       log: (line) => console.error(line),
     });

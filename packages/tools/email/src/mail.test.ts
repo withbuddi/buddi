@@ -343,6 +343,42 @@ describe('who a reply goes to', () => {
     expect(reply.to).toEqual([]);
   });
 
+  it('names who the wide shape would reach even when the narrow one was taken', () => {
+    // The whole point: asking for `sender` must not hide the fact that four
+    // other people read the message. This is the field a draft's result turns
+    // into the owner's decision, so it is stated on both shapes.
+    const narrow = replyRecipients(original);
+    expect(narrow.audience).toBe('sender');
+    expect(narrow.beyondSender).toEqual([]);
+    expect(narrow.othersOnOriginal).toEqual([
+      'remy@example.test',
+      'noor@example.test',
+      'successor@example.test',
+    ]);
+    expect(replyRecipients({ ...original, audience: 'everyone' }).othersOnOriginal).toEqual(
+      narrow.othersOnOriginal,
+    );
+  });
+
+  it('counts nobody twice, and never the owner or the sender, among the others', () => {
+    const reply = replyRecipients({
+      from: 'her@example.test',
+      to: ['HER@example.test', 'janedoe+bills@gmail.com', 'him@example.test'],
+      cc: ['him@example.test', 'jane.doe@googlemail.com'],
+      owner: ['owner@example.com'],
+    });
+    expect(reply.othersOnOriginal).toEqual(['him@example.test']);
+  });
+
+  it('says there is no one else when the message was only between the two of them', () => {
+    const reply = replyRecipients({
+      from: 'her@example.test',
+      to: ['owner@example.com'],
+      owner: ['owner@example.com'],
+    });
+    expect(reply.othersOnOriginal).toEqual([]);
+  });
+
   it('reports a sender that no human reads', () => {
     expect(
       replyRecipients({ from: 'no-reply@service.test', to: [], owner: ['owner@x.test'] })

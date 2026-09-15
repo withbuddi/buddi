@@ -378,7 +378,16 @@ export const chatApi = {
     post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
   send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>
-    post<{ conversationId: string; runId: string }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
+    post<{
+      conversationId: string;
+      runId: string;
+      /**
+       * The thread the page was in had ended (idle, or too long), and this
+       * message opened a new one. `note` is the line the owner reads; the page
+       * follows `conversationId` either way.
+       */
+      boundary?: { note: string; previousConversationId: string };
+    }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
   cancel: (conversationId: string) =>
     post<unknown>(`/chat/conversations/${encodeURIComponent(conversationId)}/cancel`),
   attach: (file: File) => {

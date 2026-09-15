@@ -470,7 +470,53 @@ suite('email tools (postgres)', () => {
       expect(draft.bcc).toEqual([]);
       expect(draft.audience).toBe('sender');
       expect(draft.beyondSender).toEqual([]);
-      expect(draft.audienceNote).toMatch(/sender alone/i);
+      expect(draft.audienceNote).toMatch(/tdorothee@client\.test alone/i);
+    });
+
+    it('states, on the narrow draft, who else was on the message and what is left to decide', async () => {
+      // The failure this exists for: a sender-only draft of a message four
+      // people read used to come back saying only "the sender alone", and the
+      // turn ended with a question in prose. The result now carries the fact.
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci Dorothée.',
+      });
+      expect(draft.othersOnOriginal).toEqual([
+        'successor@client.test',
+        'colleague@client.test',
+        'director@client.test',
+      ]);
+      expect(draft.ownerDecision).toMatchObject({ decision: 'reply-audience' });
+      expect(draft.ownerDecision.others).toEqual(draft.othersOnOriginal);
+      expect(draft.ownerDecision.options).toHaveLength(2);
+      expect(draft.audienceNote).toContain('successor@client.test');
+      expect(draft.audienceNote).toMatch(/3 other people/);
+      expect(draft.audienceNote).toMatch(/owner's to decide/i);
+      expect(draft.audienceNote).toMatch(/offering the owner what to do next/i);
+      expect(draft.audienceNote).toMatch(/show the owner that draft/i);
+    });
+
+    it('leaves no decision when the message was only ever between the two of them', async () => {
+      // The other failure: a button where there is no choice. The bank wrote to
+      // the owner and nobody else, so nothing here says anything is pending.
+      const draft = await call('email.draft_reply', {
+        inReplyTo: ids[0],
+        bodyText: 'Noted, thank you.',
+      });
+      expect(draft.othersOnOriginal).toEqual([]);
+      expect(draft.ownerDecision).toBeUndefined();
+      expect(draft.audienceNote).toMatch(/no audience choice/i);
+    });
+
+    it('leaves no decision once the wide shape has been taken', async () => {
+      const draft = await call('email.draft_reply', {
+        inReplyTo: handover(),
+        bodyText: 'Merci à tous.',
+        audience: 'everyone',
+      });
+      expect(draft.othersOnOriginal).toHaveLength(3);
+      expect(draft.ownerDecision).toBeUndefined();
+      expect(draft.audienceNote).toMatch(/3 people beyond the sender/);
     });
 
     it('reaches everyone the message did when it is asked for, To in To and Cc in Cc', async () => {

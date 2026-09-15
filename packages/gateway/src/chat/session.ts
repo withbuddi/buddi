@@ -108,6 +108,7 @@ import {
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
 
 /** The chat id this surface books its inline mission runs against. */
 export const CLI_CHAT_ID = 'cli';
@@ -957,19 +958,62 @@ export class ChatSession {
         color,
       ),
     );
-    const outcome = await this.runTurn(asked, text, { carry: false });
+    // An answer belongs to the turn that asked it: a conversation boundary
+    // never lands between a question and its answer.
+    const outcome = await this.runTurn(asked, text, { carry: false, continuation: true });
     const again = outcome.askedOwner === true && taken.captures < MAX_CAPTURES;
     this.#pending.settle(CLI_CHAT_ID, taken, outcome.askedOwner === true, this.#deps.now().getTime());
     this.#out(dim(capturedNote(taken, { stillAsking: again }), color));
+  }
+
+  /**
+   * The conversation this turn runs in — which is not always the one the last
+   * turn ran in.
+   *
+   * `conversationFor` above answers "which conversation is this session's
+   * thread with this agent". This asks whether that thread is still live, by
+   * the rule Telegram and the dashboard share: three hours idle, or a
+   * transcript past the size budget. A terminal session left open overnight is
+   * the ordinary way this happens. `/reset` is unchanged and still does it in
+   * one word.
+   *
+   * The boundary is said out loud, dim, before the spinner: the owner sees why
+   * the agent is no longer holding yesterday in its head.
+   */
+  async #conversationForTurn(
+    agent: CatalogAgent,
+    opts: { continuation?: boolean } = {},
+  ): Promise<string> {
+    const current = this.#conversations.get(agent.id);
+    const { conversationId, boundary } = await conversationForTurn(this.#deps.pool, {
+      ...(current === undefined ? {} : { current }),
+      start: async () => {
+        const id = await createConversation(this.#deps.pool, agent.id);
+        this.#conversations.set(agent.id, id);
+        return id;
+      },
+      now: this.#deps.now(),
+      ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
+      log: (line: string) => this.#deps.log?.(line),
+    });
+    if (boundary) {
+      // The thread a question was asked in is over; nothing may still claim the
+      // owner's next message on its behalf.
+      this.#pending.clear(CLI_CHAT_ID);
+      this.#out(dim(boundary.note, this.#style().color));
+    }
+    return conversationId;
   }
 
   /** One owner turn with one agent. */
   async runTurn(
     agent: CatalogAgent,
     text: string,
-    opts: { carry?: boolean } = {},
+    opts: { carry?: boolean; continuation?: boolean } = {},
   ): Promise<TurnOutcome> {
-    const conversationId = await this.conversationFor(agent);
+    const conversationId = await this.#conversationForTurn(agent, {
+      ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
+    });
     // Files staged with /attach ride with exactly one message, the way a
     // Telegram caption rides with the document it arrived on.
     const staged = opts.carry === false ? [] : this.#attachments;

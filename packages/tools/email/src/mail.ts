@@ -199,6 +199,17 @@ export interface ReplyRecipients {
   sender: string;
   /** Everyone on the reply who is not the sender. Empty is the default shape. */
   beyondSender: string[];
+  /**
+   * Everyone who was on the *original* besides the sender and the owner — the
+   * people a widened reply would reach — **whatever shape was asked for**.
+   *
+   * `beyondSender` describes the reply that was written; this describes the
+   * choice that was available. They are the same list on `everyone` and they
+   * differ on `sender`, which is the whole point: a sender-only draft of a
+   * message that five people read is the moment the owner has a decision to
+   * make, and nothing downstream can see that moment unless this is here.
+   */
+  othersOnOriginal: string[];
   /** The owner's own addresses that were on the original and were left off. */
   excludedOwn: string[];
   /** True when the sender looks like a machine that will not read a reply. */
@@ -240,6 +251,22 @@ export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
   for (const address of input.alsoCc ?? []) add(cc, address);
 
   const senderKey = mailboxKey(sender);
+
+  // Who the wide shape *would* reach, derived from the original alone so that
+  // asking for the narrow one does not hide the choice. Same exclusions as a
+  // recipient line — the owner is never counted, nothing is counted twice —
+  // but computed on its own keys, because `seen` describes the reply.
+  const otherKeys = new Set<string>([senderKey]);
+  const othersOnOriginal: string[] = [];
+  for (const raw of [...input.to, ...(input.cc ?? [])]) {
+    const address = normalizeAddress(raw);
+    if (address === '' || isOwn(address)) continue;
+    const key = mailboxKey(address);
+    if (otherKeys.has(key)) continue;
+    otherKeys.add(key);
+    othersOnOriginal.push(address);
+  }
+
   return {
     to,
     cc,
@@ -247,6 +274,7 @@ export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
     audience,
     sender,
     beyondSender: [...to, ...cc].filter((a) => mailboxKey(a) !== senderKey),
+    othersOnOriginal,
     excludedOwn,
     senderLooksUnreplyable: looksUnreplyable(sender),
   };

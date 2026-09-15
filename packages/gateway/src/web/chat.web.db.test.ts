@@ -634,6 +634,100 @@ suite('the dashboard chat API', () => {
     expect((await client.post(`/api/chat/${AGENT_ID}/messages`, { text: '   ' })).status).toBe(400);
   });
 
+  /* ---------------- how long a conversation lasts ---------------- */
+
+  /*
+   * The dashboard's own version of the runaway: the page opens on this agent's
+   * most recent conversation, which is the right thing to *draw* at rest and
+   * the wrong thing to *continue* when the most recent one is yesterday's. The
+   * SQL is exercised here rather than against a fake, because the rule reads a
+   * transcript and the sum of its sizes.
+   */
+  it('continues a live conversation, and answers into it', async () => {
+    const client = await signedIn();
+    provider.script = [say('One.'), say('Two.')];
+    const first = await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'any new mail?' });
+    const { conversationId } = (await first.json()) as any;
+    await settled(conversationId);
+
+    const second = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+      conversationId,
+      text: 'and the other one?',
+    });
+    const body = (await second.json()) as any;
+    expect(body.conversationId).toBe(conversationId);
+    expect(body.boundary).toBeUndefined();
+    await settled(conversationId, 2);
+  });
+
+  it('starts a fresh conversation for a message the next morning, and says so', async () => {
+    const client = await signedIn();
+    provider.script = [say('One.'), say('Two.')];
+    const first = await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'any new mail?' });
+    const { conversationId } = (await first.json()) as any;
+    await settled(conversationId);
+
+    // The owner closes the laptop and comes back after breakfast.
+    await pool.query(
+      `update core.messages set created_at = now() - interval '14 hours'
+        where conversation_id = $1::uuid`,
+      [conversationId],
+    );
+
+    const second = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+      conversationId,
+      text: 'any new mail?',
+    });
+    const body = (await second.json()) as any;
+    expect(body.conversationId).not.toBe(conversationId);
+    expect(body.boundary.previousConversationId).toBe(conversationId);
+    expect(body.boundary.note).toContain('New conversation');
+    await settled(body.conversationId);
+
+    // Nothing of yesterday was replayed, and the boundary is on the record.
+    const sentMessages = provider.seen.at(-1)?.messages ?? [];
+    expect(sentMessages).toHaveLength(1);
+    const { rows } = await pool.query(
+      `select payload from core.events
+        where conversation_id = $1::uuid and kind = 'chat.conversation.started'`,
+      [body.conversationId],
+    );
+    expect(rows[0]?.payload).toMatchObject({
+      reason: 'idle',
+      previousConversationId: conversationId,
+    });
+  });
+
+  it('does not resurrect a failed turn when the next message arrives', async () => {
+    const client = await signedIn();
+    const boom = new Error('fetch failed');
+    provider.script = [
+      () => {
+        throw boom;
+      },
+      say('Here is the Dorothée draft.'),
+    ];
+
+    const first = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+      text: 'draft a response to Parfait Sedjro',
+    });
+    const { conversationId } = (await first.json()) as any;
+    await settled(conversationId);
+
+    const second = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+      conversationId,
+      text: 'can you draft a reply to the mail of Dorothee Tabiou?',
+    });
+    expect(((await second.json()) as any).conversationId).toBe(conversationId);
+    await settled(conversationId, 2);
+
+    // The dead question is still in the record, followed by the turn that says
+    // it failed — so the run that succeeded was never asked to answer it.
+    const history = provider.seen.at(-1)?.messages ?? [];
+    expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(JSON.stringify(history[1])).toContain('This turn failed before I could answer');
+  });
+
   /* ---------------- attachments ---------------- */
 
   it('stores an uploaded file and hands it to the next message', async () => {
