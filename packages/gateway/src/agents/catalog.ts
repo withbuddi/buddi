@@ -84,6 +84,28 @@ export interface Queryable {
  * the same object, decided once at the composition root.
  */
 export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRegistry {
+  return buildRegistry(env, externalManifests(env));
+}
+
+/**
+ * Exactly what this build compiles in, as manifests — nothing the owner
+ * installed.
+ *
+ * This is the single source of truth the collision guards read
+ * (`plugins/load.ts`, `plugins/install.ts`): a name or a schema is "built in"
+ * because it is *registered here*, not because somebody remembered to add it to
+ * a list. The list version of this drifted the day the web plugin shipped, and
+ * an externally installed plugin could then take the name `web` and the `web`
+ * schema off it.
+ *
+ * It is the same code path as `createToolRegistry` with an empty external set,
+ * so a plugin registered above cannot be missing from it.
+ */
+export function builtInManifests(env: NodeJS.ProcessEnv = process.env): PluginManifest[] {
+  return buildRegistry(env, []).manifests();
+}
+
+function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest[]): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(financeManifest);
   registry.register(emailManifest);
@@ -102,7 +124,7 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
   // line on the process log rather than thrown: an installation must not stop
   // answering because a third-party plugin has a bug. `buddi plugins list`
   // shows the same failure where the owner will look for it.
-  for (const manifest of externalManifests(env)) {
+  for (const manifest of external) {
     try {
       registry.register(manifest);
     } catch (err) {
@@ -142,12 +164,21 @@ export function createToolRegistry(env: NodeJS.ProcessEnv = process.env): ToolRe
  * Every plugin manifest installed here — what `db:migrate` walks, what
  * `missions add-defaults` reads suggestions from, and what a backup enumerates.
  *
- * The compiled-in four, then whatever the owner installed. Same list, same
- * standing: a plugin that arrived through `buddi plugins install` owns a schema
- * and suggests missions exactly as `finance` does.
+ * The compiled-in ones that own a schema of their own, then whatever the owner
+ * installed. Same standing: a plugin that arrived through `buddi plugins
+ * install` owns a schema and suggests missions exactly as `finance` does.
+ *
+ * Derived from the registry, not listed: this was a hand-written four, and a
+ * built-in plugin that shipped afterwards would have been left out of the
+ * migrations, the doctor's pending-migration row and the backup. The filter is
+ * what the old list said in longhand — a family that creates no tables (the
+ * canvas, the reminders, delegation) has nothing here to walk.
  */
 export function installedManifests(env: NodeJS.ProcessEnv = process.env): PluginManifest[] {
-  return [financeManifest, memoryManifest, emailManifest, webManifest, ...externalManifests(env)];
+  return [
+    ...builtInManifests(env).filter((m) => (m.migrationsDir ?? '').trim() !== ''),
+    ...externalManifests(env),
+  ];
 }
 
 /**

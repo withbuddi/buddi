@@ -7,6 +7,9 @@
  * works. These tests pin the two halves of that: a seeded vault reaches the
  * probes, and a locked one stops them rather than letting the marker out.
  */
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { VAULT_PLACEHOLDER, createMemoryVault } from '@buddi/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProbes } from './doctor-probes.js';
@@ -102,5 +105,57 @@ describe('createProbes with a vault', () => {
     expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
 
     await probes.close();
+  });
+});
+
+
+/**
+ * The plugins row against a real record file — never the owner's.
+ *
+ * "Installed but did not load" is the state this row exists for: the record
+ * says the plugin is here, the import says otherwise, and every agent that was
+ * granted its tools has quietly lost them.
+ */
+describe('the plugins probe', () => {
+  function withRecord(plugins: unknown[]): NodeJS.ProcessEnv {
+    const root = mkdtempSync(path.join(tmpdir(), 'buddi-doctor-plugins-'));
+    mkdirSync(path.join(root, 'agents'), { recursive: true });
+    const file = path.join(root, 'plugins.json');
+    writeFileSync(file, JSON.stringify({ version: 1, plugins }));
+    return {
+      BUDDI_AGENTS_DIR: path.join(root, 'agents'),
+      BUDDI_SKILLS_DIR: path.join(root, 'skills'),
+      BUDDI_PLUGINS_FILE: file,
+      BUDDI_VAULT: 'none',
+    };
+  }
+
+  it('says so, and names the record, when the owner installed nothing', async () => {
+    const probes = createProbes(withRecord([]), { vault: undefined, http: recordHttp().http });
+    const row = await probes.plugins!();
+    await probes.close();
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('none installed beyond what this build ships');
+    expect(row.detail).toContain('plugins.json');
+  });
+
+  it('fails the row when an installed plugin does not load, and says what to run', async () => {
+    const env = withRecord([
+      {
+        name: 'weather',
+        version: '0.1.0',
+        entry: '/nowhere/weather/dist/index.js',
+        schema: 'weather',
+        installedAt: new Date().toISOString(),
+        source: { kind: 'directory', path: '/nowhere/weather' },
+      },
+    ]);
+    const probes = createProbes(env, { vault: undefined, http: recordHttp().http });
+    const row = await probes.plugins!();
+    await probes.close();
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('1 installed, 1 did not load');
+    expect(row.detail).toContain('weather');
+    expect(row.detail).toContain('buddi plugins list');
   });
 });

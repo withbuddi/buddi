@@ -31,12 +31,27 @@ import {
   type PluginContribution,
   type PluginManifest,
 } from '@buddi/core';
-import { agentSearchPath, AGENTS_DIR } from '../agents/catalog.js';
+import { agentSearchPath, AGENTS_DIR, builtInManifests } from '../agents/catalog.js';
 import { driftFor, type Drift } from './provenance.js';
-import { loadManifest, manifestProblem, recordFile, BUILT_IN_PLUGINS } from './load.js';
+import { loadManifest, manifestProblem, perRunManifests, recordFile } from './load.js';
 
-/** Schemas this build already owns. A plugin claiming one is refused. */
-export const BUILT_IN_SCHEMAS: readonly string[] = ['core', 'public', 'finance', 'memory', 'email'];
+/**
+ * Postgres schemas nothing installed may claim: the two that are Postgres's or
+ * buddi's own, plus every schema a built-in plugin declares.
+ *
+ * **Derived, never listed**, for the reason `builtInPluginNames` is. The list
+ * that used to live here named `finance, memory, email` and was written before
+ * the web plugin existed; a plugin claiming the `web` schema would have had its
+ * migrations applied into it, next to `web.fetches`. Nothing had to be wrong
+ * for that to happen — the plugin only had to arrive after the list.
+ */
+export function builtInSchemas(env: NodeJS.ProcessEnv = process.env): ReadonlySet<string> {
+  const schemas = new Set<string>(['core', 'public']);
+  for (const manifest of [...builtInManifests(env), ...perRunManifests()]) {
+    if (manifest.schema.trim() !== '') schemas.add(manifest.schema);
+  }
+  return schemas;
+}
 
 export class InstallRefusal extends Error {
   override readonly name = 'InstallRefusal';
@@ -115,16 +130,16 @@ export async function planInstall(
     refuse('no-directory', `${dir} is not a directory`);
   }
   const entry = entryPointOf(dir);
-  const loaded = await loadManifest(entry);
+  const loaded = await loadManifest(entry, undefined, env);
   if (!loaded.ok) refuse('not-a-plugin', `${dir} is not a usable plugin: ${loaded.message}`);
   const manifest = loaded.manifest;
-  const problem = manifestProblem(manifest);
+  const problem = manifestProblem(manifest, undefined, env);
   if (problem !== undefined) refuse('not-a-plugin', problem);
 
   const file = recordFile(env);
   const contents = readPluginsFile(file);
   const previous = contents.plugins.find((p) => p.name === manifest.name);
-  if (BUILT_IN_SCHEMAS.includes(manifest.schema) && previous === undefined) {
+  if (builtInSchemas(env).has(manifest.schema) && previous === undefined) {
     refuse(
       'schema-taken',
       `plugin "${manifest.name}" wants the Postgres schema "${manifest.schema}", which buddi itself or ` +

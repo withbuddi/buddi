@@ -149,6 +149,7 @@ buddi doctor — /Users/you/buddi
   ok    model credential  CLAUDE_CODE_OAUTH_TOKEN accepted by anthropic
   ok    config            agents: examples + private/agents (1 private)
   ok    agents            2 agents, 2 runnable — concierge, agent-father (anthropic/claude-sonnet-5)
+  ok    plugins           none installed beyond what this build ships (private/plugins.json)
   warn  telegram bot      TELEGRAM_BOT_TOKEN is not set — the Telegram surface is off
   warn  paired devices    none — run `buddi telegram pair`
   ok    queue             running; 0 pending, 0 failed

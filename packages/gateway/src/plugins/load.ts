@@ -37,21 +37,76 @@ import {
   type PluginContribution,
   type PluginManifest,
 } from '@buddi/core';
-import { agentSearchPath } from '../agents/catalog.js';
+import { agentSearchPath, builtInManifests } from '../agents/catalog.js';
+import { createMissionManifest } from '../missions/report.js';
+import { createAskManifest } from '../surfaces/pending-question.js';
+import { createOfferManifest } from '../surfaces/offered-actions.js';
 
-/** The plugin names this build compiles in. They are never records. */
-export const BUILT_IN_PLUGINS: readonly string[] = [
-  'finance',
-  'email',
-  'memory',
-  'artifacts',
-  'reminder',
-  'schedule',
-  'canvas',
-  'owner',
-  'platform',
-  'agent',
-];
+/**
+ * The families that are *not* in the base registry: they are registered onto a
+ * per-run copy of it, because each one closes over that run's sink (the mission
+ * decision, the pending question, the offered actions).
+ *
+ * They are reserved here all the same, and that is the point. A per-run family
+ * is the worst thing for an installed plugin to collide with: the base registry
+ * would accept the plugin happily, and then every mission run and every chat
+ * session would throw at `registry.register(...)` — the installation stops
+ * answering, at run time, far from the install that caused it. Refusing the
+ * name at install is the only place that failure can still be explained.
+ */
+export function perRunManifests(): PluginManifest[] {
+  // The sinks are empty objects on purpose: a sink is a mutable box a run
+  // writes its decision into, and nothing here ever calls `execute`. What is
+  // wanted is the shape — the family name and the tool names — from the same
+  // factories the runs use, so this cannot fall behind them either.
+  return [createMissionManifest({}), createAskManifest({}), createOfferManifest({})];
+}
+
+/** Memoised per `env` object, like the search path: building a registry is real work. */
+const builtInNames = new WeakMap<NodeJS.ProcessEnv, ReadonlySet<string>>();
+const builtInTools = new WeakMap<NodeJS.ProcessEnv, ReadonlySet<string>>();
+
+/**
+ * The plugin names this build compiles in. They are never records.
+ *
+ * **Derived, never listed.** Everything the base registry registers, plus the
+ * per-run families above. A hand-written list was the defect: `web` shipped
+ * after the list was written, so an installed plugin called `web` passed this
+ * check and its migrations would have been applied into the built-in web
+ * plugin's schema, next to `web.fetches`.
+ */
+export function builtInPluginNames(env: NodeJS.ProcessEnv = process.env): ReadonlySet<string> {
+  const cached = builtInNames.get(env);
+  if (cached) return cached;
+  const names = new Set<string>(
+    [...builtInManifests(env), ...perRunManifests()].map((m) => m.name),
+  );
+  builtInNames.set(env, names);
+  return names;
+}
+
+/**
+ * Every tool name this build already answers to, the per-run families included.
+ *
+ * The registry refuses a colliding tool name when a plugin registers, so this
+ * adds nothing for the base families beyond a better sentence. It is the
+ * per-run ones it exists for: `mission.report` from a plugin with an innocent
+ * name would sit quietly in the base registry and blow up on the next mission.
+ */
+export function builtInToolNames(env: NodeJS.ProcessEnv = process.env): ReadonlySet<string> {
+  const cached = builtInTools.get(env);
+  if (cached) return cached;
+  const names = new Set<string>(
+    [...builtInManifests(env), ...perRunManifests()].flatMap((m) => m.tools.map((t) => t.name)),
+  );
+  builtInTools.set(env, names);
+  return names;
+}
+
+/** Is this the name of something this build already ships? */
+export function isBuiltInPlugin(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return builtInPluginNames(env).has(name);
+}
 
 /** A plugin that is installed but did not load, and the sentence saying why. */
 export interface PluginProblem {
@@ -84,18 +139,30 @@ export function recordFile(env: NodeJS.ProcessEnv = process.env): string {
  * Is this object a plugin manifest? The check a module gets before its code is
  * allowed anywhere near the registry.
  */
-export function manifestProblem(value: unknown, expected?: { name?: string }): string | undefined {
+export function manifestProblem(
+  value: unknown,
+  expected?: { name?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
   if (typeof value !== 'object' || value === null) return 'its entry point exports no manifest object';
   const m = value as Partial<PluginManifest>;
   if (typeof m.name !== 'string' || m.name.trim() === '') return 'its manifest has no name';
   if (typeof m.version !== 'string' || m.version.trim() === '') return `plugin "${m.name}" has no version`;
   if (typeof m.schema !== 'string' || m.schema.trim() === '') return `plugin "${m.name}" declares no schema`;
   if (!Array.isArray(m.tools)) return `plugin "${m.name}" has no tools array`;
-  if (BUILT_IN_PLUGINS.includes(m.name)) {
+  if (isBuiltInPlugin(m.name, env)) {
     return `"${m.name}" is the name of a plugin this build already ships; a second one would collide on every tool name`;
   }
   if (m.schema === 'core') {
     return `plugin "${m.name}" claims the "core" schema, which belongs to buddi itself`;
+  }
+  const reserved = builtInToolNames(env);
+  const taken = (m.tools as PluginManifest['tools']).map((t) => t?.name).filter((n) => reserved.has(n));
+  if (taken.length > 0) {
+    return (
+      `plugin "${m.name}" declares the tool name${taken.length === 1 ? '' : 's'} ` +
+      `${taken.join(', ')}, which this build already answers to`
+    );
   }
   if (expected?.name !== undefined && expected.name !== m.name) {
     return `it now calls itself "${m.name}", but it is installed as "${expected.name}"`;
@@ -107,6 +174,7 @@ export function manifestProblem(value: unknown, expected?: { name?: string }): s
 export async function loadManifest(
   entry: string,
   expected?: { name?: string },
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ ok: true; manifest: PluginManifest } | { ok: false; message: string }> {
   if (!existsSync(entry)) {
     return {
@@ -121,7 +189,7 @@ export async function loadManifest(
     return { ok: false, message: `importing it threw: ${err instanceof Error ? err.message : String(err)}` };
   }
   const candidate = mod.manifest ?? mod.default;
-  const problem = manifestProblem(candidate, expected);
+  const problem = manifestProblem(candidate, expected, env);
   if (problem !== undefined) return { ok: false, message: problem };
   return { ok: true, manifest: candidate as PluginManifest };
 }
@@ -150,7 +218,7 @@ export async function loadInstalledPlugins(
   }
   const schemas = new Map<string, string>();
   for (const record of contents.plugins) {
-    const result = await loadManifest(record.entry, { name: record.name });
+    const result = await loadManifest(record.entry, { name: record.name }, env);
     if (!result.ok) {
       problems.push({ name: record.name, entry: record.entry, message: result.message });
       continue;

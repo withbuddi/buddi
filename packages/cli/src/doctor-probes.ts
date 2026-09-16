@@ -31,6 +31,8 @@ import {
   installedManifests,
   listDevices,
   loadGatewayCatalog,
+  adoptedPlugins,
+  loadInstalledPlugins,
   TelegramApi,
   telegramFetchOn,
   webConfig,
@@ -57,6 +59,7 @@ import {
   checkConfig,
   checkDatabaseExposure,
   checkNodeVersion,
+  checkPlugins,
   checkVault,
   type AgentEngineFact,
   type DoctorProbes,
@@ -548,6 +551,27 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       } catch (err) {
         return { status: 'warn', detail: err instanceof Error ? err.message : String(err) };
       }
+    },
+
+    /**
+     * What the owner installed on top of this build, and whether it loaded.
+     *
+     * The same read `buddi plugins list` does — the record file and one import
+     * per entry — and, like that command, one bad plugin is an answer rather
+     * than an exception. Nothing is adopted into this process: the doctor
+     * reports, it does not register.
+     */
+    async plugins(): Promise<ProbeResult> {
+      // What this process actually adopted, when it adopted anything: that is
+      // the set the agents were built against, so it is the honest answer.
+      // Falling back to a fresh read keeps the probe usable from a process
+      // that never called `loadPluginsOnce` — a test, or a future caller.
+      const plugins = adoptedPlugins(env) ?? (await loadInstalledPlugins(env));
+      return checkPlugins({
+        record: plugins.file,
+        loaded: plugins.loaded.map((p) => ({ name: p.record.name, version: p.manifest.version })),
+        problems: plugins.problems.map((p) => ({ name: p.name, message: p.message })),
+      });
     },
 
     /**
