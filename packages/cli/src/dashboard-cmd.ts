@@ -13,6 +13,7 @@
 import { spawn } from 'node:child_process';
 import { ensureWebToken, mintTicket, webConfig, webUrl, WEB_ENABLED_VAR } from '@buddi/gateway';
 import type { DashboardAction } from './args.js';
+import { installDashboardApp, uninstallDashboardApp } from './dashboard-app.js';
 
 /** How the dashboard is turned off, said once, in the place people look. */
 export const OFF_HELP = [
@@ -34,6 +35,8 @@ export interface DashboardOptions {
   platform?: NodeJS.Platform;
   /** Injected in tests; the real one shells out to `open`. */
   launch?: (url: string) => void;
+  /** Injected in tests. Where `--install-app` writes its `Applications` folder. */
+  home?: string;
   out?: (line: string) => void;
 }
 
@@ -55,6 +58,26 @@ export async function runDashboard(
 
   if (action === 'off') {
     out(OFF_HELP);
+    return 0;
+  }
+
+  /*
+   * The icon. It is a shortcut to this very command and holds no secret, so it
+   * changes what the owner has to type and nothing about what the server
+   * enforces: every open still mints a fresh single-use ticket here.
+   */
+  if (action === 'install-app' || action === 'uninstall-app') {
+    const platform = opts.platform ?? process.platform;
+    if (platform !== 'darwin') {
+      out('the dashboard app bundle is macOS-only; elsewhere, bookmark nothing and run');
+      out('`buddi dashboard` — the link is one-time, so a bookmark would not work anyway');
+      return 1;
+    }
+    const result =
+      action === 'install-app'
+        ? installDashboardApp(opts.home !== undefined ? { home: opts.home } : {})
+        : uninstallDashboardApp(opts.home !== undefined ? { home: opts.home } : {});
+    for (const note of result.notes) out(note);
     return 0;
   }
 

@@ -19,8 +19,14 @@ import {
   webEnabled,
   webUrl,
 } from './config.js';
-import { cookieHeader, parseCookies } from './http.js';
-import { RateLimiter, SessionStore, SpentTickets } from './sessions.js';
+import { cookieHeader, isLoopbackAddress, parseCookies, requestScope } from './http.js';
+import {
+  LOCAL_SESSION_TTL_MS,
+  RateLimiter,
+  REMOTE_SESSION_TTL_MS,
+  SessionStore,
+  SpentTickets,
+} from './sessions.js';
 import { resolveAsset } from './static.js';
 import { toStreamEvent } from './stream.js';
 import { ensureWebToken, mintTicket, verifyTicket, webTokenExists, webTokenFile } from './token.js';
@@ -149,21 +155,104 @@ describe('tickets', () => {
 describe('sessions', () => {
   it('hands out a session and a csrf token that must match exactly', () => {
     const store = new SessionStore();
-    const session = store.create();
-    expect(store.get(session.id)?.id).toBe(session.id);
+    const session = store.create('local');
+    expect(store.get(session.id, 'local')?.id).toBe(session.id);
     expect(SessionStore.csrfMatches(session, session.csrf)).toBe(true);
     expect(SessionStore.csrfMatches(session, `${session.csrf}x`)).toBe(false);
     expect(SessionStore.csrfMatches(session, '')).toBe(false);
     expect(SessionStore.csrfMatches(session, undefined)).toBe(false);
   });
 
-  it('expires, and forgets', () => {
+  it('expires when idle, and forgets', () => {
     const start = new Date('2026-09-14T10:00:00Z');
-    const store = new SessionStore(1_000);
-    const session = store.create(start);
-    expect(store.get(session.id, new Date(start.getTime() + 500))).toBeDefined();
-    expect(store.get(session.id, new Date(start.getTime() + 2_000))).toBeUndefined();
-    expect(store.get('not-a-session')).toBeUndefined();
+    const store = new SessionStore({ local: 1_000 });
+    const session = store.create('local', start);
+    expect(store.get(session.id, 'local', new Date(start.getTime() + 500))).toBeDefined();
+    expect(store.get(session.id, 'local', new Date(start.getTime() + 2_000))).toBeUndefined();
+    expect(store.get('not-a-session', 'local')).toBeUndefined();
+  });
+
+  it('slides under use, and still lapses once use stops', () => {
+    const start = new Date('2026-09-14T10:00:00Z');
+    const store = new SessionStore({ local: 1_000 });
+    const session = store.create('local', start);
+
+    // Touched every 800ms for four times the idle lifetime: still alive.
+    let t = start.getTime();
+    for (let i = 0; i < 6; i += 1) {
+      t += 800;
+      expect(store.get(session.id, 'local', new Date(t))?.id).toBe(session.id);
+    }
+    expect(t - start.getTime()).toBeGreaterThan(4 * 1_000);
+
+    // Then nobody touches it for longer than the idle lifetime.
+    expect(store.get(session.id, 'local', new Date(t + 1_500))).toBeUndefined();
+  });
+
+  it('gives a local session weeks and a remote one hours', () => {
+    const store = new SessionStore();
+    expect(store.ttlFor('local')).toBe(LOCAL_SESSION_TTL_MS);
+    expect(store.ttlFor('remote')).toBe(REMOTE_SESSION_TTL_MS);
+    expect(LOCAL_SESSION_TTL_MS).toBeGreaterThan(REMOTE_SESSION_TTL_MS * 20);
+    expect(store.create('local').ttlMs).toBe(LOCAL_SESSION_TTL_MS);
+    expect(store.create('remote').ttlMs).toBe(REMOTE_SESSION_TTL_MS);
+    // The cookie says the same thing the store does.
+    expect(SessionStore.maxAgeSeconds(store.create('remote'))).toBe(REMOTE_SESSION_TTL_MS / 1000);
+  });
+
+  it('will not honour a local session presented from the network, or the reverse', () => {
+    const store = new SessionStore();
+    const local = store.create('local');
+    const remote = store.create('remote');
+    expect(store.get(local.id, 'remote')).toBeUndefined();
+    expect(store.get(remote.id, 'local')).toBeUndefined();
+    // ...and refusing it does not destroy the session the owner is using.
+    expect(store.get(local.id, 'local')?.id).toBe(local.id);
+  });
+
+  it('re-issues the cookie once it is half spent, not on every request', () => {
+    const start = new Date('2026-09-14T10:00:00Z');
+    const store = new SessionStore({ local: 1_000 });
+    const session = store.create('local', start);
+    const at = (ms: number): Date => new Date(start.getTime() + ms);
+
+    expect(store.renewCookie(session, at(0))).toBe(false);
+    expect(store.renewCookie(session, at(100))).toBe(false);
+    expect(store.renewCookie(session, at(499))).toBe(false);
+    // Half a lifetime after it was issued: re-issued, once.
+    expect(store.renewCookie(session, at(500))).toBe(true);
+    expect(store.renewCookie(session, at(600))).toBe(false);
+    expect(store.renewCookie(session, at(1_000))).toBe(true);
+  });
+});
+
+describe('where a request came from', () => {
+  const from = (address: string | undefined, headers: Record<string, string> = {}) =>
+    requestScope({ socket: { remoteAddress: address }, headers } as never);
+
+  it('is loopback in every spelling the kernel uses', () => {
+    for (const address of ['127.0.0.1', '127.0.0.53', '::1', '::ffff:127.0.0.1', '[::1]']) {
+      expect(isLoopbackAddress(address)).toBe(true);
+      expect(from(address)).toBe('local');
+    }
+  });
+
+  it('is not loopback for a LAN or tailnet peer', () => {
+    for (const address of ['192.168.1.9', '100.101.102.103', '10.0.0.4', 'fd7a::1', undefined]) {
+      expect(isLoopbackAddress(address)).toBe(false);
+      expect(from(address)).toBe('remote');
+    }
+  });
+
+  it('cannot be claimed with a header', () => {
+    expect(
+      from('100.101.102.103', {
+        'x-forwarded-for': '127.0.0.1',
+        forwarded: 'for=127.0.0.1',
+        host: 'localhost:4317',
+        origin: 'http://127.0.0.1:4317',
+      }),
+    ).toBe('remote');
   });
 });
 

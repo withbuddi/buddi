@@ -4,6 +4,7 @@
  * a dependency.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { SessionScope } from './sessions.js';
 
 export const SESSION_COOKIE = 'buddi_session';
 export const CSRF_COOKIE = 'buddi_csrf';
@@ -129,6 +130,38 @@ export async function readJsonBody(
 /** The address a rate limit is counted against. */
 export function remoteKey(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? 'unknown';
+}
+
+/**
+ * Is this address this machine?
+ *
+ * `127.0.0.0/8` and `::1`, plus the IPv4-mapped spelling node reports when the
+ * socket is IPv6 (`::ffff:127.0.0.1`). Nothing else: a tailnet address
+ * (`100.64.0.0/10`) is *not* local — it is a machine somewhere else that can
+ * currently reach this one, which is exactly the case the shorter remote
+ * lifetime exists for.
+ */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const a = address.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  if (a === '::1' || a === '0:0:0:0:0:0:0:1') return true;
+  const v4 = a.startsWith('::ffff:') ? a.slice('::ffff:'.length) : a;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
+}
+
+/**
+ * Where a request came from, for the session lifetime it earns.
+ *
+ * Read from `req.socket.remoteAddress` — the peer of the TCP connection as the
+ * kernel sees it — and from nothing else. In particular **no `X-Forwarded-For`
+ * and no `Forwarded`**: those are strings a client types, so trusting either
+ * would let anyone on the network claim a month-long session by adding a
+ * header. There is no proxy in front of this server to make them meaningful
+ * (the dashboard binds its own socket), and if one is ever put there the right
+ * answer is an explicit list of trusted proxy addresses, not a default.
+ */
+export function requestScope(req: IncomingMessage): SessionScope {
+  return isLoopbackAddress(req.socket.remoteAddress) ? 'local' : 'remote';
 }
 
 /** `Origin`, or the origin of `Referer`, or undefined. Never guessed. */

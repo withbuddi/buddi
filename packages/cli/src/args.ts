@@ -38,8 +38,11 @@ export type DbAction = (typeof DB_ACTIONS)[number];
 export const VAULT_ACTIONS = ['set', 'get', 'delete', 'list', 'import-env'] as const;
 export type VaultAction = (typeof VAULT_ACTIONS)[number];
 
-/** `buddi dashboard` — open it, print just the ticket, or explain the off switch. */
-export const DASHBOARD_ACTIONS = ['open', 'token', 'off'] as const;
+/**
+ * `buddi dashboard` — open it, print just the ticket, explain the off switch,
+ * or install/remove the double-clickable app that runs `open` for you.
+ */
+export const DASHBOARD_ACTIONS = ['open', 'token', 'off', 'install-app', 'uninstall-app'] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 
 export const TELEGRAM_ACTIONS = ['pair', 'devices', 'unpair'] as const;
@@ -221,8 +224,11 @@ export function parseArgs(argv: string[]): Command {
     const flag = rest[0];
     if (flag === '--token') return { kind: 'dashboard', action: 'token' };
     if (flag === '--off') return { kind: 'dashboard', action: 'off' };
+    if (flag === '--install-app') return { kind: 'dashboard', action: 'install-app' };
+    if (flag === '--uninstall-app') return { kind: 'dashboard', action: 'uninstall-app' };
     throw new UsageError(
-      `unknown option for buddi dashboard: ${flag} (expected --token or --off)`,
+      `unknown option for buddi dashboard: ${flag} ` +
+        '(expected --token, --off, --install-app or --uninstall-app)',
     );
   }
 
@@ -445,6 +451,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi dashboard            open the local dashboard (one-time link)
   buddi dashboard --token    print just the one-time token
   buddi dashboard --off      how to turn the dashboard off
+  buddi dashboard --install-app   a double-clickable "Buddi Dashboard" in ~/Applications
+  buddi dashboard --uninstall-app remove it
 
   buddi telegram pair        a QR code + deep link that pairs a device
   buddi telegram devices     every paired device

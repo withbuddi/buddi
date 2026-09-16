@@ -14,6 +14,7 @@
  * Skipped unless DATABASE_URL is set.
  */
 import { readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   CORE_MIGRATIONS_DIR,
@@ -43,7 +44,8 @@ import { SURFACE } from '../telegram/surface.js';
 import { webAssetsDir } from './config.js';
 import { FINANCE_PLUGIN_MISSING_NOTE } from './read.js';
 import { mintTicket } from './token.js';
-import { startWebServer, type WebServer } from './server.js';
+import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
+import { LOCAL_SESSION_TTL_MS, REMOTE_SESSION_TTL_MS } from './sessions.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -747,6 +749,134 @@ suite('the dashboard API', () => {
 
     const after = await client.json<any>('/api/offers');
     expect(after.offers.map((o: any) => o.label)).toEqual(['Remind me tomorrow']);
+  });
+
+  /* ---------------- session lifetime ---------------- */
+
+  /**
+   * The properties the owner feels: a session he is using does not expire under
+   * him, one he abandoned does, and a browser on the network gets neither the
+   * long lifetime nor a way to ask for it.
+   *
+   * These run against their own servers — one with a deliberately tiny idle
+   * lifetime so "used all day" fits in a few seconds, and one bound to every
+   * interface so a genuinely non-loopback connection can be made.
+   */
+  describe('session lifetime', () => {
+    /**
+     * Four seconds stands in for a month, and the requests below are spaced
+     * well inside it — the rule under test is the ratio, not the number, and a
+     * loaded machine must not be able to turn a scheduling hiccup into a
+     * failure.
+     */
+    const TINY_TTL_MS = 4_000;
+    const USE_EVERY_MS = 1_200;
+
+    const lan = Object.values(os.networkInterfaces())
+      .flatMap((entries) => entries ?? [])
+      .find((entry) => entry.family === 'IPv4' && !entry.internal)?.address;
+
+    const start = async (over: Partial<WebServerDeps>): Promise<WebServer> =>
+      startWebServer({
+        pool,
+        registry,
+        catalog: fakeCatalog(),
+        ctx,
+        timezone: 'UTC',
+        now,
+        config: { enabled: true, host: '127.0.0.1', port: 0 },
+        token: TOKEN,
+        log: () => {},
+        ...over,
+      } as WebServerDeps);
+
+    const maxAge = (res: Response, name: string): number => {
+      const line = res.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+      const match = /Max-Age=(\d+)/.exec(line ?? '');
+      return match ? Number(match[1]) : -1;
+    };
+
+    it('gives a loopback browser weeks, and says so in the cookie', async () => {
+      const client = new Client(base);
+      const res = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);
+      expect(res.status).toBe(302);
+      expect(maxAge(res, 'buddi_session')).toBe(LOCAL_SESSION_TTL_MS / 1000);
+      expect(maxAge(res, 'buddi_csrf')).toBe(LOCAL_SESSION_TTL_MS / 1000);
+      // Still HttpOnly, still Strict, still no CORS — the lifetime is the only
+      // thing that changed.
+      expect(res.headers.getSetCookie().every((c) => c.includes('SameSite=Strict'))).toBe(true);
+      const session = await client.json<{ scope: string }>('/api/session');
+      expect(session.scope).toBe('local');
+    });
+
+    it('slides under use and still expires when idle', async () => {
+      const server = await start({ sessionTtlMs: { local: TINY_TTL_MS } });
+      try {
+        const client = new Client(`http://127.0.0.1:${server.port}`);
+        const opened = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);
+        expect(opened.status).toBe(302);
+        expect(maxAge(opened, 'buddi_session')).toBe(Math.floor(TINY_TTL_MS / 1000));
+
+        // Used steadily for longer than the whole idle lifetime. Under the old
+        // rule the cookie was minted once and died on schedule regardless.
+        let refreshed = 0;
+        const rounds = Math.ceil((TINY_TTL_MS * 1.5) / USE_EVERY_MS);
+        for (let i = 0; i < rounds; i += 1) {
+          await new Promise((r) => setTimeout(r, USE_EVERY_MS));
+          const res = await client.get('/api/session');
+          expect(res.status).toBe(200);
+          if (res.headers.getSetCookie().length > 0) refreshed += 1;
+        }
+        // Re-issued about once per half-life, not on every request...
+        expect(refreshed).toBeGreaterThan(0);
+        expect(refreshed).toBeLessThan(rounds);
+        // ...and a request made straight after a refresh carries no new cookie.
+        const immediate = await client.get('/api/session');
+        expect(immediate.status).toBe(200);
+        expect(immediate.headers.getSetCookie()).toEqual([]);
+
+        // Then he walks away for longer than the idle lifetime.
+        await new Promise((r) => setTimeout(r, TINY_TTL_MS + 800));
+        const stale = await client.get('/api/session');
+        expect(stale.status).toBe(401);
+        expect(await stale.text()).toBe('');
+      } finally {
+        await server.close();
+      }
+    }, 40_000);
+
+    it.skipIf(!lan)('gives a non-loopback browser hours, and no way to claim otherwise', async () => {
+      const server = await start({ config: { enabled: true, host: '0.0.0.0', port: 0 } });
+      try {
+        const remote = new Client(`http://${lan as string}:${server.port}`);
+        const res = await remote.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`, {
+          // The lie: every header a client could use to claim it is local.
+          headers: {
+            'x-forwarded-for': '127.0.0.1',
+            'x-real-ip': '127.0.0.1',
+            forwarded: 'for=127.0.0.1;proto=http',
+          },
+        });
+        expect(res.status).toBe(302);
+        expect(maxAge(res, 'buddi_session')).toBe(REMOTE_SESSION_TTL_MS / 1000);
+        const session = await remote.json<{ scope: string }>('/api/session');
+        expect(session.scope).toBe('remote');
+
+        // And a session established on loopback is not honoured from the
+        // network even with its cookie in hand.
+        const local = new Client(`http://127.0.0.1:${server.port}`);
+        expect((await local.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`)).status).toBe(302);
+        const stolen = await fetch(`http://${lan as string}:${server.port}/api/session`, {
+          headers: {
+            cookie: `buddi_session=${local.cookies.get('buddi_session') as string}`,
+            'x-forwarded-for': '127.0.0.1',
+          },
+        });
+        expect(stolen.status).toBe(401);
+      } finally {
+        await server.close();
+      }
+    });
   });
 
   /* ---------------- the built dashboard ---------------- */

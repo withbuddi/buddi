@@ -219,7 +219,9 @@ the reason last night's backup did not happen.
 
 ### 6. `buddi dashboard`
 
-Prints a one-time link and opens it.
+Prints a one-time link and opens it. `buddi dashboard --install-app` puts a
+double-clickable "Buddi Dashboard" in `~/Applications` so you never have to type
+it again — optional, removable, and it stores nothing.
 
 ---
 
@@ -554,9 +556,13 @@ pending, where `/approvals` and Telegram can still reach it.
 ### The dashboard
 
 `buddi serve` serves it on `127.0.0.1:4317`. `buddi dashboard` prints a
-single-use link, valid five minutes, and opens it. `buddi dashboard --token`
-prints just the ticket, for piping; `buddi dashboard --off` explains the off
-switch.
+single-use link, valid five minutes, and opens it — or, once, `buddi dashboard
+--install-app` puts a **"Buddi Dashboard"** in `~/Applications` so opening it is
+a double-click from Launchpad, Spotlight or the Dock instead of a terminal
+command. The icon holds no secret: it runs that same `buddi dashboard`, so every
+open mints a fresh one-time ticket. `buddi dashboard --token` prints just the
+ticket, for piping; `buddi dashboard --off` explains the off switch, and
+`--uninstall-app` removes the icon.
 
 **It opens on a conversation.** The landing page is a workbench: a chat column
 on the left, a canvas on the right. Ask for something and what the run *looked
@@ -608,6 +614,18 @@ signed with it: single-use, five minutes, swapped for an HttpOnly
 a double-submit CSRF header and an `Origin` that is the bound address. There is
 no CORS. A request without a valid session gets `401` and an empty body, and
 failed authentications are rate-limited per address.
+
+**How long you stay in.** The session is an *idle* one, and it slides: while you
+are using the page it never expires under you. Abandon it and it lapses — after
+**30 days** for a browser on this machine, after **12 hours** for one that
+reached the dashboard over a network. Which of the two you get is decided from
+the TCP connection's own address, never from a header a client could set, so
+nothing on your network can ask for the longer life; a tailnet browser is remote
+and gets the 12 hours. That difference is the whole of the access model: this
+page approves actions — sending mail today, more as plugins arrive — so a long
+local session is a convenience the loopback binding pays for, not a relaxation
+of what it can do. [docs/operations.md](docs/operations.md) has the reasoning
+and the off switch.
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -784,6 +802,8 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi dashboard` | open the local dashboard (one-time link) |
 | `buddi dashboard --token` | print just the one-time token |
 | `buddi dashboard --off` | how to turn the dashboard off |
+| `buddi dashboard --install-app` | a double-clickable "Buddi Dashboard" in `~/Applications` |
+| `buddi dashboard --uninstall-app` | remove it |
 | `buddi telegram pair` | a QR code + deep link that pairs a device |
 | `buddi telegram devices` | every paired device |
 | `buddi telegram unpair <id>` | revoke one |
@@ -852,8 +872,10 @@ pins a provider, the provider names one variable, and a missing one fails closed
 for that agent and nothing else. `buddi agents show <handle>` says more; `buddi
 agents test <handle>` proves it end to end.
 
-**The dashboard answers `401`.** The link expired — it is single-use and lives
-five minutes. Run `buddi dashboard` again. If every link fails, the token
+**The dashboard answers `401`.** Either the link expired — it is single-use and
+lives five minutes — or the session lapsed after its idle window (30 days
+locally, 12 hours from the network; a session in use never lapses). Run `buddi
+dashboard` again, or open the app icon if you installed one. If every link fails, the token
 changed under you (a new keychain entry, or a deleted `data/web-token`); the
 next `buddi dashboard` mints a fresh one. If the page will not load at all,
 check `BUDDI_WEB` is not `0` and that `buddi serve` is running.
