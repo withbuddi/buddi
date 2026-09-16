@@ -345,6 +345,67 @@ function textOf(content: ContentBlock[]): string {
 }
 
 /**
+ * One thing the model said, and whether it said it on its way to a tool call.
+ */
+export interface SpokenBlock {
+  readonly text: string;
+  /** The same turn also called a tool: the model kept working after this. */
+  readonly beforeToolCall: boolean;
+}
+
+/**
+ * The longest a line may be and still be read as "let me check that".
+ *
+ * Deliberately small. The cost of the two mistakes is not symmetric: a preamble
+ * that survives reads as a slightly chatty answer, while a draft that does not
+ * is information the owner never sees. Anything a model writes *for* the owner —
+ * a drafted reply, a summary, a list — is longer than this or contains a line
+ * break, and both of those keep it.
+ */
+const PREAMBLE_MAX_CHARS = 120;
+
+/**
+ * Is this the "thinking out loud before a tool call" line, rather than an
+ * answer? Three conditions, all required, all checkable:
+ *
+ *   1. the same turn called a tool, so this was not the model's last word;
+ *   2. it is a single line — no paragraph, no list, no draft;
+ *   3. it is at most `PREAMBLE_MAX_CHARS` long.
+ *
+ * The surfaces already say that work is happening: the terminal spinner and
+ * Telegram's progress note name each tool as it is called. A twelfth restating
+ * of "let me look that up" adds nothing they do not already show.
+ */
+export function isPreamble(block: SpokenBlock): boolean {
+  if (!block.beforeToolCall) return false;
+  const text = block.text.trim();
+  if (text === '' || text.includes('\n')) return false;
+  return text.length <= PREAMBLE_MAX_CHARS;
+}
+
+/**
+ * A run's answer: everything the model said to the owner in that run, in order.
+ *
+ * Blocks are joined with a blank line. Two blocks either side of a tool call
+ * are usually continuous prose, and a blank line between them reads as a
+ * paragraph break rather than as a seam — where joining them tightly would run
+ * a draft's last sentence into the next one.
+ *
+ * Preambles are dropped, *unless* dropping them would leave the run mute: a run
+ * whose only words were "let me check that" still says that, because a silent
+ * answer is worse than a redundant one.
+ */
+export function joinSpoken(blocks: readonly SpokenBlock[]): string {
+  const said = blocks.filter((b) => b.text.trim() !== '');
+  const kept = said.filter((b) => !isPreamble(b));
+  const use = kept.length > 0 ? kept : said;
+  return use
+    .map((b) => b.text.trim())
+    .join('\n\n')
+    .trim();
+}
+
+/**
  * The system prompt for one run, in one fixed order:
  *
  *   memory → the agent's own prompt (persona + generated tail)
@@ -522,7 +583,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const usage: Usage = { input: 0, output: 0 };
   let turns = 0;
   let stopped: RunResult['stopped'] = 'max_turns';
-  let text = '';
+  /**
+   * Everything the model said this run, in order. Not the last thing it said:
+   * a run that drafts a reply, calls a tool and then adds a closing line said
+   * both, and the owner is owed both. See `joinSpoken`.
+   */
+  const spoken: SpokenBlock[] = [];
   /** The action this run is waiting on, once one exists. */
   let pendingActionId: string | undefined;
 
@@ -568,15 +634,15 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       }
     }
 
-    const turnText = textOf(assistantContent);
-    if (turnText) {
-      text = turnText;
-      await opts.onText?.(turnText);
-    }
-
     const toolUses = assistantContent.filter(
       (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
     );
+
+    const turnText = textOf(assistantContent);
+    if (turnText) {
+      spoken.push({ text: turnText, beforeToolCall: toolUses.length > 0 });
+      await opts.onText?.(turnText);
+    }
 
     // Not an ending: the API stopped a long server-tool turn part-way and wants
     // the same turn continued. No user message, no tool results — the assistant
@@ -684,7 +750,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   );
 
   return {
-    text,
+    text: joinSpoken(spoken),
     turns,
     stopped,
     usage,

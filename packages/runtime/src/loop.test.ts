@@ -11,6 +11,8 @@ import { providerCapabilities, type ProviderCapabilities } from './capabilities.
 import {
   composeSystem,
   createConversation,
+  isPreamble,
+  joinSpoken,
   loadMessages,
   runAgent,
   type Queryable,
@@ -462,6 +464,8 @@ describe('runAgent', () => {
     });
 
     expect(result).toMatchObject({
+      // 'let me compute' is a preamble — single line, short, and followed by a
+      // tool call the spinner already announced. The answer is what is left.
       text: 'It is 42.',
       turns: 2,
       stopped: 'end_turn',
@@ -1194,7 +1198,9 @@ describe('a search the loop did not run', () => {
 
     expect(result.turns).toBe(2);
     expect(result.stopped).toBe('end_turn');
-    expect(result.text).toBe('and here is the answer');
+    // Both halves: the model wrote a sentence before the API paused the turn
+    // and another after it resumed, and the owner is owed both.
+    expect(result.text).toBe('cargurus.com says about $43,753.\n\nand here is the answer');
     // The continuation carries the paused turn back, provider blocks and all,
     // and adds nothing from the owner that the owner did not say.
     const second = provider.calls[1]!.messages;
@@ -1204,5 +1210,193 @@ describe('a search the loop did not run', () => {
       'provider_native',
       'text',
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * What a run's answer is
+ * ------------------------------------------------------------------ */
+
+/** A registry with the two conversation tools a run can stop the owner with. */
+function registryWithConversation(): ToolRegistry {
+  const manifest: PluginManifest = {
+    name: 'conversation',
+    version: '0.0.1',
+    schema: 'conversation',
+    migrationsDir: '/tmp/conversation',
+    tools: [
+      {
+        name: 'conversation.offer',
+        description: 'Puts choices in front of the owner.',
+        tier: 'auto',
+        input: z.object({ options: z.array(z.string()) }),
+        execute: async () => ({ ok: true }),
+      },
+      {
+        name: 'conversation.ask',
+        description: 'Asks the owner a question.',
+        tier: 'auto',
+        input: z.object({ question: z.string() }),
+        execute: async () => ({ ok: true }),
+      },
+    ],
+  };
+  const r = new ToolRegistry();
+  r.register(manifest);
+  return r;
+}
+
+const conversationAgent: AgentDefinition = {
+  ...agent,
+  tools: ['conversation.offer', 'conversation.ask'],
+};
+
+/** The shape that broke: prose, a tool call, a closing line. */
+const DRAFT = [
+  'Bonjour Dorothée,',
+  '',
+  'Merci pour votre message. Je vous confirme le rendez-vous de jeudi à 14h.',
+  '',
+  'Bien à vous,',
+].join('\n');
+
+async function textOfRun(
+  script: CompletionResponse[],
+  over: Partial<Parameters<typeof runAgent>[0]> = {},
+): Promise<string> {
+  const db = new FakeDb();
+  const conversationId = await createConversation(db, 'finance');
+  const result = await runAgent({
+    agent: conversationAgent,
+    provider: scriptedProvider(script),
+    registry: registryWithConversation(),
+    ctx,
+    pool: db,
+    conversationId,
+    userMessage: 'répond à Dorothée',
+    ...over,
+  } as Parameters<typeof runAgent>[0]);
+  return result.text;
+}
+
+function toolTurn(text: string, name = 'conversation.offer'): CompletionResponse {
+  return {
+    content: [
+      { type: 'text', text },
+      {
+        type: 'tool_use',
+        id: `tu_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        input: name === 'conversation.ask' ? { question: 'laquelle ?' } : { options: ['a', 'b'] },
+      },
+    ],
+    stopReason: 'tool_use',
+    usage,
+    model: 'claude-sonnet-5',
+  };
+}
+
+describe("a run's answer is everything the model said, in order", () => {
+  it('keeps the draft written before a tool call, not just the closing line', async () => {
+    const text = await textOfRun([toolTurn(DRAFT), endTurn('Voilà — à toi de choisir.')]);
+    expect(text).toBe(`${DRAFT}\n\nVoilà — à toi de choisir.`);
+    // The regression in one line: the draft is not thrown away.
+    expect(text).toContain('Merci pour votre message');
+  });
+
+  it('keeps text written between several tool calls, in the order it was said', async () => {
+    const text = await textOfRun([
+      toolTurn('Here is the first half of the summary, which runs on for a while and is plainly meant for you to read. It is comfortably longer than any preamble could be.'),
+      toolTurn('And here is the second half, also plainly written for the owner rather than as a note to self. It, too, is far longer than a line of progress chatter.'),
+      endTurn('That is everything.'),
+    ]);
+    expect(text).toBe(
+      [
+        'Here is the first half of the summary, which runs on for a while and is plainly meant for you to read. It is comfortably longer than any preamble could be.',
+        'And here is the second half, also plainly written for the owner rather than as a note to self. It, too, is far longer than a line of progress chatter.',
+        'That is everything.',
+      ].join('\n\n'),
+    );
+  });
+
+  it('is unchanged for a run whose only text is at the end', async () => {
+    const text = await textOfRun([endTurn('It is 42.')]);
+    expect(text).toBe('It is 42.');
+  });
+
+  it('is empty for a run that said nothing', async () => {
+    const text = await textOfRun([
+      {
+        content: [
+          { type: 'tool_use', id: 'tu_x', name: 'conversation.offer', input: { options: ['a'] } },
+        ],
+        stopReason: 'tool_use',
+        usage,
+        model: 'm',
+      },
+      { content: [], stopReason: 'end_turn', usage, model: 'm' },
+    ]);
+    expect(text).toBe('');
+  });
+
+  it('survives conversation.ask followed by a closing line', async () => {
+    const question = [
+      'Deux options pour la réponse à Dorothée :',
+      '',
+      '1. Confirmer jeudi 14h.',
+      '2. Proposer vendredi matin.',
+    ].join('\n');
+    const text = await textOfRun([
+      toolTurn(question, 'conversation.ask'),
+      endTurn('Dis-moi laquelle.'),
+    ]);
+    expect(text).toBe(`${question}\n\nDis-moi laquelle.`);
+  });
+
+  describe('the preamble rule', () => {
+    it('drops a short single line that precedes a tool call — the spinner already said that', async () => {
+      const text = await textOfRun([toolTurn('Let me check that.'), endTurn('It is 42.')]);
+      expect(text).toBe('It is 42.');
+    });
+
+    it('keeps a short line that did *not* precede a tool call', async () => {
+      const text = await textOfRun([endTurn('Let me check that.')]);
+      expect(text).toBe('Let me check that.');
+    });
+
+    it('keeps a multi-line block before a tool call, however short', async () => {
+      const text = await textOfRun([toolTurn('Option A\nOption B'), endTurn('Choisis.')]);
+      expect(text).toBe('Option A\nOption B\n\nChoisis.');
+    });
+
+    it('keeps a long single line before a tool call — a draft is never a preamble', async () => {
+      const long = `x${'y'.repeat(200)}`;
+      const text = await textOfRun([toolTurn(long), endTurn('Voilà.')]);
+      expect(text).toBe(`${long}\n\nVoilà.`);
+    });
+
+    it('never leaves a run mute: a preamble is kept when it is all there was', async () => {
+      const text = await textOfRun([
+        toolTurn('Let me check that.'),
+        { content: [], stopReason: 'end_turn', usage, model: 'm' },
+      ]);
+      expect(text).toBe('Let me check that.');
+    });
+
+    it('is decided on the boundary, not on taste', () => {
+      expect(isPreamble({ text: 'z'.repeat(120), beforeToolCall: true })).toBe(true);
+      expect(isPreamble({ text: 'z'.repeat(121), beforeToolCall: true })).toBe(false);
+      expect(isPreamble({ text: 'z'.repeat(120), beforeToolCall: false })).toBe(false);
+      expect(isPreamble({ text: '', beforeToolCall: true })).toBe(false);
+    });
+  });
+
+  it('joins with a blank line, trimming each block', () => {
+    expect(
+      joinSpoken([
+        { text: '  first  ', beforeToolCall: false },
+        { text: '\nsecond\n', beforeToolCall: false },
+      ]),
+    ).toBe('first\n\nsecond');
   });
 });
