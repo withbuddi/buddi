@@ -2,7 +2,7 @@
  * What it means for a plugin to be *installed* here.
  *
  * Until now "installed" meant "compiled in": a line in the gateway's
- * `createToolRegistry`. That is fine for the four plugins this repository
+ * `createToolRegistry`. That is fine for the plugins this repository
  * ships and impossible for anybody else's — installing the finance plugin on a
  * stranger's machine meant editing their code. So installation becomes a
  * record: a small file the owner owns, listing what was installed, from where,

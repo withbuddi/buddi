@@ -169,6 +169,16 @@ export interface VaultFacts {
   vault: string;
   sources: Record<string, 'vault' | 'env'>;
   problems: Record<string, { code: string; message: string }>;
+  /**
+   * What this machine's vault *is*, independent of what it managed to answer.
+   *
+   * Hydration can only report that a secret did not resolve. That is the wrong
+   * altitude for the one failure a stranger actually hits: on a machine with no
+   * keychain the vault is a file and `BUDDI_VAULT_KEY` is the key, and "locked"
+   * without that sentence is a variable name and no way to produce a value for
+   * it. Optional so a test may omit it.
+   */
+  state?: { selection: string; locked: boolean; file?: string; advice: string };
 }
 
 /**
@@ -188,10 +198,17 @@ export const REQUIRED_SECRETS: readonly string[] = ['CLAUDE_CODE_OAUTH_TOKEN', '
  */
 export function checkVault(facts: VaultFacts, required: readonly string[] = REQUIRED_SECRETS): ProbeResult {
   const locked = Object.values(facts.problems).find((p) => p.code === 'vault-locked');
-  if (locked) {
+  if (locked || facts.state?.locked === true) {
+    // The advice, when there is one, *is* the fix. It names the file, the
+    // variable and the command, which is the difference between a row an owner
+    // can act on and a row they file an issue about.
+    const why = locked?.message ?? 'no key';
     return {
       status: 'fail',
-      detail: `${facts.vault} vault is locked: ${locked.message} — unlock it and re-run (no secret was read)`,
+      detail:
+        facts.state?.advice !== undefined && facts.state.advice !== ''
+          ? `${facts.vault} vault is locked — ${facts.state.advice} (no secret was read)`
+          : `${facts.vault} vault is locked: ${why} — unlock it and re-run (no secret was read)`,
     };
   }
 
@@ -218,6 +235,17 @@ export function checkVault(facts: VaultFacts, required: readonly string[] = REQU
     };
   }
 
+  // A file vault that opens is fine *today*. What it is not is backed up: the
+  // key is the one thing an archive deliberately never contains, so the row
+  // says so every time rather than once, at `init`, months ago.
+  if (facts.state?.selection === 'file') {
+    return {
+      status: 'ok',
+      detail:
+        `file vault at ${facts.state.file ?? 'the configured path'} — ${where}; ` +
+        `BUDDI_VAULT_KEY opens it and is never in a backup — keep a copy off this machine`,
+    };
+  }
   return { status: 'ok', detail: `${facts.vault} — ${where}` };
 }
 

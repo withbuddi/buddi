@@ -19,7 +19,7 @@ import {
 } from '@buddi/core';
 import { describeDatabaseError, probeDatabase } from '@buddi/gateway';
 import type { DbAction } from './args.js';
-import { DB_SERVICE, ensureDatabasePassword, runDbSecure } from './db-secure.js';
+import { DB_SERVICE, ensureDatabasePassword, isLocked, runDbSecure } from './db-secure.js';
 import { REPO_ROOT } from './paths.js';
 import { run, runInherit } from './proc.js';
 
@@ -95,6 +95,15 @@ export async function runDb(
     // the one this project shipped with. A vault that already holds one is
     // left alone, which is what makes a second `db up` a no-op.
     const ensured = await ensureDatabasePassword({ env });
+    if (isLocked(ensured)) {
+      // A fresh installation on a machine with no keychain. Refuse *before*
+      // creating the container: `initdb` reads POSTGRES_PASSWORD exactly once,
+      // and a container created now would be built around a password nothing
+      // recorded.
+      console.error(`The vault will not open, so no database password could be stored.`);
+      console.error(ensured.advice);
+      return 1;
+    }
     if (ensured) {
       env[DB_PASSWORD_VAR] = ensured.password;
       if (ensured.created) {

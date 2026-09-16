@@ -14,6 +14,7 @@ import {
   countJobsByState,
   createPool,
   createVault,
+  vaultState,
   isPaused,
   passwordInDatabaseUrl,
   providerAuthHeaders,
@@ -258,7 +259,12 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
     },
 
     async vault(): Promise<ProbeResult> {
-      return checkVault(await secrets());
+      // `vaultState` is asked separately from hydration on purpose: hydration
+      // can only report that a secret did not resolve, and on a machine with no
+      // keychain the useful sentence is about the *vault* — which file, which
+      // variable, which command — not about the secret that happened to be
+      // asked for first.
+      return checkVault({ ...(await secrets()), state: vaultState({ env }) });
     },
 
     async modelCredential(): Promise<ProbeResult> {

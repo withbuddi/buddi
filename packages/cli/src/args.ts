@@ -85,6 +85,11 @@ export type Command =
   /** `--yes`: ask nothing, take every default, skip what needs typing. */
   | { kind: 'init'; yes: boolean }
   | { kind: 'doctor' }
+  /**
+   * `--no-backup`: skip the archive this command otherwise takes before it
+   * migrates. There is no `--yes`: the command asks nothing in the first place.
+   */
+  | { kind: 'upgrade'; backup: boolean }
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
@@ -158,6 +163,15 @@ export function parseArgs(argv: string[]): Command {
   // `status` is what a person types when they want to know if it works; it is
   // the doctor under another name rather than a second, thinner report.
   if (head === 'doctor' || head === 'status') return { kind: 'doctor' };
+
+  if (head === 'upgrade') {
+    let backup = true;
+    for (const arg of rest) {
+      if (arg === '--no-backup') backup = false;
+      else throw new UsageError(`unknown option for buddi upgrade: ${arg} (expected --no-backup)`);
+    }
+    return { kind: 'upgrade', backup };
+  }
 
   if (head === 'db') {
     const action = rest[0];
@@ -427,6 +441,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi init --yes           the same, asking nothing: for scripts and CI
   buddi doctor               check every moving part and say what is wrong
   buddi status               the same report, under the name you reached for
+  buddi upgrade              after a git pull: back up, build, migrate, restart
+  buddi upgrade --no-backup  the same, without the archive it takes first
 
   buddi db up                start the postgres container (after a reboot)
   buddi db down|status

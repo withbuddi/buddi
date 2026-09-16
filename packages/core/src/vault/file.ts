@@ -169,3 +169,21 @@ export function sameSecret(a: string, b: string): boolean {
   const bb = Buffer.from(b, 'utf8');
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
+
+/**
+ * A fresh `BUDDI_VAULT_KEY`: 256 bits, base64url, no characters a shell or a
+ * `.env` parser argues about.
+ *
+ * This is generated in exactly one place — `buddi init`, with the owner told
+ * what it is — and never by a background process. Two processes that each
+ * generated a key would each seal secrets the other cannot open, and the
+ * second one would look like a corrupt vault rather than like a mistake.
+ */
+export function generateVaultKey(bytes = 32): string {
+  return randomBytes(bytes).toString('base64url');
+}
+
+/** Does this environment hold a usable `BUDDI_VAULT_KEY`? */
+export function hasVaultKey(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (env.BUDDI_VAULT_KEY ?? '').trim() !== '';
+}

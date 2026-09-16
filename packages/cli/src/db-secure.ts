@@ -34,6 +34,8 @@ import {
   redactDatabaseUrl,
   resolveDatabaseUrl,
   VAULT_PLACEHOLDER_LINE,
+  VaultLockedError,
+  vaultState,
   type Vault,
 } from '@buddi/core';
 import { probeDatabase } from '@buddi/gateway';
@@ -133,15 +135,39 @@ export interface EnsureResult {
 }
 
 /**
+ * The vault would not open, so no password was generated and none was stored.
+ *
+ * A locked vault used to come out of here as an uncaught `VaultLockedError`,
+ * which is how a fresh Linux installation — where the file vault is the default
+ * and `BUDDI_VAULT_KEY` is not set until someone sets it — answered `buddi db
+ * up` with a stack trace. It is a configuration state, so it is a value.
+ */
+export interface EnsureLocked {
+  locked: true;
+  /** What to say, and what to do about it. Never a secret. */
+  advice: string;
+}
+
+export type EnsureOutcome = EnsureResult | EnsureLocked | null;
+
+export function isLocked(outcome: EnsureOutcome): outcome is EnsureLocked {
+  return outcome !== null && 'locked' in outcome;
+}
+
+/**
  * The password a fresh installation's container should be created with.
  *
  * Returns `null` — "not ours to decide" — when an explicit `DATABASE_URL` is in
  * the environment: that owner runs their own Postgres, and buddi neither
  * generates nor rotates credentials it did not issue.
+ *
+ * Deliberately does *not* invent a `BUDDI_VAULT_KEY` when the file vault has
+ * none. A key generated here would be generated again by the next process that
+ * did not inherit it, and the two would seal secrets neither could open. The
+ * key is generated in one place only — `buddi init`, in front of the owner —
+ * and everything else says so.
  */
-export async function ensureDatabasePassword(
-  deps: SecureDeps = {},
-): Promise<EnsureResult | null> {
+export async function ensureDatabasePassword(deps: SecureDeps = {}): Promise<EnsureOutcome> {
   const env = deps.env ?? process.env;
   const vault = deps.vault === undefined ? createVault({ env }) : (deps.vault || undefined);
   if (!vault) return null;
@@ -149,12 +175,23 @@ export async function ensureDatabasePassword(
   const fileUrl = await explicitUrlInEnvFile(deps.envFile ?? ENV_FILE);
   if (fileUrl !== null) return null;
 
+  const state = vaultState({ env });
   const existing = await vault.get(DB_PASSWORD_VAR).catch(() => null);
   if (existing !== null && existing.trim() !== '') {
     return { password: existing.trim(), created: false };
   }
   const password = (deps.generate ?? generateDatabasePassword)();
-  await vault.set(DB_PASSWORD_VAR, password);
+  try {
+    await vault.set(DB_PASSWORD_VAR, password);
+  } catch (err) {
+    if (err instanceof VaultLockedError) {
+      return {
+        locked: true,
+        advice: state.advice !== '' ? state.advice : err.message,
+      };
+    }
+    throw err;
+  }
   return { password, created: true };
 }
 

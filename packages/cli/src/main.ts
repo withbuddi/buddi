@@ -38,6 +38,7 @@ import { jobsCancel, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './
 import { loadEnvironment, REPO_ROOT } from './paths.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
+import { runUpgrade } from './upgrade.js';
 import { runVault } from './vault-cmd.js';
 
 /** Apply core's migrations and every installed plugin's. Same work as `pnpm db:migrate`. */
@@ -170,6 +171,18 @@ export async function dispatch(command: Command): Promise<number> {
     case 'doctor':
       await loadEnvironment();
       return doctor();
+    case 'upgrade': {
+      await loadEnvironment();
+      const manager = createServiceManager();
+      return runUpgrade({
+        backup: command.backup,
+        service: {
+          status: () => manager.status(),
+          stop: () => manager.stop(),
+          start: () => manager.start(),
+        },
+      });
+    }
     case 'service':
       await loadEnvironment();
       return service(command.action);

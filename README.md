@@ -7,7 +7,8 @@ file you drop on them — and you reach them from Telegram, from a terminal, and
 from a small dashboard on localhost. They also work while you are not there:
 scheduled missions, watchers that only speak when something is wrong, one-off
 reminders they set themselves. Anything irreversible stops and waits for you to
-approve it. Everything runs on your machine, against a Postgres container on
+approve it, and when there is a next move worth making they offer it as a
+button rather than a paragraph. Everything runs on your machine, against a Postgres container on
 your machine; the one thing that leaves is the prompt, which goes to whichever
 AI provider each agent's file pins — so that one line in that one file decides
 which company sees that agent's conversations.
@@ -26,6 +27,14 @@ Design and rationale: [ARCHITECTURE.md](./ARCHITECTURE.md).
   Start Docker Desktop when you sign in* — buddi is one database away from
   working, and that setting is the difference between "it came back after the
   reboot" and "nothing works this morning".
+
+**On macOS**, secrets go in the OS keychain and there is nothing to set up.
+**Everywhere else** there is no keychain, so they go in an encrypted file at
+`~/.buddi/vault.json` and `BUDDI_VAULT_KEY` is the key that opens it.
+`buddi init` generates that key for you, writes it into `.env` at mode 600, and
+tells you what it is — it is the one thing on this machine that is not in a
+backup, so copy it somewhere. Nothing else ever mints one; every other command
+that finds the vault locked names the file, the variable and `buddi init`.
 
 ```sh
 git clone <this repo> buddi && cd buddi
@@ -101,6 +110,14 @@ run with no TTY behaves the same way.
 600 and are never printed back. `buddi vault import-env` later moves them into
 the OS keychain.
 
+**The vault's own key, off macOS.** With no keychain to use, the vault is an
+encrypted file and `BUDDI_VAULT_KEY` is what opens it. `buddi init` generates
+one and writes it into `.env` — that is the only place in the system that mints
+a key, so two processes can never end up with two keys over one vault. It says
+so loudly, because that line is the only copy: a backup deliberately never
+contains it, and losing it makes the database unreachable with the data still
+intact. [docs/operations.md](./docs/operations.md) has the recovery path.
+
 **The database password.** You never type one. `buddi init` generates 32 random
 characters, hands them to Postgres, and keeps them in the OS keychain under
 `BUDDI_DB_PASSWORD`; `DATABASE_URL` is assembled around that at runtime and is
@@ -139,28 +156,32 @@ broken.
 $ buddi doctor
 buddi doctor — /Users/you/buddi
 
-  ok    node              26.2.0
+  ok    node              v26.2.0
   ok    pnpm              11.0.0
-  ok    docker            Docker version 27.4.0
-  ok    postgres          reachable at 127.0.0.1:55433
-  ok    database exposure 127.0.0.1:55433 (loopback only); password in the vault
-  ok    migrations        up to date (23 applied)
-  ok    vault             keychain (3 secrets)
-  ok    model credential  CLAUDE_CODE_OAUTH_TOKEN accepted by anthropic
-  ok    config            agents: examples + private/agents (1 private)
-  ok    agents            2 agents, 2 runnable — concierge, agent-father (anthropic/claude-sonnet-5)
+  ok    docker            Docker version 27.4.0 (engine 27.4.0)
+  ok    postgres          PostgreSQL 16.4 — postgres://buddi:***@127.0.0.1:55433/buddi
+  ok    database exposure 127.0.0.1:55433 — loopback only; password from BUDDI_DB_PASSWORD
+  ok    migrations        31 applied, none pending
+  ok    vault             keychain — from the vault: ANTHROPIC_API_KEY, TAVILY_API_KEY
+  ok    model credential  oauth accepted, model claude-sonnet-5
+  ok    config            examples /Users/you/buddi/examples/agents (6), private /Users/you/buddi/private/agents (3)
+  ok    agents            4 agents — 3 anthropic (claude-sonnet-5), 1 openai (gpt-5, unavailable: OPENAI_API_KEY is not set)
   ok    plugins           none installed beyond what this build ships (private/plugins.json)
-  warn  telegram bot      TELEGRAM_BOT_TOKEN is not set — the Telegram surface is off
-  warn  paired devices    none — run `buddi telegram pair`
-  ok    queue             running; 0 pending, 0 failed
-  ok    dashboard         127.0.0.1:4317, token in the keychain
-  warn  service           not installed — run `buddi service install`
-  ok    timezone          Europe/Paris
+  ok    web search        Tavily — key from the vault; agents on a provider with its own server-side search (Anthropic) search without one
+  warn  telegram bot      TELEGRAM_BOT_TOKEN is not set — no Telegram surface
+  warn  paired devices    none paired — run `buddi telegram pair`
+  ok    queue             running — 0 pending, 0 running, 0 suspended, 0 failed, 412 succeeded
+  ok    dashboard         http://127.0.0.1:4317 (127.0.0.1:4317) — token in the keychain
+  warn  service           not installed — `buddi service install` (or run `buddi serve` yourself)
+  warn  backups           no backup has ever been taken — `buddi backup create`; NO nightly schedule (`buddi backup schedule install`)
+  ok    timezone          Europe/Paris (BUDDI_TZ)
 
-everything critical is in place; 3 thing(s) to look at
+everything critical is in place; 4 thing(s) to look at
 ```
 
-`buddi status` is the same report under the name people reach for.
+`buddi status` is the same report under the name people reach for. On a machine
+with no keychain the `vault` row names the file instead, and repeats — every
+time, not once at `init` — that `BUDDI_VAULT_KEY` is never in a backup.
 
 ### 3. `buddi chat`
 
@@ -433,14 +454,27 @@ world-touching capability is a plugin, and a plugin can contribute six things:
   the file that appears is yours;
 - a **view descriptor** — data saying how a result is drawn on the dashboard.
 
-Four ship in this repository:
+Five ship in this repository:
 
 | Plugin | Schema | What it gives an agent |
 | --- | --- | --- |
 | `finance` | `finance` | Accounts, recurring charges, transactions and CSV import, receipts, liabilities, credit utilization and payoff, and a deterministic day-by-day cash-flow projection. Six sentinels (floor breach, minimum due, statement closing, stale balance, unmatched receipts, unprocessed files) and three suggested missions. |
 | `email` | `email` | One Gmail account: an IMAP **source** that triages new mail, and `email.send` as a **gated effect tool**. |
 | `memory` | `memory` | Owner preferences (revisioned) and agent-written notes with provenance and expiry, plus keyword recall. No embeddings. |
-| `artifacts` | *none* | Reads over the artifact store, so an agent can look at the file you dropped on it. Owns no schema: uninstalling removes tools, not your files. |
+| `web` | `web` | The live web, as evidence that keeps its source. `web.search` returns a list of results each with its own site and URL — never a blob of concatenated pages; `web.read` returns one public page as text and needs no key at all; `web.status` says whether search is configured, so an agent can find out *before* promising you something current. All three are `auto`. Everything fetched is untrusted text and is labelled as such, and nothing inside this machine is reachable — loopback, private and cloud-metadata addresses are refused after DNS and on every redirect. The schema holds an audit of what was fetched, never what came back. |
+| `artifacts` | *none of its own* | Reads over the artifact store, so an agent can look at the file you dropped on it. Owns no tables: uninstalling removes tools, not your files. |
+
+**Searching the web.** `BUDDI_SEARCH_PROVIDER` decides which company sees the
+questions your agents ask, so it is configuration rather than a default anybody
+guesses at. Left unset, an agent on Anthropic searches through Anthropic
+itself, on the credential its run already pays for, and everything else uses
+Tavily (`TAVILY_API_KEY`); `brave` (`BRAVE_SEARCH_API_KEY`) is the other
+backend, and `native` forces every agent through its own provider.
+`BUDDI_WEB_SEARCH_MAX_USES` caps how many provider-side searches one turn may
+spend (default 3, hard maximum 10). With nothing configured, `web.search`
+returns *not configured* rather than an error and tells the agent so, which is
+what stops it answering from memory as though it had looked something up.
+`buddi doctor`'s `web search` row says which of these you are in.
 
 Core boots with none of them installed — that is a test
 (`packages/gateway/src/generic-install.test.ts`), not an aspiration, and
@@ -512,8 +546,12 @@ conversations.
 | `/approvals` | anything waiting for you |
 | `/devices` | the devices paired to this installation |
 | `/reset` | a fresh conversation with the active agent |
+| `/start` | the first thing a new chat says; `/start <code>` is what a pairing link carries |
 | `/id` | your numeric user id and this chat id |
 | `/help` | the list |
+
+`/new` appears in the published menu only when an installed agent claims the
+`maker` role *and* can actually run.
 
 **Attachments.** Send a document, a photo or a CSV. With a caption, the agent
 starts working on it immediately; without one, it is kept and acknowledged, and
@@ -524,6 +562,15 @@ kept, never transcribed.
 **Approvals** arrive as a message with *Approve* / *Reject* buttons. Tapping one
 re-authenticates you against the paired identity, runs the same core transition
 the dashboard and the terminal call, and edits the message into its outcome.
+
+**Offered actions** arrive the same way. When a turn ends on a real decision —
+a draft written, a file staged, two ways a thing could go — the agent may
+attach up to three of them, each a short label over a sentence it wrote in your
+voice (*"send the reply I drafted to Dorothée"*). Tapping one asks that agent
+that sentence. **It authorizes nothing**: the run that follows has the same
+tiers and the same approval gate, so a tapped *Send it* still stops at
+`email.send` with the full envelope. They belong to the turn that made them and
+are withdrawn when the next one starts, and they lapse after a week.
 
 Unpairing is deliberately not a chat command: a stolen phone is already in a
 paired chat. Revocation stays on the machine — `buddi telegram unpair <id>`.
@@ -546,6 +593,28 @@ buddi chat [--agent <handle>] [--resume <id>] [--last] [--quiet]
 `@handle …` asks one agent a single message without switching. A line ending in
 `\` continues; `"""` on its own line opens a literal block where nothing,
 including a leading `/`, is interpreted. Ctrl-C cancels a run in flight.
+`/exit`, `/q` and `/?` are aliases for `/quit`, `/quit` and `/help`.
+
+Offers appear here too. With no buttons to draw they are spelled out under the
+reply, as `You can ask me to:` and one line each.
+
+**Conversations end by themselves.** `/reset` is one way, not the only way. A
+conversation ends before the next turn starts once it has been idle for **3
+hours**, or once its transcript passes **80,000 characters** — a boundary is
+never taken mid-run, and never while you are answering a question the agent
+asked. You are told once, in one line above the reply:
+
+```
+(New conversation — we last spoke 14 hours ago. What I remember about you carries over.)
+```
+
+That sentence is the contract. What the agent remembers about you, and your
+owner profile, are keyed to you and not to the conversation, so they carry
+over; a pending approval resumes the conversation that proposed it. What does
+not carry over is the old conversation's open offers, which are withdrawn. The
+dashboard says the same thing ambiently, in the conversation header: *12
+messages · started 2 hours ago*, and, once a limit is crossed, *your next
+message starts a fresh one*. Neither limit is configurable.
 
 **Attachments.** `/attach ~/Downloads/statement.pdf`, or just drag the file into
 the terminal — if the whole message is a path that exists, it asks
@@ -584,7 +653,28 @@ ships no finance code. A tool with no descriptor still gets a readable
 structured view, never a dump. An agent that has something worth showing which
 no tool result covers can say so directly with `canvas.show`.
 
-The monitoring pages are all still there, one click away behind the rail:
+**Down the left edge, one face per agent.** The agent rail replaced a dropdown,
+because a dropdown could not answer the question you actually have when you
+open the page: *is anything waiting on me?* Each agent is a monogram chip with
+a stable tint. They are grouped by role rather than by id — whoever holds the
+front desk at the head, your colleagues in the middle, the maker pinned to the
+foot — so the rail keeps its shape as agents come and go. An agent that cannot
+run is greyed, with the reason in its tooltip.
+
+Exactly two things earn a badge, and both mean *a run has stopped and is
+waiting for a person*: a pending approval, as a count, and a question an agent
+asked and is holding for, as a bare dot — a question is not a quantity.
+Activity earns nothing. There are no unread counts. It updates off a live
+stream rather than a poll, and a held question stops counting after fifteen
+minutes or as soon as you write to that agent again.
+
+The three dots on the conversation header open the active agent as a canvas
+tab: its grant counted out loud (*"twenty-two tools, two of which stop and wait
+for you"*), grouped by the plugin that ships each one, gated tools banded and
+sorted first, plus its model, its skills, who it may delegate to, and the
+*name* of the variable holding its credential — never the value.
+
+The monitoring pages are all still there, one click away behind the nav rail:
 
 | Page | Shows |
 | --- | --- |
@@ -594,6 +684,7 @@ The monitoring pages are all still there, one click away behind the rail:
 | Missions | Scheduled work: next fire, misfire policy, whether it spoke last time |
 | Approvals | What is waiting, with the tool-written preview; approve or reject |
 | Jobs | The durable queue by state; retry or cancel |
+| Offers | Every open offered action, with the full sentence taking it would ask — and the line saying it authorizes nothing |
 | Reminders | One-off nudges the agents set; cancel a pending one |
 | Sentinels | Installed watchers, last run, open and resolved findings |
 | Agents | Tools, skills, pinned provider and which env var holds the credential — never the credential |
@@ -683,6 +774,29 @@ finding, and core alone decides what it costs you — `urgent` wakes you now and
 then stays quiet 24 hours for the same key, `info` is noted for the weekly
 digest and stays quiet a week. Silence is the default, not an optimization.
 
+**When unattended work dies, you hear about it.** A watcher exists for one
+reason: an agent that only speaks when something is wrong is lying to you the
+moment its runs start failing silently. A scheduled run or a mission that has
+exhausted its retries — eight attempts over about four hours, not the six
+minutes an interactive turn gets — is a *dead* job, and dead jobs are folded
+into one incident and reported **once**, fifteen minutes after the first death,
+down the same path a mission report takes. It leads with what is not happening
+rather than with job ids:
+
+```
+Mail is not being read.
+12 emails between 13:21 and 13:34 were never looked at, and nothing is still
+trying — every attempt failed the same way: ECONNRESET imap.gmail.com.
+Nothing more will be sent about this outage.
+To see what was lost: buddi jobs --state failed
+To run it all again: buddi jobs retry --all
+```
+
+`buddi jobs retry --all [--kind <k>]` requeues the whole wave, and the second
+chance gets the full horizon the work should have had the first time. `buddi
+doctor`'s `queue` row and the dashboard's Overview say the same thing while it
+is still true.
+
 Missions:
 
 ```sh
@@ -721,6 +835,47 @@ immediately, naming the port and the fix.
 
 ---
 
+## Upgrading
+
+New code is four things — install, build, migrate, restart — and **migrations
+do not run themselves**. Three of the four ways to get that wrong are silent:
+skip the build and the service keeps running last month's code against this
+month's schema; skip the migration and a tool fails hours later, at the moment
+an agent calls it; skip the restart and everything looks fine until the next
+reboot disagrees.
+
+So the order is a command:
+
+```sh
+git pull          # you do this
+buddi upgrade     # buddi does the rest
+```
+
+`buddi upgrade` **does not fetch**. This checkout is yours — it may be a fork,
+it may be on a branch, it may carry your own edits — and a command that pulled
+could leave a merge conflict inside a working installation. It upgrades the
+code already on disk, prints the commit it is about to install so you can tell
+whether your pull landed, and says if you have local edits rather than refusing
+to run over them.
+
+It takes a backup first, because the migration is the only step that cannot be
+repeated away; stops the background service, because old code must not run
+while the schema moves; installs, builds, migrates — `buddi migrate`, which is
+core's migrations *and every installed plugin's* — starts the service again if
+it was running when it arrived, and ends with `buddi doctor`.
+
+`buddi upgrade --no-backup` if you took one five minutes ago.
+
+**If it fails halfway**, migrations here only go forward, so the answer is that
+archive and not an undo. Each failure stops the run and says where you are: a
+failed build leaves the database untouched and the service running on the code
+it had; a failed migration is the one case that deliberately leaves the service
+*down*, because new code against a half-migrated schema is the combination
+never to leave running. [docs/operations.md](./docs/operations.md) has the table
+and the by-hand version.
+
+---
+
 ## Backups
 
 An archive of the database, your private agents and the artifact store.
@@ -728,6 +883,10 @@ An archive of the database, your private agents and the artifact store.
 **No secret is ever in a backup** — not the model credential, not the bot token,
 not `BUDDI_VAULT_KEY`; the manifest lists their *names* and the exact
 `buddi vault set <NAME>` lines that put them back, and you type those by hand.
+`BUDDI_VAULT_KEY` is the sharpest case, because it is not one secret but the
+key to all of them on a machine with no keychain — which is exactly why it is
+excluded, and exactly why it is the one line you have to copy somewhere
+yourself.
 
 **[docs/operations.md](./docs/operations.md)** has the rest: everything an
 archive contains, everything deliberately left out and why, and the restore
@@ -757,6 +916,8 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi init --yes` | the same, asking nothing: for scripts and CI |
 | `buddi doctor` | check every moving part and say what is wrong |
 | `buddi status` | the same report, under the name you reached for |
+| `buddi upgrade` | after a `git pull`: back up, stop, build, migrate, restart, check |
+| `buddi upgrade --no-backup` | the same, without the archive it takes first |
 | `buddi migrate` | apply core + plugin migrations |
 
 **Database**
@@ -827,6 +988,7 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi resume` | start claiming again |
 | `buddi jobs` | `[--state <s>] [--kind <k>] [--limit <n>]` |
 | `buddi jobs retry <id>` / `cancel <id>` | |
+| `buddi jobs retry --all` | `[--kind <k>]` — run every dead job again |
 
 **Secrets**
 
@@ -893,8 +1055,8 @@ check `BUDDI_WEB` is not `0` and that `buddi serve` is running.
 | Postgres container (`buddi-pgdata` volume) | Conversations, the event log, missions, jobs, approvals, reminders, paired devices, and every plugin's schema |
 | `data/` | Artifacts (the files you hand it), logs, the dashboard token where there is no vault. Gitignored |
 | `private/` | Your agents and skills. Gitignored |
-| `.env` (mode 600) | Configuration, and secrets until you run `buddi vault import-env` |
-| OS keychain | Secrets after that. No command ever prints one back |
+| `.env` (mode 600) | Configuration, and secrets until you run `buddi vault import-env`. On a machine with no keychain it also holds `BUDDI_VAULT_KEY`, which is the key and not a secret the vault can hold |
+| OS keychain, or `~/.buddi/vault.json` | Secrets after that — the keychain on macOS, an AES-256-GCM file elsewhere. No command ever prints one back |
 
 `buddi-pgdata` is a Docker named volume: it is not in git, it is not in any
 clone, and `docker compose down -v` (or Docker Desktop's *Clean / Purge data*)
@@ -964,6 +1126,6 @@ Packages: `core` (domain, db, event log, tool registry, provider port, and the
 plugin contract), `runtime` (the agent loop and the provider adapters),
 `gateway` (the surfaces: terminal, Telegram, scheduler, dashboard server),
 `web` (the dashboard UI, React + Vite, built to static files), `cli` (the single
-`buddi` binary, plus `init`, `doctor`, `service` and `backup`), and
-`tools/{finance,email,memory,artifacts}` (the plugins). Core never imports a
+`buddi` binary, plus `init`, `doctor`, `service`, `upgrade` and `backup`), and
+`tools/{finance,email,memory,web,artifacts}` (the plugins). Core never imports a
 tool: delete `packages/tools/finance` and the system still boots.
