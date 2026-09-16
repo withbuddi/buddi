@@ -353,6 +353,76 @@ export interface AgentsView {
   providers: ProviderModels[];
 }
 
+/**
+ * One agent, whole — `GET /api/agents/:id/profile`.
+ *
+ * The shape is the server's (`packages/gateway/src/web/profile.ts`). Nothing
+ * here is domain vocabulary: a family is whatever plugin the server says
+ * shipped the tool, and a tier is the platform's own word for whether a call
+ * runs or stops for the owner.
+ */
+export interface AgentProfileTool {
+  name: string;
+  description: string;
+  tier: string;
+  /** The call stops and becomes an approval. The panel leads with this. */
+  gated: boolean;
+}
+
+export interface AgentProfileFamily {
+  family: string;
+  tools: AgentProfileTool[];
+  gated: number;
+}
+
+export interface AgentProfile {
+  id: string;
+  handle: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  source: string;
+  file: string;
+  available: boolean;
+  unavailableReason?: string;
+  roles: string[];
+  engine: {
+    provider: string;
+    model: string;
+    maxTurns: number;
+    language: string;
+    credentialKind: string;
+    /** The variable the credential is read from. Never a value. */
+    credentialEnv: string;
+  };
+  tools: AgentProfileFamily[];
+  toolCount: number;
+  gatedCount: number;
+  skills: Array<{
+    name: string;
+    description?: string;
+    provenance: string;
+    scope: string;
+    file: string;
+  }>;
+  delegates: Array<{
+    id: string;
+    handle: string;
+    name: string;
+    description: string;
+    available: boolean;
+  }>;
+  /** Where a change goes, resolved by role. Absent when nothing claims it. */
+  changeVia?: {
+    agentId: string;
+    handle: string;
+    name: string;
+    prompt: string;
+    available: boolean;
+  };
+  note: string;
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -428,6 +498,11 @@ export const api = {
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   agents: () => get<AgentsView>('/agents'),
+  /**
+   * What one agent is: its grant with every tool's tier, its engine, its
+   * skills, its delegates. A read; there is no counterpart that writes.
+   */
+  agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
 
   decide: (id: string, decision: 'approve' | 'reject') =>
     post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(

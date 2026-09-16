@@ -12,7 +12,7 @@
  * that has not finished uploading, and a failure says so rather than sending a
  * message that quietly refers to nothing.
  */
-import { useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { chatApi, ApiError } from '../api';
 import type { UploadedAttachment } from './types';
 
@@ -24,18 +24,33 @@ export interface PendingAttachment {
   error?: string;
 }
 
+/**
+ * A line put in the owner's mouth by something they clicked, and when.
+ *
+ * `at` is what makes it re-applicable: clicking the same button twice means the
+ * same text twice, and a value-only prop would look unchanged the second time.
+ * It is a *draft* and never a send — the owner still reads it, edits it and
+ * presses the key. Nothing in this package may put words into a run on its own.
+ */
+export interface ComposerDraft {
+  text: string;
+  at: number;
+}
+
 export function Composer({
   disabled,
   running,
   onSend,
   onStop,
   agentName,
+  draft,
 }: {
   disabled: boolean;
   running: boolean;
   onSend: (text: string, attachmentIds: string[]) => void;
   onStop: () => void;
   agentName: string;
+  draft?: ComposerDraft | null;
 }): JSX.Element {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -77,6 +92,27 @@ export function Composer({
         );
     }
   };
+
+  /*
+   * Something offered a sentence to start from. It replaces what is in the box
+   * only when the box is empty — a half-typed message is the owner's, and no
+   * button may take it.
+   */
+  const lastDraft = useRef<number>(0);
+  useEffect(() => {
+    if (!draft || draft.at === lastDraft.current) return;
+    lastDraft.current = draft.at;
+    setText((current) => (current.trim() === '' ? draft.text : current));
+    const node = area.current;
+    if (node) {
+      node.focus();
+      window.requestAnimationFrame(() => {
+        node.style.height = 'auto';
+        node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
+        node.setSelectionRange(node.value.length, node.value.length);
+      });
+    }
+  }, [draft]);
 
   /** The field is as tall as what is in it, up to a point. */
   const resize = (): void => {

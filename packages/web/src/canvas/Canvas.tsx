@@ -27,6 +27,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
+import { Profile, type ProfileProps } from './views/Profile';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -57,6 +58,7 @@ export function Canvas({
   onActivate,
   timezone,
   onDecided,
+  onChangeAgent,
   emptyHint,
   descriptors,
   agentName,
@@ -67,6 +69,8 @@ export function Canvas({
   onActivate: (id: string) => void;
   timezone: string;
   onDecided?: (action: ApprovalRow) => void;
+  /** Where the properties panel's one button goes: the maker, with a subject. */
+  onChangeAgent?: ProfileProps['onChange'];
   emptyHint?: string;
   /** The installed view descriptors, used to say what could appear here. */
   descriptors?: ViewDescriptor[];
@@ -128,12 +132,26 @@ export function Canvas({
                 <h2 className="wb-panel-title">{item.title}</h2>
                 <span className="wb-panel-tool mono">{item.tool}</span>
               </header>
-              <RenderView
-                renderer={item.renderer}
-                props={item.props}
-                timezone={timezone}
-                onDecided={onDecided}
-              />
+              {/*
+                The properties panel is not a renderer and is deliberately not
+                in the registry: it describes the installation rather than a
+                result, and a plugin — or an agent calling `canvas.show` — must
+                not be able to ask for it and fill it with whatever it likes.
+                Its source is set here, in the page, and nowhere else.
+              */}
+              {item.source === 'profile' ? (
+                <Profile
+                  {...(item.props as ProfileProps)}
+                  {...(onChangeAgent ? { onChange: onChangeAgent } : {})}
+                />
+              ) : (
+                <RenderView
+                  renderer={item.renderer}
+                  props={item.props}
+                  timezone={timezone}
+                  onDecided={onDecided}
+                />
+              )}
             </section>
           </Tabs.Content>
         ))}
