@@ -10,6 +10,7 @@
  * installing them is the owner's call, on the owner's package manager.
  */
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -28,14 +29,17 @@ import {
   createPool,
   createVault,
   databaseDefaults,
+  VAULT_KEY_VAR,
+  generateVaultKey,
   resolveDatabaseUrl,
   resolveSecrets,
+  vaultState,
   type Vault,
 } from '@buddi/core';
 import { createPairingCode, listDevices, TelegramApi } from '@buddi/gateway';
 import { getOnboarding } from '@buddi/core';
 import { runDashboard } from './dashboard-cmd.js';
-import { ensureDatabasePassword, shape } from './db-secure.js';
+import { ensureDatabasePassword, isLocked, shape } from './db-secure.js';
 import { applyEnvEdits, isBlank, maskSecret, parseEnv, type EnvEdit } from './env-file.js';
 import {
   isNoop,
@@ -146,11 +150,42 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
         return 1;
       }
       copyFileSync(ENV_EXAMPLE_FILE, ENV_FILE);
-      console.log(`created ${ENV_FILE} from .env.example`);
+      // `copyFileSync` carries the *example's* mode across, which is 644 — and
+      // this file is about to hold the vault's key and, on a day-1
+      // installation, every secret. `writeFileSync`'s `mode` option only
+      // applies when it creates a file, so the permission has to be set here,
+      // explicitly, once.
+      secureEnvFile(ENV_FILE);
+      console.log(`created ${ENV_FILE} from .env.example (mode 600)`);
     }
 
     let text = readFileSync(ENV_FILE, 'utf8');
     let env = parseEnv(text);
+
+    /*
+     * 2a. The vault's own key, where this machine has no keychain.
+     *
+     * On macOS the vault is the keychain and there is nothing to do. Everywhere
+     * else it is an encrypted file, and `BUDDI_VAULT_KEY` is the key — without
+     * it every step below fails closed, which is how a fresh Linux clone used
+     * to answer the very first command with a stack trace. This is the one
+     * place in the system that generates that key, and it says out loud what
+     * the key is and what losing it costs.
+     */
+    const keyed = await ensureVaultKey({
+      envFile: ENV_FILE,
+      confirm,
+      interactive,
+      assumeYes,
+    });
+    if (!keyed.ok) {
+      console.error(keyed.advice);
+      return 1;
+    }
+    if (keyed.generated) {
+      text = readFileSync(ENV_FILE, 'utf8');
+      env = parseEnv(text);
+    }
 
     /*
      * A secret the owner already moved into the vault leaves `NAME=<vault>`
@@ -163,8 +198,13 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     const secrets = await resolveSecrets(KNOWN_SECRETS, { vault, env });
     const locked = Object.values(secrets.problems).find((p) => p.code === 'vault-locked');
     if (locked) {
+      // Not the missing-key case — that was handled above — so this is a key
+      // that does not open the vault already on disk. Say which vault, and do
+      // not offer to mint a second key over the top of it.
       console.error(`The vault is locked: ${locked.message}`);
-      console.error('Unlock it and run `buddi init` again — nothing was changed.');
+      console.error(
+        `Unlock it and run \`buddi init\` again — nothing was changed. ${keyed.detail}`,
+      );
       return 1;
     }
     const known = secrets.env as Record<string, string>;
@@ -305,7 +345,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
 
     if (edits.length > 0) {
       text = applyEnvEdits(text, edits);
-      writeFileSync(ENV_FILE, text, { mode: 0o600 });
+      writeFileSync(ENV_FILE, text);
+      secureEnvFile(ENV_FILE);
       console.log(dim(`\nwrote ${edits.length} value(s) to ${ENV_FILE} (mode 600)`));
       env = parseEnv(text);
     }
@@ -548,6 +589,108 @@ export async function pairHere(
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * The vault's key
+ * ------------------------------------------------------------------ */
+
+export type VaultKeyOutcome =
+  | { ok: true; generated: boolean; detail: string }
+  | { ok: false; advice: string };
+
+export interface VaultKeyOptions {
+  envFile: string;
+  confirm: (question: string, byDefault?: boolean) => Promise<boolean>;
+  interactive: boolean;
+  assumeYes: boolean;
+  env?: NodeJS.ProcessEnv;
+  log?: (line: string) => void;
+  /** Injected in tests so an assertion can name the key. */
+  generate?: () => string;
+}
+
+/**
+ * Give the file vault a key, or explain precisely why nothing can continue.
+ *
+ * Three positions were available here and only one of them is honest.
+ *
+ *  - *Write the key beside the vault file.* Then anyone who can read
+ *    `~/.buddi/vault.json` can read `~/.buddi/vault.key`, and the encryption is
+ *    decoration. The file vault's entire premise is that the key is held
+ *    somewhere the ciphertext is not.
+ *  - *Refuse, and name the variable.* Correct, and the state buddi was already
+ *    in — which is how a stranger's first command became a stack trace with a
+ *    variable name in it and no way to produce a value for it.
+ *  - *Generate it here, once, in front of the owner, into `.env`.* `.env` is a
+ *    different file in a different directory at mode 600, already gitignored,
+ *    and already the file `.env.example` documents this variable in. It is the
+ *    only command a stranger runs deliberately, so it is the only place a key
+ *    is ever minted.
+ *
+ * The cost is stated rather than hidden: that line is the only copy. Lose it
+ * and every secret in the vault is unreadable, including `BUDDI_DB_PASSWORD` —
+ * so the database becomes unreachable even though the volume is intact. A
+ * backup deliberately does not contain the key (docs/operations.md), which
+ * makes this the one thing an owner has to copy somewhere by hand.
+ */
+export async function ensureVaultKey(opts: VaultKeyOptions): Promise<VaultKeyOutcome> {
+  const env = opts.env ?? process.env;
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const state = vaultState({ env });
+
+  if (state.selection === 'none') {
+    return { ok: true, generated: false, detail: 'no vault (BUDDI_VAULT=none) — secrets stay in .env' };
+  }
+  if (!state.locked) {
+    const detail =
+      state.selection === 'file'
+        ? `file vault at ${state.file} — ${VAULT_KEY_VAR} is set`
+        : `${state.selection} vault`;
+    log(`\nVault: ${dim(detail)}`);
+    return { ok: true, generated: false, detail };
+  }
+
+  log(bold('\nThe vault'));
+  log(
+    `  This machine has no OS keychain, so buddi keeps secrets in an encrypted file\n` +
+      `  at ${state.file}. ${VAULT_KEY_VAR} is the key that opens it, and it is\n` +
+      `  deliberately not stored next to the file it unlocks.`,
+  );
+
+  const wanted = opts.assumeYes
+    ? true
+    : opts.interactive
+      ? await opts.confirm(`  Generate one now and write it to ${opts.envFile}?`, true)
+      : false;
+
+  if (!wanted) {
+    return {
+      ok: false,
+      advice:
+        `No ${VAULT_KEY_VAR}, so nothing further can be stored. Either re-run \`buddi init --yes\`\n` +
+        `to have one generated, or put your own in ${opts.envFile}:\n` +
+        `  ${VAULT_KEY_VAR}=$(openssl rand -base64 32)\n` +
+        `Nothing was changed.`,
+    };
+  }
+
+  const key = (opts.generate ?? generateVaultKey)();
+  const before = readFileSync(opts.envFile, 'utf8');
+  writeFileSync(opts.envFile, applyEnvEdits(before, [{ key: VAULT_KEY_VAR, value: key }]));
+  secureEnvFile(opts.envFile);
+  // This process is about to use the vault; every later one reads `.env`.
+  env[VAULT_KEY_VAR] = key;
+
+  log(`  generated ${VAULT_KEY_VAR} and wrote it to ${opts.envFile} (mode 600)`);
+  log(bold('  That line is the only copy.'));
+  log(
+    `  Lose it and every secret in ${state.file} is unreadable — including the\n` +
+      `  database password, which makes the database unreachable with the data still\n` +
+      `  intact. A buddi backup never contains it, on purpose. Copy it somewhere you\n` +
+      `  would keep a recovery code, now, before you go further.`,
+  );
+  return { ok: true, generated: true, detail: `file vault — ${VAULT_KEY_VAR} generated` };
+}
+
 /**
  * Make sure this installation has a database password of its own, and hand back
  * the connection string everything else in the wizard should use.
@@ -559,10 +702,26 @@ export async function pairHere(
 export async function setUpDatabasePassword(
   vault: Vault | undefined,
   env: Record<string, string | undefined>,
-  io: { log?: (line: string) => void } = {},
+  io: { log?: (line: string) => void; envFile?: string } = {},
 ): Promise<string | undefined> {
   const log = io.log ?? ((line: string) => console.log(line));
-  const ensured = await ensureDatabasePassword({ env: env as NodeJS.ProcessEnv, vault });
+  // The *file*, not this environment: by the time the wizard runs, every
+  // subcommand has already assembled a `DATABASE_URL` into `process.env`, so
+  // the environment can no longer tell you whether the owner asked for one.
+  // Injectable so a test can ask the question against a file of its own.
+  const ensured = await ensureDatabasePassword({
+    env: env as NodeJS.ProcessEnv,
+    vault,
+    ...(io.envFile === undefined ? {} : { envFile: io.envFile }),
+  });
+  if (isLocked(ensured)) {
+    // `ensureVaultKey` runs before this and either gave the vault a key or
+    // stopped the wizard, so reaching here means the key does not open the
+    // vault that is already on disk — a different problem, and not one to
+    // paper over by generating a second key.
+    log(`\nDatabase password: ${dim(`not stored — ${ensured.advice}`)}`);
+    return undefined;
+  }
   if (ensured === null) {
     const resolution = await resolveDatabaseUrl({ env: env as NodeJS.ProcessEnv, vault });
     log(`\nDatabase: ${dim('DATABASE_URL is set explicitly — buddi will not touch it')}`);
@@ -583,6 +742,25 @@ export async function setUpDatabasePassword(
       : `\nDatabase password: ${dim(`already in the vault as ${DB_PASSWORD_VAR}`)}`,
   );
   return url;
+}
+
+/**
+ * `.env` holds secrets — on a machine with no keychain it holds the key to all
+ * of them — so it is the owner's to read and nobody else's.
+ *
+ * Applied every time the file is written rather than only when it is created:
+ * `writeFileSync`'s `mode` is ignored for a file that already exists, so a
+ * `.env` that started life as a 644 copy of `.env.example` would otherwise stay
+ * 644 forever while every message about it said 600. Failure is not fatal — a
+ * filesystem with no permission bits is a valid place to run — but it is not
+ * silent either.
+ */
+export function secureEnvFile(file: string, warn: (line: string) => void = console.warn): void {
+  try {
+    chmodSync(file, 0o600);
+  } catch (err) {
+    warn(`could not set ${file} to mode 600: ${message(err)} — check it by hand`);
+  }
 }
 
 /** This machine's IANA zone, with a defined fallback. */
@@ -675,14 +853,24 @@ export async function setUpPrivateConfig(
   ask: (question: string) => Promise<string>,
   known: Record<string, string>,
   remember: (key: string, value: string) => void,
-  io: { log?: (line: string) => void; interactive?: boolean } = {},
+  io: {
+    log?: (line: string) => void;
+    interactive?: boolean;
+    /**
+     * Where the private directory goes when nothing pins it. Injected in tests
+     * — the real default is the owner's own `<repo>/private`, and a test that
+     * used it would create agents in the installation it is testing.
+     */
+    defaultRoot?: string;
+  } = {},
 ): Promise<string> {
   const log = io.log ?? ((line: string) => console.log(line));
   // With nobody to ask, the default location *is* the answer: a script still
   // gets a private directory with the example agent in it.
   const interactive = io.interactive ?? true;
   const pinned = known.BUDDI_AGENTS_DIR;
-  let root = DEFAULT_PRIVATE_DIR;
+  const defaultRoot = io.defaultRoot ?? DEFAULT_PRIVATE_DIR;
+  let root = defaultRoot;
 
   if (pinned !== undefined && pinned.trim() !== '') {
     root = path.dirname(pinned.trim());
@@ -698,7 +886,7 @@ export async function setUpPrivateConfig(
     const answer = interactive ? (await ask(`Where should they live? [${root}] `)).trim() : '';
     if (answer !== '') {
       root = path.resolve(answer);
-      if (root !== DEFAULT_PRIVATE_DIR) remember('BUDDI_AGENTS_DIR', path.join(root, 'agents'));
+      if (root !== defaultRoot) remember('BUDDI_AGENTS_DIR', path.join(root, 'agents'));
     }
   }
 

@@ -986,11 +986,14 @@ your sentinels and sources over `wiring.registry.manifests()`, `buddi migrate`
 applies your schema, `buddi missions add-defaults` reads your suggestions, and
 `platform.plugin_agents` offers your agents. See §8.
 
-**The four plugins this repository ships are different**: they are compiled into
-the build, in `createToolRegistry` and `installedManifests()` in
-`packages/gateway/src/agents/catalog.ts`, and they cannot be uninstalled because
-they are part of it. If you are adding a plugin *to buddi itself*, that is the
-one line to add. If you are distributing one, you never touch that file.
+**The plugins this repository ships are different**: `finance`, `email`, `memory`,
+`artifacts` and `web` are compiled into the build, registered in
+`createToolRegistry` in `packages/gateway/src/agents/catalog.ts`, and they cannot
+be uninstalled because they are part of it. (`installedManifests()` derives the
+migratable subset from the registry rather than repeating the list — a
+hand-written one was the defect that let `web` ship without being migrated.) If
+you are adding a plugin *to buddi itself*, `createToolRegistry` is the one line
+to add. If you are distributing one, you never touch that file.
 
 **Neither is done for the example.** The `weather` plugin is in the workspace so
 it compiles and is tested against the real types — and it is what the end-to-end
@@ -1082,11 +1085,14 @@ third needs a fake transport:
 
 ## 6. Trust and classification
 
-- **The tier your tool declares is a request.** ARCHITECTURE.md's model is that
-  the owner classifies at install time and unclassified tools default to
-  `gated`. In this build the declared tier is what the registry reads, and the
-  registry executes `auto` only — so declaring `auto` on something that leaves
-  the machine is the failure mode to watch for in review, not a clever shortcut.
+- **The tier your tool declares is what the registry enforces.** There is no
+  re-tiering at install: the owner reads your whole contribution and accepts or
+  refuses it as a whole, and from then on your `tier` is the policy. The registry
+  executes `auto` only and turns `gated` into an action and an approval — so
+  declaring `auto` on something that leaves the machine is the failure mode to
+  watch for in review, not a clever shortcut. (`draft` and `session` are labels
+  the type carries; the registry refuses them with `tier-not-executable` because
+  the machinery they need does not exist yet. Do not ship a tool at either.)
 - **Unknown tool and invalid arguments fail closed,** before any code of yours
   runs. A model that hallucinates a tool name gets `unknown-tool`; arguments zod
   rejects get `invalid-args` with the field path. Make the schema tight: bounds

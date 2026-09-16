@@ -6,13 +6,14 @@
  * as one; a generated password never lands in `.env`; and `buddi db secure` is
  * idempotent and reversible against a fake `docker`.
  */
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DB_PASSWORD_VAR,
   LEGACY_DB_PASSWORD,
+  createFileVault,
   createMemoryVault,
   generateDatabasePassword,
   passwordInDatabaseUrl,
@@ -22,6 +23,7 @@ import {
   alterRolePassword,
   ensureDatabasePassword,
   hostOfPublished,
+  isLocked,
   publishedBinding,
   runDbSecure,
   type Exec,
@@ -124,21 +126,45 @@ describe('ensureDatabasePassword', () => {
     const vault = createMemoryVault();
 
     const result = await ensureDatabasePassword({ env: {}, vault, envFile: file });
+    if (result === null || isLocked(result)) throw new Error('expected a generated password');
 
-    expect(result?.created).toBe(true);
-    expect(result?.password).toMatch(/^[A-Za-z0-9_-]{32}$/);
-    expect(await vault.get(DB_PASSWORD_VAR)).toBe(result?.password);
+    expect(result.created).toBe(true);
+    expect(result.password).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(await vault.get(DB_PASSWORD_VAR)).toBe(result.password);
     // The point of the whole exercise: the file is untouched.
     expect(readFileSync(file, 'utf8')).toBe('BUDDI_DB_PORT=55433\n');
-    expect(readFileSync(file, 'utf8')).not.toContain(result?.password as string);
+    expect(readFileSync(file, 'utf8')).not.toContain(result.password);
   });
 
   it('is a no-op when the vault already holds one', async () => {
     const file = tmpEnvFile('');
     const vault = createMemoryVault();
     const first = await ensureDatabasePassword({ env: {}, vault, envFile: file });
+    if (first === null || isLocked(first)) throw new Error('expected a generated password');
     const second = await ensureDatabasePassword({ env: {}, vault, envFile: file });
-    expect(second).toEqual({ password: first?.password, created: false });
+    expect(second).toEqual({ password: first.password, created: false });
+  });
+
+  /*
+   * The fresh-Linux case. `vaultSelection` returns the file vault on anything
+   * that is not macOS, and the file vault has no key until someone sets one —
+   * so this call used to leave `VaultLockedError` to unwind out of `buddi db
+   * up` and `buddi init` as a stack trace. It is a state now, with the fix in
+   * it, and nothing was written on the way past.
+   */
+  it('reports a locked file vault instead of throwing, and stores nothing', async () => {
+    const file = tmpEnvFile('');
+    const home = mkdtempSync(path.join(tmpdir(), 'buddi-vault-'));
+    const env = { BUDDI_VAULT: 'file', BUDDI_HOME: home } satisfies NodeJS.ProcessEnv;
+    const vault = createFileVault({ env });
+
+    const result = await ensureDatabasePassword({ env, vault, envFile: file });
+
+    expect(isLocked(result)).toBe(true);
+    expect(isLocked(result) && result.advice).toContain('BUDDI_VAULT_KEY');
+    expect(isLocked(result) && result.advice).toContain('buddi init');
+    expect(existsSync(path.join(home, 'vault.json'))).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe('');
   });
 
   it('declines when the owner set DATABASE_URL themselves', async () => {
