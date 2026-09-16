@@ -96,6 +96,71 @@ Two things follow from the first row that are worth saying plainly:
 - **`data/` and `private/` are gitignored.** They are not in your git history, and
   pushing the repo does not back them up.
 
+### Getting into the dashboard, and what protects it
+
+The dashboard is not a chart viewer. It approves actions — it is where a
+proposed email is read and sent, and every plugin that arrives adds to that
+list. An unauthenticated port that shows a balance is a privacy problem; an
+unauthenticated port that can move money is a different kind of problem, and
+that is the one this model is sized for.
+
+**The chain, unchanged.** A long random token is generated on first run and
+kept in the keychain (or `data/web-token`, mode `600`). It never appears in a
+URL. `buddi dashboard` mints a **ticket** signed with it: single-use, five
+minutes, and the server refuses a second presentation of the same one. The
+browser swaps it, on a clean URL, for an `HttpOnly; SameSite=Strict` session
+cookie. Every write additionally carries a double-submit CSRF header and an
+`Origin` that is the bound address. There is no CORS, `OPTIONS` is refused, and
+anything unauthenticated is `401` with an empty body.
+
+**What changed is how long a session lasts, and only that.**
+
+| Where the browser is | Idle lifetime | Why |
+| --- | --- | --- |
+| **Local** — the connection comes from `127.0.0.0/8` or `::1` | **30 days** | On loopback, the session is the only thing standing between the page and *another human with a login on this Mac*. The browser-borne attack is already dead (`SameSite=Strict`, the Origin check, no CORS), and a hostile process running as you can read `.env` and the keychain whatever this number says. Retyping a terminal command twice a day bought nothing. |
+| **Remote** — anything else, a tailnet address included | **12 hours** | A session reachable from a network is reachable by things that are not you. This is what the dashboard has always had, and it keeps it. |
+
+Both are *idle* lifetimes. A session in use never expires underneath you: every
+authenticated request pushes the expiry out, and the cookie in the browser is
+re-issued once it is halfway through its life — often enough that it can never
+be the half that dies first, rarely enough that responses are not all carrying
+`Set-Cookie`. Stop using it for the whole window and it lapses; the next visit
+needs a fresh ticket.
+
+**"Local" is decided from the TCP connection and nothing else** —
+`socket.remoteAddress`, as the kernel reports it. No `X-Forwarded-For`, no
+`Forwarded`, no `Host`: those are strings the client types, and trusting one
+would let anyone on your network ask for the month-long session by adding a
+header. There is no proxy in front of this server for them to be meaningful.
+A session established on loopback is also refused if it is ever presented from
+a non-loopback address, so the long lifetime cannot travel.
+
+If you put the dashboard behind Tailscale (`BUDDI_WEB_HOST` on the tailnet
+address), those requests are **remote** and get the 12 hours — deliberately.
+Tailscale authenticates the device, not the person holding the laptop, and the
+short lifetime is the cheap half of that answer.
+
+**Opening it without a terminal.** Optional, and alongside `buddi service
+install` rather than part of it:
+
+```sh
+buddi dashboard --install-app     # "Buddi Dashboard" in ~/Applications
+buddi dashboard --uninstall-app   # gone again
+```
+
+That writes a small unsigned `.app` bundle whose entire program is `exec node
+…/buddi dashboard`. Open it from Launchpad, Spotlight or the Dock and a browser
+tab appears. **It holds no secret** — not the token, not a ticket, not a URL
+with one in it; each open runs the same command and mints the same fresh
+single-use ticket, so the click is a shortcut through the front door, not a key
+left under the mat. Delete the bundle and nothing else changes.
+
+**Turning it off.** `BUDDI_WEB=0` in `.env`, then `buddi service restart`. The
+server is then not started at all — no port, no session, no ticket. To move it
+instead, `BUDDI_WEB_HOST` / `BUDDI_WEB_PORT`; binding anywhere but loopback puts
+an Approve button on your network, `buddi doctor` warns about it, and it should
+have an authenticated transport in front of it.
+
 ## What a backup contains
 
 One timestamped archive, `buddi-backup-YYYYMMDD-HHMMSS.tar.gz`, written to

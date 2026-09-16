@@ -8,8 +8,46 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
-/** How long a session cookie is honoured without any activity. */
-export const SESSION_TTL_MS = 12 * 60 * 60_000;
+/**
+ * How long a session is honoured **without any activity**, by where it was
+ * established. Both are idle lifetimes, not absolute ones: a session in use
+ * never expires underneath the person using it (see `get`), and a session
+ * nobody has touched for this long is gone.
+ *
+ * The two numbers differ because the two threats differ. On loopback the only
+ * party a session keeps out is another human with a login on this machine —
+ * the browser-borne attack is already answered by `SameSite=Strict`, the
+ * Origin check and the absence of CORS, and a hostile process running as the
+ * owner can read `.env` and the keychain whatever this number says. Weeks is
+ * therefore the honest local answer, and re-typing a terminal command twice a
+ * day was never buying anything. A session established from anywhere else is a
+ * session reachable from a network, where a stolen laptop-shaped assumption no
+ * longer holds, so it keeps what the dashboard has always had.
+ */
+export const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+export const REMOTE_SESSION_TTL_MS = 12 * 60 * 60_000;
+
+/** Where a session was established from. Decided from the socket, never a header. */
+export type SessionScope = 'local' | 'remote';
+
+export const SESSION_TTL_MS: Readonly<Record<SessionScope, number>> = {
+  local: LOCAL_SESSION_TTL_MS,
+  remote: REMOTE_SESSION_TTL_MS,
+};
+
+/**
+ * How far through its life the browser's copy of a cookie is allowed to get
+ * before it is re-issued.
+ *
+ * Sliding the *server's* expiry is free — it is a field on a map entry. Sliding
+ * the *browser's* costs a `Set-Cookie` on the response, and doing that on every
+ * request would put two of them on every poll, every stream event and every
+ * static asset for no gain. Re-issuing once the copy is halfway through its
+ * life gives the same guarantee for a tiny fraction of the headers: a browser
+ * that is being used always holds a cookie with at least half the lifetime
+ * left, so it can never be the cookie that expires first.
+ */
+export const COOKIE_REFRESH_AFTER = 0.5;
 
 /** Failed authentications one address may make before it is answered 429. */
 export const AUTH_MAX_ATTEMPTS = 10;
@@ -19,8 +57,14 @@ export interface Session {
   id: string;
   /** The double-submit value. Readable by the page, required on every write. */
   csrf: string;
+  /** Loopback or not, fixed at the ticket exchange and never re-decided. */
+  scope: SessionScope;
+  /** The idle lifetime this session runs on, in ms. `SESSION_TTL_MS[scope]`. */
+  ttlMs: number;
   createdAt: Date;
   expiresAt: Date;
+  /** When the browser was last handed this cookie. Drives the refresh rule. */
+  cookieIssuedAt: Date;
 }
 
 function id(bytes = 32): string {
@@ -35,26 +79,48 @@ function equal(a: string, b: string): boolean {
 
 export class SessionStore {
   readonly #sessions = new Map<string, Session>();
-  readonly #ttlMs: number;
+  readonly #ttl: Record<SessionScope, number>;
 
-  constructor(ttlMs: number = SESSION_TTL_MS) {
-    this.#ttlMs = ttlMs;
+  constructor(ttlMs: Partial<Record<SessionScope, number>> = {}) {
+    this.#ttl = { ...SESSION_TTL_MS, ...ttlMs };
   }
 
-  create(now: Date = new Date()): Session {
+  /** The idle lifetime a session established from `scope` gets. */
+  ttlFor(scope: SessionScope): number {
+    return this.#ttl[scope];
+  }
+
+  create(scope: SessionScope, now: Date = new Date()): Session {
     this.#prune(now);
+    const ttlMs = this.#ttl[scope];
     const session: Session = {
       id: id(),
       csrf: id(24),
+      scope,
+      ttlMs,
       createdAt: now,
-      expiresAt: new Date(now.getTime() + this.#ttlMs),
+      expiresAt: new Date(now.getTime() + ttlMs),
+      cookieIssuedAt: now,
     };
     this.#sessions.set(session.id, session);
     return session;
   }
 
-  /** The live session for this cookie, sliding its expiry. */
-  get(sessionId: string | undefined, now: Date = new Date()): Session | undefined {
+  /**
+   * The live session for this cookie, sliding its expiry.
+   *
+   * `scope` is where *this request* came from, and it must match where the
+   * session was established. A cookie minted on loopback is not honoured when
+   * it arrives from the network: the long local lifetime is then a fact about
+   * this machine rather than a credential that got a longer life by accident.
+   * (A browser will not send it across hosts in the first place; this is the
+   * belt to that suspenders.)
+   */
+  get(
+    sessionId: string | undefined,
+    scope: SessionScope,
+    now: Date = new Date(),
+  ): Session | undefined {
     if (!sessionId) return undefined;
     const session = this.#sessions.get(sessionId);
     if (!session) return undefined;
@@ -62,8 +128,25 @@ export class SessionStore {
       this.#sessions.delete(sessionId);
       return undefined;
     }
-    session.expiresAt = new Date(now.getTime() + this.#ttlMs);
+    if (session.scope !== scope) return undefined;
+    session.expiresAt = new Date(now.getTime() + session.ttlMs);
     return session;
+  }
+
+  /**
+   * Should this response carry a fresh cookie? Mutating: a `true` answer marks
+   * the cookie as issued now, so the caller must actually send it.
+   */
+  renewCookie(session: Session, now: Date = new Date()): boolean {
+    const age = now.getTime() - session.cookieIssuedAt.getTime();
+    if (age < session.ttlMs * COOKIE_REFRESH_AFTER) return false;
+    session.cookieIssuedAt = now;
+    return true;
+  }
+
+  /** `Max-Age` for this session's cookies, in whole seconds. */
+  static maxAgeSeconds(session: Session): number {
+    return Math.floor(session.ttlMs / 1000);
   }
 
   /** Constant-time double-submit check. */

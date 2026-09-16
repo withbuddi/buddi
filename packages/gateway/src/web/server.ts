@@ -59,6 +59,7 @@ import {
   readJsonBody,
   remoteKey,
   requestOrigin,
+  requestScope,
   sendEmpty,
   sendJson,
   sendText,
@@ -79,7 +80,13 @@ import {
   readSentinels,
   toApprovalView,
 } from './read.js';
-import { RateLimiter, SessionStore, SpentTickets, SESSION_TTL_MS, type Session } from './sessions.js';
+import {
+  RateLimiter,
+  SessionStore,
+  SpentTickets,
+  type Session,
+  type SessionScope,
+} from './sessions.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
@@ -116,6 +123,11 @@ export interface WebServerDeps {
   env?: NodeJS.ProcessEnv | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
+  /**
+   * Idle session lifetimes, by scope. Injected only by tests — the defaults in
+   * `sessions.ts` are the product, and nothing reads this from the environment.
+   */
+  sessionTtlMs?: Partial<Record<SessionScope, number>> | undefined;
   log?: ((line: string) => void) | undefined;
   /**
    * Everything the browser needs to be a *talking* surface: the per-agent
@@ -157,7 +169,7 @@ export function webChatOf(server: Server): WebChat | undefined {
 export const TICKET_PARAM = 't';
 
 export function createWebApp(deps: WebServerDeps): Server {
-  const sessions = new SessionStore();
+  const sessions = new SessionStore(deps.sessionTtlMs ?? {});
   const spent = new SpentTickets();
   const limiter = new RateLimiter();
   const assetsDir = deps.assetsDir ?? webAssetsDir();
@@ -183,6 +195,19 @@ export function createWebApp(deps: WebServerDeps): Server {
       })
     : undefined;
   const streams = new StreamBudget();
+
+  /**
+   * The pair a browser holds: the HttpOnly session and the readable CSRF value
+   * the page has to echo back in a header. Both carry the same `Max-Age`, which
+   * is the lifetime this session's scope earned it.
+   */
+  const sessionCookies = (session: Session): string[] => {
+    const maxAgeSeconds = SessionStore.maxAgeSeconds(session);
+    return [
+      cookieHeader(SESSION_COOKIE, session.id, { httpOnly: true, maxAgeSeconds }),
+      cookieHeader(CSRF_COOKIE, session.csrf, { httpOnly: false, maxAgeSeconds }),
+    ];
+  };
 
   /**
    * The origins a write may claim, resolved against the port actually bound.
@@ -228,6 +253,11 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (limiter.blocked(key, now)) return sendEmpty(res, 429);
 
+    // Where this request came from, from the socket and nothing else. It
+    // decides how long a session minted now lives, and it must keep matching
+    // for as long as that session is used.
+    const scope = requestScope(req);
+
     // The ticket exchange. Only ever on a GET, and only ever once per ticket.
     const ticket = url.searchParams.get(TICKET_PARAM);
     if (ticket !== null && (method === 'GET' || method === 'HEAD')) {
@@ -238,27 +268,34 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendEmpty(res, 401);
       }
       limiter.reset(key);
-      const session = sessions.create(now);
+      const session = sessions.create(scope, now);
       const clean = new URL(url.toString());
       clean.searchParams.delete(TICKET_PARAM);
-      const maxAgeSeconds = Math.floor(SESSION_TTL_MS / 1000);
       return sendEmpty(res, 302, {
         Location: `${clean.pathname}${clean.search}`,
-        'Set-Cookie': [
-          cookieHeader(SESSION_COOKIE, session.id, { httpOnly: true, maxAgeSeconds }),
-          // Readable by the page on purpose: it is the half of the
-          // double-submit pair the page has to echo back in a header.
-          cookieHeader(CSRF_COOKIE, session.csrf, { httpOnly: false, maxAgeSeconds }),
-        ],
+        'Set-Cookie': sessionCookies(session),
       });
     }
 
     const cookies = parseCookies(req.headers.cookie);
-    const session = sessions.get(cookies[SESSION_COOKIE], now);
+    const session = sessions.get(cookies[SESSION_COOKIE], scope, now);
     if (!session) {
       limiter.fail(key, now);
       return sendEmpty(res, 401);
     }
+
+    /*
+     * Slide the browser's copy, not just the server's.
+     *
+     * `sessions.get` has already pushed the server-side expiry out; without
+     * this the cookie itself would still die at the `Max-Age` it was minted
+     * with, and someone who used the dashboard all day would be logged out
+     * mid-sentence. The header is attached here rather than at each `send*`
+     * so every route — JSON, static asset, event stream — carries it, and
+     * `renewCookie` is what keeps it to roughly one response per half-life
+     * instead of one per request.
+     */
+    if (sessions.renewCookie(session, now)) res.setHeader('Set-Cookie', sessionCookies(session));
 
     const mutating = method !== 'GET' && method !== 'HEAD';
     if (mutating) {
@@ -302,6 +339,11 @@ export function createWebApp(deps: WebServerDeps): Server {
             timezone: deps.timezone,
             host: deps.config.host,
             port: deps.config.port,
+            // Where this session was established and when it would lapse if
+            // nothing touched it again. Said out loud so the model is legible
+            // from the page rather than implied by a number in a source file.
+            scope: session.scope,
+            expiresAt: session.expiresAt.toISOString(),
           });
         case '/api/overview':
           return sendJson(
