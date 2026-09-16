@@ -4,6 +4,7 @@ import {
   checkAgents,
   checkDatabaseExposure,
   checkNodeVersion,
+  checkPlugins,
   checkVault,
   collectChecks,
   exitCodeFor,
@@ -432,5 +433,68 @@ describe('checkDatabaseExposure', () => {
     const row = checks.find((c) => c.name === 'database exposure');
     expect(row?.critical).toBe(true);
     expect(exitCodeFor(checks)).toBe(1);
+  });
+});
+
+
+describe('the plugins row', () => {
+  const record = '/home/o/.buddi/plugins.json';
+
+  it('is quiet, and still names the record, when nothing is installed', () => {
+    const row = checkPlugins({ record, loaded: [], problems: [] });
+    expect(row.status).toBe('ok');
+    expect(row.detail).toBe(`none installed beyond what this build ships (${record})`);
+  });
+
+  it('names what is installed and says it loaded', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [
+        { name: 'weather', version: '0.2.0' },
+        { name: 'trains', version: '1.0.0' },
+      ],
+      problems: [],
+    });
+    expect(row.status).toBe('ok');
+    expect(row.detail).toBe('2 installed, all loaded: weather@0.2.0, trains@1.0.0');
+  });
+
+  /**
+   * The state the doctor never asked about: a plugin in the record whose entry
+   * point will not import. Its tools are gone from every agent that was granted
+   * them, and until now `buddi plugins list` was the only place that said so.
+   */
+  it('fails the row — but not the installation — when one did not load', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [{ name: 'trains', version: '1.0.0' }],
+      problems: [
+        { name: 'weather', message: 'its entry point is not on disk any more (/p/dist/index.js)' },
+      ],
+    });
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('2 installed, 1 did not load');
+    expect(row.detail).toContain('weather (its entry point is not on disk any more');
+    expect(row.detail).toContain('loaded: trains@1.0.0');
+    expect(row.detail).toContain('buddi plugins list');
+  });
+
+  it('is never critical: a broken plugin does not make the installation broken', async () => {
+    const checks = await collectChecks(
+      fakeProbes({
+        plugins: async () => checkPlugins({ record, loaded: [], problems: [{ name: 'w', message: 'boom' }] }),
+      }),
+    );
+    const row = checks.find((c) => c.name === 'plugins');
+    expect(row).toBeDefined();
+    expect(row?.critical).toBe(false);
+    expect(row?.status).toBe('fail');
+    expect(exitCodeFor(checks)).toBe(0);
+    expect(summarize(checks)).toContain('1 thing(s) to look at');
+  });
+
+  it('is skipped entirely by a caller whose probes predate it', async () => {
+    const checks = await collectChecks(fakeProbes());
+    expect(checks.some((c) => c.name === 'plugins')).toBe(false);
   });
 });

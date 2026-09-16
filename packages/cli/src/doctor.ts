@@ -64,6 +64,11 @@ export interface DoctorProbes {
   dashboard(): Promise<ProbeResult>;
   service(): Promise<ProbeResult>;
   /**
+   * The plugins the owner installed on top of this build: how many, and
+   * whether each one loaded. Optional for the same reason `config` is.
+   */
+  plugins?(): Promise<ProbeResult>;
+  /**
    * The backups. Optional for the same reason `config` is: a caller built
    * before this row existed still satisfies the interface.
    */
@@ -83,6 +88,11 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'model credential', critical: true, probe: 'modelCredential' },
   { name: 'config', critical: false, probe: 'config' },
   { name: 'agents', critical: true, probe: 'agents' },
+  // Never critical: an installation whose weather plugin will not import is
+  // still a working installation, minus a weather plugin. But it is never
+  // silent either — "installed but did not load" is a state an owner can be in
+  // for weeks without a surface ever mentioning it.
+  { name: 'plugins', critical: false, probe: 'plugins' },
   // A warning, never critical: with no key the agents lose a capability and
   // are told so, which is a degraded assistant rather than a broken one.
   { name: 'web search', critical: false, probe: 'webSearch' },
@@ -406,6 +416,63 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
     };
   }
   return { status: 'ok', detail };
+}
+
+/* ------------------------------------------------------------------ *
+ * The plugins row
+ * ------------------------------------------------------------------ */
+
+/** What the doctor needs to know about the installed plugins. */
+export interface PluginFacts {
+  /** The record file the names came from — printed whether or not it has any. */
+  record: string;
+  /** Every installed plugin whose entry point imported and validated. */
+  loaded: ReadonlyArray<{ name: string; version: string }>;
+  /** Every one that is in the record and did not, and the sentence saying why. */
+  problems: ReadonlyArray<{ name: string; message: string }>;
+}
+
+/**
+ * What the owner installed, and whether it is actually running.
+ *
+ * The built-in plugins are deliberately not counted here: they cannot be in one
+ * state or the other, and a row that said "14 plugins" every time would hide
+ * the one number that varies. What varies is the record — and a plugin can sit
+ * in it, installed, migrated, named in an agent's grants, and not load at all.
+ * `buddi plugins list` has said so since the lifecycle shipped; the doctor,
+ * which is the command an owner runs when something feels wrong, did not ask.
+ */
+export function checkPlugins(facts: PluginFacts): ProbeResult {
+  const total = facts.loaded.length + facts.problems.length;
+  if (total === 0) {
+    return {
+      status: 'ok',
+      detail: `none installed beyond what this build ships (${facts.record})`,
+    };
+  }
+  const installed = `${total} installed`;
+  if (facts.problems.length === 0) {
+    return {
+      status: 'ok',
+      detail: `${installed}, all loaded: ${facts.loaded
+        .map((p) => `${p.name}@${p.version}`)
+        .join(', ')}`,
+    };
+  }
+  const broken = facts.problems
+    .map((p) => `${p.name} (${p.message})`)
+    .join('; ');
+  const working =
+    facts.loaded.length === 0
+      ? ''
+      : `; loaded: ${facts.loaded.map((p) => `${p.name}@${p.version}`).join(', ')}`;
+  return {
+    status: 'fail',
+    detail:
+      `${installed}, ${facts.problems.length} did not load — ${broken}${working}. ` +
+      'Its tools are absent from every agent: `buddi plugins list`, then rebuild it or ' +
+      '`buddi plugins uninstall <name>`',
+  };
 }
 
 /* ------------------------------------------------------------------ *

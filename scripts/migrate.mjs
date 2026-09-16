@@ -4,6 +4,7 @@
  * Core with zero plugins installed is a valid, running state.
  */
 import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
@@ -23,9 +24,21 @@ if (!url) {
 console.log(`database: ${source === 'env' ? 'DATABASE_URL from the environment' : `assembled (${source})`}`);
 
 const manifests = [];
-/** Every plugin that is built. Core with zero plugins installed is a valid state. */
-for (const name of ['finance', 'memory', 'artifacts', 'email']) {
-  const entry = path.join(repoRoot, 'packages', 'tools', name, 'dist', 'index.js');
+/**
+ * Every plugin that is built, read from the directory rather than from a list.
+ *
+ * The list this used to hold named finance, memory, artifacts and email, and
+ * the web plugin shipped after it was written — so `pnpm db:migrate` silently
+ * stopped creating one plugin's schema. A directory listing cannot fall behind
+ * the directory. Core with zero plugins installed is still a valid state.
+ */
+const toolsDir = path.join(repoRoot, 'packages', 'tools');
+const builtIn = (await readdir(toolsDir, { withFileTypes: true }))
+  .filter((e) => e.isDirectory())
+  .map((e) => e.name)
+  .sort();
+for (const name of builtIn) {
+  const entry = path.join(toolsDir, name, 'dist', 'index.js');
   if (!existsSync(entry)) continue;
   const mod = await import(entry);
   const manifest = mod.manifest ?? mod.default;

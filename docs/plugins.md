@@ -1211,6 +1211,23 @@ describe a module without loading it, and the CLI says so rather than implying a
 sandbox that does not exist. What `--yes` buys is registration, migration,
 scheduling and the offer of agents.
 
+### What a plugin may not be called
+
+Install refuses a manifest that takes something this build already ships: the
+name of a built-in family (`finance`, `web`, `platform`, and the per-run
+families `mission` and `conversation`), the name of a tool one of them already
+answers to, or a Postgres schema one of them owns (`core` and `public`
+included). Two plugins with one name collide on every tool; two plugins with one
+schema share tables, because `db:migrate` applies each plugin's migrations into
+the schema it declares.
+
+None of those sets is written down anywhere. They are derived from the registry
+this build actually creates (`builtInManifests` in
+`packages/gateway/src/agents/catalog.ts`) and from the manifests the runs
+actually register per run, so a plugin added to buddi tomorrow is reserved the
+moment it is registered. The lists that used to be there had already fallen
+behind by one plugin.
+
 ### Upgrades
 
 Install the same plugin again. The record is replaced; the migrations run

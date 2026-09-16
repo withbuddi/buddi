@@ -39,7 +39,7 @@ import type { Pool } from 'pg';
 import { loadEnvironment } from './bootstrap.js';
 import { installedManifests } from './agents/catalog.js';
 import {
-  BUILT_IN_PLUGINS,
+  isBuiltInPlugin,
   loadInstalledPlugins,
   loadManifest,
   recordFile,
@@ -164,7 +164,7 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv): Prom
   const plugins = await loadInstalledPlugins(env);
   const rows: PluginRow[] = [];
   for (const manifest of installedManifests(env)) {
-    if (!BUILT_IN_PLUGINS.includes(manifest.name)) continue;
+    if (!isBuiltInPlugin(manifest.name, env)) continue;
     const health = await healthOf(
       {
         record: {} as InstalledPlugin,
@@ -220,7 +220,7 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv): Prom
 }
 
 async function commandInfo(name: string, pool: Pool | undefined, env: NodeJS.ProcessEnv): Promise<number> {
-  const builtIn = installedManifests(env).find((m) => m.name === name && BUILT_IN_PLUGINS.includes(m.name));
+  const builtIn = installedManifests(env).find((m) => m.name === name && isBuiltInPlugin(m.name, env));
   const plugins: LoadedPlugins = await loadInstalledPlugins(env);
   const loaded = plugins.loaded.find((p) => p.record.name === name);
   const manifest = loaded?.manifest ?? builtIn;
