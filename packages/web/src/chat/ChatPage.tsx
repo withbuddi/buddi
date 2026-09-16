@@ -14,13 +14,14 @@
  * knowing a canvas exists.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, api, chatApi, type ApprovalRow } from '../api';
+import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { renderablesFrom } from '../canvas/renderables';
+import { profileRenderable, profileTabId } from './properties';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
-import { Composer } from './Composer';
+import { Composer, type ComposerDraft } from './Composer';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall } from './MessageList';
 import { openChatStream } from './stream';
@@ -82,6 +83,17 @@ export function ChatPage({
   const [takingOffer, setTakingOffer] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
+  /*
+   * The properties panel, when the owner has asked for one. It is held here
+   * rather than fetched by the canvas because it belongs to the *agent*, not to
+   * the conversation: it survives a new thread, and it is dropped the moment
+   * the owner switches to somebody else — a panel headed "Ledger" while the
+   * conversation is with Scout would be a lie the tab strip cannot correct.
+   */
+  const [profile, setProfile] = useState<AgentProfile | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  /** A line the panel put in the composer's mouth. Never sent for the owner. */
+  const [draft, setDraft] = useState<ComposerDraft | null>(null);
 
   const agent =
     [...agents.top, ...agents.middle, ...agents.bottom].find((c) => c.id === agentId) ?? null;
@@ -110,6 +122,8 @@ export function ChatPage({
     let cancelled = false;
     setConversationId(null);
     setConversation(null);
+    // Whoever this is now, it is not who the open panel described.
+    setProfile(null);
     chatApi
       .conversations(agentId)
       .then((list) => {
@@ -221,15 +235,25 @@ export function ChatPage({
 
   /* ---- the canvas ---- */
 
-  const renderables: Renderable[] = useMemo(
-    () =>
-      renderablesFrom({
-        messages: conversation?.messages ?? [],
-        descriptors,
-        awaiting,
-      }),
-    [conversation, descriptors, awaiting],
-  );
+  /*
+   * The canvas contents: everything the transcript produced, and — last, when
+   * the owner has opened it — the properties panel.
+   *
+   * It is appended rather than mixed in because it is not part of the
+   * conversation's history: it takes no place in the cap on how far back the
+   * canvas remembers, it cannot be pushed off by a long run, and it is marked
+   * unsubstantial so that a result arriving mid-read still takes the screen.
+   * The owner asked a question about the agent; they did not ask the canvas to
+   * stop following the work.
+   */
+  const renderables: Renderable[] = useMemo(() => {
+    const fromTranscript = renderablesFrom({
+      messages: conversation?.messages ?? [],
+      descriptors,
+      awaiting,
+    });
+    return profile ? [...fromTranscript, profileRenderable(profile)] : fromTranscript;
+  }, [conversation, descriptors, awaiting, profile]);
 
   /*
    * What the canvas turns to on its own.
@@ -304,6 +328,46 @@ export function ChatPage({
       });
   };
 
+  /**
+   * The three dots: open what this agent actually is, or put it away.
+   *
+   * Fetched on every open rather than cached, because the answer is read from
+   * the agent's file and the owner may have just changed it through the maker.
+   * A failure says so in the same banner every other failure uses.
+   */
+  const toggleProfile = (): void => {
+    if (!agentId) return;
+    if (profile) {
+      setProfile(null);
+      return;
+    }
+    setLoadingProfile(true);
+    api
+      .agentProfile(agentId)
+      .then((loaded) => {
+        setProfile(loaded);
+        setActiveTab(profileTabId(loaded.id));
+        if (narrow) onOpenCanvas?.();
+      })
+      .catch((err: unknown) => setError(message(err)))
+      .finally(() => setLoadingProfile(false));
+  };
+
+  /**
+   * "Ask @father to change this."
+   *
+   * The panel is read-only and must stay that way — a grant change is an
+   * approval the owner reads, not a control they toggle. So the most this does
+   * is walk them to the door: select the maker, and offer the opening sentence
+   * the *server* wrote, in the composer, unsent. They still read it, may edit
+   * it, and press the key themselves.
+   */
+  const changeVia = (target: { agentId: string; prompt: string }): void => {
+    setDraft({ text: target.prompt, at: Date.now() });
+    onSelectAgent(target.agentId);
+    if (narrow) onCloseCanvas?.();
+  };
+
   const stop = (): void => {
     if (!conversationId) return;
     chatApi
@@ -368,6 +432,7 @@ export function ChatPage({
       onActivate={setActiveTab}
       timezone={timezone}
       onDecided={onDecided}
+      onChangeAgent={changeVia}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}
       emptyHint={
@@ -409,6 +474,24 @@ export function ChatPage({
                 Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
               </button>
             ) : null}
+            {/*
+              What this agent actually is. At the end of the header because
+              that is where a thing's own menu belongs, and quiet because it
+              answers a question most sessions never ask — and the one that
+              matters most on the day somebody does.
+            */}
+            <button
+              className="wb-icon-btn wb-head-more"
+              data-testid="agent-properties"
+              aria-label={`Properties of ${agent?.name ?? 'this agent'}`}
+              aria-expanded={profile !== null}
+              title={profile ? 'Close the properties panel' : 'What this agent can do'}
+              disabled={!agentId || loadingProfile}
+              data-open={profile ? 'true' : undefined}
+              onClick={toggleProfile}
+            >
+              <MoreIcon />
+            </button>
           </div>
           {/*
             Two rails plus a conversation plus a canvas do not fit a phone. Below
@@ -479,6 +562,7 @@ export function ChatPage({
           onSend={send}
           onStop={stop}
           agentName={agent?.name ?? 'the agent'}
+          draft={draft}
         />
       </section>
 
@@ -534,4 +618,15 @@ function str(value: unknown): string | null {
 
 function message(err: unknown): string {
   return err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+}
+
+/** Three dots, vertical: this thing has more to say about itself. */
+function MoreIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <circle cx="8" cy="3.4" r="1.35" />
+      <circle cx="8" cy="8" r="1.35" />
+      <circle cx="8" cy="12.6" r="1.35" />
+    </svg>
+  );
 }

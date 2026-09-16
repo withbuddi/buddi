@@ -35,6 +35,7 @@ import {
   readEngineOptions,
   setAgentEngineFromWeb,
 } from './agents.js';
+import { readAgentProfile } from './profile.js';
 import {
   ATTACHMENTS_UNAVAILABLE,
   CHAT_CONVERSATIONS_LIMIT,
@@ -445,6 +446,21 @@ export function createWebApp(deps: WebServerDeps): Server {
       // One action, whole: the envelope the approval is bound to and the
       // preview the *tool* rendered. The canvas draws it from this, so it can
       // show what would actually happen rather than a summary of a summary.
+      /*
+       * One agent, whole: its grant with every tool's tier, its engine, its
+       * skills, its delegates. A read and only ever a read — a change to any of
+       * it goes through the maker agent, where it becomes an approval.
+       */
+      const profile = /^\/api\/agents\/([^/]+)\/profile$/.exec(path);
+      if (profile) {
+        const view = readAgentProfile(
+          { catalog: deps.catalog, registry: deps.registry },
+          decodeURIComponent(profile[1] as string),
+        );
+        if (!view) return sendJson(res, 404, { error: 'no such agent' });
+        return sendJson(res, 200, view);
+      }
+
       const approval = /^\/api\/approvals\/([^/]+)$/.exec(path);
       if (approval) {
         const action = await getAction(deps.pool, decodeURIComponent(approval[1] as string));

@@ -163,8 +163,27 @@ export interface StructuredProps {
   failed?: boolean;
 }
 
-/** Where a renderable came from, which is also its precedence order. */
-export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback';
+/**
+ * Where a renderable came from, which is also its precedence order.
+ *
+ * `profile` is the one source that is not a tool result at all: the owner asked
+ * what an agent is, and the answer takes a tab beside the work rather than a
+ * modal over it. It is listed here so that everything which reasons about a
+ * tab — what may be pushed into the overflow, what is allowed to take the
+ * screen — can tell it apart from something a run produced.
+ */
+export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile';
+
+/**
+ * What draws a panel.
+ *
+ * Every `RendererName` is a shape a *plugin* may ask for through a view
+ * descriptor. `profile` is deliberately not one of them: it is the platform's
+ * own panel about the platform's own configuration, and adding it to the
+ * renderer registry would let an agent draw a convincing properties panel out
+ * of `canvas.show` with data it made up.
+ */
+export type PanelName = RendererName | 'profile';
 
 /** One thing the canvas can show: a tab and a panel. */
 export interface Renderable {
@@ -172,7 +191,7 @@ export interface Renderable {
   id: string;
   tool: string;
   title: string;
-  renderer: RendererName;
+  renderer: PanelName;
   props: unknown;
   at: string | null;
   tone?: Tone;
