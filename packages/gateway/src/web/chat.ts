@@ -49,6 +49,7 @@ import {
 import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
+import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
 import { listRecentConversations } from '../chat/conversations.js';
 import {
   OFFER_POLICY_SUFFIX,
@@ -58,8 +59,20 @@ import {
   withdrawTurnOffers,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
+import {
+  ASK_POLICY_SUFFIX,
+  ASK_TOOLS,
+  createAskManifest,
+  type AskSink,
+} from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
-import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
+import {
+  IDLE_TIMEOUT_MS,
+  MAX_TRANSCRIPT_CHARS,
+  conversationForTurn,
+  readVitals,
+} from '../surfaces/conversation-lifetime.js';
+import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js';
 import {
   attachmentNote,
   classifyMime,
@@ -98,7 +111,42 @@ export interface ChatAgentView {
   roles: string[];
   provider: string;
   model: string;
+  /**
+   * Where this agent sits in the dashboard's agent rail: pinned to its head,
+   * pinned to its foot, or `null` for the ordinary colleagues in between.
+   *
+   * Resolved here, from roles, rather than in the page — so `packages/web`
+   * never learns an agent's name or id, and an installation that renames its
+   * front desk, writes its own, or has none keeps the right rail either way.
+   */
+  anchor: AgentAnchor | null;
 }
+
+/** The two ends of the rail an agent can be pinned to. */
+export type AgentAnchor = 'top' | 'bottom';
+
+/**
+ * Which roles pin an agent to which end, and why those two ends differ.
+ *
+ * The distinction is *what the agent acts on*. Almost every agent acts on the
+ * owner's life — his money, his mail, his car — and those belong in the middle
+ * of the rail, where the eye lands and where he reaches all day. Two do not:
+ *
+ *  - The **front desk** is where you go when you do not yet know who you need.
+ *    That is the first question of any session, so it is the first face, above
+ *    a line.
+ *  - The **maker** configures the installation itself. It is the settings door,
+ *    and a settings door belongs at the foot of a sidebar — reachable, out of
+ *    the way, and not competing with the work for the middle of the rail.
+ *
+ * Keyed to roles, so "nobody claims it" is simply an end with nothing pinned to
+ * it, and two claimants are both pinned rather than one silently winning. An
+ * agent claiming both is a front desk first: it is the one you reach for.
+ */
+export const ANCHOR_ROLES: Readonly<Record<string, AgentAnchor>> = {
+  [ROLE_FRONT_DESK]: 'top',
+  [ROLE_MAKER]: 'bottom',
+};
 
 /**
  * Every agent the composer may address, with why one of them cannot answer.
@@ -125,9 +173,17 @@ export function readChatAgents(catalog: AgentCatalog): {
       roles: [...summary.roles],
       provider: summary.providerKind,
       model: full?.provider.model ?? full?.model ?? '',
+      anchor: anchorOf(summary.roles),
     };
   });
   return { agents, defaultAgentId: catalog.defaultAgent().id };
+}
+
+/** Which end this agent's roles pin it to, or null for the middle. */
+export function anchorOf(roles: readonly string[]): AgentAnchor | null {
+  const claimed = roles.map((role) => ANCHOR_ROLES[role]).filter((end): end is AgentAnchor => !!end);
+  if (claimed.includes('top')) return 'top';
+  return claimed[0] ?? null;
 }
 
 export interface ChatConversationView {
@@ -205,10 +261,33 @@ export interface ChatOfferView {
   expiresAt: string;
 }
 
+/**
+ * How much life this conversation has left in it.
+ *
+ * The rule that ends a conversation — three hours idle, or a transcript past
+ * the budget — lives in `conversation-lifetime.ts` and is evaluated on the
+ * server when a message arrives. The page cannot re-derive it without hard-
+ * coding those two numbers, and a dashboard that says "fresh" about a thread
+ * that is one message from rolling over would be worse than saying nothing. So
+ * the limits are *sent*, and the header renders them.
+ */
+export interface ChatLifetimeView {
+  /** Messages stored in this conversation. Zero means nothing was said yet. */
+  messages: number;
+  /** The last thing written in it. */
+  lastActivityAt: string | null;
+  /** Characters of stored transcript, against `maxChars`. */
+  chars: number;
+  idleTimeoutMs: number;
+  maxChars: number;
+}
+
 export interface ChatTranscript {
   conversationId: string;
   agentId: string;
   startedAt: string;
+  /** What would end this conversation, and how close it is. */
+  lifetime: ChatLifetimeView;
   messages: ChatMessageView[];
   runs: ChatRunView[];
   usage: { input: number; output: number };
@@ -277,8 +356,16 @@ export async function readChatTranscript(
   // Untaken, unexpired, this conversation's. A chip the owner clicks goes
   // through the same claim-once take the Telegram tap does.
   const open = await listOpenOffers(pool, { now, conversationId, limit: 10 }).catch(() => []);
+  const vitals = await readVitals(pool, conversationId);
 
   return {
+    lifetime: {
+      messages: vitals.messages,
+      lastActivityAt: vitals.lastActivityAt?.toISOString() ?? null,
+      chars: vitals.chars,
+      idleTimeoutMs: IDLE_TIMEOUT_MS,
+      maxChars: MAX_TRANSCRIPT_CHARS,
+    },
     offers: open.map((offer) => ({
       id: offer.id,
       label: offer.label,
@@ -610,6 +697,14 @@ export class WebChat {
       files.push(row);
     }
 
+    // The owner is writing to this agent, so whatever it was holding out for is
+    // answered — or abandoned, which amounts to the same claim being dropped.
+    // Checked first so an ordinary turn does not append a "nothing changed" row
+    // to the log every time anybody says anything.
+    if (await holdsQuestion(this.#deps.pool, agent.id, this.#deps.now()).catch(() => false)) {
+      await this.#event(conversationId, QUESTION_CLEARED, { agentId: agent.id });
+    }
+
     const runId = randomUUID();
     const target = conversationId;
     this.#enqueue(target, () => this.#run({ agent, conversationId: target, runId, text, files }));
@@ -721,9 +816,17 @@ export class WebChat {
     // share a sink. The dashboard has buttons, so what it declares is drawn as
     // chips — by the profile, not by the surface's name.
     const offers: OfferSink = {};
+    // `conversation.ask` is registered for the same reason it is on Telegram and
+    // at the terminal: an agent that ends a turn needing an answer should say
+    // so rather than leave a surface to guess from prose. What the dashboard
+    // does with the declaration is different — it has no "whose turn is it"
+    // problem, because the owner picks the agent — so it records the claim in
+    // the event log, where the agent rail reads it as a badge.
+    const ask: AskSink = {};
     const registry = new ToolRegistry();
     for (const manifest of deps.registry.manifests()) registry.register(manifest);
     registry.register(createOfferManifest(offers));
+    registry.register(createAskManifest(ask));
 
     // An offer belongs to the turn that made it; this turn retires the last
     // one's, so a chip cannot still fire after the conversation moved on.
@@ -731,7 +834,7 @@ export class WebChat {
 
     const base = agent.definition(deps.now(), deps.timezone);
     const options: RunAgentOptions = {
-      agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS] },
+      agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS, ...ASK_TOOLS] },
       provider,
       registry,
       ctx: deps.ctx,
@@ -743,10 +846,9 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       userMessage,
-      systemSuffix:
-        systemSuffix === undefined
-          ? OFFER_POLICY_SUFFIX
-          : `${OFFER_POLICY_SUFFIX}\n\n${systemSuffix}`,
+      systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : [])].join(
+        '\n\n',
+      ),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),
       ...(deps.artifacts ? { loadArtifact: (id: string) => deps.artifacts!.load(id) } : {}),
@@ -812,6 +914,13 @@ export class WebChat {
       now: deps.now(),
       log: this.#log,
     });
+
+    // "This agent is holding a question." Recorded rather than kept in memory,
+    // so the badge survives a reload and a restart — and cleared by the owner's
+    // next message to this agent, or by the fifteen minutes a question lives.
+    if (ask.asked) {
+      await this.#event(conversationId, QUESTION_ASKED, { agentId: agent.id, runId });
+    }
 
     if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
       // The run proposed a gated effect and stopped. Nothing is decided here:

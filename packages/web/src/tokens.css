@@ -77,6 +77,19 @@
   --focus-ring: #2f5fa8;
 
   /* ---- code ---- */
+  /* ---- the agent faces ----
+   * Six quiet tints, so a rail of colleagues reads as six people rather than
+   * six copies of the accent. They are backgrounds for two letters and nothing
+   * else: saturated enough to tell apart at 30px, never loud enough to compete
+   * with the one thing on the screen that is allowed to be red.
+   */
+  --face-1-bg: #e6edf8;  --face-1-ink: #2f5fa8;
+  --face-2-bg: #e4f0e9;  --face-2-ink: #1f6f45;
+  --face-3-bg: #f6e9dd;  --face-3-ink: #96562a;
+  --face-4-bg: #ece7f6;  --face-4-ink: #5b46a0;
+  --face-5-bg: #dfeef1;  --face-5-ink: #226b7a;
+  --face-6-bg: #f7e7ee;  --face-6-ink: #9c3d68;
+
   --code-bg: #f3f2ef;
 
   /* ---- aliases the original monitoring stylesheet still speaks ---- */
@@ -125,6 +138,13 @@
 
     --focus-ring: #9cc0f4;
 
+    --face-1-bg: #1d2a3d;  --face-1-ink: #8fb6ee;
+    --face-2-bg: #17301f;  --face-2-ink: #74cb97;
+    --face-3-bg: #32241a;  --face-3-ink: #dba173;
+    --face-4-bg: #262138;  --face-4-ink: #a99ae4;
+    --face-5-bg: #142b30;  --face-5-ink: #78c0cd;
+    --face-6-bg: #331c26;  --face-6-ink: #dd94b3;
+
     --code-bg: #23262b;
 
     color-scheme: dark;
@@ -165,6 +185,13 @@
   --chart-bar-negative: #b9706c;
 
   --focus-ring: #9cc0f4;
+
+  --face-1-bg: #1d2a3d;  --face-1-ink: #8fb6ee;
+  --face-2-bg: #17301f;  --face-2-ink: #74cb97;
+  --face-3-bg: #32241a;  --face-3-ink: #dba173;
+  --face-4-bg: #262138;  --face-4-ink: #a99ae4;
+  --face-5-bg: #142b30;  --face-5-ink: #78c0cd;
+  --face-6-bg: #331c26;  --face-6-ink: #dd94b3;
 
   --code-bg: #23262b;
 

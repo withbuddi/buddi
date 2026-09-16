@@ -10,7 +10,8 @@ import path from 'node:path';
 import { loadAgentCatalog } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import { createToolRegistry, EXAMPLES_AGENTS_DIR, EXAMPLES_SKILLS_DIR, REPO_ROOT } from './catalog.js';
-import { ROLE_MAKER } from './roles.js';
+import { ROLE_FRONT_DESK, ROLE_MAKER } from './roles.js';
+import { anchorOf, readChatAgents } from '../web/chat.js';
 
 const catalog = () =>
   loadAgentCatalog({
@@ -100,6 +101,34 @@ describe('the examples this repository ships', () => {
     // Exactly one claimant: a role resolves to the first, and a second maker in
     // the shipped examples would make which one answers an accident of order.
     expect(loaded.list().filter((a) => a.roles.includes(ROLE_MAKER))).toHaveLength(1);
+  });
+
+  it('let the shipped agent answer for "front-desk", so the rail anchors it by role', () => {
+    // The dashboard's agent rail puts the front desk above a line, and it finds
+    // it the way every other surface finds an agent: by role. Nothing in
+    // `packages/web` knows the word "concierge", and an owner who renames their
+    // front desk or writes their own keeps the anchor by claiming the role.
+    const loaded = catalog();
+    const resolution = loaded.agentForRole(ROLE_FRONT_DESK);
+    expect(resolution.ok).toBe(true);
+    expect(resolution.ok && resolution.agent.id).toBe('concierge');
+
+    // The front desk pins to the head of the rail, the maker to its foot, and
+    // everyone the owner adds later sits in between without saying anything.
+    const { agents } = readChatAgents(loaded);
+    expect(agents.filter((a) => a.anchor !== null).map((a) => [a.id, a.anchor])).toEqual([
+      ['agent-father', 'bottom'],
+      ['concierge', 'top'],
+    ]);
+  });
+
+  it('pins an agent by its role, and everyone else not at all', () => {
+    expect(anchorOf([])).toBeNull();
+    expect(anchorOf(['overview', 'recap'])).toBeNull();
+    expect(anchorOf([ROLE_MAKER])).toBe('bottom');
+    // Both roles on one agent: the front desk wins, because it is the one you
+    // reach for — not whichever happens to be written first in the file.
+    expect(anchorOf([ROLE_MAKER, ROLE_FRONT_DESK])).toBe('top');
   });
 
   it('let the shipped agent conduct a first run: it has the owner tools and the skill', () => {

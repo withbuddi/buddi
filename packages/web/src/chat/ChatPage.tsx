@@ -18,8 +18,10 @@ import { ApiError, api, chatApi, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { renderablesFrom } from '../canvas/renderables';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
-import { AgentSwitcher } from './AgentSwitcher';
+import { AgentRail } from '../shell/AgentRail';
+import type { AgentAttention, AgentGroups } from '../shell/roster';
 import { Composer } from './Composer';
+import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall } from './MessageList';
 import { openChatStream } from './stream';
 import type { ChatAgent, ChatConversation, ChatEvent } from './types';
@@ -30,6 +32,21 @@ const WIDTH_KEY = 'buddi.chatWidth';
 
 export interface ChatPageProps {
   timezone: string;
+  /**
+   * The roster, already ordered, and who is selected. Owned by the shell now
+   * that the agent rail lives there: two views of one choice would drift.
+   */
+  agents: AgentGroups;
+  agentId: string | null;
+  onSelectAgent: (agentId: string) => void;
+  /** Who is waiting on the owner — drawn on the narrow strip's faces. */
+  attention: Map<string, AgentAttention>;
+  /**
+   * True when the shell's agent rail has lain down, so the conversation header
+   * carries it instead. A separate flag from `narrow`: the rail gives way
+   * before the canvas does.
+   */
+  agentsInHeader: boolean;
   /** The canvas becomes a sheet below this; passed in so tests can force it. */
   narrow: boolean;
   onOpenCanvas?: () => void;
@@ -41,14 +58,17 @@ export interface ChatPageProps {
 
 export function ChatPage({
   timezone,
+  agents,
+  agentId,
+  onSelectAgent,
+  attention,
+  agentsInHeader,
   narrow,
   canvasOpen,
   onOpenCanvas,
   onCloseCanvas,
   newConversationSignal,
 }: ChatPageProps): JSX.Element {
-  const [agents, setAgents] = useState<ChatAgent[]>([]);
-  const [agentId, setAgentId] = useState<string | null>(null);
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
@@ -63,21 +83,20 @@ export function ChatPage({
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
 
-  const agent = agents.find((candidate) => candidate.id === agentId) ?? null;
+  const agent =
+    [...agents.top, ...agents.middle, ...agents.bottom].find((c) => c.id === agentId) ?? null;
 
   /* ---- what the page knows before anyone types ---- */
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([chatApi.agents(), chatApi.views().catch(() => ({ views: [] as ViewDescriptor[] }))])
-      .then(([agentList, viewList]) => {
-        if (cancelled) return;
-        setAgents(agentList.agents);
-        setAgentId((current) => current ?? agentList.defaultAgentId ?? agentList.agents[0]?.id ?? null);
-        setDescriptors(viewList.views ?? []);
+    chatApi
+      .views()
+      .then((viewList) => {
+        if (!cancelled) setDescriptors(viewList.views ?? []);
       })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(message(err));
+      .catch(() => {
+        /* No descriptors means the canvas draws shapes generically. */
       });
     return () => {
       cancelled = true;
@@ -192,10 +211,11 @@ export function ChatPage({
     return () => handle.close();
   }, [conversationId, refresh]);
 
-  // One clock for every elapsed counter, and only while something is running.
+  // One clock. A second while something is running, because elapsed counters
+  // are read; a minute otherwise, because the header's "this one has aged out"
+  // has to become true on its own for an owner who left the tab open.
   useEffect(() => {
-    if (live.length === 0) return undefined;
-    const handle = window.setInterval(() => setNow(Date.now()), 1000);
+    const handle = window.setInterval(() => setNow(Date.now()), live.length === 0 ? 60_000 : 1000);
     return () => window.clearInterval(handle);
   }, [live.length]);
 
@@ -358,15 +378,54 @@ export function ChatPage({
     />
   );
 
+  /*
+   * The header's freed space.
+   *
+   * With the switcher gone, what the owner cannot otherwise know goes here:
+   * whether this is a fresh conversation or a long one, and whether the next
+   * message will start a new thread because this one has aged out. That is not
+   * decoration — it is the one piece of state the transcript itself hides.
+   */
+  const line = conversationLine({
+    lifetime: conversation?.lifetime ?? null,
+    startedAt: conversation?.startedAt ?? null,
+    now,
+    timezone,
+  });
+
   return (
     <>
       <section className="wb-chat" style={narrow ? undefined : { width }} data-testid="chat-column">
-        <header className="wb-chat-head">
-          <AgentSwitcher agents={agents} current={agent} onSelect={setAgentId} />
-          {narrow ? (
-            <button className="wb-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
-              Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
-            </button>
+        <header className="wb-chat-head" data-testid="chat-head">
+          <div className="wb-head-row">
+            <div className="wb-head-text">
+              <span className="wb-head-title">{agent?.name ?? 'No agent'}</span>
+              <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
+                {line.text}
+              </span>
+            </div>
+            {narrow ? (
+              <button className="wb-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
+                Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
+              </button>
+            ) : null}
+          </div>
+          {/*
+            Two rails plus a conversation plus a canvas do not fit a phone. Below
+            the breakpoint the agent rail lies down here instead of taking a
+            second 56px column out of a 420px screen: every face is still one
+            tap away, every badge is still visible, and the canvas keeps its
+            width. Collapsing it back into a menu would have put "someone needs
+            you" behind a chevron again, which is the thing this change removed.
+          */}
+          {agentsInHeader ? (
+            <AgentRail
+              agents={agents}
+              currentId={agentId}
+              attention={attention}
+              onSelect={onSelectAgent}
+              orientation="horizontal"
+            />
           ) : null}
         </header>
 

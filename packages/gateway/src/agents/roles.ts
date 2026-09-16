@@ -25,4 +25,17 @@ export const ROLE_RECAP = 'recap';
  */
 export const ROLE_MAKER = 'maker';
 
-export const SURFACE_ROLES = [ROLE_OVERVIEW, ROLE_RECAP, ROLE_MAKER] as const;
+/**
+ * The front desk: the agent that explains the installation and hands work to
+ * whoever owns it. Claimed by the shipped `concierge`, and by the owner's if
+ * they wrote their own.
+ *
+ * It is a role and not an id for the same reason every other one here is: the
+ * owner may rename their front desk, replace it with their own, or have none at
+ * all, and the dashboard's agent rail — which anchors this agent above a
+ * separator, because it is the one you go to when you do not know who to go to
+ * — must survive all three without knowing any agent's name.
+ */
+export const ROLE_FRONT_DESK = 'front-desk';
+
+export const SURFACE_ROLES = [ROLE_OVERVIEW, ROLE_RECAP, ROLE_MAKER, ROLE_FRONT_DESK] as const;

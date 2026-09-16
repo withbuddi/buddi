@@ -12,10 +12,13 @@
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
+import { api, chatApi } from './api';
 import { ChatPage } from './chat/ChatPage';
+import type { ChatAgent } from './chat/types';
 import { CHAT_ROUTE, NAV, SECTIONS } from './routes';
+import { AgentRail } from './shell/AgentRail';
 import { Rail } from './shell/Rail';
+import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
 import { Agents } from './views/Agents';
 import { Approvals } from './views/Approvals';
@@ -32,6 +35,18 @@ export { NAV, SECTIONS };
 
 /** The width below which the canvas stops being a column and becomes a sheet. */
 export const NARROW_QUERY = '(max-width: 900px)';
+
+/**
+ * The width below which the *agent* rail lies down.
+ *
+ * Deliberately higher than the canvas breakpoint. Two 56px rails, a 320px
+ * minimum conversation and a canvas need about a thousand pixels before any of
+ * them has room to be read; below that the agent rail is the one that gives
+ * way, because it is the cheapest to lay flat — a horizontal strip in the
+ * conversation header keeps every face one tap away and every badge in sight,
+ * which a menu would not.
+ */
+export const AGENT_RAIL_QUERY = '(max-width: 1080px)';
 
 export function useHash(): [string, (next: string) => void] {
   const [hash, setHash] = useState(() => window.location.hash || CHAT_ROUTE);
@@ -89,6 +104,36 @@ export function App(): JSX.Element {
   const narrow = useMediaQuery(NARROW_QUERY);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [newConversation, setNewConversation] = useState(0);
+  /*
+   * The roster lives in the shell, because the rail that draws it does. One
+   * selection, one order, one source of "who is waiting" — a second copy inside
+   * the chat page would be a second thing to keep right.
+   */
+  const [agents, setAgents] = useState<ChatAgent[]>([]);
+  const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const attention = useAttention();
+  const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
+
+  useEffect(() => {
+    let cancelled = false;
+    chatApi
+      .agents()
+      .then((list) => {
+        if (cancelled) return;
+        setAgents(list.agents);
+        setDefaultAgentId(list.defaultAgentId ?? null);
+        setAgentId((current) => current ?? list.defaultAgentId ?? list.agents[0]?.id ?? null);
+      })
+      .catch(() => {
+        /* No server, or no session. The rail is empty rather than broken. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ordered = groupAgents(agents, defaultAgentId);
 
   useEffect(() => {
     api
@@ -131,9 +176,26 @@ export function App(): JSX.Element {
             }}
           />
 
+          {railNarrow ? null : (
+            <AgentRail
+              agents={ordered}
+              currentId={agentId}
+              attention={attention}
+              onSelect={(id) => {
+                setAgentId(id);
+                if (!onChat) navigate(CHAT_ROUTE);
+              }}
+            />
+          )}
+
           {onChat ? (
             <ChatPage
               timezone={timezone}
+              agents={ordered}
+              agentId={agentId}
+              onSelectAgent={setAgentId}
+              attention={attention}
+              agentsInHeader={railNarrow}
               narrow={narrow}
               canvasOpen={canvasOpen}
               onOpenCanvas={() => setCanvasOpen(true)}
