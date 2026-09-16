@@ -64,7 +64,7 @@ export const STREAM_KINDS: Readonly<Record<string, string>> = {
 /** The kinds the tail asks for. Derived, so the two can never drift. */
 export const STREAM_KIND_LIST: readonly string[] = Object.keys(STREAM_KINDS);
 
-interface LogRow {
+export interface LogRow {
   id: string;
   kind: string;
   payload: Record<string, unknown>;
@@ -164,16 +164,31 @@ export interface StreamOptions {
 }
 
 /**
- * Hold the connection open and write the conversation's events as they land.
+ * A tail over `core.events`, with the *what* left to the caller.
  *
- * Resolves when the client goes away — the caller uses that to release the
- * session's stream slot. Nothing here ever ends the stream on its own: a run
- * finishing is not a reason to close a page that is still open.
+ * Two things stream from this log to a browser now — one conversation's run,
+ * and "some agent's claim on the owner may have changed" — and they differ only
+ * in which rows they ask for and what a row becomes on the wire. The
+ * connection handling, the cursor, the keep-alive and the "a database blip must
+ * not kill a page" rule are the same for both, and there is one copy of them.
  */
-export async function streamConversation(
+export interface LogStreamOptions {
+  /** The newest id this stream would care about, for a client with no cursor. */
+  head: () => Promise<string>;
+  /** Rows after `cursor`, ascending, at most `limit` of them. */
+  tail: (cursor: string, limit: number) => Promise<LogRow[]>;
+  /** What one row becomes on the wire. `null` drops it silently. */
+  project: (row: LogRow) => { event: string; data: Record<string, unknown> } | null;
+  since?: string | undefined;
+  pollMs?: number;
+  pingMs?: number;
+  now?: () => Date;
+}
+
+export async function streamLog(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: StreamOptions,
+  opts: LogStreamOptions,
 ): Promise<void> {
   const pollMs = opts.pollMs ?? STREAM_POLL_MS;
   const pingMs = opts.pingMs ?? STREAM_PING_MS;
@@ -193,7 +208,7 @@ export async function streamConversation(
   // A stream that is quiet for 25s is healthy, not idle: no socket timeout.
   req.socket.setTimeout(0);
 
-  let cursor = opts.since ?? (await head(opts.pool, opts.conversationId));
+  let cursor = opts.since ?? (await opts.head());
   let open = true;
   const closed = new Promise<void>((resolve) => {
     const finish = (): void => {
@@ -220,15 +235,15 @@ export async function streamConversation(
   while (open) {
     let rows: LogRow[];
     try {
-      rows = await tail(opts.pool, opts.conversationId, cursor);
+      rows = await opts.tail(cursor, STREAM_BATCH);
     } catch {
       // A database blip must not kill a page. Wait a beat and ask again; the
       // cursor has not moved, so nothing is lost.
       rows = [];
     }
     for (const row of rows) {
-      const projected = toStreamEvent(row);
-      if (!write(frame(projected.event, projected.data, row.id))) break;
+      const projected = opts.project(row);
+      if (projected !== null && !write(frame(projected.event, projected.data, row.id))) break;
       cursor = row.id;
       lastPing = Date.now();
     }
@@ -244,6 +259,26 @@ export async function streamConversation(
   res.end();
 }
 
+/**
+ * Hold the connection open and write the conversation's events as they land.
+ *
+ * Resolves when the client goes away — the caller uses that to release the
+ * session's stream slot. Nothing here ever ends the stream on its own: a run
+ * finishing is not a reason to close a page that is still open.
+ */
+export async function streamConversation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: StreamOptions,
+): Promise<void> {
+  await streamLog(req, res, {
+    ...opts,
+    head: () => head(opts.pool, opts.conversationId),
+    tail: (cursor, limit) => tail(opts.pool, opts.conversationId, cursor, limit),
+    project: toStreamEvent,
+  });
+}
+
 /** The newest event id in this conversation, or `'0'` for an empty one. */
 async function head(pool: Pool, conversationId: string): Promise<string> {
   const { rows } = await pool.query(
@@ -253,13 +288,18 @@ async function head(pool: Pool, conversationId: string): Promise<string> {
   return String(rows[0]?.id ?? '0');
 }
 
-async function tail(pool: Pool, conversationId: string, cursor: string): Promise<LogRow[]> {
+async function tail(
+  pool: Pool,
+  conversationId: string,
+  cursor: string,
+  limit: number,
+): Promise<LogRow[]> {
   const { rows } = await pool.query(
     `select id, kind, payload, created_at from core.events
       where conversation_id = $1::uuid and id > $2::bigint and kind = any($3::text[])
       order by id asc
       limit $4`,
-    [conversationId, cursor, STREAM_KIND_LIST, STREAM_BATCH],
+    [conversationId, cursor, STREAM_KIND_LIST, limit],
   );
   return rows.map((r) => ({
     id: String(r.id),

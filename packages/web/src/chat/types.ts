@@ -14,6 +14,12 @@ export interface ChatAgent {
   roles: string[];
   provider: string;
   model: string;
+  /**
+   * Which end of the rail this agent is pinned to, or null for the ordinary
+   * colleagues in between. The server resolves it from roles, so the page
+   * anchors the front desk and the maker without learning either one's name.
+   */
+  anchor?: 'top' | 'bottom' | null;
 }
 
 export interface AgentsResponse {
@@ -45,9 +51,25 @@ export interface ChatOffer {
   expiresAt: string;
 }
 
+/**
+ * What would end this conversation, and how close it is — sent with the
+ * transcript so the header can say "fresh" or "about to roll over" without the
+ * page hard-coding limits the server owns.
+ */
+export interface ChatLifetime {
+  messages: number;
+  lastActivityAt: string | null;
+  chars: number;
+  idleTimeoutMs: number;
+  maxChars: number;
+}
+
 export interface ChatConversation {
   conversationId: string;
   agentId: string;
+  /** When the conversation row was created. */
+  startedAt?: string;
+  lifetime?: ChatLifetime;
   messages: ChatMessage[];
   /** Still on the table in this conversation. Usually empty. */
   offers?: ChatOffer[];
@@ -78,6 +100,9 @@ export type ChatEventName =
   | 'message.appended'
   | 'awaiting-approval'
   | 'run.finished'
+  // The attention stream's only frame: "some agent's claim on you may have
+  // changed, ask again". It carries no payload on purpose.
+  | 'attention'
   | 'ping';
 
 export interface ChatEvent {

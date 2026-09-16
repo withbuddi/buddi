@@ -1118,6 +1118,100 @@ suite('the dashboard chat API', () => {
 
   /* ---------------- cancel ---------------- */
 
+  /* ---------------- who is waiting on the owner ---------------- */
+
+  /**
+   * The agent rail draws a badge, and this is the whole definition behind it.
+   *
+   * The rule being protected is the *negative* one: activity earns nothing. A
+   * turn that called six tools and answered is not a claim on anybody's
+   * attention, and a dot that is always lit is a dot the owner learns to stop
+   * reading. Only a suspended run and a held question count, and both clear
+   * themselves — one when it is decided, the other when the owner writes back.
+   */
+  describe('who is waiting on the owner', () => {
+    const attention = async (client: Client): Promise<any> =>
+      client.json<any>('/api/chat/attention');
+
+    it('says nothing about an agent that merely did some work', async () => {
+      const client = await signedIn();
+      provider.script = [call('t1', 'demo.read', { what: 'ledger' }), say('forty of them')];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'triage' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      expect((await attention(client)).agents).toEqual([]);
+    });
+
+    it('badges the agent whose run is suspended, and clears it when decided', async () => {
+      const client = await signedIn();
+      provider.script = [call('t1', 'demo.send', { to: 'a@example.test', body: 'hi' })];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'send it' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const waiting = await attention(client);
+      expect(waiting.agents).toHaveLength(1);
+      expect(waiting.agents[0]).toMatchObject({ agentId: AGENT_ID, approvals: 1, question: null });
+      expect(typeof waiting.agents[0].oldestApprovalAt).toBe('string');
+
+      const { rows } = await pool.query(`select id from core.actions limit 1`);
+      provider.script = [say('sent it')];
+      expect((await client.post(`/api/approvals/${rows[0].id}/approve`)).status).toBe(200);
+
+      // Decided is decided: the face goes quiet without anything sweeping it.
+      expect((await attention(client)).agents).toEqual([]);
+    });
+
+    it('badges an agent holding a question, and clears it on the next message', async () => {
+      const client = await signedIn();
+      provider.script = [
+        call('q1', 'conversation.ask', { question: 'Which card should I pay from?' }),
+        say('Which card should I pay from?'),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'pay the bill' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      const held = await attention(client);
+      expect(held.agents).toHaveLength(1);
+      expect(held.agents[0]).toMatchObject({ agentId: AGENT_ID, approvals: 0 });
+      expect(held.agents[0].question).toMatchObject({ conversationId });
+
+      provider.script = [say('done')];
+      await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'the blue one', conversationId });
+      await settled(conversationId, 2);
+
+      expect((await attention(client)).agents).toEqual([]);
+    });
+
+    it('pushes a frame on the attention stream when a claim appears', async () => {
+      const client = await signedIn();
+      provider.script = [call('t1', 'demo.send', { to: 'b@example.test', body: 'hi' })];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'send it' })
+      ).json()) as any;
+      await settled(conversationId);
+
+      // `?since=0` replays the whole log, which is how a page that connects
+      // after the fact is still told. The frame carries no payload on purpose:
+      // it means "ask again", and the endpoint is the single definition.
+      const frames = await client.stream('/api/chat/attention/stream?since=0', (e) =>
+        e.some((x) => x.event === 'attention'),
+      );
+      expect(frames.filter((f) => f.event === 'attention').length).toBeGreaterThan(0);
+    });
+
+    it('refuses both attention routes without a session', async () => {
+      const anonymous = new Client(base);
+      expect((await anonymous.get('/api/chat/attention')).status).toBe(401);
+      expect((await anonymous.get('/api/chat/attention/stream')).status).toBe(401);
+    });
+  });
+
   it('cancels a run in flight, and says so on the stream', async () => {
     const client = await signedIn();
     // Hold the provider open so there is something to cancel.

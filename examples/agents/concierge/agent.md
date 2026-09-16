@@ -5,6 +5,7 @@ name: Concierge
 description: The agent buddi ships with — answers general questions, explains the platform, and hands domain work to the agent that owns it.
 default: true
 tools: [memory.*, reminder.*, schedule.*, owner.*, canvas.*, agent.delegate, platform.list_agents, platform.read_agent, platform.installed_tools, platform.list_skills]
+roles: [front-desk]
 maxTurns: 8
 language: mirror
 ---

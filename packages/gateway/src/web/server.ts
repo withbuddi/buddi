@@ -47,6 +47,7 @@ import {
   readChatTranscript,
   type WebChatDeps,
 } from './chat.js';
+import { readAgentAttention, streamAttention } from './attention.js';
 import { allowedOrigins, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   CSRF_COOKIE,
@@ -412,6 +413,10 @@ export function createWebApp(deps: WebServerDeps): Server {
           );
         case '/api/chat/agents':
           return sendJson(res, 200, readChatAgents(deps.catalog));
+        // Which agents are waiting on the owner. One small query, and the only
+        // definition of "waiting" in the installation — see attention.ts.
+        case '/api/chat/attention':
+          return sendJson(res, 200, await readAgentAttention(deps.pool, now));
         case '/api/chat/views':
           // How the installed plugins want their tool output drawn. The page
           // owns the renderers and learns the domain mapping from here, so an
@@ -472,6 +477,27 @@ export function createWebApp(deps: WebServerDeps): Server {
         );
         if (!found) return sendJson(res, 404, { error: 'no such conversation' });
         return sendJson(res, 200, found);
+      }
+
+      /*
+       * The attention stream: the same event log, tailed without a conversation
+       * filter, so a badge lights up for an agent the owner is *not* looking at.
+       * It carries no payload — one frame means "ask `/api/chat/attention`
+       * again" — which is what keeps the definition of waiting in one place.
+       */
+      if (path === '/api/chat/attention/stream') {
+        const release = streams.take(session.id);
+        if (release === null) return sendEmpty(res, 429);
+        try {
+          await streamAttention(req, res, {
+            pool: deps.pool,
+            since: resumeCursor(req, q.get('since')),
+            now: deps.now,
+          });
+        } finally {
+          release();
+        }
+        return;
       }
 
       const stream = /^\/api\/chat\/conversations\/([^/]+)\/stream$/.exec(path);
