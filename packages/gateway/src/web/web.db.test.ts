@@ -220,9 +220,11 @@ suite('the dashboard API', () => {
   let admin: Pool;
   let pool: Pool;
   let web: WebServer;
+  let closed: WebServer;
   let registry: ToolRegistry;
   let ctx: ToolContext;
   let base: string;
+  let closedBase: string;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -258,10 +260,28 @@ suite('the dashboard API', () => {
       log: () => {},
     });
     base = `http://127.0.0.1:${web.port}`;
+
+    // The gate has two settings, and a loopback-bound socket cannot be reached
+    // from anywhere else, so the closed one is driven through the same test
+    // seam production never passes: the binding itself decides in the wild.
+    closed = await startWebServer({
+      pool,
+      registry,
+      catalog: fakeCatalog(),
+      ctx,
+      timezone: 'UTC',
+      now,
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      token: TOKEN,
+      openAccess: false,
+      log: () => {},
+    });
+    closedBase = `http://127.0.0.1:${closed.port}`;
   }, 60_000);
 
   afterAll(async () => {
     await web?.close();
+    await closed?.close();
     await pool?.end();
     if (admin) {
       await admin.query(`drop database if exists ${TEST_DB}`);
@@ -287,9 +307,36 @@ suite('the dashboard API', () => {
 
   /* ---------------- authentication ---------------- */
 
-  it('answers an unauthenticated request with 401 and nothing else', async () => {
+  it('serves a request with no session and no ticket, and hands it a session for free', async () => {
+    // Open on loopback: the binding is the credential, so a bookmark that has
+    // never been here before, and this machine's curl, both just work.
+    const client = new Client(base);
+    const first = await client.get('/api/session');
+    expect(first.status).toBe(200);
+    const minted = first.headers.getSetCookie();
+    expect(minted.some((c) => c.startsWith('buddi_session=') && c.includes('HttpOnly'))).toBe(true);
+    expect(minted.some((c) => c.startsWith('buddi_csrf=') && !c.includes('HttpOnly'))).toBe(true);
+
+    // And the freely minted session is a real one: it can carry a write.
+    const ok = await client.post('/api/pause', { paused: true });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ paused: true });
+  });
+
+  it('still refuses the first-ever write from a browser with no session yet', async () => {
+    // The mint happens in this response, so the page cannot have echoed its
+    // csrf pair back yet — and a cross-site writer is exactly this client.
+    const res = await fetch(`${base}/api/pause`, {
+      method: 'POST',
+      headers: { origin: base, 'content-type': 'application/json', 'x-buddi-csrf': 'anything' },
+      body: '{"paused":true}',
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('answers an unauthenticated request with 401 and nothing else when the gate is closed', async () => {
     for (const path of ['/', '/api/overview', '/api/events', '/assets/nope.js']) {
-      const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+      const res = await fetch(`${closedBase}${path}`, { redirect: 'manual' });
       expect(res.status).toBe(401);
       expect(await res.text()).toBe('');
       expect(res.headers.get('www-authenticate')).toBeNull();
@@ -356,9 +403,9 @@ suite('the dashboard API', () => {
   });
 
   it('refuses a write with no session at all', async () => {
-    const res = await fetch(`${base}/api/pause`, {
+    const res = await fetch(`${closedBase}/api/pause`, {
       method: 'POST',
-      headers: { origin: base, 'content-type': 'application/json', 'x-buddi-csrf': 'anything' },
+      headers: { origin: closedBase, 'content-type': 'application/json', 'x-buddi-csrf': 'anything' },
       body: '{"paused":true}',
     });
     expect(res.status).toBe(401);
@@ -518,7 +565,9 @@ suite('the dashboard API', () => {
     // Same session gate as its neighbours, and an unknown id is a 404 rather
     // than an empty envelope.
     expect((await client.get('/api/approvals/00000000-0000-0000-0000-000000000000')).status).toBe(404);
-    const anonymous = await fetch(`${base}/api/approvals/${id}`, { redirect: 'manual' });
+    // Anonymous on the *closed* gate: where a ticket is required, nothing of
+    // this shape leaks without one.
+    const anonymous = await fetch(`${closedBase}/api/approvals/${id}`, { redirect: 'manual' });
     expect(anonymous.status).toBe(401);
   });
 
@@ -810,7 +859,10 @@ suite('the dashboard API', () => {
     });
 
     it('slides under use and still expires when idle', async () => {
-      const server = await start({ sessionTtlMs: { local: TINY_TTL_MS } });
+      // The closed gate, where an expiry has someone to stop: on the open
+      // loopback gate a lapsed session is re-minted invisibly, which is the
+      // point of the open gate — idle time never logs the owner out.
+      const server = await start({ sessionTtlMs: { local: TINY_TTL_MS }, openAccess: false });
       try {
         const client = new Client(`http://127.0.0.1:${server.port}`);
         const opened = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);

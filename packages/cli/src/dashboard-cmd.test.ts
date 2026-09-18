@@ -1,11 +1,12 @@
 /**
- * `buddi dashboard` prints a one-time link and opens it — and never prints the
- * installation's token.
+ * `buddi dashboard` opens the dashboard. On the default loopback binding that
+ * is the whole story — a plain URL, no token minted, nothing to expire — and on
+ * a binding moved off loopback it prints a one-time ticket and never the token.
  */
 import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ensureWebToken, verifyTicket } from '@buddi/gateway';
+import { ensureWebToken, verifyTicket, webTokenExists } from '@buddi/gateway';
 import { describe, expect, it } from 'vitest';
 import {
   APP_BUNDLE_ID,
@@ -24,7 +25,7 @@ const env = (): NodeJS.ProcessEnv => ({
 });
 
 describe('buddi dashboard', () => {
-  it('prints the URL with a ticket that verifies against the token, and opens it', async () => {
+  it('opens the bare URL on the default loopback binding, and touches no token', async () => {
     const e = env();
     const lines: string[] = [];
     const opened: string[] = [];
@@ -35,8 +36,28 @@ describe('buddi dashboard', () => {
     });
     expect(code).toBe(0);
 
+    // The bookmark URL: the same tomorrow as today, with nothing to spend.
+    expect(opened).toEqual(['http://127.0.0.1:4317/']);
+    expect(lines[0]).toContain(opened[0] as string);
+    expect(lines.join('\n')).not.toContain('?t=');
+
+    // Open means open: the command never had a reason to create the secret.
+    expect(await webTokenExists({ env: e, vault: undefined })).toBeNull();
+  });
+
+  it('prints the URL with a ticket that verifies against the token, and opens it, off loopback', async () => {
+    const e = { ...env(), BUDDI_WEB_HOST: '10.0.0.4' };
+    const lines: string[] = [];
+    const opened: string[] = [];
+    const code = await runDashboard('open', {
+      env: e,
+      out: (line) => lines.push(line),
+      launch: (url) => opened.push(url),
+    });
+    expect(code).toBe(0);
+
     const url = opened[0] as string;
-    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:4317\/\?t=/);
+    expect(url).toMatch(/^http:\/\/10\.0\.0\.4:4317\/\?t=/);
     expect(lines[0]).toContain(url);
 
     const { token } = await ensureWebToken({ env: e, vault: undefined });

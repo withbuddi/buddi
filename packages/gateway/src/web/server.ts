@@ -1,24 +1,36 @@
 /**
- * The dashboard's HTTP server — bound to loopback, session-authenticated,
- * CSRF-checked, and CORS-free.
+ * The dashboard's HTTP server — bound to loopback, CSRF-checked, and CORS-free.
  *
  * ARCHITECTURE.md, "Owner and surface authentication": *«Web UI: session auth,
  * CSRF protection, Origin checks, bound to localhost by default (remote access
- * = explicit authenticated transport).»* Each clause is enforced here, in this
- * order, before any handler sees a request:
+ * = explicit authenticated transport).»* The binding is the credential. Each
+ * rule runs here, in this order, before any handler sees a request:
  *
  *   1. **Rate limit.** Failed authentications are counted per address; over
  *      budget is `429` with no body.
- *   2. **The ticket exchange.** A `?t=` on any GET is verified against the
- *      installation's token, spent once, and answered with a redirect to a
- *      clean URL carrying an HttpOnly session cookie. The token never appears
- *      in a log line, an error, or the redirect target.
- *   3. **The session.** Anything else without a live session cookie is `401`
- *      with an empty body. Not a message, not a `WWW-Authenticate`, not a
- *      different status for "expired" — one bit, and no hint.
- *   4. **Writes.** A mutating method additionally needs the double-submit CSRF
+ *   2. **Open on loopback.** A server bound to a loopback address serves every
+ *      request that arrives on one, with no ticket and no expiry: the owner
+ *      bookmarks `http://127.0.0.1:4317/` and it works, across restarts and
+ *      idle months. The threat a token would answer — a remote party — cannot
+ *      reach a loopback socket, and the browser-borne one is answered below and
+ *      by the absence of CORS. A session is minted silently when the browser
+ *      has none, so the CSRF machinery below works unchanged; nothing the owner
+ *      does ever shows an authentication step.
+ *   3. **The ticket exchange.** Only on a non-loopback binding (or by explicit
+ *      ask): a `?t=` on any GET is verified against the installation's token,
+ *      spent once, and answered with a redirect to a clean URL carrying an
+ *      HttpOnly session cookie. The token never appears in a log line, an
+ *      error, or the redirect target.
+ *   4. **The session, when the binding is not loopback.** Anything else without
+ *      a live session cookie is `401` with an empty body. Not a message, not a
+ *      `WWW-Authenticate`, not a different status for "expired" — one bit, and
+ *      no hint.
+ *   5. **Writes.** A mutating method additionally needs the double-submit CSRF
  *      header to match its cookie *and* an `Origin`/`Referer` that is the bound
- *      address. Either failing is `403`, empty.
+ *      address. Either failing is `403`, empty. This is the rule that survives
+ *      open access: a page on another origin can send this server a request,
+ *      but it cannot claim to be the dashboard, and it cannot read a single
+ *      response back.
  *
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
@@ -49,7 +61,7 @@ import {
   type WebChatDeps,
 } from './chat.js';
 import { readAgentAttention, streamAttention } from './attention.js';
-import { allowedOrigins, webAssetsDir, webUrl, type WebConfig } from './config.js';
+import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   CSRF_COOKIE,
   CSRF_HEADER,
@@ -130,6 +142,13 @@ export interface WebServerDeps {
    * `sessions.ts` are the product, and nothing reads this from the environment.
    */
   sessionTtlMs?: Partial<Record<SessionScope, number>> | undefined;
+  /**
+   * Whether the gate is open regardless of the binding. Derived from the
+   * binding itself (loopback is open), and overridable only by tests, which
+   * cannot reach a loopback-bound socket from anywhere else and so could not
+   * otherwise exercise the closed gate.
+   */
+  openAccess?: boolean | undefined;
   log?: ((line: string) => void) | undefined;
   /**
    * Everything the browser needs to be a *talking* surface: the per-agent
@@ -197,6 +216,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       })
     : undefined;
   const streams = new StreamBudget();
+  // The binding is the credential: loopback is open, anything else keeps the
+  // ticket-and-session gate. The override is a test seam, nothing more.
+  const openAccess = deps.openAccess ?? isLoopback(deps.config.host);
 
   /**
    * The pair a browser holds: the HttpOnly session and the readable CSRF value
@@ -280,7 +302,21 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     const cookies = parseCookies(req.headers.cookie);
-    const session = sessions.get(cookies[SESSION_COOKIE], scope, now);
+    let session = sessions.get(cookies[SESSION_COOKIE], scope, now);
+
+    /*
+     * Open on loopback: the request is on this machine and the server is bound
+     * to this machine, so there is nothing left to authenticate. A session is
+     * minted silently — the page gets its CSRF pair like any other, writes stay
+     * gated by rule 5, and the owner is never shown an authentication step.
+     * Minting rather than bypassing the store is what keeps one code path for
+     * every request; the cookie is a detail of how CSRF works, not a login.
+     */
+    if (!session && openAccess && scope === 'local') {
+      session = sessions.create(scope, now);
+      res.setHeader('Set-Cookie', sessionCookies(session));
+    }
+
     if (!session) {
       limiter.fail(key, now);
       return sendEmpty(res, 401);
