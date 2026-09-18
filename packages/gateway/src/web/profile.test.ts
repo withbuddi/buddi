@@ -348,8 +348,12 @@ describe('an agent profile', () => {
       };
     };
 
-    it('answers a signed-in read and refuses an anonymous one', async () => {
-      expect((await fetch(`${base}/api/agents/keeper/profile`)).status).toBe(401);
+    it('answers the profile read, signed in or not — and leaks the secret to neither', async () => {
+      // The gate is open on this loopback binding, so the anonymous read is
+      // served: what matters here is what the view says, not who asked.
+      const anonymous = await fetch(`${base}/api/agents/keeper/profile`);
+      expect(anonymous.status).toBe(200);
+      expect(JSON.stringify(await anonymous.json())).not.toContain(SECRET);
 
       const { cookie } = await signIn();
       const res = await fetch(`${base}/api/agents/keeper/profile`, { headers: { cookie } });

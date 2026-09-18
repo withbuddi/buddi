@@ -1,23 +1,29 @@
 /**
  * `buddi dashboard` — the link that opens the local dashboard.
  *
- * The installation's token never leaves the vault (or its `0600` file). What
- * this prints is a *ticket*: an HMAC over a nonce and a five-minute expiry,
- * keyed by that token, which the server verifies and then spends. So a URL in
- * shell history is worth nothing once it has been opened, and nothing at all a
- * few minutes later.
+ * On its default loopback binding the dashboard is simply open: the URL works,
+ * a bookmark works, and this command opens it directly with nothing minted and
+ * nothing to expire. The binding is the credential — a socket on this machine
+ * is this machine — so there is no second secret to manage and nothing to get
+ * between buddi running and the page being there.
  *
- * The token itself is never printed, never logged and never passed as an
- * argument to anything.
+ * A non-loopback binding (`BUDDI_WEB_HOST`) is the other world, and there the
+ * old discipline still applies: the installation's token never leaves the vault
+ * (or its `0600` file) and what this prints is a *ticket* — an HMAC over a nonce
+ * and a five-minute expiry, keyed by that token, which the server verifies and
+ * then spends. So a URL in shell history is worth nothing once it has been
+ * opened, and nothing at all a few minutes later. The token itself is never
+ * printed, never logged and never passed as an argument to anything.
  */
 import { spawn } from 'node:child_process';
-import { ensureWebToken, mintTicket, webConfig, webUrl, WEB_ENABLED_VAR } from '@buddi/gateway';
+import { ensureWebToken, isLoopback, mintTicket, webConfig, webUrl, WEB_ENABLED_VAR } from '@buddi/gateway';
 import type { DashboardAction } from './args.js';
 import { installDashboardApp, uninstallDashboardApp } from './dashboard-app.js';
 
 /** How the dashboard is turned off, said once, in the place people look. */
 export const OFF_HELP = [
-  'The dashboard is on by default and bound to loopback.',
+  'The dashboard is on by default and bound to loopback, where it is open:',
+  'no token, no expiry — the binding is the credential. Bookmark it once.',
   '',
   `To turn it off, set ${WEB_ENABLED_VAR}=0 in .env and restart the service:`,
   '',
@@ -26,7 +32,8 @@ export const OFF_HELP = [
   '',
   'To move it instead of turning it off, set BUDDI_WEB_HOST / BUDDI_WEB_PORT.',
   'Binding it to anything but 127.0.0.1 exposes an approval button to your',
-  'network: put it behind an authenticated transport if you do.',
+  'network: there the ticket flow comes back, and you should put it behind',
+  'an authenticated transport anyway.',
 ].join('\n');
 
 export interface DashboardOptions {
@@ -64,7 +71,8 @@ export async function runDashboard(
   /*
    * The icon. It is a shortcut to this very command and holds no secret, so it
    * changes what the owner has to type and nothing about what the server
-   * enforces: every open still mints a fresh single-use ticket here.
+   * enforces. On the default loopback binding it now opens the plain URL, and
+   * on anything wider it still goes through a fresh single-use ticket here.
    */
   if (action === 'install-app' || action === 'uninstall-app') {
     const platform = opts.platform ?? process.platform;
@@ -82,6 +90,25 @@ export async function runDashboard(
   }
 
   const config = webConfig(env);
+
+  /*
+   * The open path. Loopback binding, no token touched: the URL is the whole
+   * answer, and it is the same URL tomorrow, which is what makes a bookmark
+   * worth having. `token` is the one action that still mints a ticket even
+   * here — it is the escape hatch for scripting against a non-loopback bind.
+   */
+  if (isLoopback(config.host) && action !== 'token') {
+    const url = webUrl(config);
+    out(`buddi dashboard — ${url}`);
+    out('  open on this machine: bookmark it, nothing here expires');
+    if (!config.enabled) {
+      out(`  NOTE: ${WEB_ENABLED_VAR} is off, so \`buddi serve\` is not serving it right now`);
+    }
+    const launch = opts.launch ?? ((u: string) => defaultLaunch(opts.platform ?? process.platform, u));
+    launch(url);
+    return 0;
+  }
+
   const { token, source, created } = await ensureWebToken({ env });
   const ticket = mintTicket(token);
 

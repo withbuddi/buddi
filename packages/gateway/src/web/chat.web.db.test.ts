@@ -32,7 +32,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { createCoreArtifactStore } from '../telegram/attachments.js';
 import { mintTicket } from './token.js';
-import { startWebServer, type WebServer } from './server.js';
+import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -350,7 +350,7 @@ suite('the dashboard chat API', () => {
    * store live in *this process's* memory: a test about being refused needs a
    * server of its own, or it spends a budget the other tests are counting on.
    */
-  const startServer = async (): Promise<WebServer> =>
+  const startServer = async (over: Partial<WebServerDeps> = {}): Promise<WebServer> =>
     startWebServer({
       pool,
       registry,
@@ -366,6 +366,7 @@ suite('the dashboard chat API', () => {
         providerFor: () => provider,
         artifacts: createCoreArtifactStore({ pool, env: process.env }),
       },
+      ...over,
     });
 
   beforeAll(async () => {
@@ -1205,10 +1206,19 @@ suite('the dashboard chat API', () => {
       expect(frames.filter((f) => f.event === 'attention').length).toBeGreaterThan(0);
     });
 
-    it('refuses both attention routes without a session', async () => {
-      const anonymous = new Client(base);
-      expect((await anonymous.get('/api/chat/attention')).status).toBe(401);
-      expect((await anonymous.get('/api/chat/attention/stream')).status).toBe(401);
+    it('refuses both attention routes without a session when the gate is closed', async () => {
+      // Open on loopback, these routes answer instead of refusing — the gate
+      // that stops an anonymous stranger is the closed one, driven here through
+      // the same seam production never passes.
+      const gated = await startServer({ openAccess: false });
+      const gatedBase = `http://127.0.0.1:${gated.port}`;
+      try {
+        const anonymous = new Client(gatedBase);
+        expect((await anonymous.get('/api/chat/attention')).status).toBe(401);
+        expect((await anonymous.get('/api/chat/attention/stream')).status).toBe(401);
+      } finally {
+        await gated.close();
+      }
     });
   });
 
@@ -1285,7 +1295,7 @@ suite('the dashboard chat API', () => {
    * the file no longer depends on this test running last.
    */
   it('refuses every chat route without a session', async () => {
-    const gated = await startServer();
+    const gated = await startServer({ openAccess: false });
     const gatedBase = `http://127.0.0.1:${gated.port}`;
     try {
       for (const [method, path] of [

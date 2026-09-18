@@ -117,8 +117,11 @@ and an outbox is what would close it.
 - One **installation owner**, created at setup. All authorization refers to it.
 - **Paired surface identities**: a Telegram allowlist of *numeric* user id + private-chat
   id; update-id dedup; never trust usernames, forwards, or chat membership. Web UI:
-  session auth, CSRF protection, Origin checks, bound to localhost by default (remote
-  access = explicit authenticated transport).
+  bound to localhost by default, where it is simply open — the binding is the
+  credential, CSRF and Origin checks still gate writes, and there is no token and
+  no expiry for the owner to manage. Moving it off loopback is the deliberate act
+  that brings the ticket-and-session flow back (remote access = explicit
+  authenticated transport).
 - **Approval callbacks are bound**: a callback resolves exactly the pending action it
   references, from the owner identity. A plain message saying "yes" never resolves
   anything. Resolution from any paired surface races on the same atomic state transition.

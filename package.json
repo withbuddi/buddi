@@ -21,6 +21,8 @@
     "agents": "node packages/cli/dist/main.js agents",
     "link": "pnpm add --global ./packages/cli",
     "unlink": "pnpm remove --global @buddi/cli",
+    "dev:refresh": "pnpm -r build && node packages/cli/dist/main.js service restart",
+    "dev:install": "pnpm -r build && pnpm run link && node packages/cli/dist/main.js service install",
     "buddi": "node packages/cli/dist/main.js",
     "doctor": "node packages/cli/dist/main.js doctor",
     "init": "node packages/cli/dist/main.js init"
