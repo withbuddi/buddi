@@ -27,6 +27,9 @@ import {
   offersKeyboard,
   OFFER_TAKEN_TEXT,
   parseOfferCallback,
+  parseQuestionCallback,
+  questionCallbackData,
+  questionKeyboard,
   SURFACE,
   TelegramSurface,
 } from './surface.js';
@@ -211,6 +214,35 @@ describe('the offer callback payload', () => {
     // the wire to travel, which is why the prompt that runs is the stored one.
     expect(offerCallbackData(ID_ONE)).not.toMatch(/draft|reply|prompt/i);
     expect(Buffer.byteLength(offerCallbackData(ID_ONE))).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('the question callback payload', () => {
+  it('binds a compact option index to one exact question id', () => {
+    expect(questionCallbackData(ID_ONE, 1)).toBe(`q:${ID_ONE}:1`);
+    expect(parseQuestionCallback(questionCallbackData(ID_ONE, 1))).toEqual({ id: ID_ONE, index: 1 });
+    expect(callbackKind(questionCallbackData(ID_ONE, 1))).toBe('question');
+    expect(parseQuestionCallback(`q:${ID_ONE}:99`)).toBeUndefined();
+  });
+
+  it('marks the recommendation without changing the answer label', () => {
+    const keyboard = questionKeyboard({
+      id: ID_ONE,
+      agentId: 'ledger',
+      conversationId: ID_TWO,
+      question: 'Which account?',
+      options: [
+        { id: 'checking', label: 'Checking', hint: 'Best match', recommended: true },
+        { id: 'savings', label: 'Savings', hint: null, recommended: false },
+      ],
+      allowOther: true,
+      createdAt: '2026-09-17T20:00:00Z',
+      expiresAt: '2026-09-17T20:30:00Z',
+      answeredAt: null,
+      answeredVia: null,
+      answer: null,
+    });
+    expect(keyboard.inline_keyboard.map((row) => row[0]?.text)).toEqual(['★ Checking', 'Savings']);
   });
 });
 

@@ -762,6 +762,24 @@ export function createWebApp(deps: WebServerDeps): Server {
       });
     }
 
+    const questionAnswer = /^\/api\/chat\/questions\/([^/]+)\/answer$/.exec(path);
+    if (questionAnswer) {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      if (typeof body.answer !== 'string' || body.answer.trim() === '') {
+        return sendJson(res, 400, { error: '`answer` must be a non-empty string' });
+      }
+      if (body.optionId !== undefined && typeof body.optionId !== 'string') {
+        return sendJson(res, 400, { error: '`optionId` must be a string' });
+      }
+      const answered = await chat.answer({
+        id: decodeURIComponent(questionAnswer[1] as string),
+        answer: body.answer,
+        ...(typeof body.optionId === 'string' ? { optionId: body.optionId } : {}),
+      });
+      if (!answered.ok) return sendJson(res, answered.status, { error: answered.error });
+      return sendJson(res, 202, answered);
+    }
+
     const cancel = /^\/api\/chat\/conversations\/([^/]+)\/cancel$/.exec(path);
     if (cancel) {
       if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });

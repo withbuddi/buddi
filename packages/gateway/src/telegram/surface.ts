@@ -34,9 +34,12 @@ import {
   setActiveAgent,
   setSurfaceCursor,
   takeOffer,
+  answerQuestion,
+  getQuestion,
   TELEGRAM_SURFACE,
   touchSurfaceIdentity,
   type Offer,
+  type Question,
   type Queryable,
   type RenderedOffers,
   type Reminder,
@@ -530,7 +533,11 @@ export interface RunReply {
    * Telegram's declared profile and not from its name.
    */
   offers?: readonly Offer[];
+  /** A durable question whose options this surface may draw as buttons. */
+  question?: Question;
 }
+
+type RenderedTurn = RenderedOffers & { question?: Question };
 
 /** The text of a reply, whichever shape the runner returned. */
 export function replyText(reply: string | RunReply): string {
@@ -1191,6 +1198,32 @@ export function offersKeyboard(offers: readonly Offer[]): InlineKeyboardMarkup {
   };
 }
 
+export const QUESTION_CALLBACK_PREFIX = 'q';
+
+export function questionCallbackData(questionId: string, optionIndex: number): string {
+  const data = `${QUESTION_CALLBACK_PREFIX}:${questionId}:${optionIndex}`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    throw new Error('question callback data is too long for Telegram');
+  }
+  return data;
+}
+
+export function parseQuestionCallback(data: string | undefined): { id: string; index: number } | undefined {
+  const match = /^q:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d)$/i.exec(
+    (data ?? '').trim(),
+  );
+  return match ? { id: (match[1] as string).toLowerCase(), index: Number(match[2]) } : undefined;
+}
+
+export function questionKeyboard(question: Question): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: question.options.map((option, index) => [{
+      text: `${option.recommended ? '★ ' : ''}${option.label}`,
+      callback_data: questionCallbackData(question.id, index),
+    }]),
+  };
+}
+
 /** What a tap answers once the run is queued. */
 export const OFFER_TAKEN_TEXT = 'On it.';
 
@@ -1198,13 +1231,14 @@ export const OFFER_TAKEN_TEXT = 'On it.';
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
   const raw = (data ?? '').trim();
   if (raw.startsWith(`${USE_CALLBACK_PREFIX}:`)) return 'agent';
   if (raw.startsWith(`${REMINDER_CALLBACK_PREFIX}:`)) return 'reminder';
   if (raw.startsWith(`${OFFER_CALLBACK_PREFIX}:`)) return 'offer';
+  if (raw.startsWith(`${QUESTION_CALLBACK_PREFIX}:`)) return 'question';
   return 'approval';
 }
 
@@ -1362,6 +1396,10 @@ export class TelegramSurface {
       }
       if (kind === 'offer') {
         this.enqueue(chain, () => this.handleOfferCallback(callback));
+        return;
+      }
+      if (kind === 'question') {
+        this.enqueue(chain, () => this.handleQuestionCallback(callback));
         return;
       }
       const approvals = this.#opts.approvals;
@@ -2009,11 +2047,14 @@ export class TelegramSurface {
         // The offers this turn stored, drawn the way Telegram's own profile
         // says they are drawn — buttons here, words on a surface without any.
         // Nothing offered is the normal case, and then this is the identity.
-        return renderOffers(
+        return {
+          ...renderOffers(
           TELEGRAM_SURFACE,
           note ? `${note}\n\n${reply}` : reply,
           typeof produced === 'string' ? [] : (produced.offers ?? []),
-        );
+          ),
+          ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
+        };
       },
       label,
       carried ? readingText(label) : undefined,
@@ -2393,6 +2434,57 @@ export class TelegramSurface {
     }
   }
 
+  /** Resolve one exact structured answer. It supplies input; it grants nothing. */
+  async handleQuestionCallback(
+    query: NonNullable<TelegramUpdate['callback_query']>,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const parsed = parseQuestionCallback(query.data);
+    if (!parsed || !userId || !chatId) {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+    const owner = await resolveOwnerForSurface(this.#opts.pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!owner.ok) {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+    const question = await getQuestion(this.#opts.pool, parsed.id);
+    const option = question?.options[parsed.index];
+    if (!question || !option) {
+      await api.answerCallbackQuery(query.id, 'That question is no longer available.').catch(() => {});
+      return;
+    }
+    const settled = await answerQuestion(this.#opts.pool, {
+      id: question.id,
+      answer: option.label,
+      optionId: option.id,
+      via: SURFACE,
+      now: new Date(this.#now()),
+    });
+    if (!settled.ok) {
+      await api.answerCallbackQuery(query.id, 'That question was already answered.').catch(() => {});
+      return;
+    }
+    await api.answerCallbackQuery(query.id, option.label).catch(() => {});
+    if (query.message?.message_id !== undefined) {
+      await api.editMessageReplyMarkup(chatId, query.message.message_id, { inline_keyboard: [] }).catch(() => {});
+    }
+    const agent = this.#opts.catalog.get(question.agentId);
+    if (!agent) {
+      await api.sendMessage(chatId, 'That agent is no longer installed.');
+      return;
+    }
+    this.#pending.clear(chatId);
+    await this.#runFor(chatId, agent, option.label, { continuation: true });
+  }
+
   /**
    * A tap on an offered action.
    *
@@ -2555,7 +2647,7 @@ export class TelegramSurface {
    */
   async #withBubble(
     chatId: string,
-    produce: (progress: ProgressBubble) => Promise<string | RenderedOffers>,
+    produce: (progress: ProgressBubble) => Promise<string | RenderedTurn>,
     agentName?: string,
     placeholderOverride?: string,
     /**
@@ -2592,14 +2684,16 @@ export class TelegramSurface {
       // markdown does not render here, and we never send `parse_mode`. This
       // catches the answer of a model that ignored the profile.
       const produced = await produce(progress);
-      const drawn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
+      const drawn: RenderedTurn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
       const reply = toPlainText(drawn.text);
       await progress.settle();
       await this.#finish(
         chatId,
         placeholderId,
         reply,
-        drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
+        drawn.question && drawn.question.options.length > 0
+          ? questionKeyboard(drawn.question)
+          : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
       );
     } catch (err) {
       // The raw error goes to the log with its whole cause chain; what reaches
@@ -2686,12 +2780,15 @@ export class TelegramSurface {
    * It never asks "am I Telegram?" — `renderOffers` reads the declared profile,
    * which is the one place that fact lives.
    */
-  #rendered(produced: string | RunReply): RenderedOffers {
-    return renderOffers(
+  #rendered(produced: string | RunReply): RenderedTurn {
+    return {
+      ...renderOffers(
       TELEGRAM_SURFACE,
       replyText(produced),
       typeof produced === 'string' ? [] : (produced.offers ?? []),
-    );
+      ),
+      ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
+    };
   }
 
   #startTyping(chatId: string): () => void {

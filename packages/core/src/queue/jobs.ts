@@ -467,6 +467,13 @@ export interface ListDeadJobsInput {
   kinds?: readonly string[];
   /** Only jobs that died strictly after this instant. */
   after: Date;
+  /**
+   * Tie-breaker inside `after`'s millisecond. PostgreSQL timestamps retain
+   * microseconds while JavaScript Date does not, so timestamp-only cursors can
+   * rediscover the row that produced them. When present, ordering and paging
+   * use the millisecond bucket plus this job id.
+   */
+  afterId?: string;
   /** Only jobs that died at or before this instant. */
   until?: Date;
   limit?: number;
@@ -485,15 +492,20 @@ export async function listDeadJobs(pool: Pool, input: ListDeadJobsInput): Promis
     `select ${JOB_COLUMNS} from core.jobs
      where state = 'failed'
        and kind = any($1::text[])
-       and updated_at > $2::timestamptz
+       and case
+             when $5::uuid is null then updated_at > $2::timestamptz
+             else (date_trunc('milliseconds', updated_at), id) >
+                  (date_trunc('milliseconds', $2::timestamptz), $5::uuid)
+           end
        and ($3::timestamptz is null or updated_at <= $3::timestamptz)
-     order by updated_at, id
+     order by date_trunc('milliseconds', updated_at), id
      limit $4`,
     [
       kinds,
       input.after.toISOString(),
       input.until?.toISOString() ?? null,
       Math.max(1, Math.min(input.limit ?? 500, 1000)),
+      input.afterId ?? null,
     ],
   );
   return rows.map(toJob);

@@ -43,7 +43,13 @@
  * Kept in memory, per chat. A restart drops it, which fails to the old
  * behaviour rather than to a wrong one.
  */
-import type { PluginManifest, ToolDefinition } from '@buddi/core';
+import {
+  MAX_QUESTION_LABEL,
+  MAX_QUESTION_OPTIONS,
+  type PluginManifest,
+  type QuestionOption,
+  type ToolDefinition,
+} from '@buddi/core';
 import { z } from 'zod';
 
 /* ------------------------------------------------------------------ *
@@ -64,7 +70,11 @@ export const MAX_QUESTION_CHARS = 300;
 
 /** Where the tool records that this turn ended on a question. One per run. */
 export interface AskSink {
-  asked?: { question: string };
+  asked?: {
+    question: string;
+    options: Array<Omit<QuestionOption, 'id'>>;
+    allowOther: boolean;
+  };
 }
 
 const askInput = z.object({
@@ -75,6 +85,21 @@ const askInput = z.object({
     .describe(
       'The question you are asking the owner, in one line. You still write it out in your reply as well — this is the declaration, not the delivery.',
     ),
+  options: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(MAX_QUESTION_LABEL),
+        hint: z.string().max(120).optional(),
+        recommended: z.boolean().optional(),
+      }),
+    )
+    .max(MAX_QUESTION_OPTIONS)
+    .optional()
+    .describe('Likely answers as quick choices. Put the best default first and mark it recommended. Leave empty only for a genuinely open-ended answer.'),
+  allowOther: z
+    .boolean()
+    .optional()
+    .describe('Whether the owner may type a different answer. Keep true unless only the listed values are valid.'),
 });
 
 export type AskResult = { pending: true };
@@ -94,7 +119,15 @@ export function createAskManifest(sink: AskSink): PluginManifest {
     tier: 'auto',
     input: askInput,
     async execute(input) {
-      sink.asked = { question: input.question.trim() };
+      sink.asked = {
+        question: input.question.trim(),
+        options: (input.options ?? []).map((option) => ({
+          label: option.label.trim(),
+          hint: option.hint?.trim() || null,
+          recommended: option.recommended === true,
+        })),
+        allowOther: input.allowOther ?? true,
+      };
       return { pending: true };
     },
   };
@@ -112,10 +145,16 @@ export function createAskManifest(sink: AskSink): PluginManifest {
 
 /** The instruction block that tells an interactive turn the tool exists. */
 export const ASK_POLICY_SUFFIX = [
-  `When you end a turn by asking the owner something you need them to answer before you can finish — a time, a choice, a missing detail — call ${ASK_TOOL} with that question as you finish.`,
+  `${ASK_TOOL} is Buddi's AskUserQuestion tool. If the owner calls it AskUserQuestion, AskQuestion, a quick question, or an inline keyboard, they mean ${ASK_TOOL}; do not tell them that tool is unavailable.`,
+  `When you need the owner to choose, clarify, confirm a preference, or supply a missing detail before you can finish, call ${ASK_TOOL}.`,
+  `Prefer ${ASK_TOOL} with 2–5 short options whenever the likely answers are known: the dashboard and Telegram turn them into one-tap choices. Put the choice you recommend first, mark it recommended, and explain why in its hint.`,
+  'Ask one decision at a time unless the questions are independent. Do not ask for something you can safely read or determine yourself, and do not interrupt for a low-impact reversible choice you can state as an assumption.',
   'Call it for a request phrased as an instruction too ("tell me which card"), because that is still a question.',
-  'Do not call it for a question you answer yourself, a question you are quoting, or a closing pleasantry.',
-  'It delivers nothing and authorizes nothing; it only makes sure the owner\'s answer comes back to you.',
+  'Do not call it for an open-ended discussion, a question you answer yourself, a question you are quoting, or a closing pleasantry.',
+  `If the owner explicitly asks to test or demonstrate AskUserQuestion, that request itself is a valid reason to call ${ASK_TOOL}: ask one harmless bounded question with 2–5 choices so they can see the interaction.`,
+  'Never use it to obtain permission for an effect. Permission is a separate approval bound to the exact action.',
+  'Call it before writing the reply, then ask the same concise question in the reply without spelling out options the surface will draw.',
+  'It delivers nothing and authorizes nothing; it records the question and makes sure the answer comes back to you.',
 ].join(' ');
 
 /* ------------------------------------------------------------------ *

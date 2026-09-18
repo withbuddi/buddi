@@ -64,12 +64,16 @@ class FakeDb {
       return { rows: [{ id: '1', kind: params[0], conversation_id: null, payload: {}, created_at: new Date() }] };
     }
     if (text.includes("from core.jobs") && text.includes("state = 'failed'")) {
-      const [kinds, after, until] = params;
+      const [kinds, after, until, _limit, afterId] = params;
+      const afterMs = Date.parse(after);
       const rows = this.jobs
         .filter(
           (j) =>
             (kinds as string[]).includes(j.kind) &&
-            j.updatedAt.getTime() > Date.parse(after) &&
+            (afterId === null
+              ? j.updatedAt.getTime() > afterMs
+              : j.updatedAt.getTime() > afterMs ||
+                (j.updatedAt.getTime() === afterMs && j.id > afterId)) &&
             (until === null || j.updatedAt.getTime() <= Date.parse(until)),
         )
         .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
@@ -202,6 +206,37 @@ describe('the fold', () => {
     // A brand new watch object, the same flag row: still silent.
     const sent = await replay(db, '2026-09-14T18:00:00Z', '2026-09-15T04:00:00Z');
     expect(sent).toEqual([]);
+  });
+
+  it('does not rediscover PostgreSQL microseconds lost by JavaScript Date', async () => {
+    const db = new FakeDb(THE_WAVE.slice(0, 1));
+    let clock = new Date('2026-09-14T18:00:00Z');
+    const sent: string[] = [];
+    const tick = createDeadLetterWatch({
+      pool: db as unknown as Pool,
+      now: () => clock,
+      timezone: TZ,
+      deliver: async (text) => {
+        sent.push(text);
+        return 'chat';
+      },
+      log: () => {},
+    });
+
+    await tick();
+    expect(sent).toHaveLength(1);
+    expect(db.flags.get(DEAD_LETTER_FLAG)).toMatchObject({
+      watermarkJobId: THE_WAVE[0]?.id,
+      incident: { reported: true },
+    });
+
+    // PostgreSQL may retain .5009 while node-postgres gives us .500. Model
+    // that precision loss as the same Date plus the same id: the composite
+    // cursor must exclude it on every later pass.
+    clock = new Date(clock.getTime() + DEAD_LETTER_INCIDENT_GAP_MS + 1);
+    await tick(); // closes the old incident
+    await tick(); // used to rediscover and report the same row
+    expect(sent).toHaveLength(1);
   });
 
   it('does not announce an installation’s ancient history on first run', async () => {
