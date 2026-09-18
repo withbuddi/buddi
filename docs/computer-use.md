@@ -1,5 +1,10 @@
 # Computer use — what the ground looks like, 2026-09-16
 
+> Historical survey. The implementation has changed since this document was
+> written. As of 2026-09-18, native macOS control is the default and Playwright is
+> an explicit alternative. See [current setup, boundaries and verification](browser.md).
+> Claims below about absent drivers/session tiers describe the earlier snapshot.
+
 `ARCHITECTURE.md` has carried a "Computer access" section since before anything
 in this tree could drive anything. Nothing about that has changed: roadmap step 6
 is unstarted, no decision to build it has been made, and the `session` tier the

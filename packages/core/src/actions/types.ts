@@ -42,7 +42,7 @@ export const TERMINAL_STATES: readonly ApprovalState[] = [
  * rules change: an action approved under older rules is still readable, and it
  * is visibly *older rules*.
  */
-export const POLICY_VERSION = 1;
+export const POLICY_VERSION = 2;
 
 /** How long an approval request stands before it expires. */
 export const DEFAULT_APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
@@ -131,6 +131,11 @@ export function hashArgs(tool: string, toolVersion: string, args: unknown): stri
 /** The envelope hash written to the ledger before dispatch. */
 export function hashEnvelope(envelope: unknown): string {
   return sha256(canonicalJson(envelope));
+}
+
+/** Policy 2 binds the resolved effect as well as the tool's input references. */
+export function hashAction(tool: string, toolVersion: string, args: unknown, envelope: unknown): string {
+  return sha256(canonicalJson({ tool, toolVersion, args, envelope }));
 }
 
 /* ------------------------------------------------------------------ *

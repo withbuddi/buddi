@@ -249,6 +249,7 @@ export function withNudgeBudget(execute: MissionExecute, deps: NudgeBudgetDeps):
     });
 
   return async function guarded(occurrence, mission, control): Promise<MissionRunResult> {
+    control?.signal?.throwIfAborted();
     if (mission.id !== GETTING_STARTED_ID) return execute(occurrence, mission, control);
 
     const now = deps.now();
@@ -264,6 +265,7 @@ export function withNudgeBudget(execute: MissionExecute, deps: NudgeBudgetDeps):
       // so a hand-run occurrence cannot make it say it twice.
       if (gate.sayGoodbye && mission.enabled) {
         try {
+          control?.signal?.throwIfAborted();
           await deps.deliver(STOPPING_TEXT);
           await appendEvent(deps.pool, 'mission.delivered', {
             missionId: mission.id,

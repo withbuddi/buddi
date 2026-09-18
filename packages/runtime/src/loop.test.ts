@@ -214,6 +214,107 @@ describe('composeSystem', () => {
 });
 
 describe('runAgent', () => {
+  it('issues only the agent’s resolved session grants and refuses delegated authority', async () => {
+    for (const delegationDepth of [0, 1]) {
+      const db = new FakeDb();
+      const execute = vi.fn(async () => 'browsed');
+      const registry = new ToolRegistry();
+      registry.register({ name: 'browser', version: '1', schema: 'browser', migrationsDir: '', tools: [{
+        name: 'browser.act', description: 'browser', tier: 'session', input: z.object({}), execute,
+      }] });
+      const provider = scriptedProvider([
+        { content: [{ type: 'tool_use', id: 'b1', name: 'browser.act', input: {} }], stopReason: 'tool_use', usage, model: 'test' },
+        { content: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'test' },
+      ]);
+      await runAgent({ agent: { ...agent, tools: ['browser.act'] }, provider, registry,
+        ctx: { ...ctx, delegationDepth, ownerRequest: { id: 'owner-message', text: 'Open the site', expiresAt: Date.now() + 60_000 } },
+        pool: db, conversationId: 'probe', userMessage: 'hello' });
+      expect(execute).toHaveBeenCalledTimes(delegationDepth === 0 ? 1 : 0);
+    }
+  });
+
+  it('skips later dependent actions after a browser failure and keeps all tool results paired', async () => {
+    const db = new FakeDb();
+    const execute = vi.fn(async () => { throw new Error('stale observation'); });
+    const registry = new ToolRegistry();
+    registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [{
+      name: 'demo.double', description: 'sequential', tier: 'auto', sequential: true, input: z.object({}), execute,
+    }] });
+    const provider = scriptedProvider([
+      { content: ['first', 'second'].map((id) => ({ type: 'tool_use' as const, id, name: 'demo.double', input: {} })), stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'stopped' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'hello' });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(db.messages[2]?.content).toEqual([
+      expect.objectContaining({ tool_use_id: 'first', is_error: true }),
+      expect.objectContaining({ tool_use_id: 'second', is_error: true, content: expect.stringContaining('not-executed') }),
+    ]);
+  });
+
+  it('sends only the latest tool image and never persists its base64', async () => {
+    const db = new FakeDb();
+    let imageNumber = 0;
+    const registry = new ToolRegistry();
+    registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [{
+      name: 'demo.double', description: 'observe', tier: 'auto', input: z.object({}), execute: async () => ({ observed: true }),
+      image: async () => ({ mime: 'image/jpeg', data: `picture-${++imageNumber}` }),
+    }] });
+    const call = (id: string): CompletionResponse => ({ content: [{ type: 'tool_use', id, name: 'demo.double', input: {} }], stopReason: 'tool_use', usage, model: 'test' });
+    const provider = scriptedProvider([call('1'), call('2'), { content: [{ type: 'text', text: 'done' }], stopReason: 'end_turn', usage, model: 'test' }]);
+    await runAgent({ agent, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'hello' });
+    expect(JSON.stringify(provider.calls[1])).toContain('picture-1');
+    expect(JSON.stringify(provider.calls[2])).toContain('picture-2');
+    expect(JSON.stringify(provider.calls[2])).not.toContain('picture-1');
+    expect(JSON.stringify(db.messages)).not.toContain('picture-');
+  });
+
+  it.each(['auto', 'gated'] as const)('refuses an installed but ungranted %s tool at dispatch', async (tier) => {
+    const db = new FakeDb();
+    const execute = vi.fn(async () => 'should never run');
+    const describeEffect = vi.fn(() => ({ envelope: {}, preview: 'should never be proposed' }));
+    const registry = new ToolRegistry();
+    registry.register({ name: 'hidden', version: '1', schema: 'hidden', migrationsDir: '', tools: [{
+      name: 'hidden.call', description: 'hidden', tier, input: z.object({}),
+      execute, describe: describeEffect,
+    }] });
+    const provider = scriptedProvider([
+      { content: [{ type: 'tool_use', id: 'hidden-1', name: 'hidden.call', input: {} }], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'refused' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent: { ...agent, tools: [] }, provider, registry, ctx,
+      pool: db, conversationId: 'probe', userMessage: 'hello' });
+    expect(provider.calls[0]?.tools).toEqual([]);
+    expect(execute).not.toHaveBeenCalled();
+    expect(describeEffect).not.toHaveBeenCalled();
+    expect(db.actions).toEqual([]);
+    expect(db.messages[2]?.content).toEqual([expect.objectContaining({
+      is_error: true, content: expect.stringContaining('tool-not-granted'),
+    })]);
+  });
+
+  it('stops between calls in a batch when the run is cancelled', async () => {
+    const db = new FakeDb();
+    const controller = new AbortController();
+    const execute = vi.fn(async (_input: unknown, _ctx: ToolContext) => { controller.abort(new Error('stop now')); return 'stopped'; });
+    const registry = new ToolRegistry();
+    registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [{
+      name: 'demo.double', description: 'probe', tier: 'auto', input: z.object({}), execute,
+    }] });
+    const provider = scriptedProvider([{
+      content: ['first', 'second'].map((id) => ({ type: 'tool_use' as const, id, name: 'demo.double', input: {} })),
+      stopReason: 'tool_use', usage, model: 'test',
+    }]);
+    await expect(runAgent({ agent, provider, registry, ctx: { ...ctx, signal: controller.signal },
+      pool: db, conversationId: 'probe', userMessage: 'hello' })).rejects.toThrow('stop now');
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
+    expect(db.messages.at(-1)?.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'first', content: '"stopped"' },
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'second', is_error: true, content: expect.stringContaining('not-executed') }),
+    ]);
+  });
+
   it('passes the one-off suffix to the provider as part of the system prompt', async () => {
     const db = new FakeDb();
     const conversationId = await createConversation(db, 'finance');

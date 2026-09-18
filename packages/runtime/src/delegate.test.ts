@@ -177,6 +177,12 @@ describe('delegationMessage', () => {
 });
 
 describe('agent.delegate', () => {
+  it('passes the caller cancellation signal into the nested run', async () => {
+    const { registry, ctx, captured } = harness();
+    const signal = new AbortController().signal;
+    await registry.invoke(DELEGATE_TOOL, task, { ...ctx, signal });
+    expect(captured[0]?.ctx.signal).toBe(signal);
+  });
   it('runs an allowlisted target in a new conversation and returns its text', async () => {
     const { db, registry, ctx } = harness();
     const out = await registry.invoke(DELEGATE_TOOL, task, ctx);

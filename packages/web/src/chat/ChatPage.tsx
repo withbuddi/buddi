@@ -8,10 +8,11 @@
  * prompt in the middle. A dashboard whose front page is blank until you type
  * is a dashboard that has nothing to say about the work already done.
  *
- * **The canvas is derived, never pushed.** Everything on the right comes from
- * the transcript's own tool calls, so it fills in for a run happening now and
+ * **Results are derived, never pushed.** Result panels come from
+ * the transcript's own tool calls, so they fill in for a run happening now and
  * for a mission that ran while nobody was watching, without either of them
- * knowing a canvas exists.
+ * knowing a canvas exists. Properties and the live host-browser session are
+ * trusted platform panels beside those results, not agent-authored views.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
@@ -19,6 +20,9 @@ import { Canvas } from '../canvas/Canvas';
 import { Envelope } from '../canvas/views/Envelope';
 import { renderablesFrom } from '../canvas/renderables';
 import { profileRenderable, profileTabId } from './properties';
+import { useAsync } from '../ui';
+import { BrowserPanel } from '../views/Browser';
+import { conversationBrowser } from './browser';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
@@ -242,6 +246,10 @@ export function ChatPage({
 
   /* ---- the canvas ---- */
 
+  const browser = useAsync(() => agentId && conversationId ? api.browser({ agentId, conversationId }) : Promise.resolve(undefined), [agentId, conversationId], 1500);
+  const browserTab = conversationBrowser(browser.error ? undefined : browser.data, agentId, conversationId);
+  const browserTabId = browserTab?.id ?? null;
+
   /*
    * The canvas contents: everything the transcript produced, and — last, when
    * the owner has opened it — the properties panel.
@@ -259,8 +267,10 @@ export function ChatPage({
       descriptors,
       awaiting,
     });
-    return profile ? [...fromTranscript, profileRenderable(profile)] : fromTranscript;
-  }, [conversation, descriptors, awaiting, profile]);
+    const items = fromTranscript;
+    if (browserTab) items.push(browserTab);
+    return profile ? [...items, profileRenderable(profile)] : items;
+  }, [conversation, descriptors, awaiting, profile, browserTabId]);
 
   const inlineApproval = useMemo(
     () => [...renderables].reverse().find((item) => item.source === 'approval') ?? null,
@@ -300,6 +310,16 @@ export function ChatPage({
     // Nothing substantial has ever arrived: show the newest tab rather than none.
     if (activeTab === null && lastId) setActiveTab(lastId);
   }, [focusId, activeTab, lastId]);
+
+  // Select once when a session appears. Polls must not steal a chart the owner
+  // selected, and a pending approval remains more important than the preview.
+  const previousBrowser = useRef<string | null>(null);
+  useEffect(() => {
+    if (browserTabId !== previousBrowser.current) {
+      previousBrowser.current = browserTabId;
+      if (browserTabId && !inlineApproval) setActiveTab(browserTabId);
+    }
+  }, [browserTabId, inlineApproval]);
 
   /* ---- actions ---- */
 
@@ -477,6 +497,7 @@ export function ChatPage({
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
+      browserPanel={browserTab ? <BrowserPanel key={browserTab.id} data={browser.data} error={browser.error} reload={browser.reload} compact /> : null}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}
       emptyHint={

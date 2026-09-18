@@ -24,6 +24,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { assertApprovedEffect } from '@buddi/core';
 import { currentAccount, resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
@@ -286,6 +287,10 @@ export function createSendTool(
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 
       const envelope = await buildEnvelope(ctx, input.draftId);
+      assertApprovedEffect(ctx, envelope);
+      if (account.address !== envelope.accountAddress) {
+        throw new Error('the sending account changed; propose the send again');
+      }
       if (envelope.to.length === 0) {
         throw new Error(`email.send: draft ${draft.id} has no recipient`);
       }
@@ -317,7 +322,10 @@ export function createSendTool(
       };
 
       const client = await opts.send(account, auth.value);
+      const onAbort = (): void => { void client.close().catch(() => {}); };
+      ctx.signal?.addEventListener('abort', onAbort, { once: true });
       try {
+        ctx.signal?.throwIfAborted();
         const result = await client.send(wire);
         const { rows } = await ctx.db.query(
           `update email.drafts
@@ -350,6 +358,7 @@ export function createSendTool(
           { cause: err },
         );
       } finally {
+        ctx.signal?.removeEventListener('abort', onAbort);
         await client.close().catch(() => {});
       }
     },

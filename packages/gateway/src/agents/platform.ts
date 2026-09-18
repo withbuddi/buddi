@@ -42,6 +42,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
+  assertApprovedEffect,
   HANDLE,
   HANDLE_MAX,
   HANDLE_MIN,
@@ -1343,13 +1344,13 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     },
     async execute(input, ctx) {
       const binding = resolved(registry);
-      // Rebuilt, not carried: the only thing that reached the ledger is the
-      // canonical arguments, and everything else is derived again from them.
+      // Rebuild and compare at the write boundary, after the executor's check.
       const envelope = buildCreateEnvelope(input, {
         binding,
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
       });
+      assertApprovedEffect(ctx, envelope);
       createAgentDirAtomic(path.dirname(envelope.file), {
         [AGENT_FILE]: envelope.content,
         ...(envelope.delegates === null
@@ -1394,6 +1395,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
       });
+      assertApprovedEffect(ctx, envelope);
       const dir = path.dirname(envelope.file);
       writeFilesAtomic([
         { path: envelope.file, content: envelope.content },
@@ -1440,6 +1442,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     async execute(input, ctx) {
       const binding = resolved(registry);
       const envelope = buildSkillEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' });
+      assertApprovedEffect(ctx, envelope);
       writeFilesAtomic([{ path: envelope.file, content: envelope.content }]);
       const reload = reloadResult(binding);
       return {
@@ -1531,6 +1534,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         proposedBy: ctx.agentId ?? 'unknown',
       });
       const dir = path.dirname(envelope.file);
+      assertApprovedEffect(ctx, envelope);
       createAgentDirAtomic(dir, {
         [AGENT_FILE]: envelope.content,
         // The sidecar that makes an upgrade honest: which plugin proposed this,
@@ -1594,6 +1598,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
       });
+      assertApprovedEffect(ctx, envelope);
       writeFilesAtomic([{ path: envelope.file, content: envelope.content }]);
       const reload = reloadResult(binding);
       return {
@@ -1627,6 +1632,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     async execute(input, ctx) {
       const binding = resolved(registry);
       const envelope = buildDeleteEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' });
+      assertApprovedEffect(ctx, envelope);
       const movedTo = moveAgentAside(envelope.directory, binding.trashRoot, trashStamp(ctx.now()));
       const reload = reloadResult(binding);
       return {

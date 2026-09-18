@@ -115,6 +115,7 @@ export interface ToolSchema {
 }
 
 export interface CompletionRequest {
+  signal?: AbortSignal;
   /** The agent's own system prompt. Adapter-specific prefixes are added here. */
   system: string;
   messages: NeutralMessage[];
@@ -277,7 +278,7 @@ export interface AnthropicProviderOptions {
    */
   fetch?: HttpTransport;
   /** Injected for tests so backoff does not burn wall-clock. */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Injected for tests: the retry window is measured against this. */
   now?: () => number;
   /** Called before each wait, with the cause chain of the attempt that failed. */
@@ -682,10 +683,12 @@ export function createAnthropicProvider(
       let lastError: ProviderError | undefined;
 
       for (;;) {
+        req.signal?.throwIfAborted();
         let res: TransportResponse;
         try {
-          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload });
+          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload, ...(req.signal ? { signal: req.signal } : {}) });
         } catch (err) {
+          req.signal?.throwIfAborted();
           transportFailures += 1;
           // The message stays the caller's; the cause chain rides along, and
           // `detail` is the line that finally says what actually broke.
@@ -703,7 +706,7 @@ export function createAnthropicProvider(
             kind: 'transport',
             detail: lastError.detail,
           });
-          await sleep(delay);
+          await sleep(delay, req.signal);
           continue;
         }
 
@@ -738,7 +741,7 @@ export function createAnthropicProvider(
           kind: 'status',
           detail: error.detail,
         });
-        await sleep(wait);
+        await sleep(wait, req.signal);
       }
 
       throw (

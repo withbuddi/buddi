@@ -45,6 +45,20 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 
 const noSleep = async () => {};
 
+it('forwards cancellation to the transport and never retries an aborted request', async () => {
+  const controller = new AbortController();
+  const fetchMock = vi.fn(async (_url: unknown, init: { signal?: AbortSignal } | undefined) => {
+    expect(init?.signal).toBe(controller.signal);
+    controller.abort(new Error('owner stopped'));
+    throw new Error('transport aborted');
+  });
+  const sleep = vi.fn(noSleep);
+  const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch, sleep });
+  await expect(provider.complete({ system: 'probe', messages: [], tools: [], signal: controller.signal })).rejects.toThrow('owner stopped');
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(sleep).not.toHaveBeenCalled();
+});
+
 const tools: CompletionRequest['tools'] = [
   {
     name: 'finance.project_cashflow',

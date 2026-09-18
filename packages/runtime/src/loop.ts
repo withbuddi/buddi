@@ -452,6 +452,7 @@ export function composeSystem(
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const { agent, provider, registry, ctx, pool, conversationId, userMessage } = opts;
+  ctx.signal?.throwIfAborted();
   const resume = opts.resume;
 
   // A turn comes from the owner or from a decided approval — never from both,
@@ -492,6 +493,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const tools = search.enabled
     ? granted.filter((t) => !search.withheld.includes(t.name))
     : granted;
+  const allowedTools = new Set(tools.map((tool) => tool.name));
 
   const snapshot: RunSnapshot = {
     provider: agent.provider.kind,
@@ -518,6 +520,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     ...ctx,
     conversationId,
     agentId: agent.id,
+    sessionTools: (ctx.delegationDepth ?? 0) === 0 ? registry.list().filter((t) => t.tier === 'session' && allowedTools.has(t.name)).map((t) => t.name) : [],
     ...(opts.surface ? { surface: opts.surface } : {}),
     // So `web.status` can answer "can I search right now?" truthfully for *this*
     // agent. Without it the plugin would report the Tavily key's state to an
@@ -553,6 +556,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     [...replayed, { role: 'user', content: sentUserBlocks }],
     capabilities,
   );
+  const ephemeralImages = new Set<ContentBlock>();
 
   await appendEvent(
     pool,
@@ -593,13 +597,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   let pendingActionId: string | undefined;
 
   while (turns < agent.maxTurns) {
+    ctx.signal?.throwIfAborted();
     turns++;
     const res = await provider.complete({
       system,
       messages,
       tools,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(search.enabled ? { nativeSearch: { maxUses: search.maxUses } } : {}),
     });
+    ctx.signal?.throwIfAborted();
     usage.input += res.usage.input;
     usage.output += res.usage.output;
     if (res.usage.webSearches) {
@@ -655,7 +662,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     }
 
     const results: ContentBlock[] = [];
+    const images: ContentBlock[] = [];
+    let skipReason: string | undefined;
     for (const call of toolUses) {
+      if (ctx.signal?.aborted || skipReason || pendingActionId) {
+        results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true,
+          content: `not-executed: ${ctx.signal?.aborted ? 'the owner cancelled this run' : skipReason ?? 'waiting for owner approval'}` });
+        continue;
+      }
       opts.onToolCall?.(call.name, call.input);
       await appendEvent(
         pool,
@@ -664,7 +678,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         conversationId,
       );
 
-      const outcome = await registry.invoke(call.name, call.input, toolCtx);
+      // Tool definitions constrain the model's vocabulary, not its authority.
+      // Recheck every returned call, including calls to installed but hidden tools.
+      const outcome = ctx.signal?.aborted
+        ? { ok: false as const, reason: 'cancelled' as const, message: 'Cancelled before dispatch; no action was taken.' }
+        : allowedTools.has(call.name)
+        ? await registry.invoke(call.name, call.input, toolCtx)
+        : { ok: false as const, reason: registry.has(call.name) ? 'tool-not-granted' as const : 'unknown-tool' as const,
+            message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {
         results.push({
           type: 'tool_result',
@@ -677,6 +698,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
           { name: call.name, ok: true },
           conversationId,
         );
+        if (!ctx.signal?.aborted) {
+          try {
+            const picture = await registry.image(call.name, outcome.output, toolCtx);
+            if (picture && capabilities.multimodalImage) images.push({ type: 'image', ...picture });
+          } catch { /* Observation loss must never turn a completed action into a retry. */ }
+        }
       } else if (outcome.reason === 'approval-required') {
         // Not a refusal: the call was recorded as an action and the owner has
         // been asked. The tool_use is answered so the transcript stays valid,
@@ -704,6 +731,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
           conversationId,
         );
       } else {
+        if (registry.isSequential(call.name)) skipReason = 'an earlier sequential action failed; observe before continuing, never blindly retry a submission';
         // The model gets to see refusals, verbatim reason included.
         results.push({
           type: 'tool_result',
@@ -722,6 +750,15 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
     messages.push({ role: 'user', content: results });
     await persistMessage(pool, conversationId, 'user', results);
+    // Ephemeral observations: only the latest picture is sent, never base64 in
+    // durable transcripts or stale screenshots repeated on every later turn.
+    for (const message of messages) message.content = message.content.filter((b) => !ephemeralImages.has(b));
+    if (images.length > 0) {
+      const latest = images[images.length - 1]!;
+      ephemeralImages.add(latest);
+      messages[messages.length - 1]!.content = [...results, latest];
+    }
+    ctx.signal?.throwIfAborted();
 
     if (pendingActionId !== undefined) {
       stopped = 'awaiting-approval';

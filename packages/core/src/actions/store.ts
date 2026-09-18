@@ -12,7 +12,7 @@ import {
   DEFAULT_APPROVAL_TTL_MS,
   POLICY_VERSION,
   canonicalize,
-  hashArgs,
+  hashAction,
   toActionRecord,
   toAttemptRecord,
   type ActionRecord,
@@ -76,7 +76,7 @@ export async function createAction(
   const expiresAt =
     input.expiresAt ?? new Date(now.getTime() + (input.ttlMs ?? DEFAULT_APPROVAL_TTL_MS));
   const canonicalArgs = canonicalize(input.canonicalArgs);
-  const argsHash = hashArgs(input.tool, input.toolVersion, canonicalArgs);
+  const argsHash = hashAction(input.tool, input.toolVersion, canonicalArgs, input.envelope);
 
   const { rows } = await pool.query(
     `with a as (

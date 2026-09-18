@@ -77,6 +77,7 @@ describe('the engine endpoint', () => {
       timezone: 'Europe/Paris',
       now: () => new Date('2026-09-14T09:00:00Z'),
       config: { enabled: true, host: '127.0.0.1', port: 0 },
+      openAccess: false, // These tests exercise the ticket/session gate explicitly.
       token: TOKEN,
       env,
       log: () => {},

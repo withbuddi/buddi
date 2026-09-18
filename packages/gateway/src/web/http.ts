@@ -34,18 +34,19 @@ export function parseCookies(header: string | undefined): Record<string, string>
 export interface CookieOptions {
   httpOnly?: boolean;
   maxAgeSeconds?: number;
+  secure?: boolean;
 }
 
 /**
  * `SameSite=Strict` on both cookies: the session must not ride along on a
  * request another site started, which is the first half of the CSRF answer
- * (the double-submit header is the second). `Secure` is deliberately absent —
- * the binding is plain-HTTP loopback, and a `Secure` cookie there is a cookie
- * the browser drops.
+ * (the double-submit header is the second). Explicit HTTPS reverse-proxy
+ * sessions add Secure; direct loopback HTTP sessions do not.
  */
 export function cookieHeader(name: string, value: string, opts: CookieOptions = {}): string {
   const parts = [`${name}=${encodeURIComponent(value)}`, 'Path=/', 'SameSite=Strict'];
   if (opts.httpOnly !== false) parts.push('HttpOnly');
+  if (opts.secure) parts.push('Secure');
   if (opts.maxAgeSeconds !== undefined) parts.push(`Max-Age=${Math.max(0, Math.floor(opts.maxAgeSeconds))}`);
   return parts.join('; ');
 }
@@ -152,16 +153,21 @@ export function isLoopbackAddress(address: string | undefined): boolean {
 /**
  * Where a request came from, for the session lifetime it earns.
  *
- * Read from `req.socket.remoteAddress` — the peer of the TCP connection as the
- * kernel sees it — and from nothing else. In particular **no `X-Forwarded-For`
- * and no `Forwarded`**: those are strings a client types, so trusting either
- * would let anyone on the network claim a month-long session by adding a
- * header. There is no proxy in front of this server to make them meaningful
- * (the dashboard binds its own socket), and if one is ever put there the right
- * answer is an explicit list of trusted proxy addresses, not a default.
+ * The socket can prove a request is remote, never a forwarded header. Proxy
+ * metadata or a non-loopback Host can only DOWNGRADE a local socket to remote;
+ * they cannot authenticate anyone or elevate remote access. This prevents a
+ * loopback reverse proxy (e.g. Tailscale Serve) inheriting local auto-login.
  */
 export function requestScope(req: IncomingMessage): SessionScope {
-  return isLoopbackAddress(req.socket.remoteAddress) ? 'local' : 'remote';
+  if (!isLoopbackAddress(req.socket.remoteAddress)) return 'remote';
+  if (Object.keys(req.headers).some((key) => key === 'forwarded' || key === 'x-real-ip' || key.startsWith('x-forwarded-') || key.startsWith('tailscale-'))) return 'remote';
+  if (req.headers.host) {
+    try {
+      const host = new URL(`http://${req.headers.host}`).hostname;
+      if (host !== 'localhost' && !isLoopbackAddress(host)) return 'remote';
+    } catch { return 'remote'; }
+  }
+  return 'local';
 }
 
 /** `Origin`, or the origin of `Referer`, or undefined. Never guessed. */

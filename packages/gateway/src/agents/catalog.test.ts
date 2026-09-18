@@ -18,6 +18,8 @@
  * decide whether this is the owner's machine at all.
  */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { parseAgentFile } from '@buddi/core';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 
 const catalog = loadGatewayCatalog({ env: {} });
@@ -49,24 +51,14 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     expect(catalog.resolve().id).toBe(flagged[0]?.id);
   });
 
-  it('resolves the finance advisor grant to every registered finance and memory tool', () => {
+  it('resolves the advisor’s current configured grant in registry order', () => {
+    const advisor = catalog.resolve('finance-advisor');
+    const grants = parseAgentFile(readFileSync(advisor.file, 'utf8')).frontmatter.tools;
     const registered = createToolRegistry()
       .list()
       .map((t) => t.name)
-      // ... plus the one agent tool it names explicitly: it may ask a colleague.
-      .filter(
-        (n) =>
-          n.startsWith('finance.') ||
-          n.startsWith('memory.') ||
-          n.startsWith('artifacts.') ||
-          n.startsWith('reminder.') ||
-          n.startsWith('schedule.') ||
-          n === 'agent.delegate',
-      );
-    expect(catalog.resolve('finance-advisor').tools).toEqual(registered);
-    expect(registered).toContain('agent.delegate');
-    expect(registered.some((n) => n.startsWith('finance.'))).toBe(true);
-    expect(registered.some((n) => n.startsWith('memory.'))).toBe(true);
+      .filter((name) => grants.some((grant) => grant.endsWith('.*') ? name.startsWith(grant.slice(0, -1)) : name === grant));
+    expect(advisor.tools).toEqual(registered);
   });
 
   it('grants the concierge only registered tools, in registry order, with no finance and no default flag', () => {

@@ -247,6 +247,23 @@ it again — optional, removable, and it stores nothing.
 
 ---
 
+## Computer and browser control
+
+An agent granted `browser.*` can operate the `buddi serve` host from dashboard
+or Telegram. **Computer control is the default:** macOS window screenshots,
+accessibility targets and native input, without a browser debugging connection.
+It uses existing app windows/logins and supports owner-allowed native apps beyond
+the browser. One conversation owns the desktop at a time. The **Host browser**
+page contains mode settings, permissions, Stop, takeover and resume controls;
+the chat canvas shows the selected app.
+
+Computer mode requires macOS 14+, a native build with Xcode Command Line Tools,
+and owner-granted Accessibility and Screen Recording permissions. **Browser
+automation (Playwright)** remains an explicit alternative with dedicated-profile,
+per-conversation tabs; install Chromium only for that mode. There is no automatic
+fallback. Follow [setup and limits](docs/browser.md). Installing the plugin alone
+does not grant agents access.
+
 ## Your agents are yours
 
 The agents in this repository are **examples**. Yours live in a directory that
@@ -725,6 +742,7 @@ and the off switch.
 | `BUDDI_WEB` | `1` | `0` turns the dashboard off entirely |
 | `BUDDI_WEB_HOST` | `127.0.0.1` | Anything but loopback exposes an approval button to your network — put it behind an authenticated transport, and `buddi doctor` will warn about it |
 | `BUDDI_WEB_PORT` | `4317` | |
+| `BUDDI_WEB_PUBLIC_ORIGIN` | unset | Exact HTTPS origin for an authenticated reverse proxy such as Tailscale Serve; keeps remote tickets/CSRF while preserving local access |
 
 ### Scripts
 

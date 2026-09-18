@@ -49,6 +49,7 @@ import {
   type Suspension,
 } from '@buddi/core';
 import type { Pool } from 'pg';
+import { hostBrowser } from '@buddi/tool-browser';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
@@ -243,7 +244,8 @@ export function createMissionJobHandler(deps: {
   log?: (line: string) => void;
 }): JobHandler {
   const log = deps.log ?? ((line: string) => console.log(line));
-  return async function handle(job): Promise<unknown> {
+  return async function handle(job, jobContext): Promise<unknown> {
+    jobContext.signal?.throwIfAborted();
     const payload = missionJobPayload(job.payload);
     if (!payload) throw new Error(`mission-run job ${job.id}: payload is not an occurrence`);
 
@@ -261,6 +263,7 @@ export function createMissionJobHandler(deps: {
     // deliberately left claimed while it waited.
     const control: MissionRunControl = {
       jobId: job.id,
+      signal: jobContext.signal,
       ...(payload.approval && payload.awaiting
         ? {
             resume: {
@@ -273,6 +276,7 @@ export function createMissionJobHandler(deps: {
 
     try {
       const result = await deps.execute(occurrence, mission, control);
+      jobContext.signal?.throwIfAborted();
 
       // Stopped on a gated call: park the job, leave the occurrence claimed,
       // and record what it waits for. Nothing is held open.
@@ -300,6 +304,7 @@ export function createMissionJobHandler(deps: {
         chars: result.text.length,
       };
     } catch (err) {
+      jobContext.signal?.throwIfAborted();
       const message = err instanceof Error ? err.message : String(err);
       if (job.attempts >= job.maxAttempts) {
         await finishOccurrence(deps.pool, occurrence.id, { state: 'failed', error: message });
@@ -329,6 +334,8 @@ export async function main(): Promise<void> {
   const { pool, now } = wiring;
 
   try {
+    try { await hostBrowser(process.env).enable(); }
+    catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
     // The mail account this installation sends and receives as, from the named
     // environment variable. Idempotent, and a no-op when none is configured —
     // an installation with no mailbox is a valid, running one.
@@ -698,6 +705,7 @@ export async function main(): Promise<void> {
       reminderLoop.stop();
       deadLetterLoop.stop();
       void dashboard?.close();
+      void hostBrowser(process.env).shutdown();
       void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
@@ -706,6 +714,7 @@ export async function main(): Promise<void> {
     await Promise.all([telegram.done, scheduler.done, worker.done]);
     console.log('buddi serve stopped cleanly');
   } finally {
+    await hostBrowser(process.env).shutdown();
     await pool.end();
   }
 }

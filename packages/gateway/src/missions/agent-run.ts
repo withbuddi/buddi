@@ -157,7 +157,8 @@ function registryForRun(base: ToolRegistry, sink: DecisionSink): ToolRegistry {
 export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
   const log = deps.log ?? ((line: string) => console.error(line));
 
-  return async function handle(job): Promise<unknown | Suspension> {
+  return async function handle(job, jobContext): Promise<unknown | Suspension> {
+    jobContext.signal?.throwIfAborted();
     const payload = agentRunPayload(job.payload);
     if (!payload) {
       throw new Error(`agent-run job ${job.id}: payload is not an agent run`);
@@ -185,7 +186,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
         : `agent-run ${job.id}: @${payload.agentId} -> conversation ${conversationId}`,
     );
 
-    const ctx: ToolContext = { ...deps.ctx, jobId: job.id };
+    const ctx: ToolContext = { ...deps.ctx, jobId: job.id, signal: jobContext.signal };
 
     const result = await runAgent({
       agent,
@@ -215,6 +216,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       log(
         `agent-run ${job.id}: awaiting approval on action ${result.pendingActionId} (conversation ${conversationId})`,
       );
+      jobContext.signal?.throwIfAborted();
       await askOwner(deps, result.pendingActionId, log);
       return {
         suspended: `awaiting-approval:${result.pendingActionId}`,
@@ -260,6 +262,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
 
     let chatId: string | undefined;
     try {
+      jobContext.signal?.throwIfAborted();
       chatId = await deps.deliver(text, offers);
     } catch (err) {
       // Nobody to tell is not a reason to retry the model. The run happened,

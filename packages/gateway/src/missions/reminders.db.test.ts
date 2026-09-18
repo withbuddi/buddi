@@ -49,6 +49,7 @@ import { AGENT_RUN_JOB_KIND, createAgentRunHandler } from './agent-run.js';
  * would otherwise throw on `undefined` only on the day it started doing so.
  */
 const jobContext = (): JobContext => ({
+  signal: new AbortController().signal,
   heartbeat: async () => true,
   suspend: async () => {},
   lost: false,

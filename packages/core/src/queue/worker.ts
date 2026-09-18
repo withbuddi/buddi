@@ -53,6 +53,8 @@ export function isSuspension(value: unknown): value is Suspension {
 }
 
 export interface JobContext {
+  /** Aborted on lease loss, cancellation observed by heartbeat, or shutdown. */
+  readonly signal: AbortSignal;
   /**
    * Extend the lease mid-run. `false` means the lease is gone and the handler
    * must stop; the loop stops calling it either way.
@@ -108,10 +110,12 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
   });
   let timer: NodeJS.Timeout | null = null;
   let wake: (() => void) | null = null;
+  const active = new Set<AbortController>();
 
   const recover = async (): Promise<number> => releaseStaleLeases(pool, now());
 
   const tick = async (): Promise<Job | null> => {
+    const claimStartedAt = Date.now();
     const job = await claimJob(pool, {
       worker,
       ...(kinds ? { kinds } : {}),
@@ -119,6 +123,9 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
       leaseMs,
     });
     if (!job) return null;
+    // Stop/expiry can happen while the claim query is in flight. Do not start
+    // a handler on a claim whose authority has already ended.
+    if (!running || Date.now() >= claimStartedAt + leaseMs) return job;
 
     const handler = handlers[job.kind];
     if (!handler) {
@@ -132,20 +139,42 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
     }
 
     let lost = false;
+    let finished = false;
+    const controller = new AbortController();
+    active.add(controller);
+    const loseLease = (): void => {
+      lost = true;
+      controller.abort(new Error('job lease lost'));
+    };
+    let leaseTimer: NodeJS.Timeout;
+    const fenceUntil = (deadline: number): void => {
+      clearTimeout(leaseTimer);
+      leaseTimer = setTimeout(loseLease, Math.max(0, deadline - Date.now()));
+      leaseTimer.unref?.();
+    };
+    fenceUntil(claimStartedAt + leaseMs);
     let suspendedBy: string | null = null;
     let suspendPatch: Record<string, unknown> | undefined;
 
     const beat = async (): Promise<boolean> => {
-      if (lost) return false;
-      const alive = await heartbeat(pool, job.id, worker, leaseMs).catch((err) => {
+      if (lost || finished) return false;
+      const startedAt = Date.now();
+      let alive: boolean;
+      try {
+        alive = await heartbeat(pool, job.id, worker, leaseMs);
+      } catch (err) {
         onError(err, job);
-        return true; // A transient DB error is not proof the lease is gone.
-      });
-      if (!alive) lost = true;
-      return alive;
+        // No confirmed renewal: the local lease deadline still stops this run.
+        return !lost;
+      }
+      if (finished) return false;
+      if (!alive) loseLease();
+      else if (!lost) fenceUntil(startedAt + leaseMs);
+      return alive && !lost;
     };
 
     const ctx: JobContext = {
+      signal: controller.signal,
       heartbeat: beat,
       async suspend(reason, opts): Promise<void> {
         suspendedBy = reason;
@@ -164,7 +193,7 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
     try {
       const result = await handler(job, ctx);
       clearInterval(ticker);
-      if (lost) return job; // Someone else owns it; write nothing.
+      if (lost || !running) return job; // Leave recovery to the lease owner.
 
       const suspension = isSuspension(result) ? result.suspended : suspendedBy;
       const patch = (isSuspension(result) ? result.payloadPatch : undefined) ?? suspendPatch;
@@ -176,7 +205,7 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
     } catch (err) {
       clearInterval(ticker);
       onError(err, job);
-      if (lost) return job;
+      if (lost || !running) return job;
       const message = err instanceof Error ? err.message : String(err);
       // The retry policy, not the loop, decides whether there is any point.
       // A permanent failure — a rejected schema, an auth error, a 400 — dies
@@ -195,6 +224,11 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
         ...(decision.backoffMs === undefined ? {} : { backoffMs: decision.backoffMs }),
         classification: { class: decision.failureClass, reason: decision.reason },
       }).catch((e) => onError(e, job));
+    } finally {
+      finished = true;
+      clearInterval(ticker);
+      clearTimeout(leaseTimer!);
+      active.delete(controller);
     }
     return job;
   };
@@ -231,6 +265,7 @@ export function runWorker(opts: RunWorkerOptions): WorkerHandle {
     done,
     async stop(): Promise<void> {
       running = false;
+      for (const controller of active) controller.abort(new Error('worker stopped'));
       if (timer) clearTimeout(timer);
       wake?.();
       await done;

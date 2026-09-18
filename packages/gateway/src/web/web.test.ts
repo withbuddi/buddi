@@ -32,6 +32,12 @@ import { toStreamEvent } from './stream.js';
 import { ensureWebToken, mintTicket, verifyTicket, webTokenExists, webTokenFile } from './token.js';
 
 describe('binding', () => {
+  it('accepts only an explicitly configured HTTPS proxy origin', () => {
+    const config = webConfig({ BUDDI_WEB_PUBLIC_ORIGIN: 'https://host.example:9443/' });
+    expect(config.publicOrigin).toBe('https://host.example:9443');
+    expect(allowedOrigins(config)).toContain('https://host.example:9443');
+    for (const value of ['http://host.example', 'https://user:pass@host.example', 'https://host.example/path', 'https://host.example/?token=x']) expect(() => webConfig({ BUDDI_WEB_PUBLIC_ORIGIN: value })).toThrow();
+  });
   it('is loopback and 4317 unless the owner says otherwise', () => {
     const config = webConfig({});
     expect(config).toEqual({ enabled: true, host: DEFAULT_WEB_HOST, port: DEFAULT_WEB_PORT });
@@ -253,6 +259,11 @@ describe('where a request came from', () => {
         origin: 'http://127.0.0.1:4317',
       }),
     ).toBe('remote');
+  });
+  it('never gives a loopback reverse proxy local auto-login or local lifetime', () => {
+    const proxies: Array<Record<string, string>> = [{ 'x-forwarded-for': '127.0.0.1' }, { forwarded: 'for=100.64.0.1' }, { 'tailscale-user-login': 'owner@example.com' }, { host: 'host.example:9443' }];
+    for (const headers of proxies) expect(from('127.0.0.1', headers)).toBe('remote');
+    expect(from('127.0.0.1', { host: 'localhost:4317' })).toBe('local');
   });
 });
 

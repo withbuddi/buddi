@@ -110,8 +110,9 @@ class ScriptedProvider implements RuntimeProvider {
     // has to be a copy — otherwise every request looks like the last one.
     this.seen.push(JSON.parse(JSON.stringify(req)) as CompletionRequest);
     if (this.block) {
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         this.block = resolve;
+        req.signal?.addEventListener('abort', () => reject(req.signal?.reason), { once: true });
       });
     }
     const next = this.script.shift();

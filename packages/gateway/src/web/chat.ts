@@ -50,6 +50,7 @@ import {
   type RuntimeProvider,
 } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
+import { ownerRequestContext } from '../surfaces/owner-request.js';
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
@@ -868,7 +869,7 @@ export class WebChat {
       agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS, ...ASK_TOOLS] },
       provider,
       registry,
-      ctx: deps.ctx,
+      ctx: ownerRequestContext(deps.ctx, turn.text, runId),
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.
@@ -903,7 +904,7 @@ export class WebChat {
     const result = await this.#cancellable(
       conversationId,
       runId,
-      async () => runAgent(options),
+      async (signal) => runAgent({ ...options, ctx: { ...options.ctx, signal } }),
       () => {
         cancelled = true;
       },
@@ -982,37 +983,31 @@ export class WebChat {
   }
 
   /**
-   * Race the run against a cancel.
-   *
-   * Identical in shape to the terminal's `#cancellable`, and for the same
-   * reason: the provider call cannot be un-sent, so cancelling means this
-   * surface stops waiting. The abandoned promise is caught so a run nobody is
-   * watching cannot become an unhandled rejection.
+   * Abort cooperatively, then wait for the runtime to pair outstanding tool
+   * calls with their results. A new message must not overtake those writes and
+   * leave an invalid transcript. The cancel HTTP endpoint itself returns at
+   * once; the run finishes when its cancelled work has settled.
    */
   async #cancellable<T>(
     conversationId: string,
     runId: string,
-    work: () => Promise<T>,
+    work: (signal: AbortSignal) => Promise<T>,
     onCancel: () => void,
     onError: (err: unknown) => void,
   ): Promise<T | undefined> {
-    let resolveCancel!: () => void;
-    const cancelled = new Promise<undefined>((resolve) => {
-      resolveCancel = (): void => {
-        onCancel();
-        resolve(undefined);
-      };
-    });
-    this.#running.set(conversationId, { runId, cancel: resolveCancel });
-    const started = work();
+    const controller = new AbortController();
+    this.#running.set(conversationId, { runId, cancel: () => {
+      if (controller.signal.aborted) return;
+      onCancel();
+      controller.abort(new Error('The owner cancelled this run.'));
+    } });
     try {
-      return await Promise.race([started, cancelled]);
+      return await work(controller.signal);
     } catch (err) {
-      onError(err);
+      if (!controller.signal.aborted) onError(err);
       return undefined;
     } finally {
       this.#running.delete(conversationId);
-      void started.catch(() => {});
     }
   }
 

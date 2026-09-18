@@ -289,7 +289,19 @@ export function failureSummary(value: unknown): string {
  * data itself read for a shape.
  */
 export function inferShape(value: unknown, options: { failed?: boolean } = {}): Inferred {
-  if (options.failed) return { kind: 'error', summary: failureSummary(value), detail: detailOf(value) };
+  if (options.failed) {
+    // Some tools supply structured recovery evidence inside an error string.
+    // Keep that evidence in details instead of printing an entire page as the
+    // failure headline. Raw JSON still preserves the original string.
+    let failure = value;
+    if (typeof value === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(value.replace(/^tool-error:\s*/, ''));
+        if (isRecord(parsed)) failure = parsed;
+      } catch { /* Ordinary error text, not a structured recovery response. */ }
+    }
+    return { kind: 'error', summary: failureSummary(failure), detail: detailOf(failure) };
+  }
 
   // A result that says it failed is a failure even when the call "succeeded".
   if (isRecord(value)) {

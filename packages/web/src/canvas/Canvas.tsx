@@ -23,7 +23,7 @@
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
@@ -63,6 +63,7 @@ export function Canvas({
   descriptors,
   agentName,
   maxTabs,
+  browserPanel,
 }: {
   renderables: Renderable[];
   activeId: string | null;
@@ -77,6 +78,8 @@ export function Canvas({
   agentName?: string;
   /** Forces how many tabs fit, for tests: jsdom lays nothing out and measures 0. */
   maxTabs?: number;
+  /** Live host state supplied by the page, never by tool-result props. */
+  browserPanel?: ReactNode;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
   if (renderables.length === 0) {
@@ -128,10 +131,11 @@ export function Canvas({
         {renderables.map((item) => (
           <Tabs.Content key={item.id} value={item.id} className="wb-canvas-body">
             <section className="wb-panel">
-              <header className="wb-panel-head">
+              {item.source !== 'browser' ? <header className="wb-panel-head">
                 <h2 className="wb-panel-title">{item.title}</h2>
                 <span className="wb-panel-tool mono">{item.tool}</span>
-              </header>
+              </header> : null}
+              {item.tone === 'critical' ? <p className="muted browser-help">Recorded tool failure{item.at ? ` · ${new Date(item.at).toLocaleString()}` : ''}. This is history, not live session status.</p> : null}
               {/*
                 The properties panel is not a renderer and is deliberately not
                 in the registry: it describes the installation rather than a
@@ -139,7 +143,7 @@ export function Canvas({
                 not be able to ask for it and fill it with whatever it likes.
                 Its source is set here, in the page, and nowhere else.
               */}
-              {item.source === 'profile' ? (
+              {item.source === 'browser' ? browserPanel : item.source === 'profile' ? (
                 <Profile
                   {...(item.props as ProfileProps)}
                   {...(onChangeAgent ? { onChange: onChangeAgent } : {})}

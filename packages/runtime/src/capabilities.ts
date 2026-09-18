@@ -11,8 +11,8 @@
  * degrades to something the model can see and talk about.
  *
  * The booleans describe **this installation's adapter**, not the wire's
- * theoretical reach: neither adapter streams and neither cancels today, so both
- * say so. When an adapter grows the ability, its row changes and the loop
+ * theoretical reach: both adapters support cooperative cancellation, but
+ * neither streams tool arguments. When an adapter grows an ability, its row changes and the loop
  * follows without being edited.
  */
 import type { ProviderKind } from '@buddi/core';
@@ -64,7 +64,7 @@ const MATRIX: Record<ProviderKind, ProviderCapabilities> = {
     document: true,
     toolResultOrdering: 'blocks-in-user-turn',
     parallelToolCalls: true,
-    cancellation: false,
+    cancellation: true,
     usageReporting: true,
     // Verified live against /v1/messages with a subscription token: the
     // `web_search_20250305` server tool answers on the credential buddi
@@ -80,7 +80,7 @@ const MATRIX: Record<ProviderKind, ProviderCapabilities> = {
     document: false,
     toolResultOrdering: 'tool-messages',
     parallelToolCalls: true,
-    cancellation: false,
+    cancellation: true,
     usageReporting: true,
     // A deliberate `false`, not an oversight. Chat Completions' own
     // `web_search_options` is accepted only by the `gpt-4o-*-search-preview`

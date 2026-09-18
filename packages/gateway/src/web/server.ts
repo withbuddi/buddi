@@ -41,6 +41,7 @@ import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
 import { getAction, isJobState } from '@buddi/core';
 import type { Pool } from 'pg';
+import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import {
   engineChangeFromBody,
   readAgentEngines,
@@ -119,6 +120,8 @@ import {
 } from './write.js';
 
 export interface WebServerDeps {
+  /** Host controller; test instances can inject a fake. Reads never enable it. */
+  browser?: BrowserController;
   pool: Pool;
   registry: ToolRegistry;
   catalog: AgentCatalog;
@@ -228,8 +231,8 @@ export function createWebApp(deps: WebServerDeps): Server {
   const sessionCookies = (session: Session): string[] => {
     const maxAgeSeconds = SessionStore.maxAgeSeconds(session);
     return [
-      cookieHeader(SESSION_COOKIE, session.id, { httpOnly: true, maxAgeSeconds }),
-      cookieHeader(CSRF_COOKIE, session.csrf, { httpOnly: false, maxAgeSeconds }),
+      cookieHeader(SESSION_COOKIE, session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(CSRF_COOKIE, session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
     ];
   };
 
@@ -244,7 +247,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   const allowed = (): Set<string> => {
     const bound = (server.address() as AddressInfo | null)?.port ?? deps.config.port;
     if (originCache?.port !== bound) {
-      originCache = { port: bound, set: new Set(allowedOrigins({ host: deps.config.host, port: bound })) };
+      originCache = { port: bound, set: new Set(allowedOrigins({ ...deps.config, port: bound })) };
     }
     return originCache.set;
   };
@@ -277,7 +280,7 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (limiter.blocked(key, now)) return sendEmpty(res, 429);
 
-    // Where this request came from, from the socket and nothing else. It
+    // A remote socket or proxy metadata can only earn remote access. It
     // decides how long a session minted now lives, and it must keep matching
     // for as long as that session is used.
     const scope = requestScope(req);
@@ -368,9 +371,28 @@ export function createWebApp(deps: WebServerDeps): Server {
   ): Promise<void> {
     const path = url.pathname.replace(/\/+$/, '') || '/api';
     const q = url.searchParams;
+    const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
 
     if (method === 'GET' || method === 'HEAD') {
       switch (path) {
+        case '/api/browser':
+          return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
+            ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
+        case '/api/browser/screenshot': {
+          const expectedSession = url.searchParams.get('sessionId');
+          const current = browser.status(expectedSession !== null ? { sessionId: expectedSession } : undefined);
+          const observation = url.searchParams.get('v');
+          if ((expectedSession !== null && current.session?.id !== expectedSession) ||
+              (observation !== null && current.page?.id !== observation)) return sendEmpty(res, 404);
+          const bytes = browser.screenshot(expectedSession ?? undefined);
+          if (!bytes) return sendEmpty(res, 404);
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+          res.end(method === 'HEAD' ? undefined : bytes);
+          return;
+        }
         case '/api/session':
           return sendJson(res, 200, {
             csrf: session.csrf,
@@ -579,6 +601,30 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
+    if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
+      const body = await readJsonBody(req);
+      try {
+        if (path.endsWith('/settings')) {
+          if (!browser.configure) return sendJson(res, 409, { error: 'This host does not support changing control modes.' });
+          return sendJson(res, 200, await browser.configure(body));
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((key) => key !== 'prompt') || ('prompt' in body && typeof body.prompt !== 'boolean')) return sendJson(res, 400, { error: 'Expected {prompt: boolean}' });
+        if (!browser.checkPermissions) return sendJson(res, 409, { error: 'This host does not support native permission checks.' });
+        return sendJson(res, 200, await browser.checkPermissions((body as { prompt?: boolean }).prompt === true));
+      } catch (error) {
+        return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const control = /^\/api\/browser\/(stop|takeover|resume|release)$/.exec(path);
+    if (control) {
+      const body = await readJsonBody(req) as { sessionId?: unknown } | null;
+      if (body?.sessionId !== undefined && typeof body.sessionId !== 'string') return sendJson(res, 400, { error: 'sessionId must be a string' });
+      try {
+        return sendJson(res, 200, await browser.control(control[1] as 'stop' | 'takeover' | 'resume' | 'release', body?.sessionId as string | undefined));
+      } catch (error) {
+        return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
 
     /*
      * The upload is handled before the JSON body is read, and it is the only

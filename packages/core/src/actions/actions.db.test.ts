@@ -134,13 +134,13 @@ suite('actions and approvals (postgres)', () => {
       expect(action?.preview).toContain('mail.send');
     });
 
-    it('still refuses draft and session outright', async () => {
+    it('refuses draft and session without session authority', async () => {
       for (const tier of ['draft', 'session'] as Tier[]) {
         const { manifest, sent } = sendManifest({ tier });
         const registry = new ToolRegistry();
         registry.register(manifest);
         const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'x' }, ctx());
-        expect(res).toMatchObject({ ok: false, reason: 'tier-not-executable' });
+        expect(res).toMatchObject({ ok: false, reason: tier === 'session' ? 'session-not-authorized' : 'tier-not-executable' });
         expect(sent).toEqual([]);
       }
     });
@@ -253,7 +253,7 @@ suite('actions and approvals (postgres)', () => {
         toolVersion: '1.2.3',
         agentId: 'mailer',
         canonicalArgs: args,
-        envelope: { to: [args.to], bcc: ['archive@example.com'] },
+        envelope: { to: [args.to], bcc: ['archive@example.com'], subject: args.subject },
         preview: 'Send "Hi" to a@b.c',
       });
       await decideApproval(pool, {

@@ -47,7 +47,7 @@ plainly, with what it would take.
 | Email | IMAP transport + per-account auth; Gmail app password for v1 | Gmail OAuth restricted scopes force either verification (CASA, costly) or testing mode — and unpublished apps' refresh tokens **expire weekly**, unusable for an unattended system. App passwords work on personal Gmail today (not under Advanced Protection; revoked by password change). No cross-provider promise: Exchange Online killed basic auth — the `EmailProvider` port's second auth mode is OAuth XOAUTH2 **on the same IMAP transport**, not a new stack |
 | AI runtime | Own thin agent loop behind `RuntimeProvider` port | Hard requirement: provider swap. Design borrowed from Foreman, modified (see "Runtime provider port") |
 | Deployment | User's machine | No infra, user-owned, data local (modulo cloud-model data flow above) |
-| Computer access | Host computer-use (a11y tree + vision + synthesized input), browser-profile-scoped | CDP/browser automation is in-page detectable — serious sites (banks) flag it; OS-level input leaves no artifacts. CDP demoted to fallback for machine-friendly sites |
+| Computer access | Default macOS accessibility + window screenshots + native input; optional Playwright | Owner-required OS-level control extends to allowed native apps without a browser debugging connection. Playwright is an explicit alternative, never an automatic fallback. Neither mode promises undetectability |
 
 ### Email adapter
 Transport is separate from authentication. IMAP (`imapflow`) + SMTP are the transport;
@@ -535,15 +535,51 @@ The one message in the arc allowed to carry no finding is the last one: it says 
 stop suggesting things, that not needing them is a fine answer, and how to reach the agent
 when they do.
 
-## Computer access (host computer-use first, CDP demoted)
+## Computer access
 
-**Nothing here is built.** No part of the tree drives a computer, a browser or a
-screen, and the `session` tier this whole section rests on is a label the registry
-refuses — see the note under roadmap step 6 for what has to exist first. What follows is
-the design, kept because it is the design — with a survey dated **2026-09-16** written
-into it where the evidence has moved underneath it. Nothing here has been decided; what
-changed is what the thing would sensibly consist of if it is built. The long form of
-that survey, with its sources and its dates, is
+**Owner correction and implementation, 2026-09-18.** OS-level computer control
+is the default, restoring the original direction: macOS accessibility, selected
+window screenshots and synthesized input, without a browser debugging connection.
+The headed Playwright driver remains an explicit owner-selected alternative;
+there is no automatic fallback. Both use the existing `browser.*` grants and
+dashboard/Telegram authenticated, expiring owner-task provenance. The settings,
+native driver and canvas are implemented; live native input/capture verification
+is pending owner-granted macOS permissions. See [docs/browser.md](docs/browser.md).
+
+Computer mode is macOS 14+, uses ordinary existing browser/native-app windows,
+and allows one controlling conversation at a time because mouse/keyboard focus
+is shared. Native apps beyond the browser require an owner allowlist entry.
+Release and Stop end input but never quit the owner's apps. A fixed Swift helper
+uses AX/ScreenCaptureKit/CGEvent APIs; no shell, AppleScript, browser debugging or
+arbitrary evaluation is exposed. Only the selected window is captured; secure
+AX fields are masked. The app allowlist is not an OS sandbox, and normal app
+network traffic is not intercepted. Explicit navigation URLs are checked, but
+clicked links, redirects and background traffic are not confined by that check.
+
+Playwright mode retains its dedicated persistent profile, up to eight
+conversation-specific tab controllers, DNS-checked public-web SOCKS egress,
+scoped takeover/release and global Stop. Cookies remain shared. Both modes retain
+20-minute/80-step request limits, stale-target refusal and owner revocation.
+Mode changes require all sessions released. Natural-language task interpretation
+remains model judgment, not proof that each UI action matches the owner's intent.
+
+**Owner direction, 2026-09-17.** The browser will be an ordinary granted tool
+capability. An authenticated owner request such as "book an appointment on this
+site" authorizes the actions needed to complete that task within the owner's
+stated constraints, including the booking itself. Routine navigation, form entry
+and the requested submission must not each require another approval. The agent
+asks when a required choice is missing or an action would exceed the request or
+an explicit policy limit. A page, tool result or another agent cannot supply
+owner authorization. The eventual session machinery must capture and enforce
+the request's scope, provenance, limits and revocation underneath that simple
+tool experience. This supersedes the per-action co-driving proposal below;
+the implementation now provides bounded interactive session permissions.
+Existing gated tools retain their current approval policy.
+
+**Historical proposal below.** What follows
+is the historical design, retained with its survey dated **2026-09-16**. The owner
+direction and implementation decision above take precedence where they differ.
+The long form of that survey, with its sources and its dates, is
 [docs/computer-use.md](docs/computer-use.md).
 
 **The tool contract is no longer ours to invent.** Anthropic's
@@ -638,8 +674,9 @@ human-ish pacing with jitter.
   misclick on "Transfer"); vision covers what a11y can't see (canvas, images). Click
   targets resolve through the tree where possible and are **confirmed before firing on
   money-class pages**.
-- **Window-scoped, session tier**: looking freely within the bound window; acting is
-  co-driven (approve each action or action type live). Never arbitrary desktop apps.
+- **Window-scoped, session tier**: act within the owner's requested task and its
+  bounded grant, without approving each click. Ask for missing choices or actions
+  outside that scope. Never arbitrary desktop apps.
 - **Honest risk framing**: driving your own logged-in bank at OS level is personal-use
   automation against bank ToS — the realistic downside is an account lock, not just a
   blocked page. Gentle reads, co-drive when challenged, CSV drop as fallback.
@@ -661,8 +698,20 @@ object** created *before* the approval request:
 - The preview is **rendered from this object**, never from model-written text.
 - Any meaningful edit invalidates the approval. Execution **atomically claims** the
   approved action, rechecks authorization, and persists the outcome separately.
+- Policy version 2 hashes the resolved effect envelope together with the tool,
+  version and arguments. Before dispatch the executor re-describes the effect
+  using the original agent identity and preview clock and refuses changed state.
+  Tools resolving mutable inputs also check their final snapshot against
+  `ctx.approvedEffect` immediately before using it. Pre-version-2 approvals must
+  be proposed again; historical outcomes remain readable.
 - States: `pending → approved → executing → succeeded | failed | unknown`, plus
   `rejected` / `expired`. A timeout after dispatch is `unknown`, never auto-failed.
+- Tool contexts carry a cancellation signal. Effect deadlines signal cancellation
+  while preserving `unknown` completion, since an external effect cannot be
+  retracted. Queue lease loss, unconfirmed renewal past the local lease deadline,
+  and worker shutdown abort active agent runs; the signal reaches delegated runs,
+  provider requests and retry waits. Plugins must honor it before each external
+  operation; this is cooperative cancellation, not process isolation.
 - **Approvals resolve from any paired surface** — an inline button in the terminal, a
   Telegram callback, the dashboard — and all three race on the same atomic claim. The run
   itself suspends durably in the meantime and is resumed by the decision, not by a worker
@@ -1260,22 +1309,22 @@ nothing else in this document says: see the note after step 6.
    half of the "Memory" section — embeddings, a shared vector store, and the invalidation
    of derived summaries that deletion would have to cascade through. Recall is a keyword
    search.
-6. **Host computer-use, native apps.** ☐ Untouched. The computer-use driver (a11y tree +
-   vision + synthesized input) on a dedicated buddi browser profile with session grants —
-   upgrades the finance agent from CSV drop to live bank reads; CDP fallback for
-   machine-friendly sites; PWA before native.
+6. **Computer control, with optional browser automation.** ◐ Native macOS
+   screenshot/accessibility/input driver is now the default, with owner-allowed
+   native apps and a one-conversation desktop lock. Playwright remains an explicit
+   option. Both share bounded interactive authority and canvas/owner controls.
+   Live native acceptance awaits owner-granted macOS permissions; non-macOS
+   native drivers and richer gestures remain unbuilt.
 
-**Step 6 is two pieces of work, not one.** Its entire trust story is the `session` tier —
-"looking freely within the bound window, acting co-driven" — and `session` is currently a
-**label only**. `EXECUTABLE_TIERS` is `['auto']`, `GATED_TIERS` is `['gated']`, and the
-registry refuses everything else with `tier-not-executable`. Before a driver can be
-written, someone has to build what a session tier *is*: a bounded grant object (targets,
-operations, duration, revocation) created by an owner decision, claimed by each call
-inside it, expiring on its own, and visible and revocable while it is open — the approval
-machinery's sibling rather than a flag on it. `draft` is label-only in the same way, and
-needs the same treatment for its own machinery. Building the driver first would mean
-either running it at `gated` (an approval per mouse move) or at `auto` (no gate at all),
-and both are the wrong answer.
+**Step 6 has both an authority boundary and a driver.** `browser.act` uses the
+`session` tier: the registry requires authenticated request provenance, a current
+expiry and the runtime-resolved agent grant; the host controller adds ownership,
+operation/step/time limits, network restrictions and owner-only revocation.
+Scheduled/source/delegated runs do not mint this authority. The authenticated
+request authorizes the task; routine browser actions do not require individual
+approval. Natural-language scope remains model judgment, with the distinction
+from deterministic enforcement documented in [docs/browser.md](docs/browser.md).
+`draft` remains label-only and is refused.
 
 **What the second piece would consist of has moved since this was written.** A survey
 dated 2026-09-16 ([docs/computer-use.md](docs/computer-use.md)) found the tool contract

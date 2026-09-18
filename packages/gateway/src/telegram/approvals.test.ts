@@ -197,6 +197,7 @@ suite('TelegramApprovals (postgres)', () => {
           description: 'Send an email.',
           tier: 'gated',
           input: z.object({ to: z.string() }),
+          describe: (input) => ({ envelope: { to: [input.to] }, preview: `Send to ${input.to}` }),
           execute: execute as never,
         },
       ],

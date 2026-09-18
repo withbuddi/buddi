@@ -28,6 +28,7 @@
     "@buddi/core": "workspace:*",
     "@buddi/runtime": "workspace:*",
     "@buddi/tool-artifacts": "workspace:*",
+    "@buddi/tool-browser": "workspace:*",
     "@buddi/tool-email": "workspace:*",
     "@buddi/tool-finance": "workspace:*",
     "@buddi/tool-memory": "workspace:*",

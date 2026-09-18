@@ -169,18 +169,34 @@ be the half that dies first, rarely enough that responses are not all carrying
 `Set-Cookie`. Stop using it for the whole window and it lapses; the next visit
 needs a fresh ticket.
 
-**"Local" is decided from the TCP connection and nothing else** —
-`socket.remoteAddress`, as the kernel reports it. No `X-Forwarded-For`, no
-`Forwarded`, no `Host`: those are strings the client types, and trusting one
-would let anyone on your network ask for the month-long session by adding a
-header. There is no proxy in front of this server for them to be meaningful.
-A session established on loopback is also refused if it is ever presented from
-a non-loopback address, so the long lifetime cannot travel.
+**A remote TCP connection always counts as remote.** Forwarded headers never
+elevate access. A loopback connection carrying proxy metadata (`Forwarded`,
+`X-Forwarded-*`, `X-Real-IP`, `Tailscale-*`) or a non-loopback `Host` is also
+classified remote. These strings can only *reduce* access: they prevent a local
+reverse proxy from inheriting loopback auto-login or the month-long lifetime.
+Local sessions are refused on remote/proxied requests, so their lifetime cannot
+travel. Neither a proxy header nor a Tailscale identity header signs a user in.
 
 If you put the dashboard behind Tailscale (`BUDDI_WEB_HOST` on the tailnet
 address), those requests are **remote** and get the 12 hours — deliberately.
 Tailscale authenticates the device, not the person holding the laptop, and the
 short lifetime is the cheap half of that answer.
+
+**Private HTTPS with Tailscale Serve.** Keep `BUDDI_WEB_HOST=127.0.0.1` and set
+`BUDDI_WEB_PUBLIC_ORIGIN=https://<machine>.<tailnet>.ts.net:9443` in `.env`.
+Restart Buddi, then use `tailscale serve --bg --https=9443 http://127.0.0.1:4317`.
+Inspect existing Serve mappings first and choose an unused port; do not reset
+other services or use Funnel. This endpoint is tailnet-only and retains Buddi's
+single-use sign-in ticket, remote 12-hour session, CSRF and exact Origin checks.
+Remote cookies carry Secure; local loopback access still works without tickets.
+The external origin is explicit configuration, never inferred from proxy headers.
+
+For first sign-in, run `buddi dashboard --token` on the host and privately give the
+owner `https://<machine>.<tailnet>.ts.net:9443/?t=<ticket>`. Tickets expire after
+five minutes and are single-use; the signing token stays in the keychain/file.
+Do not put a ticket in logs or persistent configuration. After sign-in, bookmark
+the clean URL. A service restart or expired session requires a fresh ticket.
+Disable only this mapping with `tailscale serve --https=9443 off`.
 
 **Opening it without a terminal.** Optional, and alongside `buddi service
 install` rather than part of it:

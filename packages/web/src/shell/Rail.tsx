@@ -58,6 +58,10 @@ export function Rail({
         <PlusIcon />
       </RailButton>
 
+      <RailButton label="Host browser" hint="Computer & browser controls, settings and permissions" onClick={() => onNavigate('#/browser')}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>
+      </RailButton>
+
       <DropdownMenu.Root>
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
