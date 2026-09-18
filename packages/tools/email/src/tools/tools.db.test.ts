@@ -617,6 +617,17 @@ suite('email tools (postgres)', () => {
   });
 
   describe('email.send (gated)', () => {
+    it('refuses a changed draft before claiming or sending it', async () => {
+      const draftId = await draft();
+      const approvedEffect = await sendTool.describe({ draftId }, ctx);
+      await pool.query('update email.drafts set body_text = $2 where id = $1', [draftId, 'different body']);
+      await expect(sendTool.execute({ draftId }, { ...ctx, actionId: '66666666-6666-4666-8666-666666666666', approvedEffect }))
+        .rejects.toThrow(/no longer matches/);
+      expect(smtp.sent).toHaveLength(0);
+      const { rows } = await pool.query('select sent_action_id from email.drafts where id = $1', [draftId]);
+      expect(rows[0].sent_action_id).toBeNull();
+    });
+
     async function draft(): Promise<string> {
       const created = await call('email.draft_reply', {
         inReplyTo: ids[0],
@@ -676,7 +687,8 @@ suite('email tools (postgres)', () => {
     it('sends exactly what was described, once per approved action', async () => {
       const draftId = await draft();
       const actionId = '11111111-1111-4111-8111-111111111111';
-      const result = await sendTool.execute({ draftId }, { ...ctx, actionId });
+      const approvedEffect = await sendTool.describe({ draftId }, ctx);
+      const result = await sendTool.execute({ draftId }, { ...ctx, actionId, approvedEffect });
 
       expect(result).toMatchObject({ draftId, actionId, replayed: false });
       expect(result.messageId).toMatch(/^<fake-/);
@@ -698,7 +710,8 @@ suite('email tools (postgres)', () => {
 
     it('refuses a second action against an already-sent draft', async () => {
       const draftId = await draft();
-      await sendTool.execute({ draftId }, { ...ctx, actionId: '22222222-2222-4222-8222-222222222222' });
+      await sendTool.execute({ draftId }, { ...ctx, actionId: '22222222-2222-4222-8222-222222222222',
+        approvedEffect: await sendTool.describe({ draftId }, ctx) });
       const before = smtp.sent.length;
       await expect(
         sendTool.execute({ draftId }, { ...ctx, actionId: '33333333-3333-4333-8333-333333333333' }),
@@ -717,7 +730,8 @@ suite('email tools (postgres)', () => {
       const draftId = await draft();
       smtp.failWith = new Error('451 temporary failure');
       await expect(
-        sendTool.execute({ draftId }, { ...ctx, actionId: '44444444-4444-4444-8444-444444444444' }),
+        sendTool.execute({ draftId }, { ...ctx, actionId: '44444444-4444-4444-8444-444444444444',
+          approvedEffect: await sendTool.describe({ draftId }, ctx) }),
       ).rejects.toThrow(/the attempt is unknown/);
 
       const { rows } = await pool.query(

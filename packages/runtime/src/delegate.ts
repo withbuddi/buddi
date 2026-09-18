@@ -211,7 +211,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           registry: deps.registry,
           // The nested run is one level deeper, and it is the target's run: the
           // loop stamps `agentId`/`conversationId` itself.
-          ctx: { ...base, delegationDepth: depth + 1 },
+          ctx: { ...base, delegationDepth: depth + 1, ...(ctx.signal ? { signal: ctx.signal } : {}) },
           pool,
           conversationId,
           userMessage: delegationMessage(input, from),

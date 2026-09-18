@@ -9,10 +9,18 @@ import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
 
-/** UX tier labels. v1 executes `auto` only; everything else fails closed. */
+/** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
 
 export interface ToolContext {
+  /** Issued by an authenticated interactive surface, never by a model/tool. */
+  ownerRequest?: { id: string; text: string; expiresAt: number };
+  /** Runtime-resolved session tool grants. Cannot be inherited by a delegate. */
+  sessionTools?: readonly string[];
+  /** Cooperative cancellation. Check before each external operation. */
+  signal?: AbortSignal;
+  /** Set only by the executor; the exact effect the owner approved. */
+  approvedEffect?: { envelope: unknown };
   db: Pool;
   ownerId: string;
   now: () => Date;
@@ -120,6 +128,10 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * `DEFAULT_EFFECT_TIMEOUT_MS`.
    */
   timeoutMs?: number;
+  /** Dependent calls in the same model turn must be skipped after a failure. */
+  sequential?: boolean;
+  /** Optional ephemeral image for the next model call; never stored as base64. */
+  image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }
 
 /**

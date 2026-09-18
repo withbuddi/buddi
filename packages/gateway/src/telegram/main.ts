@@ -29,6 +29,7 @@ import {
 } from '@buddi/core';
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
+import { ownerRequestContext } from '../surfaces/owner-request.js';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -395,7 +396,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
         provider: deps.provider,
         registry,
-        ctx: deps.ctx,
+        ctx: ownerRequestContext(deps.ctx, text),
         pool,
         conversationId,
         userMessage: text,

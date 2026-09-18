@@ -75,13 +75,13 @@ describe('ToolRegistry', () => {
   });
 
   it.each(['draft', 'session'] as Tier[])(
-    'refuses tier %s (drafts and session grants are not built)',
+    'refuses tier %s without its required authority',
     async (tier) => {
       const execute = vi.fn();
       const r = new ToolRegistry();
       r.register(manifest(tier, execute as never));
       const res = await r.invoke('demo.double', { n: 1 }, ctx);
-      expect(res).toMatchObject({ ok: false, reason: 'tier-not-executable' });
+      expect(res).toMatchObject({ ok: false, reason: tier === 'session' ? 'session-not-authorized' : 'tier-not-executable' });
       expect(execute).not.toHaveBeenCalled();
     },
   );

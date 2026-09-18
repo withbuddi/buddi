@@ -16,6 +16,11 @@ import { hasSubstance } from './renderables';
 
 afterEach(cleanup);
 
+it('summarizes structured recovery errors without dumping page evidence into the headline', () => {
+  const error = { error: 'Target is ambiguous', dispatched: false, observation: { tree: 'Long page evidence' } };
+  expect(inferShape(`tool-error: ${JSON.stringify(error)}`, { failed: true })).toMatchObject({ kind: 'error', summary: 'Target is ambiguous' });
+});
+
 /** The result that started this: 26 recurring items and three figures. */
 const recurring = {
   items: Array.from({ length: 26 }, (_, index) => ({

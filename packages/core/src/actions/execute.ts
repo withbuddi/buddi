@@ -22,13 +22,14 @@
  * registry refuses gated tools, and this function only ever runs one that an
  * approval row says was approved.
  */
-import type { ToolContext } from '../tools.js';
+import type { EffectDescription, ToolContext } from '../tools.js';
 import type { Queryable } from '../owner.js';
 import { emitActionEvent } from './store.js';
 import {
   DEFAULT_EFFECT_TIMEOUT_MS,
-  hashArgs,
+  hashAction,
   hashEnvelope,
+  POLICY_VERSION,
   toActionRecord,
   type ActionRecord,
   type ApprovalState,
@@ -43,6 +44,7 @@ export interface ExecutableTool {
   /** The tool's own deadline; `DEFAULT_EFFECT_TIMEOUT_MS` when it declares none. */
   timeoutMs?: number | undefined;
   execute(input: any, ctx: ToolContext): Promise<unknown>;
+  describe?(input: any, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
 }
 
 export interface ToolLookup {
@@ -73,10 +75,13 @@ export type ExecuteApprovedResult =
         | 'expired'
         | 'already-claimed'
         | 'args-hash-mismatch'
+        | 'effect-changed'
+        | 'policy-version-mismatch'
         | 'unknown-tool'
         | 'invalid-args'
         | 'tool-error'
-        | 'timeout';
+        | 'timeout'
+        | 'cancelled';
       message: string;
       attempt?: number;
     };
@@ -85,6 +90,7 @@ export async function executeApproved(
   pool: Queryable,
   input: ExecuteApprovedInput,
 ): Promise<ExecuteApprovedResult> {
+  input.ctx.signal?.throwIfAborted();
   const now = input.now ?? new Date();
 
   // 1. Claim: approved -> executing, expiry rechecked in the same statement.
@@ -115,7 +121,12 @@ export async function executeApproved(
   );
 
   // 2. Recheck what the owner actually approved.
-  const recomputed = hashArgs(action.tool, action.toolVersion, action.canonicalArgs);
+  if (action.policyVersion !== POLICY_VERSION) {
+    return settleWithoutDispatch(pool, action, 'policy-version-mismatch', {
+      message: 'this approval predates full effect binding; propose the action again',
+    });
+  }
+  const recomputed = hashAction(action.tool, action.toolVersion, action.canonicalArgs, action.envelope);
   if (recomputed !== action.argsHash) {
     return settleWithoutDispatch(pool, action, 'args-hash-mismatch', {
       message:
@@ -143,11 +154,6 @@ export async function executeApproved(
     });
   }
 
-  // 3. Intent before dispatch: the ledger row exists before anything leaves.
-  const attempt = await startAttempt(pool, action, now);
-
-  // 4. Dispatch under a deadline.
-  const deadline = input.timeoutMs ?? tool.timeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
   // The context a gated effect runs with is built from the *action*, not from
   // whatever the caller happened to be holding. `actionId` is the idempotency
   // key — this is the only place a tool can get one, and a tool that cannot
@@ -155,16 +161,52 @@ export async function executeApproved(
   const ctx: ToolContext = {
     ...input.ctx,
     actionId: action.id,
+    approvedEffect: { envelope: structuredClone(action.envelope) },
     ...(action.agentId ? { agentId: action.agentId } : {}),
     ...(action.conversationId ? { conversationId: action.conversationId } : {}),
     ...(action.jobId ? { jobId: action.jobId } : {}),
   };
 
-  let outcome: { kind: 'ok'; value: unknown } | { kind: 'error'; error: unknown } | { kind: 'timeout' };
+  // Resolve references again before creating an effect attempt. Freeze the
+  // description clock at creation: derived preview dates must not drift just
+  // because the owner took time to answer (for example a schedule's next runs).
+  try {
+    ctx.signal?.throwIfAborted();
+    const current = tool.describe
+      ? (await tool.describe(parsed.data, { ...ctx, now: () => action.createdAt })).envelope
+      : parsed.data;
+    if (hashEnvelope(current) !== hashEnvelope(action.envelope)) {
+      return settleWithoutDispatch(pool, action, 'effect-changed', {
+        message: 'the effect changed since its preview; propose the action again',
+      });
+    }
+    ctx.signal?.throwIfAborted();
+  } catch (err) {
+    return settleWithoutDispatch(pool, action, 'effect-changed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 3. Intent before dispatch: the ledger row exists before anything leaves.
+  const attempt = await startAttempt(pool, action, now);
+  // 4. Signal a cooperative stop at the deadline. Completion remains unknown:
+  // cancellation cannot retract an operation already dispatched externally.
+  const deadline = input.timeoutMs ?? tool.timeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+  const controller = new AbortController();
+  ctx.signal = input.ctx.signal
+    ? AbortSignal.any([input.ctx.signal, controller.signal])
+    : controller.signal;
+
+  let outcome: { kind: 'ok'; value: unknown } | { kind: 'error'; error: unknown } | { kind: 'timeout' } | { kind: 'cancelled' };
   try {
     outcome = await withDeadline(
-      () => tool.execute(parsed.data, ctx),
+      () => {
+        ctx.signal?.throwIfAborted();
+        return tool.execute(parsed.data, ctx);
+      },
       deadline,
+      controller,
+      ctx.signal,
     );
   } catch (err) {
     outcome = { kind: 'error', error: err };
@@ -185,19 +227,22 @@ export async function executeApproved(
     return { ok: true, state: 'succeeded', action: settled, result: outcome.value, attempt: attempt.attempt };
   }
 
-  if (outcome.kind === 'timeout') {
+  if (outcome.kind === 'timeout' || outcome.kind === 'cancelled' || ctx.signal.aborted) {
     // Ambiguous completion. The effect may have happened; v1 requires a human
     // to look, and nothing here retries.
-    const message = `${action.tool} did not answer within ${deadline}ms; the effect may or may not have happened`;
+    const message = outcome.kind === 'timeout'
+      ? `${action.tool} did not answer within ${deadline}ms; the effect may or may not have happened`
+      : `${action.tool} was cancelled during dispatch; the effect may or may not have happened`;
+    const reason = outcome.kind === 'timeout' ? 'timeout' : 'cancelled';
     await finishAttempt(pool, attempt.id, 'unknown', { error: message });
-    await settleApproval(pool, action, 'unknown', { attempt: attempt.attempt, reason: 'timeout', error: message });
+    await settleApproval(pool, action, 'unknown', { attempt: attempt.attempt, reason, error: message });
     await emitActionEvent(
       pool,
       'effect.unknown',
       { actionId: action.id, tool: action.tool, attempt: attempt.attempt, timeoutMs: deadline },
       action.conversationId,
     );
-    return { ok: false, state: 'unknown', reason: 'timeout', message, attempt: attempt.attempt };
+    return { ok: false, state: 'unknown', reason, message, attempt: attempt.attempt };
   }
 
   const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
@@ -275,7 +320,7 @@ async function refuseClaim(
 async function settleWithoutDispatch(
   pool: Queryable,
   action: ActionRecord,
-  reason: 'args-hash-mismatch' | 'unknown-tool' | 'invalid-args',
+  reason: 'args-hash-mismatch' | 'unknown-tool' | 'invalid-args' | 'effect-changed' | 'policy-version-mismatch',
   detail: Record<string, unknown> & { message: string },
 ): Promise<ExecuteApprovedResult> {
   await settleApproval(pool, action, 'failed', { reason, ...detail });
@@ -357,19 +402,31 @@ async function settleApproval(
 async function withDeadline<T>(
   run: () => Promise<T>,
   ms: number,
-): Promise<{ kind: 'ok'; value: T } | { kind: 'error'; error: unknown } | { kind: 'timeout' }> {
+  controller: AbortController,
+  signal: AbortSignal,
+): Promise<{ kind: 'ok'; value: T } | { kind: 'error'; error: unknown } | { kind: 'timeout' } | { kind: 'cancelled' }> {
   let timer: NodeJS.Timeout | undefined;
+  let onAbort: () => void;
+  const cancelled = new Promise<{ kind: 'cancelled' }>((resolve) => {
+    onAbort = () => resolve({ kind: 'cancelled' });
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
   const timeout = new Promise<{ kind: 'timeout' }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: 'timeout' }), ms);
+    timer = setTimeout(() => {
+      resolve({ kind: 'timeout' });
+      controller.abort(new Error('effect deadline exceeded'));
+    }, ms);
     if (typeof timer.unref === 'function') timer.unref();
   });
-  const work = run().then(
+  const work = Promise.resolve().then(run).then(
     (value) => ({ kind: 'ok', value }) as const,
     (error) => ({ kind: 'error', error }) as const,
   );
   try {
-    return await Promise.race([work, timeout]);
+    return await Promise.race([work, timeout, cancelled]);
   } finally {
+    signal.removeEventListener('abort', onAbort!);
     if (timer) clearTimeout(timer);
     // The effect may still be in flight: whatever it does, it must not become
     // an unhandled rejection after the deadline decided the outcome.

@@ -126,6 +126,9 @@ importers:
       '@buddi/tool-artifacts':
         specifier: workspace:*
         version: link:../tools/artifacts
+      '@buddi/tool-browser':
+        specifier: workspace:*
+        version: link:../tools/browser
       '@buddi/tool-email':
         specifier: workspace:*
         version: link:../tools/email
@@ -198,6 +201,34 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.23.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.2)(jsdom@25.0.1)
+
+  packages/tools/browser:
+    dependencies:
+      '@buddi/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@buddi/tool-web':
+        specifier: workspace:*
+        version: link:../web
+      playwright:
+        specifier: ^1.58.0
+        version: 1.63.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@buddi/runtime':
+        specifier: workspace:*
+        version: link:../../runtime
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.2
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
@@ -1845,6 +1876,16 @@ packages:
   pirates@4.0.7:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
+
+  playwright-core@1.63.0:
+    resolution: {integrity: sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.63.0:
+    resolution: {integrity: sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   postcss-import@15.1.0:
     resolution: {integrity: sha512-hpr+J05B2FVYUAXHeK1YyI267J/dDDhMU6B6civm8hSY1jYJnBXxzKDKDswzJmtLHryrjhnDjqqp/49t8FALew==}
@@ -3662,6 +3703,12 @@ snapshots:
       thread-stream: 4.2.0
 
   pirates@4.0.7: {}
+
+  playwright-core@1.63.0: {}
+
+  playwright@1.63.0:
+    dependencies:
+      playwright-core: 1.63.0
 
   postcss-import@15.1.0(postcss@8.5.28):
     dependencies:

@@ -22,6 +22,8 @@ export interface WebConfig {
   enabled: boolean;
   host: string;
   port: number;
+  /** Explicit HTTPS reverse-proxy origin; never derived from request headers. */
+  publicOrigin?: string;
 }
 
 /** `BUDDI_WEB=0` (or `off`/`false`/`no`) turns the dashboard off; default on. */
@@ -37,7 +39,14 @@ export function webConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const parsed = rawPort === '' ? NaN : Number(rawPort);
   const port =
     Number.isInteger(parsed) && parsed >= 0 && parsed <= 65_535 ? parsed : DEFAULT_WEB_PORT;
-  return { enabled: webEnabled(env), host, port };
+  const external = env.BUDDI_WEB_PUBLIC_ORIGIN?.trim();
+  let publicOrigin: string | undefined;
+  if (external) {
+    const url = new URL(external);
+    if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('BUDDI_WEB_PUBLIC_ORIGIN must be an HTTPS origin without credentials, path, query or fragment');
+    publicOrigin = url.origin;
+  }
+  return { enabled: webEnabled(env), host, port, ...(publicOrigin ? { publicOrigin } : {}) };
 }
 
 /** Is this a loopback binding? Only then do `localhost` aliases count as us. */
@@ -54,7 +63,7 @@ export function isLoopback(host: string): boolean {
  * way round) and both are the same machine. Nothing else is ever allowed, and
  * there is no CORS: a cross-origin page gets no header saying it may read this.
  */
-export function allowedOrigins(config: Pick<WebConfig, 'host' | 'port'>): string[] {
+export function allowedOrigins(config: Pick<WebConfig, 'host' | 'port' | 'publicOrigin'>): string[] {
   const origins = new Set<string>();
   const add = (host: string): void => {
     origins.add(`http://${host}:${config.port}`);
@@ -65,6 +74,7 @@ export function allowedOrigins(config: Pick<WebConfig, 'host' | 'port'>): string
     add('localhost');
     add('[::1]');
   }
+  if (config.publicOrigin) origins.add(config.publicOrigin);
   return [...origins];
 }
 

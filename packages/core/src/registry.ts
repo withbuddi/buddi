@@ -8,9 +8,9 @@
  *                             action plus a pending approval, and the model is
  *                             told 'approval-required' with the action id. The
  *                             only path that ever runs it is `executeApproved`.
- *  - Tier 'draft'/'session'-> refuse ('tier-not-executable'); the machinery
- *                             those tiers need (drafts, bounded session grants)
- *                             does not exist yet.
+ *  - Tier 'session'      -> require a live owner request and runtime-resolved
+ *                          agent grant; the driver enforces ownership/budgets.
+ *  - Tier 'draft'        -> refuse ('tier-not-executable').
  *  - Tool threw            -> 'tool-error'; defects never surface as success.
  */
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -49,7 +49,7 @@ export type InvokeResult<O = unknown> =
     }
   | {
       ok: false;
-      reason: 'unknown-tool' | 'invalid-args' | 'tier-not-executable' | 'tool-error';
+      reason: 'unknown-tool' | 'invalid-args' | 'tier-not-executable' | 'tool-error' | 'session-not-authorized';
       message: string;
     };
 
@@ -270,6 +270,14 @@ export class ToolRegistry {
     return this.#tools.has(name);
   }
 
+  isSequential(name: string): boolean {
+    return this.#tools.get(name)?.tool.sequential === true;
+  }
+
+  async image(name: string, output: unknown, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined> {
+    return this.#tools.get(name)?.tool.image?.(output, ctx);
+  }
+
   /**
    * Tool specs for the model, in registration order.
    *
@@ -301,6 +309,7 @@ export class ToolRegistry {
       version,
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
+      ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
       execute: (input: unknown, ctx: ToolContext) => tool.execute(input, ctx),
     };
   }
@@ -310,6 +319,7 @@ export class ToolRegistry {
     rawArgs: unknown,
     ctx: ToolContext,
   ): Promise<InvokeResult> {
+    ctx.signal?.throwIfAborted();
     const entry = this.#tools.get(name);
     if (!entry) {
       return { ok: false, reason: 'unknown-tool', message: `unknown tool: ${name}` };
@@ -331,7 +341,14 @@ export class ToolRegistry {
       return this.#requestApproval(tool, version, parsed.data, ctx);
     }
 
-    if (!EXECUTABLE_TIERS.includes(tool.tier)) {
+    if (tool.tier === 'session' && (!ctx.ownerRequest ||
+      ctx.ownerRequest.expiresAt <= Date.now() || !ctx.sessionTools?.includes(name) ||
+      !ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0)) {
+      return { ok: false, reason: 'session-not-authorized',
+        message: 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
+    }
+
+    if (tool.tier !== 'session' && !EXECUTABLE_TIERS.includes(tool.tier)) {
       return {
         ok: false,
         reason: 'tier-not-executable',

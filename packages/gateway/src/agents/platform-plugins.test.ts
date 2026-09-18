@@ -143,7 +143,11 @@ function harness(agents: SuggestedAgent[] = [GARDENER]): Harness {
     tool(name) {
       const found = manifest.tools.find((t) => t.name === name);
       if (!found) throw new Error(`no such tool: ${name}`);
-      return found;
+      if (found.tier !== 'gated') return found;
+      // Supply the approved snapshot normally attached by executeApproved.
+      return { ...found, execute: async (input, ctx) => found.execute(input, {
+        ...ctx, approvedEffect: ctx.approvedEffect ?? await found.describe!(input, ctx),
+      }) };
     },
     ctx: {
       db: null as never,

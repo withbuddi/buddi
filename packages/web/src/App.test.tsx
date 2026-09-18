@@ -38,7 +38,8 @@ describe('the shell', () => {
     // Ten pages now — Offers joined them — and every one of them is still
     // behind the menu rather than a sidebar. The count is asserted so that
     // adding a page is a deliberate act rather than a drift.
-    expect(SECTIONS).toHaveLength(10);
+    expect(SECTIONS).toHaveLength(11);
+    expect(SECTIONS.map((s) => s.route)).toContain('#/browser');
     expect(SECTIONS.map((s) => s.route)).toContain('#/offers');
     expect(screen.getByLabelText('Monitoring sections')).toBeDefined();
     expect(screen.getByLabelText(/theme/i)).toBeDefined();

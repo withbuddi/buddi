@@ -1543,3 +1543,38 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   .wb-prof-k { margin-top: 8px; }
   .wb-prof-family-head { flex-direction: column; align-items: flex-start; gap: 2px; }
 }
+/* Host browser: observed state, not an embedded third-party website. */
+.browser-panel { padding: 16px 8px; }
+.browser-sessions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 8px; }
+.browser-sessions [aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.browser-panel-compact { padding: 0; }
+.browser-panel-compact .browser-eyebrow { display: none; }
+.browser-panel-compact .browser-heading h2 { font-size: 16px; }
+.browser-panel-compact .browser-task { margin: 14px 0; padding: 8px 12px; }
+.browser-panel-compact .browser-toolbar { margin-top: 14px; }
+.browser-panel-compact .browser-empty { min-height: 180px; padding: 20px; }
+.browser-full-view { display: inline-block; margin-top: 8px; font-size: 12px; }
+.browser-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.browser-heading h2 { margin: 0; }
+.browser-eyebrow { font-size: 10px; letter-spacing: .16em; color: var(--muted); margin: 0 0 6px; }
+.browser-state { text-transform: capitalize; }
+.browser-state-running { color: var(--ok); }
+.browser-state-stopped, .browser-state-error { color: var(--bad); }
+.browser-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 8px; }
+.browser-toolbar .browser-stop { border-color: var(--bad); color: var(--bad); }
+.browser-help { font-size: 12px; line-height: 1.6; }
+.browser-task { border-left: 2px solid var(--accent); padding: 12px 16px; margin: 22px 0; overflow-wrap: anywhere; }
+.browser-task p { margin: 8px 0 0; }
+.browser-window { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 20px 0; }
+.browser-address { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.browser-window figure { margin: 0; }
+.browser-window img { display: block; width: 100%; height: auto; }
+.browser-window figcaption { padding: 10px 16px; font-size: 11px; color: var(--muted); }
+.browser-empty { min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 32px; }
+.browser-empty p { color: var(--muted); font-size: 13px; max-width: 360px; }
+.browser-settings { margin: 0 0 1.25rem; padding: 1rem; border: 1px solid var(--border, #ddd); border-radius: 10px; }
+.browser-settings summary { cursor: pointer; font-weight: 600; }
+.browser-settings fieldset { border: 0; padding: 1rem 0 0; min-width: 0; }
+.browser-settings label { display: grid; gap: .4rem; margin: .8rem 0; }
+.browser-settings select, .browser-settings textarea { width: 100%; max-width: 100%; padding: .6rem; color: inherit; background: var(--bg, white); border: 1px solid var(--border, #ddd); border-radius: 6px; }
+.browser-settings .wb-btn { margin: .3rem .5rem .3rem 0; }

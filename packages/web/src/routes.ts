@@ -10,6 +10,7 @@ export const CHAT_ROUTE = '#/';
 
 /** The secondary nav, in the order it reads. */
 export const SECTIONS = [
+  { route: '#/browser', label: 'Browser' },
   { route: '#/overview', label: 'Overview' },
   { route: '#/events', label: 'Events' },
   { route: '#/conversations', label: 'Conversations' },

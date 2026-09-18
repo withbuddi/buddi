@@ -476,6 +476,10 @@ export const chatApi = {
 };
 
 export const api = {
+  browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
+  browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
+  browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
+  computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
   session: () => get<{ csrf: string; timezone: string; host: string; port: number }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
@@ -537,3 +541,19 @@ export const api = {
       reason: 'cancelled from the dashboard',
     }),
 };
+
+export interface ControlSettings { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[] }
+export interface BrowserStatus {
+  mode?: 'computer' | 'playwright';
+  settings?: ControlSettings;
+  permissions?: { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string };
+  state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
+  enabled: boolean;
+  busy: boolean;
+  session?: { id: string; agentId: string; conversationId: string; requestId: string; task: string; expiresAt: string; steps: number; maxSteps: number };
+  page?: { id: string; url: string; title: string; capturedAt: string; tabs: Array<{ id: string; url: string; title: string }> };
+  lastAction?: string;
+  message?: string;
+  hasScreenshot: boolean;
+  sessions?: BrowserStatus[];
+}

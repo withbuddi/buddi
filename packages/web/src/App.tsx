@@ -21,6 +21,7 @@ import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
 import { Agents } from './views/Agents';
+import { Browser } from './views/Browser';
 import { Approvals } from './views/Approvals';
 import { Conversations } from './views/Conversations';
 import { Events } from './views/Events';
@@ -246,6 +247,8 @@ function Section({
   navigate: (next: string) => void;
 }): JSX.Element {
   switch (hash) {
+    case '#/browser':
+      return <Browser />;
     case '#/events':
       return <Events timezone={timezone} />;
     case '#/conversations':

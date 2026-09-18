@@ -119,7 +119,11 @@ function harness(caller = 'agent-father'): Harness {
     tool(name) {
       const found = manifest.tools.find((t) => t.name === name);
       if (!found) throw new Error(`no such tool: ${name}`);
-      return found;
+      if (found.tier !== 'gated') return found;
+      // This unit harness stands in for the executor's approved snapshot.
+      return { ...found, execute: async (input, ctx) => found.execute(input, {
+        ...ctx, approvedEffect: ctx.approvedEffect ?? await found.describe!(input, ctx),
+      }) };
     },
     ctx,
     get reloads() {
@@ -448,6 +452,16 @@ describe('create, approve, talk to it', () => {
 });
 
 describe('update', () => {
+  it('refuses state changed after approval rather than overwriting it', async () => {
+    const input = { id: 'scout', description: 'Approved description.' };
+    const approvedEffect = described(h, 'platform.update_agent', input);
+    const file = path.join(h.agentsDir, 'scout', 'agent.md');
+    const changed = readFileSync(file, 'utf8') + '\nThe owner added this after approval.\n';
+    writeFileSync(file, changed);
+    await expect(h.tool('platform.update_agent').execute(input, { ...h.ctx, approvedEffect }))
+      .rejects.toThrow(/no longer matches/);
+    expect(readFileSync(file, 'utf8')).toBe(changed);
+  });
   it('leaves the persona byte-for-byte when only frontmatter changes', async () => {
     const file = path.join(h.agentsDir, 'scout', 'agent.md');
     const before = readFileSync(file, 'utf8');

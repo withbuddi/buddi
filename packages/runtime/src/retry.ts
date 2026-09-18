@@ -107,6 +107,17 @@ export function nextTransportDelayMs(attempt: number, elapsedMs: number): number
 /** How many transport attempts there can be in total, including the first. */
 export const MAX_TRANSPORT_ATTEMPTS = TRANSPORT_RETRY_DELAYS_MS.length + 1;
 
-export function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }

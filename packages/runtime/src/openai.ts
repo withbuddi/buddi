@@ -79,7 +79,7 @@ export interface OpenAiProviderOptions {
    */
   fetch?: HttpTransport;
   /** Injected for tests so backoff does not burn wall-clock. */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Injected for tests: the transport retry window is measured against this. */
   now?: () => number;
   /** Called before each wait, with the cause chain of the attempt that failed. */
@@ -399,10 +399,12 @@ export function createOpenAiProvider(
       let lastError: ProviderError | undefined;
 
       for (;;) {
+        req.signal?.throwIfAborted();
         let res: TransportResponse;
         try {
-          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload });
+          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload, ...(req.signal ? { signal: req.signal } : {}) });
         } catch (err) {
+          req.signal?.throwIfAborted();
           transportFailures += 1;
           lastError = new ProviderError({
             status: 0,
@@ -418,7 +420,7 @@ export function createOpenAiProvider(
             kind: 'transport',
             detail: lastError.detail,
           });
-          await sleep(delay);
+          await sleep(delay, req.signal);
           continue;
         }
 
@@ -448,7 +450,7 @@ export function createOpenAiProvider(
           kind: 'status',
           detail: error.detail,
         });
-        await sleep(wait);
+        await sleep(wait, req.signal);
       }
 
       throw (

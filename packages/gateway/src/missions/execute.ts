@@ -143,6 +143,7 @@ export type MissionDecisionKind = 'report' | 'silent' | 'no-decision';
  * inside it belongs to no job.
  */
 export interface MissionRunControl {
+  signal?: AbortSignal;
   /** The durable job this run belongs to. Recorded on any action it proposes. */
   jobId?: string;
   /** Continue the run that suspended on an approval, in its own conversation. */
@@ -248,6 +249,7 @@ export function createMissionExecutor(
     const ctx: ToolContext = {
       ...deps.ctx,
       ...(control?.jobId ? { jobId: control.jobId } : {}),
+      ...(control?.signal ? { signal: control.signal } : {}),
     };
 
     const result = await runAgent({
@@ -281,6 +283,7 @@ export function createMissionExecutor(
       if (deps.askApproval) {
         try {
           const action = await getAction(deps.pool, result.pendingActionId);
+          control?.signal?.throwIfAborted();
           if (action) await deps.askApproval(action);
         } catch (err) {
           log(
@@ -339,6 +342,7 @@ export function createMissionExecutor(
 
     let chatId: string | undefined;
     try {
+      control?.signal?.throwIfAborted();
       chatId = await deps.deliver(text, offers);
     } catch (err) {
       if (!requireDelivery && err instanceof OwnerNotPairedError) {

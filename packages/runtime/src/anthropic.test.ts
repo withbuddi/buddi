@@ -56,6 +56,20 @@ function resolve(kind: 'api-key' | 'subscription-token') {
 
 const noSleep = async () => {};
 
+it('forwards cancellation to the transport and never retries an aborted request', async () => {
+  const controller = new AbortController();
+  const fetchMock = vi.fn(async (_url: unknown, init: { signal?: AbortSignal } | undefined) => {
+    expect(init?.signal).toBe(controller.signal);
+    controller.abort(new Error('owner stopped'));
+    throw new Error('transport aborted');
+  });
+  const sleep = vi.fn(noSleep);
+  const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep });
+  await expect(provider.complete({ ...request, signal: controller.signal })).rejects.toThrow('owner stopped');
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(sleep).not.toHaveBeenCalled();
+});
+
 describe('createAnthropicProvider — subscription-token wire requirements', () => {
   it('sends the oauth beta header and the Claude Code system prefix', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
