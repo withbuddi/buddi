@@ -32,6 +32,9 @@ import {
   getAction,
   getArtifact,
   listOpenOffers,
+  openQuestion,
+  askQuestion,
+  answerQuestion,
   ToolRegistry,
   type AgentCatalog,
   type ArtifactRow,
@@ -298,6 +301,8 @@ export interface ChatTranscript {
    * being returned.
    */
   offers: ChatOfferView[];
+  /** The exact structured question currently waiting in this conversation. */
+  question: Awaited<ReturnType<typeof openQuestion>>;
 }
 
 /**
@@ -355,7 +360,10 @@ export async function readChatTranscript(
 
   // Untaken, unexpired, this conversation's. A chip the owner clicks goes
   // through the same claim-once take the Telegram tap does.
-  const open = await listOpenOffers(pool, { now, conversationId, limit: 10 }).catch(() => []);
+  const [open, question] = await Promise.all([
+    listOpenOffers(pool, { now, conversationId, limit: 10 }).catch(() => []),
+    openQuestion(pool, { now, conversationId }).catch(() => null),
+  ]);
   const vitals = await readVitals(pool, conversationId);
 
   return {
@@ -372,6 +380,7 @@ export async function readChatTranscript(
       prompt: offer.prompt,
       expiresAt: offer.expiresAt,
     })),
+    question,
     conversationId: String(conversation.id),
     agentId: String(conversation.agent_id),
     startedAt: new Date(conversation.created_at).toISOString(),
@@ -711,6 +720,28 @@ export class WebChat {
     return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
+  /** Answer one exact structured question, then continue its conversation. */
+  async answer(input: {
+    id: string;
+    answer: string;
+    optionId?: string;
+  }): Promise<SendResult> {
+    const settled = await answerQuestion(this.#deps.pool, {
+      ...input,
+      via: 'web',
+      now: this.#deps.now(),
+    });
+    if (!settled.ok) {
+      const status = settled.reason === 'unknown' ? 404 : 409;
+      return { ok: false, status, error: 'That question is no longer waiting for an answer.' };
+    }
+    return this.send({
+      agentId: settled.question.agentId,
+      conversationId: settled.question.conversationId,
+      text: input.answer,
+    });
+  }
+
   /**
    * Abandon the run in flight for this conversation.
    *
@@ -919,7 +950,22 @@ export class WebChat {
     // so the badge survives a reload and a restart — and cleared by the owner's
     // next message to this agent, or by the fifteen minutes a question lives.
     if (ask.asked) {
-      await this.#event(conversationId, QUESTION_ASKED, { agentId: agent.id, runId });
+      const stored = await askQuestion(deps.pool, {
+        agentId: agent.id,
+        conversationId,
+        question: ask.asked.question,
+        options: ask.asked.options,
+        allowOther: ask.asked.allowOther,
+        now: deps.now(),
+      }).catch((err) => {
+        this.#log(`web chat: storing question failed: ${message(err)}`);
+        return null;
+      });
+      await this.#event(conversationId, QUESTION_ASKED, {
+        agentId: agent.id,
+        runId,
+        questionId: stored?.id ?? null,
+      });
     }
 
     if (result.stopped === 'awaiting-approval' && result.pendingActionId) {

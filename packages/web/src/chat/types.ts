@@ -51,6 +51,21 @@ export interface ChatOffer {
   expiresAt: string;
 }
 
+export interface ChatQuestionOption {
+  id: string;
+  label: string;
+  hint: string | null;
+  recommended: boolean;
+}
+
+export interface ChatQuestion {
+  id: string;
+  question: string;
+  options: ChatQuestionOption[];
+  allowOther: boolean;
+  expiresAt: string;
+}
+
 /**
  * What would end this conversation, and how close it is — sent with the
  * transcript so the header can say "fresh" or "about to roll over" without the
@@ -73,6 +88,8 @@ export interface ChatConversation {
   messages: ChatMessage[];
   /** Still on the table in this conversation. Usually empty. */
   offers?: ChatOffer[];
+  /** A durable input request. It supplies information and never grants permission. */
+  question?: ChatQuestion | null;
 }
 
 export interface ConversationListItem {

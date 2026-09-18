@@ -72,6 +72,8 @@ export const DEAD_LETTER_MAX_WAVE = 500;
 export interface DeadLetterState {
   /** Deaths at or before this instant have already been folded in. */
   watermark: string;
+  /** Last job within the watermark's millisecond; see `listDeadJobs`. */
+  watermarkJobId?: string;
   incident?: {
     firstDeathAt: string;
     lastDeathAt: string;
@@ -239,6 +241,7 @@ function readState(value: unknown): DeadLetterState | null {
       : null;
   return {
     watermark: v.watermark,
+    ...(typeof v.watermarkJobId === 'string' ? { watermarkJobId: v.watermarkJobId } : {}),
     ...(incident &&
     typeof incident.firstDeathAt === 'string' &&
     typeof incident.lastDeathAt === 'string'
@@ -273,6 +276,10 @@ export function createDeadLetterWatch(
     const deaths = await listDeadJobs(deps.pool, {
       kinds,
       after: new Date(state.watermark),
+      // A legacy flag has no tie-breaker. Its timestamp meant "everything
+      // through this instant", so treating the rest of that millisecond as
+      // consumed is safer than re-announcing its final row forever.
+      afterId: state.watermarkJobId ?? 'ffffffff-ffff-ffff-ffff-ffffffffffff',
       until: now,
       limit: DEAD_LETTER_MAX_WAVE,
     });
@@ -288,6 +295,7 @@ export function createDeadLetterWatch(
         ? { ...(incident as NonNullable<typeof incident>), lastDeathAt: last.toISOString() }
         : { firstDeathAt: first.toISOString(), lastDeathAt: last.toISOString(), reported: false };
       state.watermark = last.toISOString();
+      state.watermarkJobId = deaths[deaths.length - 1]?.id;
     }
 
     // A reported incident that has been quiet long enough is over. Forgetting

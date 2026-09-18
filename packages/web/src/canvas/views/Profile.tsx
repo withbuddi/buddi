@@ -51,6 +51,32 @@ export function Profile({ profile, onChange }: ProfileProps): JSX.Element {
       )}
 
       <Section
+        title="How it works with you"
+        note="Live decisions stay in the conversation; this page explains the standing rules."
+      >
+        <ul className="wb-prof-list">
+          <li className="wb-prof-row">
+            <span className="wb-prof-row-main">
+              <span className="wb-prof-row-name">Quick questions</span>
+              <span className="wb-prof-row-desc">
+                When it knows the likely answers, it can show one-tap choices in the dashboard and Telegram. You can still write a different answer when the question allows it.
+              </span>
+            </span>
+            <span className="wb-prof-auto">Answers only</span>
+          </li>
+          <li className="wb-prof-row" data-gated="true">
+            <span className="wb-prof-row-main">
+              <span className="wb-prof-row-name">Action approvals</span>
+              <span className="wb-prof-row-desc">
+                A request to send, spend, publish or otherwise affect the world appears in the conversation with the exact action. Answering a question never approves it.
+              </span>
+            </span>
+            <span className="wb-prof-gate"><LockIcon />Exact action</span>
+          </li>
+        </ul>
+      </Section>
+
+      <Section
         title="What it can do"
         note={grantSummary(profile)}
         tone={profile.gatedCount > 0 ? 'warning' : undefined}

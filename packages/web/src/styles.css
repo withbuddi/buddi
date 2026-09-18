@@ -722,6 +722,62 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 
 /* ---- composer: one control, not three stacked ---- */
 
+.wb-question {
+  margin: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  display: grid;
+  gap: 12px;
+}
+.wb-inline-approval {
+  margin: 12px;
+  border: 1px solid var(--warn, #b7791f);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.wb-question-head { display: grid; gap: 4px; }
+.wb-question-kicker {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.wb-question-options { display: grid; gap: 7px; }
+.wb-question-option {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 9px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.wb-question-option:hover { border-color: var(--accent); }
+.wb-question-option[data-recommended='true'] { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.wb-question-number { color: var(--muted); font-family: var(--mono); }
+.wb-question-label { display: flex; gap: 8px; align-items: center; font-weight: 650; }
+.wb-question-label em { color: var(--accent); font-size: 10px; font-style: normal; text-transform: uppercase; }
+.wb-question-option small { display: block; margin-top: 3px; color: var(--muted); }
+.wb-question-other { display: flex; gap: 8px; }
+.wb-question-other input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: var(--panel);
+  color: var(--text);
+}
+.wb-question-note { margin: 0; color: var(--muted); font-size: 11px; }
+
 .wb-composer {
   padding: 10px 14px 14px;
   background: var(--surface);

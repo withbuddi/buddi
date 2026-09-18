@@ -16,16 +16,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
+import { Envelope } from '../canvas/views/Envelope';
 import { renderablesFrom } from '../canvas/renderables';
 import { profileRenderable, profileTabId } from './properties';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft } from './Composer';
+import { QuestionPicker } from './QuestionPicker';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall } from './MessageList';
 import { openChatStream } from './stream';
-import type { ChatAgent, ChatConversation, ChatEvent } from './types';
+import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage } from './types';
 
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 440;
@@ -73,6 +75,8 @@ export function ChatPage({
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
+  /** The owner's accepted send, shown before the run has persisted it. */
+  const [optimistic, setOptimistic] = useState<ChatMessage[]>([]);
   const [live, setLive] = useState<LiveCall[]>([]);
   const [running, setRunning] = useState(false);
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
@@ -81,6 +85,7 @@ export function ChatPage({
   /** "(New conversation — …)". Said once, above the thread it explains. */
   const [notice, setNotice] = useState<string | null>(null);
   const [takingOffer, setTakingOffer] = useState<string | null>(null);
+  const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
   /*
@@ -122,6 +127,7 @@ export function ChatPage({
     let cancelled = false;
     setConversationId(null);
     setConversation(null);
+    setOptimistic([]);
     // Whoever this is now, it is not who the open panel described.
     setProfile(null);
     chatApi
@@ -142,7 +148,10 @@ export function ChatPage({
   const refresh = useCallback((id: string) => {
     return chatApi
       .conversation(id)
-      .then((loaded) => setConversation(loaded))
+      .then((loaded) => {
+        setConversation(loaded);
+        setOptimistic((pending) => pending.filter((message) => !transcriptContains(loaded, message)));
+      })
       .catch((err: unknown) => setError(message(err)));
   }, []);
 
@@ -154,7 +163,10 @@ export function ChatPage({
     void chatApi
       .conversation(conversationId)
       .then((loaded) => {
-        if (!cancelled) setConversation(loaded);
+        if (!cancelled) {
+          setConversation(loaded);
+          setOptimistic((pending) => pending.filter((message) => !transcriptContains(loaded, message)));
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(message(err));
@@ -165,9 +177,6 @@ export function ChatPage({
   }, [conversationId]);
 
   /* ---- the live run ---- */
-
-  const openCanvasRef = useRef(onOpenCanvas);
-  openCanvasRef.current = onOpenCanvas;
 
   useEffect(() => {
     if (!conversationId) return undefined;
@@ -199,8 +208,6 @@ export function ChatPage({
             const toolUseId = str(event.data['toolUseId']);
             if (approvalId && toolUseId) {
               setAwaiting((current) => new Map(current).set(toolUseId, approvalId));
-              setActiveTab(toolUseId);
-              openCanvasRef.current?.();
             }
             setLive((current) => current.filter((call) => call.toolUseId !== toolUseId));
             void refresh(conversationId);
@@ -255,6 +262,14 @@ export function ChatPage({
     return profile ? [...fromTranscript, profileRenderable(profile)] : fromTranscript;
   }, [conversation, descriptors, awaiting, profile]);
 
+  const inlineApproval = useMemo(
+    () => [...renderables].reverse().find((item) => item.source === 'approval') ?? null,
+    [renderables],
+  );
+  const inlineApprovalId = inlineApproval
+    ? (inlineApproval.props as { approvalId?: string }).approvalId ?? null
+    : null;
+
   /*
    * What the canvas turns to on its own.
    *
@@ -290,6 +305,13 @@ export function ChatPage({
 
   const send = (text: string, attachmentIds: string[]): void => {
     if (!agentId) return;
+    const local: ChatMessage = {
+      id: `optimistic:${Date.now()}`,
+      role: 'user',
+      at: new Date().toISOString(),
+      blocks: [{ type: 'text', text }],
+    };
+    setOptimistic([local]);
     setError(null);
     setNotice(null);
     setRunning(true);
@@ -299,10 +321,14 @@ export function ChatPage({
         // The conversation the page was in had ended, and this message opened a
         // new one. The empty thread is explained rather than surprising.
         setNotice(result.boundary?.note ?? null);
-        if (result.conversationId !== conversationId) setConversationId(result.conversationId);
+        if (result.conversationId !== conversationId) {
+          setConversation(null);
+          setConversationId(result.conversationId);
+        }
         else void refresh(result.conversationId);
       })
       .catch((err: unknown) => {
+        setOptimistic((pending) => pending.filter((message) => message.id !== local.id));
         setError(message(err));
         setRunning(false);
       });
@@ -326,6 +352,24 @@ export function ChatPage({
         setTakingOffer(null);
         if (conversationId) void refresh(conversationId);
       });
+  };
+
+  const answerQuestion = (answer: string, optionId?: string): void => {
+    const question = conversation?.question;
+    if (!question) return;
+    setError(null);
+    setAnsweringQuestion(true);
+    setRunning(true);
+    chatApi
+      .answerQuestion(question.id, { answer, ...(optionId ? { optionId } : {}) })
+      .then(() => {
+        if (conversationId) return refresh(conversationId);
+      })
+      .catch((err: unknown) => {
+        setError(message(err));
+        setRunning(false);
+      })
+      .finally(() => setAnsweringQuestion(false));
   };
 
   /**
@@ -521,7 +565,7 @@ export function ChatPage({
         ) : null}
 
         <MessageList
-          messages={conversation?.messages ?? []}
+          messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}
           // Which calls the canvas actually kept a panel for. A call whose
@@ -540,6 +584,16 @@ export function ChatPage({
           }
         />
 
+        {inlineApprovalId ? (
+          <div className="wb-inline-approval" data-testid="inline-approval">
+            <Envelope
+              props={{ approvalId: inlineApprovalId }}
+              timezone={timezone}
+              onDecided={onDecided}
+            />
+          </div>
+        ) : null}
+
         {(conversation?.offers ?? []).length > 0 ? (
           <div className="wb-offers" data-testid="chat-offers">
             {(conversation?.offers ?? []).map((offer) => (
@@ -556,14 +610,23 @@ export function ChatPage({
           </div>
         ) : null}
 
-        <Composer
-          disabled={!agentId}
-          running={running}
-          onSend={send}
-          onStop={stop}
-          agentName={agent?.name ?? 'the agent'}
-          draft={draft}
-        />
+        {conversation?.question ? (
+          <QuestionPicker
+            key={conversation.question.id}
+            question={conversation.question}
+            disabled={answeringQuestion || running}
+            onAnswer={answerQuestion}
+          />
+        ) : (
+          <Composer
+            disabled={!agentId}
+            running={running}
+            onSend={send}
+            onStop={stop}
+            agentName={agent?.name ?? 'the agent'}
+            draft={draft}
+          />
+        )}
       </section>
 
       {narrow ? (
@@ -618,6 +681,20 @@ function str(value: unknown): string | null {
 
 function message(err: unknown): string {
   return err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+}
+
+function transcriptContains(conversation: ChatConversation, optimistic: ChatMessage): boolean {
+  const wanted = optimistic.blocks.find((block) => block.type === 'text')?.text.trim();
+  if (!wanted) return true;
+  const sentAt = Date.parse(optimistic.at);
+  return conversation.messages.some(
+    (message) =>
+      message.role === 'user' &&
+      Date.parse(message.at) >= sentAt - 1_000 &&
+      message.blocks.some(
+        (block) => block.type === 'text' && block.text.trim().startsWith(wanted),
+      ),
+  );
 }
 
 /** Three dots, vertical: this thing has more to say about itself. */

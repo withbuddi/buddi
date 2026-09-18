@@ -42,9 +42,34 @@ describe('conversation.ask — the explicit signal', () => {
       { timezone: 'UTC' } as never,
     );
 
-    expect(sink.asked).toEqual({ question: 'What time tonight?' });
+    expect(sink.asked).toEqual({ question: 'What time tonight?', options: [], allowOther: true });
     // It delivers nothing and authorizes nothing: the return value is a receipt.
     expect(result).toEqual({ pending: true });
+  });
+
+  it('records quick choices and a recommendation without turning them into permission', async () => {
+    const sink: AskSink = {};
+    const registry = new ToolRegistry();
+    registry.register(createAskManifest(sink));
+    await registry.lookup(ASK_TOOL)?.execute(
+      {
+        question: 'Which account?',
+        options: [
+          { label: 'Checking', hint: 'Best match', recommended: true },
+          { label: 'Savings' },
+        ],
+        allowOther: true,
+      },
+      { timezone: 'UTC' } as never,
+    );
+    expect(sink.asked).toMatchObject({
+      question: 'Which account?',
+      allowOther: true,
+      options: [
+        { label: 'Checking', hint: 'Best match', recommended: true },
+        { label: 'Savings', hint: null, recommended: false },
+      ],
+    });
   });
 
   it('hands a provider an object schema, like every other tool this build ships', () => {

@@ -16,6 +16,7 @@ import {
   ensureOwner,
   getAction,
   getSurfaceCursor,
+  askQuestion,
   listSurfaceIdentities,
   pairSurfaceIdentity,
   resumeJob,
@@ -449,10 +450,24 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         now: new Date(now()),
         log,
       });
+      const question = sink.asked
+        ? await askQuestion(pool, {
+            agentId: agent.id,
+            conversationId,
+            question: sink.asked.question,
+            options: sink.asked.options,
+            allowOther: sink.asked.allowOther,
+            now: new Date(now()),
+          }).catch((err) => {
+            log(`telegram: storing question failed: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          })
+        : null;
       return {
         text: result.text,
         askedOwner: sink.asked !== undefined,
         ...(stored.length > 0 ? { offers: stored } : {}),
+        ...(question ? { question } : {}),
       };
     },
   });

@@ -625,6 +625,34 @@ suite('queue (postgres)', () => {
       expect((await getJob(pool, other.id))?.state).toBe('failed');
       expect(await listDeadJobs(pool, { after: before })).toHaveLength(0);
     }, 30_000);
+
+    it('does not rediscover a death whose PostgreSQL microseconds Date discarded', async () => {
+      const job = await enqueue(pool, {
+        kind: 'agent-run',
+        payload: { agentId: 'mail-triage', prompt: 'triage precision' },
+        maxAttempts: 1,
+        dedupKey: 'microsecond-cursor',
+        runAfter: T0,
+      });
+      const claimed = await claimJob(pool, {
+        worker: 'w',
+        kinds: ['agent-run'],
+        now: T0,
+        leaseMs: LEASE_MS,
+      });
+      expect(claimed?.id).toBe(job.id);
+      await failJob(pool, job.id, 'w', 'fetch failed', { retry: false });
+
+      // node-postgres parses this as .123Z and loses the final 456µs. A plain
+      // `updated_at > cursor` therefore returns this same row forever.
+      await pool.query(
+        `update core.jobs set updated_at = '2026-09-17 18:18:22.123456+00' where id = $1`,
+        [job.id],
+      );
+      const cursor = new Date('2026-09-17T18:18:22.123Z');
+      expect(await listDeadJobs(pool, { after: cursor })).toHaveLength(1);
+      expect(await listDeadJobs(pool, { after: cursor, afterId: job.id })).toHaveLength(0);
+    });
   });
 });
 

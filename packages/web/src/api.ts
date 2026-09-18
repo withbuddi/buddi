@@ -458,6 +458,11 @@ export const chatApi = {
        */
       boundary?: { note: string; previousConversationId: string };
     }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
+  answerQuestion: (id: string, body: { answer: string; optionId?: string }) =>
+    post<{ conversationId: string; runId: string }>(
+      `/chat/questions/${encodeURIComponent(id)}/answer`,
+      body,
+    ),
   cancel: (conversationId: string) =>
     post<unknown>(`/chat/conversations/${encodeURIComponent(conversationId)}/cancel`),
   attach: (file: File) => {

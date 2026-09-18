@@ -152,7 +152,14 @@ class LaunchdManager implements ServiceManager {
 
     // An already-loaded job must be booted out first; a fresh machine has none.
     await run('launchctl', ['bootout', this.#target]);
-    const res = await run('launchctl', ['bootstrap', this.#domain, this.unitPath]);
+    let res = await run('launchctl', ['bootstrap', this.#domain, this.unitPath]);
+    // launchd may acknowledge bootout before the old job has fully left its
+    // namespace. A single short retry makes reinstall idempotent without
+    // hiding a persistent plist or permission error.
+    if (res.code !== 0) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      res = await run('launchctl', ['bootstrap', this.#domain, this.unitPath]);
+    }
     if (res.code !== 0) {
       throw new Error(
         `launchctl bootstrap failed (${res.code}): ${res.stderr.trim() || res.stdout.trim()}`,
