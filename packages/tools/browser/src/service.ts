@@ -10,7 +10,7 @@ class ObservationFailure extends Error {}
 
 export interface BrowserStatus {
   mode?: 'computer' | 'playwright';
-  settings?: { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[] };
+  settings?: { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[]; browserProfile?: string };
   permissions?: { accessibility: boolean; screenRecording: boolean; supported: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;

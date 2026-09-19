@@ -6,10 +6,14 @@ import { checkUrl } from '@buddi/tool-web';
 import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
 
 export const browserApps = ['com.google.Chrome', 'com.apple.Safari', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser', 'org.mozilla.firefox'] as const;
+/** The browsers that keep several profiles and accept `--profile-directory`. */
+export const chromiumApps: readonly string[] = ['com.google.Chrome', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser'];
 export const settingsSchema = z.object({
   mode: z.enum(['computer', 'playwright']).default('computer'),
   browserApp: z.enum(browserApps).default('com.google.Chrome'),
   allowedApps: z.array(z.string().min(3).max(200).regex(/^[A-Za-z0-9.-]+$/)).min(1).max(32).default(['com.google.Chrome', 'com.apple.Safari']),
+  /** A Chromium profile directory ("Default", "Profile 2"). Absent: whatever window is in front. */
+  browserProfile: z.string().min(1).max(100).regex(/^[A-Za-z0-9 ._-]+$/).optional(),
 }).strict().refine((value) => value.allowedApps.includes(value.browserApp), 'The selected browser must also be in allowedApps');
 export type ControlSettings = z.infer<typeof settingsSchema>;
 export interface ComputerPermissions { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string }
@@ -86,10 +90,11 @@ export class ComputerDriver implements BrowserDriver {
         url = checked.href;
       }
       this.#invalidate();
-      await this.bridge.run({ operation: 'open', appId });
+      const profile = command.action === 'navigate' && chromiumApps.includes(appId) ? this.settings.browserProfile : undefined;
+      await this.bridge.run({ operation: 'open', appId, ...(profile ? { profile } : {}) });
       if (generation !== this.#generation) throw new Error('Computer action cancelled');
       this.#appId = appId;
-      if (url) await this.bridge.run({ operation: 'act', action: 'navigate', appId, url });
+      if (url) await this.bridge.run({ operation: 'act', action: 'navigate', appId, url, ...(profile ? { profile } : {}) });
       return;
     }
     if (!this.#appId) throw new BrowserPreconditionError('Open an owner-allowed application or navigate first.');

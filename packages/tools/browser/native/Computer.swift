@@ -167,9 +167,14 @@ func click(_ point: CGPoint, _ s: State) throws {
                 guard #available(macOS 14.0, *) else { try refuse("Computer control requires macOS 14 or later") }
                 guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else { try refuse("Computer control needs macOS Accessibility and Screen Recording permission. Use Check permissions in the dashboard. No browser automation fallback was used.") }
                 guard let appId = request["appId"] as? String else { try refuse("Missing selected application") }
+                // A Chromium profile directory, validated to a plain name. Passed as
+                // Chrome's own launch argument; the running instance honours it.
+                let profile = request["profile"] as? String
+                if let profile, profile.isEmpty || profile.count > 100 || profile.rangeOfCharacter(from: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-").inverted) != nil { try refuse("Invalid browser profile") }
                 if operation == "open" {
                     guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: appId) else { try refuse("The allowed application is not installed") }
                     let config = NSWorkspace.OpenConfiguration(); config.activates = true
+                    if let profile { config.arguments = ["--profile-directory=\(profile)"]; config.createsNewApplicationInstance = true }
                     dispatched = true
                     _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
                     result = ["opened": true]
@@ -188,7 +193,13 @@ func click(_ point: CGPoint, _ s: State) throws {
                             // LaunchServices opens a normal browser tab. No address-bar guessing,
                             // remote debugging, Apple events, browser scripting or URL code schemes.
                             let config = NSWorkspace.OpenConfiguration(); config.activates = true
-                            _ = try await NSWorkspace.shared.open([parsed], withApplicationAt: application, configuration: config)
+                            if let profile {
+                                // The URL travels as a launch argument so it lands in the chosen profile.
+                                config.arguments = ["--profile-directory=\(profile)", parsed.absoluteString]; config.createsNewApplicationInstance = true
+                                _ = try await NSWorkspace.shared.openApplication(at: application, configuration: config)
+                            } else {
+                                _ = try await NSWorkspace.shared.open([parsed], withApplicationAt: application, configuration: config)
+                            }
                         } else {
                             guard request["identity"] as? String == s.identity else { try refuse("Window changed. Observe again.") }
                             var target: Node?

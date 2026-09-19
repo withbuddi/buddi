@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import { api, type BrowserStatus, type ControlSettings } from '../api';
 import { chatRoute } from '../routes';
-import { Avatar, Button, Details, Empty, ErrorBanner, KV, Notice, PageFrame, Panel, Pill, Sheet, Stack, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Stack, Toolbar, useAsync } from '../ui';
 
 export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
@@ -106,7 +106,7 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
               <ModeOption
                 current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
                 title="Use my apps"
-                body="Agents work in your own windows, signed in as you. One agent at a time. Releasing control leaves everything open."
+                body="Agents work in your own windows, signed in as you, in the browser profile you choose below. One agent at a time. Releasing control leaves everything open."
                 onPick={() => save({ ...settings, mode: 'computer' })}
               />
               <ModeOption
@@ -183,7 +183,36 @@ function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSet
         <Button variant="accent" disabled={disabled} onClick={onAdd}>Add an app</Button>
         <span className="muted">The app marked as browser is the one agents open websites in.</span>
       </Toolbar>
+      {CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
     </>
+  );
+}
+
+const CHROMIUM = ['com.google.Chrome', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser'];
+
+/** Which of the browser's profiles agents open websites in. */
+function ProfileChoice({ settings, disabled, onChange }: { settings: ControlSettings; disabled: boolean; onChange: (next: ControlSettings) => void }): JSX.Element {
+  const profiles = useAsync(() => api.browserProfiles(settings.browserApp), [settings.browserApp]);
+  const list = profiles.data?.profiles ?? [];
+  const known = settings.browserProfile ? list.some((p) => p.directory === settings.browserProfile) : true;
+  return (
+    <Field
+      label="Browser profile"
+      hint={settings.browserProfile ? 'Websites open in this profile, signed in as it is.' : 'Not chosen: websites open in whichever profile’s window is in front, or the last one you used.'}
+    >
+      <select
+        value={settings.browserProfile ?? ''}
+        disabled={disabled}
+        onChange={(e) => {
+          const { browserProfile: _drop, ...rest } = settings;
+          onChange(e.target.value ? { ...rest, browserProfile: e.target.value } : rest);
+        }}
+      >
+        <option value="">Whichever is in front</option>
+        {!known && settings.browserProfile ? <option value={settings.browserProfile}>{settings.browserProfile} (not found)</option> : null}
+        {list.map((p) => <option key={p.directory} value={p.directory}>{p.name}{p.directory === 'Default' ? '' : ` (${p.directory})`}</option>)}
+      </select>
+    </Field>
   );
 }
 

@@ -5,7 +5,7 @@ import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel } from './Browser';
 
-vi.mock('../api', () => ({ api: { browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
@@ -13,6 +13,7 @@ const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', a
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.browser).mockResolvedValue(status); vi.mocked(api.browserControl).mockResolvedValue(status);
+  vi.mocked(api.browserProfiles).mockResolvedValue({ profiles: [{ directory: 'Default', name: 'Amen' }, { directory: 'Profile 2', name: 'Work' }] });
   vi.mocked(api.installedApps).mockResolvedValue({ apps: [{ id: 'com.google.Chrome', name: 'Google Chrome', path: '/Applications/Google Chrome.app' }, { id: 'com.apple.TextEdit', name: 'TextEdit', path: '/System/Applications/TextEdit.app' }] });
 });
 
@@ -41,6 +42,14 @@ describe('computer & browser settings', () => {
     fireEvent.change(await screen.findByLabelText('Search apps'), { target: { value: 'text' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Allow' }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, allowedApps: ['com.google.Chrome', 'com.apple.TextEdit'] }));
+  });
+  it('lets the owner pick which Chrome profile websites open in', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
+    render(<Browser />);
+    const select = await screen.findByLabelText('Browser profile');
+    expect(await screen.findByRole('option', { name: 'Work (Profile 2)' })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: 'Profile 2' } });
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, browserProfile: 'Profile 2' }));
   });
   it('says who is driving and links to that conversation, with settings locked meanwhile', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', settings });
