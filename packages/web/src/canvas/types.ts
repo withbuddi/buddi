@@ -173,18 +173,19 @@ export interface StructuredProps {
  * tab — what may be pushed into the overflow, what is allowed to take the
  * screen — can tell it apart from something a run produced.
  */
-export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser';
+export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser' | 'artifact';
 
 /**
  * What draws a panel.
  *
  * Every `RendererName` is a shape a *plugin* may ask for through a view
- * descriptor. `profile` and `browser` are deliberately not among them: they are the platform's
- * own panel about the platform's own configuration, and adding it to the
- * renderer registry would let an agent draw a convincing properties panel out
- * of `canvas.show` with data it made up.
+ * descriptor. `profile`, `browser` and `artifact` are deliberately not among
+ * them: they are the platform's own panels — its configuration, its live
+ * browser session, a file the owner attached — and adding them to the renderer
+ * registry would let an agent draw a convincing properties panel, or a file
+ * that was never sent, out of `canvas.show` with data it made up.
  */
-export type PanelName = RendererName | 'profile' | 'browser';
+export type PanelName = RendererName | 'profile' | 'browser' | 'artifact';
 
 /** One thing the canvas can show: a tab and a panel. */
 export interface Renderable {

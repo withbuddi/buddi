@@ -28,6 +28,7 @@ import type { ApprovalRow } from '../api';
 import { RenderView } from './registry';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
 import { Profile, type ProfileProps } from './views/Profile';
+import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -154,6 +155,8 @@ export function Canvas({
                   {...(item.props as ProfileProps)}
                   {...(onChangeAgent ? { onChange: onChangeAgent } : {})}
                 />
+              ) : item.source === 'artifact' ? (
+                <ArtifactView {...(item.props as ArtifactViewProps)} />
               ) : (
                 <RenderView
                   renderer={item.renderer}

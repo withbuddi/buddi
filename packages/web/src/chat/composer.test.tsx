@@ -7,18 +7,21 @@
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Composer } from './Composer';
+import { Composer, type ComposerHandle } from './Composer';
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
+/**
+ * The page owns the drop target and hands files in through the composer's
+ * handle; here that handle is driven directly. jsdom has no DataTransfer
+ * worth the name anyway.
+ */
+let handle: ComposerHandle | null = null;
 function dropFile(file: File): void {
-  const zone = screen.getByTestId('composer');
-  // jsdom has no DataTransfer worth the name; the shape the handler reads is
-  // all that is needed, and all that is asserted.
-  fireEvent.drop(zone, { dataTransfer: { files: [file] } });
+  handle?.addFiles([file]);
 }
 
 describe('the composer', () => {
@@ -42,7 +45,7 @@ describe('the composer', () => {
     );
 
     const onSend = vi.fn();
-    render(<Composer disabled={false} running={false} onSend={onSend} onStop={() => {}} agentName="Ada" />);
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={onSend} onStop={() => {}} agentName="Ada" />);
 
     const file = new File(['%PDF-1.4'], 'statement.pdf', { type: 'application/pdf' });
     await act(async () => {
@@ -59,7 +62,68 @@ describe('the composer', () => {
     await act(async () => {
       screen.getByRole('button', { name: 'Send' }).click();
     });
-    expect(onSend).toHaveBeenCalledWith('What is this?', ['art-7']);
+    expect(onSend).toHaveBeenCalledWith('What is this?', [
+      { artifactId: 'art-7', filename: 'statement.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 1024 },
+    ]);
+  });
+
+  it('takes a pasted file the same way, and leaves pasted text to the field', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(
+        JSON.stringify({ artifactId: 'art-9', filename: 'image.png', mime: 'image/png', kind: 'image', sizeBytes: 12 }),
+        { status: 200 },
+      )),
+    );
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    const field = screen.getByLabelText(/Message Ada/);
+
+    // Text alone: nothing is uploaded.
+    fireEvent.paste(field, { clipboardData: { files: [] } });
+    expect(fetch).not.toHaveBeenCalled();
+
+    // A file on the clipboard — a screenshot — becomes a tile.
+    await act(async () => {
+      fireEvent.paste(field, { clipboardData: { files: [new File(['png'], 'image.png', { type: 'image/png' })] } });
+    });
+    await waitFor(() => expect(screen.getByText('image.png')).toBeDefined());
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws an image as its own thumbnail, and a document as a mark with its size', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    // jsdom has no object URLs; the composer only needs the two functions.
+    (URL as unknown as { createObjectURL: (file: File) => string }).createObjectURL = (file) => `blob:${file.name}`;
+    (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    await act(async () => {
+      dropFile(new File(['png'], 'photo.png', { type: 'image/png' }));
+      dropFile(new File(['x'.repeat(2048)], 'rows.csv', { type: 'text/csv' }));
+    });
+    const img = document.querySelector('.wb-file[data-thumb="true"] img') as HTMLImageElement | null;
+    expect(img?.getAttribute('src')).toBe('blob:photo.png');
+    expect(screen.getByText('rows.csv')).toBeDefined();
+    // The document tile has no picture, only the family mark.
+    expect(document.querySelectorAll('.wb-file img')).toHaveLength(1);
+  });
+
+  it('removes a file from the tray and never sends it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(
+        JSON.stringify({ artifactId: 'art-1', filename: 'a.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 1 }),
+        { status: 200 },
+      )),
+    );
+    const onSend = vi.fn();
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={onSend} onStop={() => {}} agentName="Ada" />);
+    await act(async () => { dropFile(new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })); });
+    await waitFor(() => expect(screen.getByText('a.pdf')).toBeDefined());
+    await act(async () => { screen.getByRole('button', { name: 'Remove a.pdf' }).click(); });
+    expect(screen.queryByText('a.pdf')).toBeNull();
+    fireEvent.change(screen.getByLabelText(/Message Ada/), { target: { value: 'hi' } });
+    await act(async () => { screen.getByRole('button', { name: 'Send' }).click(); });
+    expect(onSend).toHaveBeenCalledWith('hi', []);
   });
 
   it('will not send while a file is still uploading', async () => {
@@ -71,14 +135,14 @@ describe('the composer', () => {
       })),
     );
 
-    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
     fireEvent.change(screen.getByLabelText(/Message Ada/), { target: { value: 'here' } });
     await act(async () => {
       dropFile(new File(['x'], 'slow.csv', { type: 'text/csv' }));
     });
 
     expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByText(/uploading/)).toBeDefined();
+    expect(screen.getByText(/Uploading/)).toBeDefined();
 
     await act(async () => {
       release?.(
@@ -96,16 +160,17 @@ describe('the composer', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ error: 'that file is too large' }), { status: 413 })),
     );
-    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
     await act(async () => {
       dropFile(new File(['x'], 'huge.bin', { type: 'application/octet-stream' }));
     });
-    await waitFor(() => expect(screen.getByText(/failed/)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/that file is too large/)).toBeDefined());
+    expect(screen.getByText(/failed to upload/)).toBeDefined();
   });
 
   it('offers a stop button while a run is in flight, and no send', () => {
     const onStop = vi.fn();
-    render(<Composer disabled={false} running onSend={() => {}} onStop={onStop} agentName="Ada" />);
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running onSend={() => {}} onStop={onStop} agentName="Ada" />);
     expect(screen.queryByText('Send')).toBeNull();
     screen.getByText('Stop').click();
     expect(onStop).toHaveBeenCalled();

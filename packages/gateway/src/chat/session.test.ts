@@ -619,7 +619,7 @@ describe('/attach', () => {
     // The persisted turn holds the reference, never the bytes.
     const userTurn = h.db.messages.find((m) => m.role === 'user');
     expect(JSON.stringify(userTurn?.content)).toContain('artifact_ref');
-    expect(JSON.stringify(userTurn?.content)).toContain('artifact id art-1');
+    expect(userTurn?.content).toContainEqual(expect.objectContaining({ type: 'artifact_ref', artifactId: 'art-1' }));
     // What the provider was sent carries the image itself.
     const sent = JSON.stringify(h.provider.requests[0]?.messages);
     expect(sent).toContain('image');

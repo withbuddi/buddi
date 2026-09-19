@@ -78,7 +78,15 @@ export type ContentBlock =
     }
   | { type: 'image'; mime: string; data: string }
   | { type: 'document'; mime: 'application/pdf'; data: string; name?: string }
-  | { type: 'artifact_ref'; artifactId: string; mime: string; kind: string }
+  | {
+      type: 'artifact_ref';
+      artifactId: string;
+      mime: string;
+      kind: string;
+      /** What the owner called it, so the model can name it back. Optional: older rows have none. */
+      filename?: string;
+      sizeBytes?: number;
+    }
   /**
    * A block this port does not model, carried back to the provider that made
    * it, verbatim.

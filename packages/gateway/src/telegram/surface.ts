@@ -53,14 +53,12 @@ import {
   type TelegramUpdate,
 } from './api.js';
 import {
-  attachmentNote,
   extractAttachment,
   filesText,
   formatBytes,
   getLastAttachment,
   gotAudioText,
   gotFileText,
-  isViewable,
   listChatAttachments,
   MAX_ATTACHMENT_BYTES,
   ATTACHMENT_RECENCY_MS,
@@ -478,6 +476,8 @@ export interface RunAttachment {
   artifactId: string;
   mime: string;
   kind: string;
+  filename?: string | null;
+  sizeBytes?: number;
 }
 
 export interface RunRequest {
@@ -486,9 +486,9 @@ export interface RunRequest {
   chatId: string;
   text: string;
   /**
-   * Files this turn can *see* — images and PDFs. Saved-but-unviewable files
-   * (a CSV) are named in `text` with their artifact id instead, so the agent
-   * reaches them through a tool rather than pretending to have read them.
+   * Files this turn carries — every one, viewable or not. The runtime shows
+   * the model an image or a PDF and only names a CSV with its artifact id, so
+   * the agent reaches it through a tool rather than pretending to have read it.
    */
   attachments?: RunAttachment[];
   /**
@@ -2051,7 +2051,7 @@ export class TelegramSurface {
           conversationId,
           chatId,
           agent,
-          text: carried ? `${prompt}\n\n${carried.note}` : prompt,
+          text: prompt,
           ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
           onToolCall: (name) => progress.noteToolCall(name),
         });
@@ -2096,7 +2096,7 @@ export class TelegramSurface {
   async #carriedAttachment(
     chatId: string,
     text: string,
-  ): Promise<{ attachments: RunAttachment[]; note: string } | undefined> {
+  ): Promise<{ attachments: RunAttachment[] } | undefined> {
     if (!this.#opts.artifacts) return undefined;
     if (!referencesAttachment(text)) return undefined;
 
@@ -2115,8 +2115,9 @@ export class TelegramSurface {
   }
 
   /**
-   * How one artifact reaches a run: as a viewable block when the model can
-   * actually look at it, and always as a note naming its id.
+   * How one artifact reaches a run: as a reference with its name and size.
+   * The runtime shows the model the bytes when it can look at them, and
+   * always names the id so the agent can reach the file through a tool.
    */
   #attachmentTurn(a: {
     artifactId: string;
@@ -2124,19 +2125,15 @@ export class TelegramSurface {
     kind: string;
     filename: string | null;
     sizeBytes: number;
-  }): { attachments: RunAttachment[]; note: string } {
-    const viewable = isViewable(a.kind as 'image' | 'document' | 'audio' | 'other', a.mime);
+  }): { attachments: RunAttachment[] } {
     return {
-      attachments: viewable
-        ? [{ artifactId: a.artifactId, mime: a.mime, kind: a.kind }]
-        : [],
-      note: attachmentNote({
+      attachments: [{
         artifactId: a.artifactId,
-        filename: a.filename,
         mime: a.mime,
+        kind: a.kind,
+        filename: a.filename,
         sizeBytes: a.sizeBytes,
-        viewable,
-      }),
+      }],
     };
   }
 
@@ -2247,7 +2244,7 @@ export class TelegramSurface {
             conversationId,
             chatId,
             agent,
-            text: `${caption}\n\n${turn.note}`,
+            text: caption,
             ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
           }),

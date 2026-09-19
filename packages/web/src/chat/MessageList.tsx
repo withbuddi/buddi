@@ -16,6 +16,8 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { approvalIdOf, labelFor } from '../canvas/renderables';
+import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
+import { FileTile } from './FileTile';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 
 /** A tool call that has not come back yet. */
@@ -30,6 +32,7 @@ export function MessageList({
   live,
   now,
   onOpen,
+  onOpenFile,
   children,
   agentName,
   emptyHint,
@@ -39,6 +42,8 @@ export function MessageList({
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
   now: number;
   onOpen: (toolUseId: string) => void;
+  /** A file in the thread was clicked: show it on the canvas. */
+  onOpenFile?: (attachment: AttachmentBlock) => void;
   children?: ReactNode;
   /** Whose turn the agent's turn is. Shown once per run of its messages. */
   agentName?: string;
@@ -67,6 +72,23 @@ export function MessageList({
             {opensTurn && !mine ? (
               <div className="wb-msg-who">{agentName ?? 'Assistant'}</div>
             ) : null}
+            {/* The files a message carries sit together, before its words: the
+                thing you handed over, then what you said about it. */}
+            {files(message).length > 0 ? (
+              <div className="wb-msg-files" role="list" aria-label="Files sent with this message">
+                {files(message).map((block) => (
+                  <span role="listitem" key={block.artifactId}>
+                    <FileTile
+                      name={block.filename ?? 'Untitled file'}
+                      mime={block.mime}
+                      sizeBytes={block.sizeBytes}
+                      thumbnail={isPreviewable(block.mime) ? previewUrl(block.artifactId) : null}
+                      {...(onOpenFile ? { onOpen: () => onOpenFile(block) } : {})}
+                    />
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {(message.blocks ?? []).map((block, blockIndex) => {
               if (block.type === 'text') {
                 return block.text.trim() === '' ? null : (
@@ -75,15 +97,7 @@ export function MessageList({
                   </div>
                 );
               }
-              if (block.type === 'attachment') {
-                return (
-                  <span key={blockIndex} className="wb-chip">
-                    <ClipIcon />
-                    {block.filename}
-                    <span className="wb-chip-kind">{block.kind}</span>
-                  </span>
-                );
-              }
+              if (block.type === 'attachment') return null;
               if (block.type === 'tool_use') {
                 const result = findResult(messages, block.id);
                 return (
@@ -122,6 +136,10 @@ export function MessageList({
       <div ref={bottom} />
     </div>
   );
+}
+
+function files(message: ChatMessage): AttachmentBlock[] {
+  return (message.blocks ?? []).filter((block): block is AttachmentBlock => block.type === 'attachment');
 }
 
 /** A block worth a line on screen. A bare tool result is not one. */
@@ -204,24 +222,6 @@ function ArrowIcon(): JSX.Element {
       strokeLinejoin="round"
     >
       <path d="M4.8 2.6 9 6.5l-4.2 3.9" />
-    </svg>
-  );
-}
-
-function ClipIcon(): JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9.4 5.6 6 9a2.1 2.1 0 0 1-3-3l3.6-3.6a1.4 1.4 0 0 1 2 2L5 8" />
     </svg>
   );
 }

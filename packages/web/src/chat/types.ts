@@ -35,7 +35,7 @@ export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
-  | { type: 'attachment'; artifactId: string; filename: string; mime: string; kind: string };
+  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null };
 
 export interface ChatMessage {
   id: string;

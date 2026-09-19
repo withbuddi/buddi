@@ -33,6 +33,8 @@ export interface AttachmentRef {
   artifactId: string;
   mime: string;
   kind: string;
+  filename?: string | null;
+  sizeBytes?: number;
 }
 
 /** Per-message caps. No resizing in v1: over the line is a refusal. */
@@ -62,7 +64,45 @@ export function toArtifactRefBlocks(attachments: readonly AttachmentRef[]): Cont
     artifactId: a.artifactId,
     mime: a.mime,
     kind: a.kind,
+    ...(a.filename ? { filename: a.filename } : {}),
+    ...(typeof a.sizeBytes === 'number' && a.sizeBytes > 0 ? { sizeBytes: a.sizeBytes } : {}),
   }));
+}
+
+/** Only what a model can actually look at travels as bytes: images and PDFs. */
+export function isSendableInline(ref: { kind: string; mime: string }): boolean {
+  return ref.kind === 'image' || ref.mime.toLowerCase() === 'application/pdf';
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * What the model is told about a file, in the user turn.
+ *
+ * Generated at send time from the stored reference and never persisted: the
+ * transcript holds the owner's words and the reference, and a page rendering
+ * it shows a file, not this sentence. The id is always given, even for an
+ * image the model can see — it is how the agent reaches the bytes again
+ * through the artifacts tools, and a model that can see a PDF still cannot
+ * cite it without one.
+ */
+export function attachmentNote(ref: {
+  artifactId: string;
+  mime: string;
+  kind: string;
+  filename?: string | null;
+  sizeBytes?: number;
+}): string {
+  const name = ref.filename ?? 'a file';
+  const size = ref.sizeBytes ? `, ${formatBytes(ref.sizeBytes)}` : '';
+  const seen = isSendableInline(ref)
+    ? 'It is attached to this message.'
+    : 'Its contents are not in this message — read them with the artifacts tools.';
+  return `[Attached file: ${name} (${ref.mime}${size}), artifact id ${ref.artifactId}. ${seen}]`;
 }
 
 /** Count cap — checked before anything is loaded or persisted. */
@@ -80,22 +120,32 @@ function placeholder(ref: { mime?: string; kind?: string }, why: string): Conten
 }
 
 /**
- * Turn one `artifact_ref` into something a provider can carry.
+ * Turn one `artifact_ref` into what a provider can carry.
  *
- * Images and PDFs go over the wire as base64. Everything else (audio, an
- * archive) is described in text: the model can still reach for a tool that
- * reads it, and pretending it was attached would be a lie it cannot detect.
+ * Always a note first — name, type, size, id — because that is how the model
+ * refers to the file afterwards. Then, for an image or a PDF, the bytes as
+ * base64. Everything else (a CSV, audio, an archive) is the note alone: the
+ * model can still reach for a tool that reads it, and pretending it was
+ * attached would be a lie it cannot detect.
  */
 async function hydrateRef(
   ref: Extract<ContentBlock, { type: 'artifact_ref' }>,
   load: LoadArtifact | undefined,
   enforceCaps: boolean,
   budget: { total: number },
+): Promise<ContentBlock[]> {
+  const note: ContentBlock = { type: 'text', text: attachmentNote(ref) };
+  if (!isSendableInline(ref)) return [note];
+  const media = await hydrateBytes(ref, load, enforceCaps, budget);
+  return [note, media];
+}
+
+async function hydrateBytes(
+  ref: Extract<ContentBlock, { type: 'artifact_ref' }>,
+  load: LoadArtifact | undefined,
+  enforceCaps: boolean,
+  budget: { total: number },
 ): Promise<ContentBlock> {
-  const supported = ref.kind === 'image' || ref.mime === 'application/pdf';
-  if (!supported) {
-    return placeholder(ref, 'this kind of file cannot be shown inline; use an artifacts tool to read it');
-  }
   if (!load) return placeholder(ref, 'no artifact loader is configured for this run');
 
   let loaded: LoadedArtifact | null;
@@ -154,7 +204,7 @@ export async function hydrateContent(
       out.push(block);
       continue;
     }
-    out.push(await hydrateRef(block, load, opts.enforceCaps === true, budget));
+    out.push(...(await hydrateRef(block, load, opts.enforceCaps === true, budget)));
   }
   return out;
 }

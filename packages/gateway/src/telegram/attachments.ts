@@ -251,28 +251,6 @@ export function oversizeText(filename: string, sizeBytes: number): string {
   );
 }
 
-/**
- * What the agent is told about a file, in the user turn.
- *
- * Always present, even for an image the model can see: the id is how the agent
- * reaches the bytes again (`artifacts.text`, `artifacts.get`), and a model that
- * can see a PDF still cannot cite it without one.
- */
-export function attachmentNote(a: {
-  artifactId: string;
-  filename?: string | null;
-  mime: string;
-  sizeBytes?: number;
-  viewable: boolean;
-}): string {
-  const name = a.filename ?? 'a file';
-  const size = a.sizeBytes ? `, ${formatBytes(a.sizeBytes)}` : '';
-  const seen = a.viewable
-    ? 'It is attached to this message.'
-    : 'Its contents are not in this message — read them with the artifacts tools.';
-  return `[Attached file: ${name} (${a.mime}${size}), artifact id ${a.artifactId}. ${seen}]`;
-}
-
 /** `/files` with nothing to list. */
 export const NO_FILES_TEXT =
   'No files in this chat yet. Send me a statement, a receipt photo or a CSV and it will land here.';

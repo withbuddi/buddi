@@ -1112,12 +1112,12 @@ describe('runAgent — the capability matrix is honoured', () => {
 
   it('sends the document to a provider whose wire carries one', async () => {
     const { sent } = await runWithPdf(providerCapabilities('anthropic'));
-    expect(sent?.messages[0]?.content[1]).toMatchObject({ type: 'document' });
+    expect(sent?.messages[0]?.content[2]).toMatchObject({ type: 'document' });
   });
 
   it('degrades it to a visible placeholder for a provider whose wire cannot', async () => {
     const { db, sent } = await runWithPdf(providerCapabilities('openai'));
-    const block = sent?.messages[0]?.content[1] as { type: string; text: string };
+    const block = sent?.messages[0]?.content[2] as { type: string; text: string };
     expect(block.type).toBe('text');
     expect(block.text).toContain('openai');
     // What is *persisted* is still the reference: the same history sent to an
@@ -1128,7 +1128,7 @@ describe('runAgent — the capability matrix is honoured', () => {
 
   it('treats a provider that declares nothing as the native wire', async () => {
     const { sent } = await runWithPdf();
-    expect(sent?.messages[0]?.content[1]).toMatchObject({ type: 'document' });
+    expect(sent?.messages[0]?.content[2]).toMatchObject({ type: 'document' });
   });
 });
 

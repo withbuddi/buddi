@@ -47,7 +47,6 @@ import { nativeSearchRecorder } from '@buddi/tool-web';
 import type { Pool } from 'pg';
 import { approvalRequestText } from '../telegram/approvals.js';
 import {
-  attachmentNote,
   formatBytes,
   type ArtifactStore,
 } from '../telegram/attachments.js';
@@ -1025,21 +1024,18 @@ export class ChatSession {
     // Telegram caption rides with the document it arrived on.
     const staged = opts.carry === false ? [] : this.#attachments;
     this.#attachments = [];
-    const notes = staged.map((a) =>
-      attachmentNote({
-        artifactId: a.artifactId,
-        filename: a.filename,
-        mime: a.mime,
-        sizeBytes: a.sizeBytes,
-        viewable: a.viewable,
-      }),
-    );
-    const attachments: AttachmentRef[] = staged
-      .filter((a) => a.viewable)
-      .map((a) => ({ artifactId: a.artifactId, mime: a.mime, kind: a.kind }));
+    // Every file goes as a reference; the runtime writes the model's note
+    // from it at send time, and the transcript keeps only the reference.
+    const attachments: AttachmentRef[] = staged.map((a) => ({
+      artifactId: a.artifactId,
+      mime: a.mime,
+      kind: a.kind,
+      filename: a.filename,
+      sizeBytes: a.sizeBytes,
+    }));
 
     return this.#run(agent, conversationId, {
-      userMessage: notes.length === 0 ? text : `${text}\n\n${notes.join('\n')}`,
+      userMessage: text,
       ...(attachments.length > 0 ? { attachments } : {}),
     });
   }

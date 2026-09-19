@@ -1987,14 +1987,13 @@ describe('TelegramSurface attachment ingest', () => {
     expect(saved.source).toEqual({ surface: SURFACE, chatId: String(OWNER), messageId: '400' });
     expect(saved.bytes.toString('latin1')).toBe('%PDF-1.7 rows');
 
-    // The run gets the caption as the message, the artifact as an attachment,
-    // and a note naming the id so the agent can reach the bytes by tool.
+    // The run gets the caption as the message, untouched, and the artifact as
+    // a reference with its name — the runtime writes the model's note from it.
     expect(run).toHaveBeenCalledTimes(1);
     const req = run.mock.calls[0]?.[0] as any;
-    expect(req.text.startsWith('import this into PNC Spend')).toBe(true);
-    expect(req.text).toContain('artifact id art-1');
+    expect(req.text).toBe('import this into PNC Spend');
     expect(req.attachments).toEqual([
-      { artifactId: 'art-1', mime: 'application/pdf', kind: 'document' },
+      expect.objectContaining({ artifactId: 'art-1', mime: 'application/pdf', kind: 'document' }),
     ]);
 
     // And the bubble says what it is doing.
@@ -2027,7 +2026,7 @@ describe('TelegramSurface attachment ingest', () => {
     expect(sent.find((s) => s.method === 'getFile')?.body.file_id).toBe('full');
     expect((store.saved[0] as SaveArtifactInput).mime).toBe('image/jpeg');
     expect((run.mock.calls[0]?.[0] as any).attachments).toEqual([
-      { artifactId: 'art-1', mime: 'image/jpeg', kind: 'image' },
+      expect.objectContaining({ artifactId: 'art-1', mime: 'image/jpeg', kind: 'image' }),
     ]);
   });
 
@@ -2084,10 +2083,9 @@ describe('TelegramSurface attachment ingest', () => {
 
     expect(run).toHaveBeenCalledTimes(1);
     const req = run.mock.calls[0]?.[0] as any;
-    expect(req.text.startsWith('import this statement into PNC Spend')).toBe(true);
-    expect(req.text).toContain('artifact id art-1');
+    expect(req.text).toBe('import this statement into PNC Spend');
     expect(req.attachments).toEqual([
-      { artifactId: 'art-1', mime: 'application/pdf', kind: 'document' },
+      expect.objectContaining({ artifactId: 'art-1', mime: 'application/pdf', kind: 'document', filename: 'sept.pdf' }),
     ]);
     expect(sent.filter((s) => s.body.text === readingText(handleLabel(FINANCE.handle)))).toHaveLength(1);
   });
@@ -2119,7 +2117,7 @@ describe('TelegramSurface attachment ingest', () => {
     expect((run.mock.calls[1]?.[0] as any).attachments).toBeUndefined();
   });
 
-  it('saves a CSV without attaching it, naming the artifact id instead', async () => {
+  it('saves a CSV and passes it as a reference the agent reads by tool', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
     const { surface, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'imported'), {
@@ -2137,9 +2135,12 @@ describe('TelegramSurface attachment ingest', () => {
     await surface.drain();
 
     const req = run.mock.calls[0]?.[0] as any;
-    expect(req.attachments).toBeUndefined();
-    expect(req.text).toContain('artifact id art-1');
-    expect(req.text).toContain('artifacts tools');
+    // A CSV travels as a reference too; the runtime tells the model it is
+    // not shown inline and must be read with the artifacts tools.
+    expect(req.attachments).toEqual([
+      expect.objectContaining({ artifactId: 'art-1', mime: 'text/csv', filename: 'txns.csv' }),
+    ]);
+    expect(req.text).not.toContain('artifact id');
   });
 
   it('stores a voice note, says it cannot listen, and runs nothing', async () => {

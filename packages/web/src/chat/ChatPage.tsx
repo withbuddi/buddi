@@ -14,7 +14,7 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { Envelope } from '../canvas/views/Envelope';
@@ -31,12 +31,13 @@ import { agentRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
-import { Composer, type ComposerDraft } from './Composer';
+import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
+import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall } from './MessageList';
 import { openChatStream } from './stream';
-import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage } from './types';
+import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttachment } from './types';
 
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 440;
@@ -95,6 +96,15 @@ export function ChatPage({
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [dismissedTabs, setDismissedTabs] = useState(readDismissedTabs);
+  /*
+   * Files the owner opened from the thread. Held per conversation and dropped
+   * with it: a picture from one thread has no business on another's canvas.
+   */
+  const [openedFiles, setOpenedFiles] = useState<AttachmentBlock[]>([]);
+  /** Whether a file is being dragged over the column, for the drop overlay. */
+  const [dropping, setDropping] = useState(false);
+  const dropDepth = useRef(0);
+  const composer = useRef<ComposerHandle>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const previousNewSignal = useRef(newConversationSignal ?? 0);
   const routeAgent = useRef(agentId);
@@ -162,7 +172,7 @@ export function ChatPage({
     setOptimistic([]);
     setError(null);
     setRunning(false);
-    setActiveTab(null);
+    setActiveTab(null); setOpenedFiles([]);
     setHistoryOpen(false);
     // Whoever this is now, it is not who the open panel described.
     setProfile(null);
@@ -332,8 +342,9 @@ export function ChatPage({
       if (inspection) items.push(inspection);
     }
     if (browserTab) items.push(browserTab);
+    for (const file of openedFiles) items.push(artifactRenderable(file));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, activeTab, dismissedTabs, conversationId]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, activeTab, dismissedTabs, conversationId, openedFiles]);
 
   const inlineApprovals = useMemo(
     () => renderables.filter((item) => item.source === 'approval'),
@@ -384,13 +395,21 @@ export function ChatPage({
 
   /* ---- actions ---- */
 
-  const send = (text: string, attachmentIds: string[]): void => {
+  const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
+    const attachmentIds = attachments.map((file) => file.artifactId);
+    // The optimistic turn carries its files too, so the thread does not show
+    // bare words for a second and then grow a picture.
     const local: ChatMessage = {
       id: `optimistic:${Date.now()}`,
       role: 'user',
       at: new Date().toISOString(),
-      blocks: [{ type: 'text', text }],
+      blocks: [
+        { type: 'text', text },
+        ...attachments.map((file): ChatMessage['blocks'][number] => ({
+          type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: file.kind, sizeBytes: file.sizeBytes,
+        })),
+      ],
     };
     setOptimistic([local]);
     setError(null);
@@ -515,7 +534,7 @@ export function ChatPage({
     setNotice(null);
     setLive([]);
     setAwaiting(new Map());
-    setActiveTab(null);
+    setActiveTab(null); setOpenedFiles([]);
     previousFocus.current = null;
     if (agentId) onConversationOpened?.(agentId, 'new');
   }, [agentId, onConversationOpened]);
@@ -567,6 +586,7 @@ export function ChatPage({
       onActivate={setActiveTab}
       onClose={(id) => {
         if (profile && id === profileTabId(profile.id)) setProfile(null);
+        else if (openedFiles.some(file => artifactTabId(file.artifactId) === id)) setOpenedFiles(current => current.filter(file => artifactTabId(file.artifactId) !== id));
         else if (conversationId) setDismissedTabs(current => {
           const next = { ...current, [conversationId]: [...new Set([...(current[conversationId] ?? []), id])] };
           storeDismissedTabs(next); return next;
@@ -604,13 +624,51 @@ export function ChatPage({
 
   return (
     <>
-      <section className="wb-chat" style={narrow ? undefined : { width }} data-testid="chat-column">
+      <section
+        className="wb-chat"
+        style={narrow ? undefined : { width }}
+        data-testid="chat-column"
+        data-dropping={dropping || undefined}
+        onDragEnter={(event) => {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          dropDepth.current += 1;
+          setDropping(true);
+        }}
+        onDragOver={(event) => {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        }}
+        onDragLeave={(event) => {
+          if (!carriesFiles(event)) return;
+          dropDepth.current = Math.max(0, dropDepth.current - 1);
+          if (dropDepth.current === 0) setDropping(false);
+        }}
+        onDrop={(event) => {
+          if (!carriesFiles(event)) return;
+          event.preventDefault();
+          dropDepth.current = 0;
+          setDropping(false);
+          if (agentId) composer.current?.addFiles(event.dataTransfer.files);
+        }}
+      >
+        {/* The whole column is the target; the overlay says so the moment a
+            file crosses it, and names where it will go. */}
+        {dropping ? (
+          <div className="wb-drop" aria-hidden="true">
+            <div className="wb-drop-card">
+              <DropIcon />
+              <strong>Drop to attach</strong>
+              <span>{agent ? `It goes with your next message to ${agent.name}` : 'Pick an agent first'}</span>
+            </div>
+          </div>
+        ) : null}
         <header className="wb-chat-head" data-testid="chat-head">
           <div className="wb-head-row">
             <div className="wb-head-text">
               {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s profile`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
-                {agent?.model ? <><span className="wb-head-model" title="The model this agent runs on">{agent.model}</span>{' · '}</> : null}
                 {line.text}
               </span>
             </div>
@@ -672,7 +730,7 @@ export function ChatPage({
           onNew={() => { setHistoryOpen(false); startNew(); }}
           onSelect={id => {
             if (id === conversationId) { setHistoryOpen(false); return; }
-            setHistoryOpen(false); setConversation(null); setOptimistic([]); setRunning(false); setActiveTab(null); setError(null); setNotice(null);
+            setHistoryOpen(false); setConversation(null); setOptimistic([]); setRunning(false); setActiveTab(null); setError(null); setNotice(null); setOpenedFiles([]);
             setConversationId(id);
             onConversationOpened?.(agentId, id, false);
           }} /> : null}
@@ -691,6 +749,11 @@ export function ChatPage({
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}
+          onOpenFile={(file) => {
+            setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
+            setActiveTab(artifactTabId(file.artifactId));
+            if (narrow) onOpenCanvas?.();
+          }}
           onOpen={(toolUseId) => {
             if (conversationId) setDismissedTabs(current => {
               const next = { ...current, [conversationId]: (current[conversationId] ?? []).filter(id => id !== toolUseId) };
@@ -745,12 +808,15 @@ export function ChatPage({
           />
         ) : (
           <Composer
+            ref={composer}
             disabled={!agentId}
             running={running}
             onSend={send}
             onStop={stop}
             agentName={agent?.name ?? 'the agent'}
             draft={draft}
+            model={agent?.model ?? null}
+            setupHref={agent ? agentRoute(agent.id, 'setup') : null}
           />
         )}
       </section>
@@ -824,6 +890,24 @@ function transcriptContains(conversation: ChatConversation, optimistic: ChatMess
     return text.text.trim() === wanted;
   }
   return false;
+}
+
+/**
+ * Only a drag that carries files is ours. Dragging selected text across the
+ * column is the browser's business and must keep working as it always has.
+ */
+function carriesFiles(event: DragEvent<HTMLElement>): boolean {
+  const types = event.dataTransfer?.types;
+  return Boolean(types && Array.from(types).includes('Files'));
+}
+
+function DropIcon(): JSX.Element {
+  return (
+    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 4v13M8.5 11.5 14 17l5.5-5.5" />
+      <path d="M5 19.5v2a2.5 2.5 0 0 0 2.5 2.5h13a2.5 2.5 0 0 0 2.5-2.5v-2" />
+    </svg>
+  );
 }
 
 /** Three dots, vertical: this thing has more to say about itself. */
