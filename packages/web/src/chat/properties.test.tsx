@@ -169,9 +169,8 @@ async function open(
       />,
     );
   });
-  await act(async () => {
-    fireEvent.click(screen.getByTestId('agent-properties'));
-  });
+  await act(async () => { fireEvent.click(screen.getByTestId('chat-menu')); });
+  await act(async () => { fireEvent.click(screen.getByTestId('agent-properties')); });
   await waitFor(() => expect(screen.getByTestId('agent-profile')).toBeDefined());
   return { calls, selected };
 }
@@ -264,9 +263,8 @@ describe('the properties panel', () => {
   it('is read-only: it issues no request that is not a read', async () => {
     const { calls } = await open();
     // Close it again — the toggle is the only other thing it can be asked to do.
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('agent-properties'));
-    });
+    await act(async () => { fireEvent.click(screen.getByTestId('chat-menu')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('agent-properties')); });
     expect(screen.queryByTestId('agent-profile')).toBeNull();
     expect(calls.filter((call) => call.method !== 'GET')).toEqual([]);
     expect(calls.some((call) => call.url.includes('/agents/keeper/profile'))).toBe(true);
@@ -299,9 +297,8 @@ describe('the properties panel', () => {
         narrow={false}
       />,
     );
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('agent-properties'));
-    });
+    await act(async () => { fireEvent.click(screen.getByTestId('chat-menu')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('agent-properties')); });
     await waitFor(() => expect(screen.getByTestId('agent-profile')).toBeDefined());
 
     await act(async () => {

@@ -430,7 +430,37 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   width: 100%;
   min-width: 0;
 }
+.wb-head-face { display: inline-flex; flex: 0 0 auto; text-decoration: none; border-radius: var(--radius); }
+.wb-head-face:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wb-head-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; gap: 1px; }
+.wb-head-menu { position: relative; flex: 0 0 auto; }
+.wb-head-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 232px;
+}
+.wb-head-menu-list .ui-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.wb-head-menu-list .ui-menu-item:hover,
+.wb-head-menu-list .ui-menu-item:focus-visible { background: var(--accent-soft); outline: none; }
+.wb-head-menu-list .ui-menu-item:disabled { color: var(--text-faint); cursor: default; }
+.ui-menu-item-hint { font-size: var(--text-xs); color: var(--text-muted); }
 .wb-head-title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
