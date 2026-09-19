@@ -169,7 +169,7 @@ export function Profile({ profile, onChange }: ProfileProps): JSX.Element {
         </p>
         {profile.changeVia && onChange ? (
           <button
-            className="wb-btn"
+            className="ui-btn"
             data-testid="agent-profile-change"
             title={profile.changeVia.prompt}
             onClick={() =>

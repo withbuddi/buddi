@@ -601,9 +601,9 @@ export function ChatPage({
                 {line.text}
               </span>
             </div>
-            <button className="wb-btn" aria-expanded={historyOpen} disabled={!agentId} onClick={() => setHistoryOpen(value => !value)}>History</button>
+            <button className="ui-btn" aria-expanded={historyOpen} disabled={!agentId} onClick={() => setHistoryOpen(value => !value)}>History</button>
             {narrow ? (
-              <button className="wb-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
+              <button className="ui-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
                 Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
               </button>
             ) : null}
@@ -614,7 +614,7 @@ export function ChatPage({
               matters most on the day somebody does.
             */}
             <button
-              className="wb-icon-btn wb-head-more"
+              className="ui-icon-btn wb-head-more"
               data-testid="agent-properties"
               aria-label={`Properties of ${agent?.name ?? 'this agent'}`}
               aria-expanded={profile !== null}
@@ -699,7 +699,7 @@ export function ChatPage({
             {(conversation?.offers ?? []).map((offer) => (
               <button
                 key={offer.id}
-                className="wb-btn"
+                className="ui-btn"
                 disabled={takingOffer !== null}
                 title={offer.prompt}
                 onClick={() => takeOffer(offer.id)}
@@ -734,7 +734,7 @@ export function ChatPage({
           <div className="wb-sheet" role="dialog" aria-label="Canvas">
             <div className="wb-sheet-head">
               <strong>Canvas</strong>
-              <button className="wb-btn" onClick={onCloseCanvas}>
+              <button className="ui-btn" onClick={onCloseCanvas}>
                 Close
               </button>
             </div>

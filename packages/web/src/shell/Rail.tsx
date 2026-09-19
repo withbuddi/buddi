@@ -67,7 +67,7 @@ export function Rail({
           <Tooltip.Trigger asChild>
             <DropdownMenu.Trigger asChild>
               <button
-                className="wb-icon-btn"
+                className="ui-icon-btn"
                 data-active={onChat === false ? 'true' : undefined}
                 aria-label="Monitoring sections"
               >
@@ -77,31 +77,31 @@ export function Rail({
             </DropdownMenu.Trigger>
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content className="wb-tip" side="right" sideOffset={8}>
-              <span className="wb-tip-title">Monitoring</span>
-              <span className="wb-tip-hint">
+            <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
+              <span className="ui-tip-title">Monitoring</span>
+              <span className="ui-tip-hint">
                 {attention > 0 ? `${attention} thing${attention === 1 ? '' : 's'} want you` : 'Nine pages of instrumentation'}
               </span>
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content className="wb-menu" side="right" align="start" sideOffset={10}>
-            <DropdownMenu.Label className="wb-menu-label">Monitoring</DropdownMenu.Label>
+          <DropdownMenu.Content className="ui-menu" side="right" align="start" sideOffset={10}>
+            <DropdownMenu.Label className="ui-menu-label">Monitoring</DropdownMenu.Label>
             {SECTIONS.map((section) => (
               <DropdownMenu.Item
                 key={section.route}
-                className="wb-menu-item"
+                className="ui-menu-item"
                 onSelect={() => onNavigate(section.route)}
               >
                 <span>{section.label}</span>
                 {section.route === '#/approvals' && badges.approvals > 0 ? (
-                  <span className="wb-count" data-tone="critical">
+                  <span className="ui-count" data-tone="critical">
                     {badges.approvals}
                   </span>
                 ) : null}
                 {section.route === '#/jobs' && badges.failed > 0 ? (
-                  <span className="wb-count" data-tone="critical">
+                  <span className="ui-count" data-tone="critical">
                     {badges.failed}
                   </span>
                 ) : null}
@@ -141,7 +141,7 @@ function RailButton({
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <button
-          className="wb-icon-btn"
+          className="ui-icon-btn"
           data-active={active ? 'true' : undefined}
           aria-label={label}
           aria-current={active ? 'page' : undefined}
@@ -151,9 +151,9 @@ function RailButton({
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content className="wb-tip" side="right" sideOffset={8}>
-          <span className="wb-tip-title">{label}</span>
-          {hint ? <span className="wb-tip-hint">{hint}</span> : null}
+        <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
+          <span className="ui-tip-title">{label}</span>
+          {hint ? <span className="ui-tip-hint">{hint}</span> : null}
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>

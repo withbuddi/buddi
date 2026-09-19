@@ -136,10 +136,10 @@ export function Canvas({
         </div>
         {renderables.map((item) => (
           <Tabs.Content key={item.id} value={item.id} className="wb-canvas-body">
-            <section className="wb-panel">
-              {item.source !== 'browser' ? <header className="wb-panel-head">
-                <h2 className="wb-panel-title">{item.title}</h2>
-                <span className="wb-panel-tool mono">{item.tool}</span>
+            <section className="ui-panel">
+              {item.source !== 'browser' ? <header className="ui-panel-head">
+                <h2 className="ui-panel-title">{item.title}</h2>
+                <span className="ui-panel-tool mono">{item.tool}</span>
               </header> : null}
               {item.tone === 'critical' ? <p className="muted browser-help">Recorded tool failure{item.at ? ` · ${new Date(item.at).toLocaleString()}` : ''}. This is history, not live session status.</p> : null}
               {/*
@@ -278,15 +278,15 @@ function MoreTabs({
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="wb-menu wb-menu-wide" align="end" sideOffset={6}>
-          <DropdownMenu.Label className="wb-menu-label">Earlier in this conversation</DropdownMenu.Label>
+        <DropdownMenu.Content className="ui-menu" data-wide="true" align="end" sideOffset={6}>
+          <DropdownMenu.Label className="ui-menu-label">Earlier in this conversation</DropdownMenu.Label>
           {[...items].reverse().map((item) => (
             <DropdownMenu.Item
               key={item.id}
-              className="wb-menu-item"
+              className="ui-menu-item"
               onSelect={() => onActivate(item.id)}
             >
-              <span className="wb-menu-item-text">
+              <span className="ui-menu-item-text">
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
                 ) : null}
@@ -295,7 +295,7 @@ function MoreTabs({
               {/* The clock, not the tool name: a run that called one tool four
                   times makes four rows with the same title, and the time is
                   what tells them apart. */}
-              <span className="wb-menu-note mono">{clock(item.at, timezone) ?? item.tool}</span>
+              <span className="ui-menu-note mono">{clock(item.at, timezone) ?? item.tool}</span>
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Content>

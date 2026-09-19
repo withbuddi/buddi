@@ -9,7 +9,7 @@ export function Browser(): JSX.Element {
   return <>
     {data?.settings ? <ComputerSettings key={JSON.stringify(data.settings)} data={data} reload={reload} /> : null}
     {(data?.sessions?.length ?? 0) > 0 ? <nav className="browser-sessions" aria-label="Browser conversations">
-      {data!.sessions!.map((item) => <button className="wb-btn" key={item.session!.id}
+      {data!.sessions!.map((item) => <button className="ui-btn" key={item.session!.id}
         aria-pressed={current?.session?.id === item.session!.id} onClick={() => setSelected(item.session!.id)}>
         {item.session!.agentId} · {item.session!.conversationId.slice(0, 8)} · {item.busy ? 'Working' : item.state === 'running' ? 'Ready' : item.state}
       </button>)}
@@ -43,9 +43,9 @@ function ComputerSettings({ data, reload }: { data: BrowserStatus; reload: () =>
       </select></label>
       <label>Allowed applications (bundle IDs, one per line)<textarea rows={4} value={apps} onChange={(event) => setApps(event.target.value)} /></label>
       <p className="muted">Include the selected browser. To enable a native app, add its bundle ID (for example com.apple.TextEdit or com.apple.calculator). Allow only apps you want agents to operate. Window screenshots and accessibility text go to your agent’s model provider. App permissions are not an OS sandbox; app network traffic is not intercepted in Computer mode.</p>
-      <button className="wb-btn" onClick={() => void run(() => api.browserSettings({ ...settings, allowedApps: [...new Set(apps.split(/[\n,]/).map((app) => app.trim()).filter(Boolean))] }))}>Save control settings</button>
-      <button className="wb-btn" onClick={() => void run(() => api.computerPermissions(false))}>Check permissions</button>
-      <button className="wb-btn" onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</button>
+      <button className="ui-btn" onClick={() => void run(() => api.browserSettings({ ...settings, allowedApps: [...new Set(apps.split(/[\n,]/).map((app) => app.trim()).filter(Boolean))] }))}>Save control settings</button>
+      <button className="ui-btn" onClick={() => void run(() => api.computerPermissions(false))}>Check permissions</button>
+      <button className="ui-btn" onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</button>
     </fieldset>
     {active ? <p className="muted">Release all active sessions before changing settings or requesting permissions.</p> : null}
     {data.permissions ? <p role="status">{data.permissions.supported ? `Accessibility: ${data.permissions.accessibility ? 'Granted' : 'Needed'} · Screen Recording: ${data.permissions.screenRecording ? 'Granted' : 'Needed'}` : 'Computer control requires macOS 14 or later.'} {data.permissions.message}</p> : <p className="muted">Computer mode needs macOS Accessibility and Screen Recording permission for the Buddi helper/service. Check permissions before the first task; macOS may require restarting the service after granting them.</p>}
@@ -85,10 +85,10 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
       {compact ? <a className="browser-full-view" href="#/browser">{computer ? 'Open computer view & settings ↗' : 'Open full browser view ↗'}</a> : <p className="lede">{computer ? 'Your apps, operated through macOS accessibility, screenshots and input. No browser debugging connection.' : 'A real browser window, driven by your assistant. You stay in control.'}</p>}
       <ErrorBanner message={error ?? failure} />
       <div className="browser-toolbar">
-        <button className="wb-btn browser-stop" disabled={!canControl || data?.state === 'stopped'} onClick={() => void control('stop')}>{computer ? 'Stop computer control' : 'Stop all browsers'}</button>
-        <button className="wb-btn" disabled={!canControl || !data?.session || data?.state === 'paused'} onClick={() => void control('takeover')}>Take over</button>
-        <button className="wb-btn" disabled={!canControl || data?.busy || !['stopped', 'paused'].includes(data?.state ?? '')} onClick={() => void control('resume')}>Resume access</button>
-        <button className="wb-btn" disabled={!canControl || !data?.session} onClick={() => void control('release')}>{computer ? 'Release control' : 'Close & release'}</button>
+        <button className="ui-btn browser-stop" disabled={!canControl || data?.state === 'stopped'} onClick={() => void control('stop')}>{computer ? 'Stop computer control' : 'Stop all browsers'}</button>
+        <button className="ui-btn" disabled={!canControl || !data?.session || data?.state === 'paused'} onClick={() => void control('takeover')}>Take over</button>
+        <button className="ui-btn" disabled={!canControl || data?.busy || !['stopped', 'paused'].includes(data?.state ?? '')} onClick={() => void control('resume')}>Resume access</button>
+        <button className="ui-btn" disabled={!canControl || !data?.session} onClick={() => void control('release')}>{computer ? 'Release control' : 'Close & release'}</button>
       </div>
       {compact ? <details className="browser-help muted"><summary>About these controls</summary><p>{help}</p></details> : <p className="muted browser-help">{help}</p>}
       {data?.message ? <p className="attention" role="status">{data.message}</p> : null}

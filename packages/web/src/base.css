@@ -1,0 +1,76 @@
+/*
+ * The ground: a reset, the document, and the handful of text utilities every
+ * surface is allowed to speak.
+ *
+ * Nothing here knows what a button or a panel looks like — that is `ui.css`.
+ * This file only makes sure every element starts from nothing, every control
+ * starts from the page's own font, and a word can be muted, monospaced or
+ * toned without a component being invented for it.
+ */
+
+/* ---- reset ---- */
+*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--line); }
+h1, h2, h3, h4, h5, h6, p, figure, blockquote, pre, dl, dd, ul, ol, fieldset, legend { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; margin: 0; padding: 0; background: transparent; border-radius: 0; }
+button, [type='button'], [type='submit'] { appearance: none; -webkit-appearance: none; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+textarea { resize: vertical; }
+img, svg, video, canvas, object { display: block; max-width: 100%; }
+img { height: auto; }
+a { color: inherit; text-decoration: inherit; }
+table { border-collapse: collapse; border-spacing: 0; text-indent: 0; }
+summary { cursor: pointer; }
+:where([hidden]) { display: none !important; }
+
+/* ---- the document ---- */
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-base) / var(--leading) var(--font-sans);
+  font-weight: var(--weight-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+code, kbd, pre, .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
+
+/* Keyboard focus is always visible; the mouse does not get a ring it never
+   asked for. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Prose links. A control that happens to be an <a> opts out by being a control. */
+a:not([class]) { color: var(--accent); }
+a:not([class]):hover { text-decoration: underline; }
+
+/* ---- text utilities ---- */
+.muted { color: var(--text-muted); }
+.faint { color: var(--text-faint); }
+.good { color: var(--good); }
+.warning { color: var(--warning); }
+.critical { color: var(--critical); }
+.tnum { font-variant-numeric: tabular-nums; }
+.wrap-any { overflow-wrap: anywhere; }
+.nowrap { white-space: nowrap; }
+
+/* Keep a label in the accessibility tree and out of the layout. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+.contents { display: contents; }

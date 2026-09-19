@@ -219,7 +219,7 @@ export function Composer({
             }}
           />
           <button
-            className="wb-icon-btn wb-icon-btn-sm"
+            className="ui-icon-btn" data-size="sm"
             aria-label="Attach a file"
             onClick={() => fileInput.current?.click()}
             disabled={disabled}
@@ -234,12 +234,12 @@ export function Composer({
           </span>
 
           {running ? (
-            <button className="wb-btn" data-variant="stop" onClick={onStop}>
+            <button className="ui-btn" data-variant="stop" onClick={onStop}>
               Stop
             </button>
           ) : (
             <button
-              className="wb-btn wb-send"
+              className="ui-btn wb-send"
               data-variant="accent"
               aria-label="Send"
               onClick={send}

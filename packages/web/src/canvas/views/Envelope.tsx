@@ -70,30 +70,30 @@ export function Envelope({
 
   return (
     <div>
-      <div className="wb-stats">
+      <div className="ui-stats" data-inline="true">
         <div>
-          <div className="wb-stat-k">Tool</div>
-          <div className="wb-stat-v mono">{action.tool}</div>
+          <div className="ui-stat-k">Tool</div>
+          <div className="ui-stat-v mono">{action.tool}</div>
         </div>
         <div>
-          <div className="wb-stat-k">State</div>
-          <div className="wb-stat-v" data-tone={stateTone(action.state)}>
+          <div className="ui-stat-k">State</div>
+          <div className="ui-stat-v" data-tone={stateTone(action.state)}>
             {action.state}
           </div>
         </div>
         <div>
-          <div className="wb-stat-k">{pending ? 'Expires' : 'Decided'}</div>
-          <div className="wb-stat-v" data-size="sm">
+          <div className="ui-stat-k">{pending ? 'Expires' : 'Decided'}</div>
+          <div className="ui-stat-v" data-size="sm">
             {fmtTime(pending ? action.expiresAt : action.decidedAt, timezone)}
           </div>
         </div>
       </div>
 
-      <h4 className="wb-stat-k wb-label">Preview</h4>
+      <h4 className="ui-stat-k wb-label">Preview</h4>
       <div className="wb-doc wb-block">{action.preview || '(this tool wrote no preview)'}</div>
 
-      <h4 className="wb-stat-k wb-label">The envelope, field by field</h4>
-      <dl className="wb-kv wb-block">
+      <h4 className="ui-stat-k wb-label">The envelope, field by field</h4>
+      <dl className="ui-kv wb-block">
         {fields.map((field) => (
           <div key={field.label} className="contents">
             <dt>{field.label}</dt>
@@ -107,7 +107,7 @@ export function Envelope({
       {pending ? (
         <div className="wb-row-wrap">
           <button
-            className="wb-btn"
+            className="ui-btn"
             data-variant="good"
             disabled={busy !== null}
             onClick={() => decide('approve')}
@@ -115,11 +115,11 @@ export function Envelope({
             {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
           </button>
           {reusable ? <>
-            <button className="wb-btn" disabled={busy !== null} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</button>
-            <button className="wb-btn" disabled={busy !== null} onClick={() => decide('approve', 'always')}>Always: this agent</button>
+            <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</button>
+            <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'always')}>Always: this agent</button>
           </> : null}
           <button
-            className="wb-btn"
+            className="ui-btn"
             data-variant="danger"
             disabled={busy !== null}
             onClick={() => decide('reject')}

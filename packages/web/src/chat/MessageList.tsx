@@ -180,9 +180,9 @@ function ToolRow({
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content className="wb-tip" sideOffset={6}>
-          <span className="wb-tip-title">Open on the canvas</span>
-          <span className="wb-tip-hint mono">{tool}</span>
+        <Tooltip.Content className="ui-tip" sideOffset={6}>
+          <span className="ui-tip-title">Open on the canvas</span>
+          <span className="ui-tip-hint mono">{tool}</span>
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>

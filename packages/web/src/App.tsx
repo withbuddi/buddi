@@ -231,7 +231,7 @@ export function App(): JSX.Element {
             </main>
           )}
         </div>
-        <Toast.Viewport className="wb-toasts" />
+        <Toast.Viewport className="ui-toasts" />
       </Toast.Provider>
     </Tooltip.Provider>
   );

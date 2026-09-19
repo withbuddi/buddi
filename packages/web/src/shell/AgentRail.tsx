@@ -165,12 +165,12 @@ export function AgentFace({
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content className="wb-tip" side={side} sideOffset={8}>
-          <span className="wb-tip-title">{agent.name}</span>
-          <span className="wb-tip-hint">
+        <Tooltip.Content className="ui-tip" side={side} sideOffset={8}>
+          <span className="ui-tip-title">{agent.name}</span>
+          <span className="ui-tip-hint">
             {agent.available ? `@${agent.handle} · ${agent.model}` : reason}
           </span>
-          {waiting ? <span className="wb-tip-alert">{sentence(waiting)}</span> : null}
+          {waiting ? <span className="ui-tip-alert">{sentence(waiting)}</span> : null}
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
