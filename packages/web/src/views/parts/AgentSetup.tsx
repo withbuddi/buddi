@@ -315,13 +315,14 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [base, setBase] = useState<string[]>(agent.delegates);
   const others = all.filter((a) => a.id !== agent.id);
-  const dirty = [...chosen].sort().join(',') !== [...agent.delegates].sort().join(',');
+  const dirty = [...chosen].sort().join(',') !== [...base].sort().join(',');
   const askedBy = all.filter((a) => a.id !== agent.id && a.delegates.includes(agent.id));
   const toggle = (id: string): void => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
   const save = async (): Promise<void> => {
     setBusy(true); setFailure(null); setSaved(false);
-    try { await api.setDelegates(agent.id, chosen); setSaved(true); onSaved(); }
+    try { const result = await api.setDelegates(agent.id, chosen); setBase(result.delegates); setChosen(result.delegates); setSaved(true); onSaved(); }
     catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
