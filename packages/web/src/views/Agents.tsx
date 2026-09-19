@@ -50,7 +50,7 @@ export function Agents(): JSX.Element {
       <p><a href="#/providers">Manage provider credentials and defaults →</a></p>
       <ErrorBanner message={error ?? failure} />
       {note ? (
-        <div className="attention" style={{ borderLeftColor: 'var(--ok)' }}>
+        <div className="attention" style={{ borderLeftColor: 'var(--good)' }}>
           {note}
         </div>
       ) : null}
@@ -190,7 +190,7 @@ function Agent({
       {engine ? (
         <div
           className="muted"
-          style={{ marginTop: 4, color: engine.available ? undefined : 'var(--warn)' }}
+          style={{ marginTop: 4, color: engine.available ? undefined : 'var(--warning)' }}
         >
           {engine.available
             ? 'available on this machine'

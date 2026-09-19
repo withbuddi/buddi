@@ -54,7 +54,7 @@ function Mission({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
-    <div className="attention" style={{ borderLeftColor: mission.enabled ? 'var(--ok)' : 'var(--line)' }}>
+    <div className="attention" style={{ borderLeftColor: mission.enabled ? 'var(--good)' : 'var(--line)' }}>
       <div className="bar" style={{ marginBottom: 6 }}>
         <strong style={{ flex: '1 1 auto' }}>
           {mission.name} <span className="muted mono">{mission.id}</span>

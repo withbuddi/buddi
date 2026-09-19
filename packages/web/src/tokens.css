@@ -29,10 +29,45 @@
     'Noto Sans', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
+  /* ---- type scale ----
+   * Six sizes and nothing between them. Half-pixel sizes were how the two
+   * halves of the dashboard drifted apart; a component picks a step here or
+   * it inherits.
+   */
+  --text-xs: 11px;    /* tags, table headers, footnotes */
+  --text-sm: 12px;    /* meta, hints, secondary lines */
+  --text-md: 13px;    /* controls, dense body */
+  --text-base: 14px;  /* the page */
+  --text-lg: 15px;    /* panel and card titles */
+  --text-xl: 18px;    /* page titles */
+  --text-2xl: 22px;   /* stat values */
+
+  --leading-tight: 1.3;
+  --leading: 1.5;
+  --leading-loose: 1.6;
+
+  --weight-normal: 450;
+  --weight-medium: 550;
+  --weight-semibold: 650;
+
+  /* ---- spacing scale ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ---- control sizes ---- */
+  --control-h: 32px;
+  --control-h-sm: 26px;
+
   /* ---- shape ---- */
   --radius-sm: 4px;
   --radius: 7px;
   --radius-lg: 12px;
+  --radius-pill: 999px;
   --shadow-panel: 0 1px 2px rgb(16 15 14 / 6%);
   --shadow-pop: 0 8px 28px rgb(16 15 14 / 14%);
 
@@ -91,13 +126,6 @@
   --face-6-bg: #f7e7ee;  --face-6-ink: #9c3d68;
 
   --code-bg: #f3f2ef;
-
-  /* ---- aliases the original monitoring stylesheet still speaks ---- */
-  --panel: var(--surface);
-  --muted: var(--text-muted);
-  --ok: var(--good);
-  --warn: var(--warning);
-  --bad: var(--critical);
 
   color-scheme: light;
 }
