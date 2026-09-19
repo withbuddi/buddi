@@ -290,6 +290,7 @@ export interface SentinelFinding {
   cooldownUntil: string | null;
   deliveredAt: string | null;
   resolvedAt: string | null;
+  snoozedAt: string | null;
 }
 
 export interface AgentRow {
@@ -546,6 +547,7 @@ export const api = {
   offers: () => get<{ offers: OfferRow[] }>('/offers'),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
+  snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
   agents: () => get<AgentsView>('/agents'),
   /**
    * What one agent is: its grant with every tool's tier, its engine, its

@@ -1476,3 +1476,9 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .mode-option-title { font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
 .mode-option-body { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
 .app-role { margin-left: var(--space-2); }
+
+/* ---- alerts: a detail that can run long ---- */
+.alert-detail { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; }
+.alert-detail[data-clamp='true'] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.alert-more { display: block; margin-top: 2px; }
+.alert-detail[data-clamp='true'] .alert-more { position: absolute; right: 0; bottom: 0; padding-left: 24px; background: linear-gradient(to right, transparent, var(--surface) 40%); }

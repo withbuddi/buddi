@@ -1,21 +1,43 @@
 /**
- * Alerts: what the watchers found. Open findings first, then what resolved,
- * then what is waiting for the weekly recap. Which watchers exist and whether
- * they run is under Settings.
+ * Alerts: what the watchers found, and the two things an owner can do about
+ * one. Ask the agent that answers for it, with the finding already in the
+ * message; or snooze it, which keeps the watcher checking but stops the
+ * finding from waking anyone until the fact itself changes.
  */
-import { api } from '../api';
+import { useState } from 'react';
+import { api, type SentinelFinding } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Code, Details, Empty, ErrorBanner, PageFrame, Panel, Pill, Table, useAsync } from '../ui';
+import { chatRoute } from '../routes';
+import { leaveDraft } from '../chat/ChatPage';
+import { Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, PageFrame, Panel, Pill, Table, Toolbar, useAsync } from '../ui';
 
 export function Alerts({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
-  const { data, error } = useAsync(() => api.sentinels(), [], 30_000);
+  const { data, error, reload } = useAsync(() => api.sentinels(), [], 30_000);
+  const missions = useAsync(() => api.missions(), []);
+  const [failure, setFailure] = useState<string | null>(null);
+  // The agent that speaks for the watchers: whoever runs the wake mission.
+  const askAgentId = missions.data?.missions.find((m) => m.id === 'sentinel-wake')?.agentId ?? null;
+
+  const snooze = async (key: string, snoozed: boolean): Promise<void> => {
+    setFailure(null);
+    try { await api.snoozeAlert(key, snoozed); reload(); }
+    catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+  };
+  const open = (data?.open ?? []).filter((f) => !f.snoozedAt);
+  const snoozed = (data?.open ?? []).filter((f) => f.snoozedAt);
 
   return (
     <PageFrame embedded={embedded} title="Alerts" lede="What the watchers found.">
-      <ErrorBanner message={error} />
+      <ErrorBanner message={error ?? failure} />
+      <Notice>
+        An alert closes on its own once the fact behind it changes: record the payment, update the balance, and the watcher clears it on its next run. Snooze one you have decided to live with; it stays quiet until it resolves.
+      </Notice>
 
-      <Findings title="Open" findings={data?.open ?? []} timezone={timezone} />
-      <Findings title="Resolved" findings={data?.resolved ?? []} timezone={timezone} />
+      <Findings title="Open" findings={open} timezone={timezone} askAgentId={askAgentId} onSnooze={(key) => snooze(key, true)} empty="Nothing open. Your watchers are quiet." />
+      {snoozed.length > 0 ? (
+        <Findings title="Snoozed" findings={snoozed} timezone={timezone} askAgentId={askAgentId} onSnooze={(key) => snooze(key, false)} empty="" />
+      ) : null}
+      <Findings title="Resolved" findings={data?.resolved ?? []} timezone={timezone} empty="Nothing has resolved yet." />
 
       <Panel title="Waiting for the weekly recap" flush>
         {!data || data.digest.length === 0 ? (
@@ -34,7 +56,7 @@ export function Alerts({ timezone, embedded }: { timezone: string; embedded?: bo
                 <tr key={item.id}>
                   <td>
                     {item.title}
-                    <div className="sub">{item.detail}</div>
+                    <Clamped text={item.detail} />
                   </td>
                   <td>
                     <Severity severity={item.severity} />
@@ -54,37 +76,52 @@ function Severity({ severity }: { severity: string }): JSX.Element {
   return <Pill tone={severity === 'urgent' ? 'critical' : undefined}>{severity}</Pill>;
 }
 
+/** A detail that may run to forty file names: three lines, then a word to see the rest. */
+function Clamped({ text }: { text: string }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 240 || text.split('\n').length > 3;
+  return (
+    <div className="sub alert-detail" data-clamp={long && !open ? 'true' : undefined}>
+      {text}
+      {long ? (
+        <button type="button" className="wb-link alert-more" onClick={() => setOpen((v) => !v)}>{open ? 'Less' : 'More'}</button>
+      ) : null}
+    </div>
+  );
+}
+
+function askText(finding: SentinelFinding): string {
+  return `About this alert: "${finding.title}". ${finding.detail}\n\nWhat should I do about it, and what do you need from me to clear it?`;
+}
+
 function Findings({
   title,
   findings,
   timezone,
+  askAgentId,
+  onSnooze,
+  empty,
 }: {
   title: string;
-  findings: Array<{
-    key: string;
-    sentinelId: string;
-    severity: string;
-    title: string;
-    detail: string;
-    data: unknown;
-    firstSeenAt: string;
-    lastSeenAt: string;
-    resolvedAt: string | null;
-  }>;
+  findings: SentinelFinding[];
   timezone: string;
+  askAgentId?: string | null;
+  onSnooze?: (key: string) => void;
+  empty: string;
 }): JSX.Element {
+  const snoozedList = title === 'Snoozed';
   return (
     <Panel title={title} flush>
       {findings.length === 0 ? (
-        <Empty>None.</Empty>
+        <Empty>{empty}</Empty>
       ) : (
         <Table>
           <thead>
             <tr>
               <th>Finding</th>
               <th>Severity</th>
-              <th>First seen</th>
-              <th>Last seen</th>
+              <th>Since</th>
+              {onSnooze ? <th /> : null}
             </tr>
           </thead>
           <tbody>
@@ -92,8 +129,7 @@ function Findings({
               <tr key={finding.key}>
                 <td>
                   <strong>{finding.title}</strong>
-                  <div className="sub">{finding.detail}</div>
-                  <div className="sub mono">{finding.key}</div>
+                  <Clamped text={finding.detail} />
                   {finding.data ? (
                     <Details summary="evidence">
                       <Code>{json(finding.data)}</Code>
@@ -103,11 +139,24 @@ function Findings({
                 <td>
                   <Severity severity={finding.severity} />
                 </td>
-                <td className="nowrap">{fmtTime(finding.firstSeenAt, timezone)}</td>
                 <td className="nowrap">
-                  {fmtTime(finding.lastSeenAt, timezone)}
-                  <div className="sub">{fmtRelative(finding.lastSeenAt)}</div>
+                  {fmtTime(finding.firstSeenAt, timezone)}
+                  <div className="sub" title={fmtTime(finding.lastSeenAt, timezone)}>last seen {fmtRelative(finding.lastSeenAt)}</div>
                 </td>
+                {onSnooze ? (
+                  <td>
+                    <Toolbar align="end">
+                      {askAgentId ? (
+                        <ButtonLink size="sm" href={chatRoute(askAgentId, 'new')} onClick={() => leaveDraft(askAgentId, askText(finding))}>
+                          Ask about it
+                        </ButtonLink>
+                      ) : null}
+                      <Button size="sm" variant="ghost" onClick={() => onSnooze(finding.key)}>
+                        {snoozedList ? 'Wake' : 'Snooze'}
+                      </Button>
+                    </Toolbar>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

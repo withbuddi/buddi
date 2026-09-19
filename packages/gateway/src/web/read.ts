@@ -672,6 +672,7 @@ export interface SentinelFindingView {
   cooldownUntil: string | null;
   deliveredAt: string | null;
   resolvedAt: string | null;
+  snoozedAt: string | null;
 }
 
 export async function readSentinels(
@@ -689,7 +690,7 @@ export async function readSentinels(
   );
   const { rows: findings } = await pool.query(
     `select key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at,
-            cooldown_until, delivered_at, resolved_at
+            cooldown_until, delivered_at, resolved_at, snoozed_at
        from core.sentinel_findings
       order by (resolved_at is null) desc, last_seen_at desc
       limit $1`,
@@ -710,6 +711,7 @@ export async function readSentinels(
       cooldownUntil: r.cooldown_until ? new Date(r.cooldown_until).toISOString() : null,
       deliveredAt: r.delivered_at ? new Date(r.delivered_at).toISOString() : null,
       resolvedAt: r.resolved_at ? new Date(r.resolved_at).toISOString() : null,
+      snoozedAt: r.snoozed_at ? new Date(r.snoozed_at).toISOString() : null,
     }),
   );
 
@@ -843,9 +845,9 @@ export async function readOverview(deps: {
     `select
        (select max(last_run_at) from core.sentinel_runs) as last_run_at,
        (select count(*)::int from core.sentinel_findings
-         where resolved_at is null and severity = 'urgent') as open_urgent,
+         where resolved_at is null and snoozed_at is null and severity = 'urgent') as open_urgent,
        (select count(*)::int from core.sentinel_findings
-         where resolved_at is null and severity = 'info') as open_info`,
+         where resolved_at is null and snoozed_at is null and severity = 'info') as open_info`,
   );
   const { rows: sentinelErrors } = await pool.query(
     `select sentinel_id, last_error from core.sentinel_runs where last_error is not null`,

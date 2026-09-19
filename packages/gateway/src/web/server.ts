@@ -44,7 +44,7 @@ import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, isJobState } from '@buddi/core';
+import { getAction, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
@@ -767,6 +767,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       if (typeof body.agentId !== 'string' || typeof body.conversationId !== 'string') return sendJson(res, 400, { error: 'Expected agentId and conversationId.' });
       return sendJson(res, 200, { stopped: host.stop(deps.ctx.ownerId, body.agentId, body.conversationId) });
+    }
+
+    const alert = /^\/api\/alerts\/([^/]+)\/snooze$/.exec(path);
+    if (alert) {
+      if (typeof body.snoozed !== 'boolean') return sendJson(res, 400, { error: '`snoozed` must be true or false' });
+      const finding = await snoozeFinding(deps.pool, decodeURIComponent(alert[1]!), body.snoozed, deps.now());
+      if (!finding) return sendJson(res, 404, { error: 'No open alert has that key.' });
+      return sendJson(res, 200, { key: finding.key, snoozedAt: finding.snoozedAt ? finding.snoozedAt.toISOString() : null });
     }
 
     if (path === '/api/pause') {
