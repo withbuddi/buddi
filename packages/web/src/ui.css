@@ -110,7 +110,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .ui-toolbar-spacer { flex: 1 1 auto; }
 /* A sentence under a row of controls: takes the whole next line. */
-.ui-toolbar-note { flex: 1 1 100%; margin: 0; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+.ui-toolbar-note { order: 100; flex: 1 1 100%; margin: 0; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
 .ui-toolbar[data-align='end'] { justify-content: flex-end; }
 
 /* ================================================================== *
