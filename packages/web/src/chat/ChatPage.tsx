@@ -222,7 +222,11 @@ export function ChatPage({
     let cancelled = false;
     const timer = window.setInterval(() => {
       void chatApi.conversation(conversationId).then(loaded => {
-        if (!cancelled && loaded.agentId === selection.current.agentId) setConversation(loaded);
+        if (cancelled || loaded.agentId !== selection.current.agentId) return;
+        setConversation(loaded);
+        // The same rule every load applies: once the transcript has what we
+        // sent, the optimistic copy has done its job.
+        setOptimistic((pending) => pending.filter((message) => !transcriptContains(loaded, message)));
       }).catch(() => {});
     }, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
