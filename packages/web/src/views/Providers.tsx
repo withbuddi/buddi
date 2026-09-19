@@ -307,9 +307,9 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
           </Field>
         )}
         {a && <p className="muted">Saving changes stops an active run at its next model call. Start a new turn afterward. Changing the default model does not change existing agent assignments.</p>}
-        <Toolbar>
-          <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
+        <Toolbar align="end">
           <Button onClick={onDone}>Cancel</Button>
+          <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
         </Toolbar>
       </fieldset>
       {incomplete && <p className="muted">Enter an account name and default model to enable Save account. The example name is a placeholder.</p>}
@@ -336,7 +336,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
       <Field label="Claude authorization code">
         <input type="password" autoComplete="off" spellCheck={false} maxLength={8192} value={code} onChange={e => setCode(e.target.value)} disabled={busy} />
       </Field>
-      <Toolbar><Button type="submit" variant="accent" disabled={busy || !code.trim()}>Complete Claude sign-in</Button></Toolbar>
+      <Toolbar align="end"><Button type="submit" variant="accent" disabled={busy || !code.trim()}>Complete Claude sign-in</Button></Toolbar>
     </form>}
   </>;
 }
@@ -484,9 +484,9 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
             {probe?.truncated ? <span className="ui-field-hint">Showing the first part of the provider’s list.</span> : null}
           </div>
         )}
-        <Toolbar>
-          <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
+        <Toolbar align="end">
           <Button onClick={() => onDone()}>Cancel</Button>
+          <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
         </Toolbar>
       </fieldset>
       {incomplete && <p className="muted">Enter an account name{endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
@@ -508,12 +508,12 @@ function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { a
           <Toolbar valign="end">
             <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
           </Toolbar>
-          <Toolbar>
+          <Toolbar align="end">
+            <Button onClick={onDone}>Skip for now</Button>
             <Button variant="accent" disabled={busy || !model.trim()} onClick={() => {
               if (model === a.defaultModel) { onDone(); return; }
               void run(() => api.saveProviderAccount({ ...accountSettings(a), defaultModel: model }), 'Default model saved.').then((ok) => { if (ok) onDone(); });
             }}>Done</Button>
-            <Button onClick={onDone}>Skip for now</Button>
           </Toolbar>
         </>
       ) : (
