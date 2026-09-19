@@ -1482,3 +1482,8 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .alert-detail[data-clamp='true'] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .alert-more { display: block; margin-top: 2px; }
 .alert-detail[data-clamp='true'] .alert-more { position: absolute; right: 0; bottom: 0; padding-left: 24px; background: linear-gradient(to right, transparent, var(--surface) 40%); }
+
+/* ---- who may ask whom ---- */
+.delegate-list .ui-list-row { gap: var(--space-3); }
+.delegate-list label { cursor: pointer; }
+.delegate-list input:disabled + label { opacity: 0.55; cursor: default; }

@@ -41,6 +41,8 @@ import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
 import { listBrowserProfiles, listInstalledApps } from './apps.js';
+import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
+import { setDelegatesFromWeb } from './write.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -860,6 +862,19 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, error instanceof ProviderSettingsError ? error.status : 500,
           { error: error instanceof ProviderSettingsError ? error.message : 'Provider settings could not be applied. Check vault access and database availability, then retry.' });
       }
+    }
+
+    const delegatesRoute = /^\/api\/agents\/([^/]+)\/delegates$/.exec(path);
+    if (delegatesRoute) {
+      const search = agentSearchPath(deps.env ?? process.env);
+      return finish(
+        res,
+        await setDelegatesFromWeb(
+          { catalog: deps.catalog, agentsDir: search.owner.dir, examplesDir: EXAMPLES_AGENTS_DIR, reload: () => (deps.catalog as { reload?: () => void }).reload?.() },
+          decodeURIComponent(delegatesRoute[1] as string),
+          body.delegates,
+        ),
+      );
     }
 
     const engine = /^\/api\/agents\/([^/]+)\/engine$/.exec(path);

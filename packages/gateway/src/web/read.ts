@@ -9,6 +9,8 @@
  *
  * Nothing here writes. Nothing here reaches a model.
  */
+import path from 'node:path';
+import { readDelegates } from '../agents/delegation.js';
 import {
   getActiveSchedule,
   listJobs,
@@ -751,12 +753,20 @@ export interface AgentView {
   language: string;
   tools: string[];
   skills: Array<{ name: string; provenance: string; file: string }>;
+  /** Who it may hand work to: its allowlist, restricted to agents that exist. */
+  delegates: string[];
+  /** True when the file is a shipped example, which the dashboard will not edit. */
+  isExample: boolean;
   /**
    * The provider, named — kind, model and *which environment variable* holds
    * the credential. Never the credential: the dashboard reports the
    * authorization decision, it does not disclose the secret behind it.
    */
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
+}
+
+function safeDelegates(agentId: string, agentsDir: string): string[] {
+  try { return readDelegates(agentId, agentsDir); } catch { return []; }
 }
 
 export function readAgents(catalog: AgentCatalog): AgentView[] {
@@ -780,6 +790,8 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
           provenance: s.provenance,
           file: s.file,
         })),
+        delegates: safeDelegates(agent.id, path.dirname(path.dirname(agent.file))).filter((id) => catalog.get(id) !== undefined),
+        isExample: agent.source === 'example',
         provider: {
           kind: agent.provider.kind,
           model: agent.provider.model,

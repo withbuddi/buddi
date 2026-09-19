@@ -55,10 +55,12 @@ export function AgentSetup({ agentId }: { agentId: string }): JSX.Element {
         <Agent
           key={`${agent.id}:${data.engines.find((e) => e.id === agent.id)?.model}:${data.providerAccounts?.bindings.find((b) => b.agentId === agent.id)?.accountId}`}
           agent={agent}
+          all={data.agents}
           engine={data.engines.find((e) => e.id === agent.id)}
           providers={data.providers}
           accounts={data.providerAccounts}
           onRun={run}
+          onSaved={reload}
         />
       )}
     </Stack>
@@ -67,12 +69,16 @@ export function AgentSetup({ agentId }: { agentId: string }): JSX.Element {
 
 function Agent({
   agent,
+  all,
   engine,
   providers,
   accounts,
   onRun,
+  onSaved,
 }: {
   agent: AgentRow;
+  all: AgentRow[];
+  onSaved: () => void;
   engine: AgentEngine | undefined;
   providers: ProviderModels[];
   accounts?: ProviderAccountsView;
@@ -184,6 +190,8 @@ function Agent({
         </Toolbar>
       </Section>
 
+      <Delegation agent={agent} all={all} onSaved={onSaved} />
+
       <Section title="Built-in context">
         <p className="ui-card-meta">
           Every agent receives current time, owner timezone and server-host information. system.time and system.info
@@ -290,5 +298,84 @@ function AccountChoice({
         </Button>
       </Toolbar>
     </div>
+  );
+}
+
+
+/** The tools that make an agent a writer of the installation. Never reachable by delegation. */
+const WRITER_TOOLS = ['platform.create_agent', 'platform.update_agent', 'platform.write_skill', 'platform.delete_agent', 'platform.accept_plugin_agent', 'platform.accept_plugin_skill'];
+const isWriter = (a: AgentRow): boolean => a.tools.some((t) => WRITER_TOOLS.includes(t));
+
+/**
+ * Who this agent may ask, and who may ask it. The first is the owner's to
+ * change here; the second is read from everybody else's list.
+ */
+function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[]; onSaved: () => void }): JSX.Element {
+  const [chosen, setChosen] = useState<string[]>(agent.delegates);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const others = all.filter((a) => a.id !== agent.id);
+  const dirty = [...chosen].sort().join(',') !== [...agent.delegates].sort().join(',');
+  const askedBy = all.filter((a) => a.id !== agent.id && a.delegates.includes(agent.id));
+  const toggle = (id: string): void => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
+  const save = async (): Promise<void> => {
+    setBusy(true); setFailure(null); setSaved(false);
+    try { await api.setDelegates(agent.id, chosen); setSaved(true); onSaved(); }
+    catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <>
+      <Section title="Can ask" aside={<span className="muted">{agent.tools.includes('agent.delegate') ? 'holds agent.delegate' : 'no agent.delegate tool: it cannot ask anyone until granted'}</span>}>
+        {agent.isExample ? (
+          <Notice tone="warning">This agent ships with buddi, so its allowlist is read-only here. Ask Agent Father to make it yours, then it can change.</Notice>
+        ) : null}
+        <ErrorBanner message={failure} />
+        {others.length === 0 ? (
+          <Empty>Nobody else is installed.</Empty>
+        ) : (
+          <ul className="ui-list delegate-list" aria-label="Agents this one may ask">
+            {others.map((a) => {
+              const writer = isWriter(a);
+              return (
+                <li key={a.id} className="ui-list-row">
+                  <input
+                    type="checkbox"
+                    id={`can-ask-${agent.id}-${a.id}`}
+                    checked={chosen.includes(a.id)}
+                    disabled={writer || agent.isExample || busy}
+                    onChange={() => toggle(a.id)}
+                  />
+                  <label htmlFor={`can-ask-${agent.id}-${a.id}`} className="ui-list-main">
+                    <span className="ui-list-title">{a.name} <span className="mono muted">@{a.handle}</span></span>
+                    <span className="ui-list-sub">{writer ? 'Makes and changes agents. Never reachable by delegation.' : a.description}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {!agent.isExample ? (
+          <Toolbar>
+            <span className={dirty ? 'warning' : 'muted'}>
+              {dirty ? 'Not saved yet.' : saved ? 'Saved. Applies to the next run.' : chosen.length === 0 ? 'Asks nobody.' : `May ask ${chosen.length} agent${chosen.length === 1 ? '' : 's'}.`}
+            </span>
+            <span className="ui-toolbar-spacer" />
+            <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>Save who it can ask</Button>
+          </Toolbar>
+        ) : null}
+      </Section>
+
+      <Section title="Asked by">
+        {askedBy.length === 0 ? (
+          <p className="ui-card-meta">No other agent may hand work to {agent.name}.</p>
+        ) : (
+          <Row>
+            {askedBy.map((a) => <Pill key={a.id}>{a.name}</Pill>)}
+          </Row>
+        )}
+      </Section>
+    </>
   );
 }

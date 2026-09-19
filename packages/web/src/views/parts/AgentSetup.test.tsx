@@ -7,7 +7,7 @@ vi.mock('../../api', () => ({ api: { agents: vi.fn(), accountModels: vi.fn().moc
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
-const view = { agents: [{ id: 'demo', handle: 'demo', name: 'Demo', description: 'Fixture', isDefault: true, tools: [], skills: [],
+const view = { agents: [{ id: 'demo', handle: 'demo', name: 'Demo', description: 'Fixture', isDefault: true, tools: [], skills: [], delegates: [], isExample: false,
   model: 'claude-haiku-4-5', maxTurns: 12, language: 'en', provider: { kind: 'anthropic', credentialKind: 'api-key', credentialEnv: 'fixture' } }],
   engines: [{ id: 'demo', provider: 'anthropic', model: 'claude-haiku-4-5', maxTurns: 12, language: 'en', available: true }], providers: [],
   providerAccounts: { vault: { kind: 'memory', locked: false, advice: '' }, accounts,

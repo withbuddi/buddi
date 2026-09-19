@@ -31,11 +31,12 @@
  * tool_result, so the calling model sees *that* it was refused and why.
  */
 import { z } from 'zod';
-import type {
-  AgentDefinition,
-  ToolContext,
-  ToolDefinition,
-  ToolRegistry,
+import {
+  listArtifacts,
+  type AgentDefinition,
+  type ToolContext,
+  type ToolDefinition,
+  type ToolRegistry,
 } from '@buddi/core';
 import type { RuntimeProvider } from './anthropic.js';
 import { createConversation, runAgent as defaultRunAgent, type Queryable } from './loop.js';
@@ -151,7 +152,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
     name: DELEGATE_TOOL,
     description:
       'Ask another of the owner\'s agents a question and get its answer back as text. ' +
-      'The colleague answers in its own fresh conversation with its own tools; it cannot ' +
+      'The colleague answers in its own fresh conversation with its own tools, and any files or images it made come back as `artifacts` you can attach or describe; it cannot ' +
       'see this one. Use it when a question belongs to a specialist you are allowed to ask. ' +
       'Quote the answer back to the owner and attribute it by the handle the result ' +
       'carries, written with an @ — "@credo says: ...".',
@@ -254,12 +255,22 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         ctx.conversationId ?? conversationId,
       );
 
+      // Whatever the colleague produced travels back with its words: a poster
+      // is the answer, not a sentence about a poster. Ids only; the caller
+      // attaches or describes them with the artifact tools it holds.
+      let artifacts: Array<{ id: string; filename: string | null; mime: string; kind: string }> = [];
+      try {
+        artifacts = (await listArtifacts(pool as never, { conversationId, limit: 20 })).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, kind: a.kind }));
+      } catch {
+        /* The reply stands on its own; a listing that fails costs the attachments, not the answer. */
+      }
       return {
         agent: target.id,
         handle: target.handle,
         name: target.name,
         conversationId,
         text: result.text,
+        ...(artifacts.length > 0 ? { artifacts } : {}),
       };
     },
   };
