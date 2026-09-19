@@ -91,7 +91,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
 
       // A call that stopped on a gate is an envelope, whatever it would
       // otherwise have drawn.
-      const approvalId = awaiting?.get(block.toolUseId) ?? approvalIdOf(block);
+      const approvalId = block.approval ? approvalIdOf(block) : awaiting?.get(block.toolUseId) ?? approvalIdOf(block);
       if (approvalId) {
         collected.push({
           id: block.toolUseId,
@@ -291,11 +291,27 @@ function figures(pairs: Array<{ type: string }>): number {
  * rather than for a sentence.
  */
 export function approvalIdOf(block: Extract<ChatBlock, { type: 'tool_result' }>): string | null {
+  if (block.approval) return block.approval.state === 'pending' ? block.approval.id : null;
   for (const candidate of [block.error, block.output]) {
     const found = findApprovalId(candidate, 0);
     if (found) return found;
   }
   return null;
+}
+
+/** Small results stay quiet, but every recorded call can be inspected on demand. */
+export function inspectToolCall(messages: ChatMessage[], id: string): Renderable | null {
+  const blocks = messages.flatMap(message => message.blocks);
+  const call = blocks.find(block => block.type === 'tool_use' && block.id === id);
+  if (call?.type !== 'tool_use') return null;
+  const result = blocks.find(block => block.type === 'tool_result' && block.toolUseId === id);
+  return {
+    id, tool: call.name, title: labelFor(call.name), renderer: 'structured',
+    props: { value: { input: call.input, ...(result?.type === 'tool_result'
+      ? { status: result.approval?.state ?? (result.ok ? 'completed' : 'failed'), output: result.output, ...(result.error ? { error: result.error } : {}) }
+      : { status: 'Awaiting result' }) } },
+    at: null, source: 'fallback', substantial: false,
+  };
 }
 
 function findApprovalId(value: unknown, depth: number): string | null {

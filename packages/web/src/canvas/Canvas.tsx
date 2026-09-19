@@ -64,6 +64,7 @@ export function Canvas({
   agentName,
   maxTabs,
   browserPanel,
+  onClose,
 }: {
   renderables: Renderable[];
   activeId: string | null;
@@ -80,6 +81,7 @@ export function Canvas({
   maxTabs?: number;
   /** Live host state supplied by the page, never by tool-result props. */
   browserPanel?: ReactNode;
+  onClose?: (id: string) => void;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
   if (renderables.length === 0) {
@@ -118,12 +120,16 @@ export function Canvas({
         <div className="wb-canvas-tabs" ref={strip}>
           <Tabs.List className="wb-tabstrip" aria-label="Canvas">
             {shown.map((item) => (
-              <Tabs.Trigger key={item.id} value={item.id} className="wb-tab" data-tone={item.tone}>
+              <div key={item.id} className="wb-tab-item">
+              <Tabs.Trigger value={item.id} className="wb-tab" data-tone={item.tone}
+                onKeyDown={event => { if (event.key === 'Delete' && onClose && item.source !== 'approval' && item.source !== 'browser') { event.preventDefault(); onClose(item.id); } }}>
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
                 ) : null}
                 <span className="wb-tab-text">{item.title}</span>
               </Tabs.Trigger>
+              {onClose && item.source !== 'approval' && item.source !== 'browser' ? <button className="wb-tab-close" aria-label={`Close ${item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
+              </div>
             ))}
           </Tabs.List>
           <MoreTabs items={hidden} onActivate={onActivate} timezone={timezone} />

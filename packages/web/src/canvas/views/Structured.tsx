@@ -29,6 +29,7 @@ const CELL_CHARS = 64;
 
 export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   const [raw, setRaw] = useState(false);
+  const files = artifactFiles(props.value);
   const shape = useMemo(
     () => inferShape(props.value, { failed: props.failed ?? false }),
     [props.value, props.failed],
@@ -36,14 +37,36 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
 
   return (
     <div>
+      <ArtifactDownloads files={files} />
       <div className="flex justify-end mb-2">
         <button className="wb-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
       </div>
-      {raw ? <pre>{json(props.value)}</pre> : <Shape shape={shape} />}
+      {raw ? <pre>{json(props.value)}</pre> : files.length
+        ? <details className="wb-aside"><summary>Tool details</summary><Shape shape={shape} /></details>
+        : <Shape shape={shape} />}
     </div>
   );
+}
+
+/** Only local artifact IDs become links; never trust a tool-provided URL. */
+interface ArtifactFile { id: string; filename: string; mime?: string }
+function artifactFiles(value: unknown): ArtifactFile[] {
+  const artifacts = value && typeof value === 'object' && 'artifacts' in value ? value.artifacts : null;
+  if (!Array.isArray(artifacts)) return [];
+  return artifacts.filter((file): file is ArtifactFile => file && typeof file.id === 'string' && /^[0-9a-f-]{36}$/i.test(file.id) && typeof file.filename === 'string');
+}
+function ArtifactDownloads({ files }: { files: ArtifactFile[] }): JSX.Element | null {
+  return files.length ? <div className="wb-artifacts">{files.map(file => <div key={file.id}>
+    {['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.mime ?? '') ? <ArtifactImage file={file} /> : null}
+    <a className="wb-btn" href={`/api/artifacts/${encodeURIComponent(file.id)}/download`} download>{file.mime?.startsWith('image/') ? `Download ${file.filename}` : file.filename}</a>
+  </div>)}</div> : null;
+}
+function ArtifactImage({ file }: { file: ArtifactFile }): JSX.Element {
+  const [failed, setFailed] = useState(false);
+  return failed ? <p className="wb-note">Preview unavailable. You can still download the file.</p>
+    : <img className="wb-artifact-image" src={`/api/artifacts/${file.id}/preview`} alt={file.filename} onError={() => setFailed(true)} />;
 }
 
 function Shape({ shape }: { shape: ReturnType<typeof inferShape> }): JSX.Element {

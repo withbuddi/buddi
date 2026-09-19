@@ -8,8 +8,22 @@
  */
 export const CHAT_ROUTE = '#/';
 
+/** Stable owner-only links; the server's normal dashboard authentication applies. */
+export function chatRoute(agentId: string, conversationId?: string | null): string {
+  return `#/chat/${encodeURIComponent(agentId)}${conversationId ? `/${encodeURIComponent(conversationId)}` : ''}`;
+}
+
+export function parseChatRoute(hash: string): { agentId: string; conversationId?: string } | null {
+  const match = /^#\/chat\/([^/]+)(?:\/([^/]+))?$/.exec(hash);
+  if (!match) return null;
+  try {
+    return { agentId: decodeURIComponent(match[1]!), ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}) };
+  } catch { return null; }
+}
+
 /** The secondary nav, in the order it reads. */
 export const SECTIONS = [
+  { route: '#/providers', label: 'Providers' },
   { route: '#/browser', label: 'Browser' },
   { route: '#/overview', label: 'Overview' },
   { route: '#/events', label: 'Events' },

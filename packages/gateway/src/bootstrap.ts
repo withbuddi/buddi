@@ -29,6 +29,7 @@ import {
   type Vault,
 } from '@buddi/core';
 import { createProvider, type RuntimeProvider } from '@buddi/runtime';
+import { ProviderSettings } from './providers.js';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import {
@@ -111,8 +112,9 @@ export interface SecretHydration {
  * fails closed with its own typed problem, which is a better message than
  * anything this function could invent.
  *
- * Mutating `env` in place is deliberate and confined to here — the composition
- * root, before any agent, tool or provider exists.
+ * Initial hydration happens here. Owner provider management may subsequently
+ * refresh only provider credentials/defaults and reload the shared catalog;
+ * existing runtime adapters keep their already-resolved credential snapshot.
  */
 export async function hydrateSecrets(
   env: NodeJS.ProcessEnv = process.env,
@@ -156,6 +158,8 @@ export interface Wiring {
    * the previous catalog still serving when the tree on disk will not load.
    */
   reloadCatalog(): void;
+  reloadProviders(): void;
+  providerSettings?: ProviderSettings;
   provider: RuntimeProvider;
   /**
    * The adapter for one agent, built from that agent's own pinned provider.
@@ -207,13 +211,17 @@ export async function createWiringAsync(
   // a provider or catalog error is a distraction and the pg failure that
   // follows is an empty `AggregateError`. One probe, one sentence.
   await probeDatabase(env.DATABASE_URL);
-  return { ...createWiring(env), secrets };
+  const wiring = createWiring(env, { allowMissingDefault: true });
+  const providerSettings = new ProviderSettings({ pool: wiring.pool, env, reload: wiring.reloadProviders });
+  try { await providerSettings.load(); }
+  catch (error) { await wiring.pool.end(); throw error; }
+  return { ...wiring, secrets, providerSettings };
 }
 
 /**
  * Build the shared wiring or throw. The caller owns `pool` and must end it.
  */
-export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
+export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { allowMissingDefault?: boolean } = {}): Wiring {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error('DATABASE_URL is not set (cp .env.example .env, then pnpm db:up)');
@@ -231,7 +239,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   const now = (): Date => new Date();
   const timezone = timezoneFromEnv(env);
   const resolution = resolveProvider(catalog.defaultAgent().provider, env);
-  if (!resolution.ok) {
+  if (!resolution.ok && !options.allowMissingDefault) {
     throw new Error(
       `provider not usable [${resolution.problem.code}]: ${resolution.problem.message}` +
         '\nSet CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY in .env',
@@ -283,7 +291,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
-  const provider = createProvider(resolution.provider, { onRetry });
+  const provider: RuntimeProvider = resolution.ok ? createProvider(resolution.provider, { onRetry }) : {
+    complete: async () => { throw new Error('Default provider unavailable. Configure its credential in dashboard Providers.'); },
+  };
   // Delegation can only be wired once both exist; before this call the tool
   // refuses rather than reaching for an ambient catalog. `providerFor` rides
   // along so a colleague pinned to another provider is run on that provider.
@@ -308,11 +318,12 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     registry,
     catalog,
     reloadCatalog: () => catalog.reload(),
+    reloadProviders: () => { adapters.clear(); catalog.reload(); },
     provider,
     providerFor,
-    model: resolution.provider.model,
-    credentialKind: resolution.provider.credentialKind,
-    providerKind: resolution.provider.kind,
+    model: catalog.defaultAgent().provider.model,
+    credentialKind: catalog.defaultAgent().provider.credential.kind,
+    providerKind: catalog.defaultAgent().provider.kind,
     now,
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone },

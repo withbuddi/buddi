@@ -399,6 +399,13 @@ marker in the transcript says plainly that the message above was not answered an
 be unless the owner asks again — so the next turn's model cannot mistake a dead turn for a
 done one.
 
+**Asking is a tool-dispatch boundary.** A successful tool marked `waitsForOwner`
+(currently `conversation.ask`) blocks all remaining calls in that run, including
+later calls in the same batch. The model may finish its question as text, with
+tools and native search withheld; even unexpected tool calls are refused. The
+next owner turn starts a fresh boundary. Failed question calls do not set it,
+and tool output cannot forge it by returning a `pending` field.
+
 **The agent that asked owns the answer.** @buddi asked "what time tonight?", the owner
 answered, the answer went to the agent the chat had switched back to, and *that* agent
 correctly said it had no idea what 7pm meant. Two signals claim the owner's next message,
@@ -536,6 +543,31 @@ stop suggesting things, that not needing them is a fine answer, and how to reach
 when they do.
 
 ## Computer access
+
+### Host execution
+
+`host.exec` is a separate, optional gated tool for Bash/Python and utilities, not
+a browser-driver escape hatch. Its first command asks for Allow once, conversation
+auto-mode, or Always for this agent. Only tools explicitly opting into
+`reusableApproval` can use standing permissions. These are owner/agent/tool/version
+scoped, with an exact conversation ID or an explicit all-conversations scope.
+The decision and standing grant are recorded atomically. Every subsequent command
+still creates a hashed action and runs through the existing executor/effect ledger;
+the executor rechecks the standing permission before dispatch. Delegates cannot
+inherit these permissions. Tool upgrades require reapproval. Revocation is available
+from authenticated dashboard/Telegram controls, not a model-facing grant tool.
+
+This is unrestricted code execution as the host user, **not an OS sandbox**. A
+working directory, clean environment, timeout, and process-group cancellation do
+not prevent access to other files, network, credentials on disk or Buddi's own
+configuration. Consequently granting host execution intentionally crosses the
+tool/file privilege boundaries that apply to ordinary plugins. An owner granting
+auto-mode accepts that authority for all commands in its stated scope, including
+future scheduled tasks for Always. Staying within the requested task and asking
+before unrelated destructive/system-wide changes is model conduct, not a shell
+security boundary. See [docs/host-execution.md](docs/host-execution.md).
+
+### Native apps and browser
 
 **Owner correction and implementation, 2026-09-18.** OS-level computer control
 is the default, restoring the original direction: macOS accessibility, selected

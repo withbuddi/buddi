@@ -12,6 +12,7 @@
     { "path": "../runtime" },
     { "path": "../tools/artifacts" },
     { "path": "../tools/browser" },
+    { "path": "../tools/host" },
     { "path": "../tools/email" },
     { "path": "../tools/finance" },
     { "path": "../tools/memory" },

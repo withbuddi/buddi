@@ -906,10 +906,16 @@ export class ChatSession {
     }
 
     for (;;) {
-      const answer = (await this.#deps.ask(APPROVAL_QUESTION)).trim().toLowerCase();
+      const host = action?.tool === 'host.exec';
+      const answer = (await this.#deps.ask(host ? 'Allow host command? [y] once / [c] conversation auto-mode / [a] always for this agent / [n] reject / [l] later: ' : APPROVAL_QUESTION)).trim().toLowerCase();
       if (answer === 'l' || answer === 'later') {
         this.#out(APPROVAL_LATER_TEXT);
         return undefined;
+      }
+      if (host && ['c', 'conversation', 'a', 'always'].includes(answer)) {
+        const outcome = await approvals.decide(actionId, 'approved', answer.startsWith('c') ? 'conversation' : 'always');
+        this.#out(outcome.text);
+        return outcome.resume;
       }
       if (answer === 'y' || answer === 'yes' || answer === 'n' || answer === 'no') {
         const decision = answer.startsWith('y') ? 'approved' : 'rejected';

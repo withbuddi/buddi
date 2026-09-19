@@ -14,6 +14,9 @@
  *  - Tool threw            -> 'tool-error'; defects never surface as success.
  */
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { decideApproval } from './actions/approvals.js';
+import { executeApproved } from './actions/execute.js';
+import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
@@ -274,6 +277,10 @@ export class ToolRegistry {
     return this.#tools.get(name)?.tool.sequential === true;
   }
 
+  waitsForOwner(name: string): boolean {
+    return this.#tools.get(name)?.tool.waitsForOwner === true;
+  }
+
   async image(name: string, output: unknown, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined> {
     return this.#tools.get(name)?.tool.image?.(output, ctx);
   }
@@ -307,6 +314,7 @@ export class ToolRegistry {
     return {
       name: tool.name,
       version,
+      ...(tool.reusableApproval ? { reusableApproval: true } : {}),
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
       ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
@@ -338,6 +346,9 @@ export class ToolRegistry {
     }
 
     if (GATED_TIERS.includes(tool.tier)) {
+      if (tool.reusableApproval && (ctx.delegationDepth ?? 0) > 0) {
+        return { ok: false, reason: 'tool-error', message: 'Host execution requires a direct owner conversation; delegates do not inherit host permissions.' };
+      }
       return this.#requestApproval(tool, version, parsed.data, ctx);
     }
 
@@ -412,6 +423,17 @@ export class ToolRegistry {
         preview: described.preview,
         now: ctx.now(),
       });
+      const permission = tool.reusableApproval
+        ? await findToolPermission(ctx.db, ctx, tool.name, version) : undefined;
+      if (permission) {
+        const decision = await decideApproval(ctx.db, { actionId: action.id, decision: 'approved',
+          by: ctx.ownerId, via: `permission:${permission.id}`, now: ctx.now() });
+        if (!decision.ok) throw new Error(decision.message);
+        const executed = await executeApproved(ctx.db, { actionId: action.id, registry: this,
+          ctx, worker: 'standing-permission', now: ctx.now() });
+        return executed.ok ? { ok: true, output: executed.result }
+          : { ok: false, reason: 'tool-error', message: executed.message };
+      }
       return {
         ok: false,
         reason: 'approval-required',

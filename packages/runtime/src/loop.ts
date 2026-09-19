@@ -595,16 +595,19 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const spoken: SpokenBlock[] = [];
   /** The action this run is waiting on, once one exists. */
   let pendingActionId: string | undefined;
+  // Run-local: only a successful declared question tool can close dispatch.
+  // The next owner turn starts with a fresh boundary, not a permanent grant.
+  let waitingForOwner = false;
 
   while (turns < agent.maxTurns) {
     ctx.signal?.throwIfAborted();
     turns++;
     const res = await provider.complete({
-      system,
+      system: waitingForOwner ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.` : system,
       messages,
-      tools,
+      tools: waitingForOwner ? [] : tools,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
-      ...(search.enabled ? { nativeSearch: { maxUses: search.maxUses } } : {}),
+      ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),
     });
     ctx.signal?.throwIfAborted();
     usage.input += res.usage.input;
@@ -665,9 +668,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     const images: ContentBlock[] = [];
     let skipReason: string | undefined;
     for (const call of toolUses) {
-      if (ctx.signal?.aborted || skipReason || pendingActionId) {
+      if (ctx.signal?.aborted || waitingForOwner || skipReason || pendingActionId) {
         results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true,
-          content: `not-executed: ${ctx.signal?.aborted ? 'the owner cancelled this run' : skipReason ?? 'waiting for owner approval'}` });
+          content: `not-executed: ${ctx.signal?.aborted ? 'the owner cancelled this run' : waitingForOwner ? 'waiting for the owner to answer the question; finish your reply and do not call more tools' : skipReason ?? 'waiting for owner approval'}` });
         continue;
       }
       opts.onToolCall?.(call.name, call.input);
@@ -687,6 +690,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         : { ok: false as const, reason: registry.has(call.name) ? 'tool-not-granted' as const : 'unknown-tool' as const,
             message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {
+        if (registry.waitsForOwner(call.name)) waitingForOwner = true;
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,

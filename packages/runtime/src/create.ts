@@ -31,6 +31,8 @@ export interface CreateProviderOptions {
    */
   onRetry?: (notice: RetryNotice) => void;
   maxTokens?: number;
+  /** Zero for owner-triggered connection probes: report a rate limit promptly. */
+  maxStatusRetries?: number;
 }
 
 export function createProvider(

@@ -12,8 +12,8 @@
  *  - the model list is filtered to the selected provider, and a cross-provider
  *    model is refused by the server with the catalogue's own sentence — a model
  *    is never migrated for anyone;
- *  - the running surfaces (this process included) keep the catalog they loaded
- *    at boot, so every successful change repeats that a restart is needed.
+ *  - the service reloads its catalog for new runs; existing runs retain their
+ *    selected adapter. Older read-only catalog fixtures still report restart.
  */
 import { useState } from 'react';
 import { api, type AgentEngine, type AgentRow, type ProviderModels } from '../api';
@@ -33,7 +33,7 @@ export function Agents(): JSX.Element {
       const result = await work;
       setNote(
         result.changed.length === 0
-          ? 'That is already what the file says; nothing was written.'
+          ? `No file change needed — ${result.note}.`
           : `Changed ${result.changed.join(', ')} — ${result.note}.`,
       );
       reload();
@@ -46,6 +46,7 @@ export function Agents(): JSX.Element {
     <>
       <h2>Agents</h2>
       <p className="lede">Provider choice is pinned per agent — it decides where your data goes.</p>
+      <p><a href="#/providers">Manage provider credentials and defaults →</a></p>
       <ErrorBanner message={error ?? failure} />
       {note ? (
         <div className="attention" style={{ borderLeftColor: 'var(--ok)' }}>

@@ -21,7 +21,8 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createToolRegistry, loadGatewayCatalog } from '../agents/catalog.js';
+import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
+import { setAgentEngineFromWeb } from './agents.js';
 import { mintTicket } from './token.js';
 import { createWebApp } from './server.js';
 
@@ -172,6 +173,15 @@ describe('the engine endpoint', () => {
     expect(after).toContain('model: claude-opus-5');
     expect(after).toContain('# the engine');
     expect(after).toContain('That rule is part of the persona.');
+  });
+
+  it('reloads the shared catalog for new runs without changing a previously resolved agent', () => {
+    const live = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry: createToolRegistry({}) }));
+    const previous = live.resolve('demo');
+    const result = setAgentEngineFromWeb({ catalog: live, env }, 'demo', { model: 'claude-opus-5' });
+    expect(result).toMatchObject({ ok: true, body: { agent: { model: 'claude-opus-5', restartRequired: false }, note: expect.stringContaining('new runs') } });
+    expect(previous.provider.model).toBe('claude-sonnet-5');
+    expect(live.resolve('demo').provider.model).toBe('claude-opus-5');
   });
 
   it('refuses a cross-provider model with the catalogue’s own sentence', async () => {

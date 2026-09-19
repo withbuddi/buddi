@@ -272,6 +272,7 @@ export interface RetryNotice {
 }
 
 export interface AnthropicProviderOptions {
+  maxStatusRetries?: number;
   /**
    * Injected for tests. Defaults to `defaultHttpTransport` — `node:https` with
    * connection reuse off, not the global `fetch`. See `transport.ts` for why.
@@ -734,7 +735,7 @@ export function createAnthropicProvider(
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        if (statusFailures > RETRY_DELAYS_MS.length) break;
+        if (statusFailures > (options.maxStatusRetries ?? RETRY_DELAYS_MS.length)) break;
         options.onRetry?.({
           attempt: statusFailures,
           delayMs: wait,

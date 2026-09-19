@@ -48,11 +48,11 @@ export function Envelope({
     };
   }, [props.approvalId]);
 
-  const decide = (decision: 'approve' | 'reject'): void => {
+  const decide = (decision: 'approve' | 'reject', permissionScope?: 'once' | 'conversation' | 'always'): void => {
     setBusy(decision);
     setError(null);
     api
-      .decide(props.approvalId, decision)
+      .decide(props.approvalId, decision, permissionScope)
       .then((result) => {
         setAction(result.action);
         onDecided?.(result.action);
@@ -65,6 +65,7 @@ export function Envelope({
   if (!action) return <p className="wb-empty">Loading the envelope…</p>;
 
   const pending = action.state === 'pending';
+  const reusable = action.permissionScopes?.includes('always');
   const fields = envelopeFields(action);
 
   return (
@@ -104,15 +105,19 @@ export function Envelope({
       {error ? <div className="err-banner">{error}</div> : null}
 
       {pending ? (
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center">
           <button
             className="wb-btn"
             data-variant="good"
             disabled={busy !== null}
             onClick={() => decide('approve')}
           >
-            {busy === 'approve' ? 'Approving…' : 'Approve'}
+            {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
           </button>
+          {reusable ? <>
+            <button className="wb-btn" disabled={busy !== null} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</button>
+            <button className="wb-btn" disabled={busy !== null} onClick={() => decide('approve', 'always')}>Always: this agent</button>
+          </> : null}
           <button
             className="wb-btn"
             data-variant="danger"
@@ -121,7 +126,7 @@ export function Envelope({
           >
             {busy === 'reject' ? 'Rejecting…' : 'Reject'}
           </button>
-          <span className="wb-hint">This runs the action exactly as printed above.</span>
+          <span className="wb-hint">{reusable ? 'Auto-mode and Always also approve future calls to this tool within that scope. Host permissions can be revoked under Host execution.' : 'This runs the action exactly as printed above.'}</span>
         </div>
       ) : (
         <p className="muted m-0">

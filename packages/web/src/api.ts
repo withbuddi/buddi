@@ -225,6 +225,7 @@ export interface JobRow {
 }
 
 export interface ApprovalRow {
+  permissionScopes?: ('conversation' | 'always')[];
   id: string;
   tool: string;
   toolVersion: string;
@@ -347,6 +348,12 @@ export interface ProviderModels {
   models: Array<{ id: string; note: string }>;
 }
 
+export interface ProvidersView {
+  vault: { kind: string; locked: boolean; advice: string };
+  providers: Array<ProviderModels & { activeCredential: string; credentials: Array<{ name: string; configured: boolean; source: string }>;
+    test: { state: string; message: string; checkedAt: string } | null }>;
+}
+
 export interface AgentsView {
   agents: AgentRow[];
   engines: AgentEngine[];
@@ -442,8 +449,8 @@ export const chatApi = {
    * thing that makes a plugin's output look like anything in particular.
    */
   views: () => get<{ views: ViewDescriptor[] }>('/chat/views'),
-  conversations: (agentId: string) =>
-    get<{ conversations: ConversationListItem[] }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
+  conversations: (agentId: string, limit?: number) =>
+    get<{ conversations: ConversationListItem[] }>(`/chat/${encodeURIComponent(agentId)}/conversations`, { limit }),
   startConversation: (agentId: string) =>
     post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
@@ -476,6 +483,11 @@ export const chatApi = {
 };
 
 export const api = {
+  providers: () => get<ProvidersView>('/providers'),
+  configureProvider: (kind: string, body: { credentialKind: string; defaultModel: string }) => post<ProvidersView>(`/providers/${encodeURIComponent(kind)}/settings`, body),
+  saveCredential: (name: string, value: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/save`, { value }),
+  removeCredential: (name: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/remove`),
+  testProvider: (kind: string) => post<{ state: string; message: string }>(`/providers/${encodeURIComponent(kind)}/test`),
   browser: (scope?: { agentId: string; conversationId: string }) => get<BrowserStatus>(`/browser${scope ? `?agentId=${encodeURIComponent(scope.agentId)}&conversationId=${encodeURIComponent(scope.conversationId)}` : ''}`),
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
@@ -513,9 +525,13 @@ export const api = {
    */
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
 
-  decide: (id: string, decision: 'approve' | 'reject') =>
+  host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
+  stopHost: (agentId: string, conversationId: string) => post<{ stopped: number }>('/host/stop', { agentId, conversationId }),
+  revokeHost: (id: string) => post<{ revoked: boolean }>('/host/revoke', { id }),
+  decide: (id: string, decision: 'approve' | 'reject', permissionScope?: 'once' | 'conversation' | 'always') =>
     post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(
       `/approvals/${encodeURIComponent(id)}/${decision}`,
+      permissionScope ? { permissionScope } : undefined,
     ),
   setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }),
   setMissionEnabled: (id: string, enabled: boolean) =>
@@ -541,6 +557,11 @@ export const api = {
       reason: 'cancelled from the dashboard',
     }),
 };
+
+export interface HostState {
+  permissions: { id: string; agentId: string; conversationId: string; toolVersion: string }[];
+  runs: { actionId: string; agentId: string; conversationId: string; command: string; cwd: string; stdout: string; stderr: string }[];
+}
 
 export interface ControlSettings { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[] }
 export interface BrowserStatus {

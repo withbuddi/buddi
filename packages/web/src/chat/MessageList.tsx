@@ -11,14 +11,11 @@
  * Tool calls appear inline as they happen — the tool's human label and the
  * seconds it has been running — because a column that goes quiet for forty
  * seconds looks broken, and a spinner does not say what is taking the time.
- * Clicking one moves the canvas to what it produced — when it produced
- * something. A call whose result the canvas has nothing to draw for (a written
- * note, a colleague's answer in prose) still shows that it happened, as a line
- * rather than a button: an arrow that leads nowhere is worse than no arrow.
+ * Every recorded call opens its result or an on-demand input/output inspector.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useEffect, useRef } from 'react';
-import { labelFor } from '../canvas/renderables';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { approvalIdOf, labelFor } from '../canvas/renderables';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 
 /** A tool call that has not come back yet. */
@@ -33,7 +30,7 @@ export function MessageList({
   live,
   now,
   onOpen,
-  opens,
+  children,
   agentName,
   emptyHint,
 }: {
@@ -42,8 +39,7 @@ export function MessageList({
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
   now: number;
   onOpen: (toolUseId: string) => void;
-  /** Which calls have something on the canvas. Absent: assume they all do. */
-  opens?: Set<string>;
+  children?: ReactNode;
   /** Whose turn the agent's turn is. Shown once per run of its messages. */
   agentName?: string;
   emptyHint: string;
@@ -52,7 +48,7 @@ export function MessageList({
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, live.length]);
+  }, [messages.length, live.length, Boolean(children)]);
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
 
@@ -97,7 +93,8 @@ export function MessageList({
                     tool={block.name}
                     ok={result?.ok ?? null}
                     running={result === null}
-                    opens={opens ? opens.has(block.id) : true}
+                    status={result && approvalIdOf(result) ? 'Awaiting approval' : result?.approval?.state}
+                    opens
                     onOpen={() => onOpen(block.id)}
                   />
                 );
@@ -121,6 +118,7 @@ export function MessageList({
           />
         </div>
       ))}
+      {children}
       <div ref={bottom} />
     </div>
   );
@@ -140,6 +138,7 @@ function ToolRow({
   elapsed,
   opens,
   onOpen,
+  status,
 }: {
   label: string;
   tool: string;
@@ -149,17 +148,18 @@ function ToolRow({
   /** Whether the canvas has a panel for this call. */
   opens: boolean;
   onOpen: () => void;
+  status?: string;
 }): JSX.Element {
   const marks = (
     <>
       {running ? (
         <span className="wb-pulse" aria-hidden="true" />
       ) : (
-        <span className="wb-tool-mark" data-ok={ok === false ? 'false' : 'true'} aria-hidden="true" />
+        <span className="wb-tool-mark" data-ok={status === 'Awaiting approval' || status === 'approved' || status === 'executing' ? 'pending' : ok === false ? 'false' : 'true'} aria-hidden="true" />
       )}
       <span className="wb-tool-label">{label}</span>
       {elapsed === undefined ? null : <span className="wb-tool-elapsed">{elapsed}s</span>}
-      {ok === false ? <span className="wb-tool-elapsed">failed</span> : null}
+      {status || ok === false ? <span className="wb-tool-elapsed">{status ?? 'failed'}</span> : null}
     </>
   );
 
@@ -229,10 +229,10 @@ function ClipIcon(): JSX.Element {
 function findResult(
   messages: ChatMessage[],
   toolUseId: string,
-): { ok: boolean } | null {
+): Extract<ChatBlock, { type: 'tool_result' }> | null {
   for (const message of messages) {
     for (const block of message.blocks ?? []) {
-      if (block.type === 'tool_result' && block.toolUseId === toolUseId) return { ok: block.ok };
+      if (block.type === 'tool_result' && block.toolUseId === toolUseId) return block;
     }
   }
   return null;

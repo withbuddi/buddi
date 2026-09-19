@@ -38,6 +38,8 @@ import {
   type MisfirePolicy,
   type ToolContext,
   type ToolRegistry,
+  type PermissionScope,
+  type ActionRecord,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { toApprovalView, toJobView, type ApprovalView, type JobView } from './read.js';
@@ -49,6 +51,7 @@ export const WEB_SURFACE = 'web';
 export const WEB_WORKER = 'web-approval';
 
 export interface WriteDeps {
+  resumeInteractive?: (action: ActionRecord, outcome: { actionId: string; state: ApprovalState; result?: unknown; error?: string }) => void;
   pool: Pool;
   registry: ToolRegistry;
   ctx: ToolContext;
@@ -82,6 +85,7 @@ export async function decideApprovalFromWeb(
   deps: WriteDeps,
   actionId: string,
   decision: Decision,
+  permissionScope: PermissionScope = 'once',
 ): Promise<WriteResult<DecideResult>> {
   const now = deps.now();
   const outcome = await decideApproval(deps.pool, {
@@ -90,6 +94,8 @@ export async function decideApprovalFromWeb(
     by: deps.ctx.ownerId,
     via: WEB_SURFACE,
     now,
+    permissionScope,
+    registry: deps.registry,
   });
 
   if (!outcome.ok) {
@@ -123,6 +129,10 @@ export async function decideApprovalFromWeb(
     now,
   });
   const state: ApprovalState = execution.ok ? 'succeeded' : execution.state;
+  if (action.tool === 'host.exec' && !action.jobId && execution.ok &&
+      (execution.result as { state?: string })?.state === 'completed') {
+    deps.resumeInteractive?.(action, { actionId: action.id, state, result: execution.result });
+  }
   const resumed = await wake(deps, action, {
     state,
     ...(execution.ok ? { result: execution.result } : { error: execution.message }),

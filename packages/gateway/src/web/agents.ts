@@ -13,10 +13,9 @@
  *  - It re-reads the agent file it just wrote rather than reporting what it
  *    intended to write, and it recomputes availability from the *current*
  *    environment. The answer is the state of the world, not an echo.
- *  - It says, every time, that the running surfaces still hold the catalog they
- *    loaded at boot. The page the owner is looking at is served by that same
- *    process, and a control that silently did nothing to the Telegram bot would
- *    be worse than no control at all.
+ *  - A reloadable service swaps its catalog before reporting success, so new
+ *    runs on every surface see the edit. Active runs retain their old objects.
+ *    Non-reloadable callers still explicitly report a required restart.
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -201,13 +200,15 @@ export function setAgentEngineFromWeb(
 
   try {
     const edit = updateAgentFrontmatter(agent.file, enginePatch(change));
+    const reload = (deps.catalog as AgentCatalog & { reload?: () => void }).reload;
+    if (reload) reload.call(deps.catalog);
     return {
       ok: true,
       status: 200,
       body: {
-        agent: engineView(agent, deps.env),
+        agent: engineView(deps.catalog.get(agent.id) ?? agent, deps.env),
         changed: edit.changed,
-        note: RESTART_NOTE,
+        note: reload ? 'Applies to new runs; active runs keep their current settings' : RESTART_NOTE,
       },
     };
   } catch (err) {

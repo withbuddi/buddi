@@ -18,11 +18,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { Envelope } from '../canvas/views/Envelope';
-import { renderablesFrom } from '../canvas/renderables';
+import { inspectToolCall, renderablesFrom } from '../canvas/renderables';
 import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserPanel } from '../views/Browser';
+import { HostControls } from '../views/HostControls';
 import { conversationBrowser } from './browser';
+import { ConversationHistory } from './ConversationHistory';
+import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
+import { chatRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
@@ -38,6 +42,8 @@ const DEFAULT_WIDTH = 440;
 const WIDTH_KEY = 'buddi.chatWidth';
 
 export interface ChatPageProps {
+  requestedConversationId?: string | undefined;
+  onConversationOpened?: (agentId: string, conversationId: string, replace?: boolean) => void;
   timezone: string;
   /**
    * The roster, already ordered, and who is selected. Owned by the shell now
@@ -75,6 +81,8 @@ export function ChatPage({
   onOpenCanvas,
   onCloseCanvas,
   newConversationSignal,
+  requestedConversationId,
+  onConversationOpened,
 }: ChatPageProps): JSX.Element {
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -85,6 +93,13 @@ export function ChatPage({
   const [running, setRunning] = useState(false);
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [dismissedTabs, setDismissedTabs] = useState(readDismissedTabs);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const previousNewSignal = useRef(newConversationSignal ?? 0);
+  const routeAgent = useRef(agentId);
+  const selection = useRef({ agentId, conversationId });
+  selection.current = { agentId, conversationId };
+  const dismissed = dismissedTabs[conversationId ?? ''] ?? [];
   const [error, setError] = useState<string | null>(null);
   /** "(New conversation — …)". Said once, above the thread it explains. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -128,18 +143,34 @@ export function ChatPage({
   // rest: the last thing that happened, already drawn.
   useEffect(() => {
     if (!agentId) return undefined;
+    const sameAgent = routeAgent.current === agentId;
+    routeAgent.current = agentId;
+    // Our own successful send/latest-load just canonicalized the URL. Keep its
+    // running state, optimistic message and in-flight transcript fetch intact.
+    if (sameAgent && requestedConversationId && requestedConversationId === selection.current.conversationId) return undefined;
     let cancelled = false;
     setConversationId(null);
     setConversation(null);
     setOptimistic([]);
+    setError(null);
+    setRunning(false);
+    setActiveTab(null);
+    setHistoryOpen(false);
     // Whoever this is now, it is not who the open panel described.
     setProfile(null);
+    if (requestedConversationId) {
+      if (requestedConversationId !== 'new') setConversationId(requestedConversationId);
+      return () => { cancelled = true; };
+    }
     chatApi
       .conversations(agentId)
       .then((list) => {
         if (cancelled) return;
         const latest = [...(list.conversations ?? [])].sort(byRecency)[0];
-        if (latest) setConversationId(latest.id);
+        if (latest) {
+          setConversationId(latest.id);
+          onConversationOpened?.(agentId, latest.id);
+        }
       })
       .catch(() => {
         /* A fresh install has no conversations. That is not an error. */
@@ -147,16 +178,18 @@ export function ChatPage({
     return () => {
       cancelled = true;
     };
-  }, [agentId]);
+  }, [agentId, requestedConversationId, onConversationOpened]);
 
   const refresh = useCallback((id: string) => {
     return chatApi
       .conversation(id)
       .then((loaded) => {
+        if (selection.current.conversationId !== id) return;
+        if (loaded.agentId !== selection.current.agentId) throw new Error('This conversation belongs to another agent. Open it from that agent’s history.');
         setConversation(loaded);
         setOptimistic((pending) => pending.filter((message) => !transcriptContains(loaded, message)));
       })
-      .catch((err: unknown) => setError(message(err)));
+      .catch((err: unknown) => { if (selection.current.conversationId === id) setError(message(err)); });
   }, []);
 
   useEffect(() => {
@@ -168,6 +201,7 @@ export function ChatPage({
       .conversation(conversationId)
       .then((loaded) => {
         if (!cancelled) {
+          if (loaded.agentId !== agentId) throw new Error('This conversation belongs to another agent. Open it from that agent’s history.');
           setConversation(loaded);
           setOptimistic((pending) => pending.filter((message) => !transcriptContains(loaded, message)));
         }
@@ -178,7 +212,20 @@ export function ChatPage({
     return () => {
       cancelled = true;
     };
-  }, [conversationId]);
+  }, [conversationId, agentId]);
+
+  // A decision may arrive from Telegram or another dashboard. Reconcile from
+  // durable state, including after a lost SSE frame or a page reload.
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void chatApi.conversation(conversationId).then(loaded => {
+        if (!cancelled && loaded.agentId === selection.current.agentId) setConversation(loaded);
+      }).catch(() => {});
+    }, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [conversationId, agentId]);
 
   /* ---- the live run ---- */
 
@@ -267,18 +314,20 @@ export function ChatPage({
       descriptors,
       awaiting,
     });
-    const items = fromTranscript;
+    const items = fromTranscript.filter(item => item.source === 'approval' || !dismissed.includes(item.id));
+    if (activeTab && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
+      const inspection = inspectToolCall(conversation?.messages ?? [], activeTab);
+      if (inspection) items.push(inspection);
+    }
     if (browserTab) items.push(browserTab);
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, activeTab, dismissedTabs, conversationId]);
 
-  const inlineApproval = useMemo(
-    () => [...renderables].reverse().find((item) => item.source === 'approval') ?? null,
+  const inlineApprovals = useMemo(
+    () => renderables.filter((item) => item.source === 'approval'),
     [renderables],
   );
-  const inlineApprovalId = inlineApproval
-    ? (inlineApproval.props as { approvalId?: string }).approvalId ?? null
-    : null;
+  const inlineApproval = inlineApprovals.at(-1) ?? null;
 
   /*
    * What the canvas turns to on its own.
@@ -338,6 +387,7 @@ export function ChatPage({
     chatApi
       .send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
       .then((result) => {
+        if (selection.current.agentId !== agentId || selection.current.conversationId !== conversationId) return;
         // The conversation the page was in had ended, and this message opened a
         // new one. The empty thread is explained rather than surprising.
         setNotice(result.boundary?.note ?? null);
@@ -346,6 +396,7 @@ export function ChatPage({
           setConversationId(result.conversationId);
         }
         else void refresh(result.conversationId);
+        onConversationOpened?.(agentId, result.conversationId);
       })
       .catch((err: unknown) => {
         setOptimistic((pending) => pending.filter((message) => message.id !== local.id));
@@ -446,21 +497,29 @@ export function ChatPage({
   const startNew = useCallback(() => {
     setConversationId(null);
     setConversation(null);
+    setOptimistic([]);
+    setRunning(false);
+    setError(null);
+    setNotice(null);
     setLive([]);
     setAwaiting(new Map());
     setActiveTab(null);
     previousFocus.current = null;
-  }, []);
+    if (agentId) onConversationOpened?.(agentId, 'new');
+  }, [agentId, onConversationOpened]);
 
   useEffect(() => {
-    if (newConversationSignal) startNew();
+    if (newConversationSignal && newConversationSignal !== previousNewSignal.current) {
+      previousNewSignal.current = newConversationSignal;
+      startNew();
+    }
   }, [newConversationSignal, startNew]);
 
   const onDecided = (action: ApprovalRow): void => {
     if (conversationId) void refresh(conversationId);
     // The rest of the dashboard counts pending approvals; keep it honest.
     void api.overview().catch(() => {});
-    if (action.state !== 'pending') setAwaiting((current) => new Map(current));
+    if (action.state !== 'pending') setAwaiting((current) => new Map([...current].filter(([, id]) => id !== action.id)));
   };
 
   /* ---- the split ---- */
@@ -494,6 +553,14 @@ export function ChatPage({
       renderables={renderables}
       activeId={activeTab}
       onActivate={setActiveTab}
+      onClose={(id) => {
+        if (profile && id === profileTabId(profile.id)) setProfile(null);
+        else if (conversationId) setDismissedTabs(current => {
+          const next = { ...current, [conversationId]: [...new Set([...(current[conversationId] ?? []), id])] };
+          storeDismissedTabs(next); return next;
+        });
+        if (activeTab === id) setActiveTab(null);
+      }}
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
@@ -529,11 +596,12 @@ export function ChatPage({
         <header className="wb-chat-head" data-testid="chat-head">
           <div className="wb-head-row">
             <div className="wb-head-text">
-              <span className="wb-head-title">{agent?.name ?? 'No agent'}</span>
+              {agent ? <a className="wb-head-title" href={chatRoute(agent.id)}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
                 {line.text}
               </span>
             </div>
+            <button className="wb-btn" aria-expanded={historyOpen} disabled={!agentId} onClick={() => setHistoryOpen(value => !value)}>History</button>
             {narrow ? (
               <button className="wb-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
                 Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
@@ -576,6 +644,16 @@ export function ChatPage({
             />
           ) : null}
         </header>
+        {historyOpen && agentId ? <ConversationHistory agentId={agentId} currentId={conversationId} timezone={timezone}
+          onNew={() => { setHistoryOpen(false); startNew(); }}
+          onSelect={id => {
+            if (id === conversationId) { setHistoryOpen(false); return; }
+            setHistoryOpen(false); setConversation(null); setOptimistic([]); setRunning(false); setActiveTab(null); setError(null); setNotice(null);
+            setConversationId(id);
+            onConversationOpened?.(agentId, id, false);
+          }} /> : null}
+
+        {agentId && conversationId ? <HostControls key={`${agentId}:${conversationId}`} agentId={agentId} conversationId={conversationId} /> : null}
 
         {error ? <div className="err-banner m-2.5">{error}</div> : null}
 
@@ -589,11 +667,11 @@ export function ChatPage({
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}
-          // Which calls the canvas actually kept a panel for. A call whose
-          // result is already in the answer has no panel, and this is what
-          // stops its line offering to open one.
-          opens={new Set(renderables.map((item) => item.id))}
           onOpen={(toolUseId) => {
+            if (conversationId) setDismissedTabs(current => {
+              const next = { ...current, [conversationId]: (current[conversationId] ?? []).filter(id => id !== toolUseId) };
+              storeDismissedTabs(next); return next;
+            });
             setActiveTab(toolUseId);
             if (narrow) onOpenCanvas?.();
           }}
@@ -603,17 +681,18 @@ export function ChatPage({
               ? `Nothing here yet. Ask ${agent.name} for something — a projection, a document, a decision.`
               : 'Loading agents…'
           }
-        />
+        >
 
-        {inlineApprovalId ? (
-          <div className="wb-inline-approval" data-testid="inline-approval">
+        {inlineApprovals.length ? inlineApprovals.map(item => (
+          <div key={item.id} className="wb-inline-approval" data-testid="inline-approval">
             <Envelope
-              props={{ approvalId: inlineApprovalId }}
+              props={item.props as { approvalId: string }}
               timezone={timezone}
               onDecided={onDecided}
             />
           </div>
-        ) : null}
+        )) : null}
+        </MessageList>
 
         {(conversation?.offers ?? []).length > 0 ? (
           <div className="wb-offers" data-testid="chat-offers">
@@ -692,8 +771,8 @@ function readWidth(): number {
   }
 }
 
-function byRecency(a: { lastMessageAt: string | null; createdAt: string }, b: { lastMessageAt: string | null; createdAt: string }): number {
-  return Date.parse(b.lastMessageAt ?? b.createdAt) - Date.parse(a.lastMessageAt ?? a.createdAt);
+function byRecency(a: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }, b: { lastMessageAt: string | null; createdAt?: string; startedAt?: string | null }): number {
+  return Date.parse(b.lastMessageAt ?? b.startedAt ?? b.createdAt ?? '') - Date.parse(a.lastMessageAt ?? a.startedAt ?? a.createdAt ?? '');
 }
 
 function str(value: unknown): string | null {

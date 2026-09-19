@@ -98,6 +98,7 @@ export interface MissionExecutorDeps {
   pool: Pool;
   registry: ToolRegistry;
   provider: RuntimeProvider;
+  providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
   ctx: ToolContext;
   env: NodeJS.ProcessEnv;
   /** Defaults to the catalog loaded from `agents/` for this environment. */
@@ -217,7 +218,8 @@ export function createMissionExecutor(
     // install does not carry is a configuration problem, not a fallback.
     const finding = findingOf(occurrence.payload);
     const agentId = finding?.agentId || mission.agentId;
-    const base = catalog.resolve(agentId).definition(deps.now(), deps.ctx.timezone);
+    const selectedAgent = catalog.resolve(agentId);
+    const base = selectedAgent.definition(deps.now(), deps.ctx.timezone);
     // The mission tools exist for this run only; the agent's own file never
     // needs to know about them, and nothing outside a mission run can call them.
     const agent = { ...base, tools: [...base.tools, ...MISSION_TOOLS] };
@@ -254,7 +256,7 @@ export function createMissionExecutor(
 
     const result = await runAgent({
       agent,
-      provider: deps.provider,
+      provider: deps.providerFor ? deps.providerFor(selectedAgent) : deps.provider,
       registry,
       ctx,
       pool: deps.pool,

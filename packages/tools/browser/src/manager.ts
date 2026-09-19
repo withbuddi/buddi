@@ -1,4 +1,4 @@
-import { BrowserService, type BrowserController, type BrowserScope, type BrowserStatus } from './service.js';
+import { BrowserService, type BrowserController, type BrowserScope, type BrowserStatus, type BrowserRollover } from './service.js';
 import type { BrowserCommand, BrowserDriver } from './types.js';
 import type { ToolContext } from '@buddi/core';
 
@@ -43,6 +43,20 @@ export class BrowserManager implements BrowserController {
   screenshot(sessionId?: string): Buffer | undefined {
     const id = sessionId ?? this.status().session?.id;
     return id ? this.#find({ sessionId: id })?.screenshot() : undefined;
+  }
+  rollover(input: BrowserRollover): boolean {
+    if (!this.#enabled || this.#stopped || this.#controlling) return false;
+    const oldKey = JSON.stringify([input.ownerId, input.agentId, input.previousConversationId]);
+    const newKey = JSON.stringify([input.ownerId, input.agentId, input.conversationId]);
+    const child = this.#children.get(oldKey);
+    if (!child) return false;
+    if (oldKey === newKey || this.#children.has(newKey) || this.#opening.has(oldKey)) throw new Error('Cannot transfer this browser conversation.');
+    if (!child.rollover(input)) return false;
+    // Synchronous: no command or owner control can interleave with re-keying.
+    this.#children.delete(oldKey);
+    this.#children.set(newKey, child);
+    for (const request of this.#requests.values()) if (request.key === oldKey) request.ended = true;
+    return true;
   }
   #sweep(): void {
     for (const [id, record] of this.#requests) if (record.expiresAt <= Date.now()) this.#requests.delete(id);

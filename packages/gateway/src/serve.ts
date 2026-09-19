@@ -50,6 +50,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser } from '@buddi/tool-browser';
+import { hostService } from '@buddi/tool-host';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
@@ -346,6 +347,7 @@ export async function main(): Promise<void> {
       registry: wiring.registry,
       catalog: wiring.catalog,
       provider: wiring.provider,
+      providerFor: wiring.providerFor,
       ctx: wiring.ctx,
       env: process.env,
       now,
@@ -524,6 +526,7 @@ export async function main(): Promise<void> {
           registry: wiring.registry,
           catalog: wiring.catalog,
           provider: wiring.provider,
+          providerFor: wiring.providerFor,
           ctx: wiring.ctx,
           now,
           deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
@@ -625,6 +628,7 @@ export async function main(): Promise<void> {
           config: web,
           token,
           env: process.env,
+          providerSettings: wiring.providerSettings,
           jobs: { resumeJob },
           // The browser as a talking surface. Every one of these is the object
           // the other surfaces already use — the per-agent provider adapter,
@@ -696,6 +700,7 @@ export async function main(): Promise<void> {
 
     let stopping = false;
     const shutdown = (signal: string): void => {
+      hostService(process.env).stop(wiring.ctx.ownerId);
       if (stopping) return;
       stopping = true;
       console.log(`\n${signal}: stopping scheduler and telegram surface…`);

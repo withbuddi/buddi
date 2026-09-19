@@ -66,7 +66,8 @@ export function providerFromEnv(
     };
   }
 
-  const hasSubscriptionToken = (env[DEFAULT_ANTHROPIC_TOKEN_ENV] ?? '').trim() !== '';
+  const selection = env.BUDDI_ANTHROPIC_CREDENTIAL_KIND;
+  const hasSubscriptionToken = selection === 'subscription-token' || (selection !== 'api-key' && (env[DEFAULT_ANTHROPIC_TOKEN_ENV] ?? '').trim() !== '');
   return {
     kind: 'anthropic',
     credential: hasSubscriptionToken

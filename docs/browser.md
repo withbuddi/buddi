@@ -70,6 +70,23 @@ tabs remain open. Already dispatched actions cannot be undone. Do not use the
 same mouse/keyboard while the agent is driving. A focus change causes refusal,
 not automatic refocusing; use takeover, then resume in the intended app.
 
+An observation or screenshot failure preserves the helper's actual error and
+pauses control instead of returning a successful empty observation. The agent
+cannot retry or click blindly while paused. Inspect the reported cause and the
+selected window, use **Resume access**, then request a fresh observation. Resume
+clears old screenshots and target evidence. Release remains available. If input
+already completed before capture failed, the result explicitly preserves that
+fact: do not repeat the input just to recover a screenshot.
+
+Automatic **size-based transcript rollover** in Telegram and the dashboard
+continues the same agent's existing computer/browser task. The surface moves the
+session before adopting the new transcript and carries at most six short text
+messages plus the task description, never old tool calls or accessibility trees.
+Session identity, expiry and paused state survive; old requests are fenced and
+the next action must be a fresh observation (or release). No click is replayed.
+Idle rollover, explicit reset, another chat or another agent do not adopt control,
+and conversation-scoped host execution permissions are not transferred.
+
 ### Native boundaries and current limitations
 
 - Captures only the selected window, not the whole desktop. Its screenshot and

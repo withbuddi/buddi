@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { fmtRelative, fmtTime, json, short } from '../format';
 import { Empty, ErrorBanner, Panel, StatePill, useAsync } from '../ui';
+import { HostControls } from './HostControls';
 
 export function Approvals({ timezone }: { timezone: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.approvals(), [], 10_000);
@@ -18,12 +19,12 @@ export function Approvals({ timezone }: { timezone: string }): JSX.Element {
   const [note, setNote] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const decide = async (id: string, decision: 'approve' | 'reject'): Promise<void> => {
+  const decide = async (id: string, decision: 'approve' | 'reject', scope?: 'once' | 'conversation' | 'always'): Promise<void> => {
     setBusy(id);
     setFailure(null);
     setNote(null);
     try {
-      const result = await api.decide(id, decision);
+      const result = await api.decide(id, decision, scope);
       setNote(
         decision === 'reject'
           ? `Rejected ${result.action.tool}.`
@@ -45,6 +46,7 @@ export function Approvals({ timezone }: { timezone: string }): JSX.Element {
   return (
     <>
       <h2>Approvals</h2>
+      <HostControls />
       <p className="lede">
         Nothing gated runs without one. The preview below is what the tool rendered, never model prose.
       </p>
@@ -124,7 +126,7 @@ function Pending({
   action: ApprovalRow;
   timezone: string;
   busy: boolean;
-  onDecide: (id: string, decision: 'approve' | 'reject') => void;
+  onDecide: (id: string, decision: 'approve' | 'reject', scope?: 'once' | 'conversation' | 'always') => void;
 }): JSX.Element {
   const [showEnvelope, setShowEnvelope] = useState(false);
   return (
@@ -140,8 +142,12 @@ function Pending({
       </p>
       <div className="bar">
         <button className="primary" disabled={busy} onClick={() => onDecide(action.id, 'approve')}>
-          Approve
+          {action.permissionScopes?.length ? 'Allow once' : 'Approve'}
         </button>
+        {action.permissionScopes?.length ? <>
+          <button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'conversation')}>Auto: this conversation</button>
+          <button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'always')}>Always: this agent</button>
+        </> : null}
         <button className="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
           Reject
         </button>

@@ -214,6 +214,60 @@ describe('composeSystem', () => {
 });
 
 describe('runAgent', () => {
+  it('blocks same-batch and later tools after a question, then allows work on the next owner turn', async () => {
+    const db = new FakeDb();
+    const execute = vi.fn(async () => 'done');
+    const registry = new ToolRegistry();
+    registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [
+      { name: 'demo.ask', description: 'ask', tier: 'auto', waitsForOwner: true, input: z.object({}), execute: async () => ({ pending: true }) },
+      { name: 'demo.double', description: 'work', tier: 'auto', input: z.object({}), execute },
+    ] });
+    const call = (id: string, name: string) => ({ type: 'tool_use' as const, id, name, input: {} });
+    const provider = scriptedProvider([
+      { content: [call('question', 'demo.ask'), call('same-batch', 'demo.double')], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [call('later-batch', 'demo.double')], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Wait for the export?' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    const askingAgent = { ...agent, tools: ['demo.ask', 'demo.double'] };
+    const result = await runAgent({ agent: askingAgent, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'Consolidate these' });
+    expect(result.text).toBe('Wait for the export?');
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.calls[1]?.tools).toEqual([]);
+    expect(provider.calls[2]?.tools).toEqual([]);
+    expect(provider.calls[1]?.nativeSearch).toBeUndefined();
+    for (const id of ['same-batch', 'later-batch']) {
+      expect(db.messages.flatMap((m) => m.content as unknown[])).toContainEqual(expect.objectContaining({
+        tool_use_id: id, is_error: true, content: expect.stringContaining('waiting for the owner to answer'),
+      }));
+    }
+    const answer = scriptedProvider([
+      { content: [call('after-answer', 'demo.double')], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Done' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent: askingAgent, provider: answer, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'Proceed now' });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not block tools for a failed question or an ordinary pending-shaped tool result', async () => {
+    for (const failing of [true, false]) {
+      const db = new FakeDb();
+      const execute = vi.fn(async () => 'done');
+      const registry = new ToolRegistry();
+      registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [
+        { name: 'demo.ask', description: 'ask', tier: 'auto', waitsForOwner: failing, input: z.object({}), execute: async () => {
+          if (failing) throw new Error('question not recorded');
+          return { pending: true };
+        } },
+        { name: 'demo.double', description: 'work', tier: 'auto', input: z.object({}), execute },
+      ] });
+      const provider = scriptedProvider([
+        { content: ['demo.ask', 'demo.double'].map((name) => ({ type: 'tool_use' as const, id: name, name, input: {} })), stopReason: 'tool_use', usage, model: 'test' },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'end_turn', usage, model: 'test' },
+      ]);
+      await runAgent({ agent: { ...agent, tools: ['demo.ask', 'demo.double'] }, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'hello' });
+      expect(execute).toHaveBeenCalledTimes(1);
+    }
+  });
   it('issues only the agent’s resolved session grants and refuses delegated authority', async () => {
     for (const delegationDepth of [0, 1]) {
       const db = new FakeDb();
