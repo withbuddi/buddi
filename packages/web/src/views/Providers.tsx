@@ -4,13 +4,14 @@ import { ErrorBanner, useAsync } from '../ui';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 export function Providers(): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.providerAccounts(), []);
+  const { data, error, reload, loading } = useAsync(() => api.providerAccounts(), []);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [adding, setAdding] = useState(false);
+  const [refreshRequested, setRefreshRequested] = useState(false);
   const run: Run = async (work, message) => {
-    setBusy(true); setFailure(null); setNotice('');
+    setBusy(true); setFailure(null); setNotice(''); setRefreshRequested(false);
     try {
       const result = await work() as { warning?: string } | undefined;
       setNotice(result?.warning ?? message); reload(); return true;
@@ -23,14 +24,15 @@ export function Providers(): JSX.Element {
     <p><a href="#/agents">Assign accounts to agents →</a></p>
     <ErrorBanner message={error ?? failure} />
     {notice && <p role="status">{notice}</p>}
+    {refreshRequested && <p role="status">{loading ? 'Refreshing account status…' : error ? 'Could not refresh account status. Try again.' : 'Account status refreshed. This checks saved credentials; it does not renew subscription tokens or test connections.'}</p>}
     {!data && !error && <p>Loading accounts…</p>}
     {error && <button onClick={reload}>Retry</button>}
     {data && <>
       <p className="muted">Credential storage: {data.vault.kind === 'keychain' ? 'macOS Keychain' : data.vault.kind === 'file' ? 'Encrypted file vault' : data.vault.kind}. Postgres stores account settings and assignments, never secret values.</p>
       {(data.vault.locked || data.vault.kind === 'none') && <p className="attention">{data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</p>}
-      <button disabled={busy} onClick={() => setAdding(true)}>Add account</button>
-      <button disabled={busy} onClick={reload}>Refresh status</button>
-      {adding && <AccountForm busy={busy} run={run} onDone={() => setAdding(false)} />}
+      <button disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>{adding ? 'Cancel adding account' : 'Add account'}</button>
+      <button disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>{loading ? 'Refreshing…' : 'Refresh status'}</button>
+      {adding && <div id="new-provider-account"><AccountForm busy={busy} run={run} onDone={() => setAdding(false)} /></div>}
       {data.accounts.length === 0 && <p>No accounts yet. Add one to connect your agents.</p>}
       {data.accounts.map(account => <AccountCard key={`${account.id}:${account.revision}`} account={account} busy={busy} run={run} />)}
       <p className="muted">Subscription login is separate from API-key access. Existing Claude setup tokens are preserved as legacy accounts, without automatic refresh or a known expiry. New OAuth/device sign-in is not implemented in this release.</p>
@@ -88,7 +90,7 @@ function AccountForm({ account: a, busy, run, onDone }: { account?: ProviderAcco
   }}>
     <h3>{a ? 'Edit account' : 'New account'}</h3>
     <fieldset disabled={busy} className="provider-fields">
-      <label>Account name <input required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" /></label>
+      <label>Account name <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" /></label>
       <label>Provider <select disabled={!!a} value={kind} onChange={e => changeKind(e.target.value as ProviderAccount['kind'])}>
         <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="openai-compatible">OpenAI-compatible</option>
       </select></label>
@@ -106,5 +108,6 @@ function AccountForm({ account: a, busy, run, onDone }: { account?: ProviderAcco
       {a && <p className="muted">Saving changes stops an active run at its next model call. Start a new turn afterward. Changing the default model does not change existing agent assignments.</p>}
       <div className="bar"><button type="submit" disabled={!label.trim() || !model.trim()}>Save account</button><button type="button" onClick={onDone}>Cancel</button></div>
     </fieldset>
+    {(!label.trim() || !model.trim()) && <p className="muted">Enter an account name and default model to enable Save account. The example name is a placeholder.</p>}
   </form>;
 }
