@@ -1,6 +1,6 @@
 /**
  * Settings: the installation, in four sections. Model accounts, the computer
- * and browser the agents may drive, the sentinels that watch, and the system
+ * and browser the agents may drive, the watchers that check, and the system
  * itself. Nothing here is a page an owner visits daily, which is why it is
  * behind the gear and not on the rail's first screen.
  */
@@ -11,7 +11,7 @@ import { SETTINGS_SECTIONS, settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Stack, Tab, Tabs, useAsync } from '../ui';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
-import { Sentinels } from './Sentinels';
+import { Watchers } from './Watchers';
 
 export function Settings({ hash, timezone, navigate }: PlaceProps): JSX.Element {
   const section = /^#\/settings\/([a-z]+)/.exec(hash)?.[1] ?? 'accounts';
@@ -31,7 +31,7 @@ export function Settings({ hash, timezone, navigate }: PlaceProps): JSX.Element 
       </Tabs>
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
-      {section === 'sentinels' ? <Sentinels timezone={timezone} embedded /> : null}
+      {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
       {section === 'system' ? <System timezone={timezone} /> : null}
     </div>
   );

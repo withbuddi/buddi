@@ -1,61 +1,25 @@
 /**
- * Deterministic watchers: what is installed, when each last ran, what is open,
- * what resolved, and what is waiting for the weekly digest.
+ * Alerts: what the watchers found. Open findings first, then what resolved,
+ * then what is waiting for the weekly recap. Which watchers exist and whether
+ * they run is under Settings.
  */
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
 import { Code, Details, Empty, ErrorBanner, PageFrame, Panel, Pill, Table, useAsync } from '../ui';
 
-export function Sentinels({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
+export function Alerts({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const { data, error } = useAsync(() => api.sentinels(), [], 30_000);
 
   return (
-    <PageFrame
-      embedded={embedded}
-      title="Sentinels"
-      lede="Code, not prompts. A finding wakes the owner, waits for the digest, or stays quiet."
-    >
+    <PageFrame embedded={embedded} title="Alerts" lede="What the watchers found.">
       <ErrorBanner message={error} />
 
-      <Panel title="Installed" flush>
-        {!data || data.installed.length === 0 ? (
-          <Empty>No sentinels are installed.</Empty>
-        ) : (
-          <Table>
-            <thead>
-              <tr>
-                <th>Sentinel</th>
-                <th>Every</th>
-                <th>Last run</th>
-                <th>Last error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.installed.map((sentinel) => {
-                const run = data.runs.find((r) => r.sentinelId === sentinel.id);
-                return (
-                  <tr key={sentinel.id}>
-                    <td>
-                      <span className="mono">{sentinel.id}</span>
-                      <div className="sub">{sentinel.description}</div>
-                    </td>
-                    <td className="nowrap">{sentinel.every}s</td>
-                    <td className="nowrap">{run ? `${fmtTime(run.lastRunAt, timezone)} (${fmtRelative(run.lastRunAt)})` : '—'}</td>
-                    <td className={run?.lastError ? 'critical' : 'muted'}>{run?.lastError ?? 'none'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        )}
-      </Panel>
-
-      <Findings title="Open findings" findings={data?.open ?? []} timezone={timezone} />
+      <Findings title="Open" findings={data?.open ?? []} timezone={timezone} />
       <Findings title="Resolved" findings={data?.resolved ?? []} timezone={timezone} />
 
-      <Panel title="Waiting for the digest" flush>
+      <Panel title="Waiting for the weekly recap" flush>
         {!data || data.digest.length === 0 ? (
-          <Empty>Nothing is queued for the weekly recap.</Empty>
+          <Empty>Nothing is waiting for the recap.</Empty>
         ) : (
           <Table>
             <thead>

@@ -58,7 +58,7 @@ export const PLACES = [
 export const SETTINGS_SECTIONS = [
   { id: 'accounts', label: 'Model accounts' },
   { id: 'computer', label: 'Computer & browser' },
-  { id: 'sentinels', label: 'Sentinels' },
+  { id: 'watchers', label: 'Watchers' },
   { id: 'system', label: 'System' },
 ] as const;
 
@@ -80,7 +80,8 @@ export function legacyRedirect(hash: string): string | null {
     '#/reminders': `${AGENTS_ROUTE}?tab=reminders`,
     '#/providers': settingsRoute('accounts'),
     '#/browser': settingsRoute('computer'),
-    '#/sentinels': settingsRoute('sentinels'),
+    '#/sentinels': settingsRoute('watchers'),
+    '#/settings/sentinels': settingsRoute('watchers'),
   };
   return map[hash] ?? null;
 }

@@ -31,6 +31,7 @@ import {
   Tabs,
   useAsync,
 } from '../ui';
+import { Alerts } from './Alerts';
 import { Events } from './Events';
 import { Jobs } from './Jobs';
 
@@ -38,6 +39,7 @@ const TABS = [
   { id: 'conversations', label: 'Conversations' },
   { id: 'jobs', label: 'Jobs' },
   { id: 'approvals', label: 'Approvals' },
+  { id: 'alerts', label: 'Alerts' },
   { id: 'events', label: 'Events' },
 ] as const;
 
@@ -70,6 +72,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
       {tab === 'conversations' ? <Conversations timezone={timezone} navigate={navigate} nameOf={nameOf} /> : null}
       {tab === 'jobs' ? <Jobs timezone={timezone} embedded /> : null}
       {tab === 'approvals' ? <ApprovalHistory timezone={timezone} nameOf={nameOf} /> : null}
+      {tab === 'alerts' ? <Alerts timezone={timezone} embedded /> : null}
       {tab === 'events' ? <Events timezone={timezone} embedded /> : null}
     </div>
   );
