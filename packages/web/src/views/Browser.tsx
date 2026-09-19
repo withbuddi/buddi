@@ -1,85 +1,232 @@
-import { useState } from 'react';
+/**
+ * Computer & browser, for the owner rather than the engineer.
+ *
+ * Three questions, answered in order: does macOS let agents act at all, which
+ * apps may they touch, and how do they get a browser. The live view of what an
+ * agent is doing is not here: it is on the Canvas of the conversation doing it,
+ * and this page only says who is driving and links there.
+ */
+import { useMemo, useState } from 'react';
 import { api, type BrowserStatus, type ControlSettings } from '../api';
-import { Button, Details, ErrorBanner, Field, Notice, PageFrame, Pill, Toolbar, useAsync } from '../ui';
+import { chatRoute } from '../routes';
+import { Avatar, Button, Details, Empty, ErrorBanner, KV, Notice, PageFrame, Panel, Pill, Sheet, Stack, Toolbar, useAsync } from '../ui';
 
 export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.browser(), [], 1500);
-  const [selected, setSelected] = useState<string | null>(null);
-  const current = data?.sessions?.find((item) => item.session?.id === selected) ?? data;
+  const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
   return (
     <PageFrame embedded={embedded} title="Computer & browser">
-      {data?.settings ? <ComputerSettings key={JSON.stringify(data.settings)} data={data} reload={reload} /> : null}
-      {(data?.sessions?.length ?? 0) > 0 ? (
-        <nav aria-label="Browser conversations">
-          <Toolbar>
-            {data!.sessions!.map((item) => (
-              <Button
-                size="sm"
-                key={item.session!.id}
-                aria-pressed={current?.session?.id === item.session!.id}
-                onClick={() => setSelected(item.session!.id)}
-              >
-                {item.session!.agentId} · {item.session!.conversationId.slice(0, 8)} · {item.busy ? 'Working' : item.state === 'running' ? 'Ready' : item.state}
-              </Button>
-            ))}
-          </Toolbar>
-        </nav>
-      ) : null}
-      <BrowserPanel key={current?.session?.id ?? 'idle'} data={current} error={error} reload={reload} />
+      <ErrorBanner message={error} />
+      {!data ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} reload={reload} />}
     </PageFrame>
   );
 }
 
-function ComputerSettings({ data, reload }: { data: BrowserStatus; reload: () => void }): JSX.Element {
-  const [settings, setSettings] = useState<ControlSettings>(data.settings!);
-  const [apps, setApps] = useState(settings.allowedApps.join('\n'));
+function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: () => void }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const active = !!data.session || !!data.sessions?.length || data.busy;
+  const [picking, setPicking] = useState(false);
+  const settings = data.settings;
+  const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
+  const active = sessions.length > 0 || data.busy;
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true); setFailure(null);
     try { await action(); } catch (error) { setFailure(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); reload(); }
   };
+  const save = (next: ControlSettings) => void run(() => api.browserSettings(next));
+  const perms = data.permissions;
+  const ready = !!data.enabled && (!perms?.supported || (perms.accessibility && perms.screenRecording));
+
   return (
-    <Details boxed summary="Computer & browser settings" open={!data.session}>
+    <Stack gap="lg">
       <ErrorBanner message={failure} />
-      <fieldset className="ui-fields" data-stack="true" disabled={busy || active || !data.enabled}>
-        <Field
-          label="Control mode"
-          hint="Computer mode uses OS input, not a browser debugging connection. One agent controls the desktop at a time. It uses your existing app windows and logins; releasing leaves them open. Playwright keeps separate conversation tabs in a dedicated browser profile. Modes never switch automatically."
-        >
-          <select value={settings.mode} onChange={(event) => setSettings({ ...settings, mode: event.target.value as ControlSettings['mode'] })}>
-            <option value="computer">Computer control — macOS accessibility + screenshots (default)</option>
-            <option value="playwright">Browser automation — Playwright (optional)</option>
-          </select>
-        </Field>
-        <Field label="Browser application">
-          <select value={settings.browserApp} onChange={(event) => setSettings({ ...settings, browserApp: event.target.value })}>
-            <option value="com.google.Chrome">Google Chrome</option><option value="com.apple.Safari">Safari</option><option value="org.chromium.Chromium">Chromium</option><option value="com.microsoft.edgemac">Microsoft Edge</option><option value="com.brave.Browser">Brave</option><option value="org.mozilla.firefox">Firefox</option>
-          </select>
-        </Field>
-        <Field
-          label="Allowed applications (bundle IDs, one per line)"
-          hint="Include the selected browser. To enable a native app, add its bundle ID (for example com.apple.TextEdit or com.apple.calculator). Allow only apps you want agents to operate. Window screenshots and accessibility text go to your agent’s model provider. App permissions are not an OS sandbox; app network traffic is not intercepted in Computer mode."
-        >
-          <textarea rows={4} value={apps} onChange={(event) => setApps(event.target.value)} />
-        </Field>
-        <Toolbar>
-          <Button variant="accent" onClick={() => void run(() => api.browserSettings({ ...settings, allowedApps: [...new Set(apps.split(/[\n,]/).map((app) => app.trim()).filter(Boolean))] }))}>Save control settings</Button>
-          <Button onClick={() => void run(() => api.computerPermissions(false))}>Check permissions</Button>
-          <Button onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button>
-        </Toolbar>
-      </fieldset>
-      {active ? <p className="muted">Release all active sessions before changing settings or requesting permissions.</p> : null}
-      {data.permissions ? (
-        <p role="status">
-          {data.permissions.supported ? `Accessibility: ${data.permissions.accessibility ? 'Granted' : 'Needed'} · Screen Recording: ${data.permissions.screenRecording ? 'Granted' : 'Needed'}` : 'Computer control requires macOS 14 or later.'} {data.permissions.message}
-        </p>
-      ) : (
-        <p className="muted">Computer mode needs macOS Accessibility and Screen Recording permission for the Buddi helper/service. Check permissions before the first task; macOS may require restarting the service after granting them.</p>
+
+      <Panel title="Status">
+        <Stack>
+          {!data.enabled ? (
+            <Notice tone="warning">The host is not available. Start buddi serve on a machine with a desktop session.</Notice>
+          ) : ready ? (
+            <Notice tone="good">Ready. Agents can use your computer within the apps you allow below.</Notice>
+          ) : (
+            <Notice tone="warning">macOS has not granted everything yet. Grant the permissions below, then check again.</Notice>
+          )}
+          {perms?.supported ? (
+            <ul className="perm-list">
+              <li className="perm-row">
+                <Pill tone={perms.accessibility ? 'good' : 'warning'}>{perms.accessibility ? 'Granted' : 'Needed'}</Pill>
+                <span className="perm-name">Accessibility</span>
+                <span className="muted">Lets agents click and type in the apps you allow.</span>
+              </li>
+              <li className="perm-row">
+                <Pill tone={perms.screenRecording ? 'good' : 'warning'}>{perms.screenRecording ? 'Granted' : 'Needed'}</Pill>
+                <span className="perm-name">Screen Recording</span>
+                <span className="muted">Lets agents see the window they are working in.</span>
+              </li>
+            </ul>
+          ) : perms ? (
+            <p className="muted">Computer control requires macOS 14 or later.</p>
+          ) : null}
+          {perms?.message ? <p className="muted">{perms.message}</p> : null}
+          <Toolbar>
+            {!ready && perms?.supported ? <Button variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
+            <Button disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
+          </Toolbar>
+          {perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
+        </Stack>
+      </Panel>
+
+      <Panel title="Who is driving">
+        {sessions.length === 0 ? (
+          <p className="ui-card-meta">Nobody right now. Ask an agent to open a website or one of the allowed apps, and you will see it working on that conversation’s Canvas.</p>
+        ) : (
+          <div className="ui-list">
+            {sessions.map((s) => (
+              <a key={s.session!.id} className="ui-list-row" href={chatRoute(s.session!.agentId, s.session!.conversationId)}>
+                <Avatar id={s.session!.agentId} name={s.session!.agentId} size="sm" />
+                <span className="ui-list-main">
+                  <span className="ui-list-title">{s.session!.task}</span>
+                  <span className="ui-list-sub">{s.session!.agentId}, {s.busy ? 'working' : s.state}, {s.session!.steps} of {s.session!.maxSteps} steps</span>
+                </span>
+                <span className="ui-list-side">Open the Canvas</span>
+              </a>
+            ))}
+          </div>
+        )}
+        {sessions.length > 0 ? (
+          <Toolbar>
+            <Button variant="danger" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{data.mode === 'computer' ? 'Stop computer control' : 'Stop all browsers'}</Button>
+          </Toolbar>
+        ) : null}
+      </Panel>
+
+      {settings ? (
+        <>
+          <Panel title="How agents get a screen">
+            <div className="mode-choice" role="radiogroup" aria-label="Control mode">
+              <ModeOption
+                current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
+                title="Use my apps"
+                body="Agents work in your own windows, signed in as you. One agent at a time. Releasing control leaves everything open."
+                onPick={() => save({ ...settings, mode: 'computer' })}
+              />
+              <ModeOption
+                current={settings.mode} value="playwright" disabled={busy || active || !data.enabled}
+                title="Give agents their own browser"
+                body="A separate browser profile with its own tabs, one per conversation. Your apps are never touched."
+                onPick={() => save({ ...settings, mode: 'playwright' })}
+              />
+            </div>
+            {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
+          </Panel>
+
+          <Panel title="Apps agents may use">
+            <Stack>
+              <AppList settings={settings} disabled={busy || active || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
+              <Details summary="Details">
+                <div className="ui-prose muted">
+                  <p>Agents see what is on screen in these apps, and what they see goes to the agent’s model provider. Allow only apps you want operated.</p>
+                  <p>Never type a password or a sign-in code in chat. Sign in yourself, in the app, while you have taken over.</p>
+                  <p>This is an allow list, not a sandbox: an allowed app’s own network traffic is not inspected.</p>
+                </div>
+              </Details>
+            </Stack>
+          </Panel>
+          {picking ? (
+            <AppPicker
+              chosen={settings.allowedApps}
+              onClose={() => setPicking(false)}
+              onPick={(id) => { setPicking(false); if (!settings.allowedApps.includes(id)) save({ ...settings, allowedApps: [...settings.allowedApps, id] }); }}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </Stack>
+  );
+}
+
+function ModeOption({ current, value, title, body, disabled, onPick }: { current: string; value: string; title: string; body: string; disabled: boolean; onPick: () => void }): JSX.Element {
+  const on = current === value;
+  return (
+    <button type="button" role="radio" aria-checked={on} className="mode-option" disabled={disabled} onClick={() => { if (!on) onPick(); }}>
+      <span className="mode-option-dot" aria-hidden="true" />
+      <span className="mode-option-text">
+        <span className="mode-option-title">{title}</span>
+        <span className="mode-option-body">{body}</span>
+      </span>
+    </button>
+  );
+}
+
+function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSettings; disabled: boolean; onChange: (next: ControlSettings) => void; onAdd: () => void }): JSX.Element {
+  const apps = useAsync(() => api.installedApps(), []);
+  const nameOf = (id: string): string => apps.data?.apps.find((a) => a.id === id)?.name ?? id;
+  return (
+    <>
+      {settings.allowedApps.length === 0 ? <Empty>No apps yet. Agents cannot touch anything until you add one.</Empty> : (
+        <ul className="ui-list" aria-label="Allowed apps">
+          {settings.allowedApps.map((id) => (
+            <li key={id} className="ui-list-row">
+              <Avatar id={id} name={nameOf(id)} size="sm" />
+              <span className="ui-list-main">
+                <span className="ui-list-title">{nameOf(id)}{id === settings.browserApp ? <Pill tone="accent" className="app-role">browser</Pill> : null}</span>
+                <span className="ui-list-sub mono">{id}</span>
+              </span>
+              <Toolbar>
+                {id !== settings.browserApp && isBrowser(id) ? <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange({ ...settings, browserApp: id })}>Use as browser</Button> : null}
+                <Button size="sm" variant="ghost" disabled={disabled || id === settings.browserApp} title={id === settings.browserApp ? 'Pick another browser first' : undefined} onClick={() => onChange({ ...settings, allowedApps: settings.allowedApps.filter((a) => a !== id) })}>Remove</Button>
+              </Toolbar>
+            </li>
+          ))}
+        </ul>
       )}
-    </Details>
+      <Toolbar>
+        <Button variant="accent" disabled={disabled} onClick={onAdd}>Add an app</Button>
+        <span className="muted">The app marked as browser is the one agents open websites in.</span>
+      </Toolbar>
+    </>
+  );
+}
+
+const BROWSERS = ['com.google.Chrome', 'com.apple.Safari', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser', 'org.mozilla.firefox', 'company.thebrowser.Browser'];
+function isBrowser(id: string): boolean { return BROWSERS.includes(id); }
+
+function AppPicker({ chosen, onClose, onPick }: { chosen: string[]; onClose: () => void; onPick: (id: string) => void }): JSX.Element {
+  const apps = useAsync(() => api.installedApps(), []);
+  const [q, setQ] = useState('');
+  const [manual, setManual] = useState('');
+  const rows = useMemo(() => {
+    const list = apps.data?.apps ?? [];
+    const needle = q.trim().toLowerCase();
+    return list.filter((a) => !needle || a.name.toLowerCase().includes(needle) || a.id.toLowerCase().includes(needle)).slice(0, 60);
+  }, [apps.data, q]);
+  return (
+    <Sheet title="Add an app" onClose={onClose}>
+      <input autoFocus aria-label="Search apps" placeholder="Search installed apps" value={q} onChange={(e) => setQ(e.target.value)} />
+      <ErrorBanner message={apps.error} />
+      {!apps.data ? <Empty>Reading your Applications folder…</Empty> : rows.length === 0 ? <Empty>No app matches.</Empty> : (
+        <ul className="ui-list" aria-label="Installed apps">
+          {rows.map((a) => {
+            const already = chosen.includes(a.id);
+            return (
+              <li key={a.id} className="ui-list-row">
+                <Avatar id={a.id} name={a.name} size="sm" />
+                <span className="ui-list-main">
+                  <span className="ui-list-title">{a.name}</span>
+                  <span className="ui-list-sub mono">{a.id}</span>
+                </span>
+                <Button size="sm" disabled={already} onClick={() => onPick(a.id)}>{already ? 'Allowed' : 'Allow'}</Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <Details summary="Add by bundle identifier instead">
+        <Toolbar>
+          <input aria-label="Bundle identifier" placeholder="com.apple.TextEdit" value={manual} onChange={(e) => setManual(e.target.value)} />
+          <Button disabled={!manual.trim()} onClick={() => onPick(manual.trim())}>Allow this identifier</Button>
+        </Toolbar>
+      </Details>
+    </Sheet>
   );
 }
 

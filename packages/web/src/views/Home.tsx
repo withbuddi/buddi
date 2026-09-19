@@ -97,13 +97,13 @@ export function Home({
             ) : null}
             {urgent > 0 ? (
               <Notice tone="critical">
-                <a href={settingsRoute('sentinels')} onClick={go(settingsRoute('sentinels'))}>
-                  {urgent} urgent finding{urgent === 1 ? '' : 's'} from your sentinels.
+                <a href={`${ACTIVITY_ROUTE}/alerts`} onClick={go(`${ACTIVITY_ROUTE}/alerts`)}>
+                  {urgent} urgent alert{urgent === 1 ? '' : 's'} from your watchers.
                 </a>
               </Notice>
             ) : null}
             {(data?.sentinels?.errors ?? []).map((err) => (
-              <Notice key={err.sentinelId} tone="warning">Sentinel {err.sentinelId} failed: {err.error}</Notice>
+              <Notice key={err.sentinelId} tone="warning">Watcher {err.sentinelId} failed: {err.error}</Notice>
             ))}
             {(data?.mail ?? []).filter((m) => m.lastError).map((source) => (
               <Notice key={source.sourceId} tone="warning">Source {source.sourceId}: {source.lastError}</Notice>
