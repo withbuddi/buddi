@@ -526,3 +526,82 @@ fieldset:disabled { opacity: 0.6; }
   .ui-kv dt { margin-top: var(--space-2); }
   .ui-sheet { width: 100%; padding: var(--space-4); }
 }
+
+/* ================================================================== *
+ * faces
+ * ================================================================== */
+
+.ui-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  user-select: none;
+  background: var(--face-1-bg);
+  color: var(--face-1-ink);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 4%);
+}
+.ui-avatar[data-size='sm'] { width: 22px; height: 22px; font-size: var(--text-2xs); border-radius: var(--radius-sm); }
+.ui-avatar[data-size='lg'] { width: 44px; height: 44px; font-size: var(--text-lg); border-radius: var(--radius-lg); }
+.ui-avatar[data-size='xl'] { width: 64px; height: 64px; font-size: var(--text-2xl); border-radius: 18px; }
+.ui-avatar[data-unavailable='true'] { filter: grayscale(1); opacity: 0.55; }
+.ui-avatar[data-tint='1'] { background: var(--face-1-bg); color: var(--face-1-ink); }
+.ui-avatar[data-tint='2'] { background: var(--face-2-bg); color: var(--face-2-ink); }
+.ui-avatar[data-tint='3'] { background: var(--face-3-bg); color: var(--face-3-ink); }
+.ui-avatar[data-tint='4'] { background: var(--face-4-bg); color: var(--face-4-ink); }
+.ui-avatar[data-tint='5'] { background: var(--face-5-bg); color: var(--face-5-ink); }
+.ui-avatar[data-tint='6'] { background: var(--face-6-bg); color: var(--face-6-ink); }
+
+/* Titles in the hub's own voice. */
+.ui-page-title, .ui-card-title, .ui-panel-title, .ui-sheet-title { font-family: var(--font-display); }
+
+/* A row of tabs under a page head. */
+.ui-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.ui-tabs::-webkit-scrollbar { display: none; }
+.ui-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ui-tab:hover { color: var(--text); }
+.ui-tab[aria-current='page'], .ui-tab[data-state='active'] { color: var(--text); border-bottom-color: var(--accent); }
+.ui-tab .ui-count { margin-left: 2px; }
+
+/* A list of rows, each a link or a fact, with one hairline between. */
+.ui-list { display: flex; flex-direction: column; }
+.ui-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.ui-list-row:last-child { border-bottom: 0; }
+a.ui-list-row:hover .ui-list-title { color: var(--accent); }
+.ui-list-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ui-list-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-list-sub { font-size: var(--text-sm); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-list-side { flex: 0 0 auto; font-size: var(--text-sm); color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ui-panel[data-flush='true'] .ui-list-row { padding: 10px var(--space-4); }

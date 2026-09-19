@@ -28,6 +28,10 @@
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* The voice of the hub: a rounded face where the system has one (SF Pro
+     Rounded on Apple), the plain sans everywhere else. No font file, still. */
+  --font-display: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
+    'Segoe UI', Roboto, sans-serif;
 
   /* ---- type scale ----
    * Six sizes and nothing between them. Half-pixel sizes were how the two
@@ -42,6 +46,7 @@
   --text-lg: 15px;    /* panel and card titles */
   --text-xl: 18px;    /* page titles */
   --text-2xl: 22px;   /* stat values */
+  --text-3xl: 30px;   /* the greeting */
 
   --leading-tight: 1.3;
   --leading: 1.5;
@@ -87,8 +92,8 @@
   --text-faint: #96928a;
 
   /* ---- the one accent hue, used sparingly ---- */
-  --accent: #2f5fa8;
-  --accent-soft: #e6edf8;
+  --accent: #3d5bd6;
+  --accent-soft: #e8ecfb;
   --accent-contrast: #ffffff;
 
   /* ---- semantic states, deliberately not the accent ---- */
@@ -110,7 +115,7 @@
   --chart-bar-negative: #c98a86;
 
   /* ---- focus ---- */
-  --focus-ring: #2f5fa8;
+  --focus-ring: #3d5bd6;
 
   /* ---- code ---- */
   /* ---- the agent faces ----
@@ -119,7 +124,7 @@
    * else: saturated enough to tell apart at 30px, never loud enough to compete
    * with the one thing on the screen that is allowed to be red.
    */
-  --face-1-bg: #e6edf8;  --face-1-ink: #2f5fa8;
+  --face-1-bg: #e6ebf9;  --face-1-ink: #3552c4;
   --face-2-bg: #e4f0e9;  --face-2-ink: #1f6f45;
   --face-3-bg: #f6e9dd;  --face-3-ink: #96562a;
   --face-4-bg: #ece7f6;  --face-4-ink: #5b46a0;
@@ -148,8 +153,8 @@
     --text-muted: #9c988f;
     --text-faint: #75716a;
 
-    --accent: #7aa7e8;
-    --accent-soft: #1d2a3d;
+    --accent: #93a8f5;
+    --accent-soft: #212a4a;
     --accent-contrast: #0e1013;
 
     --good: #5fc98a;
@@ -196,8 +201,8 @@
   --text-muted: #9c988f;
   --text-faint: #75716a;
 
-  --accent: #7aa7e8;
-  --accent-soft: #1d2a3d;
+  --accent: #93a8f5;
+  --accent-soft: #212a4a;
   --accent-contrast: #0e1013;
 
   --good: #5fc98a;

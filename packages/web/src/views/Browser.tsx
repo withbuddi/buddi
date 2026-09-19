@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { api, type BrowserStatus, type ControlSettings } from '../api';
-import { Button, Details, ErrorBanner, Field, Notice, Page, Pill, Toolbar, useAsync } from '../ui';
+import { Button, Details, ErrorBanner, Field, Notice, PageFrame, Pill, Toolbar, useAsync } from '../ui';
 
-export function Browser(): JSX.Element {
+export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 1500);
   const [selected, setSelected] = useState<string | null>(null);
   const current = data?.sessions?.find((item) => item.session?.id === selected) ?? data;
   return (
-    <Page>
+    <PageFrame embedded={embedded} title="Computer & browser">
       {data?.settings ? <ComputerSettings key={JSON.stringify(data.settings)} data={data} reload={reload} /> : null}
       {(data?.sessions?.length ?? 0) > 0 ? (
         <nav aria-label="Browser conversations">
@@ -26,7 +26,7 @@ export function Browser(): JSX.Element {
         </nav>
       ) : null}
       <BrowserPanel key={current?.session?.id ?? 'idle'} data={current} error={error} reload={reload} />
-    </Page>
+    </PageFrame>
   );
 }
 

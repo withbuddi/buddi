@@ -1,13 +1,14 @@
 /**
  * The shell.
  *
- * Chat is the landing route and owns the window: a conversation column driving
- * a canvas. The nine monitoring pages are unchanged and still reachable at the
- * routes they always had — they simply sit behind the rail now, because the
- * point of the dashboard is the work, not the instrumentation of the work.
+ * A rail of five places on the left, and the place on the right. Home is the
+ * landing route: what needs you, then your team, then what is coming. Chat
+ * owns a conversation column driving a canvas, exactly as before. The old
+ * monitoring hashes still resolve: `legacyRedirect` sends each to the page
+ * that now holds its content.
  *
- * Routing is still the URL hash, so there are still no server routes and a
- * reload still lands where the owner was.
+ * Routing is the URL hash, so there are no server routes and a reload lands
+ * where the owner was.
  */
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -15,25 +16,28 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, chatApi } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
-import { CHAT_ROUTE, NAV, SECTIONS, chatRoute, parseChatRoute } from './routes';
+import {
+  ACTIVITY_ROUTE,
+  AGENTS_ROUTE,
+  CHAT_ROUTE,
+  HOME_ROUTE,
+  PLACES,
+  SETTINGS_ROUTE,
+  chatRoute,
+  legacyRedirect,
+  parseChatRoute,
+  placeOf,
+} from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
+import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
-import { Providers } from './views/Providers';
-import { Browser } from './views/Browser';
-import { Approvals } from './views/Approvals';
-import { Conversations } from './views/Conversations';
-import { Events } from './views/Events';
-import { Jobs } from './views/Jobs';
-import { Missions } from './views/Missions';
-import { Overview } from './views/Overview';
-import { Offers } from './views/Offers';
-import { Reminders } from './views/Reminders';
-import { Sentinels } from './views/Sentinels';
+import { Home } from './views/Home';
+import { Settings } from './views/Settings';
 
-export { NAV, SECTIONS };
+export { PLACES };
 
 /** The width below which the canvas stops being a column and becomes a sheet. */
 export const NARROW_QUERY = '(max-width: 900px)';
@@ -41,19 +45,16 @@ export const NARROW_QUERY = '(max-width: 900px)';
 /**
  * The width below which the *agent* rail lies down.
  *
- * Deliberately higher than the canvas breakpoint. Two 56px rails, a 320px
- * minimum conversation and a canvas need about a thousand pixels before any of
- * them has room to be read; below that the agent rail is the one that gives
- * way, because it is the cheapest to lay flat — a horizontal strip in the
- * conversation header keeps every face one tap away and every badge in sight,
- * which a menu would not.
+ * Deliberately higher than the canvas breakpoint. Two rails, a 320px minimum
+ * conversation and a canvas need about a thousand pixels before any of them
+ * has room to be read; below that the agent rail is the one that gives way.
  */
 export const AGENT_RAIL_QUERY = '(max-width: 1080px)';
 
 export function useHash(): [string, (next: string, replace?: boolean) => void] {
-  const [hash, setHash] = useState(() => window.location.hash || CHAT_ROUTE);
+  const [hash, setHash] = useState(() => window.location.hash || HOME_ROUTE);
   useEffect(() => {
-    const onChange = (): void => setHash(window.location.hash || CHAT_ROUTE);
+    const onChange = (): void => setHash(window.location.hash || HOME_ROUTE);
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);
   }, []);
@@ -107,17 +108,22 @@ export function App(): JSX.Element {
   const [theme, setTheme] = useThemeChoice();
   const narrow = useMediaQuery(NARROW_QUERY);
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const [newConversation, setNewConversation] = useState(0);
   /*
    * The roster lives in the shell, because the rail that draws it does. One
-   * selection, one order, one source of "who is waiting" — a second copy inside
-   * the chat page would be a second thing to keep right.
+   * selection, one order, one source of "who is waiting".
    */
   const [agents, setAgents] = useState<ChatAgent[]>([]);
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const attention = useAttention();
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
+
+  // The old hashes, sent where their content went. Replaced, not pushed, so
+  // Back does not bounce between the two.
+  useEffect(() => {
+    const target = legacyRedirect(hash);
+    if (target) navigate(target, true);
+  }, [hash, navigate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,34 +173,29 @@ export function App(): JSX.Element {
     return () => window.clearInterval(handle);
   }, []);
 
-  const conversationId = /^#\/conversations\/(.+)$/.exec(hash)?.[1] ?? null;
-  const section = conversationId ? '#/conversations' : hash || CHAT_ROUTE;
-  const onChat = !!chatLocation || section === CHAT_ROUTE || section === '#' || section === '';
+  const place = placeOf(hash);
+  const onChat = place === CHAT_ROUTE;
 
   return (
     <Tooltip.Provider delayDuration={400}>
       <Toast.Provider swipeDirection="right">
         <div className="wb">
           <Rail
-            badges={badges}
+            attention={badges.approvals + badges.failed}
+            place={place}
             onNavigate={navigate}
-            onChat={onChat}
             theme={theme}
             onTheme={setTheme}
-            onNewConversation={() => {
-              setNewConversation((count) => count + 1);
-              navigate(selectedAgentId ? chatRoute(selectedAgentId, 'new') : CHAT_ROUTE);
-            }}
           />
 
-          {railNarrow ? null : (
+          {onChat && !railNarrow ? (
             <AgentRail
               agents={ordered}
               currentId={selectedAgentId}
               attention={attention}
               onSelect={selectAgent}
             />
-          )}
+          ) : null}
 
           {onChat ? (
             <ChatPage
@@ -210,24 +211,17 @@ export function App(): JSX.Element {
               canvasOpen={canvasOpen}
               onOpenCanvas={() => setCanvasOpen(true)}
               onCloseCanvas={() => setCanvasOpen(false)}
-              newConversationSignal={newConversation}
             />
           ) : (
             <main>
-              <div>
-                <p className="page-crumbs">
-                  <a href={CHAT_ROUTE} onClick={goTo(navigate, CHAT_ROUTE)}>
-                    ← Chat
-                  </a>
-                  <span>{timezone}</span>
-                </p>
-                <Section
-                  hash={section}
-                  conversationId={conversationId}
-                  timezone={timezone}
-                  navigate={navigate}
-                />
-              </div>
+              <Place
+                hash={hash}
+                place={place}
+                timezone={timezone}
+                navigate={navigate}
+                agents={agents}
+                attention={attention}
+              />
             </main>
           )}
         </div>
@@ -237,54 +231,23 @@ export function App(): JSX.Element {
   );
 }
 
-function goTo(navigate: (next: string) => void, route: string) {
-  return (event: { preventDefault: () => void }): void => {
-    event.preventDefault();
-    navigate(route);
-  };
+export interface PlaceProps {
+  hash: string;
+  timezone: string;
+  navigate: (next: string, replace?: boolean) => void;
+  agents: ChatAgent[];
+  attention: ReturnType<typeof useAttention>;
 }
 
-function Section({
-  hash,
-  conversationId,
-  timezone,
-  navigate,
-}: {
-  hash: string;
-  conversationId: string | null;
-  timezone: string;
-  navigate: (next: string) => void;
-}): JSX.Element {
-  switch (hash) {
-    case '#/browser':
-      return <Browser />;
-    case '#/events':
-      return <Events timezone={timezone} />;
-    case '#/conversations':
-      return (
-        <Conversations
-          timezone={timezone}
-          selectedId={conversationId}
-          onSelect={(id) => navigate(id ? `#/conversations/${id}` : '#/conversations')}
-        />
-      );
-    case '#/missions':
-      return <Missions timezone={timezone} />;
-    case '#/approvals':
-      return <Approvals timezone={timezone} />;
-    case '#/jobs':
-      return <Jobs timezone={timezone} />;
-    case '#/offers':
-      return <Offers timezone={timezone} />;
-    case '#/reminders':
-      return <Reminders timezone={timezone} />;
-    case '#/sentinels':
-      return <Sentinels timezone={timezone} />;
-    case '#/agents':
-      return <Agents />;
-    case '#/providers':
-      return <Providers />;
+function Place({ place, ...props }: PlaceProps & { place: string }): JSX.Element {
+  switch (place) {
+    case AGENTS_ROUTE:
+      return <Agents {...props} />;
+    case ACTIVITY_ROUTE:
+      return <Activity {...props} />;
+    case SETTINGS_ROUTE:
+      return <Settings {...props} />;
     default:
-      return <Overview timezone={timezone} onNavigate={navigate} />;
+      return <Home {...props} />;
   }
 }

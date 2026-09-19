@@ -8,11 +8,11 @@
 import { useState } from 'react';
 import { api, type EventPage, type EventRow } from '../api';
 import { fmtRelative, fmtTime, json, truncate } from '../format';
-import { Button, Code, Empty, ErrorBanner, Page, PageHeader, Panel, Sheet, Table, Toolbar, useAsync } from '../ui';
+import { Button, Code, Empty, ErrorBanner, PageFrame, Panel, Sheet, Table, Toolbar, useAsync } from '../ui';
 
 const POLL_MS = 5_000;
 
-export function Events({ timezone }: { timezone: string }): JSX.Element {
+export function Events({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const [kind, setKind] = useState('');
   const [q, setQ] = useState('');
   const [selected, setSelected] = useState<EventRow | null>(null);
@@ -25,11 +25,11 @@ export function Events({ timezone }: { timezone: string }): JSX.Element {
   );
 
   return (
-    <Page>
-      <PageHeader
-        title="Events"
-        lede="The append-only log. Everything the installation did, including what you do here."
-      />
+    <PageFrame
+      embedded={embedded}
+      title="Events"
+      lede="The append-only log. Everything the installation did, including what you do here."
+    >
 
       <Toolbar>
         <select aria-label="Event kind" value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -106,6 +106,6 @@ export function Events({ timezone }: { timezone: string }): JSX.Element {
           <Code>{json(selected.payload)}</Code>
         </Sheet>
       ) : null}
-    </Page>
+    </PageFrame>
   );
 }

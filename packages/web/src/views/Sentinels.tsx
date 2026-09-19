@@ -4,17 +4,17 @@
  */
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Code, Details, Empty, ErrorBanner, Page, PageHeader, Panel, Pill, Table, useAsync } from '../ui';
+import { Code, Details, Empty, ErrorBanner, PageFrame, Panel, Pill, Table, useAsync } from '../ui';
 
-export function Sentinels({ timezone }: { timezone: string }): JSX.Element {
+export function Sentinels({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const { data, error } = useAsync(() => api.sentinels(), [], 30_000);
 
   return (
-    <Page>
-      <PageHeader
-        title="Sentinels"
-        lede="Code, not prompts. A finding wakes the owner, waits for the digest, or stays quiet."
-      />
+    <PageFrame
+      embedded={embedded}
+      title="Sentinels"
+      lede="Code, not prompts. A finding wakes the owner, waits for the digest, or stays quiet."
+    >
       <ErrorBanner message={error} />
 
       <Panel title="Installed" flush>
@@ -82,7 +82,7 @@ export function Sentinels({ timezone }: { timezone: string }): JSX.Element {
           </Table>
         )}
       </Panel>
-    </Page>
+    </PageFrame>
   );
 }
 
