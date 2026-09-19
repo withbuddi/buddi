@@ -26,6 +26,7 @@ import {
   useAsync,
 } from '../ui';
 import { ModelPicker } from '../ModelPicker';
+import { AGENTS_ROUTE, agentRoute } from '../routes';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 
@@ -77,11 +78,11 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
           <Button variant="accent" disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>
             Add account
           </Button>
-          <Button disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>
+          <span className="muted">Secrets live in the {vaultName(data.vault.kind)}; Postgres holds names and assignments only.</span>
+          <span className="ui-toolbar-spacer" />
+          <Button variant="ghost" size="sm" disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>
             {loading ? 'Refreshing…' : 'Refresh status'}
           </Button>
-          <span className="ui-toolbar-spacer" />
-          <span className="muted">Secrets live in the {vaultName(data.vault.kind)}; Postgres holds names and assignments only.</span>
         </Toolbar>
         {adding && (
           <Sheet title="Add an account" onClose={() => setAdding(false)}>
@@ -172,7 +173,19 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           { label: 'Provider', value: providerName(a) },
           { label: 'Default model', value: <span className="mono">{a.defaultModel || '—'}</span> },
           ...(a.baseUrl ? [{ label: 'Endpoint', value: <span className="mono">{a.baseUrl}</span> }] : []),
-          { label: 'Used by', value: a.assignedAgents.length ? a.assignedAgents.join(', ') : 'No agents' },
+          {
+            label: 'Used by',
+            value: a.assignedAgents.length ? (
+              <span className="ui-row">
+                {a.assignedAgents.map((id) => <a key={id} href={agentRoute(id, 'setup')}>{id}</a>)}
+              </span>
+            ) : (
+              <span className="ui-row">
+                <span className="muted">No agents</span>
+                <a href={AGENTS_ROUTE}>Assign to an agent</a>
+              </span>
+            ),
+          },
           ...(a.tokenExpiresAt ? [{ label: 'Access token', value: `expires ${new Date(a.tokenExpiresAt).toLocaleString()} (not your subscription renewal date)` }] : []),
         ]}
       />
