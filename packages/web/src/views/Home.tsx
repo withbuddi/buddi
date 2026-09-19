@@ -61,7 +61,9 @@ export function Home({
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 8);
-  const onOffer: OfferRow[] = offers.data?.offers ?? [];
+  const allOffers: OfferRow[] = offers.data?.offers ?? [];
+  const onOffer = allOffers.slice(0, 8);
+  const moreOffers = allOffers.length - onOffer.length;
 
   return (
     <div className="home">
@@ -144,7 +146,7 @@ export function Home({
       </Section>
 
       {onOffer.length > 0 ? (
-        <Section title="On offer">
+        <Section title="On offer" aside={moreOffers > 0 ? <a href={`${AGENTS_ROUTE}?tab=offers`} onClick={go(`${AGENTS_ROUTE}?tab=offers`)}>{moreOffers} more</a> : null}>
           <div className="home-offers">
             {onOffer.map((offer) => (
               <a key={offer.id} className="home-offer" href={agentRoute(offer.agentId, 'offers')} onClick={go(agentRoute(offer.agentId, 'offers'))} title={offer.prompt}>
