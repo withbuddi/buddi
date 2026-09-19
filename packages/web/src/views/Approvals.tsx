@@ -10,7 +10,24 @@
 import { useState } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { fmtRelative, fmtTime, json, short } from '../format';
-import { Empty, ErrorBanner, Panel, StatePill, useAsync } from '../ui';
+import {
+  Button,
+  Card,
+  Code,
+  Empty,
+  ErrorBanner,
+  Notice,
+  Page,
+  PageHeader,
+  Panel,
+  Pill,
+  Section,
+  Stack,
+  StatePill,
+  Table,
+  Toolbar,
+  useAsync,
+} from '../ui';
 import { HostControls } from './HostControls';
 
 export function Approvals({ timezone }: { timezone: string }): JSX.Element {
@@ -44,35 +61,42 @@ export function Approvals({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <>
-      <h2>Approvals</h2>
+    <Page>
+      <PageHeader
+        title="Approvals"
+        lede="Nothing gated runs without one. The preview below is what the tool rendered, never model prose."
+      />
       <HostControls />
-      <p className="lede">
-        Nothing gated runs without one. The preview below is what the tool rendered, never model prose.
-      </p>
       <ErrorBanner message={error ?? failure} />
-      {note ? <div className="attention">{note}</div> : null}
+      {note ? (
+        <Notice tone="good" role="status">
+          {note}
+        </Notice>
+      ) : null}
 
-      <h3>Waiting for you</h3>
-      {!data || data.pending.length === 0 ? (
-        <Empty>Nothing is waiting for your approval.</Empty>
-      ) : (
-        data.pending.map((action) => (
-          <Pending
-            key={action.id}
-            action={action}
-            timezone={timezone}
-            busy={busy === action.id}
-            onDecide={decide}
-          />
-        ))
-      )}
+      <Section title="Waiting for you">
+        {!data || data.pending.length === 0 ? (
+          <Empty>Nothing is waiting for your approval.</Empty>
+        ) : (
+          <Stack>
+            {data.pending.map((action) => (
+              <Pending
+                key={action.id}
+                action={action}
+                timezone={timezone}
+                busy={busy === action.id}
+                onDecide={decide}
+              />
+            ))}
+          </Stack>
+        )}
+      </Section>
 
-      <Panel title="Recent">
+      <Panel title="Recent" flush>
         {!data || data.recent.length === 0 ? (
           <Empty>No actions have been created yet.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Tool</th>
@@ -87,33 +111,33 @@ export function Approvals({ timezone }: { timezone: string }): JSX.Element {
                 <tr key={action.id}>
                   <td>
                     {action.tool}
-                    <div className="muted mono">{short(action.id)}</div>
+                    <div className="sub mono">{short(action.id)}</div>
                   </td>
                   <td>
                     <StatePill state={action.state} />
                   </td>
                   <td className="mono">{action.agentId}</td>
-                  <td>
+                  <td className="nowrap">
                     {action.decidedAt ? (
                       <>
                         {fmtTime(action.decidedAt, timezone)}
-                        <div className="muted">via {action.decidedVia ?? '—'}</div>
+                        <div className="sub">via {action.decidedVia ?? '—'}</div>
                       </>
                     ) : (
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td>
+                  <td className="nowrap">
                     {fmtTime(action.createdAt, timezone)}
-                    <div className="muted">{fmtRelative(action.createdAt)}</div>
+                    <div className="sub">{fmtRelative(action.createdAt)}</div>
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
-    </>
+    </Page>
   );
 }
 
@@ -130,39 +154,53 @@ function Pending({
 }): JSX.Element {
   const [showEnvelope, setShowEnvelope] = useState(false);
   return (
-    <div className="attention" style={{ borderLeftColor: 'var(--accent)' }}>
-      <strong>{action.tool}</strong>{' '}
-      <span className="pill">v{action.toolVersion}</span>{' '}
-      <span className="muted">asked by {action.agentId}</span>
-      <pre style={{ marginTop: 8 }}>{action.preview}</pre>
-      <p className="muted" style={{ margin: '8px 0' }}>
+    <Card
+      tone="accent"
+      title={action.tool}
+      meta={
+        <>
+          <Pill>v{action.toolVersion}</Pill>
+          <span className="muted">asked by {action.agentId}</span>
+        </>
+      }
+    >
+      <Code>{action.preview}</Code>
+      <p className="ui-card-meta">
         Expires {fmtTime(action.expiresAt, timezone)} ({fmtRelative(action.expiresAt)}) · policy v
         {action.policyVersion} · args {short(action.argsHash, 12)}
         {action.jobId ? ` · job ${short(action.jobId)}` : ''}
       </p>
-      <div className="bar">
-        <button className="primary" disabled={busy} onClick={() => onDecide(action.id, 'approve')}>
+      <Toolbar>
+        <Button variant="good" disabled={busy} onClick={() => onDecide(action.id, 'approve')}>
           {action.permissionScopes?.length ? 'Allow once' : 'Approve'}
-        </button>
-        {action.permissionScopes?.length ? <>
-          <button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'conversation')}>Auto: this conversation</button>
-          <button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'always')}>Always: this agent</button>
-        </> : null}
-        <button className="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
+        </Button>
+        {action.permissionScopes?.length ? (
+          <>
+            <Button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'conversation')}>
+              Auto: this conversation
+            </Button>
+            <Button disabled={busy} onClick={() => onDecide(action.id, 'approve', 'always')}>
+              Always: this agent
+            </Button>
+          </>
+        ) : null}
+        <Button variant="danger" disabled={busy} onClick={() => onDecide(action.id, 'reject')}>
           Reject
-        </button>
-        <button onClick={() => setShowEnvelope((v) => !v)}>
-          {showEnvelope ? 'hide envelope' : 'show envelope'}
-        </button>
-      </div>
+        </Button>
+        <Button variant="ghost" onClick={() => setShowEnvelope((v) => !v)} aria-expanded={showEnvelope}>
+          {showEnvelope ? 'Hide envelope' : 'Show envelope'}
+        </Button>
+      </Toolbar>
       {showEnvelope ? (
-        <>
-          <div className="muted">Envelope — everything that decides what the world will see.</div>
-          <pre>{json(action.envelope)}</pre>
-          <div className="muted">Canonical arguments</div>
-          <pre>{json(action.canonicalArgs)}</pre>
-        </>
+        <div className="ui-card-foot">
+          <Section title="Envelope — everything that decides what the world will see">
+            <Code>{json(action.envelope)}</Code>
+          </Section>
+          <Section title="Canonical arguments">
+            <Code>{json(action.canonicalArgs)}</Code>
+          </Section>
+        </div>
       ) : null}
-    </div>
+    </Card>
   );
 }

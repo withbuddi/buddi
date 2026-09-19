@@ -60,14 +60,17 @@ export function ButtonLink({
 export function Toolbar({
   children,
   align,
+  valign,
   className,
 }: {
   children: ReactNode;
   align?: 'end';
+  /** Bottom-align the row, for fields whose labels sit above their controls. */
+  valign?: 'end';
   className?: string;
 }): JSX.Element {
   return (
-    <div className={cx('ui-toolbar', className)} data-align={align}>
+    <div className={cx('ui-toolbar', className)} data-align={align} data-valign={valign}>
       {children}
     </div>
   );
@@ -77,28 +80,29 @@ export function Spacer(): JSX.Element {
   return <span className="ui-toolbar-spacer" />;
 }
 
-/** A label, its control, and an optional hint beneath. */
+/** A label, its control, and an optional hint beneath. The hint sits outside
+ * the <label> so the control's accessible name is the label alone. */
 export function Field({
   label,
   hint,
   inline,
   grow,
-  htmlFor,
   children,
 }: {
   label: ReactNode;
   hint?: ReactNode;
   inline?: boolean;
   grow?: boolean;
-  htmlFor?: string;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <label className="ui-field" data-inline={inline ? 'true' : undefined} data-grow={grow ? 'true' : undefined} htmlFor={htmlFor}>
-      <span className="ui-field-label">{label}</span>
-      {children}
+    <div className="ui-field" data-inline={inline ? 'true' : undefined} data-grow={grow ? 'true' : undefined}>
+      <label className="ui-field-control">
+        <span className="ui-field-label">{label}</span>
+        {children}
+      </label>
       {hint ? <span className="ui-field-hint">{hint}</span> : null}
-    </label>
+    </div>
   );
 }
 

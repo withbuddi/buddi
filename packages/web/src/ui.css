@@ -96,9 +96,11 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); width
 
 /* A label above its control, and a hint beneath. */
 .ui-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ui-field-control { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .ui-field-label { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-muted); }
 .ui-field-hint { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
-.ui-field[data-inline='true'] { flex-direction: row; align-items: center; gap: var(--space-2); }
+.ui-field[data-inline='true'] .ui-field-control { flex-direction: row; align-items: center; gap: var(--space-2); }
+.ui-field[data-inline='true'] .ui-field-label { white-space: nowrap; }
 .ui-field[data-grow='true'] { flex: 1 1 240px; }
 fieldset.ui-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); min-width: 0; }
 fieldset.ui-fields[data-stack='true'] { flex-direction: column; align-items: stretch; }
@@ -311,6 +313,8 @@ fieldset:disabled { opacity: 0.6; }
 .ui-stack[data-gap='sm'] { gap: var(--space-2); }
 .ui-stack[data-gap='lg'] { gap: var(--space-5); }
 .ui-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.ui-row[data-align='end'] { align-items: flex-end; }
+.ui-toolbar[data-valign='end'] { align-items: flex-end; }
 
 /* ================================================================== *
  * numbers and facts
