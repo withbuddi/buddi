@@ -176,6 +176,21 @@ describe('the composer', () => {
     expect(screen.getByText('that file is too large')).toBeDefined();
   });
 
+  it('opens a stored file from the tray, and not one still uploading', async () => {
+    let release: ((value: Response) => void) | null = null;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { release = resolve; })));
+    const onOpenFile = vi.fn();
+    render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" onOpenFile={onOpenFile} />);
+    await act(async () => { dropFile(new File(['x'], 'deck.pdf', { type: 'application/pdf' })); });
+    expect(screen.queryByRole('button', { name: 'Open deck.pdf' })).toBeNull();
+    await act(async () => {
+      release?.(new Response(JSON.stringify({ artifactId: 'art-5', filename: 'deck.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 9 }), { status: 200 }));
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open deck.pdf' })).toBeDefined());
+    screen.getByRole('button', { name: 'Open deck.pdf' }).click();
+    expect(onOpenFile).toHaveBeenCalledWith(expect.objectContaining({ artifactId: 'art-5', filename: 'deck.pdf' }));
+  });
+
   it('offers a stop button while a run is in flight, and no send', () => {
     const onStop = vi.fn();
     render(<Composer ref={(h) => { handle = h; }} disabled={false} running onSend={() => {}} onStop={onStop} agentName="Ada" />);
