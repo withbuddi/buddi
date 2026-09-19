@@ -20,6 +20,10 @@ export interface ChatAgent {
    * anchors the front desk and the maker without learning either one's name.
    */
   anchor?: 'top' | 'bottom' | null;
+  /** The face to draw, when the agent file names one. */
+  avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
+  /** `#rrggbb`, the agent's own colour. */
+  accent?: string;
 }
 
 export interface AgentsResponse {

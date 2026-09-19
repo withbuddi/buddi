@@ -106,6 +106,10 @@ export interface AgentSummary {
   available: boolean;
   /** Why not, in one sentence. Present only when `available` is false. */
   unavailableReason?: string;
+  /** An emoji, or an image file name inside the agent's folder. */
+  avatar?: string;
+  /** `#rrggbb`, the agent's own colour. */
+  accent?: string;
 }
 
 /**
@@ -432,6 +436,8 @@ function buildAgent(
     providerKind: provider.kind,
     available: availability.ok,
     ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
+    ...(frontmatter.avatar === undefined ? {} : { avatar: frontmatter.avatar }),
+    ...(frontmatter.accent === undefined ? {} : { accent: frontmatter.accent }),
     file,
     model: provider.model,
     tools,

@@ -11,7 +11,7 @@ import { api, type ConversationSummary, type Transcript, type TranscriptBlock } 
 import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { ACTIVITY_ROUTE, chatRoute, transcriptRoute } from '../routes';
 import {
-  Avatar,
+  AgentAvatar,
   Button,
   ButtonLink,
   Code,
@@ -69,7 +69,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
           );
         })}
       </Tabs>
-      {tab === 'conversations' ? <Conversations timezone={timezone} navigate={navigate} nameOf={nameOf} /> : null}
+      {tab === 'conversations' ? <Conversations timezone={timezone} navigate={navigate} nameOf={nameOf} agents={agents} /> : null}
       {tab === 'jobs' ? <Jobs timezone={timezone} embedded /> : null}
       {tab === 'approvals' ? <ApprovalHistory timezone={timezone} nameOf={nameOf} /> : null}
       {tab === 'alerts' ? <Alerts timezone={timezone} embedded /> : null}
@@ -78,7 +78,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
   );
 }
 
-function Conversations({ timezone, navigate, nameOf }: { timezone: string; navigate: (r: string) => void; nameOf: (id: string) => string }): JSX.Element {
+function Conversations({ timezone, navigate, nameOf, agents }: { timezone: string; navigate: (r: string) => void; nameOf: (id: string) => string; agents: PlaceProps['agents'] }): JSX.Element {
   const { data, error } = useAsync(() => api.conversations(), [], 30_000);
   return (
     <>
@@ -95,7 +95,7 @@ function Conversations({ timezone, navigate, nameOf }: { timezone: string; navig
                 key={c.id}
                 href={transcriptRoute(c.id)}
                 onClick={() => navigate(transcriptRoute(c.id))}
-                lead={<Avatar id={c.agentId} name={nameOf(c.agentId)} size="sm" />}
+                lead={<AgentAvatar agents={agents} id={c.agentId} size="sm" />}
                 title={c.opening ? truncate(c.opening, 100) : 'Untitled conversation'}
                 sub={`${nameOf(c.agentId)}, ${c.messageCount} message${c.messageCount === 1 ? '' : 's'}, ${c.runs} run${c.runs === 1 ? '' : 's'}, ${fmtNumber(c.usage.input)} in / ${fmtNumber(c.usage.output)} out`}
                 side={<span title={fmtTime(c.lastMessageAt ?? c.createdAt, timezone)}>{fmtRelative(c.lastMessageAt ?? c.createdAt)}</span>}

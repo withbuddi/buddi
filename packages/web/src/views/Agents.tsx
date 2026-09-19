@@ -66,7 +66,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
               const waiting = waitingText(attention.get(agent.id));
               return (
                 <a key={agent.id} className="team-card" href={agentRoute(agent.id)} onClick={go(agentRoute(agent.id))} data-unavailable={agent.available ? undefined : 'true'}>
-                  <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} />
+                  <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} face={agent} />
                   <span className="team-card-name">{agent.name}</span>
                   <span className="team-card-handle">@{agent.handle}</span>
                   <span className="team-card-desc">{agent.description}</span>
@@ -108,7 +108,7 @@ function AgentPage({
         <a href={AGENTS_ROUTE} onClick={go(AGENTS_ROUTE)}>Agents</a>
       </p>
       <header className="agent-head">
-        <Avatar id={agentId} name={name} size="xl" unavailable={agent ? !agent.available : false} />
+        <Avatar id={agentId} name={name} size="xl" unavailable={agent ? !agent.available : false} face={agent} />
         <div className="agent-head-text">
           <h2 className="ui-page-title">{name}</h2>
           <p className="ui-page-lede">{agent?.description ?? 'This agent is not in the roster right now.'}</p>

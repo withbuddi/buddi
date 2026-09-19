@@ -14,6 +14,7 @@ import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, tra
 import type { AgentAttention } from '../shell/roster';
 import { waitingText } from '../shell/roster';
 import {
+  AgentAvatar,
   Avatar,
   Button,
   Empty,
@@ -131,7 +132,7 @@ export function Home({
                   data-waiting={waiting ? 'true' : undefined}
                   data-unavailable={agent.available ? undefined : 'true'}
                 >
-                  <Avatar id={agent.id} name={agent.name} size="lg" unavailable={!agent.available} />
+                  <Avatar id={agent.id} name={agent.name} size="lg" unavailable={!agent.available} face={agent} />
                   <span className="home-face-text">
                     <span className="home-face-name">{agent.name}</span>
                     <span className="home-face-status">
@@ -150,7 +151,7 @@ export function Home({
           <div className="home-offers">
             {onOffer.map((offer) => (
               <a key={offer.id} className="home-offer" href={agentRoute(offer.agentId, 'offers')} onClick={go(agentRoute(offer.agentId, 'offers'))} title={offer.prompt}>
-                <Avatar id={offer.agentId} name={nameOf(offer.agentId)} size="sm" />
+                <AgentAvatar agents={agents} id={offer.agentId} size="sm" />
                 <span>{offer.label}</span>
               </a>
             ))}
@@ -170,7 +171,7 @@ export function Home({
                     key={item.key}
                     href={item.route}
                     onClick={() => navigate(item.route)}
-                    lead={<Avatar id={item.agentId} name={nameOf(item.agentId)} size="sm" />}
+                    lead={<AgentAvatar agents={agents} id={item.agentId} size="sm" />}
                     title={item.title}
                     sub={`${item.kind} for ${nameOf(item.agentId)}`}
                     side={fmtRelative(item.at)}
@@ -192,7 +193,7 @@ export function Home({
                     key={c.id}
                     href={chatRoute(c.agentId, c.id)}
                     onClick={() => navigate(chatRoute(c.agentId, c.id))}
-                    lead={<Avatar id={c.agentId} name={nameOf(c.agentId)} size="sm" />}
+                    lead={<AgentAvatar agents={agents} id={c.agentId} size="sm" />}
                     title={c.opening ? truncate(c.opening, 80) : 'Untitled conversation'}
                     sub={`${nameOf(c.agentId)}, ${c.messageCount} message${c.messageCount === 1 ? '' : 's'}`}
                     side={fmtRelative(c.lastMessageAt ?? c.createdAt)}
