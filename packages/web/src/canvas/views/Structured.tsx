@@ -21,6 +21,8 @@ import { humanise } from '../resolve';
 import { fmtValue } from '../format';
 import { ROW_CAP, inferShape, isBlank, type Aside, type InferredType, type Stat } from '../infer';
 import { json } from '../../format';
+import { commandResult } from '../command-result';
+import { CommandResult } from './CommandResult';
 
 const DEPTH_LIMIT = 2;
 
@@ -29,7 +31,8 @@ const CELL_CHARS = 64;
 
 export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   const [raw, setRaw] = useState(false);
-  const files = artifactFiles(props.value);
+  const execution = commandResult(props.value);
+  const files = artifactFiles(execution?.result ?? props.value);
   const shape = useMemo(
     () => inferShape(props.value, { failed: props.failed ?? false }),
     [props.value, props.failed],
@@ -37,13 +40,14 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
 
   return (
     <div>
-      <ArtifactDownloads files={files} />
+      {!execution && <ArtifactDownloads files={files} />}
       <div className="flex justify-end mb-2">
         <button className="wb-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
       </div>
-      {raw ? <pre>{json(props.value)}</pre> : files.length
+      {raw ? <pre>{json(props.value)}</pre> : execution
+        ? <CommandResult value={execution}>{files.length > 0 && <section><h4>Generated files</h4><ArtifactDownloads files={files} /></section>}</CommandResult> : files.length
         ? <details className="wb-aside"><summary>Tool details</summary><Shape shape={shape} /></details>
         : <Shape shape={shape} />}
     </div>

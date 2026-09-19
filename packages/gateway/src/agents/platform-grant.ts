@@ -133,7 +133,8 @@ export function withheldLine(
   specs: readonly ToolSpec[],
 ): string | undefined {
   const has = new Set(granted.map((f) => f.family));
-  const rest = [...new Set(specs.map((s) => familyOf(s.name)))].filter((f) => !has.has(f));
+  // Read-only platform facts are automatic, not withheld agent permissions.
+  const rest = [...new Set(specs.map((s) => familyOf(s.name)))].filter((f) => f !== 'system' && !has.has(f));
   if (rest.length === 0) return undefined;
   return `It reaches nothing else — not ${listWords(rest)}.`;
 }

@@ -200,7 +200,9 @@ function Agent({
         </div>
       ) : null}
 
-      <h3>Tools ({agent.tools.length})</h3>
+      <h3>Built-in context</h3>
+      <p className="muted">Every agent receives current time, owner timezone and server-host information. system.time and system.info are always available, without grants or approval. Host and browser access still require their own permissions.</p>
+      <h3>Granted tools ({agent.tools.length})</h3>
       <div>
         {agent.tools.map((tool) => (
           <span className="pill mono" key={tool} style={{ marginRight: 4, marginBottom: 4 }}>

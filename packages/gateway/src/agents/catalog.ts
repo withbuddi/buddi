@@ -28,6 +28,7 @@ import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
 import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
+import { createSystemManifest } from '../system-context.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
 import { createPlatformManifest } from './platform.js';
@@ -110,6 +111,7 @@ export function builtInManifests(env: NodeJS.ProcessEnv = process.env): PluginMa
 
 function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest[]): ToolRegistry {
   const registry = new ToolRegistry();
+  registry.register(createSystemManifest());
   registry.register(financeManifest);
   registry.register(emailManifest);
   registry.register(memoryManifest);

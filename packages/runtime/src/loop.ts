@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -307,7 +307,7 @@ async function appendEvent(
 export function selectTools(registry: ToolRegistry, agent: AgentDefinition): ToolSchema[] {
   const specs = new Map(registry.list().map((s) => [s.name, s]));
   const selected: ToolSchema[] = [];
-  for (const name of agent.tools) {
+  for (const name of new Set([...agent.tools, ...SYSTEM_TOOLS.filter(name => specs.has(name))])) {
     const spec = specs.get(name);
     if (!spec) {
       throw new Error(
@@ -505,9 +505,10 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   };
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
+  const platformContext = await ctx.systemContext?.();
   const system = composeSystem(
     agent.systemPrompt,
-    opts.systemSuffix,
+    [opts.systemSuffix, platformContext?.prompt].filter(Boolean).join('\n\n'),
     memory,
     opts.surface,
     search.enabled ? NATIVE_SEARCH_SYSTEM_NOTE : undefined,
@@ -521,6 +522,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // run that asked for it, so the delegate must be told about that screen.
   const toolCtx: ToolContext = {
     ...ctx,
+    ...(platformContext ? { timezone: platformContext.timezone } : {}),
     conversationId,
     agentId: agent.id,
     sessionTools: (ctx.delegationDepth ?? 0) === 0 ? registry.list().filter((t) => t.tier === 'session' && allowedTools.has(t.name)).map((t) => t.name) : [],
@@ -566,7 +568,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     resume ? 'run.resumed' : 'run.started',
     {
       agentId: agent.id,
-      tools: agent.tools,
+      tools: tools.map(t => t.name),
       maxTurns: agent.maxTurns,
       // The per-run snapshot: which company this run's data went to, on which
       // model, under which credential. Written before the first call, so it is
