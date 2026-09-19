@@ -49,6 +49,7 @@ import {
   AGENT_FILE,
   KEBAB,
   PROVIDER_KINDS,
+  accountModelProblem,
   modelProblem,
   parseAgentFile,
   parseSkillFile,
@@ -127,10 +128,35 @@ export interface PlatformBinding {
   skillsDir?: string;
   /** The shipped examples, for the "never write here" check. */
   examplesDir?: string;
+  /**
+   * The named model accounts, when this installation has them. Read at call
+   * time, because the service arrives after the tools are bound. Absent on an
+   * installation still on environment credentials, where the agent file's own
+   * `provider`/`model` is what runs.
+   */
+  accounts?: () => PlatformAccounts | undefined;
 }
 
-interface ResolvedBinding extends Required<Omit<PlatformBinding, 'reload' | 'catalog'>> {
+/** One named account, as the platform tools see it. */
+export interface PlatformAccount {
+  id: string;
+  label: string;
+  kind: string;
+  enabled: boolean;
+  configured: boolean;
+  defaultModel: string;
+  assignedAgents: string[];
+}
+
+export interface PlatformAccounts {
+  list(): PlatformAccount[];
+  bindingOf(agentId: string): { accountId: string; model: string } | undefined;
+  assign(agentId: string, accountId: string, model: string): Promise<unknown>;
+}
+
+interface ResolvedBinding extends Required<Omit<PlatformBinding, 'reload' | 'catalog' | 'accounts'>> {
   catalog: ReloadableAgentCatalog;
+  accounts: PlatformAccounts | undefined;
   reload: () => void;
   /** Where a deleted agent goes: `<private>/.trash`. */
   trashRoot: string;
@@ -167,6 +193,7 @@ function resolved(registry: ToolRegistry, env: NodeJS.ProcessEnv = process.env):
   return {
     catalog: binding.catalog,
     reload: binding.reload,
+    accounts: binding.accounts?.(),
     agentsDir,
     skillsDir: binding.skillsDir ?? search.owner.skillsDir,
     examplesDir: binding.examplesDir ?? EXAMPLES_AGENTS_DIR,
@@ -281,6 +308,48 @@ export function writeToolsHeldBy(catalog: ReloadableAgentCatalog, agentId: strin
   return writeToolsIn(catalog.get(agentId)?.tools ?? []);
 }
 
+/** What an agent will run on, once named accounts are the way. */
+export interface AccountChoice { id: string; label: string; kind: string; model: string }
+
+/**
+ * Resolve `account` (a label or an id) against the named accounts, or say why
+ * not. With accounts configured, `provider` is the old road and is refused by
+ * name, the same way the CLI refuses `--provider`.
+ */
+export function checkAccount(
+  accounts: PlatformAccounts | undefined,
+  input: { account?: string | undefined; provider?: string | undefined; model?: string | undefined },
+  options: { required: boolean; current?: { accountId: string; model: string } | undefined },
+): AccountChoice | null {
+  if (!accounts) return null;
+  const all = accounts.list();
+  if (all.length === 0) return null;
+  const names = all.filter((a) => a.enabled).map((a) => `"${a.label}"`).join(', ');
+  if (input.provider !== undefined) {
+    refuse('use-account', `this installation runs agents on named accounts, not providers: pass \`account\` with one of ${names} (see platform.list_accounts).`);
+  }
+  const wanted = input.account?.trim();
+  if (!wanted) {
+    if (options.current) {
+      if (input.model === undefined) return null;
+      const row = all.find((a) => a.id === options.current!.accountId);
+      if (!row) refuse('unknown-account', 'the account this agent runs on no longer exists; pass `account` to choose another');
+      const problem = accountModelProblem(row.kind as never, input.model);
+      if (problem) refuse('model-mismatch', `${problem} ("${row.label}" is ${row.kind})`);
+      return { id: row.id, label: row.label, kind: row.kind, model: input.model.trim() };
+    }
+    if (!options.required) return null;
+    refuse('choose-account', `which account should it run on? Ask the owner to pick one of ${names} and pass it as \`account\`.`);
+  }
+  const row = all.find((a) => a.label.toLowerCase() === wanted.toLowerCase()) ?? all.find((a) => a.id === wanted);
+  if (!row) refuse('unknown-account', `no account is called "${wanted}". The owner has ${names}. Add one under Settings before assigning it.`);
+  if (!row.enabled) refuse('account-disabled', `"${row.label}" is disabled. Ask the owner to enable it, or choose one of ${names}.`);
+  const model = input.model?.trim() || row.defaultModel;
+  const problem = accountModelProblem(row.kind as never, model);
+  if (problem) refuse('model-mismatch', `${problem} ("${row.label}" is ${row.kind})`);
+  return { id: row.id, label: row.label, kind: row.kind, model };
+}
+
 export function checkProviderModel(provider: string | undefined, model: string | undefined): void {
   if (provider !== undefined && !PROVIDER_KINDS.includes(provider as ProviderKind)) {
     refuse('bad-provider', `"${provider}" is not a provider this build knows (${PROVIDER_KINDS.join(', ')})`);
@@ -358,6 +427,8 @@ export interface CreateAgentEnvelope {
   delegatesFile: string | null;
   provider: string | null;
   model: string | null;
+  /** The named account it will be assigned to once written. Null on legacy installs. */
+  account: AccountChoice | null;
   maxTurns: number | null;
   language: string | null;
   roles: string[];
@@ -385,6 +456,8 @@ export interface UpdateAgentEnvelope {
   personaChanged: boolean;
   delegatesBefore: string[];
   delegatesAfter: string[];
+  /** A new account assignment, applied after the file is written. Null when unchanged. */
+  account: AccountChoice | null;
   /** The complete resulting file, byte for byte. */
   content: string;
 }
@@ -444,8 +517,10 @@ export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readon
         ]
       : []),
     `File:  ${envelope.file}`,
-    `Runs on: ${envelope.model ?? 'the installation default model'}` +
-      `${envelope.provider === null ? '' : ` (${envelope.provider})`}` +
+    (envelope.account
+      ? `Runs on: the "${envelope.account.label}" account (${envelope.account.kind}), model ${envelope.account.model}`
+      : `Runs on: ${envelope.model ?? 'the installation default model'}` +
+        `${envelope.provider === null ? '' : ` (${envelope.provider})`}`) +
       `, ${envelope.maxTurns ?? 'the default'} turns per run.`,
     ...(envelope.roles.length === 0 ? [] : [`Roles it answers for: ${envelope.roles.join(', ')}.`]),
     `Proposed by ${envelope.proposedBy}.`,
@@ -558,8 +633,16 @@ const createInput = z
           'BOUNDARY: the agent can call exactly what is named here and nothing else, ever. Name the ' +
           'smallest set that does the job and check it against platform.installed_tools first.',
       ),
-    model: z.string().min(1).optional().describe('Pin a model. Leave it out to use the installation default.'),
-    provider: z.enum(['anthropic', 'openai']).optional().describe('Pin the provider. Must match the model.'),
+    account: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The named model account it runs on, by the name the owner gave it (platform.list_accounts). ' +
+          'Required where the owner has accounts; ask which one rather than guessing.',
+      ),
+    model: z.string().min(1).optional().describe("Pin a model the account serves. Leave it out for the account's default."),
+    provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
     maxTurns: z.number().int().positive().max(64).optional().describe('Turn budget per run. Default 12.'),
     language: z.enum(['mirror', 'en', 'fr']).optional().describe('Default "mirror": answer in the owner\'s language.'),
     roles: z.array(z.string().min(1)).optional().describe('Capabilities it answers for, e.g. ["recap"].'),
@@ -611,7 +694,8 @@ function buildCreateEnvelope(
     );
   }
 
-  checkProviderModel(input.provider, input.model);
+  const account = checkAccount(binding.accounts, input, { required: true });
+  if (account === null) checkProviderModel(input.provider, input.model);
   const tools = checkTools(input.tools, registry, id);
   const roles = checkRoles(input.roles);
   const delegates = checkDelegates(input.delegates, binding.catalog, id);
@@ -635,8 +719,10 @@ function buildCreateEnvelope(
     name: input.name.trim(),
     description: input.description.trim(),
     tools: input.tools.map((t) => t.trim()),
-    ...(input.provider === undefined ? {} : { provider: input.provider }),
-    ...(input.model === undefined ? {} : { model: input.model.trim() }),
+    // With named accounts the model lives on the assignment, not in the file:
+    // the file's provider vocabulary cannot name an endpoint or a subscription.
+    ...(account === null && input.provider !== undefined ? { provider: input.provider } : {}),
+    ...(account === null && input.model !== undefined ? { model: input.model.trim() } : {}),
     ...(roles === undefined ? {} : { roles }),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
@@ -665,8 +751,9 @@ function buildCreateEnvelope(
     declaredTools: spec.tools,
     delegates: delegates ?? null,
     delegatesFile: delegates === undefined ? null : path.join(binding.agentsDir, id, DELEGATES_FILE),
-    provider: input.provider ?? null,
-    model: input.model?.trim() ?? null,
+    provider: account === null ? (input.provider ?? null) : null,
+    model: account === null ? (input.model?.trim() ?? null) : account.model,
+    account,
     maxTurns: input.maxTurns ?? null,
     language: input.language ?? null,
     roles: roles ?? [],
@@ -687,8 +774,9 @@ const updateInput = z
         'A NEW tool grant, replacing the current one entirely — not an addition. Adding a family here ' +
           'widens what this agent can reach, and the owner is shown exactly what was added.',
       ),
-    model: z.string().min(1).optional(),
-    provider: z.enum(['anthropic', 'openai']).optional(),
+    account: z.string().min(1).optional().describe('Move it to another named model account, by name (platform.list_accounts).'),
+    model: z.string().min(1).optional().describe('A model the account serves.'),
+    provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
     maxTurns: z.number().int().positive().max(64).optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
     roles: z.array(z.string().min(1)).optional(),
@@ -718,7 +806,10 @@ function buildUpdateEnvelope(
     refuse('examples-tree', examplesRefusal(agent.id, agent.file));
   }
 
-  checkProviderModel(input.provider ?? agent.provider.kind, input.model);
+  const current = binding.accounts?.bindingOf(agent.id);
+  const account = checkAccount(binding.accounts, input, { required: false, current });
+  if (account === null && binding.accounts === undefined) checkProviderModel(input.provider ?? agent.provider.kind, input.model);
+  const onAccounts = binding.accounts !== undefined && binding.accounts.list().length > 0;
   const toolsAfter =
     input.tools === undefined ? [...agent.tools] : checkTools(input.tools, registry, agent.id);
   const roles = checkRoles(input.roles);
@@ -728,8 +819,8 @@ function buildUpdateEnvelope(
   const patch: FrontmatterPatch = {
     ...(input.description === undefined ? {} : { description: input.description.trim() }),
     ...(input.tools === undefined ? {} : { tools: input.tools.map((t) => t.trim()) }),
-    ...(input.model === undefined ? {} : { model: input.model.trim() }),
-    ...(input.provider === undefined ? {} : { provider: input.provider }),
+    ...(!onAccounts && input.model !== undefined ? { model: input.model.trim() } : {}),
+    ...(!onAccounts && input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
     ...(roles === undefined ? {} : { roles }),
@@ -754,9 +845,11 @@ function buildUpdateEnvelope(
   const personaChanged = input.persona !== undefined && content !== edited.text;
   const delegatesBefore = readDelegates(agent.id, binding.agentsDir);
   const delegatesAfter = delegates ?? delegatesBefore;
-  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',')) {
+  const accountChanged = account !== null && (account.id !== current?.accountId || account.model !== current?.model);
+  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',') && !accountChanged) {
     refuse('no-change', `nothing in that would change ${agent.id}: the file already says exactly this`);
   }
+  const currentLabel = current ? (binding.accounts?.list().find((a) => a.id === current.accountId)?.label ?? current.accountId) : undefined;
 
   const change = diffGrant(agent.tools, toolsAfter);
   const before = edited.before as Record<string, unknown>;
@@ -773,14 +866,24 @@ function buildUpdateEnvelope(
     added: change.added,
     removed: change.removed,
     widened: change.widened,
-    changes: edited.changed.map((key) => ({
-      key,
-      from: renderValue(before[key]),
-      to: renderValue(after[key]),
-    })),
+    changes: [
+      ...edited.changed.map((key) => ({
+        key,
+        from: renderValue(before[key]),
+        to: renderValue(after[key]),
+      })),
+      ...(accountChanged
+        ? [{
+            key: 'runs on',
+            from: current ? `${currentLabel}, ${current.model}` : '(unset)',
+            to: `${account!.label}, ${account!.model}`,
+          }]
+        : []),
+    ],
     personaChanged,
     delegatesBefore,
     delegatesAfter,
+    account: accountChanged ? account : null,
     content,
   };
 }
@@ -1149,6 +1252,17 @@ function buildAcceptSkillEnvelope(
  * ------------------------------------------------------------------ */
 
 /** The sentence every successful write ends with — and the honest one when it fails. */
+/** Put the agent on its account once the file exists. The sentence, or nothing. */
+async function assignAccount(binding: ResolvedBinding, agentId: string, account: AccountChoice | null): Promise<string> {
+  if (!account || !binding.accounts) return '';
+  try {
+    await binding.accounts.assign(agentId, account.id, account.model);
+    return ` Runs on "${account.label}" with ${account.model}.`;
+  } catch (err) {
+    return ` The file is written, but assigning "${account.label}" failed: ${err instanceof Error ? err.message : String(err)}. Assign it under Agents.`;
+  }
+}
+
 export function reloadResult(binding: ResolvedBinding): { reloaded: boolean; message: string } {
   try {
     binding.reload();
@@ -1188,7 +1302,38 @@ function describing<I, E>(build: (input: I) => E, render: (envelope: E) => strin
   };
 }
 
+function accountOf(accounts: PlatformAccounts, agentId: string): { account: string | null; model: string | null } {
+  const binding = accounts.bindingOf(agentId);
+  if (!binding) return { account: null, model: null };
+  return { account: accounts.list().find((a) => a.id === binding.accountId)?.label ?? binding.accountId, model: binding.model };
+}
+
 export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
+  const listAccounts: ToolDefinition<Record<string, never>, unknown> = {
+    name: 'platform.list_accounts',
+    description:
+      'The named model accounts the owner has set up, by name: the provider each one is (an Anthropic ' +
+      'or OpenAI API key, a Claude or ChatGPT subscription, or an OpenAI-compatible endpoint such as ' +
+      'Ollama), its default model, whether it is usable, and which agents run on it. An agent runs on ' +
+      'exactly one of these; name it as `account` when you create or change one. Never guess: if the ' +
+      'owner has not said which, ask.',
+    tier: 'auto',
+    input: z.object({}).strict(),
+    async execute(_input, _ctx) {
+      const binding = resolved(registry);
+      if (!binding.accounts) return { accounts: [], note: 'This installation has no named accounts; agents run on the credentials in the environment.' };
+      return {
+        accounts: binding.accounts.list().map((a) => ({
+          name: a.label,
+          provider: a.kind,
+          defaultModel: a.defaultModel,
+          usable: a.enabled && a.configured,
+          usedBy: a.assignedAgents,
+        })),
+      };
+    },
+  };
+
   const listAgents: ToolDefinition<Record<string, never>, unknown> = {
     name: 'platform.list_agents',
     description:
@@ -1210,8 +1355,9 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
             description: summary.description,
             source: summary.source,
             isDefault: summary.isDefault,
-            provider: summary.providerKind,
-            model: agent?.model ?? null,
+            ...(binding.accounts
+              ? accountOf(binding.accounts, summary.id)
+              : { provider: summary.providerKind, model: agent?.model ?? null }),
             roles: summary.roles,
             tools: agent?.tools ?? [],
             delegates: readDelegates(summary.id, binding.agentsDir),
@@ -1358,6 +1504,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
           : { [DELEGATES_FILE]: `${JSON.stringify(envelope.delegates, null, 2)}\n` }),
       });
       const reload = reloadResult(binding);
+      const assigned = await assignAccount(binding, envelope.id, envelope.account);
       return {
         ok: true,
         id: envelope.id,
@@ -1365,7 +1512,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         file: envelope.file,
         tools: envelope.tools,
         live: reload.reloaded,
-        message: `@${envelope.handle} exists. ${reload.message}`,
+        message: `@${envelope.handle} exists. ${reload.message}${assigned}`,
       };
     },
   };
@@ -1409,6 +1556,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
             ]),
       ]);
       const reload = reloadResult(binding);
+      const assigned = await assignAccount(binding, envelope.id, envelope.account);
       return {
         ok: true,
         id: envelope.id,
@@ -1417,7 +1565,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         added: envelope.added,
         removed: envelope.removed,
         live: reload.reloaded,
-        message: `@${envelope.handle} updated. ${reload.message}`,
+        message: `@${envelope.handle} updated. ${reload.message}${assigned}`,
       };
     },
   };
@@ -1655,6 +1803,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     schema: 'core',
     migrationsDir: '',
     tools: [
+      listAccounts,
       listAgents,
       installedTools,
       readAgent,

@@ -34,6 +34,7 @@ import {
 } from './catalog.js';
 import {
   bindPlatformTools,
+  type PlatformAccounts,
   createPlatformManifest,
   type CreateAgentEnvelope,
   type DeleteAgentEnvelope,
@@ -71,7 +72,7 @@ interface Harness {
   reloads: number;
 }
 
-function harness(caller = 'agent-father'): Harness {
+function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness {
   const root = mkdtempSync(path.join(tmpdir(), 'buddi-platform-'));
   const agentsDir = path.join(root, 'agents');
   const skillsDir = path.join(root, 'skills');
@@ -100,6 +101,7 @@ function harness(caller = 'agent-father'): Harness {
     agentsDir,
     skillsDir,
     examplesDir: EXAMPLES_AGENTS_DIR,
+    ...(accounts ? { accounts: () => accounts } : {}),
   });
   const manifest = createPlatformManifest(registry);
   const ctx = {
@@ -637,5 +639,65 @@ describe('a delegates.json naming a writer is refused at load', () => {
         registry: createToolRegistry({}),
       }),
     ).toThrow(/may not delegate to agent-father/);
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * Named accounts
+ * ------------------------------------------------------------------ */
+
+describe('with named model accounts', () => {
+  const assigned: Array<[string, string, string]> = [];
+  const bindings = new Map<string, { accountId: string; model: string }>();
+  const accounts: PlatformAccounts = {
+    list: () => [
+      { id: 'acc-local', label: 'Local endpoint', kind: 'openai-compatible', enabled: true, configured: true, defaultModel: 'qwen3:8b', assignedAgents: [] },
+      { id: 'acc-claude', label: 'Anthropic API', kind: 'anthropic', enabled: true, configured: true, defaultModel: 'claude-sonnet-5', assignedAgents: ['scout'] },
+      { id: 'acc-off', label: 'Old key', kind: 'openai', enabled: false, configured: true, defaultModel: 'gpt-5', assignedAgents: [] },
+    ],
+    bindingOf: (id) => bindings.get(id),
+    assign: async (agentId, accountId, model) => { assigned.push([agentId, accountId, model]); bindings.set(agentId, { accountId, model }); },
+  };
+  let a: Harness;
+  beforeEach(() => { assigned.length = 0; bindings.clear(); bindings.set('scout', { accountId: 'acc-claude', model: 'claude-sonnet-5' }); a = harness('agent-father', accounts); });
+
+  it('lists the accounts by name, with who uses them', async () => {
+    const result = await a.tool('platform.list_accounts').execute({}, a.ctx) as { accounts: Array<{ name: string; provider: string; usable: boolean; usedBy: string[] }> };
+    expect(result.accounts.map((x) => x.name)).toEqual(['Local endpoint', 'Anthropic API', 'Old key']);
+    expect(result.accounts[0]).toMatchObject({ provider: 'openai-compatible', usable: true });
+    expect(result.accounts[2]!.usable).toBe(false);
+    expect(result.accounts[1]!.usedBy).toEqual(['scout']);
+  });
+
+  it('asks for an account rather than guessing, and refuses the old provider road', () => {
+    expect(refusalOf(a, 'platform.create_agent', baseCreate)).toContain('which account');
+    expect(refusalOf(a, 'platform.create_agent', { ...baseCreate, provider: 'anthropic' })).toContain('named accounts');
+    expect(refusalOf(a, 'platform.create_agent', { ...baseCreate, account: 'Old key' })).toContain('disabled');
+    expect(refusalOf(a, 'platform.create_agent', { ...baseCreate, account: 'Nope' })).toContain('no account is called');
+    expect(refusalOf(a, 'platform.create_agent', { ...baseCreate, account: 'Anthropic API', model: 'gpt-5' })).toContain('Anthropic API');
+  });
+
+  it('creates on the named account, keeps the model out of the file, and assigns after writing', async () => {
+    const { envelope, preview } = described<CreateAgentEnvelope>(a, 'platform.create_agent', { ...baseCreate, account: 'local endpoint' });
+    expect(envelope.account).toEqual({ id: 'acc-local', label: 'Local endpoint', kind: 'openai-compatible', model: 'qwen3:8b' });
+    expect(preview).toContain('"Local endpoint" account (openai-compatible), model qwen3:8b');
+    expect(envelope.content).not.toContain('model:');
+    expect(envelope.content).not.toContain('provider:');
+    const result = await a.tool('platform.create_agent').execute({ ...baseCreate, account: 'local endpoint' }, a.ctx) as { message: string };
+    expect(assigned).toEqual([['bookkeeper', 'acc-local', 'qwen3:8b']]);
+    expect(result.message).toContain('Runs on "Local endpoint"');
+  });
+
+  it('moves an existing agent to another account, and treats a model-only change as an assignment', async () => {
+    const moved = described<UpdateAgentEnvelope>(a, 'platform.update_agent', { id: 'scout', account: 'Local endpoint' });
+    expect(moved.envelope.changes).toContainEqual({ key: 'runs on', from: 'Anthropic API, claude-sonnet-5', to: 'Local endpoint, qwen3:8b' });
+    expect(moved.envelope.content).not.toContain('qwen3');
+    await a.tool('platform.update_agent').execute({ id: 'scout', account: 'Local endpoint' }, a.ctx);
+    expect(assigned).toEqual([['scout', 'acc-local', 'qwen3:8b']]);
+    const retuned = described<UpdateAgentEnvelope>(a, 'platform.update_agent', { id: 'scout', model: 'qwen3:32b' });
+    expect(retuned.envelope.changes).toContainEqual({ key: 'runs on', from: 'Local endpoint, qwen3:8b', to: 'Local endpoint, qwen3:32b' });
+    const listed = await a.tool('platform.list_agents').execute({}, a.ctx) as { agents: Array<{ id: string; account?: string | null; model: string | null }> };
+    expect(listed.agents.find((x) => x.id === 'scout')).toMatchObject({ account: 'Local endpoint', model: 'qwen3:8b' });
   });
 });

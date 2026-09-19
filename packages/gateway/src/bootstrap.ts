@@ -327,7 +327,22 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   // The `platform.*` family writes agent files and then reloads this same
   // façade, which is why it is bound here and not at construction: it needs the
   // catalog it is about to replace.
-  bindPlatformTools(registry, { catalog, reload: () => catalog.reload() });
+  bindPlatformTools(registry, {
+    catalog,
+    reload: () => catalog.reload(),
+    accounts: () => {
+      if (!accounts) return undefined;
+      const service = accounts;
+      return {
+        list: () => service.view().accounts.map((a) => ({
+          id: a.id, label: a.label, kind: a.kind, enabled: a.enabled, configured: a.configured,
+          defaultModel: a.defaultModel, assignedAgents: a.assignedAgents,
+        })),
+        bindingOf: (agentId) => service.view().bindings.find((b) => b.agentId === agentId),
+        assign: (agentId, accountId, model) => service.assign(agentId, { accountId, model }),
+      };
+    },
+  });
   return {
     pool,
     registry,
