@@ -37,14 +37,13 @@ it('shows Codex account creation only when the experiment is enabled', async () 
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true });
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex' } });
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'My subscription' } });
-  expect(screen.getByLabelText('Default model')).toHaveValue('');
-  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
-  fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'gpt-5.6-terra' } });
   expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Default model')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
-  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'codex', auth: 'chatgpt', defaultModel: 'gpt-5.6-terra' })));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'codex', auth: 'chatgpt', label: 'My subscription' })));
   expect(api.codexAccountAction).not.toHaveBeenCalled();
 });
 it('renders device sign-in inside the account card with cancellation and no paid test', async () => {
@@ -83,13 +82,13 @@ it('states reset time is unknown when no retry advice was supplied', async () =>
   expect(await screen.findByText(/Reset time is unknown/)).toBeInTheDocument();
   expect(screen.queryByText(/Provider suggested retry time:/)).not.toBeInTheDocument();
 });
-it('toggles the add form, focuses its name, and explains the disabled save button', async () => {
+it('opens the add sheet, focuses its name, and explains the disabled save button', async () => {
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
   expect(screen.getByLabelText('Account name')).toHaveFocus();
   expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
   expect(screen.getByText(/The example name is a placeholder/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel adding account' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(screen.queryByLabelText('Account name')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Add account' })).toHaveAttribute('aria-expanded', 'false');
 });

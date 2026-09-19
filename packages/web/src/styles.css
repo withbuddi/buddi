@@ -1214,7 +1214,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .browser-title { margin: 0; font-size: var(--text-xl); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
 .browser-panel[data-compact='true'] .browser-title { font-size: var(--text-lg); }
 .browser-full-view { display: inline-block; font-size: var(--text-sm); color: var(--accent); }
-.browser-task { border-left: 3px solid var(--accent); padding: var(--space-2) var(--space-4); overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--space-1); }
+.browser-task { background: var(--surface-sunken); border-radius: var(--radius); padding: var(--space-3) var(--space-4); overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--space-1); }
 .browser-window { border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); }
 .browser-address { display: flex; gap: var(--space-3); padding: 10px var(--space-4); border-bottom: 1px solid var(--line); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .browser-window figure { margin: 0; }
@@ -1346,7 +1346,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   padding: 10px var(--space-3);
   border: 0;
   border-bottom: 1px solid var(--line);
-  border-left: 3px solid transparent;
   background: transparent;
   color: inherit;
   text-align: left;
@@ -1355,7 +1354,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 }
 .accounts-row:last-child { border-bottom: 0; }
 .accounts-row:hover { background: var(--surface-sunken); }
-.accounts-row[aria-pressed='true'] { background: var(--accent-soft); border-left-color: var(--accent); }
+.accounts-row[aria-pressed='true'] { background: var(--accent-soft); }
 .accounts-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .accounts-row-name { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accounts-row-sub { font-size: var(--text-xs); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
