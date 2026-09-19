@@ -14,9 +14,12 @@ This is the completion checklist, not a claim that subscription sign-in exists.
 ## In progress: experimental Codex App Server adapter
 
 Owner selected official Codex App Server, on `experiment/codex-app-server`.
-An isolated offline protocol prototype is implemented; see
-[the experiment notes](codex-app-server-experiment.md) for verified behavior and
-the native-tool isolation gate. It is not yet an assignable provider account.
+The experimental backend now has named accounts, Dashboard device sign-in,
+cancel/reconnect/disconnect, vault-backed credential staging, and explicit agent
+assignment. See [the experiment notes](codex-app-server-experiment.md) for the
+pinned native-tool contract and remaining limits. Owner device sign-in has passed;
+a real chat/tool round trip and subscription plan/quota display remain unverified
+or undelivered.
 
 Verified documentation:
 

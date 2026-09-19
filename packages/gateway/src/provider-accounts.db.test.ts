@@ -24,10 +24,43 @@ suite('named provider accounts', () => {
     return { env, agents, catalog, vault, reload, test, service };
   }
   const settings = { label: 'Work API', kind: 'anthropic', auth: 'api-key', defaultModel: 'claude-sonnet-5', enabled: true, secret: 'private-fixture-value' };
+  const codexSettings = { label: 'Personal Codex', kind: 'codex', auth: 'chatgpt', defaultModel: 'gpt-5', enabled: true };
   const metadata = (f: ReturnType<typeof fixture>, id: string) => {
     const a = f.service.view().accounts.find(a => a.id === id)!;
     return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled };
   };
+  it('gates native accounts and forbids pasted tokens or API fallback', async () => {
+    const disabled = fixture(); await disabled.service.initialize();
+    await expect(disabled.service.save(codexSettings)).rejects.toThrow('Enable the Codex experiment');
+    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    await expect(f.service.save({ ...codexSettings, secret: 'pasted-token' })).rejects.toThrow('device sign-in');
+    await expect(f.service.save({ ...codexSettings, auth: 'api-key' })).rejects.toThrow('require ChatGPT');
+    const account = await f.service.save(codexSettings);
+    expect(f.service.view().accounts.find(a => a.id === account.id)).toMatchObject({ kind: 'codex', configured: false });
+    await expect(f.service.test(account.id)).rejects.toThrow('output-token cap');
+    expect(f.test).not.toHaveBeenCalled();
+  });
+  it('serializes native credentials across processes and allows disabling and removal', async () => {
+    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    const account = await f.service.save(codexSettings);
+    let finish!: () => void;
+    vi.spyOn(f.service.codex!, 'login').mockResolvedValue({ view: { state: 'pending' }, finished: new Promise<void>(resolve => { finish = resolve; }) });
+    await f.service.codexAction(account.id, 'login', 1);
+    const other = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await other.service.initialize();
+    await expect(other.service.save({ ...metadata(other, account.id), enabled: false })).rejects.toThrow('busy');
+    finish();
+    await vi.waitFor(async () => {
+      const client = await pool.connect();
+      try {
+        const result = await client.query("select pg_try_advisory_lock(hashtext('buddi-codex'),hashtext($1)) as acquired", [account.id]);
+        expect(result.rows[0].acquired).toBe(true);
+        await client.query("select pg_advisory_unlock(hashtext('buddi-codex'),hashtext($1))", [account.id]);
+      } finally { client.release(); }
+    });
+    await other.service.save({ ...metadata(other, account.id), enabled: false });
+    await other.service.remove(account.id, 2);
+    expect(other.service.view().accounts.some(a => a.id === account.id)).toBe(false);
+  });
   it('migrates existing choices atomically and never reassigns on restart or discovers another key', async () => {
     const f = fixture(); await f.service.initialize();
     expect(f.service.view().bindings).toEqual(expect.arrayContaining([{ agentId: 'ledger', accountId: 'legacy-anthropic-subscription', model: 'claude-sonnet-5' }]));

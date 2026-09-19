@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { ErrorBanner, useAsync } from '../ui';
 
@@ -10,6 +10,13 @@ export function Providers(): JSX.Element {
   const [notice, setNotice] = useState('');
   const [adding, setAdding] = useState(false);
   const [refreshRequested, setRefreshRequested] = useState(false);
+  const pendingLogin = data?.accounts.some(a => a.login?.state === 'pending' &&
+    a.login.expiresAt && Date.parse(a.login.expiresAt) > Date.now());
+  useEffect(() => {
+    if (!pendingLogin) return;
+    const timer = setInterval(reload, 2_000);
+    return () => clearInterval(timer);
+  }, [pendingLogin, reload]);
   const run: Run = async (work, message) => {
     setBusy(true); setFailure(null); setNotice(''); setRefreshRequested(false);
     try {
@@ -32,10 +39,10 @@ export function Providers(): JSX.Element {
       {(data.vault.locked || data.vault.kind === 'none') && <p className="attention">{data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</p>}
       <button disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>{adding ? 'Cancel adding account' : 'Add account'}</button>
       <button disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>{loading ? 'Refreshing…' : 'Refresh status'}</button>
-      {adding && <div id="new-provider-account"><AccountForm busy={busy} run={run} onDone={() => setAdding(false)} /></div>}
+      {adding && <div id="new-provider-account"><AccountForm codexEnabled={data.codexEnabled} busy={busy} run={run} onDone={() => setAdding(false)} /></div>}
       {data.accounts.length === 0 && <p>No accounts yet. Add one to connect your agents.</p>}
       {data.accounts.map(account => <AccountCard key={`${account.id}:${account.revision}`} account={account} busy={busy} run={run} />)}
-      <p className="muted">Subscription login is separate from API-key access. Existing Claude setup tokens are preserved as legacy accounts, without automatic refresh or a known expiry. New OAuth/device sign-in is not implemented in this release.</p>
+      <p className="muted">Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry. {data.codexEnabled ? 'Codex ChatGPT device sign-in is experimental; existing account assignments are unchanged.' : 'Codex subscription sign-in is not enabled on this host.'}</p>
     </>}
   </>;
 }
@@ -53,13 +60,27 @@ function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy
     <p>Used by: {a.assignedAgents.length ? a.assignedAgents.join(', ') : 'No agents'}</p>
     {a.removalPending && <p className="attention">Removal is pending. Unlock the vault, then retry Remove account.</p>}
     {a.auth === 'legacy-subscription-token' && <p className="muted">Legacy subscription token · Not refreshable · Token expiry and subscription renewal date unknown</p>}
+    {a.kind === 'codex' && <>
+      <p className="muted">Experimental Codex App Server · Credentials stay in Buddi’s vault and are staged in a private temporary file during native sessions. Codex manages refresh. Subscription renewal date is unknown.</p>
+      <p className="muted">Native tool-step usage reporting is incomplete. Do not use Buddi’s token or API-cost estimates as subscription billing or remaining quota.</p>
+      <div className="bar">
+        <button disabled={busy || !a.enabled || a.removalPending || a.login?.state === 'pending'} onClick={() => void run(() => api.codexAccountAction(a.id, 'login', a.revision), 'Complete device sign-in below.')}>{a.configured ? 'Reconnect ChatGPT' : 'Connect ChatGPT'}</button>
+        {a.login?.state === 'pending' && <button disabled={busy} onClick={() => void run(() => api.codexAccountAction(a.id, 'cancel-login', a.revision), 'Sign-in cancelled.')}>Cancel sign-in</button>}
+        <button disabled={busy || !a.configured} onClick={() => void run(() => api.codexAccountAction(a.id, 'logout', a.revision), 'Subscription disconnected from Buddi. Your regular Codex login is unchanged.')}>Disconnect</button>
+      </div>
+      {a.login?.state === 'pending' && <div role="status">
+        <p>Open <a href={a.login.verificationUrl} target="_blank" rel="noreferrer">{a.login.verificationUrl}</a> and enter <code>{a.login.userCode}</code>.</p>
+        <p className="muted">Buddi stops waiting at {a.login.expiresAt && new Date(a.login.expiresAt).toLocaleTimeString()}. This is the sign-in timeout, not your subscription expiry.</p>
+      </div>}
+      {a.login && a.login.state !== 'pending' && <p role="status">{a.login.message ?? `Sign-in ${a.login.state}.`}</p>}
+    </>}
     <div className="bar">
       <button disabled={busy || a.removalPending} onClick={() => setEditing(!editing)}>{editing ? 'Cancel edit' : 'Edit account'}</button>
       <button disabled={busy || a.removalPending} onClick={() => void run(() => api.saveProviderAccount({ ...accountSettings(a), enabled: !a.enabled }), a.enabled ? 'Account disabled. Subsequent model calls will stop; already-sent requests cannot be recalled.' : 'Account enabled.')}>{a.enabled ? 'Disable' : 'Enable'}</button>
-      <button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(() => api.testProviderAccount(a.id), 'Connection test finished.')}>Test connection</button>
+      {a.kind !== 'codex' && <button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(() => api.testProviderAccount(a.id), 'Connection test finished.')}>Test connection</button>}
       <button disabled={busy || a.assignedAgents.length > 0} title={a.assignedAgents.length ? 'Reassign its agents before removing this account' : undefined} onClick={() => setRemoving(true)}>Remove account</button>
     </div>
-    <p className="muted">Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
+    <p className="muted">{a.kind === 'codex' ? 'After connecting, assign this account to an agent and send a test message. Model turns use your subscription allowance.' : 'Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.'}</p>
     {a.test && <div role="status">
       <p>{a.test.state}{a.test.httpStatus ? ` · HTTP ${a.test.httpStatus}` : ''}: {a.test.message}</p>
       <p className="muted">Tested at: {new Date(a.test.checkedAt).toLocaleString()} (your browser’s local time). This is not a quota reset or subscription renewal date.</p>
@@ -75,7 +96,7 @@ function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy
   </section>;
 }
 
-function AccountForm({ account: a, busy, run, onDone }: { account?: ProviderAccount; busy: boolean; run: Run; onDone: () => void }): JSX.Element {
+function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?: ProviderAccount; busy: boolean; run: Run; onDone: () => void; codexEnabled?: boolean }): JSX.Element {
   const [label, setLabel] = useState(a?.label ?? '');
   const [kind, setKind] = useState<ProviderAccount['kind']>(a?.kind ?? 'anthropic');
   const [auth, setAuth] = useState<ProviderAccount['auth']>(a?.auth ?? 'api-key');
@@ -83,9 +104,9 @@ function AccountForm({ account: a, busy, run, onDone }: { account?: ProviderAcco
   const [model, setModel] = useState(a?.defaultModel ?? 'claude-sonnet-5');
   const [secret, setSecret] = useState('');
   const changeKind = (value: ProviderAccount['kind']) => {
-    setKind(value); setAuth('api-key'); setSecret('');
+    setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
     setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
-    setModel(value === 'anthropic' ? 'claude-sonnet-5' : value === 'openai' ? 'gpt-5' : '');
+    setModel(value === 'anthropic' ? 'claude-sonnet-5' : value === 'openai' || value === 'codex' ? 'gpt-5' : '');
   };
   return <form className="attention" onSubmit={e => {
     e.preventDefault();
@@ -98,6 +119,7 @@ function AccountForm({ account: a, busy, run, onDone }: { account?: ProviderAcco
       <label>Account name <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" /></label>
       <label>Provider <select disabled={!!a} value={kind} onChange={e => changeKind(e.target.value as ProviderAccount['kind'])}>
         <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="openai-compatible">OpenAI-compatible</option>
+        {(codexEnabled || a?.kind === 'codex') && <option value="codex">Codex — ChatGPT subscription (experimental)</option>}
       </select></label>
       {kind === 'openai-compatible' && <>
         <label>API base URL <input required type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></label>

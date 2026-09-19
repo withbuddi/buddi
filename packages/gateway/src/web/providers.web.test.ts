@@ -30,7 +30,7 @@ it('protects provider reads and credential writes with existing owner session, o
 });
 
 it('protects named account creation and assignments and retires global credential writes', async () => {
-  const manager = { view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn() };
+  const manager = { view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
   const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerAccounts: manager as unknown as ProviderAccounts });
@@ -41,11 +41,16 @@ it('protects named account creation and assignments and retires global credentia
   const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
   const csrf = cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
-  for (const route of ['/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account']) {
+  for (const route of ['/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
   }
   expect(manager.save).not.toHaveBeenCalled(); expect(manager.assign).not.toHaveBeenCalled();
+  expect(manager.codexAction).not.toHaveBeenCalled();
+  const login = await fetch(`${origin}/api/provider-accounts/one/login`, { method: 'POST', headers, body: JSON.stringify({ revision: 2 }) });
+  expect(login.status).toBe(200);
+  expect(login.headers.get('cache-control')).toBe('no-store');
+  expect(manager.codexAction).toHaveBeenCalledWith('one', 'login', 2);
   const saved = await fetch(`${origin}/api/provider-accounts/save`, { method: 'POST', headers, body: JSON.stringify({ secret: 'fixture-secret' }) });
   expect(saved.status).toBe(200); expect(saved.headers.get('cache-control')).toBe('no-store');
   expect(await saved.text()).not.toContain('fixture-secret');

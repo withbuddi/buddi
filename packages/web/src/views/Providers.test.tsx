@@ -3,13 +3,36 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null,
 }] };
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providerAccounts).mockResolvedValue(view); vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'two' }); });
+it('shows Codex account creation only when the experiment is enabled', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex' } });
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'My subscription' } });
+  expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'codex', auth: 'chatgpt' })));
+  expect(api.codexAccountAction).not.toHaveBeenCalled();
+});
+it('renders device sign-in inside the account card with cancellation and no paid test', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true, accounts: [{ ...view.accounts[0]!,
+    kind: 'codex', auth: 'chatgpt', login: { state: 'pending', verificationUrl: 'http://localhost/device', userCode: 'ABCD-1234', expiresAt: '2026-09-19T12:00:00Z' },
+  }] });
+  render(<Providers />);
+  expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'http://localhost/device' })).toHaveAttribute('rel', 'noreferrer');
+  expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }));
+  await waitFor(() => expect(api.codexAccountAction).toHaveBeenCalledWith('one', 'cancel-login', 1));
+  expect(JSON.stringify(localStorage)).not.toContain('ABCD-1234');
+});
 it('renders named accounts without modifying or testing them on load', async () => {
   render(<Providers />);
   expect(await screen.findByText('Personal OpenAI')).toBeInTheDocument();

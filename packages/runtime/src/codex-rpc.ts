@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 export type RpcMessage = { id?: string | number; method?: string; params?: unknown; result?: unknown; error?: unknown };
 export interface CodexRpc {
+  readonly processId?: number;
   request(method: string, params?: unknown): Promise<unknown>;
   notify(method: string, params?: unknown): void;
   onMessage(listener: (message: RpcMessage) => void): () => void;
@@ -76,6 +77,7 @@ export function createCodexRpc(child: ChildProcessWithoutNullStreams, timeoutMs 
     }
   });
   return {
+    processId: child.pid,
     request(method, params) {
       if (closed) return Promise.reject(closed);
       const id = ++sequence;

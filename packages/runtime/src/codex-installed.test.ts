@@ -3,7 +3,7 @@
  */
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -12,12 +12,17 @@ import { createCodexRpc, type CodexRpc } from './codex-rpc.js';
 import { CODEX_EXPERIMENT_CONFIG, codexConfigArgs } from './codex-policy.js';
 import { createCodexAppServerAdapter } from './codex-app-server.js';
 
-it.skipIf(process.env.BUDDI_TEST_CODEX !== '1').each(['text', 'tool'] as const)('installed Codex offline %s contract and native-tool inventory', async (mode) => {
+it.skipIf(process.env.BUDDI_TEST_CODEX !== '1').each(['text', 'tool', 'skills-list', 'skills-executor', 'skills-read', 'native-shell'] as const)('installed Codex offline %s contract and native-tool inventory', async (mode) => {
   const dir = await mkdtemp(join(tmpdir(), 'buddi-codex-contract-'));
   const profileDir = join(dir, 'profile');
   const cwd = join(dir, 'workspace');
   await mkdir(profileDir, { mode: 0o700 });
   await mkdir(cwd, { mode: 0o700 });
+  const sentinel = join(dir, 'outside-workspace.txt');
+  await writeFile(sentinel, 'BUDDI_PRIVATE_SENTINEL_NOT_FOR_MODEL');
+  const skillDir = join(cwd, '.agents', 'skills', 'private-fixture');
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, 'SKILL.md'), '---\nname: private-fixture\ndescription: BUDDI_PRIVATE_SKILL_NOT_FOR_MODEL\n---\nPrivate test instruction.\n');
   let received: Record<string, unknown> | undefined;
   let requestCount = 0;
   const server = createServer((req, res) => {
@@ -28,8 +33,13 @@ it.skipIf(process.env.BUDDI_TEST_CODEX !== '1').each(['text', 'tool'] as const)(
       received = JSON.parse(body);
       requestCount++;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      const item = mode === 'tool' && requestCount === 1
-        ? { type: 'function_call', id: 'fc_test', call_id: 'call_test', name: 'buddi_time', arguments: '{}' }
+      const item = mode !== 'text' && requestCount === 1
+        ? mode === 'tool'
+          ? { type: 'function_call', id: 'fc_test', call_id: 'call_test', name: 'buddi_time', arguments: '{}' }
+          : mode === 'native-shell' ? { type: 'function_call', id: 'fc_test', call_id: 'call_test', name: 'exec_command', arguments: JSON.stringify({ cmd: `cat ${sentinel}` }) }
+          : { type: 'function_call', id: 'fc_test', call_id: 'call_test', namespace: 'skills',
+            name: mode === 'skills-read' ? 'read' : 'list',
+            arguments: JSON.stringify(mode === 'skills-read' ? { package: sentinel } : { authority: { kind: mode === 'skills-executor' ? 'executor' : 'orchestrator' } }) }
         : { type: 'message', id: 'msg_test', role: 'assistant', content: [{ type: 'output_text', text: 'Offline contract test.' }] };
       for (const event of [
         { type: 'response.created', response: { id: 'resp_test', status: 'in_progress' } },
@@ -64,7 +74,7 @@ it.skipIf(process.env.BUDDI_TEST_CODEX !== '1').each(['text', 'tool'] as const)(
     const toolsForModel = [{ name: 'buddi_time', description: 'Read the clock.', input_schema: { type: 'object', properties: {} } }];
     const result = await adapter.complete({ system: 'Offline contract test.',
       messages: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }] }], tools: toolsForModel });
-    if (mode === 'text') expect(result.content).toEqual([{ type: 'text', text: 'Offline contract test.' }]);
+    if (mode !== 'tool') expect(result.content).toEqual([{ type: 'text', text: 'Offline contract test.' }]);
     else {
       expect(result.content).toEqual([{ type: 'tool_use', id: 'call_test', name: 'buddi_time', input: {} }]);
       expect(requestCount).toBe(1); // Codex cannot continue/execute the proposal itself.
@@ -81,7 +91,19 @@ it.skipIf(process.env.BUDDI_TEST_CODEX !== '1').each(['text', 'tool'] as const)(
         expect.objectContaining({ type: 'function_call_output', call_id: 'call_test', output: '2026-09-18T12:00:00Z' }),
       ]));
     }
+    if (mode.startsWith('skills')) {
+      const outputs = (received?.input as Array<Record<string, unknown>>).filter(item => item.type === 'function_call_output');
+      expect(JSON.stringify(outputs).includes('BUDDI_PRIVATE_SENTINEL_NOT_FOR_MODEL')).toBe(false);
+      if (mode === 'skills-read') expect(outputs[0]?.output).toBe('skill package is not available');
+      else expect(JSON.parse(String(outputs[0]?.output))).toMatchObject({ skills: [] });
+    }
+    if (mode === 'native-shell') {
+      const outputs = (received?.input as Array<Record<string, unknown>>).filter(item => item.type === 'function_call_output');
+      expect(JSON.stringify(outputs).includes('BUDDI_PRIVATE_SENTINEL_NOT_FOR_MODEL')).toBe(false);
+      expect(String(outputs[0]?.output)).toMatch(/unsupported|unknown|not found|not available/i);
+    }
     const tools = received?.tools as Array<{ type: string; name?: string }>;
+    expect(JSON.stringify(received).includes('BUDDI_PRIVATE_SKILL_NOT_FOR_MODEL')).toBe(false);
     // This inventory is NOT the desired allowlist. It records why the live
     // adapter remains gated: disabling host features does not remove skills.
     expect(tools.map((tool) => tool.name ?? tool.type)).toEqual(['request_user_input', 'skills', 'buddi_time']);

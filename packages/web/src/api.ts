@@ -362,14 +362,16 @@ export interface AgentsView {
 }
 
 export interface ProviderAccount {
-  id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible';
-  auth: 'api-key' | 'none' | 'legacy-subscription-token'; baseUrl: string;
+  id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
+  auth: 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt'; baseUrl: string;
   defaultModel: string; enabled: boolean; revision: number; configured: boolean;
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
+  login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string } | null;
 }
 export interface ProviderAccountsView {
+  codexEnabled?: boolean;
   vault: { kind: string; locked: boolean; advice: string };
   accounts: ProviderAccount[];
   bindings: Array<{ agentId: string; accountId: string; model: string }>;
@@ -506,6 +508,7 @@ export const api = {
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
   testProviderAccount: (id: string) => post<{ state: string; message: string }>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),
+  codexAccountAction: (id: string, action: 'login' | 'cancel-login' | 'logout', revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/${action}`, { revision }),
   assignProviderAccount: (agent: string, accountId: string, model: string) => post<{ changed: string[]; note: string }>(`/agents/${encodeURIComponent(agent)}/account`, { accountId, model }),
   configureProvider: (kind: string, body: { credentialKind: string; defaultModel: string }) => post<ProvidersView>(`/providers/${encodeURIComponent(kind)}/settings`, body),
   saveCredential: (name: string, value: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/save`, { value }),
