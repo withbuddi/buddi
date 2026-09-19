@@ -372,7 +372,11 @@ export async function releaseStaleLeases(pool: Pool, now: Date): Promise<number>
   return rows.length;
 }
 
-/** Stop a job for good. Anything not already finished can be cancelled. */
+/**
+ * Stop a job for good. Anything not already finished can be cancelled, and so
+ * can a failed one: "failed" is the queue waiting for a human, and giving up
+ * is one of the two answers a human has.
+ */
 export async function cancelJob(pool: Pool, jobId: string): Promise<Job | null> {
   const { rows } = await pool.query<JobRow>(
     `update core.jobs
@@ -380,7 +384,7 @@ export async function cancelJob(pool: Pool, jobId: string): Promise<Job | null> 
          lease_owner = null,
          lease_until = null,
          updated_at = now()
-     where id = $1::uuid and state in ('pending', 'leased', 'suspended')
+     where id = $1::uuid and state in ('pending', 'leased', 'suspended', 'failed')
      returning ${JOB_COLUMNS}`,
     [jobId],
   );

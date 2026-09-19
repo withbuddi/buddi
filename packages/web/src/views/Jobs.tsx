@@ -140,7 +140,7 @@ export function Jobs({ timezone, embedded, initialState }: { timezone: string; e
                           Retry
                         </Button>
                       ) : null}
-                      {['pending', 'leased', 'suspended'].includes(job.state) ? (
+                      {['pending', 'leased', 'suspended', 'failed'].includes(job.state) ? (
                         <Button size="sm" variant="danger" onClick={() => act(api.cancelJob(job.id))}>
                           Cancel
                         </Button>
