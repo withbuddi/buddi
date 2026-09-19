@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from './anthropic.js';
 import { codexHistory, createCodexAppServerAdapter } from './codex-app-server.js';
 import type { CodexRpc, RpcMessage } from './codex-rpc.js';
+import { CODEX_EXPERIMENT_CONFIG } from './codex-policy.js';
 
 const request: CompletionRequest = {
   system: 'You are the owner’s assistant.',
@@ -15,6 +16,8 @@ function fake(onTurn: (emit: (message: RpcMessage) => void) => void) {
   const emit = (message: RpcMessage) => { for (const listener of messages) listener(message); };
   const rpc: CodexRpc = {
     request: vi.fn(async (method) => {
+      if (method === 'config/read') return { config: { sandbox_mode: 'read-only', web_search: 'disabled', features: Object.fromEntries(Object.entries(CODEX_EXPERIMENT_CONFIG).filter(([key]) => key.startsWith('features.')).map(([key, value]) => [key.slice(9), value])) } };
+      if (method === 'skills/list') return { data: [{ skills: [], errors: [] }] };
       if (method === 'thread/start') return { thread: { id: 'thread1' }, model: 'gpt-5' };
       if (method === 'turn/start') { onTurn(emit); return { turn: { id: 'turn1' } }; }
       return {};
@@ -47,7 +50,7 @@ describe('experimental Codex adapter', () => {
     const { adapter, rpc } = fake((emit) => emit(call()));
     expect(await adapter.complete(request)).toMatchObject({ content: [{ type: 'tool_use', id: 'call1', name: 'system.time', input: {} }], stopReason: 'tool_use' });
     expect(rpc.close).toHaveBeenCalled();
-    expect(vi.mocked(rpc.request).mock.calls.map(([method]) => method)).toEqual(['initialize', 'thread/start', 'thread/inject_items', 'turn/start']);
+    expect(vi.mocked(rpc.request).mock.calls.map(([method]) => method)).toEqual(['initialize', 'config/read', 'skills/list', 'skills/list', 'thread/start', 'thread/inject_items', 'turn/start']);
     expect(rpc.notify).toHaveBeenCalledTimes(1);
   });
 

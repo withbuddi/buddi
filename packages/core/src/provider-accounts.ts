@@ -1,8 +1,8 @@
 import { modelProblem, type ProviderKind, type ResolvedProvider } from './provider.js';
 
 /** Account identity is separate from the protocol used by the runtime adapter. */
-export type ProviderAccountKind = 'anthropic' | 'openai' | 'openai-compatible';
-export type ProviderAccountAuth = 'api-key' | 'none' | 'legacy-subscription-token';
+export type ProviderAccountKind = 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
+export type ProviderAccountAuth = 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt';
 export interface ProviderAccount {
   id: string;
   label: string;
@@ -21,12 +21,12 @@ export function accountProtocol(kind: ProviderAccountKind): ProviderKind {
 export function accountModelProblem(kind: ProviderAccountKind, model: string): string | undefined {
   if (!model.trim() || model.length > 150 || /[\r\n\x00-\x1f]/.test(model)) return 'Enter a valid model id (1–150 characters).';
   // Compatible servers own their model names; never apply OpenAI's prefix list.
-  return kind === 'openai-compatible' ? undefined : modelProblem(kind, model);
+  return kind === 'openai-compatible' ? undefined : modelProblem(accountProtocol(kind), model);
 }
 
 /** Explicit endpoint paths are preserved (OpenRouter uses /api/v1, for example). */
 export function accountBaseUrl(kind: ProviderAccountKind, value?: string): string {
-  const fixed = kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1';
+  const fixed = kind === 'codex' ? 'https://chatgpt.com' : kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1';
   if (kind !== 'openai-compatible') {
     if (value && value.replace(/\/+$/, '') !== fixed) throw new Error('Use an OpenAI-compatible account for a custom endpoint.');
     return fixed;
@@ -41,6 +41,7 @@ export function accountBaseUrl(kind: ProviderAccountKind, value?: string): strin
 }
 
 export function resolveProviderAccount(account: ProviderAccount, model: string, secret: string | null): ResolvedProvider {
+  if (account.kind === 'codex' || account.auth === 'chatgpt') throw new Error('Codex accounts require the native App Server adapter; API fallback is forbidden.');
   if (!account.enabled) throw new Error('Provider account is disabled.');
   const problem = accountModelProblem(account.kind, model);
   if (problem) throw new Error(problem);

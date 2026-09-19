@@ -3,6 +3,11 @@ import { accountBaseUrl, accountModelProblem, resolveProviderAccount, type Provi
 import { providerAuthHeaders, resolveProvider } from './provider.js';
 const local: ProviderAccount = { id: 'local', label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true, revision: 1 };
 describe('provider account domain', () => {
+  it('never sends native subscription credentials through an API adapter', () => {
+    expect(accountBaseUrl('codex')).toBe('https://chatgpt.com');
+    expect(accountModelProblem('codex', 'gpt-5')).toBeUndefined();
+    expect(() => resolveProviderAccount({ ...local, kind: 'codex', auth: 'chatgpt' }, 'gpt-5', 'native-secret')).toThrow('fallback is forbidden');
+  });
   it('cannot bypass an account assignment by resolving ambient credentials', () => {
     const result = resolveProvider({ kind: 'anthropic', model: 'claude-sonnet-5', accountId: 'disabled-account', credential: { kind: 'api-key', env: 'ANTHROPIC_API_KEY' } }, { ANTHROPIC_API_KEY: 'fixture' });
     expect(result).toMatchObject({ ok: false, problem: { code: 'unsupported' } });

@@ -1,7 +1,6 @@
 /**
- * Experimental, dependency-injected App Server adapter. Intentionally NOT exported
- * by runtime/index or selected by createProvider: the installed-client isolation
- * contract is not yet satisfied (docs/codex-app-server-experiment.md).
+ * Experimental, dependency-injected App Server adapter. Selected only by the
+ * opt-in Codex account service, never by the generic HTTP provider factory.
  *
  * One child/thread per completion. A tool request is returned as a proposal, then
  * the child is closed BEFORE the caller can execute it through Buddi's registry.
@@ -11,6 +10,7 @@ import type { CompletionRequest, CompletionResponse, ContentBlock, RuntimeProvid
 import { toolNameMap } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
 import { initializeCodex, type CodexRpc, type RpcMessage } from './codex-rpc.js';
+import { assertCodexIsolation } from './codex-policy.js';
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -108,8 +108,9 @@ export function createCodexAppServerAdapter(options: {
       try {
         if (req.signal?.aborted) abort();
         await initializeCodex(rpc);
+        await assertCodexIsolation(rpc, options.cwd);
         const started = record(await rpc.request('thread/start', {
-          model: options.model, cwd: options.cwd, ephemeral: true, environments: [],
+          model: options.model, cwd: options.cwd, ephemeral: true, environments: [], selectedCapabilityRoots: [],
           approvalPolicy: 'on-request', sandbox: 'read-only',
           baseInstructions: req.system,
           dynamicTools: req.tools.map((tool) => ({ type: 'function', name: names.get(tool.name), description: tool.description, inputSchema: tool.input_schema })),
