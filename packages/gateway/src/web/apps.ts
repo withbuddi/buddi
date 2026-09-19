@@ -55,3 +55,34 @@ async function readApp(appPath: string): Promise<InstalledApp | null> {
     return null;
   }
 }
+
+
+/** One Chromium profile, as Chrome names it to the owner and as it names it on disk. */
+export interface BrowserProfile { directory: string; name: string }
+
+const PROFILE_STATE: Record<string, string> = {
+  'com.google.Chrome': 'Google/Chrome',
+  'org.chromium.Chromium': 'Chromium',
+  'com.microsoft.edgemac': 'Microsoft Edge',
+  'com.brave.Browser': 'BraveSoftware/Brave-Browser',
+};
+
+/**
+ * The profiles a Chromium browser keeps, read from its own "Local State" file.
+ * Only the names and directories: no history, no cookies, nothing else in it.
+ */
+export async function listBrowserProfiles(app: string): Promise<BrowserProfile[]> {
+  const folder = PROFILE_STATE[app];
+  if (!folder || process.platform !== 'darwin') return [];
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const text = await readFile(path.join(homedir(), 'Library', 'Application Support', folder, 'Local State'), 'utf8');
+    const state = JSON.parse(text) as { profile?: { info_cache?: Record<string, { name?: string; user_name?: string }> } };
+    const cache = state.profile?.info_cache ?? {};
+    return Object.entries(cache)
+      .map(([directory, info]) => ({ directory, name: info.name || directory }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}

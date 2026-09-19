@@ -41,15 +41,15 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   return (
     <div>
       {!execution && <ArtifactDownloads files={files} />}
-      <div className="wb-row-end-block">
-        <button className="ui-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
-          {raw ? 'Readable' : 'Raw JSON'}
-        </button>
-      </div>
-      {raw ? <pre>{json(props.value)}</pre> : execution
+      {raw ? <pre className="ui-code">{json(props.value)}</pre> : execution
         ? <CommandResult value={execution}>{files.length > 0 && <section><h4>Generated files</h4><ArtifactDownloads files={files} /></section>}</CommandResult> : files.length
         ? <details className="wb-aside"><summary>Tool details</summary><Shape shape={shape} /></details>
         : <Shape shape={shape} />}
+      <div className="wb-row-end wb-section">
+        <button className="ui-btn" data-variant="ghost" data-size="sm" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
+          {raw ? 'Readable' : 'Raw JSON'}
+        </button>
+      </div>
     </div>
   );
 }

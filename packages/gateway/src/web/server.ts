@@ -40,7 +40,7 @@ import { randomUUID } from 'node:crypto';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
-import { listInstalledApps } from './apps.js';
+import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -417,6 +417,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/host/apps':
           return sendJson(res, 200, { apps: await listInstalledApps() });
+        case '/api/host/browser-profiles':
+          return sendJson(res, 200, { profiles: await listBrowserProfiles(q.get('app') ?? '') });
         case '/api/browser':
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());

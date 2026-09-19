@@ -788,15 +788,11 @@ function message(err: unknown): string {
 function transcriptContains(conversation: ChatConversation, optimistic: ChatMessage): boolean {
   const wanted = optimistic.blocks.find((block) => block.type === 'text')?.text.trim();
   if (!wanted) return true;
-  const sentAt = Date.parse(optimistic.at);
-  return conversation.messages.some(
-    (message) =>
-      message.role === 'user' &&
-      Date.parse(message.at) >= sentAt - 1_000 &&
-      message.blocks.some(
-        (block) => block.type === 'text' && block.text.trim().startsWith(wanted),
-      ),
-  );
+  // The server has it once the newest user message says what we sent. No clock
+  // comparison: the two clocks are not the same clock, and a second either way
+  // was enough to show the bubble twice.
+  const latest = [...conversation.messages].reverse().find((message) => message.role === 'user');
+  return !!latest && latest.blocks.some((block) => block.type === 'text' && block.text.trim() === wanted);
 }
 
 /** Three dots, vertical: this thing has more to say about itself. */
