@@ -328,6 +328,14 @@ describe('createOpenAiProvider — attachments', () => {
 });
 
 describe('createOpenAiProvider — failures', () => {
+  it('preserves retry timing and quota type for connection diagnostics', async () => {
+    const provider = createOpenAiProvider(resolved(), { maxStatusRetries: 0,
+      fetch: vi.fn(async () => jsonResponse(429, { error: { type: 'insufficient_quota', message: 'quota' } }, { 'retry-after': '7200' })) });
+    const before = Date.now();
+    const error = await provider.complete(request).catch(e => e);
+    expect(error.type).toBe('insufficient_quota');
+    expect(Date.parse(error.retryAt)).toBeGreaterThanOrEqual(before + 7200_000);
+  });
   it('never retries a 4xx and carries the API error through', async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse(400, { error: { type: 'invalid_request_error', message: 'bad model' } }),

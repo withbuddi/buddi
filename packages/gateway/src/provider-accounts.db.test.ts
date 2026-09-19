@@ -94,6 +94,10 @@ suite('named provider accounts', () => {
     f.test.mockRejectedValueOnce(Object.assign(new Error('SECRET RESPONSE'), { status: 401 }));
     expect(await f.service.test(a.id)).toMatchObject({ state: 'authentication-error' });
     expect(JSON.stringify(f.service.view())).not.toContain('SECRET');
+    f.test.mockRejectedValueOnce(Object.assign(new Error('SECRET RESPONSE'), { status: 429, retryAt: '2026-09-19T04:00:00.000Z' }));
+    expect(await f.service.test(a.id)).toMatchObject({ state: 'rate-limited', httpStatus: 429, retryAt: '2026-09-19T04:00:00.000Z' });
+    expect(f.service.view().accounts.find(row => row.id === a.id)?.test?.retryAt).toBe('2026-09-19T04:00:00.000Z');
+    expect(JSON.stringify(f.service.view())).not.toContain('SECRET');
     let finish!: () => void;
     f.test.mockImplementationOnce(() => new Promise<void>(r => { finish = r; }));
     const testing = f.service.test(a.id);

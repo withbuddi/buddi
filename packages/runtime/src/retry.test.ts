@@ -7,6 +7,7 @@ import {
   nextTransportDelayMs,
   RETRY_DELAYS_MS,
   retryAfterMs,
+  providerRetryAt,
   TRANSPORT_RETRY_DELAYS_MS,
   TRANSPORT_RETRY_WINDOW_MS,
 } from './retry.js';
@@ -16,6 +17,15 @@ const headers = (value?: string) => ({
 });
 
 describe('the shared retry policy', () => {
+  it('preserves provider retry advice independently of the local sleep cap', () => {
+    const now = Date.parse('2026-09-19T02:00:00Z');
+    expect(providerRetryAt(headers('7200'), now)).toBe('2026-09-19T04:00:00.000Z');
+    expect(retryAfterMs(headers('7200'), now)).toBe(MAX_RETRY_AFTER_MS);
+    expect(providerRetryAt(headers('Sat, 19 Sep 2026 04:00:00 GMT'), now)).toBe('2026-09-19T04:00:00.000Z');
+    for (const value of [undefined, '', '-1', 'garbage SECRET', '999999999999999999', 'Fri, 18 Sep 2026 04:00:00 GMT']) {
+      expect(providerRetryAt(headers(value), now)).toBeNull();
+    }
+  });
   it('retries rate limits, overload and 5xx — and nothing else', () => {
     for (const status of [429, 500, 502, 529]) expect(isRetryableStatus(status)).toBe(true);
     for (const status of [400, 401, 403, 404, 422]) {

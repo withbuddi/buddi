@@ -60,7 +60,12 @@ function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy
       <button disabled={busy || a.assignedAgents.length > 0} title={a.assignedAgents.length ? 'Reassign its agents before removing this account' : undefined} onClick={() => setRemoving(true)}>Remove account</button>
     </div>
     <p className="muted">Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
-    {a.test && <p role="status">{a.test.state}: {a.test.message} <span className="muted">{new Date(a.test.checkedAt).toLocaleString()}</span></p>}
+    {a.test && <div role="status">
+      <p>{a.test.state}{a.test.httpStatus ? ` · HTTP ${a.test.httpStatus}` : ''}: {a.test.message}</p>
+      <p className="muted">Tested at: {new Date(a.test.checkedAt).toLocaleString()} (your browser’s local time). This is not a quota reset or subscription renewal date.</p>
+      {a.test.retryAt ? <p>Provider suggested retry time: {new Date(a.test.retryAt).toLocaleString()}. This is retry advice, not a guaranteed quota reset.</p>
+        : ['rate-limited', 'quota-exhausted'].includes(a.test.state) && <p className="muted">The provider did not supply a usable Retry-After time. Reset time is unknown.</p>}
+    </div>}
     {editing && <AccountForm account={a} busy={busy} run={run} onDone={() => setEditing(false)} />}
     {removing && <div className="attention">
       <p>Remove “{a.label}” and its stored credential from Buddi? This does not revoke it at the provider or remove it from backups.</p>

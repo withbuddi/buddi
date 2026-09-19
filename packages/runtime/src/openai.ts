@@ -47,6 +47,7 @@ import {
   defaultSleep,
   isRetryableStatus,
   nextDelayMs,
+  providerRetryAt,
   nextTransportDelayMs,
   RETRY_DELAYS_MS,
 } from './retry.js';
@@ -386,7 +387,7 @@ export function createOpenAiProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers) });
   }
 
   return {
