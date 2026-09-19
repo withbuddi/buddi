@@ -280,6 +280,7 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 .wb-face:disabled { cursor: default; }
 
 .wb-face-mark {
+  flex: 0 0 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -295,9 +296,9 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 4%);
 }
 
-.wb-face .wb-face-mark[data-accent='true'], .wb-face-mark[data-accent='true'] { background: color-mix(in srgb, var(--face-accent) 16%, var(--surface)); color: var(--face-accent); }
-.wb-face .wb-face-mark[data-kind='emoji'], .wb-face-mark[data-kind='emoji'] { font-family: var(--font-sans); font-size: 15px; background: var(--surface-sunken); }
-.wb-face .wb-face-mark[data-kind='image'], .wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
+.wb-face[data-tint] .wb-face-mark[data-accent='true'], .wb-face-mark[data-accent='true'] { background: color-mix(in srgb, var(--face-accent) 16%, var(--surface)); color: var(--face-accent); }
+.wb-face[data-tint] .wb-face-mark[data-kind='emoji']:not([data-accent]), .wb-face-mark[data-kind='emoji'] { font-family: var(--font-sans); font-size: 15px; background: var(--surface-sunken); }
+.wb-face[data-tint] .wb-face-mark[data-kind='image'], .wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
 .wb-face-mark[data-kind='image'] img { width: 100%; height: 100%; object-fit: cover; }
 .wb-face[data-tint='1'] .wb-face-mark { background: var(--face-1-bg); color: var(--face-1-ink); }
 .wb-face[data-tint='2'] .wb-face-mark { background: var(--face-2-bg); color: var(--face-2-ink); }
