@@ -17,10 +17,11 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtRelative } from '../format';
-import { Button, Card, Empty, ErrorBanner, Notice, Page, PageHeader, Pill, Stack, useAsync } from '../ui';
+import { Button, Card, Empty, ErrorBanner, Notice, PageFrame, Pill, Stack, useAsync } from '../ui';
 
-export function Offers({ timezone: _timezone }: { timezone: string }): JSX.Element {
+export function Offers({ embedded, agentId }: { timezone?: string; embedded?: boolean; agentId?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.offers(), [], 20_000);
+  const rows = (data?.offers ?? []).filter((o) => !agentId || o.agentId === agentId);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [taken, setTaken] = useState<string | null>(null);
@@ -44,22 +45,22 @@ export function Offers({ timezone: _timezone }: { timezone: string }): JSX.Eleme
   };
 
   return (
-    <Page>
-      <PageHeader
-        title="Offers"
-        lede="Things an agent already worked out that you might want done. Taking one asks that agent the sentence it wrote — it authorizes nothing, and anything that would leave this machine still comes back to you as an approval."
-      />
+    <PageFrame
+      embedded={embedded}
+      title="Offers"
+      lede="Things an agent already worked out that you might want done. Taking one asks that agent the sentence it wrote. It authorizes nothing, and anything that would leave this machine still comes back to you as an approval."
+    >
       <ErrorBanner message={error ?? failure} />
       {taken ? (
         <Notice tone="good" role="status">
           {taken}
         </Notice>
       ) : null}
-      {!data || data.offers.length === 0 ? (
+      {!data || rows.length === 0 ? (
         <Empty>Nothing is on offer.</Empty>
       ) : (
         <Stack>
-          {data.offers.map((offer) => (
+          {rows.map((offer) => (
             <Card
               key={offer.id}
               tone="accent"
@@ -81,6 +82,6 @@ export function Offers({ timezone: _timezone }: { timezone: string }): JSX.Eleme
           ))}
         </Stack>
       )}
-    </Page>
+    </PageFrame>
   );
 }

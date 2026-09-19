@@ -5,10 +5,11 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Button, Code, Details, Empty, ErrorBanner, Page, PageHeader, Panel, StatePill, Table, useAsync } from '../ui';
+import { Button, Code, Details, Empty, ErrorBanner, PageFrame, Panel, StatePill, Table, useAsync } from '../ui';
 
-export function Reminders({ timezone }: { timezone: string }): JSX.Element {
+export function Reminders({ timezone, embedded, agentId }: { timezone: string; embedded?: boolean; agentId?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.reminders(), [], 30_000);
+  const rows = (data?.reminders ?? []).filter((r) => !agentId || r.agentId === agentId);
   const [failure, setFailure] = useState<string | null>(null);
 
   const cancel = async (id: string): Promise<void> => {
@@ -22,14 +23,14 @@ export function Reminders({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <Page>
-      <PageHeader
-        title="Reminders"
-        lede="A reminder wakes an agent with a note and the instruction to check before it speaks — never a message queued for delivery."
-      />
+    <PageFrame
+      embedded={embedded}
+      title="Reminders"
+      lede="A reminder wakes an agent with a note and the instruction to check before it speaks, never a message queued for delivery."
+    >
       <ErrorBanner message={error ?? failure} />
       <Panel flush>
-        {!data || data.reminders.length === 0 ? (
+        {!data || rows.length === 0 ? (
           <Empty>No reminders.</Empty>
         ) : (
           <Table>
@@ -43,7 +44,7 @@ export function Reminders({ timezone }: { timezone: string }): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {data.reminders.map((reminder) => (
+              {rows.map((reminder) => (
                 <tr key={reminder.id}>
                   <td className="nowrap">
                     {fmtTime(reminder.dueAt, timezone)}
@@ -75,6 +76,6 @@ export function Reminders({ timezone }: { timezone: string }): JSX.Element {
           </Table>
         )}
       </Panel>
-    </Page>
+    </PageFrame>
   );
 }

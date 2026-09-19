@@ -1,223 +1,168 @@
 /**
- * The rail: where you are, and everything that is no longer the point.
+ * The rail: the five places, and where you are.
  *
- * Four marks, top to bottom: the workbench itself, a new conversation, the
- * monitoring pages, and the theme. Each is a drawn icon with a tooltip and —
- * for the two that are places rather than actions — a filled, accented state
- * when you are standing in it, so the rail answers "where am I" without being
- * read.
+ * Home, Chat, Agents, Activity, Settings — each a drawn icon with its word
+ * under it, so the rail is read rather than guessed. The current place is
+ * filled and accented and marked on the rail's own edge. Home carries the one
+ * badge in the rail: the count of things waiting on the owner, which is the
+ * reason to go there.
  *
- * The nine monitoring pages still exist and still work; they have simply
- * stopped being what the dashboard opens on. They live one click away behind a
- * menu, with the two counts that would make you want them — approvals waiting,
- * jobs failed — shown as a dot on the rail so "one click away" never means
- * "out of sight".
- *
- * Icons are drawn, not typed: no emoji stands in for a section here.
+ * Icons are drawn, not typed: no emoji stands in for a place here.
  */
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import type { ReactNode } from 'react';
-import { CHAT_ROUTE, SECTIONS } from '../routes';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE } from '../routes';
 import { nextTheme, themeLabel, type ThemeChoice } from '../theme';
 
 export function Rail({
-  badges,
+  attention,
+  place,
   onNavigate,
-  onChat,
   theme,
   onTheme,
-  onNewConversation,
 }: {
-  badges: { approvals: number; failed: number };
+  /** Things waiting on the owner: approvals plus failed jobs. */
+  attention: number;
+  place: string;
   onNavigate: (route: string) => void;
-  /** True when the workbench, rather than a monitoring page, is on screen. */
-  onChat?: boolean;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
-  onNewConversation: () => void;
 }): JSX.Element {
-  const attention = badges.approvals + badges.failed;
-
   return (
-    <nav className="wb-rail" aria-label="Sections">
-      <span className="wb-rail-mark" aria-hidden="true">
+    <nav className="rail" aria-label="Places">
+      <a className="rail-mark" href={HOME_ROUTE} onClick={(e) => { e.preventDefault(); onNavigate(HOME_ROUTE); }} aria-label="buddi home">
         b
-      </span>
+      </a>
 
-      <RailButton
-        label="Workbench"
-        hint="The conversation and its canvas"
-        active={onChat === true}
-        onClick={() => onNavigate(CHAT_ROUTE)}
-      >
-        <ChatIcon />
-      </RailButton>
+      {PLACES.map((entry) => (
+        <RailLink
+          key={entry.route}
+          label={entry.label}
+          href={entry.route}
+          active={place === entry.route}
+          badge={entry.route === HOME_ROUTE ? attention : 0}
+          onClick={() => onNavigate(entry.route)}
+        >
+          {ICONS[entry.route]}
+        </RailLink>
+      ))}
 
-      <RailButton label="New conversation" hint="Start again with a clear canvas" onClick={onNewConversation}>
-        <PlusIcon />
-      </RailButton>
+      <div className="rail-spacer" />
 
-      <RailButton label="Host browser" hint="Computer & browser controls, settings and permissions" onClick={() => onNavigate('#/browser')}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>
-      </RailButton>
-
-      <DropdownMenu.Root>
-        <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            <DropdownMenu.Trigger asChild>
-              <button
-                className="ui-icon-btn"
-                data-active={onChat === false ? 'true' : undefined}
-                aria-label="Monitoring sections"
-              >
-                <GaugeIcon />
-                {attention > 0 ? <span className="wb-rail-dot" aria-hidden="true" /> : null}
-              </button>
-            </DropdownMenu.Trigger>
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
-              <span className="ui-tip-title">Monitoring</span>
-              <span className="ui-tip-hint">
-                {attention > 0 ? `${attention} thing${attention === 1 ? '' : 's'} want you` : 'Nine pages of instrumentation'}
-              </span>
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content className="ui-menu" side="right" align="start" sideOffset={10}>
-            <DropdownMenu.Label className="ui-menu-label">Monitoring</DropdownMenu.Label>
-            {SECTIONS.map((section) => (
-              <DropdownMenu.Item
-                key={section.route}
-                className="ui-menu-item"
-                onSelect={() => onNavigate(section.route)}
-              >
-                <span>{section.label}</span>
-                {section.route === '#/approvals' && badges.approvals > 0 ? (
-                  <span className="ui-count" data-tone="critical">
-                    {badges.approvals}
-                  </span>
-                ) : null}
-                {section.route === '#/jobs' && badges.failed > 0 ? (
-                  <span className="ui-count" data-tone="critical">
-                    {badges.failed}
-                  </span>
-                ) : null}
-              </DropdownMenu.Item>
-            ))}
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-
-      <div className="wb-rail-spacer" />
-
-      <RailButton
-        label={`Theme: ${themeLabel(theme)}`}
-        hint="Click to change"
-        onClick={() => onTheme(nextTheme(theme))}
-      >
-        <ThemeIcon choice={theme} />
-      </RailButton>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <button className="rail-link" aria-label={`Theme: ${themeLabel(theme)}`} onClick={() => onTheme(nextTheme(theme))}>
+            <span className="rail-icon"><ThemeIcon choice={theme} /></span>
+            <span className="rail-label">Theme</span>
+          </button>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
+            <span className="ui-tip-title">{themeLabel(theme)}</span>
+            <span className="ui-tip-hint">Click to change</span>
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
     </nav>
   );
 }
 
-function RailButton({
+function RailLink({
   label,
-  hint,
+  href,
   active,
+  badge,
   onClick,
   children,
 }: {
   label: string;
-  hint?: string;
-  active?: boolean;
+  href: string;
+  active: boolean;
+  badge: number;
   onClick: () => void;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <Tooltip.Root>
-      <Tooltip.Trigger asChild>
-        <button
-          className="ui-icon-btn"
-          data-active={active ? 'true' : undefined}
-          aria-label={label}
-          aria-current={active ? 'page' : undefined}
-          onClick={onClick}
-        >
-          {children}
-        </button>
-      </Tooltip.Trigger>
-      <Tooltip.Portal>
-        <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
-          <span className="ui-tip-title">{label}</span>
-          {hint ? <span className="ui-tip-hint">{hint}</span> : null}
-        </Tooltip.Content>
-      </Tooltip.Portal>
-    </Tooltip.Root>
+    <a
+      className="rail-link"
+      href={href}
+      data-active={active ? 'true' : undefined}
+      aria-current={active ? 'page' : undefined}
+      aria-label={badge > 0 ? `${label}, ${badge} waiting` : label}
+      onClick={(e) => { e.preventDefault(); onClick(); }}
+    >
+      <span className="rail-icon">
+        {children}
+        {badge > 0 ? <span className="rail-badge" aria-hidden="true">{badge > 99 ? '99+' : badge}</span> : null}
+      </span>
+      <span className="rail-label">{label}</span>
+    </a>
   );
 }
 
 const stroke = {
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.5,
+  strokeWidth: 1.6,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 };
 
-/** A conversation: a speech bubble with something said in it. */
-function ChatIcon(): JSX.Element {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-      <path d="M15.5 9.8a4.7 4.7 0 0 1-4.7 4.7H6.9L3 16.4l.9-2.7A4.7 4.7 0 0 1 2.5 10V7.2A4.7 4.7 0 0 1 7.2 2.5h3.6a4.7 4.7 0 0 1 4.7 4.7Z" />
-      <path d="M6 7.5h6M6 10.4h3.6" />
+const ICONS: Record<string, JSX.Element> = {
+  [HOME_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M3.5 9.2 10 3.6l6.5 5.6" />
+      <path d="M5.2 8.4v7.4a1 1 0 0 0 1 1h2.6v-4.6h2.4v4.6h2.6a1 1 0 0 0 1-1V8.4" />
     </svg>
-  );
-}
-
-function PlusIcon(): JSX.Element {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-      <path d="M9 3.6v10.8M3.6 9h10.8" />
+  ),
+  [CHAT_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M17 10.6a4.9 4.9 0 0 1-4.9 4.9H7.8L3.6 18l.9-3A4.9 4.9 0 0 1 3 11V8.2A4.9 4.9 0 0 1 7.9 3.3h4.2A4.9 4.9 0 0 1 17 8.2Z" />
+      <path d="M7 8.3h6M7 11.3h3.6" />
     </svg>
-  );
-}
-
-/** Instrumentation: a dial with a needle. */
-function GaugeIcon(): JSX.Element {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-      <path d="M2.6 12.6a7 7 0 1 1 12.8 0" />
-      <path d="M9 12.2 12 7.4" />
-      <circle cx="9" cy="12.6" r="1.15" fill="currentColor" stroke="none" />
+  ),
+  [AGENTS_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <circle cx="7.5" cy="7" r="2.8" />
+      <path d="M2.8 16.2a4.7 4.7 0 0 1 9.4 0" />
+      <circle cx="14" cy="7.8" r="2.2" />
+      <path d="M13.2 12.5a3.9 3.9 0 0 1 4.3 3.7" />
     </svg>
-  );
-}
+  ),
+  [ACTIVITY_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M2.8 10.5h3.4l2-5.2 3.4 9.8 2.2-4.6h3.4" />
+    </svg>
+  ),
+  [SETTINGS_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <circle cx="10" cy="10" r="2.6" />
+      <path d="M10 2.8v2.1M10 15.1v2.1M2.8 10h2.1M15.1 10h2.1M4.9 4.9l1.5 1.5M13.6 13.6l1.5 1.5M15.1 4.9l-1.5 1.5M6.4 13.6l-1.5 1.5" />
+    </svg>
+  ),
+};
 
-/** Sun, moon, or a screen — the three states, each drawn as itself. */
+/** Sun, moon, or a screen: the three states, each drawn as itself. */
 function ThemeIcon({ choice }: { choice: ThemeChoice }): JSX.Element {
   if (choice === 'light') {
     return (
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-        <circle cx="9" cy="9" r="3.4" />
-        <path d="M9 1.3v1.7M9 15v1.7M1.3 9H3M15 9h1.7M3.5 3.5l1.2 1.2M13.3 13.3l1.2 1.2M14.5 3.5l-1.2 1.2M4.7 13.3l-1.2 1.2" />
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+        <circle cx="10" cy="10" r="3.6" />
+        <path d="M10 2.2v1.8M10 16v1.8M2.2 10H4M16 10h1.8M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M15.5 4.5l-1.3 1.3M5.8 14.2l-1.3 1.3" />
       </svg>
     );
   }
   if (choice === 'dark') {
     return (
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-        <path d="M14.8 10.8A6.3 6.3 0 0 1 7.2 3.2a6.3 6.3 0 1 0 7.6 7.6Z" />
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+        <path d="M16.4 12A6.9 6.9 0 0 1 8 3.6a6.9 6.9 0 1 0 8.4 8.4Z" />
       </svg>
     );
   }
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" {...stroke}>
-      <rect x="2.4" y="3.4" width="13.2" height="9" rx="1.4" />
-      <path d="M6.6 15.2h4.8" />
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <rect x="2.8" y="4" width="14.4" height="9.6" rx="1.6" />
+      <path d="M7.4 16.8h5.2" />
     </svg>
   );
 }

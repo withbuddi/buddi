@@ -6,25 +6,11 @@
 import { useState } from 'react';
 import { api, type JobRow } from '../api';
 import { fmtRelative, fmtTime, json, short, truncate } from '../format';
-import {
-  Button,
-  Code,
-  Empty,
-  ErrorBanner,
-  Page,
-  PageHeader,
-  Panel,
-  Section,
-  Sheet,
-  StatePill,
-  Table,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Code, Empty, ErrorBanner, PageFrame, Panel, Section, Sheet, StatePill, Table, Toolbar, useAsync } from '../ui';
 
 const STATES = ['pending', 'leased', 'suspended', 'failed', 'succeeded', 'cancelled'] as const;
 
-export function Jobs({ timezone }: { timezone: string }): JSX.Element {
+export function Jobs({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const [state, setState] = useState('');
   const [selected, setSelected] = useState<JobRow | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -46,16 +32,16 @@ export function Jobs({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <Page>
-      <PageHeader
-        title="Jobs"
-        lede={`${data?.paused ? 'Paused — nothing is being claimed. ' : ''}Bounded retries with backoff; past the budget a job waits for you.`}
-        actions={
-          <Button size="sm" variant={data?.paused ? 'accent' : undefined} onClick={() => act(api.setPaused(!(data?.paused ?? false)))}>
-            {data?.paused ? 'Resume the queue' : 'Pause the queue'}
-          </Button>
-        }
-      />
+    <PageFrame
+      embedded={embedded}
+      title="Jobs"
+      lede={`${data?.paused ? 'Paused: nothing is being claimed. ' : ''}Bounded retries with backoff; past the budget a job waits for you.`}
+      actions={
+        <Button size="sm" variant={data?.paused ? 'accent' : undefined} onClick={() => act(api.setPaused(!(data?.paused ?? false)))}>
+          {data?.paused ? 'Resume the queue' : 'Pause the queue'}
+        </Button>
+      }
+    >
 
       <Toolbar>
         <select aria-label="Job state" value={state} onChange={(e) => setState(e.target.value)}>
@@ -143,6 +129,6 @@ export function Jobs({ timezone }: { timezone: string }): JSX.Element {
           ) : null}
         </Sheet>
       ) : null}
-    </Page>
+    </PageFrame>
   );
 }

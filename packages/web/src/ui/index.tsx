@@ -9,6 +9,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
 
 export { useAsync } from './async';
+export { Avatar } from '../views/parts/Avatar';
 
 export type Tone = 'good' | 'warning' | 'critical' | 'accent' | 'muted';
 
@@ -208,6 +209,39 @@ export function PageHeader({
       </div>
       {lede ? <p className="ui-page-lede">{lede}</p> : null}
     </header>
+  );
+}
+
+/**
+ * A page, or the body of one. `embedded` drops the head and the page gap so
+ * the same view can sit inside a tab on another page.
+ */
+export function PageFrame({
+  embedded,
+  title,
+  lede,
+  actions,
+  children,
+}: {
+  embedded?: boolean;
+  title: ReactNode;
+  lede?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  if (embedded) {
+    return (
+      <div className="ui-stack" data-gap="lg">
+        {actions ? <div className="ui-toolbar">{actions}</div> : null}
+        {children}
+      </div>
+    );
+  }
+  return (
+    <Page>
+      <PageHeader title={title} lede={lede} actions={actions} />
+      {children}
+    </Page>
   );
 }
 
@@ -426,4 +460,72 @@ export function Sheet({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * tabs and lists
+ * ------------------------------------------------------------------ */
+
+export function Tabs({ children }: { children: ReactNode }): JSX.Element {
+  return <nav className="ui-tabs">{children}</nav>;
+}
+
+export function Tab({
+  href,
+  active,
+  count,
+  onClick,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  count?: number;
+  onClick?: (event: { preventDefault: () => void }) => void;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <a className="ui-tab" href={href} aria-current={active ? 'page' : undefined} onClick={onClick}>
+      {children}
+      {count ? <span className="ui-count">{count}</span> : null}
+    </a>
+  );
+}
+
+export function List({ children }: { children: ReactNode }): JSX.Element {
+  return <div className="ui-list">{children}</div>;
+}
+
+export function ListRow({
+  href,
+  onClick,
+  lead,
+  title,
+  sub,
+  side,
+}: {
+  href?: string;
+  onClick?: () => void;
+  lead?: ReactNode;
+  title: ReactNode;
+  sub?: ReactNode;
+  side?: ReactNode;
+}): JSX.Element {
+  const body = (
+    <>
+      {lead}
+      <span className="ui-list-main">
+        <span className="ui-list-title">{title}</span>
+        {sub ? <span className="ui-list-sub">{sub}</span> : null}
+      </span>
+      {side ? <span className="ui-list-side">{side}</span> : null}
+    </>
+  );
+  if (href) {
+    return (
+      <a className="ui-list-row" href={href} onClick={onClick ? (e) => { e.preventDefault(); onClick(); } : undefined}>
+        {body}
+      </a>
+    );
+  }
+  return <div className="ui-list-row">{body}</div>;
 }

@@ -61,7 +61,7 @@ it('renders device sign-in inside the account card with cancellation and no paid
 });
 it('renders named accounts without modifying or testing them on load', async () => {
   render(<Providers />);
-  expect(await screen.findByText('Personal OpenAI')).toBeInTheDocument();
+  expect((await screen.findAllByText('Personal OpenAI'))[0]).toBeInTheDocument();
   expect(api.testProviderAccount).not.toHaveBeenCalled();
   expect(api.saveProviderAccount).not.toHaveBeenCalled();
 });
@@ -102,7 +102,7 @@ it('shows refresh progress and completion without testing or changing credential
   expect(await screen.findByRole('button', { name: 'Refreshing…' })).toBeDisabled();
   expect(screen.getByRole('status')).toHaveTextContent('Refreshing account status');
   finish({ ...view, accounts: [{ ...view.accounts[0]!, configured: false }] });
-  expect(await screen.findByText('Needs credential')).toBeInTheDocument();
+  expect((await screen.findAllByText('Needs credential'))[0]).toBeInTheDocument();
   expect(screen.getByRole('status')).toHaveTextContent('Account status refreshed');
   expect(api.providerAccounts).toHaveBeenCalledTimes(2);
   expect(api.testProviderAccount).not.toHaveBeenCalled();

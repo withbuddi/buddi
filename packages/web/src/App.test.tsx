@@ -1,21 +1,35 @@
 /**
  * The shell, and the page it opens on.
  *
- * Chat is the landing route now: with no server behind it the page still
- * renders a conversation column, a composer and a canvas, rather than an error
- * screen. The monitoring pages moved behind the rail, so the assertion about
- * them is that they are *reachable*, not that they are on screen.
+ * Home is the landing route: with no server behind it the page still renders
+ * a greeting and the rail, rather than an error screen. Chat keeps its
+ * conversation column, composer and canvas at `#/chat`. The old monitoring
+ * hashes redirect to the place that now holds their content.
  */
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App, NARROW_QUERY, SECTIONS, useMediaQuery } from './App';
+import '@testing-library/jest-dom/vitest';
+import { App, NARROW_QUERY, PLACES, useMediaQuery } from './App';
 import { fmtMoney, truncate } from './format';
-import { Overview } from './views/Overview';
+import { api } from './api';
+import { legacyRedirect, placeOf } from './routes';
+import { Home, greeting, needsSentence } from './views/Home';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); window.history.replaceState(null, '', '#/'); });
 
 describe('the shell', () => {
-  it('opens on the workbench, and survives a server that is not there', async () => {
+  it('opens on home, and survives a server that is not there', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
+    await act(async () => {
+      render(<App />);
+    });
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/Good|Still up/);
+    expect(screen.getByLabelText('Places')).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the workbench at #/chat', async () => {
+    window.history.replaceState(null, '', '#/chat');
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
     // Awaited so the first (failing) loads settle inside the act boundary.
     await act(async () => {
@@ -30,19 +44,21 @@ describe('the shell', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps every monitoring section reachable from the rail', async () => {
+  it('has five places on the rail, and sends every old hash to one of them', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
     await act(async () => {
       render(<App />);
     });
-    // Ten pages now — Offers joined them — and every one of them is still
-    // behind the menu rather than a sidebar. The count is asserted so that
-    // adding a page is a deliberate act rather than a drift.
-    expect(SECTIONS).toHaveLength(12);
-    expect(SECTIONS.map((s) => s.route)).toContain('#/browser');
-    expect(SECTIONS.map((s) => s.route)).toContain('#/offers');
-    expect(screen.getByLabelText('Monitoring sections')).toBeDefined();
+    expect(PLACES).toHaveLength(5);
+    for (const place of PLACES) expect(screen.getByRole('link', { name: new RegExp(`^${place.label}`) })).toBeDefined();
     expect(screen.getByLabelText(/theme/i)).toBeDefined();
+    for (const old of ['#/overview', '#/events', '#/jobs', '#/conversations', '#/missions', '#/approvals', '#/offers', '#/reminders', '#/providers', '#/browser', '#/sentinels']) {
+      const target = legacyRedirect(old);
+      expect(target, old).not.toBeNull();
+      expect(PLACES.map((p) => p.route)).toContain(placeOf(target!));
+    }
+    expect(legacyRedirect('#/conversations/abc')).toBe('#/activity/conversations/abc');
+    expect(legacyRedirect('#/chat/x')).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -53,46 +69,48 @@ describe('the shell', () => {
   });
 });
 
-describe('overview', () => {
-  const data = {
-    now: '2026-09-14T09:00:00Z',
-    timezone: 'UTC',
-    paused: false,
-    finance: {
-      available: true,
-      currency: 'USD',
-      cashTotal: 4210,
-      netWorth: 19_050,
-      totalDebt: 3300,
-      upcoming: [{ date: '2026-09-20', balance: 3910, events: [{ name: 'Rent', amount: -300 }] }],
-      minBalance: 120,
-      minBalanceDate: '2026-09-26',
-      breachesFloor: true,
-    },
-    approvals: { pending: 2, oldestPendingAt: '2026-09-14T07:00:00Z' },
-    jobs: { pending: 1, leased: 0, suspended: 0, failed: 3, succeeded: 9, cancelled: 0 },
-    missions: { total: 2, enabled: 1, nextRun: '2026-09-19T13:00:00Z' },
-    reminders: { pending: 0, nextDueAt: null },
-    sentinels: { lastRunAt: '2026-09-14T08:59:00Z', openUrgent: 1, openInfo: 0, errors: [] },
-    mail: [{ sourceId: 'demo.inbox-poll', lastRunAt: '2026-09-14T08:58:00Z', lastError: null }],
-  };
+describe('home', () => {
+  it('says what needs a human, in one sentence', () => {
+    expect(needsSentence(0, 0, 0, 0, false)).toBe('Nothing needs you. Your agents are on it.');
+    expect(needsSentence(2, 2, 0, 0, false)).toBe('2 approvals waiting.');
+    expect(needsSentence(3, 1, 3, 1, false)).toBe('1 approval waiting, 3 failed jobs and 1 urgent finding.');
+    expect(needsSentence(1, 0, 0, 0, true)).toBe('The installation is paused.');
+  });
 
-  it('puts what needs a human above the numbers', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify(data), { status: 200 })),
-    );
+  it('greets by the hour in the owner\'s time zone', () => {
+    expect(greeting('2026-09-14T09:00:00Z', 'UTC')).toBe('Good morning.');
+    expect(greeting('2026-09-14T15:00:00Z', 'UTC')).toBe('Good afternoon.');
+    expect(greeting('2026-09-14T21:00:00Z', 'UTC')).toBe('Good evening.');
+    expect(greeting('2026-09-14T03:00:00Z', 'UTC')).toBe('Still up?');
+  });
+
+  it('puts what needs a human above the team', async () => {
+    vi.spyOn(api, 'overview').mockResolvedValue({
+      now: '2026-09-14T09:00:00Z', timezone: 'UTC', paused: false,
+      finance: { available: true, currency: 'USD', cashTotal: 4210, netWorth: 19_050, totalDebt: 3300, upcoming: [{ date: '2026-09-20', balance: 3910, events: [{ name: 'Rent', amount: -300 }] }], minBalance: 120, minBalanceDate: '2026-09-26', breachesFloor: true },
+      approvals: { pending: 1, oldestPendingAt: '2026-09-14T07:00:00Z' },
+      jobs: { pending: 1, leased: 0, suspended: 0, failed: 3, succeeded: 9, cancelled: 0 },
+      missions: { total: 2, enabled: 1, nextRun: '2026-09-19T13:00:00Z' },
+      reminders: { pending: 0, nextDueAt: null },
+      sentinels: { lastRunAt: '2026-09-14T08:59:00Z', openUrgent: 1, openInfo: 0, errors: [] },
+      mail: [],
+    } as never);
+    vi.spyOn(api, 'approvals').mockResolvedValue({ pending: [{ id: 'a1', tool: 'email.send', toolVersion: '1', agentId: 'ledger', preview: 'Send the invoice', expiresAt: '2026-09-14T10:00:00Z', policyVersion: 1, argsHash: 'abcdef123456', envelope: {}, canonicalArgs: {} }], recent: [] } as never);
+    vi.spyOn(api, 'missions').mockResolvedValue({ missions: [] });
+    vi.spyOn(api, 'reminders').mockResolvedValue({ reminders: [] });
+    vi.spyOn(api, 'conversations').mockResolvedValue({ conversations: [] });
+    vi.spyOn(api, 'offers').mockResolvedValue({ offers: [] });
+    const agents = [{ id: 'ledger', handle: 'ledger', name: 'Ledger', description: 'Keeps the books', available: true, roles: [], provider: 'x', model: 'y' }];
     await act(async () => {
-      render(<Overview timezone="UTC" onNavigate={() => {}} />);
+      render(<Home timezone="UTC" navigate={() => {}} agents={agents} attention={new Map()} />);
     });
-
-    await waitFor(() => expect(screen.getByText('Needs attention')).toBeDefined());
-    expect(screen.getByText(/2 approvals waiting for you/)).toBeDefined();
-    expect(screen.getByText(/3 failed jobs/)).toBeDefined();
-    expect(screen.getByText(/1 open urgent finding/)).toBeDefined();
+    await waitFor(() => expect(screen.getByText('Needs you')).toBeDefined());
+    expect(screen.getByText(/1 approval waiting, 3 failed jobs and 1 urgent finding/)).toBeDefined();
+    expect(screen.getByText('Send the invoice')).toBeDefined();
     expect(screen.getByText('$4,210')).toBeDefined();
     expect(screen.getByText('Rent')).toBeDefined();
-    vi.unstubAllGlobals();
+    expect(screen.getByText('Ledger')).toBeDefined();
+    vi.restoreAllMocks();
   });
 });
 

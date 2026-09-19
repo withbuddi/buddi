@@ -12,7 +12,7 @@ function transcript(id: string): ChatConversation {
   return { conversationId: id, agentId: id.startsWith('scout') ? 'scout' : 'keeper', messages: [{ id: `message-${id}`, role: 'assistant', at: '', blocks: [{ type: 'text', text: `Transcript ${id}` }] }] };
 }
 beforeEach(() => {
-  window.history.replaceState(null, '', '#/'); sessionStorage.clear();
+  window.history.replaceState(null, '', '#/chat'); sessionStorage.clear();
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
   vi.spyOn(api, 'session').mockResolvedValue({ timezone: 'UTC' } as never);
   vi.spyOn(api, 'overview').mockResolvedValue({ approvals: { pending: 0 }, jobs: { failed: 0 } } as never);

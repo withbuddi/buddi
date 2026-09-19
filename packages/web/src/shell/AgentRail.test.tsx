@@ -227,6 +227,7 @@ describe('narrow widths', () => {
     stubApi();
     stubMatchMedia(true);
     await act(async () => {
+      window.history.replaceState(null, '', '#/chat');
       render(<App />);
     });
     await waitFor(() => expect(screen.getByTestId('agent-rail')).toBeDefined());
@@ -241,6 +242,7 @@ describe('narrow widths', () => {
     stubApi();
     stubMatchMedia(false);
     await act(async () => {
+      window.history.replaceState(null, '', '#/chat');
       render(<App />);
     });
     await waitFor(() => expect(screen.getByTestId('agent-rail')).toBeDefined());
@@ -253,6 +255,7 @@ describe('a badge that arrives while you are looking elsewhere', () => {
     const push = stubApi();
     stubMatchMedia(false);
     await act(async () => {
+      window.history.replaceState(null, '', '#/chat');
       render(<App />);
     });
     await waitFor(() => expect(screen.getByTestId('agent-face-postman')).toBeDefined());

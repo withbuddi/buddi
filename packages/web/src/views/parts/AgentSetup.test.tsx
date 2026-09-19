@@ -1,9 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, type AgentsView } from '../api';
-import { Agents } from './Agents';
-vi.mock('../api', () => ({ api: { agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn() } }));
+import { api, type AgentsView } from '../../api';
+import { AgentSetup } from './AgentSetup';
+vi.mock('../../api', () => ({ api: { agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
@@ -15,7 +15,7 @@ const view = { agents: [{ id: 'demo', handle: 'demo', name: 'Demo', description:
 } as unknown as AgentsView;
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.agents).mockResolvedValue(view); vi.mocked(api.assignProviderAccount).mockResolvedValue({ changed: ['account'], note: 'Saved' }); });
 it('lets the owner explicitly select a second account from the same provider', async () => {
-  render(<Agents />);
+  render(<AgentSetup agentId="demo" />);
   const select = await screen.findByLabelText('Account');
   expect(select).toHaveValue('account-0');
   fireEvent.change(select, { target: { value: 'account-1' } });

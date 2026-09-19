@@ -9,29 +9,13 @@
 import { useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
-import {
-  Button,
-  Card,
-  Code,
-  Empty,
-  ErrorBanner,
-  Field,
-  Page,
-  PageHeader,
-  Panel,
-  Pill,
-  Section,
-  Stack,
-  StatePill,
-  Table,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Card, Code, Empty, ErrorBanner, Field, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync } from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
-export function Missions({ timezone }: { timezone: string }): JSX.Element {
+export function Missions({ timezone, embedded, agentId }: { timezone: string; embedded?: boolean; agentId?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.missions(), [], 30_000);
+  const rows = (data?.missions ?? []).filter((m) => !agentId || m.agentId === agentId);
   const [failure, setFailure] = useState<string | null>(null);
 
   const run = async (work: Promise<unknown>): Promise<void> => {
@@ -45,19 +29,18 @@ export function Missions({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <Page>
-      <PageHeader title="Missions" lede="Standing schedules. A disabled mission materializes nothing." />
+    <PageFrame embedded={embedded} title="Missions" lede="Standing schedules. A disabled mission materializes nothing.">
       <ErrorBanner message={error ?? failure} />
-      {!data || data.missions.length === 0 ? (
+      {!data || rows.length === 0 ? (
         <Empty>No missions are registered (`buddi missions add-defaults`).</Empty>
       ) : (
         <Stack>
-          {data.missions.map((mission) => (
+          {rows.map((mission) => (
             <Mission key={mission.id} mission={mission} timezone={timezone} onRun={run} />
           ))}
         </Stack>
       )}
-    </Page>
+    </PageFrame>
   );
 }
 
