@@ -327,9 +327,9 @@ export function Card({
   );
 }
 
-export function Stack({ gap, children }: { gap?: 'sm' | 'lg'; children: ReactNode }): JSX.Element {
+export function Stack({ gap, divided, children }: { gap?: 'sm' | 'lg'; divided?: boolean; children: ReactNode }): JSX.Element {
   return (
-    <div className="ui-stack" data-gap={gap}>
+    <div className="ui-stack" data-gap={gap} data-divided={divided ? 'true' : undefined}>
       {children}
     </div>
   );
