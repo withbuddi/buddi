@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', () => ({ api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
@@ -15,6 +15,41 @@ it('renders named accounts without modifying or testing them on load', async () 
   expect(await screen.findByText('Personal OpenAI')).toBeInTheDocument();
   expect(api.testProviderAccount).not.toHaveBeenCalled();
   expect(api.saveProviderAccount).not.toHaveBeenCalled();
+});
+it('toggles the add form, focuses its name, and explains the disabled save button', async () => {
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  expect(screen.getByLabelText('Account name')).toHaveFocus();
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
+  expect(screen.getByText(/The example name is a placeholder/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel adding account' }));
+  expect(screen.queryByLabelText('Account name')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Add account' })).toHaveAttribute('aria-expanded', 'false');
+});
+it('shows refresh progress and completion without testing or changing credentials', async () => {
+  render(<Providers />);
+  const button = await screen.findByRole('button', { name: 'Refresh status' });
+  let finish!: (value: ProviderAccountsView) => void;
+  vi.mocked(api.providerAccounts).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  fireEvent.click(button);
+  expect(await screen.findByRole('button', { name: 'Refreshing…' })).toBeDisabled();
+  expect(screen.getByRole('status')).toHaveTextContent('Refreshing account status');
+  finish({ ...view, accounts: [{ ...view.accounts[0]!, configured: false }] });
+  expect(await screen.findByText('Needs credential')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Account status refreshed');
+  expect(api.providerAccounts).toHaveBeenCalledTimes(2);
+  expect(api.testProviderAccount).not.toHaveBeenCalled();
+  expect(api.saveProviderAccount).not.toHaveBeenCalled();
+});
+it('reports refresh failures and allows a successful retry', async () => {
+  render(<Providers />);
+  const button = await screen.findByRole('button', { name: 'Refresh status' });
+  vi.mocked(api.providerAccounts).mockRejectedValueOnce(new Error('Connection unavailable'));
+  fireEvent.click(button);
+  expect(await screen.findByText(/Could not refresh account status/)).toBeInTheDocument();
+  expect(screen.getByText(/Error: Connection unavailable/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+  expect(await screen.findByText(/Account status refreshed/)).toBeInTheDocument();
 });
 it('saves a new independent credential from a password field and clears the field', async () => {
   render(<Providers />);
