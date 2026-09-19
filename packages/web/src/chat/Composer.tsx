@@ -228,9 +228,10 @@ export function Composer({
           </button>
 
           {/* The hint waits its turn: it appears only once the placeholder is
-              gone, so the two never occupy the same line. */}
-          <span className="wb-hint" data-shown={text !== '' || running}>
-            {running ? `${agentName} is working` : 'Enter sends · Shift+Enter for a new line'}
+              gone, so the two never occupy the same line. While a run is live
+              the line becomes the status, with a pulse that says "now". */}
+          <span className="wb-hint" data-shown={text !== '' || running} data-live={running ? 'true' : undefined}>
+            {running ? <><span className="wb-pulse" aria-hidden="true" />{agentName} is working…</> : 'Enter sends, Shift+Enter for a new line'}
           </span>
 
           {running ? (
@@ -239,13 +240,12 @@ export function Composer({
             </button>
           ) : (
             <button
-              className="ui-btn wb-send"
-              data-variant="accent"
+              className="wb-send"
               aria-label="Send"
+              title="Send"
               onClick={send}
               disabled={!canSend}
             >
-              Send
               <SendIcon />
             </button>
           )}
@@ -271,10 +271,11 @@ function ClipIcon(): JSX.Element {
   );
 }
 
+/** Up, not right: the message leaves the box and goes to the thread above. */
 function SendIcon(): JSX.Element {
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" {...stroke}>
-      <path d="M2 7h9M7.4 3.4 11 7l-3.6 3.6" />
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" {...stroke} strokeWidth={1.8}>
+      <path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2" />
     </svg>
   );
 }

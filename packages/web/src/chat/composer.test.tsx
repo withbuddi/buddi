@@ -57,7 +57,7 @@ describe('the composer', () => {
     // …and the message carries the id the upload returned.
     fireEvent.change(screen.getByLabelText(/Message Ada/), { target: { value: 'What is this?' } });
     await act(async () => {
-      screen.getByText('Send').click();
+      screen.getByRole('button', { name: 'Send' }).click();
     });
     expect(onSend).toHaveBeenCalledWith('What is this?', ['art-7']);
   });
@@ -77,7 +77,7 @@ describe('the composer', () => {
       dropFile(new File(['x'], 'slow.csv', { type: 'text/csv' }));
     });
 
-    expect(screen.getByText('Send').hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByText(/uploading/)).toBeDefined();
 
     await act(async () => {
@@ -88,7 +88,7 @@ describe('the composer', () => {
         ),
       );
     });
-    await waitFor(() => expect(screen.getByText('Send').hasAttribute('disabled')).toBe(false));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(false));
   });
 
   it('says a failed upload failed, instead of sending without it', async () => {

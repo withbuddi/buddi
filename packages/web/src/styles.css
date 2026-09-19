@@ -613,7 +613,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-question-note { margin: 0; color: var(--text-muted); font-size: var(--text-xs); }
 
 .wb-composer {
-  padding: 10px 14px 14px;
+  padding: 8px 14px 14px;
   background: var(--surface);
 }
 .wb-composer[data-dropping='true'] .wb-composer-box {
@@ -621,17 +621,19 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   background: var(--accent-soft);
 }
 
+/* The box: one rounded field with the controls inside it. It rises a little
+   when it has focus, the way the thing you are about to speak into should. */
 .wb-composer-box {
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: 18px;
   background: var(--surface-raised);
   box-shadow: var(--shadow-panel);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease, box-shadow 160ms ease;
   overflow: hidden;
 }
 .wb-composer-box[data-focused='true'] {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 6px 20px rgb(16 15 14 / 8%);
 }
 .wb-composer-box[data-disabled='true'] { opacity: 0.6; }
 
@@ -639,29 +641,33 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   display: block;
   width: 100%;
   resize: none;
-  min-height: 44px;
-  max-height: 200px;
+  min-height: 54px;
+  max-height: 220px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  padding: 12px 14px 4px;
+  padding: 14px 16px 6px;
   line-height: 1.55;
-  font-size: var(--text-md);
+  font-size: var(--text-base);
 }
 .wb-composer-box textarea:focus { outline: none; }
+.wb-composer-box textarea::placeholder { color: var(--text-faint); }
 
 .wb-composer-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 8px;
+  padding: 2px 8px 8px 10px;
 }
 
 /* The hint waits for the placeholder to leave before taking the line. */
 .wb-hint {
   flex: 1 1 auto;
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text-faint);
   font-size: var(--text-xs);
   white-space: nowrap;
@@ -671,8 +677,25 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   transition: opacity 140ms ease;
 }
 .wb-hint[data-shown='true'] { opacity: 1; }
+.wb-hint[data-live='true'] { color: var(--text-muted); font-size: var(--text-sm); }
 
-.wb-send { flex: 0 0 auto; }
+/* Send: a round accent button with an arrow, the one loud thing in the box. */
+.wb-send {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, filter 120ms ease;
+}
+.wb-send:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.wb-send:disabled { opacity: 0.35; cursor: default; }
 
 .wb-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
 .wb-chip {
