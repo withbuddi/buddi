@@ -30,6 +30,7 @@ export function Envelope({
 }): JSX.Element {
   const [action, setAction] = useState<ApprovalRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
 
   useEffect(() => {
@@ -68,6 +69,7 @@ export function Envelope({
   const pending = action.state === 'pending';
   const reusable = action.permissionScopes?.includes('always');
   const fields = envelopeFields(action);
+  const longPreview = (action.preview ?? '').split('\n').length > 12 || (action.preview ?? '').length > 900;
 
   return (
     <div>
@@ -90,23 +92,10 @@ export function Envelope({
         </div>
       </div>
 
-      <h4 className="ui-stat-k wb-label">Preview</h4>
-      <div className="wb-doc wb-block">{action.preview || '(this tool wrote no preview)'}</div>
-
-      <h4 className="ui-stat-k wb-label">The envelope, field by field</h4>
-      <dl className="ui-kv wb-block">
-        {fields.map((field) => (
-          <div key={field.label} className="contents">
-            <dt>{field.label}</dt>
-            <dd className={field.mono ? 'mono' : undefined}>{field.value}</dd>
-          </div>
-        ))}
-      </dl>
-
       <ErrorBanner message={error} />
 
       {pending ? (
-        <div className="wb-row-wrap">
+        <div className="wb-row-wrap wb-block">
           <button
             className="ui-btn"
             data-variant="good"
@@ -135,6 +124,26 @@ export function Envelope({
           {action.decidedVia ? `via ${action.decidedVia}` : ''}
         </p>
       )}
+
+      <h4 className="ui-stat-k wb-label">Preview</h4>
+      <div className="wb-doc wb-block" data-clamp={longPreview && !showAll ? 'true' : undefined}>
+        {action.preview || '(this tool wrote no preview)'}
+        {longPreview && !showAll ? (
+          <button type="button" className="wb-doc-more" onClick={() => setShowAll(true)}>Show the whole preview</button>
+        ) : null}
+      </div>
+
+      <details className="ui-details wb-block">
+        <summary>The envelope, field by field</summary>
+        <dl className="ui-kv">
+          {fields.map((field) => (
+            <div key={field.label} className="contents">
+              <dt>{field.label}</dt>
+              <dd className={field.mono ? 'mono' : undefined}>{field.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
     </div>
   );
 }

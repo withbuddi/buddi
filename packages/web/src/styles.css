@@ -966,6 +966,24 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   padding: 12px 14px;
   max-height: 60vh;
   overflow: auto;
+  position: relative;
+}
+/* A long preview shows its first screen and says there is more. */
+.wb-doc[data-clamp='true'] { max-height: 260px; overflow: hidden; padding-bottom: 44px; }
+.wb-doc-more {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 26px 14px 10px;
+  border: 0;
+  background: linear-gradient(to bottom, transparent, var(--surface-sunken) 55%);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
 }
 
 .wb-tree { font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; }
