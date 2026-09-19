@@ -74,8 +74,9 @@ describe('the page makes no external request', () => {
 
   it('keeps the index.html free of any off-origin reference', () => {
     const html = readFileSync(path.join(PACKAGE, 'index.html'), 'utf8');
-    // The same assertion the gateway makes against the served page.
-    expect(html).not.toMatch(/https?:\/\/(?!127\.0\.0\.1|localhost)/);
+    // The same assertion the gateway makes against the served page. The inline
+    // favicon carries the SVG namespace, which is a name and never fetched.
+    expect(externalUrls(html)).toEqual([]);
   });
 
   it.runIf(existsSync(DIST))('has no external URL anywhere in the built bundle', () => {
