@@ -460,6 +460,48 @@ export interface AgentProfile {
   note: string;
 }
 
+/** The owner, as every agent is told about them. All of it may be empty. */
+export interface OwnerView {
+  preferredName: string | null;
+  timezone: string | null;
+  language: string | null;
+  about: string | null;
+  displayName: string | null;
+  /** The zone this host runs in, offered as the default. */
+  detectedTimezone: string;
+  /** Every zone the host knows, for the picker. */
+  zones: string[];
+}
+export interface OwnerPatch {
+  preferredName?: string | null;
+  timezone?: string | null;
+  language?: string | null;
+  about?: string | null;
+}
+
+export interface MemoryPreference {
+  key: string;
+  value: string;
+  /** `shared` or an agent id. */
+  scope: string;
+  revision: number;
+  updatedAt: string | null;
+}
+export interface MemoryNote {
+  id: string;
+  content: string;
+  kind: string;
+  scope: string;
+  createdAt: string | null;
+  expiresAt: string | null;
+  createdByAgent: string | null;
+  sourceConversationId: string | null;
+}
+export interface MemoryView {
+  preferences: MemoryPreference[];
+  notes: MemoryNote[];
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -570,6 +612,15 @@ export const api = {
    * What one agent is: its grant with every tool's tier, its engine, its
    * skills, its delegates. A read; there is no counterpart that writes.
    */
+  /* ---- the owner ---- */
+  owner: () => get<OwnerView>('/owner'),
+  setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
+  /* ---- memory ---- */
+  memory: () => get<MemoryView>('/memory'),
+  setPreference: (body: { key: string; value: string; scope: string }) => post<MemoryPreference>('/memory/preferences', body),
+  forgetPreference: (body: { key: string; scope: string }) => post<null>('/memory/preferences/forget', body),
+  updateNote: (id: string, change: { content?: string; scope?: string; kind?: string }) => post<MemoryNote>(`/memory/notes/${encodeURIComponent(id)}`, change),
+  forgetNote: (id: string) => post<null>(`/memory/notes/${encodeURIComponent(id)}/forget`),
   setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[] }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
 

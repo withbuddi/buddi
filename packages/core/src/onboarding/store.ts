@@ -235,6 +235,7 @@ function toProfile(row: any): OwnerProfile {
     preferredName: text(row.preferred_name),
     timezone: text(row.timezone),
     language: text(row.language),
+    about: text(row.about),
     displayName: text(row.display_name),
   };
 }
@@ -242,14 +243,14 @@ function toProfile(row: any): OwnerProfile {
 /** What the agents know about how to address the owner. All of it may be null. */
 export async function getOwnerProfile(pool: Queryable): Promise<OwnerProfile> {
   const { rows } = await pool.query(
-    `select preferred_name, timezone, language, display_name
+    `select preferred_name, timezone, language, about, display_name
        from core.owner where id = $1`,
     [OWNER_ID],
   );
-  return rows[0]
-    ? toProfile(rows[0])
-    : { preferredName: null, timezone: null, language: null, displayName: null };
+  return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
 }
+
+const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null };
 
 /**
  * Write the profile. Absent keys are left alone; an explicit `null` clears one.
@@ -272,14 +273,16 @@ export async function setOwnerProfile(
   const preferredName = value(patch.preferredName);
   const timezone = value(patch.timezone);
   const language = value(patch.language);
+  const about = value(patch.about);
 
   const { rows } = await pool.query(
     `update core.owner
         set preferred_name = case when $2::boolean then $3 else preferred_name end,
             timezone       = case when $4::boolean then $5 else timezone end,
-            language       = case when $6::boolean then $7 else language end
+            language       = case when $6::boolean then $7 else language end,
+            about          = case when $8::boolean then $9 else about end
       where id = $1
-      returning preferred_name, timezone, language, display_name`,
+      returning preferred_name, timezone, language, about, display_name`,
     [
       OWNER_ID,
       preferredName !== undefined,
@@ -288,9 +291,9 @@ export async function setOwnerProfile(
       timezone ?? null,
       language !== undefined,
       language ?? null,
+      about !== undefined,
+      about ?? null,
     ],
   );
-  return rows[0]
-    ? toProfile(rows[0])
-    : { preferredName: null, timezone: null, language: null, displayName: null };
+  return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
 }

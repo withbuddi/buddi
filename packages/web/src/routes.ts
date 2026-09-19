@@ -56,6 +56,8 @@ export const PLACES = [
 
 /** The settings sections, in tab order. */
 export const SETTINGS_SECTIONS = [
+  { id: 'you', label: 'You' },
+  { id: 'memory', label: 'Memory' },
   { id: 'accounts', label: 'Model accounts' },
   { id: 'computer', label: 'Computer & browser' },
   { id: 'watchers', label: 'Watchers' },

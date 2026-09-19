@@ -12,9 +12,11 @@ import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Stack, Tab, Tabs, 
 import { Browser } from './Browser';
 import { Providers } from './Providers';
 import { Watchers } from './Watchers';
+import { You } from './You';
+import { Memory } from './Memory';
 
-export function Settings({ hash, timezone, navigate }: PlaceProps): JSX.Element {
-  const section = /^#\/settings\/([a-z]+)/.exec(hash)?.[1] ?? 'accounts';
+export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.Element {
+  const section = /^#\/settings\/([a-z]+)/.exec(hash)?.[1] ?? 'you';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   return (
     <div className="ui-page">
@@ -29,6 +31,8 @@ export function Settings({ hash, timezone, navigate }: PlaceProps): JSX.Element 
           </Tab>
         ))}
       </Tabs>
+      {section === 'you' ? <You embedded /> : null}
+      {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}

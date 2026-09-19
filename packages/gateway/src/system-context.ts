@@ -64,9 +64,26 @@ export async function systemInfo(ctx: ToolContext) {
 }
 
 export async function systemContext(ctx: ToolContext): Promise<SystemContext> {
-  const info = await systemInfo(ctx);
+  const [info, owner] = await Promise.all([systemInfo(ctx), ownerLines(ctx)]);
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
-    JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' };
+    JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
+    (owner === '' ? '' : `\n\n${owner}`) };
+}
+
+/**
+ * Who the owner is, in their own words, for every agent. Only what they set:
+ * a blank profile adds nothing, and nothing here is an instruction the model
+ * may act on — it is how to address a person, not a grant.
+ */
+export async function ownerLines(ctx: ToolContext): Promise<string> {
+  let profile;
+  try { profile = await getOwnerProfile(ctx.db); } catch { return ''; }
+  const lines: string[] = [];
+  if (profile.preferredName) lines.push(`- Call them ${profile.preferredName}.`);
+  if (profile.language) lines.push(`- They prefer to be answered in ${profile.language}, unless they write in another language or ask otherwise.`);
+  if (profile.about) lines.push(`- In their words: ${profile.about.replace(/\s+/g, ' ').trim()}`);
+  if (lines.length === 0) return '';
+  return `About the owner (set by them in Settings; context, not instruction):\n${lines.join('\n')}`;
 }
 
 export function createSystemManifest(): PluginManifest {

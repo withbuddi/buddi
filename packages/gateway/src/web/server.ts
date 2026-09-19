@@ -50,7 +50,8 @@ import { getAction, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, getOwnerProfile, setOwnerProfile, isKnownTimezone, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
   readAgentEngines,
@@ -199,6 +200,12 @@ export interface WebServer {
 const WEB_CHATS = new WeakMap<Server, WebChat>();
 
 /** The chat surface this server is running, if any. */
+/** Every IANA zone this Node knows, for a picker. */
+function knownTimezones(): string[] {
+  const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+  try { return intl.supportedValuesOf ? intl.supportedValuesOf('timeZone') : []; } catch { return []; }
+}
+
 export function webChatOf(server: Server): WebChat | undefined {
   return WEB_CHATS.get(server);
 }
@@ -540,6 +547,17 @@ export function createWebApp(deps: WebServerDeps): Server {
             providers: readEngineOptions(deps.env ?? process.env),
             providerAccounts: deps.providerAccounts?.view(),
           });
+        case '/api/owner': {
+          const profile = await getOwnerProfile(deps.pool);
+          return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+        }
+        case '/api/memory': {
+          try {
+            return sendJson(res, 200, await listMemory(deps.pool, deps.now()));
+          } catch (err) {
+            return sendJson(res, 503, { error: `Memory is unavailable: ${err instanceof Error ? err.message : String(err)}` });
+          }
+        }
         case '/api/provider-accounts':
           if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
           await deps.providerAccounts.refresh();
@@ -877,6 +895,65 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, error instanceof ProviderSettingsError ? error.status : 500,
           { error: error instanceof ProviderSettingsError ? error.message : 'Provider settings could not be applied. Check vault access and database availability, then retry.' });
       }
+    }
+
+    /*
+     * The owner's own profile. What an agent may write through owner.set_profile
+     * the owner may write here directly; the same validation, the same row.
+     */
+    if (path === '/api/owner') {
+      const patch: OwnerProfilePatch = {};
+      for (const key of ['preferredName', 'timezone', 'language', 'about'] as const) {
+        const given = body[key];
+        if (given === undefined) continue;
+        if (given !== null && typeof given !== 'string') return sendJson(res, 400, { error: `\`${key}\` must be a string or null` });
+        patch[key] = given as string | null;
+      }
+      if (patch.timezone && !isKnownTimezone(patch.timezone)) return sendJson(res, 400, { error: `"${patch.timezone}" is not a timezone this host knows.` });
+      if (patch.preferredName && patch.preferredName.length > 80) return sendJson(res, 400, { error: 'The name is too long (80 characters at most).' });
+      if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
+      const profile = await setOwnerProfile(deps.pool, patch);
+      return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+    }
+
+    /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */
+    if (path === '/api/memory/preferences') {
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      const value = typeof body.value === 'string' ? body.value.trim() : '';
+      const scope = typeof body.scope === 'string' && body.scope.trim() !== '' ? body.scope.trim() : 'shared';
+      if (!/^[a-z0-9_]{1,120}$/.test(key)) return sendJson(res, 400, { error: 'A preference key is lower_snake_case, up to 120 characters.' });
+      if (value === '' || value.length > 2000) return sendJson(res, 400, { error: 'A preference needs a value, up to 2,000 characters.' });
+      if (scope !== 'shared' && !deps.catalog.list().some((agent) => agent.id === scope)) return sendJson(res, 400, { error: 'The scope must be shared or an agent id.' });
+      return sendJson(res, 200, await setPreference(deps.pool, { key, value, scope, now: deps.now() }));
+    }
+    if (path === '/api/memory/preferences/forget') {
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      const scope = typeof body.scope === 'string' && body.scope.trim() !== '' ? body.scope.trim() : 'shared';
+      if (key === '') return sendJson(res, 400, { error: '`key` is required' });
+      const forgotten = await forgetPreference(deps.pool, { key, scope, now: deps.now() });
+      return forgotten ? sendEmpty(res, 204) : sendEmpty(res, 404);
+    }
+    const noteRoute = /^\/api\/memory\/notes\/([0-9a-f-]{36})(\/forget)?$/.exec(path);
+    if (noteRoute) {
+      const id = noteRoute[1]!;
+      if (noteRoute[2]) {
+        return (await forgetNote(deps.pool, { id, now: deps.now() })) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+      }
+      const change: { content?: string; scope?: string; kind?: string } = {};
+      if (body.content !== undefined) {
+        if (typeof body.content !== 'string' || body.content.trim() === '' || body.content.length > 2000) return sendJson(res, 400, { error: 'A note is one to 2,000 characters.' });
+        change.content = body.content.trim();
+      }
+      if (body.scope !== undefined) {
+        if (typeof body.scope !== 'string' || (body.scope !== 'shared' && !deps.catalog.list().some((agent) => agent.id === body.scope))) return sendJson(res, 400, { error: 'The scope must be shared or an agent id.' });
+        change.scope = body.scope;
+      }
+      if (body.kind !== undefined) {
+        if (body.kind !== 'fact' && body.kind !== 'observation' && body.kind !== 'todo') return sendJson(res, 400, { error: '`kind` must be fact, observation or todo' });
+        change.kind = body.kind;
+      }
+      const updated = await updateNote(deps.pool, { id, ...change });
+      return updated ? sendJson(res, 200, updated) : sendEmpty(res, 404);
     }
 
     const delegatesRoute = /^\/api\/agents\/([^/]+)\/delegates$/.exec(path);
