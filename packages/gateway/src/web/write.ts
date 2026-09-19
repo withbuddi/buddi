@@ -14,6 +14,10 @@
  * so the dashboard shows its own actions in the log a second later, with no
  * special casing anywhere.
  */
+import { checkDelegates } from '../agents/platform.js';
+import { DELEGATES_FILE } from '../agents/delegation.js';
+import { writeFilesAtomic } from '../agents/platform-files.js';
+import { join as pathJoin } from 'node:path';
 import {
   cancelJob,
   cancelReminder,
@@ -352,3 +356,36 @@ export async function takeOfferFromWeb(
 
 /** Re-exported so the router does not have to reach into core for the cast. */
 export { toActionRecord };
+
+
+/* ------------------------------------------------------------------ *
+ * Delegation allowlists
+ * ------------------------------------------------------------------ */
+
+/**
+ * The owner rewrites who an agent may ask. The same checks the maker applies
+ * (`checkDelegates`): every id must exist, none may be the agent itself, and
+ * none may hold the platform write tools, because delegation is a corridor.
+ * Only a private agent's file is written; a shipped example is refused with
+ * the way to get a private copy.
+ */
+export async function setDelegatesFromWeb(
+  deps: { catalog: import('@buddi/core').AgentCatalog & { reload?: () => void }; agentsDir: string; examplesDir: string; reload?: () => void },
+  agentId: string,
+  delegates: unknown,
+): Promise<WriteResult<{ delegates: string[] }>> {
+  if (!Array.isArray(delegates) || !delegates.every((d) => typeof d === 'string')) return fail(400, 'Expected a list of agent ids.');
+  const agent = deps.catalog.get(agentId);
+  if (!agent) return fail(404, 'No such agent.');
+  if (agent.source === 'example') return fail(409, 'This agent ships with buddi. Ask Agent Father to make it yours first; then its allowlist can change.');
+  let checked: string[];
+  try {
+    checked = checkDelegates(delegates, deps.catalog as never, agent.id) ?? [];
+  } catch (err) {
+    return fail(400, err instanceof Error ? err.message : String(err));
+  }
+  const unique = [...new Set(checked)];
+  writeFilesAtomic([{ path: pathJoin(deps.agentsDir, agent.id, DELEGATES_FILE), content: `${JSON.stringify(unique, null, 2)}\n` }]);
+  try { deps.reload?.(); } catch { /* the file is written; the next load will say if it cannot be read */ }
+  return { ok: true, status: 200, body: { delegates: unique } };
+}

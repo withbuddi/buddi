@@ -304,6 +304,10 @@ export interface AgentRow {
   language: string;
   tools: string[];
   skills: Array<{ name: string; provenance: string; file: string }>;
+  /** Who it may hand work to. */
+  delegates: string[];
+  /** A shipped example: read-only until Agent Father makes a private copy. */
+  isExample: boolean;
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
 }
 
@@ -553,6 +557,7 @@ export const api = {
    * What one agent is: its grant with every tool's tier, its engine, its
    * skills, its delegates. A read; there is no counterpart that writes.
    */
+  setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[] }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
 
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
