@@ -179,15 +179,14 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
 
 .drawer header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 
-/* ---- transcript ---- */
-
-.msg { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; background: var(--surface); }
-.msg > .who { padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: 12px; }
-.msg > .body { padding: 10px; }
-.msg .text { white-space: pre-wrap; word-break: break-word; }
-.tool { border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
-.tool.err { border-left-color: var(--critical); }
-.tool .name { font-weight: 600; }
+/* ---- a stored transcript, block by block ---- */
+.transcript-msg { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.transcript-who { padding: 6px 12px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: var(--text-sm); }
+.transcript-body { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
+.transcript-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-md); line-height: var(--leading-loose); }
+.transcript-tool { border-left: 3px solid var(--accent); padding-left: 10px; display: flex; flex-direction: column; gap: 6px; }
+.transcript-tool[data-tone='critical'] { border-left-color: var(--critical); }
+.transcript-tool-name { font-weight: var(--weight-semibold); }
 
 .err-banner {
   border: 1px solid var(--critical);

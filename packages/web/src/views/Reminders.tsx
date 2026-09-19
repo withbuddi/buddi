@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Empty, ErrorBanner, StatePill, useAsync } from '../ui';
+import { Button, Code, Details, Empty, ErrorBanner, Page, PageHeader, Panel, StatePill, Table, useAsync } from '../ui';
 
 export function Reminders({ timezone }: { timezone: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.reminders(), [], 30_000);
@@ -22,18 +22,17 @@ export function Reminders({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <>
-      <h2>Reminders</h2>
-      <p className="lede">
-        A reminder wakes an agent with a note and the instruction to check before it speaks — never a message queued
-        for delivery.
-      </p>
+    <Page>
+      <PageHeader
+        title="Reminders"
+        lede="A reminder wakes an agent with a note and the instruction to check before it speaks — never a message queued for delivery."
+      />
       <ErrorBanner message={error ?? failure} />
-      <div className="wrap">
+      <Panel flush>
         {!data || data.reminders.length === 0 ? (
           <Empty>No reminders.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Due</th>
@@ -46,37 +45,36 @@ export function Reminders({ timezone }: { timezone: string }): JSX.Element {
             <tbody>
               {data.reminders.map((reminder) => (
                 <tr key={reminder.id}>
-                  <td>
+                  <td className="nowrap">
                     {fmtTime(reminder.dueAt, timezone)}
-                    <div className="muted">{fmtRelative(reminder.dueAt)}</div>
+                    <div className="sub">{fmtRelative(reminder.dueAt)}</div>
                   </td>
                   <td className="mono">{reminder.agentId}</td>
                   <td>
                     {reminder.text}
                     {reminder.context ? (
-                      <details>
-                        <summary className="muted">context</summary>
-                        <pre>{json(reminder.context)}</pre>
-                      </details>
+                      <Details summary="context">
+                        <Code>{json(reminder.context)}</Code>
+                      </Details>
                     ) : null}
                   </td>
                   <td>
                     <StatePill state={reminder.state} />
-                    {reminder.cancelReason ? <div className="muted">{reminder.cancelReason}</div> : null}
+                    {reminder.cancelReason ? <div className="sub">{reminder.cancelReason}</div> : null}
                   </td>
                   <td>
                     {reminder.state === 'pending' ? (
-                      <button className="danger" onClick={() => cancel(reminder.id)}>
-                        cancel
-                      </button>
+                      <Button size="sm" variant="danger" onClick={() => cancel(reminder.id)}>
+                        Cancel
+                      </Button>
                     ) : null}
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
-      </div>
-    </>
+      </Panel>
+    </Page>
   );
 }

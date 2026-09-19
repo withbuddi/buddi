@@ -6,7 +6,21 @@
 import { useState } from 'react';
 import { api, type JobRow } from '../api';
 import { fmtRelative, fmtTime, json, short, truncate } from '../format';
-import { Drawer, Empty, ErrorBanner, StatePill, useAsync } from '../ui';
+import {
+  Button,
+  Code,
+  Empty,
+  ErrorBanner,
+  Page,
+  PageHeader,
+  Panel,
+  Section,
+  Sheet,
+  StatePill,
+  Table,
+  Toolbar,
+  useAsync,
+} from '../ui';
 
 const STATES = ['pending', 'leased', 'suspended', 'failed', 'succeeded', 'cancelled'] as const;
 
@@ -32,15 +46,19 @@ export function Jobs({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <>
-      <h2>Jobs</h2>
-      <p className="lede">
-        {data?.paused ? 'PAUSED — nothing is being claimed. ' : ''}
-        Bounded retries with backoff; past the budget a job waits for you.
-      </p>
+    <Page>
+      <PageHeader
+        title="Jobs"
+        lede={`${data?.paused ? 'Paused — nothing is being claimed. ' : ''}Bounded retries with backoff; past the budget a job waits for you.`}
+        actions={
+          <Button size="sm" variant={data?.paused ? 'accent' : undefined} onClick={() => act(api.setPaused(!(data?.paused ?? false)))}>
+            {data?.paused ? 'Resume the queue' : 'Pause the queue'}
+          </Button>
+        }
+      />
 
-      <div className="bar">
-        <select value={state} onChange={(e) => setState(e.target.value)}>
+      <Toolbar>
+        <select aria-label="Job state" value={state} onChange={(e) => setState(e.target.value)}>
           <option value="">every state</option>
           {STATES.map((s) => (
             <option key={s} value={s}>
@@ -48,18 +66,15 @@ export function Jobs({ timezone }: { timezone: string }): JSX.Element {
             </option>
           ))}
         </select>
-        <button onClick={() => act(api.setPaused(!(data?.paused ?? false)))}>
-          {data?.paused ? 'Resume the queue' : 'Pause the queue'}
-        </button>
-      </div>
+      </Toolbar>
 
       <ErrorBanner message={error ?? failure} />
 
-      <div className="wrap">
+      <Panel flush>
         {!data || data.jobs.length === 0 ? (
           <Empty>No jobs match.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Kind</th>
@@ -75,55 +90,59 @@ export function Jobs({ timezone }: { timezone: string }): JSX.Element {
                 <tr key={job.id}>
                   <td className="clickable" onClick={() => setSelected(job)}>
                     {job.kind}
-                    <div className="muted mono">{short(job.id)}</div>
+                    <div className="sub mono">{short(job.id)}</div>
                   </td>
                   <td>
                     <StatePill state={job.state} />
-                    {job.suspendedReason ? <div className="muted">{truncate(job.suspendedReason, 40)}</div> : null}
+                    {job.suspendedReason ? <div className="sub">{truncate(job.suspendedReason, 40)}</div> : null}
                   </td>
                   <td className="num">
                     {job.attempts}/{job.maxAttempts}
                   </td>
-                  <td className={job.lastError ? 'bad' : 'muted'}>
+                  <td className={job.lastError ? 'critical' : 'muted'}>
                     {job.lastError ? truncate(job.lastError, 80) : '—'}
                   </td>
-                  <td>
+                  <td className="nowrap">
                     {fmtTime(job.updatedAt, timezone)}
-                    <div className="muted">{fmtRelative(job.updatedAt)}</div>
+                    <div className="sub">{fmtRelative(job.updatedAt)}</div>
                   </td>
                   <td>
-                    <div className="bar" style={{ margin: 0 }}>
+                    <Toolbar align="end">
                       {['failed', 'cancelled', 'suspended'].includes(job.state) ? (
-                        <button onClick={() => act(api.retryJob(job.id))}>retry</button>
+                        <Button size="sm" onClick={() => act(api.retryJob(job.id))}>
+                          Retry
+                        </Button>
                       ) : null}
                       {['pending', 'leased', 'suspended'].includes(job.state) ? (
-                        <button className="danger" onClick={() => act(api.cancelJob(job.id))}>
-                          cancel
-                        </button>
+                        <Button size="sm" variant="danger" onClick={() => act(api.cancelJob(job.id))}>
+                          Cancel
+                        </Button>
                       ) : null}
-                    </div>
+                    </Toolbar>
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
-      </div>
+      </Panel>
 
       {selected ? (
-        <Drawer title={selected.kind} onClose={() => setSelected(null)}>
+        <Sheet title={selected.kind} onClose={() => setSelected(null)}>
           <p className="muted mono">{selected.id}</p>
-          <h3>Payload</h3>
-          <pre>{json(selected.payload)}</pre>
-          <h3>Result</h3>
-          <pre>{json(selected.result)}</pre>
+          <Section title="Payload">
+            <Code>{json(selected.payload)}</Code>
+          </Section>
+          <Section title="Result">
+            <Code>{json(selected.result)}</Code>
+          </Section>
           {selected.conversationId ? (
             <p>
               <a href={`#/conversations/${selected.conversationId}`}>open the transcript</a>
             </p>
           ) : null}
-        </Drawer>
+        </Sheet>
       ) : null}
-    </>
+    </Page>
   );
 }
