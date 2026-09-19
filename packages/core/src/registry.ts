@@ -21,6 +21,7 @@ import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
+import type { HomeContribution } from './home.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -267,6 +268,11 @@ export class ToolRegistry {
    */
   views(): ViewDescriptor[] {
     return [...this.#manifests.values()].flatMap((m) => m.views ?? []);
+  }
+
+  /** Every Home block the installed plugins contribute, in registration order. */
+  home(): HomeContribution[] {
+    return [...this.#manifests.values()].flatMap((m) => m.home ?? []);
   }
 
   has(name: string): boolean {

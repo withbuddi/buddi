@@ -42,7 +42,6 @@ import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { TelegramApprovals } from '../telegram/approvals.js';
 import { SURFACE } from '../telegram/surface.js';
 import { webAssetsDir } from './config.js';
-import { FINANCE_PLUGIN_MISSING_NOTE } from './read.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
 import { LOCAL_SESSION_TTL_MS, REMOTE_SESSION_TTL_MS } from './sessions.js';
@@ -421,9 +420,9 @@ suite('the dashboard API', () => {
     expect(overview).toMatchObject({
       timezone: 'UTC',
       paused: false,
-      // An agent claims the `overview` role, so the only thing missing is a
-      // plugin that reports balances — and the note says which, not zeros.
-      finance: { available: false, note: FINANCE_PLUGIN_MISSING_NOTE },
+      // No plugin contributes a block here, so Home has none: not a money
+      // block full of zeros, no block at all.
+      home: [],
       approvals: { pending: expect.any(Number) },
       jobs: { pending: expect.any(Number), failed: expect.any(Number) },
       missions: { total: expect.any(Number) },
