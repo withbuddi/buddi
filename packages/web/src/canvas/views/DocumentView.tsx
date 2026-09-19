@@ -14,7 +14,7 @@ export function DocumentView({ props }: { props: DocumentProps }): JSX.Element {
       {props.title ? <h4 className="wb-doc-title">{props.title}</h4> : null}
 
       {props.metadata.length > 0 ? (
-        <dl className="wb-kv wb-block">
+        <dl className="ui-kv wb-block">
           {props.metadata.map((item) => (
             <div key={item.label} className="contents">
               <dt>{item.label}</dt>

@@ -1,75 +1,15 @@
 /*
  * The hand-written stylesheet.
  *
- * Colours, type, spacing and shape live in `tokens.css` and nowhere else; this
- * file only spends them. There is no framework: a short reset below, then the
- * shared primitives, then the workbench. There is still no framework font and
- * no `@import` of anything remote — the page makes no external request at all.
+ * `tokens.css` decides every colour, size and space; `base.css` is the reset
+ * and the document; `ui.css` is every shared piece. This file is what is left:
+ * the workbench shell, and the monitoring pages. There is still no framework
+ * font and no `@import` of anything remote — the page makes no external
+ * request at all.
  */
 @import './tokens.css';
-
-/* ---- reset ----
- * Enough that every element starts from nothing and every control starts
- * from the page's own font, and no more. Whatever an element then looks like
- * is a decision made once, below, in tokens.
- */
-*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--line); }
-h1, h2, h3, h4, h5, h6, p, figure, blockquote, pre, dl, dd, ul, ol, fieldset, legend { margin: 0; padding: 0; }
-ul, ol { list-style: none; }
-h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
-button, input, select, textarea { font: inherit; color: inherit; margin: 0; padding: 0; background: transparent; border-radius: 0; }
-button, [type='button'], [type='submit'] { appearance: none; -webkit-appearance: none; }
-button { cursor: pointer; }
-button:disabled { cursor: default; }
-textarea { resize: vertical; }
-img, svg, video, canvas, object { display: block; max-width: 100%; }
-img { height: auto; }
-a { color: inherit; text-decoration: inherit; }
-table { border-collapse: collapse; border-spacing: 0; text-indent: 0; }
-summary { cursor: pointer; }
-:where([hidden]) { display: none !important; }
-
-/* Keep a label in the accessibility tree and out of the layout. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border-width: 0;
-}
-.contents { display: contents; }
-
-html, body, #root { height: 100%; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 14px/1.5 var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-}
-
-code, pre, .mono {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-/* Digits that have to line up, line up. */
-.tnum, td.num, .card .v { font-variant-numeric: tabular-nums; }
-
-/* Keyboard focus is always visible; the mouse does not get a ring it never
-   asked for. */
-:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}
-
-a { color: var(--accent); }
+@import './base.css';
+@import './ui.css';
 
 /* ----------------------------------------------------------------- *
  * The monitoring pages.
@@ -313,34 +253,12 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
   user-select: none;
 }
 
-.wb-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  position: relative;
-  padding: 0;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.wb-icon-btn-sm { width: 30px; height: 30px; }
-
-.wb-icon-btn:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text); }
-.wb-icon-btn:disabled { opacity: 0.4; cursor: default; }
-.wb-icon-btn[data-state='open'] { background: var(--surface-sunken); color: var(--text); }
-
 /* Where you are: filled, accented, and marked on the rail's own edge. */
-.wb-icon-btn[data-active='true'] {
+.ui-icon-btn[data-active='true'] {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.wb-rail .wb-icon-btn[data-active='true']::before {
+.wb-rail .ui-icon-btn[data-active='true']::before {
   content: '';
   position: absolute;
   left: -10px;
@@ -620,7 +538,7 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
    new thread. Never a prediction — a warning that is usually wrong is noise. */
 .wb-head-meta[data-tone='note'] { color: var(--warning); }
 
-.wb-tag {
+.ui-tag {
   flex: 0 0 auto;
   font-size: 10px;
   font-weight: 600;
@@ -632,7 +550,7 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
   padding: 1px 7px;
 }
 
-.wb-count {
+.ui-count {
   font-variant-numeric: tabular-nums;
   font-size: 11.5px;
   font-weight: 650;
@@ -882,27 +800,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 }
 .wb-hint[data-shown='true'] { opacity: 1; }
 
-.wb-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 550;
-  padding: 6px 12px;
-  cursor: pointer;
-  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
-}
-.wb-btn:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-sunken); }
-.wb-btn:disabled { opacity: 0.45; cursor: default; }
-.wb-btn[data-variant='accent'] { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
-.wb-btn[data-variant='accent']:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); filter: brightness(1.08); }
-.wb-btn[data-variant='stop'] { border-color: var(--critical); color: var(--critical); background: var(--surface); }
-.wb-btn[data-variant='good'] { background: var(--good); border-color: var(--good); color: var(--accent-contrast); }
-.wb-btn[data-variant='danger'] { border-color: var(--critical); color: var(--critical); }
 .wb-send { flex: 0 0 auto; }
 
 .wb-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
@@ -1056,7 +953,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-tab-more[data-tone] { color: var(--text-faint); }
 .wb-tab-more[data-tone]:hover { color: var(--text); }
 .wb-tab-more[data-state='open'] { background: var(--surface-sunken); color: var(--text); }
-.wb-menu-item-text {
+.ui-menu-item-text {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1068,59 +965,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 
 .wb-canvas-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 26px 44px; }
 .wb-canvas-body-empty { display: flex; align-items: center; justify-content: center; padding: 24px; }
-
-.wb-panel {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-panel);
-  padding: 18px 20px 20px;
-  max-width: 1080px;
-}
-.wb-panel + .wb-panel { margin-top: 14px; }
-
-.wb-panel-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin: 0 0 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-.wb-panel-title { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.005em; }
-.wb-panel-tool {
-  color: var(--text-faint);
-  font-size: 11px;
-  background: var(--surface-sunken);
-  border-radius: var(--radius-sm);
-  padding: 2px 7px;
-}
-
-.wb-stats { display: flex; flex-wrap: wrap; gap: 18px 26px; margin-bottom: 16px; }
-.wb-stat-k { color: var(--text-muted); font-size: 11.5px; }
-.wb-stat-v { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.wb-stat-v[data-size='sm'] { font-size: var(--text-lg); }
-.wb-stat-v[data-tone='good'] { color: var(--good); }
-.wb-stat-v[data-tone='warning'] { color: var(--warning); }
-.wb-stat-v[data-tone='critical'] { color: var(--critical); }
-
-.wb-meter {
-  height: 7px;
-  border-radius: 999px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--line);
-  overflow: hidden;
-  min-width: 90px;
-}
-.wb-meter-fill { height: 100%; background: var(--good); }
-.wb-meter-fill[data-tone='warning'] { background: var(--warning); }
-.wb-meter-fill[data-tone='critical'] { background: var(--critical); }
-
-.wb-kv { display: grid; grid-template-columns: minmax(120px, 210px) 1fr; gap: 6px 20px; }
-.wb-kv dt { color: var(--text-muted); font-size: 12px; padding-top: 2px; }
-.wb-kv dd { margin: 0; word-break: break-word; }
 
 /* ---- the empty canvas: what could be here, not an apology ---- */
 
@@ -1249,103 +1093,10 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   .wb-tab-text { max-width: 104px; }
 }
 
-/* ---- Radix popovers ---- */
-
-.wb-menu {
-  min-width: 212px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
-  padding: 6px;
-  z-index: 40;
-}
-.wb-menu-wide { min-width: 272px; }
-.wb-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 9px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-  user-select: none;
-}
-.wb-menu-item[data-highlighted] { background: var(--accent-soft); }
-.wb-menu-item[data-disabled] { cursor: default; }
-.wb-menu-label {
-  padding: 5px 9px 6px;
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 650;
-  color: var(--text-faint);
-}
-.wb-menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
-.wb-menu-note { font-size: 11px; color: var(--text-faint); }
-.wb-menu-empty { margin: 0; padding: 6px 9px 8px; font-size: 12px; color: var(--text-muted); }
-
-.wb-tip {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 220px;
-  background: var(--text);
-  color: var(--bg);
-  font-size: 12px;
-  padding: 6px 9px;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-  z-index: 40;
-}
-.wb-tip-title { font-weight: 600; }
-.wb-tip-hint { opacity: 0.7; font-size: 11px; }
-/* The reason a badge is lit, in words. A dot the owner has to click to
-   understand is a dot they learn to stop clicking.
-   `--critical-soft` rather than `--critical`: a tooltip paints itself in
-   `--text` on `--bg`, so its ground *inverts* with the theme, and the only
-   critical token that inverts with it is the soft one. */
-.wb-tip-alert {
-  margin-top: 3px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--critical-soft);
-}
-
-.wb-toasts {
-  position: fixed;
-  bottom: 14px;
-  right: 14px;
-  width: min(360px, calc(100vw - 28px));
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 50;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  outline: none;
-}
-.wb-toast {
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-pop);
-  padding: 9px 12px;
-}
-.wb-toast[data-tone='critical'] { border-left-color: var(--critical); }
-.wb-toast-title { font-weight: 600; font-size: 13px; }
-.wb-toast-body { color: var(--text-muted); font-size: 12px; }
-
 /* ---- small layout helpers the canvas views share ---- */
 .wb-row { display: flex; align-items: center; gap: var(--space-2); }
 .wb-row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .wb-row-end { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }
-.wb-stack { display: flex; flex-direction: column; gap: var(--space-2); }
 .wb-section { margin-top: var(--space-4); }
 .wb-scroll-x { overflow-x: auto; }
 .wb-label { margin: 0 0 6px; }
@@ -1397,7 +1148,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 
 /* ---- the inferred fallback: a table, a list or a reason, never a dump ---- */
 
-.wb-panel-sub { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--text-sm); }
+.ui-panel-sub { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--text-sm); }
 .wb-sub {
   margin: 0 0 8px;
   font-size: 11.5px;
@@ -1661,7 +1412,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .browser-settings fieldset { border: 0; padding: 1rem 0 0; min-width: 0; }
 .browser-settings label { display: grid; gap: .4rem; margin: .8rem 0; }
 .browser-settings select, .browser-settings textarea { width: 100%; max-width: 100%; padding: .6rem; color: inherit; background: var(--surface-raised); border: 1px solid var(--line); border-radius: 6px; }
-.browser-settings .wb-btn { margin: .3rem .5rem .3rem 0; }
+.browser-settings .ui-btn { margin: .3rem .5rem .3rem 0; }
 .host-controls { padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .host-controls summary { cursor: pointer; }
 .host-controls pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

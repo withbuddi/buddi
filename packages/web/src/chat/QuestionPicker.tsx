@@ -52,7 +52,7 @@ export function QuestionPicker({
             placeholder={question.options.length ? 'Something else…' : 'Type your answer…'}
             disabled={disabled}
           />
-          <button className="wb-btn" data-variant="accent" disabled={disabled || !other.trim()}>
+          <button className="ui-btn" data-variant="accent" disabled={disabled || !other.trim()}>
             Answer
           </button>
         </form>

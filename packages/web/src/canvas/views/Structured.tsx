@@ -42,7 +42,7 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
     <div>
       {!execution && <ArtifactDownloads files={files} />}
       <div className="wb-row-end">
-        <button className="wb-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
+        <button className="ui-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
       </div>
@@ -64,7 +64,7 @@ function artifactFiles(value: unknown): ArtifactFile[] {
 function ArtifactDownloads({ files }: { files: ArtifactFile[] }): JSX.Element | null {
   return files.length ? <div className="wb-artifacts">{files.map(file => <div key={file.id}>
     {['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.mime ?? '') ? <ArtifactImage file={file} /> : null}
-    <a className="wb-btn" href={`/api/artifacts/${encodeURIComponent(file.id)}/download`} download>{file.mime?.startsWith('image/') ? `Download ${file.filename}` : file.filename}</a>
+    <a className="ui-btn" href={`/api/artifacts/${encodeURIComponent(file.id)}/download`} download>{file.mime?.startsWith('image/') ? `Download ${file.filename}` : file.filename}</a>
   </div>)}</div> : null;
 }
 function ArtifactImage({ file }: { file: ArtifactFile }): JSX.Element {
@@ -147,11 +147,11 @@ function Shape({ shape }: { shape: ReturnType<typeof inferShape> }): JSX.Element
 function Stats({ stats }: { stats: Stat[] }): JSX.Element | null {
   if (stats.length === 0) return null;
   return (
-    <div className="wb-stats">
+    <div className="ui-stats" data-inline="true">
       {stats.map((stat) => (
         <div key={stat.label}>
-          <div className="wb-stat-k">{stat.label}</div>
-          <div className="wb-stat-v">{text(stat.value, stat.type, stat.currency)}</div>
+          <div className="ui-stat-k">{stat.label}</div>
+          <div className="ui-stat-v">{text(stat.value, stat.type, stat.currency)}</div>
         </div>
       ))}
     </div>
@@ -175,7 +175,7 @@ function Notes({ notes }: { notes: string[] }): JSX.Element | null {
 function Pairs({ pairs }: { pairs: Stat[] }): JSX.Element {
   if (pairs.length === 0) return <p className="wb-note">Nothing to show.</p>;
   return (
-    <dl className="wb-kv">
+    <dl className="ui-kv">
       {pairs.map((pair) => (
         <div key={pair.label} className="contents">
           <dt>{pair.label}</dt>
@@ -249,7 +249,7 @@ function AutoTable({
           <span>
             Showing {shown.length} of {total}
           </span>
-          <button className="wb-btn" onClick={() => setAll(true)}>
+          <button className="ui-btn" onClick={() => setAll(true)}>
             Show all {total}
           </button>
         </p>

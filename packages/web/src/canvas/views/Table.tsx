@@ -15,11 +15,11 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
   return (
     <div>
       {props.summary.length > 0 ? (
-        <div className="wb-stats">
+        <div className="ui-stats" data-inline="true">
           {props.summary.map((item) => (
             <div key={item.label}>
-              <div className="wb-stat-k">{item.label}</div>
-              <div className="wb-stat-v" data-tone={item.tone}>
+              <div className="ui-stat-k">{item.label}</div>
+              <div className="ui-stat-v" data-tone={item.tone}>
                 {fmtValue(item.value, item.unit, item.currency)}
               </div>
             </div>
@@ -32,7 +32,7 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
       ) : (
         props.groups.map((group, groupIndex) => (
           <div key={group.label ?? groupIndex} className={groupIndex > 0 ? 'mt-5' : ''}>
-            {group.label ? <h4 className="wb-stat-k wb-label">{group.label}</h4> : null}
+            {group.label ? <h4 className="ui-stat-k wb-label">{group.label}</h4> : null}
             <div className="wrap wb-scroll-x">
               <table>
                 <thead>
@@ -71,7 +71,7 @@ function Cell({ cell }: { cell: TableCell }): JSX.Element {
     <td className="num">
       <div className="wb-row" style={{ justifyContent: 'flex-end' }}>
         <div
-          className="wb-meter"
+          className="ui-meter"
           role="meter"
           aria-valuenow={Math.round(cell.bar.fraction * 100)}
           aria-valuemin={0}
@@ -79,7 +79,7 @@ function Cell({ cell }: { cell: TableCell }): JSX.Element {
           aria-label={text}
         >
           <div
-            className="wb-meter-fill"
+            className="ui-meter-fill"
             data-tone={cell.bar.tone}
             style={{ width: `${Math.round(cell.bar.fraction * 100)}%` }}
           />

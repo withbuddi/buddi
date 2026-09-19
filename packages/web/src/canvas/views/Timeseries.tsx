@@ -52,7 +52,7 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
 
   return (
     <div>
-      {props.label ? <p className="wb-panel-sub">{props.label}</p> : null}
+      {props.label ? <p className="ui-panel-sub">{props.label}</p> : null}
       <div className="wb-chart-layout">
         <div className="wb-chart-plot">
           <svg
@@ -128,7 +128,7 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
 
         {props.events.length > 0 ? (
           <aside className="wb-chart-events">
-            <h4 className="wb-stat-k wb-label">What happens</h4>
+            <h4 className="ui-stat-k wb-label">What happens</h4>
             <ul className="wb-chart-event-list">
               {props.events.map((event, index) => (
                 <li key={`${event.at}-${event.label}-${index}`} className="wb-chart-event">

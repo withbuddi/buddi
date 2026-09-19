@@ -109,7 +109,7 @@ function TranscriptView({
         <Empty>Loading…</Empty>
       ) : (
         <>
-          <p><a className="wb-btn" href={chatRoute(transcript.agentId, id)}>Open in chat ↗</a></p>
+          <p><a className="ui-btn" href={chatRoute(transcript.agentId, id)}>Open in chat ↗</a></p>
           <div className="cards">
             <div className="card">
               <div className="k">Agent</div>

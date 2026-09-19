@@ -5,7 +5,7 @@ import { json } from '../../format';
 function CopyButton({ text, label }: { text: string; label: string }): JSX.Element {
   const [status, setStatus] = useState('');
   return <span className="wb-command-copy">
-    <button className="wb-btn" onClick={() => {
+    <button className="ui-btn" onClick={() => {
       setStatus('');
       if (!navigator.clipboard?.writeText) { setStatus('Copy unavailable; select the text to copy.'); return; }
       void navigator.clipboard.writeText(text).then(() => setStatus('Copied'), () => setStatus('Copy failed; select the text to copy.'));

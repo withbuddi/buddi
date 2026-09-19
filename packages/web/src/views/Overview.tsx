@@ -6,7 +6,7 @@
  */
 import { api, type Overview as OverviewData } from '../api';
 import { fmtMoney, fmtNumber, fmtRelative, fmtTime } from '../format';
-import { Card, Empty, ErrorBanner, Panel, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, Notice, Page, PageHeader, Panel, Stat, Stats, Table, useAsync } from '../ui';
 
 export function Overview({
   timezone,
@@ -56,25 +56,30 @@ export function Overview({
   const currency = data.finance.currency;
 
   return (
-    <>
-      <h2>Overview</h2>
-      <p className="lede">
-        {fmtTime(data.now, timezone)} · {data.timezone} ·{' '}
-        <button onClick={reload} style={{ padding: '0 6px' }}>
-          refresh
-        </button>{' '}
-        <button
-          onClick={() => {
-            void api.setPaused(!data.paused).then(reload);
-          }}
-        >
-          {data.paused ? 'Resume' : 'Pause'}
-        </button>
-      </p>
+    <Page>
+      <PageHeader
+        title="Overview"
+        lede={`${fmtTime(data.now, timezone)} · ${data.timezone}`}
+        actions={
+          <>
+            <Button size="sm" onClick={reload}>
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              variant={data.paused ? 'accent' : undefined}
+              onClick={() => {
+                void api.setPaused(!data.paused).then(reload);
+              }}
+            >
+              {data.paused ? 'Resume' : 'Pause'}
+            </Button>
+          </>
+        }
+      />
 
       {attention.length > 0 ? (
-        <div className={`attention ${attention.some((a) => a.bad) ? 'bad' : ''}`}>
-          <strong>Needs attention</strong>
+        <Notice tone={attention.some((a) => a.bad) ? 'critical' : 'warning'} title="Needs attention">
           <ul>
             {attention.map((item, i) => (
               <li key={i}>
@@ -90,58 +95,58 @@ export function Overview({
               </li>
             ))}
           </ul>
-        </div>
+        </Notice>
       ) : null}
 
       {data.finance.available ? (
-        <div className="cards">
-          <Card label="Cash" value={fmtMoney(data.finance.cashTotal, currency)} note="spendable accounts" />
-          <Card label="Net worth" value={fmtMoney(data.finance.netWorth, currency)} note="cash + held − debt" />
-          <Card label="Debt" value={fmtMoney(data.finance.totalDebt, currency)} note="recorded liabilities" />
-          <Card
+        <Stats>
+          <Stat label="Cash" value={fmtMoney(data.finance.cashTotal, currency)} note="spendable accounts" />
+          <Stat label="Net worth" value={fmtMoney(data.finance.netWorth, currency)} note="cash + held − debt" />
+          <Stat label="Debt" value={fmtMoney(data.finance.totalDebt, currency)} note="recorded liabilities" />
+          <Stat
             label="Low point (14d)"
             value={fmtMoney(data.finance.minBalance, currency)}
             note={data.finance.minBalanceDate ?? ''}
-            tone={data.finance.breachesFloor ? 'bad' : undefined}
+            tone={data.finance.breachesFloor ? 'critical' : undefined}
           />
-        </div>
+        </Stats>
       ) : null}
 
-      <div className="cards">
-        <Card
+      <Stats>
+        <Stat
           label="Approvals"
           value={fmtNumber(data.approvals.pending)}
           note="pending"
-          tone={data.approvals.pending > 0 ? 'warn' : undefined}
+          tone={data.approvals.pending > 0 ? 'warning' : undefined}
         />
-        <Card
+        <Stat
           label="Queue"
           value={`${fmtNumber(data.jobs.pending ?? 0)} / ${fmtNumber(data.jobs.leased ?? 0)}`}
           note={`pending / running · ${fmtNumber(data.jobs.suspended ?? 0)} suspended · ${fmtNumber(failedJobs)} failed`}
-          tone={failedJobs > 0 ? 'bad' : undefined}
+          tone={failedJobs > 0 ? 'critical' : undefined}
         />
-        <Card
+        <Stat
           label="Missions"
           value={`${fmtNumber(data.missions.enabled)} / ${fmtNumber(data.missions.total)}`}
           note={data.missions.nextRun ? `next ${fmtRelative(data.missions.nextRun)}` : 'nothing scheduled'}
         />
-        <Card
+        <Stat
           label="Reminders"
           value={fmtNumber(data.reminders.pending)}
           note={data.reminders.nextDueAt ? `next ${fmtRelative(data.reminders.nextDueAt)}` : 'none pending'}
         />
-        <Card
+        <Stat
           label="Sentinels"
           value={`${fmtNumber(data.sentinels.openUrgent)} / ${fmtNumber(data.sentinels.openInfo)}`}
           note={
             data.sentinels.lastRunAt ? `urgent / info · last ran ${fmtRelative(data.sentinels.lastRunAt)}` : 'never run'
           }
-          tone={data.sentinels.openUrgent > 0 ? 'bad' : undefined}
+          tone={data.sentinels.openUrgent > 0 ? 'critical' : undefined}
         />
-        <Card label="State" value={data.paused ? 'paused' : 'running'} tone={data.paused ? 'warn' : 'ok'} />
-      </div>
+        <Stat label="State" value={data.paused ? 'paused' : 'running'} tone={data.paused ? 'warning' : 'good'} />
+      </Stats>
 
-      <Panel title="Next 14 days">
+      <Panel title="Next 14 days" flush>
         {data.finance.upcoming.length === 0 ? (
           <Empty>
             {data.finance.available
@@ -150,7 +155,7 @@ export function Overview({
                 'Nothing in this installation reports balances yet — install a plugin that provides them.')}
           </Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Date</th>
@@ -165,7 +170,7 @@ export function Overview({
                   <tr key={`${day.date}-${i}`}>
                     <td className="mono">{i === 0 ? day.date : ''}</td>
                     <td>{event.name}</td>
-                    <td className={`num ${event.amount < 0 ? 'bad' : 'ok'}`}>
+                    <td className={`num ${event.amount < 0 ? 'critical' : 'good'}`}>
                       {fmtMoney(event.amount, currency)}
                     </td>
                     <td className="num muted">{i === day.events.length - 1 ? fmtMoney(day.balance, currency) : ''}</td>
@@ -173,15 +178,15 @@ export function Overview({
                 )),
               )}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
 
-      <Panel title="Mail and sources">
+      <Panel title="Mail and sources" flush>
         {data.mail.length === 0 ? (
           <Empty>No sources are installed.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Source</th>
@@ -196,13 +201,13 @@ export function Overview({
                   <td>
                     {fmtTime(source.lastRunAt, timezone)} <span className="muted">{fmtRelative(source.lastRunAt)}</span>
                   </td>
-                  <td className={source.lastError ? 'bad' : 'muted'}>{source.lastError ?? 'none'}</td>
+                  <td className={source.lastError ? 'critical' : 'muted'}>{source.lastError ?? 'none'}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
-    </>
+    </Page>
   );
 }
