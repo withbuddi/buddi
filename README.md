@@ -6,14 +6,17 @@ Agents get real access to your data and your tools — a bank export, an inbox, 
 file you drop on them — and you reach them from Telegram, from a terminal, and
 from a small dashboard on localhost. They also work while you are not there:
 scheduled missions, watchers that only speak when something is wrong, one-off
-reminders they set themselves. Anything irreversible stops and waits for you to
-approve it, and when there is a next move worth making they offer it as a
+reminders they set themselves. Gated actions wait for approval; host commands can also use
+an explicit, revocable conversation or per-agent standing permission. When there is a next move worth making they offer it as a
 button rather than a paragraph. Everything runs on your machine, against a Postgres container on
 your machine; the one thing that leaves is the prompt, which goes to whichever
 AI provider each agent's file pins — so that one line in that one file decides
 which company sees that agent's conversations.
 
 Design and rationale: [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+Host shell/Python execution, file processing and permission scopes:
+[docs/host-execution.md](./docs/host-execution.md). Host access is optional and **not sandboxed**.
 
 ---
 
@@ -643,6 +646,12 @@ pending, where `/approvals` and Telegram can still reach it.
 
 ### The dashboard
 
+**Providers** (`#/providers`) manages model-provider credentials through the host
+vault and stores non-secret defaults in Postgres. Save, replace, remove, or test
+a credential, then choose each agent's provider/model in **Agents**. Changes
+apply to new runs without restarting; active runs keep their selected adapter.
+See [provider management](docs/providers.md) for vault setup and removal behavior.
+
 `buddi serve` serves it on `127.0.0.1:4317`. `buddi dashboard` prints a
 single-use link, valid five minutes, and opens it — or, once, `buddi dashboard
 --install-app` puts a **"Buddi Dashboard"** in `~/Applications` so opening it is
@@ -659,6 +668,15 @@ its worst day marked, a staged import as its rows, a gated action as its full
 envelope with Approve and Reject under it. The canvas is rendered from the
 conversation's own tool calls, so it fills in live as a run proceeds and works
 just as well on a mission that ran at 6am and on a conversation from last month.
+
+The chat header's **History** button lists that agent's recent conversations
+with previews and dates. Open one to inspect its messages and canvas; opening
+history never runs a task. Agent links use `#/chat/<agent-id>` and exact threads
+use `#/chat/<agent-id>/<conversation-id>`, so bookmarks, reload and browser
+Back/Forward retain the selection. Result tabs have **×** buttons; dismissal is
+remembered in this browser tab across refreshes, and clicking the original tool
+chip reopens the panel. Closing a result does not delete messages or stop apps.
+Pending approvals and live computer controls stay visible.
 
 Nothing on the canvas is written for a particular plugin. The dashboard ships
 seven **generic renderers** — `timeseries`, `table`, `bars`, `keyvalue`,

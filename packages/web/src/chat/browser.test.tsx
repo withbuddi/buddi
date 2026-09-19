@@ -1,10 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, chatApi, type BrowserStatus } from '../api';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import { conversationBrowser } from './browser';
+import type { ChatConversation } from './types';
 
 vi.mock('./stream', () => ({ openChatStream: () => ({ close() {} }) }));
 const status: BrowserStatus = {
@@ -27,6 +28,46 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('conversation browser canvas', () => {
+  it('opens small tool results on demand, without creating noisy tabs beforehand', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
+    vi.mocked(chatApi.conversation).mockResolvedValue({ conversationId: 'c1', agentId: 'keeper', messages: [
+      { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'tiny', name: 'shed.status', input: { target: 'garden' } }] },
+      { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'tiny', name: 'shed.status', ok: true, output: 'All ready' }] },
+    ] });
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const chip = await screen.findByRole('button', { name: /Shed · Status/ });
+    expect(screen.queryByRole('tab', { name: /Shed · Status/ })).not.toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(await screen.findByRole('tab', { name: /Shed · Status/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Raw JSON' }));
+    expect(screen.getByText(/"target": "garden"/)).toHaveTextContent('All ready');
+  });
+  it('restores an approval inside chat after reload and removes it after a decision', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
+    const transcript: ChatConversation = { conversationId: 'c1', agentId: 'keeper', messages: [
+      { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'gate', name: 'shed.run', input: { command: 'calculate' } }] },
+      { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'gate', name: 'shed.run', ok: true, output: 'awaiting owner approval', approval: { id: 'a1', state: 'pending' } }] },
+    ] };
+    vi.mocked(chatApi.conversation).mockResolvedValue(transcript);
+    const approval = { id: 'a1', state: 'pending', tool: 'shed.run', permissionScopes: ['conversation', 'always'], preview: 'Run calculate', envelope: {}, canonicalArgs: {} } as never;
+    vi.spyOn(api, 'approval').mockResolvedValue(approval);
+    vi.spyOn(api, 'overview').mockResolvedValue({} as never);
+    vi.spyOn(api, 'decide').mockImplementation(async () => {
+      const resolved = structuredClone(transcript);
+      const block = resolved.messages[1]!.blocks[0]!;
+      if (block.type === 'tool_result') { block.approval!.state = 'succeeded'; block.output = '42'; }
+      vi.mocked(chatApi.conversation).mockResolvedValue(resolved);
+      return { action: { ...approval as object, state: 'succeeded' } as never, execution: { state: 'succeeded' } };
+    });
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const inline = await screen.findByTestId('inline-approval');
+    expect(screen.getByTestId('messages')).toContainElement(inline);
+    expect(await within(inline).findByRole('button', { name: 'Always: this agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Shed · Run Awaiting approval/ })).toBeInTheDocument();
+    fireEvent.click(within(inline).getByRole('button', { name: 'Allow once' }));
+    await waitFor(() => expect(screen.queryByTestId('inline-approval')).not.toBeInTheDocument());
+    expect(api.decide).toHaveBeenCalledWith('a1', 'approve', undefined);
+  });
   it('opens a matching session beside chat with scoped controls and a full-page link', async () => {
     render(<ChatPage {...props} />);
     expect(await screen.findByRole('tab', { name: 'Browser' })).toHaveAttribute('data-state', 'active');

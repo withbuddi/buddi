@@ -228,7 +228,7 @@ export async function readChatConversations(
 export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string }
+  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string }
   | { type: 'unknown'; raw: unknown };
 
@@ -358,6 +358,14 @@ export async function readChatTranscript(
     }
   }
   const artifacts = await artifactsById(pool, [...artifactIds]);
+  // Gates are persisted as provider-compatible text. Join their durable state
+  // here so reloads and decisions from another surface show the same prompt.
+  const { rows: actions } = await pool.query(
+    `select a.id, a.tool, case when p.state = 'pending' and a.expires_at <= $2 then 'expired' else p.state end as state,
+            p.outcome from core.actions a join core.approvals p on p.action_id = a.id
+      where a.conversation_id = $1::uuid`, [conversationId, now],
+  );
+  const approvals = new Map<string, TranscriptApproval>(actions.map(a => [String(a.id), a as TranscriptApproval]));
 
   // Untaken, unexpired, this conversation's. A chip the owner clicks goes
   // through the same claim-once take the Telegram tap does.
@@ -389,7 +397,7 @@ export async function readChatTranscript(
       id: m.id,
       role: m.role,
       at: m.at,
-      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts)),
+      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals)),
     })),
     ...(await runsOf(pool, conversationId)),
   };
@@ -409,10 +417,13 @@ function safeParse(text: string): unknown {
   }
 }
 
+interface TranscriptApproval { id: string; tool: string; state: string; outcome: unknown }
+
 function toChatBlock(
   block: Record<string, any>,
   toolNames: Map<string, string>,
   artifacts: Map<string, ArtifactRow>,
+  approvals: Map<string, TranscriptApproval>,
 ): ChatBlock {
   switch (block.type) {
     case 'text':
@@ -429,6 +440,21 @@ function toChatBlock(
       const ok = block.is_error !== true;
       const content = block.content;
       const output = typeof content === 'string' ? maybeJson(content) : (content ?? null);
+      const gateId = typeof content === 'string'
+        ? /^awaiting owner approval \(action ([0-9a-f-]{36})\); this effect has not happened$/.exec(content)?.[1]
+        : undefined;
+      const action = gateId ? approvals.get(gateId) : undefined;
+      if (action && action.tool === toolNames.get(toolUseId)) {
+        const failed = ['rejected', 'expired', 'failed', 'unknown'].includes(action.state);
+        return {
+          type: 'tool_result', toolUseId, name: action.tool, ok: !failed,
+          approval: { id: action.id, state: action.state },
+          output: action.state === 'pending' ? output : action.state === 'succeeded'
+            ? (action.outcome as { result?: unknown } | null)?.result ?? null
+            : action.outcome ?? { state: action.state },
+          ...(failed ? { error: `Action ${action.state}` } : {}),
+        };
+      }
       return {
         type: 'tool_result',
         toolUseId,
@@ -561,6 +587,7 @@ async function runsOf(
  * ------------------------------------------------------------------ */
 
 export interface WebChatDeps {
+  onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook;
   pool: Pool;
   catalog: AgentCatalog;
   registry: ToolRegistry;
@@ -682,7 +709,11 @@ export class WebChat {
        */
       const decided = await conversationForTurn(this.#deps.pool, {
         current: conversationId,
-        start: () => createConversation(this.#deps.pool, agent.id),
+        start: async (boundary) => {
+          const next = await createConversation(this.#deps.pool, agent.id);
+          if (boundary) await this.#deps.onConversationRollover?.(agent.id, boundary.previousConversationId, next, boundary.reason);
+          return next;
+        },
         now: this.#deps.now(),
         log: this.#log,
       });
@@ -759,6 +790,14 @@ export class WebChat {
   }
 
   /** Wait for every queued run to finish. Used by tests and by shutdown. */
+  resumeHost(action: { agentId: string; conversationId: string | null }, resume: NonNullable<RunAgentOptions['resume']>): void {
+    if (!action.conversationId) return;
+    const agent = this.#deps.catalog.get(action.agentId);
+    if (!agent) return;
+    const conversationId = action.conversationId;
+    this.#enqueue(conversationId, () => this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume }));
+  }
+
   async drain(): Promise<void> {
     await Promise.all([...this.#queues.values()]);
   }
@@ -786,6 +825,7 @@ export class WebChat {
     runId: string;
     text: string;
     files: ArtifactRow[];
+    resume?: RunAgentOptions['resume'];
   }): Promise<void> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
@@ -869,7 +909,7 @@ export class WebChat {
       agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS, ...ASK_TOOLS] },
       provider,
       registry,
-      ctx: ownerRequestContext(deps.ctx, turn.text, runId),
+      ctx: turn.resume ? deps.ctx : ownerRequestContext(deps.ctx, turn.text, runId),
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.
@@ -877,7 +917,7 @@ export class WebChat {
       conversationId,
       surface: WEB_SURFACE,
       runId,
-      userMessage,
+      ...(turn.resume ? { resume: turn.resume } : { userMessage }),
       systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : [])].join(
         '\n\n',
       ),

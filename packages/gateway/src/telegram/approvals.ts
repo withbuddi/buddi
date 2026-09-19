@@ -37,6 +37,7 @@ import {
   type Queryable,
   type ToolContext,
   type ToolRegistry,
+  type PermissionScope,
 } from '@buddi/core';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -55,7 +56,7 @@ export const TELEGRAM_WORKER = 'telegram-approval';
 export type CallbackQuery = NonNullable<TelegramUpdate['callback_query']>;
 
 /** `apr:<actionId>:<approve|reject>` */
-export function approvalCallbackData(actionId: string, decision: 'approve' | 'reject'): string {
+export function approvalCallbackData(actionId: string, decision: 'approve' | 'reject' | 'conversation' | 'always'): string {
   const data = `${CALLBACK_PREFIX}:${actionId}:${decision}`;
   if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
     // A uuid keeps this well under the limit; anything that does not is a bug
@@ -68,6 +69,7 @@ export function approvalCallbackData(actionId: string, decision: 'approve' | 're
 export interface ParsedCallback {
   actionId: string;
   decision: Decision;
+  permissionScope?: PermissionScope;
 }
 
 /**
@@ -78,23 +80,28 @@ export interface ParsedCallback {
  * approval callback and is treated as if it had never arrived.
  */
 export function parseApprovalCallback(data: string | undefined): ParsedCallback | undefined {
-  const m = /^apr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approve|reject)$/i.exec(
+  const m = /^apr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approve|reject|conversation|always)$/i.exec(
     (data ?? '').trim(),
   );
   if (!m) return undefined;
   return {
     actionId: (m[1] as string).toLowerCase(),
-    decision: m[2] === 'approve' ? 'approved' : 'rejected',
+    decision: m[2]?.toLowerCase() === 'reject' ? 'rejected' : 'approved',
+    ...(['conversation', 'always'].includes(m[2]!.toLowerCase()) ? { permissionScope: m[2]!.toLowerCase() as PermissionScope } : {}),
   };
 }
 
-export function approvalKeyboard(actionId: string): InlineKeyboardMarkup {
+export function approvalKeyboard(actionId: string, host = false): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
-        { text: '✅ Approve', callback_data: approvalCallbackData(actionId, 'approve') },
+        { text: host ? '✅ Allow once' : '✅ Approve', callback_data: approvalCallbackData(actionId, 'approve') },
         { text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') },
       ],
+      ...(host ? [[
+        { text: 'Auto: conversation', callback_data: approvalCallbackData(actionId, 'conversation') },
+        { text: 'Always: this agent', callback_data: approvalCallbackData(actionId, 'always') },
+      ]] : []),
     ],
   };
 }
@@ -158,6 +165,7 @@ function firstLine(text: string): string {
 }
 
 export interface ApprovalsOptions {
+  resumeInteractive?: (chatId: string, action: ActionRecord, outcome: { actionId: string; state: ApprovalState; result?: unknown }) => Promise<void>;
   api: Pick<TelegramApi, 'sendMessage' | 'editMessageText' | 'answerCallbackQuery'>;
   pool: Queryable;
   /** Needed to execute an approved action; the Executor looks tools up in it. */
@@ -196,7 +204,7 @@ export class TelegramApprovals {
     return this.#opts.api.sendMessage(
       chatId,
       approvalRequestText(action, this.#opts.timezone),
-      { replyMarkup: approvalKeyboard(action.id) },
+      { replyMarkup: approvalKeyboard(action.id, action.tool === 'host.exec') },
     );
   }
 
@@ -256,6 +264,8 @@ export class TelegramApprovals {
       by: resolution.ownerId,
       via: SURFACE,
       now: this.#now(),
+      permissionScope: parsed.permissionScope,
+      registry: this.#opts.registry,
     });
 
     if (!decision.ok) {
@@ -302,6 +312,10 @@ export class TelegramApprovals {
       state,
       ...(outcome.ok ? { result: outcome.result } : { error: outcome.message }),
     });
+    if (action.tool === 'host.exec' && !action.jobId && outcome.ok &&
+        (outcome.result as { state?: string })?.state === 'completed') {
+      await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state, result: outcome.result });
+    }
   }
 
   /** Wake the suspended run, if there is one. Never fails the decision. */

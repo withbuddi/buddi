@@ -73,6 +73,14 @@ const request: CompletionRequest = {
   tools,
 };
 
+it('reports rate limits immediately for connection probes', async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(429, { error: { message: 'limited', type: 'rate_limit_error' } }));
+  const sleep = vi.fn(noSleep);
+  const provider = createOpenAiProvider(resolved(), { fetch: fetchMock, sleep, maxStatusRetries: 0 });
+  await expect(provider.complete(request)).rejects.toMatchObject({ status: 429 });
+  expect(fetchMock).toHaveBeenCalledOnce(); expect(sleep).not.toHaveBeenCalled();
+});
+
 /** Send `req` and return the parsed wire body plus the URL and headers used. */
 async function send(req: CompletionRequest, body: unknown = okBody()) {
   const fetchMock = vi.fn(async () => jsonResponse(200, body));

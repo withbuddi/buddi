@@ -56,6 +56,14 @@ function resolve(kind: 'api-key' | 'subscription-token') {
 
 const noSleep = async () => {};
 
+it('reports rate limits immediately for connection probes', async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(429, { error: { type: 'rate_limit_error', message: 'limited' } }));
+  const sleep = vi.fn(noSleep);
+  const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock, sleep, maxStatusRetries: 0 });
+  await expect(provider.complete(request)).rejects.toMatchObject({ status: 429 });
+  expect(fetchMock).toHaveBeenCalledOnce(); expect(sleep).not.toHaveBeenCalled();
+});
+
 it('forwards cancellation to the transport and never retries an aborted request', async () => {
   const controller = new AbortController();
   const fetchMock = vi.fn(async (_url: unknown, init: { signal?: AbortSignal } | undefined) => {

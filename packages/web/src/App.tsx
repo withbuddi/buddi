@@ -15,12 +15,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, chatApi } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
-import { CHAT_ROUTE, NAV, SECTIONS } from './routes';
+import { CHAT_ROUTE, NAV, SECTIONS, chatRoute, parseChatRoute } from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
 import { Agents } from './views/Agents';
+import { Providers } from './views/Providers';
 import { Browser } from './views/Browser';
 import { Approvals } from './views/Approvals';
 import { Conversations } from './views/Conversations';
@@ -49,15 +50,17 @@ export const NARROW_QUERY = '(max-width: 900px)';
  */
 export const AGENT_RAIL_QUERY = '(max-width: 1080px)';
 
-export function useHash(): [string, (next: string) => void] {
+export function useHash(): [string, (next: string, replace?: boolean) => void] {
   const [hash, setHash] = useState(() => window.location.hash || CHAT_ROUTE);
   useEffect(() => {
     const onChange = (): void => setHash(window.location.hash || CHAT_ROUTE);
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);
   }, []);
-  const navigate = useCallback((next: string) => {
-    window.location.hash = next;
+  const navigate = useCallback((next: string, replace = false) => {
+    if (replace) window.history.replaceState(null, '', next);
+    else window.location.hash = next;
+    setHash(next);
   }, []);
   return [hash, navigate];
 }
@@ -132,9 +135,16 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hash]);
 
   const ordered = groupAgents(agents, defaultAgentId);
+  const chatLocation = parseChatRoute(hash);
+  const selectedAgentId = chatLocation?.agentId ?? agentId;
+  useEffect(() => {
+    if (chatLocation) setAgentId(chatLocation.agentId);
+  }, [chatLocation?.agentId]);
+  const selectAgent = (id: string): void => { setAgentId(id); navigate(chatRoute(id)); };
+  const conversationOpened = useCallback((id: string, conversation: string, replace = true) => navigate(chatRoute(id, conversation), replace), [navigate]);
 
   useEffect(() => {
     api
@@ -159,7 +169,7 @@ export function App(): JSX.Element {
 
   const conversationId = /^#\/conversations\/(.+)$/.exec(hash)?.[1] ?? null;
   const section = conversationId ? '#/conversations' : hash || CHAT_ROUTE;
-  const onChat = section === CHAT_ROUTE || section === '#' || section === '';
+  const onChat = !!chatLocation || section === CHAT_ROUTE || section === '#' || section === '';
 
   return (
     <Tooltip.Provider delayDuration={400}>
@@ -173,19 +183,16 @@ export function App(): JSX.Element {
             onTheme={setTheme}
             onNewConversation={() => {
               setNewConversation((count) => count + 1);
-              if (!onChat) navigate(CHAT_ROUTE);
+              navigate(selectedAgentId ? chatRoute(selectedAgentId, 'new') : CHAT_ROUTE);
             }}
           />
 
           {railNarrow ? null : (
             <AgentRail
               agents={ordered}
-              currentId={agentId}
+              currentId={selectedAgentId}
               attention={attention}
-              onSelect={(id) => {
-                setAgentId(id);
-                if (!onChat) navigate(CHAT_ROUTE);
-              }}
+              onSelect={selectAgent}
             />
           )}
 
@@ -193,8 +200,10 @@ export function App(): JSX.Element {
             <ChatPage
               timezone={timezone}
               agents={ordered}
-              agentId={agentId}
-              onSelectAgent={setAgentId}
+              agentId={selectedAgentId}
+              requestedConversationId={chatLocation?.conversationId}
+              onConversationOpened={conversationOpened}
+              onSelectAgent={selectAgent}
               attention={attention}
               agentsInHeader={railNarrow}
               narrow={narrow}
@@ -273,6 +282,8 @@ function Section({
       return <Sentinels timezone={timezone} />;
     case '#/agents':
       return <Agents />;
+    case '#/providers':
+      return <Providers />;
     default:
       return <Overview timezone={timezone} onNavigate={navigate} />;
   }

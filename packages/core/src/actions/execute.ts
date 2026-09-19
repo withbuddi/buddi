@@ -37,6 +37,7 @@ import {
 
 /** What the Executor needs of a registered tool. `ToolRegistry` satisfies it. */
 export interface ExecutableTool {
+  reusableApproval?: boolean;
   name: string;
   /** The plugin version, part of the approved hash. */
   version: string;
@@ -166,6 +167,16 @@ export async function executeApproved(
     ...(action.conversationId ? { conversationId: action.conversationId } : {}),
     ...(action.jobId ? { jobId: action.jobId } : {}),
   };
+
+  if (action.decidedVia?.startsWith('permission:')) {
+    const { rows } = await pool.query(`select id from core.tool_permissions where id=$1
+      and owner_id=$2 and agent_id=$3 and tool=$4 and tool_version=$5
+      and conversation_id in ('', $6)`, [action.decidedVia.slice('permission:'.length),
+      ctx.ownerId, action.agentId, action.tool, action.toolVersion, action.conversationId]);
+    if (!tool.reusableApproval || !rows.length) return settleWithoutDispatch(pool, action, 'effect-changed', {
+      message: 'The standing permission was revoked; request approval again.',
+    });
+  }
 
   // Resolve references again before creating an effect attempt. Freeze the
   // description clock at creation: derived preview dates must not drift just

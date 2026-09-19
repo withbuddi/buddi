@@ -86,6 +86,7 @@ export interface OpenAiProviderOptions {
   onRetry?: (notice: RetryNotice) => void;
   /** Default output-token cap when a request does not set one. */
   maxTokens?: number;
+  maxStatusRetries?: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -443,7 +444,7 @@ export function createOpenAiProvider(
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        if (statusFailures > RETRY_DELAYS_MS.length) break;
+        if (statusFailures > (options.maxStatusRetries ?? RETRY_DELAYS_MS.length)) break;
         options.onRetry?.({
           attempt: statusFailures,
           delayMs: wait,

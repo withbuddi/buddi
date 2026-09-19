@@ -109,6 +109,8 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   /** Shown to the model. */
   description: string;
   tier: Tier;
+  /** Opt-in only: owner may remember approval for this tool/agent/version. */
+  reusableApproval?: boolean;
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   /**
@@ -130,6 +132,8 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   timeoutMs?: number;
   /** Dependent calls in the same model turn must be skipped after a failure. */
   sequential?: boolean;
+  /** A successful call leaves a decision with the owner: no more tools this run. */
+  waitsForOwner?: boolean;
   /** Optional ephemeral image for the next model call; never stored as base64. */
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }

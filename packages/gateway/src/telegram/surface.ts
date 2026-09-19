@@ -177,6 +177,9 @@ export const HELP = [
   '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
   '/approvals — anything waiting for your approval',
+  '/host — host execution permissions and running commands',
+  '/hoststop — interrupt all host commands',
+  '/hostrevoke — revoke all host auto-permissions and interrupt commands',
   '/devices — the devices paired to this installation',
   '/new — make a new agent: the maker interviews you and writes the file',
   '/reset — start a fresh conversation with the active agent',
@@ -478,6 +481,7 @@ export interface RunAttachment {
 }
 
 export interface RunRequest {
+  resume?: import('@buddi/runtime').ApprovalResume;
   conversationId: string;
   chatId: string;
   text: string;
@@ -555,6 +559,9 @@ export interface ApprovalHooks {
 }
 
 export interface TelegramSurfaceOptions {
+  onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook;
+  /** Authenticated, immediate controls: must not queue behind a long command. */
+  hostControl?: (ownerId: string, command: 'status' | 'stop' | 'revoke') => Promise<string>;
   api: TelegramApi;
   pool: Queryable;
   /** Every agent this installation can talk to; the surface only reads it. */
@@ -991,12 +998,14 @@ export async function conversationForChatTurn(
   pool: Queryable,
   chatId: string,
   agentId: string,
-  opts: { now: Date; continuation?: boolean | undefined; log?: ((line: string) => void) | undefined },
+  opts: { now: Date; continuation?: boolean | undefined; log?: ((line: string) => void) | undefined; onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook | undefined },
 ): Promise<TurnConversation> {
   const current = await getConversationForChat(pool, chatId, agentId);
   return conversationForTurn(pool, {
     ...(current === undefined ? {} : { current }),
-    start: () => startNewConversationForChat(pool, chatId, agentId),
+    start: (boundary) => startNewConversationForChat(pool, chatId, agentId, boundary
+      ? next => opts.onConversationRollover?.(agentId, boundary.previousConversationId, next, boundary.reason) ?? Promise.resolve()
+      : undefined),
     now: opts.now,
     ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
     ...(opts.log === undefined ? {} : { log: opts.log }),
@@ -1008,8 +1017,10 @@ export async function startNewConversationForChat(
   pool: Queryable,
   chatId: string,
   agentId: string,
+  beforeAdopt?: (conversationId: string) => Promise<void>,
 ): Promise<string> {
   const id = await createConversation(pool, agentId);
+  await beforeAdopt?.(id);
   await setConversationForChat(pool, chatId, agentId, id);
   return id;
 }
@@ -1454,6 +1465,14 @@ export class TelegramSurface {
     // rides along: it fills in a device that paired without one (the startup
     // allowlist pairs by id alone) and never overwrites a stored label.
     await this.#touch(userId, senderLabel(message.from));
+
+    const hostCommand = /^\/(host|hoststop|hostrevoke)(?:@\w+)?\s*$/i.exec(message.text ?? '');
+    if (hostCommand && this.#opts.hostControl) {
+      const kind = hostCommand[1]!.toLowerCase();
+      const reply = await this.#opts.hostControl(resolution.ownerId, kind === 'host' ? 'status' : kind === 'hoststop' ? 'stop' : 'revoke');
+      await this.#opts.api.sendMessage(chatId, reply);
+      return;
+    }
 
     // The owner said something. That is the only evidence the arc is being
     // read, so it clears the unanswered counter — before the message is even
@@ -2007,6 +2026,7 @@ export class TelegramSurface {
         now: new Date(this.#now()),
         ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
         log: (line) => this.#log(`telegram: chat ${chatId} — ${line}`),
+        onConversationRollover: this.#opts.onConversationRollover,
       },
     );
     // The thread that question was asked in is over; nothing may still claim

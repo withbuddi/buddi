@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
 import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { Empty, ErrorBanner, Panel, useAsync } from '../ui';
+import { chatRoute } from '../routes';
 
 export function Conversations({
   timezone,
@@ -46,7 +47,7 @@ export function Conversations({
             <tbody>
               {data.conversations.map((c: ConversationSummary) => (
                 <tr key={c.id} className="clickable" onClick={() => onSelect(c.id)}>
-                  <td className="mono">{c.agentId}</td>
+                  <td className="mono"><a href={chatRoute(c.agentId, c.id)} onClick={event => event.stopPropagation()} title="Open this conversation in chat">{c.agentId} ↗</a></td>
                   <td>{c.opening ? truncate(c.opening, 90) : <span className="muted">(no opening text)</span>}</td>
                   <td className="num">{c.messageCount}</td>
                   <td className="num">{c.runs}</td>
@@ -108,6 +109,7 @@ function TranscriptView({
         <Empty>Loading…</Empty>
       ) : (
         <>
+          <p><a className="wb-btn" href={chatRoute(transcript.agentId, id)}>Open in chat ↗</a></p>
           <div className="cards">
             <div className="card">
               <div className="k">Agent</div>

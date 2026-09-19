@@ -145,8 +145,53 @@ describe('host browser authority and lifecycle', () => {
   it('treats observation loss after a successful action as completed, not retryable', async () => {
     const { service, driver, ctx } = await setup();
     vi.mocked(driver.observe).mockRejectedValue(new Error('page vanished'));
-    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, message: expect.stringContaining('do not repeat') });
+    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, observed: false, message: expect.stringContaining('Do not repeat') });
     expect(driver.perform).toHaveBeenCalledTimes(1);
+    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false, message: expect.stringContaining('page vanished') });
+    await expect(service.execute(navigate, ctx)).rejects.toThrow('human control');
+    expect(driver.perform).toHaveBeenCalledTimes(1);
+  });
+  it.each(['observe', 'screenshot'] as const)('surfaces %s failure as a failed observation, clears evidence and stops blind retries', async (method) => {
+    const { service, driver, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver[method]).mockRejectedValue(new BrowserPreconditionError('The selected app is no longer in front'));
+    const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
+    const failed = await registry.invoke('browser.act', observe, ctx);
+    expect(failed).toMatchObject({ ok: false, reason: 'tool-error', message: expect.stringContaining('no longer in front') });
+    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ completed: false, observed: false, state: 'paused' });
+    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
+    expect(service.status().page).toBeUndefined();
+    expect(service.screenshot()).toBeUndefined();
+    expect(driver.observe).toHaveBeenCalledTimes(2); // No hidden recovery retry.
+    await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
+    expect(driver.perform).toHaveBeenCalledTimes(2);
+
+    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
+    vi.mocked(driver.screenshot).mockResolvedValue(Buffer.from('new screenshot'));
+    await service.control('resume');
+    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
+    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
+    await expect(service.execute(observe, ctx)).resolves.toMatchObject({ completed: true, observation: { id: 'fresh' } });
+    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: true });
+    expect(service.status().message).toBeUndefined();
+  });
+  it('keeps release available after observation fails', async () => {
+    const { service, driver, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.observe).mockRejectedValue(new Error('capture unavailable'));
+    await expect(service.execute(observe, ctx)).rejects.toThrow('capture unavailable');
+    await expect(service.execute(commandSchema.parse({ action: 'close' }), ctx)).resolves.toMatchObject({ closed: true });
+    expect(service.status()).toMatchObject({ state: 'idle', hasScreenshot: false });
+  });
+  it('does not claim fresh evidence when precondition recovery also fails', async () => {
+    const { service, driver, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('Focus changed'));
+    vi.mocked(driver.observe).mockRejectedValue(new Error('Cannot uniquely identify the focused native window'));
+    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
+    await expect(service.execute(click, ctx)).rejects.toThrow('Cannot uniquely identify');
+    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
+    expect(service.status().page).toBeUndefined();
   });
   it('pauses after an uncertain submission and does not retry it', async () => {
     const { service, driver, ctx } = await setup();

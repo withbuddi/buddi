@@ -28,6 +28,51 @@ async function setup(options: ConstructorParameters<typeof BrowserManager>[1] = 
   managers.push(manager); await manager.enable(); return { manager, drivers };
 }
 describe('multiple browser conversations', () => {
+  it('continues a task into a new transcript without opening another app or reusing evidence', async () => {
+    const { manager, drivers } = await setup({ allowOpen: true, maxSessions: 1 });
+    await manager.execute(navigate, context('a', 'old'));
+    const before = manager.status();
+    expect(manager.rollover({ ownerId: 'owner', agentId: 'a', previousConversationId: 'old', conversationId: 'next' })).toBe(true);
+    expect(manager.status()).toMatchObject({ state: 'running', hasScreenshot: false, session: { id: before.session!.id, conversationId: 'next', expiresAt: before.session!.expiresAt } });
+    expect(manager.status().page).toBeUndefined();
+    expect(drivers[0]!.close).not.toHaveBeenCalled();
+    expect(drivers[0]!.perform).toHaveBeenCalledTimes(1);
+    const click = { action: 'click', observation: 'o0', target: { ref: 'ax1', frame: 0, by: 'text' } } as const;
+    await expect(manager.execute(click, context('a', 'next'))).rejects.toThrow('observe the current page');
+    await expect(manager.execute(navigate, context('a', 'old'))).rejects.toThrow('ended');
+    await manager.execute(observe, context('a', 'next'));
+    await manager.execute(click, context('a', 'next'));
+    expect(drivers).toHaveLength(1);
+    await manager.execute({ action: 'close' }, context('a', 'next'));
+    await manager.execute(navigate, context('a', 'fresh'));
+  });
+  it('never steals another owner/agent session or resumes a paused task during rollover', async () => {
+    const { manager } = await setup({ allowOpen: true, maxSessions: 1 });
+    await manager.execute(navigate, context('a', 'old'));
+    const input = { ownerId: 'owner', agentId: 'a', previousConversationId: 'old', conversationId: 'next' };
+    expect(manager.rollover({ ...input, ownerId: 'stranger' })).toBe(false);
+    expect(manager.rollover({ ...input, agentId: 'b' })).toBe(false);
+    await manager.control('takeover', manager.status().session!.id);
+    expect(manager.rollover(input)).toBe(true);
+    expect(manager.status().state).toBe('paused');
+    await expect(manager.execute(observe, context('a', 'next'))).rejects.toThrow('human control');
+    await manager.control('resume', manager.status().session!.id);
+    await expect(manager.execute(navigate, context('a', 'next'))).rejects.toThrow('observe the current page');
+    await manager.execute(observe, context('a', 'next'));
+    await manager.control('stop');
+    expect(manager.rollover({ ...input, previousConversationId: 'next', conversationId: 'later' })).toBe(false);
+  });
+  it('refuses transfer while an action is running', async () => {
+    const { manager, drivers } = await setup();
+    await manager.execute(navigate, context('a', 'old'));
+    let finish!: () => void;
+    vi.mocked(drivers[0]!.perform).mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const pending = manager.execute(observe, context('a', 'old'));
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(() => manager.rollover({ ownerId: 'owner', agentId: 'a', previousConversationId: 'old', conversationId: 'next' })).toThrow('settle');
+    expect(manager.status().session?.conversationId).toBe('old');
+    finish(); await pending;
+  });
   it('a cancelled agent closes only its own tabs and cannot reopen with that request', async () => {
     const { manager, drivers } = await setup(); const controller = new AbortController();
     await manager.execute(navigate, context('a')); await manager.execute(navigate, context('b'));

@@ -30,7 +30,7 @@ export interface AgentsResponse {
 export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown }
+  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string; mime: string; kind: string };
 
 export interface ChatMessage {
@@ -94,10 +94,12 @@ export interface ChatConversation {
 
 export interface ConversationListItem {
   id: string;
-  agentId: string;
-  createdAt: string;
+  agentId?: string;
+  createdAt?: string;
+  startedAt?: string | null;
   lastMessageAt: string | null;
-  opening: string | null;
+  opening?: string | null;
+  preview?: string;
   messageCount: number;
 }
 

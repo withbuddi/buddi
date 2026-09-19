@@ -27,6 +27,7 @@ import {
   type Queryable,
   type ToolContext,
   type ToolRegistry,
+  type PermissionScope,
 } from '@buddi/core';
 import type { ApprovalResume } from '@buddi/runtime';
 import { decidedText, pendingText } from '../telegram/approvals.js';
@@ -84,7 +85,7 @@ export interface ApprovalPort {
   /** A full id for what the owner typed, or the sentence to print instead. */
   resolveId(input: string): Promise<{ ok: true; id: string } | { ok: false; text: string }>;
   /** Decide one action: approve runs it through the Executor, reject does not. */
-  decide(actionId: string, decision: Decision): Promise<DecisionOutcome>;
+  decide(actionId: string, decision: Decision, scope?: PermissionScope): Promise<DecisionOutcome>;
 }
 
 export class CliApprovals implements ApprovalPort {
@@ -133,7 +134,7 @@ export class CliApprovals implements ApprovalPort {
    * Decide one action. Approve runs it through the Executor; reject does not.
    * Either way the suspended run is told, here or through the queue.
    */
-  async decide(actionId: string, decision: Decision): Promise<DecisionOutcome> {
+  async decide(actionId: string, decision: Decision, scope: PermissionScope = 'once'): Promise<DecisionOutcome> {
     const pool = this.#opts.pool;
     const result = await decideApproval(pool, {
       actionId,
@@ -141,6 +142,8 @@ export class CliApprovals implements ApprovalPort {
       by: this.#opts.ownerId,
       via: SURFACE,
       now: this.#now(),
+      permissionScope: scope,
+      registry: this.#opts.registry,
     });
 
     if (!result.ok) {

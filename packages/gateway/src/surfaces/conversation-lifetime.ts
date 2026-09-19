@@ -48,6 +48,12 @@
  *    owner, not by conversation: `memoryPreamble` is asked for by agent id on
  *    every run, and the memory plugin's own tables are untouched here. What an
  *    agent has learned about the owner is not a property of a chat thread.
+ *  - **An active computer/browser task survives size rollover.** The dashboard
+ *    and Telegram composition roots transfer only that same agent's live task
+ *    before adopting the new transcript, carrying bounded conversational text.
+ *    Old evidence is invalidated and a fresh observation is mandatory. Pause,
+ *    expiry and Stop still apply; explicit reset and idle rollover do not adopt
+ *    control, and no host execution permission follows the task.
  *  - **Pending approvals survive.** An action records the conversation that
  *    proposed it and the run resumes *that* conversation when the owner
  *    decides, whichever conversation the chat has moved on to. A boundary can
@@ -189,7 +195,7 @@ export interface TurnConversationInput {
    * `core.surface_conversations` row, the terminal its per-agent map, the
    * dashboard hands the new id back to the page.
    */
-  start: () => Promise<string>;
+  start: (boundary?: { previousConversationId: string; reason: LifetimeReason }) => Promise<string>;
   now: Date;
   /**
    * This message belongs to the previous turn — the owner answering a question
@@ -255,7 +261,7 @@ export async function conversationForTurn(
     input.log?.(`conversation lifetime: withdrawing offers of ${current} failed: ${errorText(err)}`);
   }
 
-  const conversationId = await input.start();
+  const conversationId = await input.start({ previousConversationId: current, reason });
   input.log?.(
     `conversation lifetime: ${current} ended (${reason}: ${vitals.messages} messages, ` +
       `${vitals.chars} chars) — this turn runs in ${conversationId}`,

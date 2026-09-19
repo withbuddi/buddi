@@ -18,6 +18,9 @@
 import type { Queryable } from '../owner.js';
 import { emitActionEvent } from './store.js';
 import { toActionRecord, type ActionRecord, type ApprovalState } from './types.js';
+import { getAction } from './store.js';
+import type { ToolLookup } from './execute.js';
+import type { PermissionScope } from './permissions.js';
 
 export type Decision = 'approved' | 'rejected';
 
@@ -29,13 +32,15 @@ export interface DecideApprovalInput {
   /** The surface the decision arrived on: 'telegram', 'cli', 'web'. */
   via: string;
   now?: Date;
+  permissionScope?: PermissionScope;
+  registry?: ToolLookup;
 }
 
 export type DecideApprovalResult =
   | { ok: true; action: ActionRecord }
   | {
       ok: false;
-      reason: 'not-found' | 'expired' | 'already-decided';
+      reason: 'not-found' | 'expired' | 'already-decided' | 'invalid-permission';
       /** The state the approval is actually in, when there is a row. */
       state?: ApprovalState;
       message: string;
@@ -46,6 +51,16 @@ export async function decideApproval(
   input: DecideApprovalInput,
 ): Promise<DecideApprovalResult> {
   const now = input.now ?? new Date();
+  const remember = input.permissionScope && input.permissionScope !== 'once';
+  if (remember) {
+    const action = await getAction(pool, input.actionId);
+    const tool = action && input.registry?.lookup(action.tool);
+    if (input.decision !== 'approved' || !action || !tool?.reusableApproval ||
+        tool.version !== action.toolVersion || !action.conversationId ||
+        !['conversation', 'always'].includes(input.permissionScope!)) {
+      return { ok: false, reason: 'invalid-permission', message: 'This action does not support that permission scope.' };
+    }
+  }
 
   // An expired request is moved to `expired` before anything else looks at it,
   // so "decide" and "expire" cannot both claim the same pending row.
@@ -61,7 +76,7 @@ export async function decideApproval(
   );
 
   const { rows } = await pool.query(
-    `update core.approvals ap
+    `${remember ? 'with decided as (' : ''}update core.approvals ap
         set state = $2, decided_by = $3, decided_via = $4, decided_at = $5, updated_at = $5
        from core.actions a
       where ap.action_id = a.id
@@ -72,8 +87,14 @@ export async function decideApproval(
                 a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-                ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at`,
-    [input.actionId, input.decision, input.by, input.via, now],
+                ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at${remember ? `
+      ), remembered as (
+        insert into core.tool_permissions (owner_id, agent_id, tool, tool_version, conversation_id, granted_via)
+        select $3, agent_id, tool, tool_version, case when $6 = 'always' then '' else conversation_id::text end, $4 from decided
+        on conflict (owner_id, agent_id, tool, tool_version, conversation_id)
+        do update set granted_via=excluded.granted_via
+      ) select * from decided` : ''}`,
+    [input.actionId, input.decision, input.by, input.via, now, ...(remember ? [input.permissionScope] : [])],
   );
 
   if (rows[0]) {
@@ -88,6 +109,7 @@ export async function decideApproval(
         decidedBy: input.by,
         decidedVia: input.via,
         jobId: action.jobId,
+        permissionScope: input.permissionScope ?? 'once',
       },
       action.conversationId,
     );

@@ -26,9 +26,14 @@ import {
   type Offer,
   type SurfaceIdentity,
   type ToolContext,
+  listToolPermissions,
+  revokeToolPermission,
 } from '@buddi/core';
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
+import { hostService } from '@buddi/tool-host';
+import { hostBrowser } from '@buddi/tool-browser';
+import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ownerRequestContext } from '../surfaces/owner-request.js';
 import {
   ASK_POLICY_SUFFIX,
@@ -59,6 +64,9 @@ import {
   SURFACE,
   TelegramSurface,
   handleLabel,
+  replyText,
+  type RunRequest,
+  type RunReply,
   type RunMission,
 } from './surface.js';
 import type { ReloadableAgentCatalog } from '../agents/catalog.js';
@@ -80,6 +88,9 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'reminders', description: 'What the agents put on the clock' },
   { command: 'quiet', description: 'Stop proactive messages for a while' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
+  { command: 'host', description: 'Host execution permissions and running commands' },
+  { command: 'hoststop', description: 'Interrupt all host commands' },
+  { command: 'hostrevoke', description: 'Revoke all host auto-permissions and stop commands' },
   { command: 'files', description: 'The last files you sent me' },
   { command: 'devices', description: 'Devices paired to this installation' },
   { command: 'reset', description: 'Start a fresh conversation' },
@@ -213,6 +224,7 @@ export interface TelegramDeps {
   /** Every installed agent. One bot, many agents; the chat picks with /use. */
   catalog: AgentCatalog;
   provider: RuntimeProvider;
+  providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
   ctx: ToolContext;
   env: NodeJS.ProcessEnv;
   now: () => Date;
@@ -316,6 +328,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   // resume happens inside core. The queue is wired in so a decided action wakes
   // the run that was suspended waiting for it.
   const jobs = deps.jobs === null ? undefined : (deps.jobs ?? { resumeJob });
+  let runInteractive: (request: RunRequest) => Promise<string | RunReply>;
   const approvals = new TelegramApprovals({
     api,
     pool,
@@ -325,6 +338,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     ...(jobs ? { jobs } : {}),
     log,
     now,
+    resumeInteractive: async (chatId, action, resume) => {
+      const agent = deps.catalog.get(action.agentId);
+      if (!agent || !action.conversationId) return;
+      const reply = await runInteractive({ chatId, conversationId: action.conversationId, agent, text: '', resume });
+      const text = replyText(reply);
+      if (text) await api.sendMessage(chatId, text);
+    },
   });
 
   // Rebound with this surface's name so a first run completed here is recorded
@@ -360,10 +380,25 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         })()
       : { recapMissionId: deps.recapMissionId }),
     approvals,
+    onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, hostBrowser(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+    hostControl: async (ownerId, command) => {
+      const host = hostService(env);
+      const permissions = (await listToolPermissions(pool, ownerId)).filter(p => p.tool === 'host.exec');
+      if (command === 'revoke') {
+        for (const permission of permissions) await revokeToolPermission(pool, ownerId, permission.id);
+        host.stop(ownerId);
+        return 'All host execution auto-permissions revoked; running host commands interrupted. Completed changes are not undone. Future commands will ask for approval.';
+      }
+      if (command === 'stop') return `Interrupted ${host.stop(ownerId)} host command(s). Completed changes are not undone. Use /hostrevoke to also end auto-permissions.`;
+      const runs = host.runs(ownerId);
+      return ['Host execution — not sandboxed', ...permissions.map(p => `${p.agentId}: ${p.conversationId ? 'conversation auto-mode' : 'always allowed'}`),
+        `${runs.length} command(s) running.`, '/hoststop interrupts all host commands.', '/hostrevoke revokes all host auto-permissions and interrupts commands.',
+        'Individual controls and command output are in the dashboard under Host execution.'].join('\n');
+    },
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -394,12 +429,12 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
       const options: RunAgentOptions = {
         agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
-        provider: deps.provider,
+        provider: deps.providerFor ? deps.providerFor(deps.catalog.resolve(agent.id)) : deps.provider,
         registry,
-        ctx: ownerRequestContext(deps.ctx, text),
+        ctx: resume ? deps.ctx : ownerRequestContext(deps.ctx, text),
         pool,
         conversationId,
-        userMessage: text,
+        ...(resume ? { resume } : { userMessage: text }),
         // The declared profile, not a sentence written here: how Telegram
         // renders is a property of Telegram, and it belongs in one place that
         // every surface reads the same way.
@@ -508,6 +543,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     cursor,
     done,
     async stop(): Promise<void> {
+      hostService(env).stop(deps.ctx.ownerId);
       unwatchCatalog();
       surface.stop();
       await done;
@@ -542,6 +578,7 @@ export async function main(): Promise<void> {
       registry: wiring.registry,
       catalog: wiring.catalog,
       provider: wiring.provider,
+      providerFor: wiring.providerFor,
       ctx: wiring.ctx,
       env: process.env,
       now: wiring.now,

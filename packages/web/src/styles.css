@@ -703,6 +703,9 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   background: var(--good);
 }
 .wb-tool-mark[data-ok='false'] { background: var(--critical); }
+.wb-tool-mark[data-ok='pending'] { background: var(--warn, #b7791f); }
+.wb-artifacts { display: grid; gap: 20px; margin-bottom: 20px; }
+.wb-artifact-image { display: block; max-width: 100%; height: auto; max-height: 65vh; object-fit: contain; margin: 0 auto 12px; border-radius: 8px; }
 .wb-tool[data-ok='false'] { border-color: var(--critical-soft); color: var(--critical); }
 .wb-tool[data-ok='false'] .wb-tool-label { color: var(--critical); }
 
@@ -732,6 +735,8 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   gap: 12px;
 }
 .wb-inline-approval {
+  flex-shrink: 0;
+  padding: 14px;
   margin: 12px;
   border: 1px solid var(--warn, #b7791f);
   border-radius: 14px;
@@ -974,6 +979,16 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
   font-weight: 650;
 }
 .wb-tab[data-tone='critical'] { color: var(--critical); }
+.wb-tab-item { display: flex; align-items: center; min-width: 0; }
+.wb-tab-close { flex: 0 0 auto; padding: 4px 6px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius); cursor: pointer; font-size: 18px; }
+.wb-tab-close:hover, .wb-tab-close:focus-visible { background: var(--surface-sunken); color: var(--text); }
+.wb-history { flex: 0 0 auto; max-height: 45vh; overflow: auto; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.wb-history ul { list-style: none; padding: 0; margin: 12px 0; }
+.wb-history li a { display: grid; gap: 4px; padding: 10px; border-radius: var(--radius); text-decoration: none; color: var(--text); }
+.wb-history li a:hover, .wb-history li a[aria-current='page'] { background: var(--surface-sunken); }
+.wb-history li a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-history small { color: var(--text-muted); }
+.wb-head-title { text-decoration: none; }
 .wb-tab-dot {
   flex: 0 0 auto;
   width: 6px;
@@ -1578,3 +1593,12 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 .browser-settings label { display: grid; gap: .4rem; margin: .8rem 0; }
 .browser-settings select, .browser-settings textarea { width: 100%; max-width: 100%; padding: .6rem; color: inherit; background: var(--bg, white); border: 1px solid var(--border, #ddd); border-radius: 6px; }
 .browser-settings .wb-btn { margin: .3rem .5rem .3rem 0; }
+.host-controls { padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.host-controls summary { cursor: pointer; }
+.host-controls pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.host-controls .bar { flex-wrap: wrap; margin: 8px 0; }
+/* Provider secrets stay in transient password fields, never browser storage. */
+.provider-fields { border: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.provider-fields label, .provider-credential label { display: flex; flex-direction: column; gap: 6px; }
+.provider-credential { margin-block: 20px; max-width: 640px; overflow-wrap: anywhere; }
+.provider-credential .bar { margin-top: 8px; flex-wrap: wrap; gap: 8px; }

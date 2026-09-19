@@ -10,7 +10,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Canvas, splitTabs } from './Canvas';
-import { renderablesFrom } from './renderables';
+import { inspectToolCall, renderablesFrom } from './renderables';
 import type { Renderable } from './types';
 import type { ChatMessage } from '../chat/types';
 
@@ -36,6 +36,19 @@ function tabsFor(output: unknown, ok = true): Renderable[] {
 }
 
 describe('what earns a tab', () => {
+  it('inspects quiet and old calls even when no automatic tab was kept', () => {
+    const messages = toolPair('old', 'shed.status', 'ready');
+    expect(renderablesFrom({ messages, descriptors: [] })).toEqual([]);
+    expect(inspectToolCall(messages, 'old')).toMatchObject({ id: 'old', substantial: false, props: { value: { input: {}, output: 'ready' } } });
+    expect(inspectToolCall(messages, 'missing')).toBeNull();
+  });
+  it('durable resolved approval state overrides stale stream hints', () => {
+    const messages = toolPair('gate', 'shed.run', { reason: 'approval-required', actionId: 'a1' });
+    const result = messages[1]!.blocks[0]!;
+    if (result.type === 'tool_result') result.approval = { id: 'a1', state: 'succeeded' };
+    const panels = renderablesFrom({ messages, descriptors: [], awaiting: new Map([['gate', 'a1']]) });
+    expect(panels.some(p => p.source === 'approval')).toBe(false);
+  });
   it('gives no tab to an answer that is entirely prose', () => {
     // One agent asking another: the whole content is the colleague's reply,
     // which the conversation has already printed, word for word.
@@ -173,6 +186,17 @@ describe('the strip holds what fits and names the rest', () => {
 });
 
 describe('the split itself', () => {
+  it('dismisses result tabs by button or Delete, but does not hide approvals or live controls', () => {
+    const onClose = vi.fn();
+    render(<Canvas renderables={[fake(0), fake(1, { source: 'approval' }), fake(2, { source: 'browser', renderer: 'browser' })]}
+      activeId="r0" onActivate={vi.fn()} onClose={onClose} timezone="UTC" maxTabs={5} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Thing 0 tab' }));
+    expect(onClose).toHaveBeenCalledWith('r0');
+    expect(screen.queryByRole('button', { name: 'Close Thing 1 tab' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close Thing 2 tab' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Thing 0' }), { key: 'Delete' });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
   it('shows a pinned pair even when the room is one', () => {
     const items = [fake(0, { source: 'approval' }), fake(1), fake(2)];
     const { shown, hidden } = splitTabs(items, 'r2', 1);

@@ -37,6 +37,7 @@ describe('conversation.ask — the explicit signal', () => {
     registry.register(createAskManifest(sink));
 
     const tool = registry.lookup(ASK_TOOL);
+    expect(registry.waitsForOwner(ASK_TOOL)).toBe(true);
     const result = await tool?.execute(
       { question: '  What time tonight?  ' },
       { timezone: 'UTC' } as never,

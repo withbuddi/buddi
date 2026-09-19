@@ -14,3 +14,4 @@ export * from './approvals.js';
 export * from './execute.js';
 export * from './jobs.js';
 export * from './effect.js';
+export * from './permissions.js';

@@ -4,10 +4,11 @@
  * ARCHITECTURE.md, "Owner and surface authentication": *«Web UI: session auth,
  * CSRF protection, Origin checks, bound to localhost by default (remote access
  * = explicit authenticated transport).»* The binding is the credential. Each
- * rule runs here, in this order, before any handler sees a request:
+ * rule runs here before any handler sees a request:
  *
  *   1. **Rate limit.** Failed authentications are counted per address; over
- *      budget is `429` with no body.
+ *      budget is `429` with no body. Valid sessions and fresh, valid tickets
+ *      still work, so a stale polling tab cannot lock out the owner.
  *   2. **Open on loopback.** A server bound to a loopback address serves every
  *      request that arrives on one, with no ticket and no expiry: the owner
  *      bookmarks `http://127.0.0.1:4317/` and it works, across restarts and
@@ -36,12 +37,16 @@
  * page on another origin gets no preflight and no permission.
  */
 import { randomUUID } from 'node:crypto';
+import { continueBrowserTask } from '../surfaces/browser-continuation.js';
+import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
 import { getAction, isJobState } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
+import { hostService } from '@buddi/tool-host';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, type PermissionScope } from '@buddi/core';
 import {
   engineChangeFromBody,
   readAgentEngines,
@@ -138,6 +143,7 @@ export interface WebServerDeps {
    * explicitly, as everywhere else: nothing here discovers a credential.
    */
   env?: NodeJS.ProcessEnv | undefined;
+  providerSettings?: ProviderSettings;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   /**
@@ -208,6 +214,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   };
   const chat = deps.chat
     ? new WebChat({
+        onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(deps.pool, deps.browser ?? hostBrowser(deps.env ?? process.env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
         pool: deps.pool,
         catalog: deps.catalog,
         registry: deps.registry,
@@ -219,6 +226,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       })
     : undefined;
   const streams = new StreamBudget();
+  const permissionScopes = (tool: string): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval
+    ? { permissionScopes: ['conversation', 'always'] } : {};
+  writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   // The binding is the credential: loopback is open, anything else keeps the
   // ticket-and-session gate. The override is a test seam, nothing more.
   const openAccess = deps.openAccess ?? isLoopback(deps.config.host);
@@ -278,8 +288,6 @@ export function createWebApp(deps: WebServerDeps): Server {
     // No CORS, and therefore no preflight.
     if (method === 'OPTIONS') return sendEmpty(res, 405);
 
-    if (limiter.blocked(key, now)) return sendEmpty(res, 429);
-
     // A remote socket or proxy metadata can only earn remote access. It
     // decides how long a session minted now lives, and it must keep matching
     // for as long as that session is used.
@@ -290,6 +298,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (ticket !== null && (method === 'GET' || method === 'HEAD')) {
       const check = verifyTicket(deps.token, ticket, now);
       if (!check.ok || !spent.spend(check.nonce, check.expiresAt, now)) {
+        if (limiter.blocked(key, now)) return sendEmpty(res, 429);
         limiter.fail(key, now);
         // Never says which of "wrong", "expired" and "already used" it was.
         return sendEmpty(res, 401);
@@ -321,6 +330,10 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (!session) {
+      // Rate-limit failed authentication, not authenticated traffic. A stale
+      // tab behind the same proxy must not lock out a valid recovery ticket
+      // or an already authenticated owner (nor direct local access).
+      if (limiter.blocked(key, now)) return sendEmpty(res, 429);
       limiter.fail(key, now);
       return sendEmpty(res, 401);
     }
@@ -374,7 +387,31 @@ export function createWebApp(deps: WebServerDeps): Server {
     const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
 
     if (method === 'GET' || method === 'HEAD') {
+      const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);
+      if (download) {
+        const artifact = await getArtifact(deps.pool, download[1]!);
+        if (!artifact) return sendEmpty(res, 404);
+        const preview = download[2] === 'preview';
+        // Only passive raster formats can be displayed inline on our origin.
+        // SVG/HTML and all other outputs remain attachment-only downloads.
+        if (preview && !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(artifact.mime)) return sendEmpty(res, 415);
+        const bytes = await readArtifactBytes(deps.env ?? process.env, artifact);
+        res.setHeader('Content-Type', preview ? artifact.mime : 'application/octet-stream');
+        res.setHeader('Content-Disposition', `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(artifact.filename ?? 'download').replace(/'/g, '%27')}`);
+        if (preview) res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(method === 'HEAD' ? undefined : bytes);
+        return;
+      }
       switch (path) {
+        case '/api/host': {
+          const host = hostService(deps.env ?? process.env);
+          const agentId = q.get('agentId') ?? undefined;
+          const conversationId = q.get('conversationId') ?? undefined;
+          const permissions = (await listToolPermissions(deps.pool, deps.ctx.ownerId)).filter(p => p.tool === 'host.exec' && (!agentId || p.agentId === agentId) && (!conversationId || !p.conversationId || p.conversationId === conversationId));
+          return sendJson(res, 200, { permissions, runs: host.runs(deps.ctx.ownerId, agentId, conversationId) });
+        }
         case '/api/browser':
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
@@ -450,12 +487,11 @@ export function createWebApp(deps: WebServerDeps): Server {
             }),
           );
         }
-        case '/api/approvals':
-          return sendJson(
-            res,
-            200,
-            await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50)),
-          );
+        case '/api/approvals': {
+          const approvals = await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50));
+          return sendJson(res, 200, { pending: approvals.pending.map(a => ({ ...a, ...permissionScopes(a.tool) })),
+            recent: approvals.recent.map(a => ({ ...a, ...permissionScopes(a.tool) })) });
+        }
         case '/api/offers':
           return sendJson(res, 200, {
             offers: await readOffers(deps.pool, now, boundedLimit(q.get('limit'))),
@@ -490,6 +526,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             engines: readAgentEngines(deps.catalog, deps.env ?? process.env),
             providers: readEngineOptions(deps.env ?? process.env),
           });
+        case '/api/providers':
+          if (!deps.providerSettings) return sendJson(res, 503, { error: 'Provider management is unavailable in this process.' });
+          return sendJson(res, 200, deps.providerSettings.view());
         default:
           break;
       }
@@ -523,7 +562,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (approval) {
         const action = await getAction(deps.pool, decodeURIComponent(approval[1] as string));
         if (!action) return sendJson(res, 404, { error: 'no such action' });
-        return sendJson(res, 200, { action: toApprovalView(action) });
+        return sendJson(res, 200, { action: { ...toApprovalView(action), ...permissionScopes(action.tool) } });
       }
 
       /* ---------------- chat ---------------- */
@@ -672,14 +711,31 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const approval = /^\/api\/approvals\/([^/]+)\/(approve|reject)$/.exec(path);
     if (approval) {
+      const scope = body.permissionScope ?? 'once';
+      if (!['once', 'conversation', 'always'].includes(String(scope)) || typeof scope !== 'string') return sendJson(res, 400, { error: 'Invalid permission scope.' });
       return finish(
         res,
         await decideApprovalFromWeb(
           writeDeps,
           decodeURIComponent(approval[1] as string),
           approval[2] === 'approve' ? 'approved' : 'rejected',
+          scope as PermissionScope,
         ),
       );
+    }
+
+    if (path === '/api/host/stop' || path === '/api/host/revoke') {
+      const host = hostService(deps.env ?? process.env);
+      if (path.endsWith('/revoke')) {
+        if (typeof body.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.id)) return sendJson(res, 400, { error: 'Expected permission id.' });
+        const permission = (await listToolPermissions(deps.pool, deps.ctx.ownerId)).find(p => p.id === body.id && p.tool === 'host.exec');
+        if (!permission) return sendEmpty(res, 404);
+        await revokeToolPermission(deps.pool, deps.ctx.ownerId, permission.id);
+        host.stop(deps.ctx.ownerId, permission.agentId, permission.conversationId || undefined);
+        return sendJson(res, 200, { revoked: true });
+      }
+      if (typeof body.agentId !== 'string' || typeof body.conversationId !== 'string') return sendJson(res, 400, { error: 'Expected agentId and conversationId.' });
+      return sendJson(res, 200, { stopped: host.stop(deps.ctx.ownerId, body.agentId, body.conversationId) });
     }
 
     if (path === '/api/pause') {
@@ -722,6 +778,21 @@ export function createWebApp(deps: WebServerDeps): Server {
                 : undefined,
         }),
       );
+    }
+
+    const providerSettingsRoute = /^\/api\/providers\/(anthropic|openai)\/(settings|test)$/.exec(path);
+    const credentialRoute = /^\/api\/providers\/credentials\/([^/]+)\/(save|remove)$/.exec(path);
+    if (providerSettingsRoute || credentialRoute) {
+      if (!deps.providerSettings) return sendJson(res, 503, { error: 'Provider management is unavailable in this process.' });
+      try {
+        const result = providerSettingsRoute
+          ? providerSettingsRoute[2] === 'test' ? await deps.providerSettings.test(providerSettingsRoute[1]!) : await deps.providerSettings.configure(providerSettingsRoute[1]!, body)
+          : await deps.providerSettings.credential(credentialRoute![1]!, credentialRoute![2] as 'save' | 'remove', body);
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, error instanceof ProviderSettingsError ? error.status : 500,
+          { error: error instanceof ProviderSettingsError ? error.message : 'Provider settings could not be applied. Check vault access and database availability, then retry.' });
+      }
     }
 
     const engine = /^\/api\/agents\/([^/]+)\/engine$/.exec(path);
@@ -828,6 +899,7 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const cancel = /^\/api\/chat\/conversations\/([^/]+)\/cancel$/.exec(path);
     if (cancel) {
+      hostService(deps.env ?? process.env).stop(deps.ctx.ownerId, undefined, decodeURIComponent(cancel[1]!));
       if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
       return sendJson(res, 200, {
         cancelled: chat.cancel(decodeURIComponent(cancel[1] as string)),

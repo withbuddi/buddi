@@ -6,7 +6,7 @@ import { BrowserManager } from './manager.js';
 import { PlaywrightHost } from './host.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
-import type { BrowserController, BrowserScope, BrowserStatus } from './service.js';
+import type { BrowserController, BrowserScope, BrowserStatus, BrowserRollover } from './service.js';
 import type { BrowserCommand } from './types.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
@@ -42,6 +42,10 @@ export class HostController implements BrowserController {
     return { ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => ({ ...session, ...metadata })) } : {}) };
   }
   screenshot(sessionId?: string): Buffer | undefined { return this.#manager.screenshot(sessionId); }
+  rollover(input: BrowserRollover): boolean {
+    if (this.#changing) throw new Error('Control settings are changing. Wait before continuing.');
+    return this.#manager.rollover(input);
+  }
   async execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
     if (this.#changing) throw new Error('Computer/browser settings are changing. Wait for the owner.');
     for (const [id, record] of this.#requests) if (record.expiresAt <= Date.now()) this.#requests.delete(id);

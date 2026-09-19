@@ -115,6 +115,7 @@ export interface AgentRunDeps {
   registry: ToolRegistry;
   catalog: AgentCatalog;
   provider: RuntimeProvider;
+  providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
   ctx: ToolContext;
   now: () => Date;
   /** Where a `mission.report` goes. Defaults to Telegram in `buddi serve`. */
@@ -166,7 +167,8 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
 
     // Fails closed with UnknownAgentError: a source naming an agent this
     // installation does not carry is a configuration problem, not a fallback.
-    const base = deps.catalog.resolve(payload.agentId).definition(deps.now(), deps.ctx.timezone);
+    const selectedAgent = deps.catalog.resolve(payload.agentId);
+    const base = selectedAgent.definition(deps.now(), deps.ctx.timezone);
     const agent = { ...base, tools: [...base.tools, ...MISSION_TOOLS] };
 
     const sink: DecisionSink = {};
@@ -190,7 +192,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
 
     const result = await runAgent({
       agent,
-      provider: deps.provider,
+      provider: deps.providerFor ? deps.providerFor(selectedAgent) : deps.provider,
       registry,
       ctx,
       pool: deps.pool,

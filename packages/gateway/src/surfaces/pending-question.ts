@@ -117,6 +117,7 @@ export function createAskManifest(sink: AskSink): PluginManifest {
     description:
       "Declare that you are ending this turn by asking the owner something you need them to answer. Call it once, just before you finish, whenever your reply leaves a decision with them — a time, a choice, a missing detail — including when you phrase it as an instruction ('tell me which card'). It sends nothing and authorizes nothing: it only tells this chat that the owner's next message is an answer to you, so their reply reaches you rather than whichever agent they were talking to before.",
     tier: 'auto',
+    waitsForOwner: true,
     input: askInput,
     async execute(input) {
       sink.asked = {
@@ -154,6 +155,7 @@ export const ASK_POLICY_SUFFIX = [
   `If the owner explicitly asks to test or demonstrate AskUserQuestion, that request itself is a valid reason to call ${ASK_TOOL}: ask one harmless bounded question with 2–5 choices so they can see the interaction.`,
   'Never use it to obtain permission for an effect. Permission is a separate approval bound to the exact action.',
   'Call it before writing the reply, then ask the same concise question in the reply without spelling out options the surface will draw.',
+  'After calling it, finish with your question and wait for the owner. No further tool calls or dependent work may run until they answer.',
   'It delivers nothing and authorizes nothing; it records the question and makes sure the answer comes back to you.',
 ].join(' ');
 

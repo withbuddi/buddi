@@ -24,6 +24,7 @@ import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
 import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
+import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
@@ -117,6 +118,7 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // an agent reaches the web only if its own `tools:` line names `web.*`.
   registry.register(webManifest);
   registry.register(createBrowserManifest(hostBrowser(env)));
+  registry.register(createHostManifest(hostService(env)));
   // Everything the owner installed, from `plugins.json`. Empty in any process
   // that did not await `loadPluginsOnce` — a unit test, a fixture — which is
   // the honest answer for a process that never read the owner's record.
