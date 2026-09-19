@@ -781,7 +781,7 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
           kind: agent.provider.kind,
           model: agent.provider.model,
           credentialKind: credential?.kind ?? 'unknown',
-          credentialEnv: credential?.env ?? 'unknown',
+          credentialEnv: agent.provider.accountId ?? credential?.env ?? 'unknown',
         },
       },
     ];

@@ -30,6 +30,7 @@ import {
 } from '@buddi/core';
 import { createProvider, type RuntimeProvider } from '@buddi/runtime';
 import { ProviderSettings } from './providers.js';
+import { ProviderAccounts } from './provider-accounts.js';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import {
@@ -160,6 +161,8 @@ export interface Wiring {
   reloadCatalog(): void;
   reloadProviders(): void;
   providerSettings?: ProviderSettings;
+  providerAccounts?: ProviderAccounts;
+  useProviderAccounts(accounts: ProviderAccounts): void;
   provider: RuntimeProvider;
   /**
    * The adapter for one agent, built from that agent's own pinned provider.
@@ -213,9 +216,17 @@ export async function createWiringAsync(
   await probeDatabase(env.DATABASE_URL);
   const wiring = createWiring(env, { allowMissingDefault: true });
   const providerSettings = new ProviderSettings({ pool: wiring.pool, env, reload: wiring.reloadProviders });
-  try { await providerSettings.load(); }
+  const providerAccounts = new ProviderAccounts({ pool: wiring.pool, env, catalog: () => wiring.catalog, reload: wiring.reloadProviders });
+  try {
+    await providerSettings.load();
+    // Initialization captures the old choice once, before switching resolution.
+    await providerAccounts.initialize();
+    wiring.useProviderAccounts(providerAccounts);
+  }
   catch (error) { await wiring.pool.end(); throw error; }
-  return { ...wiring, secrets, providerSettings };
+  const selected = wiring.catalog.defaultAgent();
+  return { ...wiring, secrets, providerSettings, providerAccounts, model: selected.model,
+    providerKind: selected.provider.kind, credentialKind: selected.provider.credential.kind };
 }
 
 /**
@@ -233,7 +244,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   // reachable from the CLI, Telegram, the web chat and the mission runner on
   // their next turn, with no restart. `adoptProcessCatalog` makes sure the
   // runner's own `gatewayCatalog()` is this same object and not a second one.
-  const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry }));
+  let accounts: ProviderAccounts | undefined;
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry, providerSelection: accounts?.selection }));
   adoptProcessCatalog(env, catalog);
 
   const now = (): Date => new Date();
@@ -269,6 +281,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   };
 
   const providerFor = (agent: CatalogAgent): RuntimeProvider => {
+    if (accounts) return accounts.provider(agent.provider);
     const key = `${agent.provider.kind}:${agent.provider.model}:${agent.provider.credential.env}`;
     const cached = adapters.get(key);
     if (cached) return cached;
@@ -291,8 +304,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
-  const provider: RuntimeProvider = resolution.ok ? createProvider(resolution.provider, { onRetry }) : {
-    complete: async () => { throw new Error('Default provider unavailable. Configure its credential in dashboard Providers.'); },
+  const provider: RuntimeProvider = {
+    get capabilities() { return providerFor(catalog.defaultAgent()).capabilities; },
+    complete: request => providerFor(catalog.defaultAgent()).complete(request),
   };
   // Delegation can only be wired once both exist; before this call the tool
   // refuses rather than reaching for an ambient catalog. `providerFor` rides
@@ -319,6 +333,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     catalog,
     reloadCatalog: () => catalog.reload(),
     reloadProviders: () => { adapters.clear(); catalog.reload(); },
+    useProviderAccounts: (service: ProviderAccounts) => { accounts = service; adapters.clear(); catalog.reload(); },
     provider,
     providerFor,
     model: catalog.defaultAgent().provider.model,

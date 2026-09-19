@@ -364,6 +364,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       pool,
       registry: wiring.registry,
       provider: wiring.provider,
+      providerFor: wiring.providerFor,
       ctx: wiring.ctx,
       env: process.env,
       now,

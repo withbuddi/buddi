@@ -112,7 +112,8 @@ type WireMessage =
 type WireRequest = {
   model: string;
   /** Chat Completions' modern name for the output cap. */
-  max_completion_tokens: number;
+  max_completion_tokens?: number;
+  max_tokens?: number;
   messages: WireMessage[];
   tools?: {
     type: 'function';
@@ -355,7 +356,9 @@ export function createOpenAiProvider(
     }
     const wire: WireRequest = {
       model: resolved.model,
-      max_completion_tokens: req.maxTokens ?? defaultMaxTokens,
+      ...(resolved.compatible
+        ? { max_tokens: req.maxTokens ?? defaultMaxTokens }
+        : { max_completion_tokens: req.maxTokens ?? defaultMaxTokens }),
       messages,
     };
     const tools = toWireTools(req.tools, names);

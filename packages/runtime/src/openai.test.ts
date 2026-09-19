@@ -45,6 +45,17 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 
 const noSleep = async () => {};
 
+it('supports a compatible local endpoint, custom model and no-key auth without leaking an OpenAI key', async () => {
+  const fetchMock = vi.fn(async (_url: string, _init: any) => jsonResponse(200, okBody({ model: 'local-custom' })));
+  const provider = createOpenAiProvider({ ...resolved(), compatible: true, secret: '', baseUrl: 'http://localhost:11434/v1', model: 'local-custom' }, { fetch: fetchMock });
+  await provider.complete({ system: '', messages: [], tools: [], maxTokens: 100 });
+  const [url, init] = fetchMock.mock.calls[0]!;
+  expect(url).toBe('http://localhost:11434/v1/chat/completions');
+  expect(init.headers.authorization).toBeUndefined();
+  expect(JSON.parse(init.body)).toMatchObject({ model: 'local-custom', max_tokens: 100 });
+  expect(JSON.parse(init.body)).not.toHaveProperty('max_completion_tokens');
+});
+
 it('forwards cancellation to the transport and never retries an aborted request', async () => {
   const controller = new AbortController();
   const fetchMock = vi.fn(async (_url: unknown, init: { signal?: AbortSignal } | undefined) => {

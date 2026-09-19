@@ -646,10 +646,12 @@ pending, where `/approvals` and Telegram can still reach it.
 
 ### The dashboard
 
-**Providers** (`#/providers`) manages model-provider credentials through the host
-vault and stores non-secret defaults in Postgres. Save, replace, remove, or test
-a credential, then choose each agent's provider/model in **Agents**. Changes
-apply to new runs without restarting; active runs keep their selected adapter.
+**Providers** (`#/providers`) manages named accounts: multiple Anthropic API keys,
+OpenAI API keys, and OpenAI-compatible endpoints, including local no-key servers.
+Credentials stay in the host vault; Postgres stores account metadata and explicit
+agent/account/model assignments. Choose each agent's account in **Agents**.
+Assignments apply to new runs without restarting. Active runs never switch accounts;
+editing or disabling their account stops their next model call.
 See [provider management](docs/providers.md) for vault setup and removal behavior.
 
 `buddi serve` serves it on `127.0.0.1:4317`. `buddi dashboard` prints a

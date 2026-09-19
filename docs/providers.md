@@ -1,42 +1,98 @@
-# Provider management
+# Provider accounts
 
-Open `#/providers` in the owner dashboard. Add/replace/remove the supported
-Anthropic API key, Anthropic subscription token, or OpenAI API key. Keys go to
-the existing host vault, never Postgres. Saved values cannot be read back through
-the API. The UI holds an entered value only long enough to submit it, then clears
-the password field. No secret goes into browser storage or chat.
+Open `#/providers` in the owner dashboard. Each account is an independent named
+connection, not a global preference. Add multiple accounts for the same provider,
+then use `#/agents` to explicitly select an account and model for each agent.
 
-Provider authentication preference and default model live in
-`core.provider_settings`. Anthropic can select API key, subscription token, or
-the existing automatic token-first behavior. Explicit selection never falls back
-to a different credential kind. Per-agent provider/model pins remain in agent
-files: edit them at `#/agents`. An explicit agent model overrides the provider
-default. All changes reload the shared catalog for subsequent runs. Existing runs
-retain the adapter they started with; there is no mid-run vendor switch.
+Supported connections:
 
-Credential removal writes a nonsecret tombstone in
-`core.provider_credential_state`, disables it for new runs and deletes the vault
-entry. The marker prevents an old environment copy from reappearing after restart.
-It does not revoke a key at its issuer, erase backups, or cancel active runs.
-If physical vault deletion fails, the key stays disabled and the UI asks the
-owner to unlock the vault and retry. Saving it again clears the tombstone.
+- Anthropic API key, using Anthropic's fixed endpoint.
+- OpenAI API key, using OpenAI's fixed endpoint.
+- OpenAI-compatible Chat Completions endpoint, with an API key or explicitly no key.
+  Supply the API base including `/v1` or a custom path such as `/api/v1`. A bare host
+  gains `/v1`. HTTPS is required except for loopback local servers. Compatible model
+  names are not restricted to OpenAI prefixes. The selected model/server must support
+  the capabilities used by the agent, especially tool calling and images.
+- Previously configured Claude subscription/setup tokens, imported as legacy accounts.
+  These are preserved, not promoted to refreshable OAuth connections. Token expiry and
+  subscription renewal date are unknown. New subscription OAuth/device sign-in is not
+  implemented. The extracted Chrome extension package is not loaded into the server.
 
-**Test connection** is an explicit owner action. It sends a fixed, small prompt
-to the saved default model (which may incur a small charge); it never sends
-conversation history, files or tool definitions. Rate limits and authentication
-errors are reported without dumping provider response bodies. Tests have a
-15-second timeout and no HTTP-status retries. A test result is a point-in-time
-check, not a promise about quotas or availability for future requests.
+## Storage and migration
 
-macOS uses Keychain by default. Windows/Linux use the existing AES-256-GCM file
-vault and `BUDDI_VAULT_KEY`. Run `buddi init` on the host to initialize its master
-key if needed; the dashboard reports a locked/unconfigured vault rather than
-falling back to plaintext. Database backups contain configuration and removal
-markers only; vault recovery still needs the vault and its independently kept key.
+`core.provider_accounts` holds account metadata, revision and secret references.
+`core.agent_provider_accounts` holds agent/account/model assignments. Keys stay in the
+host vault. The UI never reads back saved values and never stores keys in browser
+storage. Newly entered password fields are cleared on submission, including failures.
 
-Provider routes use the same authenticated owner session, Origin and CSRF checks
-as all dashboard writes, with no-store responses. They are not agent tools.
-The server can start with an unavailable default model credential so the owner
-can repair it from the dashboard. Named-agent runs on Telegram, dashboard and
-background jobs resolve their own provider before starting, not the default
-agent's adapter. No automatic cross-provider failover is enabled.
+On first boot after migration 018, the gateway atomically imports three legacy account
+slots and pins every installed agent to its previously selected credential and model.
+It references existing vault entries without copying values into SQL. Existing removal
+markers remain disabled. An explicitly selected missing API key stays missing; it does
+not switch to a subscription token. Missing slots can be filled later or removed when
+unassigned. A migration marker prevents restarts from reimporting or rebinding accounts.
+
+An imported account may read its explicitly named legacy environment variable if the
+vault entry is absent. Replacing its credential creates an account-specific vault entry
+and permanently removes that environment fallback for the account. The old legacy
+vault entry is retained on replacement for compatibility/recovery, but the account no
+longer uses it. Newly created accounts never read ambient environment credentials.
+
+Once migrated, account/model bindings in Postgres override agent-file provider/model
+fields. Files still own persona, tools, language and turn budget. Newly installed agents
+must be assigned an account; there is no silent default or cross-account fallback.
+
+macOS uses Keychain by default. Windows/Linux use the AES-256-GCM file vault with
+`BUDDI_VAULT_KEY` outside Postgres. Run `buddi init` on the host to initialize it.
+Database backups alone cannot restore credentials; preserve the vault and its master
+key separately. A locked vault fails closed.
+
+## Account lifecycle
+
+The dashboard can add, rename, replace API keys, test, disable, enable and remove
+accounts. Provider/authentication type is immutable: create another account to change
+it. Changing a keyed endpoint requires re-entering the credential for that destination.
+Saving a default model does not silently change models pinned on existing agents.
+
+Assignments reload the shared catalog for new Dashboard, Telegram, delegated and
+scheduled runs. Existing runs retain their selected account/model. Editing or disabling
+an account causes its next model call to stop with a clear restart-turn message, rather
+than silently rerouting or using an old credential. Requests already dispatched cannot
+be recalled. Use **Refresh status** after unlocking a vault or changing accounts from
+another process.
+
+Removal is refused while an agent remains assigned; reassign those agents or disable
+the account instead. Removal first disables and marks the account as being deleted,
+then removes the stored credential and account metadata. If vault deletion fails, the
+account remains disabled and cannot be re-enabled; unlock the vault and retry removal.
+This does not revoke keys at their issuer, erase backups, or delete retained legacy
+credential copies that are no longer referenced by this account.
+
+**Test connection** is an explicit owner action and may incur a small charge. It sends
+only a fixed short prompt, no history, files or tools. It has a 15-second timeout and
+no HTTP-status retries. Responses report safe connection/auth/rate-limit status, never
+raw provider errors or credentials. A result for an edited account is discarded.
+
+## API and CLI
+
+Owner-only routes inherit session, Origin, CSRF, body-size and no-store protections:
+
+- `GET /api/provider-accounts`
+- `POST /api/provider-accounts/save`
+- `POST /api/provider-accounts/:id/test`
+- `POST /api/provider-accounts/:id/remove` with the displayed `revision`
+- `POST /api/agents/:id/account` with `accountId` and `model`
+
+Edits also require the displayed account revision to prevent stale overwrites. Global
+provider/credential mutation endpoints return 410 when account management is active.
+These operations are not exposed as agent tools.
+
+`buddi agents` and `buddi agents show <handle>` read the account-aware catalog.
+`buddi agents set <handle> --account <id> --model <model>` changes a binding;
+`--model` alone changes the model on its current account. `--provider` is refused after
+migration because it is ambiguous. `buddi agents test <handle>` uses the assigned account.
+Restart other running processes after a standalone CLI edit, or refresh the Providers
+page. Dashboard edits take effect in its shared serving process immediately.
+
+The account/domain layer is portable; provider-specific native-client login adapters
+and safe coordinated OAuth refresh remain separate future work, not simulated features.

@@ -185,6 +185,8 @@ export interface RunResult {
 
 /** The per-run provenance record; written to `core.events` and returned. */
 export interface RunSnapshot {
+  /** Stable connection identity, never the credential. */
+  accountId?: string;
   provider: string;
   credentialKind: string;
   /** The model the agent file / environment pinned. */
@@ -496,6 +498,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const allowedTools = new Set(tools.map((tool) => tool.name));
 
   const snapshot: RunSnapshot = {
+    ...(agent.provider.accountId ? { accountId: agent.provider.accountId } : {}),
     provider: agent.provider.kind,
     credentialKind: agent.provider.credential.kind,
     model: agent.provider.model,
@@ -570,6 +573,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       // on record even if the call never comes back.
       provider: snapshot.provider,
       credentialKind: snapshot.credentialKind,
+      ...(snapshot.accountId ? { accountId: snapshot.accountId } : {}),
       model: snapshot.model,
       capabilities: snapshot.capabilities,
       // Which backend honours this run's web grant, and why. On record before
@@ -780,6 +784,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       provider: snapshot.provider,
       model: snapshot.model,
       servedModel: snapshot.servedModel ?? null,
+      ...(snapshot.accountId ? { accountId: snapshot.accountId } : {}),
       credentialKind: snapshot.credentialKind,
       // The profile's *id*, not the profile: the event log records where the
       // run came from, and the capability facts are already in the prompt.

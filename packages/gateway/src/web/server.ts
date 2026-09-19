@@ -39,6 +39,7 @@
 import { randomUUID } from 'node:crypto';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
+import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -144,6 +145,7 @@ export interface WebServerDeps {
    */
   env?: NodeJS.ProcessEnv | undefined;
   providerSettings?: ProviderSettings;
+  providerAccounts?: ProviderAccounts;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   /**
@@ -525,7 +527,12 @@ export function createWebApp(deps: WebServerDeps): Server {
             // catalog it booted with — which `restartRequired` reports.
             engines: readAgentEngines(deps.catalog, deps.env ?? process.env),
             providers: readEngineOptions(deps.env ?? process.env),
+            providerAccounts: deps.providerAccounts?.view(),
           });
+        case '/api/provider-accounts':
+          if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
+          await deps.providerAccounts.refresh();
+          return sendJson(res, 200, deps.providerAccounts.view());
         case '/api/providers':
           if (!deps.providerSettings) return sendJson(res, 503, { error: 'Provider management is unavailable in this process.' });
           return sendJson(res, 200, deps.providerSettings.view());
@@ -780,9 +787,27 @@ export function createWebApp(deps: WebServerDeps): Server {
       );
     }
 
+    const accountRoute = /^\/api\/provider-accounts\/([^/]+)\/(test|remove)$/.exec(path);
+    const accountAssignment = /^\/api\/agents\/([^/]+)\/account$/.exec(path);
+    if (path === '/api/provider-accounts/save' || accountRoute || accountAssignment) {
+      if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
+      try {
+        const result = accountAssignment
+          ? await deps.providerAccounts.assign(decodeURIComponent(accountAssignment[1]!), body)
+          : accountRoute ? accountRoute[2] === 'test'
+            ? await deps.providerAccounts.test(decodeURIComponent(accountRoute[1]!))
+            : await deps.providerAccounts.remove(decodeURIComponent(accountRoute[1]!), body.revision as number)
+          : await deps.providerAccounts.save(body);
+        return sendJson(res, 200, result);
+      } catch (error) {
+        return sendJson(res, error instanceof ProviderAccountError ? error.status : 500,
+          { error: error instanceof ProviderAccountError ? error.message : 'Account operation failed. Check vault and database availability.' });
+      }
+    }
     const providerSettingsRoute = /^\/api\/providers\/(anthropic|openai)\/(settings|test)$/.exec(path);
     const credentialRoute = /^\/api\/providers\/credentials\/([^/]+)\/(save|remove)$/.exec(path);
     if (providerSettingsRoute || credentialRoute) {
+      if (deps.providerAccounts) return sendJson(res, 410, { error: 'Global credentials have been replaced by named provider accounts. Reload the dashboard.' });
       if (!deps.providerSettings) return sendJson(res, 503, { error: 'Provider management is unavailable in this process.' });
       try {
         const result = providerSettingsRoute
@@ -797,6 +822,9 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const engine = /^\/api\/agents\/([^/]+)\/engine$/.exec(path);
     if (engine) {
+      if (deps.providerAccounts && (body.provider !== undefined || body.model !== undefined)) {
+        return sendJson(res, 400, { error: 'Choose the account and model using the account selector; global provider choices are no longer used.' });
+      }
       const change = engineChangeFromBody(body);
       if (typeof change === 'string') return sendJson(res, 400, { error: change });
       return finish(

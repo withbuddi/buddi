@@ -69,7 +69,7 @@ export type OpenAiProviderRef = {
   model: string;
 };
 
-export type ProviderRef = AnthropicProviderRef | OpenAiProviderRef;
+export type ProviderRef = (AnthropicProviderRef | OpenAiProviderRef) & { accountId?: string };
 
 export type CredentialKind = AnthropicCredential['kind'] | OpenAiCredential['kind'];
 
@@ -96,6 +96,8 @@ export type ProviderProblem = {
 };
 
 export type ResolvedProvider = {
+  /** OpenAI-compatible wire, not an assertion that OpenAI serves this model. */
+  compatible?: boolean;
   kind: ProviderKind;
   baseUrl: string;
   credentialKind: CredentialKind;
@@ -163,6 +165,9 @@ export function resolveProvider(
   ref: ProviderRef,
   env: NodeJS.ProcessEnv,
 ): ProviderResolution {
+  if (ref.accountId !== undefined) {
+    return fail('unsupported', 'Named provider accounts must be resolved by the account service, not environment credentials.');
+  }
   const kind = (ref as { kind: ProviderKind }).kind;
   if (!PROVIDER_KINDS.includes(kind)) {
     return fail(
@@ -242,6 +247,7 @@ export function resolveProvider(
 export function providerAuthHeaders(
   provider: ResolvedProvider,
 ): Record<string, string> {
+  if (provider.compatible && provider.secret === '') return {};
   return provider.kind === 'anthropic' && provider.credentialKind === 'api-key'
     ? { 'x-api-key': provider.secret }
     : { authorization: `Bearer ${provider.secret}` };

@@ -24,3 +24,4 @@ export * from './owner.js';
 export * from './onboarding/index.js';
 export * from './plugins/index.js';
 export { runMigrations } from './cli-migrate.js';
+export * from './provider-accounts.js';

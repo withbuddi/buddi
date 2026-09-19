@@ -629,6 +629,7 @@ export async function main(): Promise<void> {
           token,
           env: process.env,
           providerSettings: wiring.providerSettings,
+          providerAccounts: wiring.providerAccounts,
           jobs: { resumeJob },
           // The browser as a talking surface. Every one of these is the object
           // the other surfaces already use — the per-agent provider adapter,

@@ -17,6 +17,7 @@ import {
   type AgentCatalog,
   type AgentSearchPath,
   type PluginManifest,
+  type LoadAgentCatalogOptions,
 } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
@@ -197,6 +198,7 @@ export function memoryPreambleFor(pool: Queryable): (agentId: string) => Promise
 }
 
 export interface GatewayCatalogOptions {
+  providerSelection?: LoadAgentCatalogOptions['providerSelection'];
   env?: NodeJS.ProcessEnv;
   registry?: ToolRegistry;
   dir?: string;
@@ -237,7 +239,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -251,6 +253,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     dirs: search.entries.map(({ dir, skillsDir, source }) => ({ dir, skillsDir, source })),
     registry,
     env,
+    providerSelection: opts.providerSelection,
   });
   assertNoDelegationToWriters(catalog);
   return catalog;

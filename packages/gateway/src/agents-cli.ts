@@ -37,9 +37,9 @@ import {
   type ProviderModels,
 } from '@buddi/core';
 import { createProvider, providerCapabilities } from '@buddi/runtime';
-import { createToolRegistry, loadGatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
+import { gatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
 import { migrateAgents, renderMigration } from './agents/migrate.js';
-import { hydrateSecrets, loadEnvironment } from './bootstrap.js';
+import { createWiringAsync, hydrateSecrets, loadEnvironment, type Wiring } from './bootstrap.js';
 import { estimateCost, formatCost, formatTokens, formatWebSearches } from './chat/usage.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 
@@ -48,6 +48,7 @@ export const USAGE = `buddi agents — which engine each agent runs on
   buddi agents                       every agent: provider, model, credential, availability
   buddi agents show <handle>         one agent in full, wiring and last run included
   buddi agents set <handle> [options]
+      --account <id>                named account (from dashboard Providers)
       --provider anthropic|openai    where this agent's conversations go
       --model <id>                   validated against that provider's catalogue
       --max-turns <n>                turn budget for one run
@@ -70,7 +71,7 @@ export type AgentsCommand =
   | { action: 'help' }
   | { action: 'list' }
   | { action: 'show'; handle: string }
-  | { action: 'set'; handle: string; change: EnginePatch }
+  | { action: 'set'; handle: string; change: EnginePatch & { accountId?: string } }
   | { action: 'models'; provider?: ProviderKind }
   | { action: 'test'; handle: string; prompt: string }
   | { action: 'migrate'; dryRun: boolean };
@@ -147,10 +148,14 @@ export function parseAgentsArgs(argv: string[]): AgentsCommand {
       return { action: 'test', handle, prompt };
     }
 
-    const change: EnginePatch = {};
+    const change: EnginePatch & { accountId?: string } = {};
     for (let i = 0; i < args.length; i += 1) {
       const arg = args[i] as string;
       const value = args[i + 1];
+      if (arg === '--account') {
+        if (!value?.trim()) throw new Error('--account needs an account id');
+        change.accountId = value.trim(); i += 1; continue;
+      }
       if (arg === '--provider') {
         change.provider = providerValue(value, arg);
         i += 1;
@@ -224,7 +229,9 @@ export function agentLine(agent: CatalogAgent): AgentLine {
     isDefault: agent.isDefault,
     provider: agent.provider.kind,
     model: agent.model,
-    credential: `${agent.provider.credential.kind} from ${agent.provider.credential.env}`,
+    credential: agent.provider.accountId !== undefined
+      ? `account ${agent.provider.accountId || '(not selected)'}`
+      : `${agent.provider.credential.kind} from ${agent.provider.credential.env}`,
     available: agent.availability.ok,
     ...(agent.availability.ok ? {} : { unavailableReason: agent.availability.problem.message }),
     roles: rolesOf(agent as { roles?: readonly string[] }),
@@ -312,7 +319,7 @@ export function renderChange(
  * ------------------------------------------------------------------ */
 
 function catalogFor(env: NodeJS.ProcessEnv) {
-  return loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+  return gatewayCatalog(env);
 }
 
 function resolveOrExit(env: NodeJS.ProcessEnv, handle: string): CatalogAgent {
@@ -404,6 +411,7 @@ async function showCommand(
   out('persona', agent.file);
   out('provider', agent.provider.kind);
   out('model', agent.model);
+  if (agent.provider.accountId !== undefined) out('account', agent.provider.accountId || '(not selected)');
   out('credential', `${agent.provider.credential.kind} from ${agent.provider.credential.env}`);
   out(
     'availability',
@@ -522,9 +530,12 @@ async function testCommand(
   style: TerminalStyle,
   handle: string,
   prompt: string,
+  wiring?: Wiring,
 ): Promise<number> {
   const agent = resolveOrExit(env, handle);
-  const resolution = resolveProvider(agent.provider, env);
+  const resolution = agent.provider.accountId !== undefined && wiring
+    ? { ok: true as const, provider: { kind: agent.provider.kind, model: agent.model, credentialKind: agent.provider.credential.kind, baseUrl: `account:${agent.provider.accountId}` } }
+    : resolveProvider(agent.provider, env);
   if (!resolution.ok) {
     console.error(
       `@${agent.handle} cannot run [${resolution.problem.code}]: ${resolution.problem.message}`,
@@ -537,7 +548,7 @@ async function testCommand(
     return 1;
   }
 
-  const provider = createProvider(resolution.provider);
+  const provider = wiring ? wiring.providerFor(agent) : createProvider(resolution.provider as import('@buddi/core').ResolvedProvider);
   console.log(
     dim(
       `@${agent.handle} → ${resolution.provider.kind} · ${resolution.provider.model} · ` +
@@ -604,9 +615,8 @@ function migrateCommand(env: NodeJS.ProcessEnv, dryRun: boolean): number {
 /**
  * `buddi agents …`. `argv` is the slice *after* the command word.
  *
- * No database wiring and no pool: listing what is installed must work with
- * Docker stopped, and `set` edits a file. `test` hydrates the vault first,
- * because a `.env` left holding `<vault>` markers is not a credential.
+ * Account-aware commands use the same wiring as the serving process. The
+ * database is authoritative for bindings; never silently fall back to files.
  */
 export async function main(argv: string[] = process.argv.slice(3)): Promise<number> {
   let command: AgentsCommand;
@@ -624,7 +634,9 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
   // those a credential would report availability that is simply false.
   await hydrateSecrets(process.env);
   const style = styleFor(process.env, process.stdout);
-
+  let wiring: Wiring | undefined;
+  try {
+    if (['list', 'show', 'set', 'test'].includes(command.action)) wiring = await createWiringAsync(process.env);
   switch (command.action) {
     case 'help':
       console.log(USAGE);
@@ -636,13 +648,30 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
       await showCommand(process.env, style, command.handle);
       return 0;
     case 'set':
+      if (wiring?.providerAccounts) {
+        const agent = wiring.catalog.resolve(command.handle);
+        const { accountId, model, provider, ...fileChange } = command.change;
+        if (provider) { console.error('Choose a named account with --account instead of --provider.'); return 1; }
+        if (accountId || model) {
+          const view = wiring.providerAccounts.view();
+          const binding = view.bindings.find(b => b.agentId === agent.id);
+          const id = accountId ?? binding?.accountId;
+          const account = view.accounts.find(a => a.id === id);
+          if (!account) { console.error('Choose a provider account in the dashboard or with --account.'); return 1; }
+          await wiring.providerAccounts.assign(agent.id, { accountId: account.id, model: model ?? (accountId ? account.defaultModel : binding?.model) ?? account.defaultModel });
+          console.log(`@${agent.handle} → ${account.label}. Restart other running processes to load this CLI change.`);
+        }
+        return Object.keys(fileChange).length ? setCommand(process.env, style, command.handle, fileChange) : 0;
+      }
       return setCommand(process.env, style, command.handle, command.change);
     case 'models':
       modelsCommand(process.env, command.provider);
       return 0;
     case 'test':
-      return testCommand(process.env, style, command.handle, command.prompt);
+      return await testCommand(process.env, style, command.handle, command.prompt, wiring);
     case 'migrate':
       return migrateCommand(process.env, command.dryRun);
   }
+  } finally { await wiring?.pool.end(); }
+  return 0;
 }

@@ -28,7 +28,6 @@ import { fileURLToPath } from 'node:url';
 import {
   resolveDataDir,
   CLI_SURFACE,
-  resolveProvider,
   UnknownAgentError,
   type CatalogAgent,
 } from '@buddi/core';
@@ -326,26 +325,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   // The *selected* agent's provider, not the process's: an agent pinned to
   // another provider is run on that provider or not at all.
-  const resolution = resolveProvider(agent.provider, process.env);
-  if (!resolution.ok) {
-    console.error(
-      `@${selected.handle} cannot run [${resolution.problem.code}]: ${resolution.problem.message}`,
-    );
-    console.error(
-      selected.provider.kind === 'openai'
-        ? 'Set OPENAI_API_KEY in .env, or pick an agent on another provider (buddi agents).'
-        : 'Set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY in .env',
-    );
+  if (!selected.available) {
+    console.error(`@${selected.handle} cannot run: ${selected.unavailableReason}. Configure its account in dashboard Providers.`);
     process.exit(1);
   }
   // The cause chain of every failed attempt, on stderr. At a terminal that is
   // where an operator looks, and it is the only record `buddi chat` keeps.
-  const provider = createProvider(resolution.provider, {
-    onRetry: (notice) =>
-      console.error(
-        `provider: ${notice.kind} attempt ${notice.attempt} failed, retrying in ${notice.delayMs}ms — ${notice.detail}`,
-      ),
-  });
+  const provider = wiring.providerFor(selected);
   /** Delegation needs both halves; rebound here for the *selected* agent. */
   bindDelegation(registry, {
     catalog,
