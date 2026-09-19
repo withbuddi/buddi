@@ -350,6 +350,15 @@ export function checkAccount(
   return { id: row.id, label: row.label, kind: row.kind, model };
 }
 
+/** A face from a tool is an emoji, never a file name: files are the owner's to drop in. */
+export function checkAvatar(value: string): string {
+  const trimmed = value.trim();
+  if (/[A-Za-z0-9./\\]/.test(trimmed)) {
+    refuse('bad-avatar', 'avatar must be an emoji; an image file is something the owner adds beside the agent file themselves');
+  }
+  return trimmed;
+}
+
 export function checkProviderModel(provider: string | undefined, model: string | undefined): void {
   if (provider !== undefined && !PROVIDER_KINDS.includes(provider as ProviderKind)) {
     refuse('bad-provider', `"${provider}" is not a provider this build knows (${PROVIDER_KINDS.join(', ')})`);
@@ -431,6 +440,8 @@ export interface CreateAgentEnvelope {
   account: AccountChoice | null;
   maxTurns: number | null;
   language: string | null;
+  avatar: string | null;
+  accent: string | null;
   roles: string[];
   /** The complete resulting file, byte for byte. */
   content: string;
@@ -523,6 +534,9 @@ export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readon
         `${envelope.provider === null ? '' : ` (${envelope.provider})`}`) +
       `, ${envelope.maxTurns ?? 'the default'} turns per run.`,
     ...(envelope.roles.length === 0 ? [] : [`Roles it answers for: ${envelope.roles.join(', ')}.`]),
+    ...(envelope.avatar || envelope.accent
+      ? [`Face: ${[envelope.avatar, envelope.accent].filter(Boolean).join(', ')}.`]
+      : []),
     `Proposed by ${envelope.proposedBy}.`,
     '',
     ...personaBlock(envelope.content),
@@ -645,6 +659,17 @@ const createInput = z
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
     maxTurns: z.number().int().positive().max(64).optional().describe('Turn budget per run. Default 12.'),
     language: z.enum(['mirror', 'en', 'fr']).optional().describe('Default "mirror": answer in the owner\'s language.'),
+    avatar: z
+      .string()
+      .min(1)
+      .max(8)
+      .optional()
+      .describe('An emoji for its face, e.g. "🧪". Pick one that says what it does; the owner can change it.'),
+    accent: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/)
+      .optional()
+      .describe('Its own colour, as #rrggbb. Leave it out for a tint chosen from its id.'),
     roles: z.array(z.string().min(1)).optional().describe('Capabilities it answers for, e.g. ["recap"].'),
     delegates: z
       .array(z.string().min(1))
@@ -726,6 +751,8 @@ function buildCreateEnvelope(
     ...(roles === undefined ? {} : { roles }),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
+    ...(input.avatar === undefined ? {} : { avatar: checkAvatar(input.avatar) }),
+    ...(input.accent === undefined ? {} : { accent: input.accent.toLowerCase() }),
     // Replacing the example that declares `default: true` must not leave the
     // installation without a default agent: the claim travels with the file.
     ...(idClash?.isDefault === true ? { default: true } : {}),
@@ -756,6 +783,8 @@ function buildCreateEnvelope(
     account,
     maxTurns: input.maxTurns ?? null,
     language: input.language ?? null,
+    avatar: spec.avatar ?? null,
+    accent: spec.accent ?? null,
     roles: roles ?? [],
     content,
     replacesExample: idClash !== undefined,
@@ -779,6 +808,17 @@ const updateInput = z
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
     maxTurns: z.number().int().positive().max(64).optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
+    avatar: z
+      .string()
+      .min(1)
+      .max(8)
+      .optional()
+      .describe('An emoji for its face, e.g. "🧪". Pick one that says what it does; the owner can change it.'),
+    accent: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/)
+      .optional()
+      .describe('Its own colour, as #rrggbb. Leave it out for a tint chosen from its id.'),
     roles: z.array(z.string().min(1)).optional(),
     delegates: z.array(z.string().min(1)).optional().describe('A new delegate allowlist, replacing the current one.'),
   })
@@ -823,6 +863,8 @@ function buildUpdateEnvelope(
     ...(!onAccounts && input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
+    ...(input.avatar === undefined ? {} : { avatar: checkAvatar(input.avatar) }),
+    ...(input.accent === undefined ? {} : { accent: input.accent.toLowerCase() }),
     ...(roles === undefined ? {} : { roles }),
   };
 

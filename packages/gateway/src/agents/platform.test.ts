@@ -701,3 +701,19 @@ describe('with named model accounts', () => {
     expect(listed.agents.find((x) => x.id === 'scout')).toMatchObject({ account: 'Local endpoint', model: 'qwen3:8b' });
   });
 });
+
+describe('a face from the maker', () => {
+  it('writes an emoji and a colour into the file, and says so in the preview', () => {
+    const { envelope, preview } = described<CreateAgentEnvelope>(h, 'platform.create_agent', { ...baseCreate, avatar: '🧪', accent: '#E06C3F' });
+    expect(envelope.content).toMatch(/avatar: "?🧪"?/);
+    expect(envelope.content).toContain('accent: "#e06c3f"');
+    expect(preview).toContain('Face: 🧪, #e06c3f.');
+  });
+  it('refuses a file name as an avatar', () => {
+    expect(refusalOf(h, 'platform.create_agent', { ...baseCreate, avatar: 'face.png' })).toContain('emoji');
+  });
+  it('changes a face on an existing agent', () => {
+    const { envelope } = described<UpdateAgentEnvelope>(h, 'platform.update_agent', { id: 'scout', avatar: '🔭' });
+    expect(envelope.changes).toContainEqual({ key: 'avatar', from: '(unset)', to: '🔭' });
+  });
+});

@@ -40,6 +40,8 @@ export const FRONTMATTER_ORDER: readonly string[] = [
   'skills',
   'maxTurns',
   'language',
+  'avatar',
+  'accent',
 ];
 
 /**
@@ -61,6 +63,9 @@ export interface AgentFileSpec {
   roles?: string[];
   maxTurns?: number;
   language?: string;
+  /** An emoji face, and the agent's own colour as #rrggbb. */
+  avatar?: string;
+  accent?: string;
   /** Only ever carried over from an example being replaced. */
   default?: boolean;
   /** The persona. Written verbatim, with exactly one trailing newline. */
@@ -88,6 +93,8 @@ export function composeAgentFile(spec: AgentFileSpec): string {
     roles: spec.roles === undefined || spec.roles.length === 0 ? undefined : spec.roles,
     maxTurns: spec.maxTurns,
     language: spec.language,
+    avatar: spec.avatar,
+    accent: spec.accent,
   };
   const lines = FRONTMATTER_ORDER.flatMap((key) => {
     const value = values[key];
