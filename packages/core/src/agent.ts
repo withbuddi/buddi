@@ -9,4 +9,11 @@ export interface AgentDefinition {
   /** Pinned per agent — provider choice is an authorization decision. */
   provider: ProviderRef;
   maxTurns: number;
+  /**
+   * Whether the model reasons before it answers. `on` and `off` are sent to
+   * the provider; absent leaves the model's own default alone.
+   */
+  thinking?: ThinkingSetting;
 }
+
+export type ThinkingSetting = 'on' | 'off';

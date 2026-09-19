@@ -36,7 +36,7 @@ import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
 import { conversationLine } from './lifetime';
-import { MessageList, type LiveCall } from './MessageList';
+import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttachment } from './types';
 
@@ -93,6 +93,8 @@ export function ChatPage({
   /** The owner's accepted send, shown before the run has persisted it. */
   const [optimistic, setOptimistic] = useState<ChatMessage[]>([]);
   const [live, setLive] = useState<LiveCall[]>([]);
+  /** The answer as it is being written, ahead of the transcript. */
+  const [partial, setPartial] = useState<LiveTurnView | null>(null);
   const [running, setRunning] = useState(false);
   const [awaiting, setAwaiting] = useState<Map<string, string>>(new Map());
   const [activeTab, setActiveTab] = useState<string | null>(null);
@@ -260,7 +262,41 @@ export function ChatPage({
         switch (event.name) {
           case 'run.started':
             setRunning(true);
+            setPartial(null);
             break;
+          case 'live': {
+            const runId = str(event.data['runId']) ?? '';
+            const turn = Number(event.data['turn'] ?? 0);
+            const kind = event.data['kind'] === 'thinking' ? 'thinking' : 'text';
+            const text = str(event.data['text']) ?? '';
+            const at = Date.now();
+            setPartial((current) => {
+              const base: LiveTurnView = current && current.runId === runId && current.turn === turn
+                ? current
+                : { runId, turn, text: '', thinking: '', thinkingStartedAt: null, textStartedAt: null, settled: false };
+              return kind === 'thinking'
+                ? { ...base, thinking: base.thinking + text, thinkingStartedAt: base.thinkingStartedAt ?? at }
+                : { ...base, text: base.text + text, textStartedAt: base.textStartedAt ?? at };
+            });
+            break;
+          }
+          case 'live.snapshot': {
+            const runId = str(event.data['runId']) ?? '';
+            const turn = Number(event.data['turn'] ?? 0);
+            const text = str(event.data['text']) ?? '';
+            const thinking = str(event.data['thinking']) ?? '';
+            const startedAt = Number(event.data['startedAt'] ?? Date.now());
+            setPartial({ runId, turn, text, thinking, thinkingStartedAt: thinking ? startedAt : null, textStartedAt: text ? startedAt : null, settled: false });
+            break;
+          }
+          case 'live.settle': {
+            const runId = str(event.data['runId']) ?? '';
+            const turn = Number(event.data['turn'] ?? 0);
+            // Marked, not dropped: it stays on screen until the refresh that
+            // carries the real message has landed, so the words never blink.
+            setPartial((current) => current && current.runId === runId && current.turn === turn ? { ...current, settled: true } : current);
+            break;
+          }
           case 'tool.called': {
             const id = str(event.data['toolUseId']) ?? str(event.data['id']);
             const name = str(event.data['name']) ?? str(event.data['tool']) ?? 'tool';
@@ -275,7 +311,9 @@ export function ChatPage({
             break;
           }
           case 'message.appended':
-            void refresh(conversationId);
+            void refresh(conversationId).then(() => {
+              setPartial((current) => (current?.settled ? null : current));
+            });
             break;
           case 'awaiting-approval': {
             const approvalId = str(event.data['approvalId']) ?? str(event.data['actionId']);
@@ -290,6 +328,7 @@ export function ChatPage({
           case 'run.finished': {
             setRunning(false);
             setLive([]);
+            setPartial(null);
             // A turn that failed says so in words the server already wrote for
             // a person. The raw error stays in the log: the page is never
             // handed it, so it can never put it on the screen.
@@ -759,6 +798,7 @@ export function ChatPage({
           live={live}
           now={now}
           working={running}
+          partial={partial}
           onOpenFile={openFile}
           onOpen={(toolUseId) => {
             if (conversationId) setDismissedTabs(current => {

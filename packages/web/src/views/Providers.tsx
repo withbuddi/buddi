@@ -365,7 +365,7 @@ export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAcco
   return base;
 }
 
-type Probe = { models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean };
+type Probe = { models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean };
 
 function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled }: {
   accounts: ProviderAccount[]; busy: boolean; run: Run; onDone: (id?: string) => void; codexEnabled?: boolean; anthropicOAuthEnabled?: boolean;
@@ -466,7 +466,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
                 <select aria-label="Model" value={customModel ? '__custom__' : model} onChange={e => {
                   if (e.target.value === '__custom__') { setCustomModel(true); setModel(''); } else { setCustomModel(false); setModel(e.target.value); }
                 }}>
-                  {probe.models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}</option>)}
+                  {probe.models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}{m.thinks ? ' · thinks' : ''}</option>)}
                   <option value="__custom__">Custom model…</option>
                 </select>
                 <Button size="sm" disabled={probing || !canProbe} onClick={() => void loadModels()}>{probing ? 'Loading…' : 'Reload'}</Button>

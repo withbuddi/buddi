@@ -78,6 +78,7 @@ import {
 } from '../surfaces/conversation-lifetime.js';
 import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js';
 import { type ArtifactStore } from '../telegram/attachments.js';
+import { LiveTurns } from './live.js';
 
 /** The surface id every web run is attributed to in the event log. */
 export const WEB_CHAT_SURFACE = WEB_SURFACE.id;
@@ -240,6 +241,7 @@ export type ChatBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
+  | { type: 'thinking'; text: string }
   | { type: 'unknown'; raw: unknown };
 
 export interface ChatMessageView {
@@ -450,6 +452,8 @@ function toChatBlock(
   switch (block.type) {
     case 'text':
       return { type: 'text', text: String(block.text ?? '') };
+    case 'thinking':
+      return { type: 'thinking', text: String(block.text ?? '') };
     case 'tool_use':
       return {
         type: 'tool_use',
@@ -660,6 +664,8 @@ export type SendResult =
  */
 export class WebChat {
   readonly #deps: WebChatDeps;
+  /** The answer being written, per conversation, for the stream to hand on. */
+  readonly live = new LiveTurns();
   readonly #queues = new Map<string, Promise<void>>();
   readonly #running = new Map<string, { runId: string; cancel: () => void }>();
   readonly #log: (line: string) => void;
@@ -951,7 +957,11 @@ export class WebChat {
       // the run is over before — or instead of — being told what it said.
       onText: async () => {
         await this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId });
+        // Told after the row landed, so a page that clears the live text on
+        // settle finds the message already there when it refreshes.
+        this.live.settle(conversationId, runId);
       },
+      onDelta: (delta) => this.live.append(conversationId, runId, delta),
       // Counted only so a failed turn knows whether offering to run it again
       // would be honest — work that already happened cannot be un-happened.
       onToolCall: () => {
@@ -972,6 +982,8 @@ export class WebChat {
         failure = err;
       },
     );
+    // However it ended, nothing stays half-written on anybody's screen.
+    this.live.end(conversationId, runId);
 
     if (cancelled) {
       await this.#failed(

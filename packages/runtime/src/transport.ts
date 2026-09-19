@@ -104,6 +104,7 @@ import { Agent as HttpAgent, request as httpRequest, type ClientRequest } from '
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import type { LookupFunction } from 'node:net';
+import { StringDecoder } from 'node:string_decoder';
 
 /**
  * The slice of `Response` an adapter actually uses. Narrow on purpose: the
@@ -152,6 +153,14 @@ export interface TransportRequest {
    * wrote. Omitted everywhere else: a provider's answer is as long as it is.
    */
   maxBytes?: number | undefined;
+  /**
+   * Called with each piece of the body as it arrives, decoded as UTF-8 on
+   * character boundaries, together with the status the response opened with.
+   * The body is still buffered in full, so `text()` and `json()` work as
+   * before — this is a tap, not a replacement. A provider streaming its
+   * answer as server-sent events is read through it.
+   */
+  onChunk?: ((text: string, status: number) => void) | undefined;
 }
 
 export type HttpTransport = (
@@ -313,6 +322,8 @@ function attempt(
         const chunks: Buffer[] = [];
         let received = 0;
         const cap = init.maxBytes;
+        const tap = init.onChunk;
+        const decoder = tap ? new StringDecoder('utf8') : null;
         res.on('data', (chunk: Buffer) => {
           received += chunk.byteLength;
           if (cap !== undefined && received > cap) {
@@ -327,9 +338,21 @@ function attempt(
             return;
           }
           chunks.push(chunk);
+          if (tap && decoder) {
+            const text = decoder.write(chunk);
+            if (text !== '') {
+              try { tap(text, res.statusCode ?? 0); } catch (err) { fail(err); }
+            }
+          }
         });
         res.on('end', () => {
           if (settled) return;
+          if (tap && decoder) {
+            const text = decoder.end();
+            if (text !== '') {
+              try { tap(text, res.statusCode ?? 0); } catch (err) { fail(err); return; }
+            }
+          }
           settled = true;
           resolve(responseOf(res, Buffer.concat(chunks)));
         });

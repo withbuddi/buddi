@@ -52,6 +52,8 @@ export interface AgentEngineView {
   model: string;
   maxTurns: number;
   language: string;
+  /** Reasoning before the answer: on, off, or null for the model's default. */
+  thinking: 'on' | 'off' | null;
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -88,10 +90,20 @@ export function readEngineOptions(env: NodeJS.ProcessEnv): ProviderModels[] {
  * this endpoint, or by hand) the file wins, and `restartRequired` records that
  * the loaded catalog and the file no longer agree.
  */
+/** The file wins over the loaded catalog, as for every other engine key. */
+function thinkingOnDisk(agent: CatalogAgent): 'on' | 'off' | null {
+  try {
+    return parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file }).frontmatter.thinking ?? null;
+  } catch {
+    return agent.thinking ?? null;
+  }
+}
+
 function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineView {
   if (agent.provider.accountId !== undefined) return {
     id: agent.id, handle: agent.handle, name: agent.name, isDefault: agent.isDefault,
     provider: agent.provider.kind, model: agent.model, maxTurns: agent.maxTurns, language: agent.language,
+    thinking: thinkingOnDisk(agent),
     credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
     available: agent.available, unavailableReason: agent.unavailableReason, restartRequired: false,
   };
@@ -134,6 +146,7 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     model,
     maxTurns,
     language,
+    thinking: thinkingOnDisk(agent),
     credentialKind,
     credentialEnv,
     available: resolution.ok,
@@ -173,9 +186,16 @@ export function engineChangeFromBody(body: Record<string, unknown>): EnginePatch
     }
     change.language = body.language as EnginePatch['language'];
   }
+  // `null` is a value here: it removes the key, back to the model's default.
+  if (body.thinking !== undefined) {
+    if (body.thinking !== null && body.thinking !== 'on' && body.thinking !== 'off') {
+      return '`thinking` must be "on", "off" or null';
+    }
+    change.thinking = body.thinking;
+  }
 
   if (Object.keys(change).length === 0) {
-    return 'nothing to change (send provider, model, maxTurns or language)';
+    return 'nothing to change (send provider, model, maxTurns, language or thinking)';
   }
   return change;
 }

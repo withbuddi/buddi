@@ -333,6 +333,8 @@ export interface AgentEngine {
   model: string;
   maxTurns: number;
   language: string;
+  /** Reasoning before the answer: on, off, or null for the model's default. */
+  thinking: 'on' | 'off' | null;
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -463,6 +465,8 @@ export interface EngineChange {
   model?: string;
   maxTurns?: number;
   language?: string;
+  /** `null` removes the setting: back to the model's default. */
+  thinking?: 'on' | 'off' | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -516,8 +520,8 @@ export const api = {
   providers: () => get<ProvidersView>('/providers'),
   providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
   probeModels: (body: { kind: 'anthropic' | 'openai' | 'openai-compatible'; auth: 'api-key' | 'none'; baseUrl?: string; secret?: string }) =>
-    post<{ models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
-  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
+    post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
+  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
   testProviderAccount: (id: string) => post<{ state: string; message: string }>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),

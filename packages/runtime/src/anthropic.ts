@@ -25,6 +25,7 @@ import {
   providerAuthHeaders,
   type ResolvedProvider,
 } from '@buddi/core';
+import { SseParser, frameJson, type SseFrame } from './sse.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
   defaultSleep,
@@ -78,6 +79,12 @@ export type ContentBlock =
     }
   | { type: 'image'; mime: string; data: string }
   | { type: 'document'; mime: 'application/pdf'; data: string; name?: string }
+  /**
+   * What the model thought before it answered. Persisted, so a page can show
+   * it; replayed to Anthropic with its `signature` (the API insists on the
+   * original when a tool-use turn continues) and dropped on any other wire.
+   */
+  | { type: 'thinking'; text: string; signature?: string }
   | {
       type: 'artifact_ref';
       artifactId: string;
@@ -139,6 +146,23 @@ export interface CompletionRequest {
    * says `nativeWebSearch: false` ignores this field entirely.
    */
   nativeSearch?: { maxUses: number };
+  /**
+   * Reasoning before the answer: `on`, `off`, or absent for the model's own
+   * default. Each adapter says it in its provider's words.
+   */
+  thinking?: 'on' | 'off';
+  /**
+   * The answer as it is written, when the caller wants it before it is
+   * finished. Present, the adapter streams the request and calls this for
+   * every piece of text or thinking; the completed response is returned
+   * exactly as it would have been without.
+   */
+  onDelta?: (delta: CompletionDelta) => void;
+}
+
+export interface CompletionDelta {
+  kind: 'text' | 'thinking';
+  text: string;
 }
 
 /**
@@ -338,6 +362,9 @@ type WireBlock =
  * to `web_search` and would otherwise collide with it on the wire.
  */
 export const WEB_SEARCH_TOOL_TYPE = 'web_search_20250305';
+
+/** The smallest thinking budget the API accepts. */
+export const THINKING_MIN_BUDGET = 1024;
 export const WEB_SEARCH_TOOL_NAME = 'web_search';
 
 type WireSystemBlock = { type: 'text'; text: string };
@@ -345,6 +372,8 @@ type WireSystemBlock = { type: 'text'; text: string };
 type WireRequest = {
   model: string;
   max_tokens: number;
+  stream?: boolean;
+  thinking?: { type: 'enabled'; budget_tokens: number } | { type: 'disabled' };
   /** A plain string for `api-key`; blocks for `subscription-token`. */
   system: string | WireSystemBlock[];
   messages: { role: MessageRole; content: WireBlock[] }[];
@@ -393,6 +422,13 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
       // Verbatim, or it is not a continuation of the same turn. `raw` came off
       // this same endpoint; it is never constructed here and never read.
       return block.raw as Record<string, unknown>;
+    case 'thinking':
+      // Only a block this endpoint signed goes back; one from another wire
+      // has no signature and would be refused. It is stated as empty text
+      // rather than omitted so the caller's block count still lines up.
+      return block.signature
+        ? { type: 'thinking', thinking: block.text, signature: block.signature }
+        : { type: 'text', text: '' };
     case 'artifact_ref':
       // The loop hydrates these before calling a provider. Reaching here means
       // an un-hydrated history — say so rather than dropping the block.
@@ -500,6 +536,15 @@ function fromWireBlocks(
     const b = item as Record<string, unknown>;
     if (b.type === 'text' && typeof b.text === 'string') {
       out.push({ type: 'text', text: b.text });
+    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+      out.push({
+        type: 'thinking',
+        text: b.thinking,
+        ...(typeof b.signature === 'string' ? { signature: b.signature } : {}),
+      });
+    } else if (b.type === 'redacted_thinking') {
+      // Encrypted by the API; carried back verbatim, shown to nobody.
+      out.push({ type: 'provider_native', provider: 'anthropic', raw: b });
     } else if (
       b.type === 'tool_use' &&
       typeof b.id === 'string' &&
@@ -522,10 +567,9 @@ function fromWireBlocks(
       out.push({ type: 'provider_native', provider: 'anthropic', raw: b });
     }
 
-    // Everything else — a thinking block, anything a future API version adds —
-    // is still not part of this port and is still dropped. Only the server-tool
-    // pair above is carried, and only because a paused turn cannot be continued
-    // without it.
+    // Everything else — anything a future API version adds — is not part of
+    // this port and is dropped. Thinking is carried above; the server-tool
+    // pair is carried because a paused turn cannot be continued without it.
   }
   return { content: out, searches };
 }
@@ -644,6 +688,15 @@ export function createAnthropicProvider(
       });
     }
     if (tools.length > 0) wire.tools = tools;
+    if (req.thinking === 'on') {
+      // The budget must sit under max_tokens; a fixed slice of it, never all.
+      const budget = Math.max(THINKING_MIN_BUDGET, Math.floor(wire.max_tokens / 2));
+      if (wire.max_tokens <= budget) wire.max_tokens = budget + THINKING_MIN_BUDGET;
+      wire.thinking = { type: 'enabled', budget_tokens: budget };
+    } else if (req.thinking === 'off') {
+      wire.thinking = { type: 'disabled' };
+    }
+    if (req.onDelta) wire.stream = true;
     return wire;
   }
 
@@ -698,10 +751,20 @@ export function createAnthropicProvider(
       for (;;) {
         req.signal?.throwIfAborted();
         let res: TransportResponse;
+        // Streaming: the frames are assembled into the same shape the
+        // non-streaming answer has, so one parser serves both. Once a delta
+        // has reached the caller a retry would say it twice, so from then on
+        // a failure is final.
+        const assembly = req.onDelta ? new AnthropicStreamAssembly(req.onDelta) : null;
         try {
-          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload, ...(req.signal ? { signal: req.signal } : {}) });
+          res = await doFetch(url, {
+            method: 'POST', headers: headers(), body: payload,
+            ...(req.signal ? { signal: req.signal } : {}),
+            ...(assembly ? { onChunk: (text: string, status: number) => { if (status >= 200 && status < 300) assembly.push(text); } } : {}),
+          });
         } catch (err) {
           req.signal?.throwIfAborted();
+          if (assembly?.spoke) throw new ProviderError({ status: 0, type: 'transport_error', message: err instanceof Error ? err.message : String(err), cause: err });
           transportFailures += 1;
           // The message stays the caller's; the cause chain rides along, and
           // `detail` is the line that finally says what actually broke.
@@ -724,7 +787,7 @@ export function createAnthropicProvider(
         }
 
         if (res.ok) {
-          const json = (await res.json()) as WireResponse;
+          const json = assembly ? assembly.finish() : ((await res.json()) as WireResponse);
           const parsed = fromWireBlocks(json.content, names);
           const webSearches = json.usage?.server_tool_use?.web_search_requests ?? 0;
           return {
@@ -767,4 +830,114 @@ export function createAnthropicProvider(
       );
     },
   };
+}
+
+/**
+ * The streamed form of one `/v1/messages` answer, put back together.
+ *
+ * `content_block_start` opens a block, `content_block_delta` grows it (text,
+ * thinking, a signature, or the JSON of a tool input as partial text), and
+ * `message_delta` carries the stop reason and the final output count. The
+ * result is the `WireResponse` the non-streaming path would have received,
+ * so everything after this point is shared.
+ */
+class AnthropicStreamAssembly {
+  readonly #parser = new SseParser();
+  readonly #blocks: Record<string, unknown>[] = [];
+  readonly #partialJson = new Map<number, string>();
+  #model: string | undefined;
+  #stopReason: string | null = null;
+  #usage: { input_tokens?: number; output_tokens?: number; server_tool_use?: { web_search_requests?: number } } = {};
+  /** True once a delta has been handed to the caller. */
+  spoke = false;
+
+  constructor(private readonly onDelta: (delta: CompletionDelta) => void) {}
+
+  push(text: string): void {
+    for (const frame of this.#parser.push(text)) this.#frame(frame);
+  }
+
+  #frame(frame: SseFrame): void {
+    const json = frameJson(frame);
+    if (!json) return;
+    const type = typeof json.type === 'string' ? json.type : frame.event;
+    switch (type) {
+      case 'message_start': {
+        const message = (json.message ?? {}) as Record<string, unknown>;
+        if (typeof message.model === 'string') this.#model = message.model;
+        const usage = (message.usage ?? {}) as Record<string, unknown>;
+        if (typeof usage.input_tokens === 'number') this.#usage.input_tokens = usage.input_tokens;
+        break;
+      }
+      case 'content_block_start': {
+        const index = typeof json.index === 'number' ? json.index : this.#blocks.length;
+        const block = { ...((json.content_block ?? {}) as Record<string, unknown>) };
+        if (block.type === 'tool_use' || block.type === 'server_tool_use') this.#partialJson.set(index, '');
+        if (block.type === 'text' && typeof block.text !== 'string') block.text = '';
+        if (block.type === 'thinking' && typeof block.thinking !== 'string') block.thinking = '';
+        this.#blocks[index] = block;
+        break;
+      }
+      case 'content_block_delta': {
+        const index = typeof json.index === 'number' ? json.index : this.#blocks.length - 1;
+        const block = this.#blocks[index];
+        const delta = (json.delta ?? {}) as Record<string, unknown>;
+        if (!block) break;
+        if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+          block.text = `${typeof block.text === 'string' ? block.text : ''}${delta.text}`;
+          this.spoke = true;
+          this.onDelta({ kind: 'text', text: delta.text });
+        } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+          block.thinking = `${typeof block.thinking === 'string' ? block.thinking : ''}${delta.thinking}`;
+          this.spoke = true;
+          this.onDelta({ kind: 'thinking', text: delta.thinking });
+        } else if (delta.type === 'signature_delta' && typeof delta.signature === 'string') {
+          block.signature = `${typeof block.signature === 'string' ? block.signature : ''}${delta.signature}`;
+        } else if (delta.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+          this.#partialJson.set(index, `${this.#partialJson.get(index) ?? ''}${delta.partial_json}`);
+        }
+        break;
+      }
+      case 'content_block_stop': {
+        const index = typeof json.index === 'number' ? json.index : this.#blocks.length - 1;
+        const block = this.#blocks[index];
+        const partial = this.#partialJson.get(index);
+        if (block && partial !== undefined) {
+          try { block.input = partial.trim() === '' ? {} : JSON.parse(partial); } catch { block.input = {}; }
+          this.#partialJson.delete(index);
+        }
+        break;
+      }
+      case 'message_delta': {
+        const delta = (json.delta ?? {}) as Record<string, unknown>;
+        if (typeof delta.stop_reason === 'string') this.#stopReason = delta.stop_reason;
+        const usage = (json.usage ?? {}) as Record<string, unknown>;
+        if (typeof usage.output_tokens === 'number') this.#usage.output_tokens = usage.output_tokens;
+        if (typeof usage.input_tokens === 'number') this.#usage.input_tokens = usage.input_tokens;
+        const server = usage.server_tool_use as { web_search_requests?: number } | undefined;
+        if (server) this.#usage.server_tool_use = server;
+        break;
+      }
+      case 'error': {
+        const error = (json.error ?? {}) as Record<string, unknown>;
+        throw new ProviderError({
+          status: 0,
+          type: typeof error.type === 'string' ? error.type : 'stream_error',
+          message: typeof error.message === 'string' ? error.message : 'the stream reported an error',
+        });
+      }
+      default:
+        break;
+    }
+  }
+
+  finish(): WireResponse {
+    for (const frame of this.#parser.end()) this.#frame(frame);
+    return {
+      ...(this.#model ? { model: this.#model } : {}),
+      stop_reason: this.#stopReason,
+      content: this.#blocks.filter(Boolean),
+      usage: this.#usage,
+    };
+  }
 }

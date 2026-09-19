@@ -27,7 +27,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import type { AgentDefinition } from '../agent.js';
+import type { AgentDefinition, ThinkingSetting } from '../agent.js';
 import { resolveProvider, type ProviderKind, type ProviderProblem, type ProviderRef } from '../provider.js';
 import { localDateString, timezoneFromEnv } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
@@ -141,6 +141,7 @@ export interface CatalogAgent extends AgentSummary {
   /** Tool names resolved against the registry, in registry order. */
   tools: string[];
   maxTurns: number;
+  thinking?: ThinkingSetting;
   language: AgentLanguage;
   provider: ProviderRef;
   /**
@@ -442,6 +443,7 @@ function buildAgent(
     model: provider.model,
     tools,
     maxTurns,
+    ...(frontmatter.thinking === undefined ? {} : { thinking: frontmatter.thinking }),
     language,
     provider,
     availability,
@@ -459,6 +461,7 @@ function buildAgent(
         tools,
         provider,
         maxTurns,
+        ...(frontmatter.thinking === undefined ? {} : { thinking: frontmatter.thinking }),
       };
     },
   };

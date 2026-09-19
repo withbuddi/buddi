@@ -395,3 +395,66 @@ describe('createOpenAiProvider — failures', () => {
     await expect(provider.complete(request)).rejects.not.toThrow(/sk-openai-secret/);
   });
 });
+
+describe('createOpenAiProvider — thinking and streaming', () => {
+  it('turns reasoning off in the words each host understands', async () => {
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => { bodies.push(JSON.parse(init.body)); return jsonResponse(200, okBody()); });
+    const local = createOpenAiProvider({ ...resolved(), compatible: true, secret: '', baseUrl: 'http://localhost:11434/v1', model: 'gemma4:12b' }, { fetch: fetchMock as unknown as typeof fetch });
+    await local.complete({ ...request, thinking: 'off' });
+    await local.complete({ ...request, thinking: 'on' });
+    await local.complete(request);
+    const cloud = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });
+    await cloud.complete({ ...request, thinking: 'off' });
+    expect(bodies[0].reasoning_effort).toBe('none');
+    // Ollama's default is on; nothing is sent so the model keeps its own.
+    expect(bodies[1].reasoning_effort).toBeUndefined();
+    expect(bodies[2].reasoning_effort).toBeUndefined();
+    expect(bodies[3].reasoning_effort).toBe('minimal');
+  });
+
+  it('keeps what the model thought as its own block', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({ choices: [{ finish_reason: 'stop', message: { content: '391', reasoning: '17 times 23…' } }] })));
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });
+    const res = await provider.complete(request);
+    expect(res.content).toEqual([{ type: 'thinking', text: '17 times 23…' }, { type: 'text', text: '391' }]);
+  });
+
+  it('streams when asked, hands out each piece, and returns the assembled answer', async () => {
+    const chunks = [
+      { model: 'gemma4:12b', choices: [{ delta: { role: 'assistant', reasoning: 'think' } }] },
+      { choices: [{ delta: { content: 'Hel' } }] },
+      { choices: [{ delta: { content: 'lo' } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'finance_balance', arguments: '{"a"' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: ':1}' } }] }, finish_reason: 'tool_calls' }] },
+      { choices: [], usage: { prompt_tokens: 4, completion_tokens: 6 } },
+    ];
+    const wire = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      const body = JSON.parse(init.body);
+      expect(body.stream).toBe(true);
+      expect(body.stream_options).toEqual({ include_usage: true });
+      const cut = Math.floor(wire.length / 3);
+      init.onChunk(wire.slice(0, cut), 200);
+      init.onChunk(wire.slice(cut), 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });
+    const deltas: any[] = [];
+    const res = await provider.complete({ ...request, onDelta: (d) => deltas.push(d) });
+    expect(deltas).toEqual([
+      { kind: 'thinking', text: 'think' },
+      { kind: 'text', text: 'Hel' },
+      { kind: 'text', text: 'lo' },
+    ]);
+    expect(res.content).toEqual([
+      { type: 'thinking', text: 'think' },
+      { type: 'text', text: 'Hello' },
+      // No such tool in this request's map, so the wire name stands.
+      { type: 'tool_use', id: 'call_1', name: 'finance_balance', input: { a: 1 } },
+    ]);
+    expect(res.stopReason).toBe('tool_use');
+    expect(res.usage).toEqual({ input: 4, output: 6 });
+    expect(res.model).toBe('gemma4:12b');
+  });
+});

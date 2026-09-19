@@ -167,6 +167,8 @@ export const agentFrontmatterSchema = z
     /** Shared skills to load by name; private skills are always loaded. */
     skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),
+    /** Reasoning before answering: `on`, `off`, or absent for the model's default. */
+    thinking: z.enum(['on', 'off']).optional(),
     default: z.boolean().optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
     /**
