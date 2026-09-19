@@ -355,10 +355,28 @@ export interface ProvidersView {
 }
 
 export interface AgentsView {
+  providerAccounts?: ProviderAccountsView;
   agents: AgentRow[];
   engines: AgentEngine[];
   providers: ProviderModels[];
 }
+
+export interface ProviderAccount {
+  id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible';
+  auth: 'api-key' | 'none' | 'legacy-subscription-token'; baseUrl: string;
+  defaultModel: string; enabled: boolean; revision: number; configured: boolean;
+  refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
+  assignedAgents: string[]; test: { state: string; message: string; checkedAt: string } | null;
+  removalPending?: boolean;
+}
+export interface ProviderAccountsView {
+  vault: { kind: string; locked: boolean; advice: string };
+  accounts: ProviderAccount[];
+  bindings: Array<{ agentId: string; accountId: string; model: string }>;
+}
+export type SaveProviderAccount = Pick<ProviderAccount, 'label' | 'kind' | 'auth' | 'baseUrl' | 'defaultModel' | 'enabled'> & {
+  id?: string; revision?: number; secret?: string;
+};
 
 /**
  * One agent, whole — `GET /api/agents/:id/profile`.
@@ -484,6 +502,11 @@ export const chatApi = {
 
 export const api = {
   providers: () => get<ProvidersView>('/providers'),
+  providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
+  saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
+  testProviderAccount: (id: string) => post<{ state: string; message: string }>(`/provider-accounts/${encodeURIComponent(id)}/test`),
+  removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),
+  assignProviderAccount: (agent: string, accountId: string, model: string) => post<{ changed: string[]; note: string }>(`/agents/${encodeURIComponent(agent)}/account`, { accountId, model }),
   configureProvider: (kind: string, body: { credentialKind: string; defaultModel: string }) => post<ProvidersView>(`/providers/${encodeURIComponent(kind)}/settings`, body),
   saveCredential: (name: string, value: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/save`, { value }),
   removeCredential: (name: string) => post<ProvidersView>(`/providers/credentials/${encodeURIComponent(name)}/remove`),

@@ -1,35 +1,44 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, type ProvidersView } from '../api';
+import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', () => ({ api: { providers: vi.fn(), saveCredential: vi.fn(), removeCredential: vi.fn(), configureProvider: vi.fn(), testProvider: vi.fn() } }));
-const view: ProvidersView = { vault: { kind: 'file', locked: false, advice: '' }, providers: [{
-  kind: 'openai', credentialKind: 'api-key', credentialEnv: 'OPENAI_API_KEY', usable: true, defaultModel: 'gpt-5', defaultFrom: 'built-in', defaultEnv: 'BUDDI_OPENAI_MODEL', prefixes: ['gpt-'], models: [{ id: 'gpt-5', note: '' }],
-  activeCredential: 'OPENAI_API_KEY', credentials: [{ name: 'OPENAI_API_KEY', configured: true, source: 'vault' }], test: null,
+vi.mock('../api', () => ({ api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn() } }));
+const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
+  id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
+  defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
+  tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null,
 }] };
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providers).mockResolvedValue(view); });
-it('does not test or modify credentials on page load and only submits keys from a password field', async () => {
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providerAccounts).mockResolvedValue(view); vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'two' }); });
+it('renders named accounts without modifying or testing them on load', async () => {
   render(<Providers />);
-  const field = await screen.findByLabelText(/OPENAI_API_KEY —/);
+  expect(await screen.findByText('Personal OpenAI')).toBeInTheDocument();
+  expect(api.testProviderAccount).not.toHaveBeenCalled();
+  expect(api.saveProviderAccount).not.toHaveBeenCalled();
+});
+it('saves a new independent credential from a password field and clears the field', async () => {
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Second Anthropic' } });
+  const field = screen.getByLabelText('API key');
   expect(field).toHaveAttribute('type', 'password');
-  expect(field).toHaveValue(''); expect(api.testProvider).not.toHaveBeenCalled();
-  expect(api.saveCredential).not.toHaveBeenCalled();
   fireEvent.change(field, { target: { value: 'fixture-secret' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save OPENAI_API_KEY' }));
-  await waitFor(() => expect(api.saveCredential).toHaveBeenCalledWith('OPENAI_API_KEY', 'fixture-secret'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ label: 'Second Anthropic', secret: 'fixture-secret', kind: 'anthropic' })));
   expect(field).toHaveValue('');
   expect(JSON.stringify(localStorage)).not.toContain('fixture-secret');
 });
-it('requires a separate confirmation before removing a credential', async () => {
+it('requires confirmation before removal and sends the account revision', async () => {
   render(<Providers />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Remove OPENAI_API_KEY' }));
-  expect(api.removeCredential).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole('button', { name: 'Remove account' }));
+  expect(api.removeProviderAccount).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }));
-  await waitFor(() => expect(api.removeCredential).toHaveBeenCalledWith('OPENAI_API_KEY'));
+  await waitFor(() => expect(api.removeProviderAccount).toHaveBeenCalledWith('one', 1));
 });
-it('shows locked-vault guidance without requesting a key from chat', async () => {
-  vi.mocked(api.providers).mockResolvedValue({ ...view, vault: { kind: 'file', locked: true, advice: 'Run buddi init on the host.' } });
+it('blocks removal of assigned accounts and shows vault guidance', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, vault: { kind: 'file', locked: true, advice: 'Unlock the host vault.' }, accounts: [{ ...view.accounts[0]!, assignedAgents: ['ledger'] }] });
   render(<Providers />);
-  expect(await screen.findByText('Run buddi init on the host.')).toBeInTheDocument();
+  expect(await screen.findByText('Unlock the host vault.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Remove account' })).toBeDisabled();
+  expect(screen.getByText('Used by: ledger')).toBeInTheDocument();
 });

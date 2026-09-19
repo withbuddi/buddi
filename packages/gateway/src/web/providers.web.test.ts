@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import type { ProviderSettings } from '../providers.js';
+import type { ProviderAccounts } from '../provider-accounts.js';
 const servers: WebServer[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(s => s.close())); });
 it('protects provider reads and credential writes with existing owner session, origin and CSRF checks', async () => {
@@ -26,4 +27,30 @@ it('protects provider reads and credential writes with existing owner session, o
   expect(saved.status).toBe(200); expect(saved.headers.get('cache-control')).toBe('no-store');
   expect(await saved.text()).not.toContain('fixture-secret');
   expect(manager.credential).toHaveBeenCalledWith('OPENAI_API_KEY', 'save', { value: 'fixture-secret' });
+});
+
+it('protects named account creation and assignments and retires global credential writes', async () => {
+  const manager = { view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn() };
+  const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+    ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
+    config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerAccounts: manager as unknown as ProviderAccounts });
+  servers.push(app);
+  const origin = `http://127.0.0.1:${app.port}`;
+  expect((await fetch(`${origin}/api/provider-accounts`, { headers: { 'X-Forwarded-For': '100.64.0.2' } })).status).toBe(401);
+  const session = await fetch(`${origin}/api/session`);
+  const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
+  const csrf = cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
+  for (const route of ['/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account']) {
+    expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
+  }
+  expect(manager.save).not.toHaveBeenCalled(); expect(manager.assign).not.toHaveBeenCalled();
+  const saved = await fetch(`${origin}/api/provider-accounts/save`, { method: 'POST', headers, body: JSON.stringify({ secret: 'fixture-secret' }) });
+  expect(saved.status).toBe(200); expect(saved.headers.get('cache-control')).toBe('no-store');
+  expect(await saved.text()).not.toContain('fixture-secret');
+  const assigned = await fetch(`${origin}/api/agents/ledger/account`, { method: 'POST', headers, body: JSON.stringify({ accountId: 'one', model: 'gpt-5' }) });
+  expect(assigned.status).toBe(200);
+  expect(manager.assign).toHaveBeenCalledWith('ledger', { accountId: 'one', model: 'gpt-5' });
+  expect((await fetch(`${origin}/api/providers/credentials/OPENAI_API_KEY/save`, { method: 'POST', headers, body: '{}' })).status).toBe(410);
 });

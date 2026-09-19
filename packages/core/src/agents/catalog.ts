@@ -217,6 +217,8 @@ export interface AgentDirSpec {
 }
 
 export interface LoadAgentCatalogOptions {
+  /** Installation-owned account metadata. Core never reads credentials or SQL. */
+  providerSelection?: (agent: AgentFrontmatter) => { provider: ProviderRef; availability: AgentAvailability };
   /**
    * A single directory — the original shape, kept because most tests and every
    * ad-hoc caller means exactly one. A directory that cannot be read is an
@@ -401,12 +403,13 @@ function buildAgent(
   // never reaches for `process.env` itself.
   const catalogTimezone = timezoneFromEnv(opts.env);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
-  const provider = providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
+  const selection = opts.providerSelection?.(frontmatter);
+  const provider = selection?.provider ?? providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
   // Fail *soft* here and fail closed at run time: see the file header.
   const resolution = resolveProvider(provider, opts.env);
-  const availability: AgentAvailability = resolution.ok
+  const availability: AgentAvailability = selection?.availability ?? (resolution.ok
     ? { ok: true }
-    : { ok: false, problem: resolution.problem };
+    : { ok: false, problem: resolution.problem });
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
   const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
   const section = skillsSection(skills);

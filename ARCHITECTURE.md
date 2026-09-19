@@ -1001,6 +1001,36 @@ optional always-on relay (which changes the deployment premise — opt-in).
 
 Reference: `~/Projects/personal/foreman-0.1.18/.../foreman/src/provider.ts`.
 
+### Named provider accounts
+
+The serving composition root now resolves **agent → account + model → wire adapter**.
+`core.provider_accounts` stores named, versioned account metadata and vault references;
+`core.agent_provider_accounts` stores explicit per-agent account/model assignments.
+No secret values enter Postgres or the browser. `provider-accounts.ts` in core contains
+the platform-independent account/endpoint validation; the gateway owns persistence,
+vault access and runtime wiring. A compatible endpoint uses the OpenAI wire without
+claiming to be OpenAI or restricting its model names to OpenAI prefixes.
+
+Migration 018 plus the gateway's transactional one-time import preserve legacy
+credentials and every installed agent's effective model/credential choice. Thereafter
+these database assignments override provider/model frontmatter; newly installed agents
+need an explicit assignment. The file still owns persona, tools, language and turn budget.
+Global credential preference is a legacy import input, not a runtime fallback policy.
+Environment resolution explicitly refuses account-bearing refs to prevent bypasses.
+
+Runs pin account identity and model. Before each model call, the account service checks
+the database revision and reads that account's vault credential. A disabled, removed,
+or edited account stops the next call; already-dispatched requests cannot be recalled.
+Account assignment changes never redirect an in-flight run. Dashboard edits reload the
+shared catalog; standalone CLI edits require other processes to refresh/restart.
+
+Existing pasted Claude subscription tokens are preserved as non-refreshable legacy
+accounts. No new subscription OAuth/device login is implemented. A supported native
+client integration needs its own authentication lifecycle/adapter, not API-key reuse.
+See [provider accounts](docs/providers.md) for operational details.
+
+### Legacy environment adapter contract
+
 - **`ProviderRef` discriminated union** — provider + credential source + wire are one
   choice, so "subscription login + custom base URL" (token exfiltration) is hard to
   express. Name the invariant as a constant; assert it in tests.

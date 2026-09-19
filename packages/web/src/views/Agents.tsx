@@ -16,7 +16,7 @@
  *    selected adapter. Older read-only catalog fixtures still report restart.
  */
 import { useState } from 'react';
-import { api, type AgentEngine, type AgentRow, type ProviderModels } from '../api';
+import { api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../api';
 import { Empty, ErrorBanner, useAsync } from '../ui';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
@@ -58,10 +58,11 @@ export function Agents(): JSX.Element {
       ) : (
         data.agents.map((agent) => (
           <Agent
-            key={agent.id}
+            key={`${agent.id}:${data.engines.find(e => e.id === agent.id)?.model}:${data.providerAccounts?.bindings.find(b => b.agentId === agent.id)?.accountId}`}
             agent={agent}
             engine={data.engines.find((e) => e.id === agent.id)}
             providers={data.providers}
+            accounts={data.providerAccounts}
             onRun={run}
           />
         ))
@@ -74,17 +75,20 @@ function Agent({
   agent,
   engine,
   providers,
+  accounts,
   onRun,
 }: {
   agent: AgentRow;
   engine: AgentEngine | undefined;
   providers: ProviderModels[];
+  accounts?: ProviderAccountsView;
   onRun: (work: Promise<{ note: string; changed: string[] }>) => void;
 }): JSX.Element {
   const provider = engine?.provider ?? agent.provider.kind;
   const group = providers.find((p) => p.kind === provider);
   const model = engine?.model ?? agent.model;
   const [turns, setTurns] = useState(String(engine?.maxTurns ?? agent.maxTurns));
+  const binding = accounts?.bindings.find(b => b.agentId === agent.id);
 
   const set = (change: Record<string, unknown>): void => {
     onRun(api.setAgentEngine(agent.id, change));
@@ -115,7 +119,7 @@ function Agent({
 
       <h3>Engine</h3>
       <div className="bar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <label>
+        {accounts ? <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} /> : <><label>
           <span className="muted">provider </span>
           <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
             {providers.map((p) => (
@@ -143,7 +147,7 @@ function Agent({
               <option key={id} value={id} />
             ))}
           </datalist>
-        </label>
+        </label></>}
 
         <label>
           <span className="muted">max turns </span>
@@ -178,9 +182,9 @@ function Agent({
       </div>
 
       <div className="muted" style={{ marginTop: 6 }}>
-        {engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
-        <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span>
-        {group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
+        {accounts ? <>Account: {accounts.accounts.find(a => a.id === binding?.accountId)?.label ?? 'Not selected'} · Model: {binding?.model ?? 'Not selected'}</> : <>{engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
+        <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span></>}
+        {!accounts && group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
       </div>
       {engine ? (
         <div
@@ -219,4 +223,24 @@ function Agent({
       )}
     </div>
   );
+}
+
+function AccountChoice({ agentId, accounts, onRun }: { agentId: string; accounts: ProviderAccountsView;
+  onRun: (work: Promise<{ note: string; changed: string[] }>) => void }): JSX.Element {
+  const binding = accounts.bindings.find(b => b.agentId === agentId);
+  const [id, setId] = useState(binding?.accountId ?? '');
+  const [model, setModel] = useState(binding?.model ?? '');
+  const [busy, setBusy] = useState(false);
+  return <>
+    <label>Account <select value={id} disabled={busy} onChange={e => {
+      setId(e.target.value); setModel(accounts.accounts.find(a => a.id === e.target.value)?.defaultModel ?? '');
+    }}>
+      <option value="">Choose an account</option>
+      {accounts.accounts.map(a => <option key={a.id} value={a.id} disabled={!a.enabled}>{a.label}{!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}</option>)}
+    </select></label>
+    <label>Model <input value={model} disabled={busy} onChange={e => setModel(e.target.value)} /></label>
+    <button disabled={busy || !id || !model.trim() || (id === binding?.accountId && model === binding.model)} onClick={() => {
+      setBusy(true); onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
+    }}>Save account selection</button>
+  </>;
 }

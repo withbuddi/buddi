@@ -89,6 +89,12 @@ export function readEngineOptions(env: NodeJS.ProcessEnv): ProviderModels[] {
  * the loaded catalog and the file no longer agree.
  */
 function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineView {
+  if (agent.provider.accountId !== undefined) return {
+    id: agent.id, handle: agent.handle, name: agent.name, isDefault: agent.isDefault,
+    provider: agent.provider.kind, model: agent.model, maxTurns: agent.maxTurns, language: agent.language,
+    credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
+    available: agent.available, unavailableReason: agent.unavailableReason, restartRequired: false,
+  };
   let provider = agent.provider.kind;
   let model = agent.model;
   let maxTurns = agent.maxTurns;
