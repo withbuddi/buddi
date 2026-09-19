@@ -213,13 +213,13 @@ export function App(): JSX.Element {
               newConversationSignal={newConversation}
             />
           ) : (
-            <main className="flex-1 min-w-0 overflow-auto">
-              <div className="max-w-[1100px]">
-                <p className="muted text-[12px] mb-2">
+            <main>
+              <div className="page">
+                <p className="page-crumbs">
                   <a href={CHAT_ROUTE} onClick={goTo(navigate, CHAT_ROUTE)}>
                     ← Chat
                   </a>
-                  <span className="ml-3">{timezone}</span>
+                  <span>{timezone}</span>
                 </p>
                 <Section
                   hash={section}

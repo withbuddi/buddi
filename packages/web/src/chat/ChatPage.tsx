@@ -655,10 +655,10 @@ export function ChatPage({
 
         {agentId && conversationId ? <HostControls key={`${agentId}:${conversationId}`} agentId={agentId} conversationId={conversationId} /> : null}
 
-        {error ? <div className="err-banner m-2.5">{error}</div> : null}
+        {error ? <div className="err-banner" style={{ margin: 10 }}>{error}</div> : null}
 
         {notice ? (
-          <div className="muted m-2.5 text-xs" data-testid="chat-notice">
+          <div className="wb-chat-notice" data-testid="chat-notice">
             {notice}
           </div>
         ) : null}

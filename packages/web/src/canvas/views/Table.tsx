@@ -32,8 +32,8 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
       ) : (
         props.groups.map((group, groupIndex) => (
           <div key={group.label ?? groupIndex} className={groupIndex > 0 ? 'mt-5' : ''}>
-            {group.label ? <h4 className="wb-stat-k m-0 mb-1.5">{group.label}</h4> : null}
-            <div className="wrap overflow-x-auto">
+            {group.label ? <h4 className="wb-stat-k wb-label">{group.label}</h4> : null}
+            <div className="wrap wb-scroll-x">
               <table>
                 <thead>
                   <tr>
@@ -69,7 +69,7 @@ function Cell({ cell }: { cell: TableCell }): JSX.Element {
   }
   return (
     <td className="num">
-      <div className="flex items-center gap-2 justify-end">
+      <div className="wb-row" style={{ justifyContent: 'flex-end' }}>
         <div
           className="wb-meter"
           role="meter"

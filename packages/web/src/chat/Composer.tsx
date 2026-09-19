@@ -211,7 +211,7 @@ export function Composer({
             ref={fileInput}
             type="file"
             multiple
-            className="hidden"
+            hidden
             data-testid="file-input"
             onChange={(event) => {
               take(event.target.files);

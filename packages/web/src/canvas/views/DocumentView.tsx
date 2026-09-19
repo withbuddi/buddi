@@ -11,10 +11,10 @@ import { fmtValue } from '../format';
 export function DocumentView({ props }: { props: DocumentProps }): JSX.Element {
   return (
     <div>
-      {props.title ? <h4 className="m-0 mb-2 text-[15px] font-semibold">{props.title}</h4> : null}
+      {props.title ? <h4 className="wb-doc-title">{props.title}</h4> : null}
 
       {props.metadata.length > 0 ? (
-        <dl className="wb-kv mb-3">
+        <dl className="wb-kv wb-block">
           {props.metadata.map((item) => (
             <div key={item.label} className="contents">
               <dt>{item.label}</dt>
@@ -25,9 +25,9 @@ export function DocumentView({ props }: { props: DocumentProps }): JSX.Element {
       ) : null}
 
       {props.kind === 'image' && props.src ? (
-        <img src={props.src} alt={props.title ?? 'Attached image'} className="max-w-full rounded" />
+        <img src={props.src} alt={props.title ?? 'Attached image'} className="wb-doc-image" />
       ) : props.kind === 'pdf' && props.src ? (
-        <object data={props.src} type="application/pdf" className="w-full h-[70vh] rounded border">
+        <object data={props.src} type="application/pdf" className="wb-doc-pdf">
           <a href={props.src}>Open the PDF</a>
         </object>
       ) : props.text ? (

@@ -1,17 +1,47 @@
 /*
  * The hand-written stylesheet.
  *
- * Colours live in `tokens.css` and nowhere else; this file only spends them.
- * Tailwind's utilities are layered on top for the workbench, with preflight
- * off so the monitoring pages below keep the shape they were designed in.
- * There is still no framework font and no `@import` of anything remote — the
- * page makes no external request at all.
+ * Colours, type, spacing and shape live in `tokens.css` and nowhere else; this
+ * file only spends them. There is no framework: a short reset below, then the
+ * shared primitives, then the workbench. There is still no framework font and
+ * no `@import` of anything remote — the page makes no external request at all.
  */
 @import './tokens.css';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* ---- reset ----
+ * Enough that every element starts from nothing and every control starts
+ * from the page's own font, and no more. Whatever an element then looks like
+ * is a decision made once, below, in tokens.
+ */
+*, ::before, ::after { box-sizing: border-box; border: 0 solid var(--line); }
+h1, h2, h3, h4, h5, h6, p, figure, blockquote, pre, dl, dd, ul, ol, fieldset, legend { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; margin: 0; padding: 0; background: transparent; border-radius: 0; }
+button, [type='button'], [type='submit'] { appearance: none; -webkit-appearance: none; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+textarea { resize: vertical; }
+img, svg, video, canvas, object { display: block; max-width: 100%; }
+img { height: auto; }
+a { color: inherit; text-decoration: inherit; }
+table { border-collapse: collapse; border-spacing: 0; text-indent: 0; }
+summary { cursor: pointer; }
+:where([hidden]) { display: none !important; }
+
+/* Keep a label in the accessibility tree and out of the layout. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+.contents { display: contents; }
 
 html, body, #root { height: 100%; }
 
@@ -42,14 +72,7 @@ code, pre, .mono {
 a { color: var(--accent); }
 
 /* ----------------------------------------------------------------- *
- * The monitoring pages, restored.
- *
- * Preflight is on, which is what stops every element being a 3px box and
- * every form control wearing its user-agent chrome. It also flattens the
- * document defaults the nine monitoring pages were written against — heading
- * weight, paragraph rhythm, list markers. Those pages live inside `<main>`
- * and nothing in the workbench does, so what they relied on is given back
- * here and nowhere else.
+ * The monitoring pages.
  * ----------------------------------------------------------------- */
 
 main h1, main h2, main h3, main h4 { font-weight: 650; }
@@ -90,7 +113,9 @@ nav.side a.active { background: var(--bg); border-left: 3px solid var(--accent);
 nav.side a:hover { background: var(--bg); }
 nav.side a .badge { color: var(--critical); font-variant-numeric: tabular-nums; }
 
-main { flex: 1 1 auto; padding: 22px 26px 60px; min-width: 0; }
+main { flex: 1 1 auto; padding: 22px 26px 60px; min-width: 0; overflow: auto; }
+.page { max-width: 1100px; }
+.page-crumbs { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: var(--space-2); display: flex; gap: var(--space-3); }
 
 main h2 { margin: 0 0 4px; font-size: 18px; }
 main h3 { margin: 22px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
@@ -325,6 +350,8 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
   border-radius: 999px;
   background: var(--accent);
 }
+
+.wb-rail-spacer { flex: 1 1 auto; }
 
 .wb-rail-dot {
   position: absolute;
@@ -616,6 +643,8 @@ main button.danger, .drawer button.danger { border-color: var(--critical); color
 }
 
 /* ---- the conversation ---- */
+
+.wb-chat-notice { color: var(--text-muted); font-size: var(--text-xs); margin: 10px; }
 
 .wb-messages {
   flex: 1 1 auto;
@@ -1206,7 +1235,9 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 @media (max-width: 900px) {
   .wb-chat { flex: 1 1 auto; width: auto !important; border-right: 0; }
   .wb-rail { width: 50px; }
-  .wb-messages { padding: 16px 14px 20px; }
+  .wb-chat-notice { color: var(--text-muted); font-size: var(--text-xs); margin: 10px; }
+
+.wb-messages { padding: 16px 14px 20px; }
   .wb-composer { padding: 8px 12px 12px; }
   .wb-canvas-body { padding: 16px 14px 32px; }
   .wb-msg[data-role='user'] .wb-bubble { max-width: 94%; }
@@ -1309,6 +1340,29 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-toast-title { font-weight: 600; font-size: 13px; }
 .wb-toast-body { color: var(--text-muted); font-size: 12px; }
 
+/* ---- small layout helpers the canvas views share ---- */
+.wb-row { display: flex; align-items: center; gap: var(--space-2); }
+.wb-row-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.wb-row-end { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }
+.wb-stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.wb-section { margin-top: var(--space-4); }
+.wb-scroll-x { overflow-x: auto; }
+.wb-label { margin: 0 0 6px; }
+.wb-block { margin-bottom: var(--space-4); }
+
+/* ---- bars: a category, a bar, a value ---- */
+.wb-bars { display: flex; flex-direction: column; gap: var(--space-2); }
+.wb-bar-row { display: flex; align-items: center; gap: var(--space-3); }
+.wb-bar-cat { flex: 0 0 120px; font-size: var(--text-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-bar-track { flex: 1 1 auto; min-width: 0; height: 18px; position: relative; }
+.wb-bar-fill { position: absolute; top: 0; height: 100%; border-radius: var(--radius-sm); }
+.wb-bar-val { flex: 0 0 110px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- documents on the canvas ---- */
+.wb-doc-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.wb-doc-image { border-radius: var(--radius); }
+.wb-doc-pdf { width: 100%; height: 70vh; border-radius: var(--radius); border: 1px solid var(--line); }
+
 /* ---- the chart ---- */
 
 .wb-chart { width: 100%; height: auto; display: block; overflow: visible; }
@@ -1342,6 +1396,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 
 /* ---- the inferred fallback: a table, a list or a reason, never a dump ---- */
 
+.wb-panel-sub { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--text-sm); }
 .wb-sub {
   margin: 0 0 8px;
   font-size: 11.5px;
@@ -1402,6 +1457,9 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   padding-right: 4px;
 }
 .wb-chart-event-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.wb-chart-event { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--text-md); }
+.wb-chart-event-day { font-variant-numeric: tabular-nums; color: var(--text-muted); margin-right: var(--space-2); }
+.wb-chart-layout { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: flex-start; }
 .wb-chart-event-list li { padding: 2px 0; border-bottom: 1px solid var(--line); }
 .wb-chart-event-list li:last-child { border-bottom: 0; }
 
