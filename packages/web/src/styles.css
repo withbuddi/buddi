@@ -129,6 +129,7 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 /* ---- the conversation column ---- */
 
 .wb-chat {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -137,6 +138,40 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
+
+/* ---- the drop target: the whole column, said out loud ---- */
+
+/* A file crossing the column dims it and names where the file will go. The
+   overlay ignores the pointer so the drop itself still lands on the column. */
+.wb-drop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.wb-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 34px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: center;
+  box-shadow: var(--shadow-panel);
+}
+.wb-drop-card svg { color: var(--accent); margin-bottom: 4px; }
+.wb-drop-card strong { font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.wb-drop-card span { color: var(--text-muted); font-size: var(--text-sm); }
+.wb-chat[data-dropping='true'] .wb-composer-box { border-color: var(--accent); }
 
 .wb-chat-head {
   display: flex;
@@ -417,7 +452,6 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 /* Said once, and only when it is certainly true: the next message opens a
    new thread. Never a prediction — a warning that is usually wrong is noise. */
 .wb-head-meta[data-tone='note'] { color: var(--warning); }
-.wb-head-model { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
 
 .ui-count {
   font-variant-numeric: tabular-nums;
@@ -617,11 +651,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   padding: 8px 14px 14px;
   background: var(--surface);
 }
-.wb-composer[data-dropping='true'] .wb-composer-box {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
 /* The box: one rounded field with the controls inside it. It rises a little
    when it has focus, the way the thing you are about to speak into should. */
 .wb-composer-box {
@@ -698,36 +727,190 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-send:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
 .wb-send:disabled { opacity: 0.35; cursor: default; }
 
-.wb-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 0; }
-.wb-chip {
+/* ---- files: in the composer before sending, in the thread after ---- */
+
+.wb-composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+.wb-msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 88%;
+}
+.wb-msg[data-role='user'] .wb-msg-files { justify-content: flex-end; }
+
+/* One file: a thumbnail or a family mark, then name and meta. The same tile
+   before and after sending, so a file does not change shape when you press
+   Enter. */
+.wb-file {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 2px 4px 2px 10px;
-  font-size: var(--text-sm);
-  color: var(--text);
-  background: var(--surface-sunken);
   max-width: 100%;
 }
-.wb-chip[data-pending='true'] { color: var(--text-muted); }
-.wb-chip[data-failed='true'] { border-color: var(--critical); color: var(--critical); }
-.wb-chip-kind { color: var(--text-faint); font-size: var(--text-xs); }
-.wb-chip-x {
+.wb-file-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 260px;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: default;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+button.wb-file-open { cursor: pointer; }
+button.wb-file-open:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgb(16 15 14 / 8%); transform: translateY(-1px); }
+button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wb-file-visual {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  overflow: hidden;
+}
+.wb-file-visual img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wb-file-visual[data-family='pdf'] { color: var(--critical); }
+.wb-file-visual[data-family='table'] { color: var(--good); }
+.wb-file-visual[data-family='code'] { color: var(--accent); }
+.wb-file-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.wb-file-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-file-meta { font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; }
+
+/* An image with a thumbnail is mostly picture: bigger visual, the name under it only on hover. */
+.wb-file[data-thumb='true'] .wb-file-open { padding: 4px; gap: 0; }
+.wb-file[data-thumb='true'] .wb-file-visual { width: 128px; height: 96px; border-radius: calc(var(--radius-lg) - 3px); }
+.wb-file[data-thumb='true'] .wb-file-text {
+  position: absolute;
+  left: 4px; right: 4px; bottom: 4px;
+  padding: 14px 8px 6px;
+  border-radius: 0 0 calc(var(--radius-lg) - 3px) calc(var(--radius-lg) - 3px);
+  background: linear-gradient(to top, rgb(16 15 14 / 72%), transparent);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.wb-file[data-thumb='true'] .wb-file-meta { color: rgb(255 255 255 / 75%); }
+.wb-file[data-thumb='true']:hover .wb-file-text,
+.wb-file[data-thumb='true']:focus-within .wb-file-text { opacity: 1; }
+
+/* Smaller in the composer, where several may sit in a row. */
+.wb-file[data-size='sm'] .wb-file-visual { width: 36px; height: 36px; }
+.wb-file[data-size='sm'][data-thumb='true'] .wb-file-visual { width: 84px; height: 64px; }
+.wb-file[data-size='sm'] .wb-file-open { padding: 5px 10px 5px 5px; max-width: 220px; }
+.wb-file[data-size='sm'][data-thumb='true'] .wb-file-open { padding: 3px; }
+
+/* The three honest states. */
+.wb-file[data-state='uploading'] .wb-file-visual { opacity: 0.55; }
+.wb-file[data-state='uploading'] .wb-file-meta { color: var(--text-muted); }
+.wb-file[data-state='uploading']::after {
+  content: '';
+  position: absolute;
+  left: 12px; right: 12px; bottom: -1px;
+  height: 2px;
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-faint);
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 200% 100%;
+  animation: wb-file-shimmer 1.1s linear infinite;
+}
+@keyframes wb-file-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .wb-file[data-state='uploading']::after { animation: none; background: var(--accent); } }
+.wb-file[data-state='failed'] .wb-file-open { border-color: var(--critical); }
+.wb-file[data-state='failed'] .wb-file-meta { color: var(--critical); white-space: normal; }
+
+/* Remove: a small round button on the tile's corner, visible on hover and focus. */
+.wb-file-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 0;
+  box-shadow: var(--shadow-panel);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
-.wb-chip-x:hover { background: var(--surface); color: var(--text); }
+.wb-file:hover .wb-file-x,
+.wb-file:focus-within .wb-file-x,
+.wb-file[data-state='failed'] .wb-file-x { opacity: 1; }
+.wb-file-x:hover { color: var(--critical); border-color: var(--critical); }
+
+/* The model, next to where the message is sent: a quiet pill that opens Setup. */
+.wb-composer-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+a.wb-composer-model:hover { border-color: var(--line); background: var(--surface-sunken); color: var(--text); }
+.wb-composer-model-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex: 0 0 auto; }
+.wb-hint[data-tone='critical'] { color: var(--critical); }
+
+/* ---- a file on the canvas ---- */
+
+.wb-artifact { display: flex; flex-direction: column; gap: 18px; }
+.wb-artifact-picture {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.wb-artifact-picture img {
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+}
+.wb-artifact-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.wb-artifact-mark svg { width: 34px; height: 34px; }
+.wb-artifact-mime { margin-left: 8px; color: var(--text-faint); font-size: var(--text-xs); }
 
 /* ---- the grip between the two halves ---- */
 

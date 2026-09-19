@@ -77,12 +77,7 @@ import {
   readVitals,
 } from '../surfaces/conversation-lifetime.js';
 import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js';
-import {
-  attachmentNote,
-  classifyMime,
-  isViewable,
-  type ArtifactStore,
-} from '../telegram/attachments.js';
+import { type ArtifactStore } from '../telegram/attachments.js';
 
 /** The surface id every web run is attributed to in the event log. */
 export const WEB_CHAT_SURFACE = WEB_SURFACE.id;
@@ -244,7 +239,7 @@ export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
-  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string }
+  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'unknown'; raw: unknown };
 
 export interface ChatMessageView {
@@ -412,10 +407,22 @@ export async function readChatTranscript(
       id: m.id,
       role: m.role,
       at: m.at,
-      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals)),
+      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
+        .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
     })),
     ...(await runsOf(pool, conversationId)),
   };
+}
+
+/**
+ * Conversations from before the note was generated at send time persisted it
+ * in the owner's own text. Those rows are not rewritten; the sentence is
+ * dropped on read, so an old thread shows a file where a file was sent.
+ */
+const LEGACY_NOTE = /\n*\[Attached file: [^\]]*artifact id [0-9a-f-]{36}\.[^\]]*\]/g;
+function withoutLegacyNote(block: ChatBlock): ChatBlock {
+  if (block.type !== 'text' || !block.text.includes('[Attached file:')) return block;
+  return { type: 'text', text: block.text.replace(LEGACY_NOTE, '').trim() };
 }
 
 function rawBlocks(content: unknown): Array<Record<string, any>> {
@@ -482,12 +489,15 @@ function toChatBlock(
     case 'artifact_ref': {
       const artifactId = String(block.artifactId ?? '');
       const row = artifacts.get(artifactId);
+      // The row is the truth when the artifact still exists; the reference
+      // carries enough to name a file whose bytes are gone.
       return {
         type: 'attachment',
         artifactId,
-        filename: row?.filename ?? null,
+        filename: row?.filename ?? (typeof block.filename === 'string' ? block.filename : null),
         mime: row?.mime ?? String(block.mime ?? 'application/octet-stream'),
         kind: row?.kind ?? String(block.kind ?? 'other'),
+        sizeBytes: row?.sizeBytes ?? (typeof block.sizeBytes === 'number' ? block.sizeBytes : null),
       };
     }
     default:
@@ -863,23 +873,18 @@ export class WebChat {
     }
 
     // Files ride with exactly one message, the way a Telegram caption rides
-    // with the document it arrived on. The note is always written — even for an
-    // image the model can see — because the artifact id is how the agent reaches
-    // the bytes again through the artifacts tools.
-    const notes = turn.files.map((row) =>
-      attachmentNote({
-        artifactId: row.id,
-        filename: row.filename,
-        mime: row.mime,
-        sizeBytes: row.sizeBytes,
-        viewable: isViewable(classifyMime(row.mime), row.mime),
-      }),
-    );
-    const attachments: AttachmentRef[] = turn.files
-      .filter((row) => isViewable(classifyMime(row.mime), row.mime))
-      .map((row) => ({ artifactId: row.id, mime: row.mime, kind: row.kind }));
-
-    const userMessage = notes.length === 0 ? turn.text : `${turn.text}\n\n${notes.join('\n')}`;
+    // with the document it arrived on. Every file goes as a reference — name,
+    // type, size, id — and the runtime writes the model's note from it at send
+    // time. The transcript keeps the owner's words and the reference only, so
+    // the page shows a file where a file was sent, not a sentence about one.
+    const attachments: AttachmentRef[] = turn.files.map((row) => ({
+      artifactId: row.id,
+      mime: row.mime,
+      kind: row.kind,
+      filename: row.filename,
+      sizeBytes: row.sizeBytes,
+    }));
+    const userMessage = turn.text;
 
     // "The owner said something, and it is in the transcript." Written before
     // the provider is called, so a page that connected mid-flight still sees

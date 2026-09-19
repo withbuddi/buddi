@@ -141,21 +141,25 @@ describe('runAgent with attachments', () => {
       pool: db,
       conversationId,
       userMessage: 'what does this say?',
-      attachments: [{ artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document' }],
+      attachments: [{ artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document', filename: 'statement.pdf', sizeBytes: 2048 }],
       loadArtifact: loader,
     });
 
-    // Stored: the reference. No base64 anywhere in core.messages.
+    // Stored: the owner's words and the reference. No note, no base64
+    // anywhere in core.messages — a page rendering this shows a file.
     const stored = db.messages.find((m) => m.role === 'user');
     expect(stored?.content).toEqual([
       { type: 'text', text: 'what does this say?' },
-      { type: 'artifact_ref', artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document' },
+      { type: 'artifact_ref', artifactId: 'pdf-1', mime: 'application/pdf', kind: 'document', filename: 'statement.pdf', sizeBytes: 2048 },
     ]);
     expect(JSON.stringify(db.messages)).not.toContain(PDF_B64);
+    expect(JSON.stringify(db.messages)).not.toContain('Attached file');
 
-    // Sent: the document block, with the bytes.
+    // Sent: the note the model reads — name, type, size, id — then the
+    // document block with the bytes.
     expect(provider.calls[0]?.messages.at(-1)?.content).toEqual([
       { type: 'text', text: 'what does this say?' },
+      { type: 'text', text: '[Attached file: statement.pdf (application/pdf, 2.0 KB), artifact id pdf-1. It is attached to this message.]' },
       { type: 'document', mime: 'application/pdf', data: PDF_B64 },
     ]);
   });
@@ -191,6 +195,7 @@ describe('runAgent with attachments', () => {
     const replayed = provider.calls[0]?.messages[0];
     expect(replayed?.content).toEqual([
       { type: 'text', text: 'here is a photo' },
+      { type: 'text', text: '[Attached file: a file (image/png), artifact id img-1. It is attached to this message.]' },
       { type: 'image', mime: 'image/png', data: PNG_B64 },
     ]);
   });
@@ -213,8 +218,8 @@ describe('runAgent with attachments', () => {
     });
 
     const sent = provider.calls[0]?.messages.at(-1)?.content ?? [];
-    expect(sent).toHaveLength(2);
-    const placeholder = sent[1] as { type: string; text: string };
+    expect(sent).toHaveLength(3);
+    const placeholder = sent[2] as { type: string; text: string };
     expect(placeholder.type).toBe('text');
     expect(placeholder.text).toContain(ATTACHMENT_UNAVAILABLE);
     // The reference is still what was persisted — history stays honest.
@@ -281,17 +286,21 @@ describe('hydrateContent', () => {
   });
 
   it('describes what it cannot send inline instead of pretending it did', async () => {
-    const [block] = await hydrateContent(
-      [{ type: 'artifact_ref', artifactId: 'a-1', mime: 'audio/ogg', kind: 'audio' }],
+    const blocks = await hydrateContent(
+      [{ type: 'artifact_ref', artifactId: 'a-1', mime: 'audio/ogg', kind: 'audio', filename: 'memo.ogg' }],
       loader,
     );
-    expect(block).toMatchObject({ type: 'text' });
-    expect((block as { text: string }).text).toContain(ATTACHMENT_UNAVAILABLE);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: 'text' });
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('memo.ogg');
+    expect(text).toContain('artifact id a-1');
+    expect(text).toContain('artifacts tools');
   });
 
   it('degrades on replay instead of throwing on an over-cap image', async () => {
     const big = 'A'.repeat(Math.ceil(((MAX_IMAGE_BYTES + 1024) * 4) / 3));
-    const [block] = await hydrateContent(
+    const [, block] = await hydrateContent(
       [{ type: 'artifact_ref', artifactId: 'img-1', mime: 'image/png', kind: 'image' }],
       async () => ({ mime: 'image/png', data: big }),
     );
