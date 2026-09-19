@@ -185,7 +185,8 @@ async function upsertAndMaybeFire(
   const cooldownPassed =
     existing !== null &&
     (existing.cooldownUntil === null || existing.cooldownUntil.getTime() <= now.getTime());
-  const shouldFire = isNew || cooldownPassed;
+  // A snoozed finding is touched and never fires: the owner has heard it.
+  const shouldFire = (isNew || cooldownPassed) && existing?.snoozedAt == null;
 
   await pool.query(
     `insert into core.sentinel_findings
@@ -328,7 +329,7 @@ async function resolveMissing(
     if (seen.has(finding.key)) continue;
     await pool.query(
       `update core.sentinel_findings
-       set resolved_at = $2, cooldown_until = null
+       set resolved_at = $2, cooldown_until = null, snoozed_at = null
        where key = $1 and resolved_at is null`,
       [finding.key, now.toISOString()],
     );
@@ -341,4 +342,21 @@ async function resolveMissing(
     resolved += 1;
   }
   return resolved;
+}
+
+/**
+ * The owner's one verb on a finding: snooze it, or take the snooze back. Only
+ * an open finding can be snoozed; a resolved one is already quiet. Returns the
+ * finding as it now stands, or null when the key names nothing open.
+ */
+export async function snoozeFinding(pool: Pool, key: string, snoozed: boolean, now = new Date()): Promise<SentinelFinding | null> {
+  const { rows } = await pool.query<SentinelFindingRow>(
+    `update core.sentinel_findings set snoozed_at = $2
+      where key = $1 and resolved_at is null
+      returning ${SENTINEL_FINDING_COLUMNS}`,
+    [key, snoozed ? now.toISOString() : null],
+  );
+  if (rows.length === 0) return null;
+  await appendEvent(pool, snoozed ? 'sentinel.snoozed' : 'sentinel.unsnoozed', { key });
+  return toSentinelFinding(rows[0] as SentinelFindingRow);
 }

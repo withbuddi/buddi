@@ -119,6 +119,13 @@ export function ChatPage({
   const [loadingProfile, setLoadingProfile] = useState(false);
   /** A line the panel put in the composer's mouth. Never sent for the owner. */
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
+  // Another page may leave a sentence for this agent (an alert to ask about).
+  // It is read once, for the agent it was written for, and then forgotten.
+  useEffect(() => {
+    if (!agentId) return;
+    const left = takeDraft(agentId);
+    if (left) setDraft({ text: left, at: Date.now() });
+  }, [agentId]);
 
   const agent =
     [...agents.top, ...agents.middle, ...agents.bottom].find((c) => c.id === agentId) ?? null;
@@ -840,4 +847,24 @@ function SlidersIcon(): JSX.Element {
       <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
     </svg>
   );
+}
+
+export const DRAFT_KEY = 'buddi.chatDraft';
+
+/** Leave a sentence for an agent; the chat picks it up when it opens on that agent. */
+export function leaveDraft(agentId: string, text: string): void {
+  try { window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ agentId, text })); } catch { /* a private window forgets */ }
+}
+
+function takeDraft(agentId: string): string | null {
+  try {
+    const raw = window.sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { agentId?: string; text?: string };
+    if (parsed.agentId !== agentId || typeof parsed.text !== 'string') return null;
+    window.sessionStorage.removeItem(DRAFT_KEY);
+    return parsed.text;
+  } catch {
+    return null;
+  }
 }

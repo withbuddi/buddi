@@ -65,6 +65,8 @@ export type SentinelFinding = {
   cooldownUntil: Date | null;
   deliveredAt: Date | null;
   resolvedAt: Date | null;
+  /** Set by the owner: heard, living with it. Cleared when the fact resolves. */
+  snoozedAt: Date | null;
 };
 
 export type SentinelFindingRow = {
@@ -79,10 +81,11 @@ export type SentinelFindingRow = {
   cooldown_until: Date | null;
   delivered_at: Date | null;
   resolved_at: Date | null;
+  snoozed_at: Date | null;
 };
 
 export const SENTINEL_FINDING_COLUMNS =
-  'key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at, cooldown_until, delivered_at, resolved_at';
+  'key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at, cooldown_until, delivered_at, resolved_at, snoozed_at';
 
 export function toSentinelFinding(row: SentinelFindingRow): SentinelFinding {
   return {
@@ -97,6 +100,7 @@ export function toSentinelFinding(row: SentinelFindingRow): SentinelFinding {
     cooldownUntil: row.cooldown_until,
     deliveredAt: row.delivered_at,
     resolvedAt: row.resolved_at,
+    snoozedAt: row.snoozed_at ?? null,
   };
 }
 
