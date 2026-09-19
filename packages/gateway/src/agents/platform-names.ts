@@ -34,6 +34,7 @@ export const PLATFORM_WRITE_TOOLS: readonly string[] = [
 
 /** The tools that only look. Safe to grant to anybody. */
 export const PLATFORM_READ_TOOLS: readonly string[] = [
+  'platform.list_accounts',
   'platform.list_agents',
   'platform.installed_tools',
   'platform.read_agent',
