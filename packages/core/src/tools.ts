@@ -8,11 +8,14 @@ import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
+import type { SystemContext } from './system-context.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
 
 export interface ToolContext {
+  /** Fresh owner timezone and host facts, supplied by the composition root. */
+  systemContext?: () => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
   ownerRequest?: { id: string; text: string; expiresAt: number };
   /** Runtime-resolved session tool grants. Cannot be inherited by a delegate. */

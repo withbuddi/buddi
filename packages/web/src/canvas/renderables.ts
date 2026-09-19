@@ -39,6 +39,7 @@ import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
+import { commandResult } from './command-result';
 
 /** The tool family the agent uses to drive the canvas on purpose. */
 export const CANVAS_SHOW = 'canvas.show';
@@ -141,7 +142,7 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
         continue;
       }
 
-      const props = { value: block.output };
+      const props = { value: commandResult(block.output) ? { input: use?.input, output: block.output } : block.output };
       if (!earnsTab('structured', props)) continue;
       collected.push({
         id: block.toolUseId,
@@ -248,6 +249,7 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
       return groups.some((group) => count((group as Record<string, unknown>)['rows']) > 0);
     }
     default: {
+      if (commandResult(record['value'])) return true;
       // The fallback has to read the value, because its whole job is to work
       // out what the value is.
       const shape = inferShape(record['value'], { failed: record['failed'] === true });

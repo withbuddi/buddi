@@ -8,6 +8,7 @@
  * guesses one.
  */
 import path from 'node:path';
+import { systemContext } from './system-context.js';
 import {
   DATABASE_URL_VAR,
   KNOWN_SECRETS,
@@ -341,6 +342,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     providerKind: catalog.defaultAgent().provider.kind,
     now,
     timezone,
-    ctx: { db: pool, ownerId: OWNER_ID, now, timezone },
+    ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
+      systemContext: () => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }) },
   };
 }

@@ -705,6 +705,16 @@ main button.danger, .drawer button.danger { border-color: var(--bad); color: var
 .wb-tool-mark[data-ok='false'] { background: var(--critical); }
 .wb-tool-mark[data-ok='pending'] { background: var(--warn, #b7791f); }
 .wb-artifacts { display: grid; gap: 20px; margin-bottom: 20px; }
+.wb-command-result { min-width: 0; display: grid; gap: 16px; }
+.wb-command-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.wb-command-bar h4 { margin: 0; flex: 1; }
+.wb-command-stream { min-width: 0; }
+.wb-command-stream .wb-command-bar { margin-bottom: 8px; }
+.wb-command-copy { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: normal; overflow: auto; max-height: 55vh; max-width: 100%; font-family: var(--mono, monospace); line-height: 1.6; tab-size: 4; }
+.wb-command-stream[data-error] pre { border-color: var(--warn); }
+.wb-command-result .pill[data-tone="good"] { color: var(--good); }
+.wb-command-result .pill[data-tone="critical"] { color: var(--warn); }
 .wb-artifact-image { display: block; max-width: 100%; height: auto; max-height: 65vh; object-fit: contain; margin: 0 auto 12px; border-radius: 8px; }
 .wb-tool[data-ok='false'] { border-color: var(--critical-soft); color: var(--critical); }
 .wb-tool[data-ok='false'] .wb-tool-label { color: var(--critical); }

@@ -15,6 +15,7 @@ import {
   joinSpoken,
   loadMessages,
   runAgent,
+  selectTools,
   type Queryable,
 } from './loop.js';
 
@@ -159,6 +160,36 @@ function scriptedProvider(script: CompletionResponse[]): RuntimeProvider & {
 }
 
 const usage = { input: 5, output: 2 };
+
+it('includes registered system tools even without an agent grant, once only', () => {
+  const registry = registryWithDouble();
+  registry.register({ name: 'system', version: '0.1.0', schema: 'system', migrationsDir: '', tools:
+    ['system.time', 'system.info'].map(name => ({ name, description: 'Platform facts', tier: 'auto' as const, input: z.object({}), execute: async () => ({}) })) });
+  expect(selectTools(registry, agent).map(t => t.name)).toEqual(['demo.double', 'system.time', 'system.info']);
+  expect(selectTools(registry, { ...agent, tools: [...agent.tools, 'system.time'] }).filter(t => t.name === 'system.time')).toHaveLength(1);
+});
+
+it('injects platform context on every surface and applies owner timezone to tools without mutating shared context', async () => {
+  for (const surface of [CLI_SURFACE, TELEGRAM_SURFACE, SCHEDULED_SURFACE]) {
+    const db = new FakeDb();
+    const registry = registryWithDouble();
+    let seenTimezone = '';
+    registry.register({ name: 'check', version: '0.1.0', schema: 'check', migrationsDir: '', tools: [{
+      name: 'check.timezone', description: 'Check timezone', tier: 'auto', input: z.object({}),
+      execute: async (_input, toolCtx) => { seenTimezone = toolCtx.timezone; return {}; },
+    }] });
+    const provider = scriptedProvider([
+      { model: 'fixture', content: [{ type: 'tool_use', id: 'tz', name: 'check.timezone', input: {} }], stopReason: 'tool_use', usage },
+      { model: 'fixture', content: [{ type: 'text', text: 'Done' }], stopReason: 'end_turn', usage },
+    ]);
+    const runCtx = { ...ctx, systemContext: async () => ({ timezone: 'Asia/Tokyo', prompt: 'Current host: fixture macOS. Local date: 2026-01-01.' }) };
+    await runAgent({ agent: { ...agent, tools: ['check.timezone'] }, provider, registry, ctx: runCtx, pool: db,
+      conversationId: await createConversation(db, agent.id), userMessage: 'Check time', surface });
+    expect(provider.calls[0]!.system).toContain('Current host: fixture macOS');
+    expect(seenTimezone).toBe('Asia/Tokyo');
+    expect(runCtx.timezone).toBe('UTC');
+  }
+});
 
 /* ---------------- tests ---------------- */
 
