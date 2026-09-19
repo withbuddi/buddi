@@ -30,6 +30,7 @@ import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
+import { AgentAvatar } from '../ui';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
@@ -673,47 +674,48 @@ export function ChatPage({
         ) : null}
         <header className="wb-chat-head" data-testid="chat-head">
           <div className="wb-head-row">
+            {/* Whose column this is: the same face as in the roster, then the
+                name, then the one fact the transcript hides — how old it is. */}
+            {agent ? <a className="wb-head-face" href={agentRoute(agent.id)} aria-label={`${agent.name}'s page`}><AgentAvatar agents={[...agents.top, ...agents.middle, ...agents.bottom]} id={agent.id} /></a> : null}
             <div className="wb-head-text">
-              {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s profile`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
+              {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
                 {line.text}
               </span>
             </div>
             <button className="ui-btn" data-variant="accent" disabled={!agentId} onClick={() => { setHistoryOpen(false); startNew(); }}>New chat</button>
-            <button className="ui-btn" aria-expanded={historyOpen} disabled={!agentId} onClick={() => setHistoryOpen(value => !value)}>History</button>
+            <button
+              className="ui-icon-btn wb-head-more"
+              aria-label="History"
+              title="Earlier conversations"
+              aria-expanded={historyOpen}
+              data-open={historyOpen ? 'true' : undefined}
+              disabled={!agentId}
+              onClick={() => setHistoryOpen(value => !value)}
+            >
+              <HistoryIcon />
+            </button>
             {narrow ? (
               <button className="ui-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
                 Canvas{renderables.length > 0 ? ` (${renderables.length})` : ''}
               </button>
             ) : null}
             {/*
-              What this agent actually is. At the end of the header because
-              that is where a thing's own menu belongs, and quiet because it
-              answers a question most sessions never ask — and the one that
-              matters most on the day somebody does.
+              Everything else about this agent, behind one labelled menu: what
+              it can do (a panel beside the work), how it is set up (its page),
+              and its page itself. One place, with words, instead of two icons
+              that each open something different.
             */}
-            {agent ? (
-              <a
-                className="ui-icon-btn wb-head-more"
-                href={agentRoute(agent.id, 'setup')}
-                aria-label={`Set up ${agent.name}`}
-                title="Account, model, tools and skills"
-              >
-                <SlidersIcon />
-              </a>
-            ) : null}
-            <button
-              className="ui-icon-btn wb-head-more"
-              data-testid="agent-properties"
-              aria-label={`Properties of ${agent?.name ?? 'this agent'}`}
-              aria-expanded={profile !== null}
-              title={profile ? 'Close the properties panel' : 'What this agent can do'}
-              disabled={!agentId || loadingProfile}
-              data-open={profile ? 'true' : undefined}
-              onClick={toggleProfile}
-            >
-              <MoreIcon />
-            </button>
+            <HeadMenu
+              disabled={!agentId}
+              items={[
+                { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
+                ...(agent ? [
+                  { label: 'Set up', hint: 'Account, model, tools and skills', href: agentRoute(agent.id, 'setup') },
+                  { label: 'Open agent page', hint: 'Profile, activity and setup', href: agentRoute(agent.id) },
+                ] : []),
+              ]}
+            />
           </div>
           {/*
             Two rails plus a conversation plus a canvas do not fit a phone. Below
@@ -915,28 +917,9 @@ function DropIcon(): JSX.Element {
   );
 }
 
-/** Three dots, vertical: this thing has more to say about itself. */
-function MoreIcon(): JSX.Element {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
-      <circle cx="8" cy="3.4" r="1.35" />
-      <circle cx="8" cy="8" r="1.35" />
-      <circle cx="8" cy="12.6" r="1.35" />
-    </svg>
-  );
-}
 
-/** Three sliders: the agent's setup lives behind them, the same mark Settings uses. */
-function SlidersIcon(): JSX.Element {
-  return (
-    <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
-      <circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" />
-      <circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" />
-      <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
-    </svg>
-  );
-}
+
+
 
 export const DRAFT_KEY = 'buddi.chatDraft';
 
@@ -956,4 +939,89 @@ function takeDraft(agentId: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A clock face with its hand: what came before. */
+function HistoryIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8" />
+      <path d="M2.4 2.6v2.6h2.6M8 5.2V8l2 1.3" />
+    </svg>
+  );
+}
+
+/** Three dots, vertical: this thing has more to say about itself. */
+function MoreIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <circle cx="8" cy="3.4" r="1.35" />
+      <circle cx="8" cy="8" r="1.35" />
+      <circle cx="8" cy="12.6" r="1.35" />
+    </svg>
+  );
+}
+
+interface HeadMenuItem {
+  label: string;
+  hint?: string;
+  href?: string;
+  onSelect?: () => void;
+  disabled?: boolean;
+  testId?: string;
+}
+
+/**
+ * The header's one menu. Plain markup rather than a menu library: three rows,
+ * a click outside or Escape closes it, and a test can open it with a click.
+ */
+function HeadMenu({ items, disabled }: { items: HeadMenuItem[]; disabled: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: MouseEvent): void => { if (root.current && !root.current.contains(event.target as Node)) setOpen(false); };
+    const key = (event: globalThis.KeyboardEvent): void => { if (event.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', away);
+    window.addEventListener('keydown', key);
+    return () => { window.removeEventListener('mousedown', away); window.removeEventListener('keydown', key); };
+  }, [open]);
+  return (
+    <div className="wb-head-menu" ref={root}>
+      <button
+        className="ui-icon-btn wb-head-more"
+        data-testid="chat-menu"
+        aria-label="More about this agent"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-open={open ? 'true' : undefined}
+        disabled={disabled}
+        onClick={() => setOpen(value => !value)}
+      >
+        <MoreIcon />
+      </button>
+      {open ? (
+        <div className="ui-menu wb-head-menu-list" role="menu">
+          {items.map((item) => item.href ? (
+            <a key={item.label} className="ui-menu-item" role="menuitem" href={item.href} onClick={() => setOpen(false)}>
+              <span className="ui-menu-item-text">{item.label}</span>
+              {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
+            </a>
+          ) : (
+            <button
+              key={item.label}
+              className="ui-menu-item"
+              role="menuitem"
+              data-testid={item.testId}
+              disabled={item.disabled}
+              onClick={() => { setOpen(false); item.onSelect?.(); }}
+            >
+              <span className="ui-menu-item-text">{item.label}</span>
+              {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
