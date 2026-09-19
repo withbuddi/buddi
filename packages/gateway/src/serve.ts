@@ -34,6 +34,7 @@ import {
   listMissions,
   nextAfter,
   releaseStaleClaims,
+  sweepOrphanUploads,
   resumeJob,
   runScheduler,
   runSentinels,
@@ -88,6 +89,9 @@ export { createInlineMissionRunner, type InlineMissionDeps };
 /** Scheduler cadence and the age at which a claim is considered abandoned. */
 export const TICK_MS = 30_000;
 export const STALE_CLAIM_MS = 15 * 60_000;
+/** An upload nobody sent is kept this long before the sweep takes it. */
+export const ORPHAN_UPLOAD_MS = 24 * 60 * 60_000;
+export const ORPHAN_SWEEP_MS = 60 * 60_000;
 
 /**
  * The watchers and the sources run on their own loops, off the scheduler's
@@ -507,6 +511,18 @@ export async function main(): Promise<void> {
       );
     }, TICK_MS);
     if (typeof sweep.unref === 'function') sweep.unref();
+
+    // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
+    // day old, at start and then hourly. Anything a message carries is kept.
+    const sweepOrphans = async (): Promise<void> => {
+      const gone = await sweepOrphanUploads(pool, { surface: 'web', olderThan: new Date(now().getTime() - ORPHAN_UPLOAD_MS), at: now() });
+      if (gone > 0) console.error(`artifacts: discarded ${gone} unsent upload(s)`);
+    };
+    void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+    const orphanSweep = setInterval(() => {
+      void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+    }, ORPHAN_SWEEP_MS);
+    if (typeof orphanSweep.unref === 'function') orphanSweep.unref();
 
     // The queue worker is what actually runs a mission. The scheduler decides
     // *when* and hands the occurrence over; the run itself is a durable job with

@@ -120,12 +120,18 @@ export const Composer = forwardRef<ComposerHandle, {
     if (attachment.thumbnail && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(attachment.thumbnail);
   };
 
+  /*
+   * A file taken back out. It was stored the moment it landed, so the store
+   * is told; a refusal (the same bytes already sent in some message) is fine
+   * and needs no telling — the tray is what the owner asked to change.
+   */
   const remove = (key: string): void => {
-    setAttachments((current) => {
-      const gone = current.find((attachment) => attachment.key === key);
-      if (gone) release(gone);
-      return current.filter((attachment) => attachment.key !== key);
-    });
+    const gone = attachments.find((attachment) => attachment.key === key);
+    if (gone) {
+      release(gone);
+      if (gone.state === 'ready' && gone.uploaded) void chatApi.discardAttachment(gone.uploaded.artifactId).catch(() => undefined);
+    }
+    setAttachments((current) => current.filter((attachment) => attachment.key !== key));
   };
 
   useImperativeHandle(ref, () => ({
