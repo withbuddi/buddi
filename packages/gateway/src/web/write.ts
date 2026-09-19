@@ -288,7 +288,7 @@ export async function cancelJobFromWeb(
   jobId: string,
 ): Promise<WriteResult<{ job: JobView }>> {
   const job = await cancelJob(deps.pool, jobId);
-  if (!job) return fail(409, 'only a pending, running or suspended job can be cancelled');
+  if (!job) return fail(409, 'only a pending, running, suspended or failed job can be cancelled');
   return { ok: true, status: 200, body: { job: toJobView(job) } };
 }
 
