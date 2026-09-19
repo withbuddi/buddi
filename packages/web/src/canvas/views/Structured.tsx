@@ -41,7 +41,7 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   return (
     <div>
       {!execution && <ArtifactDownloads files={files} />}
-      <div className="wb-row-end">
+      <div className="wb-row-end-block">
         <button className="ui-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
@@ -222,8 +222,8 @@ function AutoTable({
   return (
     <div>
       {label ? <h4 className="wb-sub">{label}</h4> : null}
-      <div className="wrap wb-scroll-x">
-        <table>
+      <div className="ui-table-wrap">
+        <table className="ui-table">
           <thead>
             <tr>
               {columns.map((column) => (

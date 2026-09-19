@@ -16,6 +16,7 @@ import { api, ApiError, type ApprovalRow } from '../../api';
 import { fmtTime } from '../../format';
 import { humanise } from '../resolve';
 import { fmtValue } from '../format';
+import { ErrorBanner } from '../../ui';
 import type { EnvelopeProps } from '../types';
 
 export function Envelope({
@@ -102,7 +103,7 @@ export function Envelope({
         ))}
       </dl>
 
-      {error ? <div className="err-banner">{error}</div> : null}
+      <ErrorBanner message={error} />
 
       {pending ? (
         <div className="wb-row-wrap">

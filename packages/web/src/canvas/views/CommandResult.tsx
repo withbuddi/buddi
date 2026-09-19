@@ -32,7 +32,7 @@ export function CommandResult({ value, children }: { value: CommandResultView; c
   const errors = Array.isArray(result.outputErrors) ? result.outputErrors.filter((e): e is string => typeof e === 'string') : [];
   return <div className="wb-command-result">
     <div className="wb-command-bar">
-      <span className="pill" data-tone={good ? 'good' : 'critical'}>{failed ? 'Failed' : result.state === 'completed' && signal ? 'Terminated' : result.state}</span>
+      <span className="ui-pill" data-tone={good ? 'good' : 'critical'}>{failed ? 'Failed' : result.state === 'completed' && signal ? 'Terminated' : result.state}</span>
       {result.exitCode !== null && <span className="mono">Exit code {result.exitCode}</span>}
       {signal && <span className="mono">Signal {signal}</span>}
       <span className="wb-hint">Recorded command result</span>

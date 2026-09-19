@@ -23,6 +23,7 @@ import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserPanel } from '../views/Browser';
 import { HostControls } from '../views/HostControls';
+import { ErrorBanner } from '../ui';
 import { conversationBrowser } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
@@ -655,7 +656,7 @@ export function ChatPage({
 
         {agentId && conversationId ? <HostControls key={`${agentId}:${conversationId}`} agentId={agentId} conversationId={conversationId} /> : null}
 
-        {error ? <div className="err-banner" style={{ margin: 10 }}>{error}</div> : null}
+        {error ? <div className="wb-chat-notice"><ErrorBanner message={error} /></div> : null}
 
         {notice ? (
           <div className="wb-chat-notice" data-testid="chat-notice">

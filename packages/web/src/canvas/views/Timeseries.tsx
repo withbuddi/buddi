@@ -137,7 +137,7 @@ export function Timeseries({ props }: { props: TimeseriesProps }): JSX.Element {
                     {event.label}
                   </span>
                   {event.amount === null ? null : (
-                    <span className="tnum" style={{ color: event.amount < 0 ? 'var(--critical)' : 'var(--good)' }}>
+                    <span className={event.amount < 0 ? 'tnum critical' : 'tnum good'}>
                       {fmtValue(event.amount, unit, currency)}
                     </span>
                   )}

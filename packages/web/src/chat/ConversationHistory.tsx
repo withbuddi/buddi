@@ -20,7 +20,7 @@ export function ConversationHistory({ agentId, currentId, timezone, onSelect, on
     return () => { cancelled = true; };
   }, [agentId, attempt]);
   return <section className="wb-history" aria-label="Past conversations">
-    <div className="bar"><strong>Past conversations</strong><button className="ui-btn" onClick={onNew}>New conversation</button></div>
+    <div className="ui-toolbar"><strong>Past conversations</strong><button className="ui-btn" onClick={onNew}>New conversation</button></div>
     {error ? <p role="alert">{error} <button className="ui-btn" onClick={() => setAttempt(n => n + 1)}>Retry</button></p>
       : items === null ? <p className="muted">Loading conversations…</p>
       : items.length === 0 ? <p className="muted">No conversations yet.</p>

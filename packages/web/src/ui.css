@@ -142,7 +142,7 @@ fieldset:disabled { opacity: 0.6; }
 /* A very small, all-caps word: what kind of thing this is. */
 .ui-tag {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -465,7 +465,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-menu-item[data-disabled] { cursor: default; }
 .ui-menu-label {
   padding: 5px 9px 6px;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: var(--weight-semibold);
