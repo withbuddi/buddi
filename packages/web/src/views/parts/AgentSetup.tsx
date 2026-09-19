@@ -101,7 +101,7 @@ function Agent({
   const available = engine ? engine.available : true;
 
   return (
-    <Stack gap="lg">
+    <Stack gap="lg" divided>
       {!available ? (
         <Notice tone="warning">
           This agent cannot run right now: {engine?.unavailableReason ?? 'no credential'}.
