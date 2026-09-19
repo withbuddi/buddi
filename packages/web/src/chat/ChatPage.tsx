@@ -27,7 +27,7 @@ import { ErrorBanner } from '../ui';
 import { conversationBrowser } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
-import { chatRoute } from '../routes';
+import { agentRoute, chatRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
@@ -601,7 +601,7 @@ export function ChatPage({
         <header className="wb-chat-head" data-testid="chat-head">
           <div className="wb-head-row">
             <div className="wb-head-text">
-              {agent ? <a className="wb-head-title" href={chatRoute(agent.id)}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
+              {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s profile`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
                 {line.text}
               </span>
@@ -619,6 +619,16 @@ export function ChatPage({
               answers a question most sessions never ask — and the one that
               matters most on the day somebody does.
             */}
+            {agent ? (
+              <a
+                className="ui-icon-btn wb-head-more"
+                href={agentRoute(agent.id, 'setup')}
+                aria-label={`Set up ${agent.name}`}
+                title="Account, model, tools and skills"
+              >
+                <SlidersIcon />
+              </a>
+            ) : null}
             <button
               className="ui-icon-btn wb-head-more"
               data-testid="agent-properties"
@@ -815,6 +825,18 @@ function MoreIcon(): JSX.Element {
       <circle cx="8" cy="3.4" r="1.35" />
       <circle cx="8" cy="8" r="1.35" />
       <circle cx="8" cy="12.6" r="1.35" />
+    </svg>
+  );
+}
+
+/** Three sliders: the agent's setup lives behind them, the same mark Settings uses. */
+function SlidersIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+      <circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" />
+      <circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" />
+      <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
     </svg>
   );
 }
