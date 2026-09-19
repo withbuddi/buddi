@@ -1101,6 +1101,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-stats { display: flex; flex-wrap: wrap; gap: 18px 26px; margin-bottom: 16px; }
 .wb-stat-k { color: var(--text-muted); font-size: 11.5px; }
 .wb-stat-v { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.wb-stat-v[data-size='sm'] { font-size: var(--text-lg); }
 .wb-stat-v[data-tone='good'] { color: var(--good); }
 .wb-stat-v[data-tone='warning'] { color: var(--warning); }
 .wb-stat-v[data-tone='critical'] { color: var(--critical); }

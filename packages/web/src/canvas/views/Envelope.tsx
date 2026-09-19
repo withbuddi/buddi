@@ -83,7 +83,7 @@ export function Envelope({
         </div>
         <div>
           <div className="wb-stat-k">{pending ? 'Expires' : 'Decided'}</div>
-          <div className="wb-stat-v text-[15px]">
+          <div className="wb-stat-v" data-size="sm">
             {fmtTime(pending ? action.expiresAt : action.decidedAt, timezone)}
           </div>
         </div>
