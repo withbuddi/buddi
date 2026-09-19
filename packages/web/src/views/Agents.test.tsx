@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type AgentsView } from '../api';
 import { Agents } from './Agents';
-vi.mock('../api', () => ({ api: { agents: vi.fn(), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn() } }));
+vi.mock('../api', () => ({ api: { agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));

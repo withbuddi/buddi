@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
@@ -16,9 +16,12 @@ it('shows Codex account creation only when the experiment is enabled', async () 
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex' } });
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'My subscription' } });
+  expect(screen.getByLabelText('Default model')).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'gpt-5.6-terra' } });
   expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
-  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'codex', auth: 'chatgpt' })));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'codex', auth: 'chatgpt', defaultModel: 'gpt-5.6-terra' })));
   expect(api.codexAccountAction).not.toHaveBeenCalled();
 });
 it('renders device sign-in inside the account card with cancellation and no paid test', async () => {

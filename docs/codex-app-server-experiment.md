@@ -31,9 +31,12 @@ Then assign the account/model to an agent and send a test chat. Existing account
 are never reassigned automatically. All surfaces use the same account resolver.
 
 Owner-assisted device sign-in succeeded on the development host on September 19,
-2026; the account reports connected, with no agent assignments at verification.
-No paid model call was initiated by the implementation agent. A real chat/tool
-round trip remains the final acceptance check. The host must have
+2026. Scout is assigned to `gpt-5.6-terra` at the owner's request; a live greeting
+and a clock-tool proposal/result round trip succeeded through the subscription.
+Those diagnostic model calls used the subscription allowance. `gpt-5` was rejected
+by this account and is no longer prefilled for new Codex accounts. Unsupported
+model errors now direct the owner to agent settings without exposing raw responses.
+The host must have
 `codex-cli 0.155.0`; different versions fail closed until
 their tool contract is tested. Windows is currently blocked pending private-folder
 ACL validation; Linux code paths have not been exercised on this macOS host.
@@ -57,11 +60,45 @@ actual Buddi tool proposals still go through the normal runtime grants/approvals
 This is a verified configuration contract for the pinned binary, not a general
 operating-system sandbox or a claim about future Codex versions.
 
+The internal `code_mode_host` dispatcher must remain enabled for modern-model
+dynamic tool calls. Disabling it let text chat succeed but returned a tool-host
+disabled result instead of reaching Buddi. Native code mode, shell, browser and
+computer features remain disabled; the installed-binary inventory, skill-read
+and shell-isolation checks pass with the dispatcher enabled.
+
 ## Subscription credentials and lifecycle
+
+### Account model pickers
+
+Saved, connected accounts offer model dropdowns in **Edit account** and agent
+account assignments. Codex uses its native `model/list`; HTTP accounts use their
+own `/models` endpoint (Anthropic uses `/v1/models`). Lists are account-scoped,
+cached in memory for 60 seconds, and invalidated on account revision changes.
+**Refresh models** bypasses the cache; concurrent requests are coalesced. Native
+discovery uses the same account lock, vault staging, refresh and cleanup as chat,
+but never creates a thread or model turn. Pagination, response size and duration
+are bounded. Errors are sanitized, and the endpoint requires owner/CSRF/origin
+checks and returns no-store responses.
+
+Refreshing never changes the selected model. Unlisted selections stay visible;
+**Custom model…** supports compatible endpoints, unsupported list APIs and custom
+IDs. New accounts still need an initial model entered manually before saving and
+connecting, since no authenticated account exists to query yet. A listed model
+is not a guarantee that every Buddi tool or modality is supported.
+Live model discovery was verified on the development host for the configured
+Claude subscription token, OpenAI API-key account, and Codex ChatGPT account.
+No model completion was sent by those checks.
+
+### Credential handling
 
 - Codex's official device flow handles login and refresh; no custom token endpoint.
 - Durable credentials are in the existing Buddi vault under independent account
   references. No secret value is stored in Postgres, UI state, or logs.
+- Subscription envelopes are normalized to single-line JSON before persistence.
+  Existing multiline credentials returned as hexadecimal by macOS Keychain are
+  decoded and validated in the Codex credential loader only; ordinary API keys
+  are never interpreted as hex. This fixes the first Scout chat's vault-read
+  failure without requiring another device sign-in.
 - Each operation uses a newly created private 0700 profile/workspace, with a 0600
   staged native credential file. No normal CLI profile/keyring login is reused.
 - Close the native child, validate refreshed credentials, save to the vault, then

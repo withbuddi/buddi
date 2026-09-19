@@ -16,6 +16,31 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** Keep useful classifications, never raw provider text (which can echo secrets). */
+export function codexTurnError(value: unknown): Error {
+  const error = record(value);
+  const message = typeof error.message === 'string' ? error.message : '';
+  if (/model.{0,200}(?:not supported|unsupported|not available|does not exist)/i.test(message)) {
+    return Object.assign(new Error('The selected model is not available for this Codex account. Choose a supported model in agent settings.'),
+      { status: 400, type: 'model_not_supported' });
+  }
+  const info = error.codexErrorInfo;
+  const kind = typeof info === 'string' ? info : Object.keys(record(info))[0];
+  const known: Record<string, [number | undefined, string]> = {
+    contextWindowExceeded: [400, 'context_window_exceeded'], usageLimitExceeded: [429, 'rate_limit_error'],
+    unauthorized: [401, 'authentication_error'], badRequest: [400, 'invalid_request_error'],
+    internalServerError: [500, 'provider_error'], httpConnectionFailed: [undefined, 'transport_error'],
+    responseStreamConnectionFailed: [undefined, 'transport_error'], responseStreamDisconnected: [undefined, 'transport_error'],
+    responseTooManyFailedAttempts: [undefined, 'transport_error'], sandboxError: [undefined, 'sandbox_error'],
+  };
+  const recognized = kind && Object.hasOwn(known, kind) ? known[kind] : undefined;
+  if (!recognized) return new Error('Codex turn did not complete successfully.');
+  const upstream = record(record(info)[kind!]).httpStatusCode;
+  const status = typeof upstream === 'number' && Number.isInteger(upstream) && upstream >= 400 && upstream <= 599 ? upstream : recognized[0];
+  return Object.assign(new Error(`Codex turn failed (${kind}${status ? `; HTTP ${status}` : ''}).`),
+    { ...(status !== undefined ? { status } : {}), type: status !== undefined ? 'http_error' : recognized[1] });
+}
+
 export function codexHistory(req: CompletionRequest, names: Map<string, string>): unknown[] {
   return req.messages.flatMap((message) => message.content.map((block): unknown => {
     switch (block.type) {
@@ -52,6 +77,7 @@ export function createCodexAppServerAdapter(options: {
       const rpc = options.connect();
       let threadId: string | undefined;
       let turnId: string | undefined;
+      let lastError: Error | undefined;
       const content: ContentBlock[] = [];
       const usage = { input: 0, output: 0 };
       let finish!: (response: CompletionResponse) => void;
@@ -99,10 +125,14 @@ export function createCodexAppServerAdapter(options: {
           const last = record(record(params.tokenUsage).last);
           if (typeof last.inputTokens === 'number') usage.input = last.inputTokens;
           if (typeof last.outputTokens === 'number') usage.output = last.outputTokens;
+        } else if (message.method === 'error') {
+          // Retrying error events are not terminal. Keep a sanitized fallback
+          // for clients that omit the error from the final turn notification.
+          lastError = codexTurnError(params.error);
         } else if (message.method === 'turn/completed') {
           const turn = record(params.turn);
           if (turn.status === 'completed') finish({ content, stopReason: 'end_turn', usage, model: options.model });
-          else fail(new Error('Codex turn did not complete successfully.'));
+          else fail(turn.error ? codexTurnError(turn.error) : lastError ?? codexTurnError(undefined));
         }
       });
       try {

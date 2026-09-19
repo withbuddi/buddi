@@ -37,7 +37,9 @@ export const CODEX_EXPERIMENT_CONFIG: Record<string, unknown> = {
   'features.skip_host_skill_discovery': true,
   'features.skill_search': false,
   'features.code_mode': false,
-  'features.code_mode_host': false,
+  // Required to dispatch modern models' tool calls to the client. This is the
+  // internal dispatcher, not a grant of native shell/code/browser tools.
+  'features.code_mode_host': true,
   'features.image_generation': false,
   'features.goals': false,
   'features.sleep_tool': false,

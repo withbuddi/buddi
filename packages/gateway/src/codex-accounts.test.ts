@@ -34,6 +34,28 @@ function fixture(options: { early?: boolean; badUrl?: boolean; timeout?: number 
 }
 
 describe('Codex subscription session lifecycle', () => {
+  it('lists paginated native models without opening a thread, and persists refresh safely', async () => {
+    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
+    vi.mocked(f.session.rpc.request).mockImplementation(async (method, params) => {
+      if (method === 'model/list') return (params as { cursor?: string }).cursor
+        ? { data: [{ model: 'gpt-two', displayName: 'Two', isDefault: false }], nextCursor: null }
+        : { data: [{ model: 'gpt-one', displayName: 'One', isDefault: true }], nextCursor: 'next' };
+      return {};
+    });
+    expect((await f.service.models(f.access)).models.map(m => m.id)).toEqual(['gpt-one', 'gpt-two']);
+    expect(f.session.rpc.request).not.toHaveBeenCalledWith('thread/start', expect.anything());
+    expect(f.session.rpc.request).not.toHaveBeenCalledWith('turn/start', expect.anything());
+    expect(f.access.check).toHaveBeenCalledTimes(2);
+    expect(f.session.dispose).toHaveBeenCalled();
+  });
+  it('refuses model discovery during sign-in and cleans up malformed lists', async () => {
+    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
+    const login = await f.service.login(f.access);
+    await expect(f.service.models(f.access)).rejects.toThrow('busy');
+    await f.service.cancel(f.access.id); await login.finished;
+    await expect(f.service.models(f.access)).rejects.toThrow('Invalid native model list');
+    expect(f.session.dispose).toHaveBeenCalled();
+  });
   it('persists only after a matching successful login and never returns tokens', async () => {
     const f = fixture(); const start = await f.service.login(f.access);
     expect(f.open).toHaveBeenCalledWith(null);

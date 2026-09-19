@@ -18,6 +18,7 @@
 import { useState } from 'react';
 import { api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../api';
 import { Empty, ErrorBanner, useAsync } from '../ui';
+import { ModelPicker } from '../ModelPicker';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
 
@@ -240,7 +241,7 @@ function AccountChoice({ agentId, accounts, onRun }: { agentId: string; accounts
       <option value="">Choose an account</option>
       {accounts.accounts.map(a => <option key={a.id} value={a.id} disabled={!a.enabled}>{a.label}{!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}</option>)}
     </select></label>
-    <label>Model <input value={model} disabled={busy} onChange={e => setModel(e.target.value)} /></label>
+    <ModelPicker key={`${id}:${accounts.accounts.find(a => a.id === id)?.revision}`} accountId={accounts.accounts.find(a => a.id === id)?.configured ? id : undefined} label="Model" value={model} onChange={setModel} disabled={busy} />
     <button disabled={busy || !id || !model.trim() || (id === binding?.accountId && model === binding.model)} onClick={() => {
       setBusy(true); onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
     }}>Save account selection</button>

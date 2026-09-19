@@ -18,13 +18,23 @@ export interface CodexSession {
 /** Shape validation only; never decode, log or expose the tokens. */
 export function validateCodexCredential(value: string): string {
   try {
+    // macOS `security -w` hex-encodes passwords containing control characters,
+    // including the newlines in Codex's pretty-printed auth.json. Decode only
+    // here, where a subscription JSON envelope is expected: a generic vault
+    // reader must not reinterpret an ordinary API key that happens to be hex.
+    if (Buffer.byteLength(value) > 128 * 1024) throw new Error();
+    if (/^(?:[0-9a-f]{2})+$/i.test(value)) {
+      value = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(value, 'hex'));
+    }
     if (Buffer.byteLength(value) > 64 * 1024) throw new Error();
     const data = JSON.parse(value) as Record<string, unknown>;
     const tokens = data.tokens as Record<string, unknown> | undefined;
     if (!tokens || typeof tokens.access_token !== 'string' || !tokens.access_token ||
       typeof tokens.refresh_token !== 'string' || !tokens.refresh_token || data.OPENAI_API_KEY ||
       (data.auth_mode !== undefined && data.auth_mode !== 'chatgpt')) throw new Error();
-    return value;
+    // Persist one line so subsequent Keychain reads don't need the legacy
+    // decoding path. Preserve all native fields, including refresh metadata.
+    return JSON.stringify(data);
   } catch { throw new Error('Invalid Codex subscription credential. Reconnect the account.'); }
 }
 
@@ -52,7 +62,7 @@ export async function cleanupCodexSessions(root = tmpdir()): Promise<void> {
 
 export async function openCodexSession(credential: string | null, executable = 'codex'): Promise<CodexSession> {
   if (process.platform === 'win32') throw new Error('Codex experiment needs a verified private-directory ACL on Windows before it can run.');
-  if (credential !== null) validateCodexCredential(credential);
+  if (credential !== null) credential = validateCodexCredential(credential);
   // Do not silently accept changed native tool behavior after a binary update.
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
   const version = await promisify(execFile)(executable, ['--version'], { env, timeout: 5_000, maxBuffer: 4096 })

@@ -5,7 +5,7 @@ import {
   resolveProviderAccount, vaultState, type AgentCatalog, type AgentFrontmatter,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { createProvider, providerCapabilities, type RuntimeProvider } from '@buddi/runtime';
+import { createProvider, providerCapabilities, listProviderModels, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -44,10 +44,13 @@ export class ProviderAccounts {
   #testing = new Set<string>();
   #codexReleased = new Map<string, Promise<void>>();
   #tail: Promise<unknown> = Promise.resolve();
+  #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
+  #modelRequests = new Map<string, Promise<AccountModels>>();
   constructor(readonly deps: {
     pool: Pick<Pool, 'query' | 'connect'>; env: NodeJS.ProcessEnv;
     catalog: () => AgentCatalog; reload: () => void; vault?: Vault;
     test?: (resolved: ResolvedProvider) => Promise<void>;
+    listModels?: typeof listProviderModels;
   }) {
     this.vault = deps.vault ?? createVault({ env: deps.env });
     if (deps.env.BUDDI_CODEX_EXPERIMENT === '1' && this.vault) this.codex = new CodexAccounts({ vault: this.vault });
@@ -151,6 +154,40 @@ export class ProviderAccounts {
     return result.rows[0];
   }
 
+  async models(id: string, refresh = false): Promise<AccountModels> {
+    const row = await this.#row(id);
+    if (!row.enabled || row.deleting) throw new ProviderAccountError(409, 'Enable this account before loading models.');
+    const cached = this.#modelLists.get(id);
+    if (!refresh && cached?.revision === row.revision && cached.until > Date.now()) return cached.value;
+    const key = `${id}:${row.revision}`;
+    const existing = this.#modelRequests.get(key);
+    if (existing) return existing;
+    const pending = (async () => {
+      try {
+        let value: AccountModels;
+        if (row.kind === 'codex') {
+          if (!this.codex) throw new ProviderAccountError(409, 'Codex experiment is unavailable.');
+          const lease = await this.#codexAccess(row);
+          try { value = await this.codex.models(lease.access); } finally { await lease.release(); }
+        } else {
+          const secret = await this.#secret(row);
+          if (row.auth !== 'none' && !secret) throw new ProviderAccountError(409, 'Save or connect this account’s credential before loading models.');
+          value = await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, row.defaultModel, secret));
+        }
+        const current = await this.#row(id);
+        if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
+        this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
+        return value;
+      } catch (error) {
+        if (error instanceof ProviderAccountError) throw error;
+        const diagnostic = providerDiagnostic(error);
+        throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
+      } finally { this.#modelRequests.delete(key); }
+    })();
+    this.#modelRequests.set(key, pending);
+    return pending;
+  }
+
   save(body: unknown) { return this.#serial(async () => {
     const parsed = saveSchema.safeParse(body);
     if (!parsed.success) throw new ProviderAccountError(400, 'Invalid account settings.');
@@ -202,6 +239,7 @@ export class ProviderAccounts {
       catch { warning = 'Account saved. Its retired credential could not be removed from the vault.'; }
     }
     this.#tests.delete(id);
+    this.#modelLists.delete(id);
     await this.load();
     return { id, warning };
     } finally { await lease?.release(); }
@@ -350,6 +388,7 @@ export class ProviderAccounts {
       finally { await lease.release(); }
       await this.load();
       this.codex.forget(id);
+      this.#modelLists.delete(id);
       return { removed: true };
     }
     const lease = await this.#codexAccess(row);

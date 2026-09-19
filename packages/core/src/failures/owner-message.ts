@@ -182,6 +182,10 @@ export function describeFailure(
   }
 
   if (verdict.class === 'permanent') {
+    if (typeof err === 'object' && err !== null && (err as Record<string, unknown>).type === 'model_not_supported') {
+      return { class: 'permanent', retryable: false, detail,
+        text: 'The selected model is not available for this provider account. Open agent settings and choose a model supported by the assigned account, then send your message again.' };
+    }
     if (isCredentialFailure(err)) {
       const envVar = credentialEnvVar(err);
       const who = options.agentName ? `${options.agentName} can't` : "I can't";

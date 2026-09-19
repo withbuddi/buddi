@@ -2,6 +2,7 @@ import type { Vault } from '@buddi/core';
 import {
   createCodexAppServerAdapter, initializeCodex, openCodexSession, assertCodexIsolation,
   type CodexSession, type CompletionRequest, type CompletionResponse,
+  modelOptions, type AccountModels,
 } from '@buddi/runtime';
 
 export interface CodexLoginView {
@@ -148,6 +149,44 @@ export class CodexAccounts {
             await access.check();
             await this.deps.vault.set(access.secretRef, refreshed);
           }
+        }
+      } finally { try { await session?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
+    }
+  }
+
+  async models(access: CodexAccountAccess): Promise<AccountModels> {
+    let session: CodexSession | undefined;
+    let cancelled = false;
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    this.#reserve(access.id, async () => { cancelled = true; await session?.rpc.close(); await finished; });
+    const timer = setTimeout(() => { cancelled = true; void session?.rpc.close().catch(() => {}); }, 20_000);
+    try {
+      const credential = await this.deps.vault.get(access.secretRef);
+      if (!credential) throw new Error('Connect this Codex subscription account first.');
+      session = await this.#open(access, credential);
+      if (cancelled) throw new Error('Model discovery cancelled.');
+      await initializeCodex(session.rpc);
+      const models: AccountModels['models'] = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const result = await session.rpc.request('model/list', { includeHidden: false, limit: 100, ...(cursor ? { cursor } : {}) }) as { data?: unknown[]; nextCursor?: string | null };
+        if (!Array.isArray(result.data)) throw new Error('Invalid native model list.');
+        models.push(...modelOptions(result.data, true));
+        if (models.length > 1000) return { models: models.slice(0, 1000), truncated: true };
+        if (!result.nextCursor) return { models: [...new Map(models.map(m => [m.id, m])).values()], truncated: false };
+        if (typeof result.nextCursor !== 'string' || result.nextCursor.length > 2048 || seen.has(result.nextCursor)) throw new Error('Invalid native model pagination.');
+        cursor = result.nextCursor; seen.add(cursor);
+      }
+      return { models, truncated: true };
+    } finally {
+      clearTimeout(timer);
+      try {
+        if (session) {
+          await session.rpc.close();
+          const refreshed = await session.credential();
+          if (refreshed && !cancelled) { await access.check(); await this.deps.vault.set(access.secretRef, refreshed); }
         }
       } finally { try { await session?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
     }

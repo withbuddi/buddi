@@ -787,14 +787,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       );
     }
 
-    const accountRoute = /^\/api\/provider-accounts\/([^/]+)\/(test|remove|login|cancel-login|logout)$/.exec(path);
+    const accountRoute = /^\/api\/provider-accounts\/([^/]+)\/(test|remove|login|cancel-login|logout|models)$/.exec(path);
     const accountAssignment = /^\/api\/agents\/([^/]+)\/account$/.exec(path);
     if (path === '/api/provider-accounts/save' || accountRoute || accountAssignment) {
       if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
       try {
         const result = accountAssignment
           ? await deps.providerAccounts.assign(decodeURIComponent(accountAssignment[1]!), body)
-          : accountRoute ? accountRoute[2] === 'test'
+          : accountRoute ? accountRoute[2] === 'models'
+            ? await deps.providerAccounts.models(decodeURIComponent(accountRoute[1]!), body.refresh === true)
+            : accountRoute[2] === 'test'
             ? await deps.providerAccounts.test(decodeURIComponent(accountRoute[1]!))
             : accountRoute[2] === 'remove'
               ? await deps.providerAccounts.remove(decodeURIComponent(accountRoute[1]!), body.revision as number)

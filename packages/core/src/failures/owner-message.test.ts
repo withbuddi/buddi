@@ -39,6 +39,13 @@ function httpError(status: number, type = 'http_error'): Error {
 /** Everything a surface may show. Nothing else is ever put in front of a person. */
 const shown = (err: unknown): string => renderFailure(err).text;
 
+it('directs unsupported-model failures to agent settings without offering a blind retry', () => {
+  const result = renderFailure(Object.assign(new Error('SECRET'), { status: 400, type: 'model_not_supported' }));
+  expect(result).toMatchObject({ class: 'permanent', retryable: false, offerRetry: false });
+  expect(result.text).toContain('Open agent settings');
+  expect(result.text).not.toContain('SECRET');
+});
+
 describe('the raw error never reaches the owner', () => {
   const leaks = [
     'fetch failed',

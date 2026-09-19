@@ -17,9 +17,9 @@ Owner selected official Codex App Server, on `experiment/codex-app-server`.
 The experimental backend now has named accounts, Dashboard device sign-in,
 cancel/reconnect/disconnect, vault-backed credential staging, and explicit agent
 assignment. See [the experiment notes](codex-app-server-experiment.md) for the
-pinned native-tool contract and remaining limits. Owner device sign-in has passed;
-a real chat/tool round trip and subscription plan/quota display remain unverified
-or undelivered.
+pinned native-tool contract and remaining limits. Owner device sign-in and a live
+chat/tool round trip have passed. Account-scoped model discovery is implemented;
+subscription plan/quota display remains undelivered.
 
 Verified documentation:
 
