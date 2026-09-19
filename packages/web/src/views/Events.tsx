@@ -5,12 +5,13 @@
  * a socket would be a second, weaker copy of it. Filters are a kind and a
  * substring of the payload; a row opens a sheet with the whole envelope.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type EventPage, type EventRow } from '../api';
 import { fmtRelative, fmtTime, json, truncate } from '../format';
 import { Button, Code, Empty, ErrorBanner, PageFrame, Panel, Sheet, Table, Toolbar, useAsync } from '../ui';
 
 const POLL_MS = 5_000;
+const PAGE = 50;
 
 export function Events({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const [kind, setKind] = useState('');
@@ -19,10 +20,27 @@ export function Events({ timezone, embedded }: { timezone: string; embedded?: bo
 
   const kinds = useAsync(() => api.eventKinds(), []);
   const { data, error } = useAsync<EventPage>(
-    () => api.events({ kind: kind || undefined, q: q || undefined, limit: 200 }),
+    () => api.events({ kind: kind || undefined, q: q || undefined, limit: PAGE }),
     [kind, q],
     POLL_MS,
   );
+  // Older pages, fetched on request and kept while the first page keeps
+  // polling for the newest. A filter change starts over.
+  const [older, setOlder] = useState<{ events: EventRow[]; cursor: string | null; busy: boolean; error: string | null }>({ events: [], cursor: null, busy: false, error: null });
+  useEffect(() => { setOlder({ events: [], cursor: null, busy: false, error: null }); }, [kind, q]);
+  const cursor = older.events.length > 0 ? older.cursor : (data?.nextCursor ?? null);
+  const loadOlder = async (): Promise<void> => {
+    if (!cursor) return;
+    setOlder((o) => ({ ...o, busy: true, error: null }));
+    try {
+      const page = await api.events({ kind: kind || undefined, q: q || undefined, before: cursor, limit: PAGE });
+      setOlder((o) => ({ events: [...o.events, ...page.events], cursor: page.nextCursor, busy: false, error: null }));
+    } catch (err) {
+      setOlder((o) => ({ ...o, busy: false, error: err instanceof Error ? err.message : String(err) }));
+    }
+  };
+  const seen = new Set((data?.events ?? []).map((e) => e.id));
+  const rows = [...(data?.events ?? []), ...older.events.filter((e) => !seen.has(e.id))];
 
   return (
     <PageFrame
@@ -63,7 +81,7 @@ export function Events({ timezone, embedded }: { timezone: string; embedded?: bo
       <ErrorBanner message={error} />
 
       <Panel flush>
-        {!data || data.events.length === 0 ? (
+        {!data || rows.length === 0 ? (
           <Empty>No events match.</Empty>
         ) : (
           <Table>
@@ -76,7 +94,7 @@ export function Events({ timezone, embedded }: { timezone: string; embedded?: bo
               </tr>
             </thead>
             <tbody>
-              {data.events.map((event) => (
+              {rows.map((event) => (
                 <tr key={event.id} data-clickable="true" onClick={() => setSelected(event)}>
                   <td className="mono muted">{event.id}</td>
                   <td className="nowrap">
@@ -91,6 +109,14 @@ export function Events({ timezone, embedded }: { timezone: string; embedded?: bo
           </Table>
         )}
       </Panel>
+      {cursor || older.error ? (
+        <Toolbar>
+          <span className="muted">{rows.length} shown{cursor ? ', older ones are kept' : ''}.</span>
+          <span className="ui-toolbar-spacer" />
+          {older.error ? <span className="critical">{older.error}</span> : null}
+          {cursor ? <Button disabled={older.busy} onClick={() => void loadOlder()}>{older.busy ? 'Loading…' : 'Load older'}</Button> : null}
+        </Toolbar>
+      ) : null}
 
       {selected ? (
         <Sheet title={selected.kind} onClose={() => setSelected(null)}>
