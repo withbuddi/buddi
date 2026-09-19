@@ -427,6 +427,3 @@ export function Sheet({
     </Dialog.Root>
   );
 }
-
-/** @deprecated The old name. Pages still on it move to `Sheet` as they are redrawn. */
-export const Drawer = Sheet;

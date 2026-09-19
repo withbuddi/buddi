@@ -31,10 +31,10 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
         <p className="wb-empty">{props.empty}</p>
       ) : (
         props.groups.map((group, groupIndex) => (
-          <div key={group.label ?? groupIndex} className={groupIndex > 0 ? 'mt-5' : ''}>
+          <div key={group.label ?? groupIndex} className={groupIndex > 0 ? 'wb-section' : undefined}>
             {group.label ? <h4 className="ui-stat-k wb-label">{group.label}</h4> : null}
-            <div className="wrap wb-scroll-x">
-              <table>
+            <div className="ui-table-wrap">
+              <table className="ui-table">
                 <thead>
                   <tr>
                     {props.columns.map((column) => (
@@ -69,7 +69,7 @@ function Cell({ cell }: { cell: TableCell }): JSX.Element {
   }
   return (
     <td className="num">
-      <div className="wb-row" style={{ justifyContent: 'flex-end' }}>
+      <div className="wb-row wb-row-end">
         <div
           className="ui-meter"
           role="meter"

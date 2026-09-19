@@ -34,6 +34,7 @@
    * halves of the dashboard drifted apart; a component picks a step here or
    * it inherits.
    */
+  --text-2xs: 10px;   /* the smallest word: a tag, a kicker */
   --text-xs: 11px;    /* tags, table headers, footnotes */
   --text-sm: 12px;    /* meta, hints, secondary lines */
   --text-md: 13px;    /* controls, dense body */

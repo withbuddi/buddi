@@ -214,7 +214,7 @@ export function App(): JSX.Element {
             />
           ) : (
             <main>
-              <div className="page">
+              <div>
                 <p className="page-crumbs">
                   <a href={CHAT_ROUTE} onClick={goTo(navigate, CHAT_ROUTE)}>
                     ← Chat
