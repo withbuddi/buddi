@@ -114,6 +114,9 @@ export async function decideApprovalFromWeb(
   const action = outcome.action;
 
   if (decision === 'rejected') {
+    // A run started from the chat is not durable: nothing else will wake it,
+    // so the agent is handed the rejection here and gets to say what it does next.
+    if (!action.jobId) deps.resumeInteractive?.(action, { actionId: action.id, state: 'rejected' });
     const resumed = await wake(deps, action, { state: 'rejected' });
     const after = (await getAction(deps.pool, actionId)) ?? action;
     return { ok: true, status: 200, body: { action: toApprovalView(after), execution: null, resumed } };
@@ -129,9 +132,17 @@ export async function decideApprovalFromWeb(
     now,
   });
   const state: ApprovalState = execution.ok ? 'succeeded' : execution.state;
-  if (action.tool === 'host.exec' && !action.jobId && execution.ok &&
-      (execution.result as { state?: string })?.state === 'completed') {
-    deps.resumeInteractive?.(action, { actionId: action.id, state, result: execution.result });
+  // A run started from the chat is resumed here with the outcome, so the agent
+  // closes its own turn ("@playground exists") instead of the transcript ending
+  // on a bare "succeeded". A host command resumes only once it has completed;
+  // a still-running one reports back through the host service itself.
+  const stillRunning = action.tool === 'host.exec' && execution.ok && (execution.result as { state?: string })?.state !== 'completed';
+  if (!action.jobId && !stillRunning) {
+    deps.resumeInteractive?.(action, {
+      actionId: action.id,
+      state,
+      ...(execution.ok ? { result: execution.result } : { error: execution.message }),
+    });
   }
   const resumed = await wake(deps, action, {
     state,

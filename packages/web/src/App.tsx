@@ -125,21 +125,31 @@ export function App(): JSX.Element {
     if (target) navigate(target, true);
   }, [hash, navigate]);
 
+  // The roster is re-read on every navigation, on a slow timer, and whenever
+  // the window comes back into focus: an agent created by Agent Father joins
+  // the rail without a reload.
   useEffect(() => {
     let cancelled = false;
-    chatApi
-      .agents()
-      .then((list) => {
-        if (cancelled) return;
-        setAgents(list.agents);
-        setDefaultAgentId(list.defaultAgentId ?? null);
-        setAgentId((current) => current ?? list.defaultAgentId ?? list.agents[0]?.id ?? null);
-      })
-      .catch(() => {
-        /* No server, or no session. The rail is empty rather than broken. */
-      });
+    const load = (): void => {
+      chatApi
+        .agents()
+        .then((list) => {
+          if (cancelled) return;
+          setAgents(list.agents);
+          setDefaultAgentId(list.defaultAgentId ?? null);
+          setAgentId((current) => current ?? list.defaultAgentId ?? list.agents[0]?.id ?? null);
+        })
+        .catch(() => {
+          /* No server, or no session. The rail is empty rather than broken. */
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 15_000);
+    window.addEventListener('focus', load);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', load);
     };
   }, [hash]);
 
