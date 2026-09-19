@@ -108,42 +108,57 @@ function Agent({
         </Notice>
       ) : null}
 
-      <Section title="Engine">
-        <Toolbar valign="end">
-          {accounts ? (
-            <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
-          ) : (
-            <>
-              <Field label="Provider">
-                <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
-                  {providers.map((p) => (
-                    <option key={p.kind} value={p.kind}>
-                      {p.kind}
-                      {p.usable ? '' : ' (no credential)'}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Model">
-                <input
-                  list={`models-${agent.id}`}
-                  defaultValue={model}
-                  onBlur={(e) => {
-                    if (e.target.value.trim() !== '' && e.target.value.trim() !== model) {
-                      set({ model: e.target.value.trim() });
-                    }
-                  }}
-                />
-                <datalist id={`models-${agent.id}`}>
-                  {options.map((id) => (
-                    <option key={id} value={id} />
-                  ))}
-                </datalist>
-              </Field>
-            </>
-          )}
+      <Section title="Runs on">
+        {accounts ? (
+          <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
+        ) : (
+          <Toolbar valign="end">
+            <Field label="Provider">
+              <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
+                {providers.map((p) => (
+                  <option key={p.kind} value={p.kind}>
+                    {p.kind}
+                    {p.usable ? '' : ' (no credential)'}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Model">
+              <input
+                list={`models-${agent.id}`}
+                defaultValue={model}
+                onBlur={(e) => {
+                  if (e.target.value.trim() !== '' && e.target.value.trim() !== model) {
+                    set({ model: e.target.value.trim() });
+                  }
+                }}
+              />
+              <datalist id={`models-${agent.id}`}>
+                {options.map((id) => (
+                  <option key={id} value={id} />
+                ))}
+              </datalist>
+            </Field>
+          </Toolbar>
+        )}
+        {!accounts ? (
+          <p className="ui-card-meta">
+            {engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
+            <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span>
+            {group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
+          </p>
+        ) : null}
+        {engine && !engine.available ? (
+          <p className="warning">unavailable: {engine.unavailableReason ?? 'no credential'}</p>
+        ) : null}
+        {engine?.restartRequired ? (
+          <p className="warning">This file has changed since the service loaded it. Run `buddi service restart`.</p>
+        ) : null}
+      </Section>
 
-          <Field label="Max turns">
+      <Section title="Behaviour" aside={<span className="muted">saved as you change them</span>}>
+        <Toolbar valign="end">
+          <Field label="Max turns" hint="Per run. The agent stops when it runs out.">
             <input
               type="number"
               min={1}
@@ -157,8 +172,7 @@ function Agent({
               }}
             />
           </Field>
-
-          <Field label="Language">
+          <Field label="Language" hint="Mirror answers in whatever language you write.">
             <select value={engine?.language ?? agent.language} onChange={(e) => set({ language: e.target.value })}>
               {LANGUAGES.map((l) => (
                 <option key={l} value={l}>
@@ -168,31 +182,6 @@ function Agent({
             </select>
           </Field>
         </Toolbar>
-
-        <p className="ui-card-meta">
-          {accounts ? (
-            <>
-              Account: {accounts.accounts.find((a) => a.id === binding?.accountId)?.label ?? 'Not selected'} · Model:{' '}
-              {binding?.model ?? 'Not selected'}
-            </>
-          ) : (
-            <>
-              {engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
-              <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span>
-            </>
-          )}
-          {!accounts && group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
-        </p>
-        {engine ? (
-          <p className={engine.available ? 'ui-card-meta' : 'warning'}>
-            {engine.available
-              ? 'available on this machine'
-              : `unavailable: ${engine.unavailableReason ?? 'no credential'}`}
-            {engine.restartRequired
-              ? ' · this file has changed since the service loaded it — run `buddi service restart`'
-              : ''}
-          </p>
-        ) : null}
       </Section>
 
       <Section title="Built-in context">
@@ -248,43 +237,57 @@ function AccountChoice({
   const [model, setModel] = useState(binding?.model ?? '');
   const [busy, setBusy] = useState(false);
   const chosen = accounts.accounts.find((a) => a.id === id);
+  const dirty = id !== (binding?.accountId ?? '') || model !== (binding?.model ?? '');
+  const current = accounts.accounts.find((a) => a.id === binding?.accountId);
   return (
-    <>
-      <Field label="Account">
-        <select
-          value={id}
+    <div className="ui-stack">
+      <Toolbar valign="end">
+        <Field label="Account">
+          <select
+            value={id}
+            disabled={busy}
+            onChange={(e) => {
+              setId(e.target.value);
+              setModel(accounts.accounts.find((a) => a.id === e.target.value)?.defaultModel ?? '');
+            }}
+          >
+            <option value="">Choose an account</option>
+            {accounts.accounts.map((a) => (
+              <option key={a.id} value={a.id} disabled={!a.enabled}>
+                {a.label}
+                {!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <ModelPicker
+          key={`${id}:${chosen?.revision}`}
+          accountId={chosen?.configured ? id : undefined}
+          label="Model"
+          value={model}
+          onChange={setModel}
           disabled={busy}
-          onChange={(e) => {
-            setId(e.target.value);
-            setModel(accounts.accounts.find((a) => a.id === e.target.value)?.defaultModel ?? '');
+        />
+      </Toolbar>
+      <Toolbar>
+        <Button
+          variant="accent"
+          disabled={busy || !id || !model.trim() || !dirty}
+          onClick={() => {
+            setBusy(true);
+            onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
           }}
         >
-          <option value="">Choose an account</option>
-          {accounts.accounts.map((a) => (
-            <option key={a.id} value={a.id} disabled={!a.enabled}>
-              {a.label}
-              {!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <ModelPicker
-        key={`${id}:${chosen?.revision}`}
-        accountId={chosen?.configured ? id : undefined}
-        label="Model"
-        value={model}
-        onChange={setModel}
-        disabled={busy}
-      />
-      <Button
-        disabled={busy || !id || !model.trim() || (id === binding?.accountId && model === binding.model)}
-        onClick={() => {
-          setBusy(true);
-          onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
-        }}
-      >
-        Save account selection
-      </Button>
-    </>
+          Save account selection
+        </Button>
+        {dirty && id && model.trim() ? (
+          <span className="warning">Not saved yet. New runs still use {current ? `${current.label}, ${binding?.model ?? ''}` : 'nothing'}.</span>
+        ) : (
+          <span className="muted">
+            {current ? `Running on ${current.label} with ${binding?.model ?? 'no model'}.` : 'No account chosen yet: this agent cannot run until you save one.'}
+          </span>
+        )}
+      </Toolbar>
+    </div>
   );
 }
