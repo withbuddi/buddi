@@ -24,6 +24,12 @@ const saveSchema = z.object({
   baseUrl: z.string().trim().max(2048).optional(), defaultModel: z.string().trim().min(1).max(150),
   enabled: z.boolean(), secret: z.string().trim().min(1).max(16384).optional(),
 }).strict();
+const probeSchema = z.object({
+  kind: z.enum(['anthropic', 'openai', 'openai-compatible']),
+  auth: z.enum(['api-key', 'none']),
+  baseUrl: z.string().trim().max(2048).optional(),
+  secret: z.string().trim().min(1).max(16384).optional(),
+}).strict();
 const legacy = [
   { id: 'legacy-anthropic-api', name: 'ANTHROPIC_API_KEY', label: 'Anthropic — existing API key', kind: 'anthropic', auth: 'api-key' },
   { id: 'legacy-anthropic-subscription', name: 'CLAUDE_CODE_OAUTH_TOKEN', label: 'Claude — existing subscription token', kind: 'anthropic', auth: 'legacy-subscription-token' },
@@ -203,6 +209,30 @@ export class ProviderAccounts {
     })();
     this.#modelRequests.set(key, pending);
     return pending;
+  }
+
+  /**
+   * List the models a credential can reach, before anything is saved.
+   *
+   * Nothing is written: the secret is used for one request and dropped. This is
+   * what lets the add-account form offer a real list to pick from rather than
+   * asking the owner to type a model id from memory. Subscription accounts
+   * cannot be probed; they connect first.
+   */
+  async probeModels(body: unknown): Promise<AccountModels> {
+    const parsed = probeSchema.safeParse(body);
+    if (!parsed.success) throw new ProviderAccountError(400, 'Invalid probe.');
+    const input = parsed.data;
+    if (input.auth === 'none' && input.kind !== 'openai-compatible') throw new ProviderAccountError(400, 'This provider requires an API key.');
+    if (input.auth === 'api-key' && !input.secret) throw new ProviderAccountError(400, 'Enter the API key first.');
+    const placeholder = input.kind === 'anthropic' ? 'claude-sonnet-5' : input.kind === 'openai' ? 'gpt-5' : 'probe';
+    const row: ProviderAccount = { id: 'probe', label: 'probe', kind: input.kind, auth: input.auth, baseUrl: input.baseUrl ?? '', defaultModel: placeholder, enabled: true, revision: 0 };
+    try {
+      return await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, placeholder, input.secret ?? null));
+    } catch (error) {
+      const diagnostic = providerDiagnostic(error);
+      throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
+    }
   }
 
   save(body: unknown) { return this.#serial(async () => {
