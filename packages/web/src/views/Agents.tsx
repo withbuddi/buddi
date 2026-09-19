@@ -12,7 +12,7 @@ import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
 import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute } from '../routes';
 import { waitingText } from '../shell/roster';
-import { Avatar, ButtonLink, Empty, List, ListRow, Panel, Pill, Tab, Tabs, useAsync } from '../ui';
+import { Avatar, ButtonLink, Empty, List, ListRow, Panel, Pill, Sheet, Tab, Tabs, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Reminders } from './Reminders';
@@ -35,10 +35,6 @@ const AGENT_TABS = [
 
 export function Agents({ hash, timezone, navigate, agents, attention }: PlaceProps): JSX.Element {
   const location = parseAgentRoute(hash);
-  if (location) {
-    const agent = agents.find((a) => a.id === location.agentId);
-    return <AgentPage agentId={location.agentId} agent={agent} tab={location.tab ?? 'conversations'} timezone={timezone} navigate={navigate} attention={attention} />;
-  }
   const tab = /[?&]tab=([a-z]+)/.exec(hash)?.[1] ?? 'team';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   return (
@@ -80,6 +76,18 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
           </div>
         )
       ) : null}
+      {location ? (
+        <Sheet title={agents.find((a) => a.id === location.agentId)?.name ?? location.agentId} size="wide" onClose={() => navigate(AGENTS_ROUTE)}>
+          <AgentPage
+            agentId={location.agentId}
+            agent={agents.find((a) => a.id === location.agentId)}
+            tab={location.tab ?? 'conversations'}
+            timezone={timezone}
+            navigate={navigate}
+            attention={attention}
+          />
+        </Sheet>
+      ) : null}
     </div>
   );
 }
@@ -103,14 +111,10 @@ function AgentPage({
   const waiting = waitingText(attention.get(agentId));
   const name = agent?.name ?? agentId;
   return (
-    <div className="ui-page">
-      <p className="page-crumbs">
-        <a href={AGENTS_ROUTE} onClick={go(AGENTS_ROUTE)}>Agents</a>
-      </p>
+    <div className="ui-stack" data-gap="lg">
       <header className="agent-head">
         <Avatar id={agentId} name={name} size="xl" unavailable={agent ? !agent.available : false} face={agent} />
         <div className="agent-head-text">
-          <h2 className="ui-page-title">{name}</h2>
           <p className="ui-page-lede">{agent?.description ?? 'This agent is not in the roster right now.'}</p>
           <div className="ui-row">
             {agent ? <span className="muted mono">@{agent.handle}</span> : null}
