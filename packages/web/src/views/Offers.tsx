@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtRelative } from '../format';
-import { Empty, ErrorBanner, useAsync } from '../ui';
+import { Button, Card, Empty, ErrorBanner, Notice, Page, PageHeader, Pill, Stack, useAsync } from '../ui';
 
 export function Offers({ timezone: _timezone }: { timezone: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.offers(), [], 20_000);
@@ -44,37 +44,43 @@ export function Offers({ timezone: _timezone }: { timezone: string }): JSX.Eleme
   };
 
   return (
-    <>
-      <h2>Offers</h2>
-      <p className="lede">
-        Things an agent already worked out that you might want done. Taking one asks that agent the sentence it
-        wrote — it authorizes nothing, and anything that would leave this machine still comes back to you as an
-        approval.
-      </p>
+    <Page>
+      <PageHeader
+        title="Offers"
+        lede="Things an agent already worked out that you might want done. Taking one asks that agent the sentence it wrote — it authorizes nothing, and anything that would leave this machine still comes back to you as an approval."
+      />
       <ErrorBanner message={error ?? failure} />
-      {taken ? <p className="muted">{taken}</p> : null}
+      {taken ? (
+        <Notice tone="good" role="status">
+          {taken}
+        </Notice>
+      ) : null}
       {!data || data.offers.length === 0 ? (
         <Empty>Nothing is on offer.</Empty>
       ) : (
-        data.offers.map((offer) => (
-          <div className="attention" key={offer.id}>
-            <div className="bar" style={{ marginBottom: 6 }}>
-              <button
-                disabled={busy === offer.id}
-                onClick={() => take(offer.id, offer.label)}
-                title={offer.prompt}
-              >
-                {offer.label}
-              </button>
-              <span className="mono muted" style={{ flex: '1 1 auto' }}>
-                {offer.agentId}
-              </span>
-              <span className="muted">expires {fmtRelative(offer.expiresAt)}</span>
-            </div>
-            <div className="muted">{offer.prompt}</div>
-          </div>
-        ))
+        <Stack>
+          {data.offers.map((offer) => (
+            <Card
+              key={offer.id}
+              tone="accent"
+              title={offer.label}
+              meta={
+                <>
+                  <Pill mono>{offer.agentId}</Pill>
+                  <span className="muted">expires {fmtRelative(offer.expiresAt)}</span>
+                </>
+              }
+              actions={
+                <Button variant="accent" size="sm" disabled={busy === offer.id} onClick={() => take(offer.id, offer.label)}>
+                  Take
+                </Button>
+              }
+            >
+              <p className="ui-card-meta">{offer.prompt}</p>
+            </Card>
+          ))}
+        </Stack>
       )}
-    </>
+    </Page>
   );
 }

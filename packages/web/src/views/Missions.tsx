@@ -9,7 +9,24 @@
 import { useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
-import { Empty, ErrorBanner, StatePill, useAsync } from '../ui';
+import {
+  Button,
+  Card,
+  Code,
+  Empty,
+  ErrorBanner,
+  Field,
+  Page,
+  PageHeader,
+  Panel,
+  Pill,
+  Section,
+  Stack,
+  StatePill,
+  Table,
+  Toolbar,
+  useAsync,
+} from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
@@ -28,18 +45,19 @@ export function Missions({ timezone }: { timezone: string }): JSX.Element {
   };
 
   return (
-    <>
-      <h2>Missions</h2>
-      <p className="lede">Standing schedules. A disabled mission materializes nothing.</p>
+    <Page>
+      <PageHeader title="Missions" lede="Standing schedules. A disabled mission materializes nothing." />
       <ErrorBanner message={error ?? failure} />
       {!data || data.missions.length === 0 ? (
         <Empty>No missions are registered (`buddi missions add-defaults`).</Empty>
       ) : (
-        data.missions.map((mission) => (
-          <Mission key={mission.id} mission={mission} timezone={timezone} onRun={run} />
-        ))
+        <Stack>
+          {data.missions.map((mission) => (
+            <Mission key={mission.id} mission={mission} timezone={timezone} onRun={run} />
+          ))}
+        </Stack>
       )}
-    </>
+    </Page>
   );
 }
 
@@ -54,20 +72,32 @@ function Mission({
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
-    <div className="attention" style={{ borderLeftColor: mission.enabled ? 'var(--good)' : 'var(--line)' }}>
-      <div className="bar" style={{ marginBottom: 6 }}>
-        <strong style={{ flex: '1 1 auto' }}>
-          {mission.name} <span className="muted mono">{mission.id}</span>
-        </strong>
-        <span className="pill">{mission.agentId}</span>
-        {mission.alwaysDeliver ? <span className="pill">always delivers</span> : null}
-        <button onClick={() => onRun(api.setMissionEnabled(mission.id, !mission.enabled))}>
-          {mission.enabled ? 'Disable' : 'Enable'}
-        </button>
-        <button onClick={() => setOpen((v) => !v)}>{open ? 'less' : 'more'}</button>
-      </div>
-
-      <div className="muted">
+    <Card
+      tone={mission.enabled ? 'good' : 'muted'}
+      title={
+        <>
+          {mission.name} <span className="mono muted">{mission.id}</span>
+        </>
+      }
+      meta={
+        <>
+          <Pill mono>{mission.agentId}</Pill>
+          {mission.alwaysDeliver ? <Pill>always delivers</Pill> : null}
+          {!mission.enabled ? <Pill tone="warning">disabled</Pill> : null}
+        </>
+      }
+      actions={
+        <>
+          <Button size="sm" onClick={() => onRun(api.setMissionEnabled(mission.id, !mission.enabled))}>
+            {mission.enabled ? 'Disable' : 'Enable'}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+            {open ? 'Less' : 'More'}
+          </Button>
+        </>
+      }
+    >
+      <p className="ui-card-meta">
         {mission.schedule ? (
           <>
             <span className="mono">{mission.schedule.cron}</span> {mission.schedule.timezone} · rev{' '}
@@ -77,80 +107,79 @@ function Mission({
         ) : (
           'no schedule — enqueued by hand or by a sentinel'
         )}
-      </div>
-      <div className="muted">
+        <br />
         Last notification:{' '}
         {mission.lastNotification
           ? `${mission.lastNotification.kind === 'mission.delivered' ? 'delivered' : 'silent'} ${fmtRelative(
               mission.lastNotification.at,
             )}${mission.lastNotification.reason ? ` — ${mission.lastNotification.reason}` : ''}`
           : 'none'}
-      </div>
+      </p>
 
       {open ? (
-        <>
+        <div className="ui-card-foot">
           {mission.schedule ? (
-            <div className="bar" style={{ marginTop: 10 }}>
-              <label className="muted" htmlFor={`p-${mission.id}`}>
-                misfire policy
-              </label>
-              <select
-                id={`p-${mission.id}`}
-                value={mission.schedule.misfirePolicy}
-                onChange={(e) => onRun(api.setMisfirePolicy(mission.id, e.target.value))}
-              >
-                {POLICIES.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
+            <Toolbar>
+              <Field inline label="Misfire policy">
+                <select
+                  value={mission.schedule.misfirePolicy}
+                  onChange={(e) => onRun(api.setMisfirePolicy(mission.id, e.target.value))}
+                >
+                  {POLICIES.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <span className="muted">
-                what a week asleep does: replay every instant, coalesce into one, keep only the latest, or skip past a
+                What a week asleep does: replay every instant, coalesce into one, keep only the latest, or skip past a
                 deadline.
               </span>
-            </div>
+            </Toolbar>
           ) : null}
 
-          <h3>Prompt</h3>
-          <pre>{mission.prompt}</pre>
+          <Section title="Prompt">
+            <Code>{mission.prompt}</Code>
+          </Section>
 
-          <h3>Recent occurrences</h3>
-          <div className="wrap">
-            {mission.occurrences.length === 0 ? (
-              <Empty>Never run.</Empty>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Scheduled</th>
-                    <th>State</th>
-                    <th>Finished</th>
-                    <th>Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mission.occurrences.map((o) => (
-                    <tr key={o.id}>
-                      <td>{fmtTime(o.scheduledAt, timezone)}</td>
-                      <td>
-                        <StatePill state={o.state} />
-                      </td>
-                      <td>{fmtTime(o.finishedAt, timezone)}</td>
-                      <td className={o.error ? 'bad' : 'muted'}>
-                        {o.error ? truncate(o.error, 120) : null}
-                        {o.runConversationId ? (
-                          <a href={`#/conversations/${o.runConversationId}`}>transcript</a>
-                        ) : null}
-                      </td>
+          <Section title="Recent occurrences">
+            <Panel flush>
+              {mission.occurrences.length === 0 ? (
+                <Empty>Never run.</Empty>
+              ) : (
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>Scheduled</th>
+                      <th>State</th>
+                      <th>Finished</th>
+                      <th>Detail</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
+                  </thead>
+                  <tbody>
+                    {mission.occurrences.map((o) => (
+                      <tr key={o.id}>
+                        <td className="nowrap">{fmtTime(o.scheduledAt, timezone)}</td>
+                        <td>
+                          <StatePill state={o.state} />
+                        </td>
+                        <td className="nowrap">{fmtTime(o.finishedAt, timezone)}</td>
+                        <td className={o.error ? 'critical' : 'muted'}>
+                          {o.error ? truncate(o.error, 120) : null}
+                          {o.runConversationId ? (
+                            <a href={`#/conversations/${o.runConversationId}`}>transcript</a>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              )}
+            </Panel>
+          </Section>
+        </div>
       ) : null}
-    </div>
+    </Card>
   );
 }

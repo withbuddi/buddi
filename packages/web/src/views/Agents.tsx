@@ -17,7 +17,22 @@
  */
 import { useState } from 'react';
 import { api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../api';
-import { Empty, ErrorBanner, useAsync } from '../ui';
+import {
+  Button,
+  Card,
+  Empty,
+  ErrorBanner,
+  Field,
+  Notice,
+  Page,
+  PageHeader,
+  Pill,
+  Row,
+  Section,
+  Stack,
+  Toolbar,
+  useAsync,
+} from '../ui';
 import { ModelPicker } from '../ModelPicker';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
@@ -44,31 +59,35 @@ export function Agents(): JSX.Element {
   };
 
   return (
-    <>
-      <h2>Agents</h2>
-      <p className="lede">Provider choice is pinned per agent — it decides where your data goes.</p>
-      <p><a href="#/providers">Manage provider credentials and defaults →</a></p>
+    <Page>
+      <PageHeader
+        title="Agents"
+        lede="Provider choice is pinned per agent — it decides where your data goes."
+        actions={<a href="#/providers">Manage provider credentials and defaults →</a>}
+      />
       <ErrorBanner message={error ?? failure} />
       {note ? (
-        <div className="attention" style={{ borderLeftColor: 'var(--good)' }}>
+        <Notice tone="good" role="status">
           {note}
-        </div>
+        </Notice>
       ) : null}
       {!data || data.agents.length === 0 ? (
         <Empty>No agents are installed.</Empty>
       ) : (
-        data.agents.map((agent) => (
-          <Agent
-            key={`${agent.id}:${data.engines.find(e => e.id === agent.id)?.model}:${data.providerAccounts?.bindings.find(b => b.agentId === agent.id)?.accountId}`}
-            agent={agent}
-            engine={data.engines.find((e) => e.id === agent.id)}
-            providers={data.providers}
-            accounts={data.providerAccounts}
-            onRun={run}
-          />
-        ))
+        <Stack>
+          {data.agents.map((agent) => (
+            <Agent
+              key={`${agent.id}:${data.engines.find((e) => e.id === agent.id)?.model}:${data.providerAccounts?.bindings.find((b) => b.agentId === agent.id)?.accountId}`}
+              agent={agent}
+              engine={data.engines.find((e) => e.id === agent.id)}
+              providers={data.providers}
+              accounts={data.providerAccounts}
+              onRun={run}
+            />
+          ))}
+        </Stack>
       )}
-    </>
+    </Page>
   );
 }
 
@@ -89,7 +108,7 @@ function Agent({
   const group = providers.find((p) => p.kind === provider);
   const model = engine?.model ?? agent.model;
   const [turns, setTurns] = useState(String(engine?.maxTurns ?? agent.maxTurns));
-  const binding = accounts?.bindings.find(b => b.agentId === agent.id);
+  const binding = accounts?.bindings.find((b) => b.agentId === agent.id);
 
   const set = (change: Record<string, unknown>): void => {
     onRun(api.setAgentEngine(agent.id, change));
@@ -105,145 +124,203 @@ function Agent({
 
   const known = group?.models.map((m) => m.id) ?? [];
   const options = known.includes(model) ? known : [model, ...known];
+  const available = engine ? engine.available : true;
 
   return (
-    <div className="attention" key={agent.id} style={{ borderLeftColor: 'var(--accent)' }}>
-      <div className="bar" style={{ marginBottom: 4 }}>
-        <strong style={{ flex: '1 1 auto' }}>
+    <Card
+      tone={available ? 'accent' : 'warning'}
+      title={
+        <>
           {agent.name} <span className="mono muted">@{agent.handle}</span>
-        </strong>
-        {agent.isDefault ? <span className="pill">default</span> : null}
-        <span className="pill">{engine?.language ?? agent.language}</span>
-        <span className="pill">{engine?.maxTurns ?? agent.maxTurns} turns</span>
-      </div>
-      <div className="muted">{agent.description}</div>
+        </>
+      }
+      meta={
+        <>
+          {agent.isDefault ? <Pill tone="accent">default</Pill> : null}
+          <Pill>{engine?.language ?? agent.language}</Pill>
+          <Pill>{engine?.maxTurns ?? agent.maxTurns} turns</Pill>
+        </>
+      }
+    >
+      <p className="ui-card-meta">{agent.description}</p>
 
-      <h3>Engine</h3>
-      <div className="bar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        {accounts ? <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} /> : <><label>
-          <span className="muted">provider </span>
-          <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
-            {providers.map((p) => (
-              <option key={p.kind} value={p.kind}>
-                {p.kind}
-                {p.usable ? '' : ' (no credential)'}
-              </option>
+      <Section title="Engine">
+        <Toolbar valign="end">
+          {accounts ? (
+            <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
+          ) : (
+            <>
+              <Field label="Provider">
+                <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
+                  {providers.map((p) => (
+                    <option key={p.kind} value={p.kind}>
+                      {p.kind}
+                      {p.usable ? '' : ' (no credential)'}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Model">
+                <input
+                  list={`models-${agent.id}`}
+                  defaultValue={model}
+                  onBlur={(e) => {
+                    if (e.target.value.trim() !== '' && e.target.value.trim() !== model) {
+                      set({ model: e.target.value.trim() });
+                    }
+                  }}
+                />
+                <datalist id={`models-${agent.id}`}>
+                  {options.map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+              </Field>
+            </>
+          )}
+
+          <Field label="Max turns">
+            <input
+              type="number"
+              min={1}
+              value={turns}
+              onChange={(e) => setTurns(e.target.value)}
+              onBlur={() => {
+                const n = Number(turns);
+                if (Number.isInteger(n) && n >= 1 && n !== (engine?.maxTurns ?? agent.maxTurns)) {
+                  set({ maxTurns: n });
+                }
+              }}
+            />
+          </Field>
+
+          <Field label="Language">
+            <select value={engine?.language ?? agent.language} onChange={(e) => set({ language: e.target.value })}>
+              {LANGUAGES.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </Toolbar>
+
+        <p className="ui-card-meta">
+          {accounts ? (
+            <>
+              Account: {accounts.accounts.find((a) => a.id === binding?.accountId)?.label ?? 'Not selected'} · Model:{' '}
+              {binding?.model ?? 'Not selected'}
+            </>
+          ) : (
+            <>
+              {engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
+              <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span>
+            </>
+          )}
+          {!accounts && group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
+        </p>
+        {engine ? (
+          <p className={engine.available ? 'ui-card-meta' : 'warning'}>
+            {engine.available
+              ? 'available on this machine'
+              : `unavailable: ${engine.unavailableReason ?? 'no credential'}`}
+            {engine.restartRequired
+              ? ' · this file has changed since the service loaded it — run `buddi service restart`'
+              : ''}
+          </p>
+        ) : null}
+      </Section>
+
+      <Section title="Built-in context">
+        <p className="ui-card-meta">
+          Every agent receives current time, owner timezone and server-host information. system.time and system.info
+          are always available, without grants or approval. Host and browser access still require their own
+          permissions.
+        </p>
+      </Section>
+
+      <Section title={`Granted tools (${agent.tools.length})`}>
+        {agent.tools.length === 0 ? (
+          <span className="muted">none</span>
+        ) : (
+          <Row>
+            {agent.tools.map((tool) => (
+              <Pill mono key={tool}>
+                {tool}
+              </Pill>
             ))}
-          </select>
-        </label>
+          </Row>
+        )}
+      </Section>
 
-        <label>
-          <span className="muted">model </span>
-          <input
-            list={`models-${agent.id}`}
-            defaultValue={model}
-            onBlur={(e) => {
-              if (e.target.value.trim() !== '' && e.target.value.trim() !== model) {
-                set({ model: e.target.value.trim() });
-              }
-            }}
-          />
-          <datalist id={`models-${agent.id}`}>
-            {options.map((id) => (
-              <option key={id} value={id} />
+      <Section title={`Skills (${agent.skills.length})`}>
+        {agent.skills.length === 0 ? (
+          <span className="muted">none</span>
+        ) : (
+          <Row>
+            {agent.skills.map((skill) => (
+              <Pill key={skill.file}>
+                {skill.name} · {skill.provenance}
+              </Pill>
             ))}
-          </datalist>
-        </label></>}
-
-        <label>
-          <span className="muted">max turns </span>
-          <input
-            type="number"
-            min={1}
-            style={{ width: 70 }}
-            value={turns}
-            onChange={(e) => setTurns(e.target.value)}
-            onBlur={() => {
-              const n = Number(turns);
-              if (Number.isInteger(n) && n >= 1 && n !== (engine?.maxTurns ?? agent.maxTurns)) {
-                set({ maxTurns: n });
-              }
-            }}
-          />
-        </label>
-
-        <label>
-          <span className="muted">language </span>
-          <select
-            value={engine?.language ?? agent.language}
-            onChange={(e) => set({ language: e.target.value })}
-          >
-            {LANGUAGES.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <div className="muted" style={{ marginTop: 6 }}>
-        {accounts ? <>Account: {accounts.accounts.find(a => a.id === binding?.accountId)?.label ?? 'Not selected'} · Model: {binding?.model ?? 'Not selected'}</> : <>{engine?.credentialKind ?? agent.provider.credentialKind} from{' '}
-        <span className="mono">{engine?.credentialEnv ?? agent.provider.credentialEnv}</span></>}
-        {!accounts && group && !group.usable ? ` · default model ${group.defaultModel} (${group.defaultFrom})` : ''}
-      </div>
-      {engine ? (
-        <div
-          className="muted"
-          style={{ marginTop: 4, color: engine.available ? undefined : 'var(--warning)' }}
-        >
-          {engine.available
-            ? 'available on this machine'
-            : `unavailable: ${engine.unavailableReason ?? 'no credential'}`}
-          {engine.restartRequired
-            ? ' · this file has changed since the service loaded it — run `buddi service restart`'
-            : ''}
-        </div>
-      ) : null}
-
-      <h3>Built-in context</h3>
-      <p className="muted">Every agent receives current time, owner timezone and server-host information. system.time and system.info are always available, without grants or approval. Host and browser access still require their own permissions.</p>
-      <h3>Granted tools ({agent.tools.length})</h3>
-      <div>
-        {agent.tools.map((tool) => (
-          <span className="pill mono" key={tool} style={{ marginRight: 4, marginBottom: 4 }}>
-            {tool}
-          </span>
-        ))}
-      </div>
-
-      <h3>Skills ({agent.skills.length})</h3>
-      {agent.skills.length === 0 ? (
-        <span className="muted">none</span>
-      ) : (
-        <div>
-          {agent.skills.map((skill) => (
-            <span className="pill" key={skill.file} style={{ marginRight: 4 }}>
-              {skill.name} · {skill.provenance}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
+          </Row>
+        )}
+      </Section>
+    </Card>
   );
 }
 
-function AccountChoice({ agentId, accounts, onRun }: { agentId: string; accounts: ProviderAccountsView;
-  onRun: (work: Promise<{ note: string; changed: string[] }>) => void }): JSX.Element {
-  const binding = accounts.bindings.find(b => b.agentId === agentId);
+function AccountChoice({
+  agentId,
+  accounts,
+  onRun,
+}: {
+  agentId: string;
+  accounts: ProviderAccountsView;
+  onRun: (work: Promise<{ note: string; changed: string[] }>) => void;
+}): JSX.Element {
+  const binding = accounts.bindings.find((b) => b.agentId === agentId);
   const [id, setId] = useState(binding?.accountId ?? '');
   const [model, setModel] = useState(binding?.model ?? '');
   const [busy, setBusy] = useState(false);
-  return <>
-    <label>Account <select value={id} disabled={busy} onChange={e => {
-      setId(e.target.value); setModel(accounts.accounts.find(a => a.id === e.target.value)?.defaultModel ?? '');
-    }}>
-      <option value="">Choose an account</option>
-      {accounts.accounts.map(a => <option key={a.id} value={a.id} disabled={!a.enabled}>{a.label}{!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}</option>)}
-    </select></label>
-    <ModelPicker key={`${id}:${accounts.accounts.find(a => a.id === id)?.revision}`} accountId={accounts.accounts.find(a => a.id === id)?.configured ? id : undefined} label="Model" value={model} onChange={setModel} disabled={busy} />
-    <button disabled={busy || !id || !model.trim() || (id === binding?.accountId && model === binding.model)} onClick={() => {
-      setBusy(true); onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
-    }}>Save account selection</button>
-  </>;
+  const chosen = accounts.accounts.find((a) => a.id === id);
+  return (
+    <>
+      <Field label="Account">
+        <select
+          value={id}
+          disabled={busy}
+          onChange={(e) => {
+            setId(e.target.value);
+            setModel(accounts.accounts.find((a) => a.id === e.target.value)?.defaultModel ?? '');
+          }}
+        >
+          <option value="">Choose an account</option>
+          {accounts.accounts.map((a) => (
+            <option key={a.id} value={a.id} disabled={!a.enabled}>
+              {a.label}
+              {!a.enabled ? ' (disabled)' : !a.configured ? ' (needs credential)' : ''}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <ModelPicker
+        key={`${id}:${chosen?.revision}`}
+        accountId={chosen?.configured ? id : undefined}
+        label="Model"
+        value={model}
+        onChange={setModel}
+        disabled={busy}
+      />
+      <Button
+        disabled={busy || !id || !model.trim() || (id === binding?.accountId && model === binding.model)}
+        onClick={() => {
+          setBusy(true);
+          onRun(api.assignProviderAccount(agentId, id, model).finally(() => setBusy(false)));
+        }}
+      >
+        Save account selection
+      </Button>
+    </>
+  );
 }
