@@ -7,10 +7,11 @@ import {
 import { createProvider, providerCapabilities, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
 
 type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean };
 type Binding = { agentId: string; accountId: string; model: string };
-type TestResult = { state: string; message: string; checkedAt: string };
+type TestResult = ProviderDiagnostic & { checkedAt: string };
 const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as "defaultModel",
   enabled, deleting, revision, secret_ref as "secretRef", legacy_env as "legacyEnv"`;
 const saveSchema = z.object({
@@ -247,7 +248,7 @@ export class ProviderAccounts {
     this.#testing.add(id);
     try {
       const row = await this.#row(id);
-      let state = 'connected', message = 'Connection succeeded.';
+      let diagnostic: ProviderDiagnostic = { state: 'connected', message: 'Connection succeeded.', httpStatus: null, retryAt: null };
       try {
         const resolved = resolveProviderAccount(row, row.defaultModel, await this.#secret(row));
         if (this.deps.test) await this.deps.test(resolved);
@@ -256,12 +257,10 @@ export class ProviderAccounts {
           tools: [], signal: AbortSignal.timeout(15_000),
         });
       } catch (error) {
-        const status = (error as { status?: number }).status;
-        state = status === 401 || status === 403 ? 'authentication-error' : status === 429 ? 'rate-limited' : 'unavailable';
-        message = state === 'authentication-error' ? 'Provider rejected this credential.' : state === 'rate-limited' ? 'Provider rate limit reached. Try later.' : 'Connection failed. Check the account, model, vault and network.';
+        diagnostic = providerDiagnostic(error);
       }
       if ((await this.#row(id)).revision !== row.revision) throw new ProviderAccountError(409, 'Account changed during the test. Test it again.');
-      const result = { state, message, checkedAt: new Date().toISOString() };
+      const result = { ...diagnostic, checkedAt: new Date().toISOString() };
       this.#tests.set(id, result); return result;
     } finally { this.#testing.delete(id); }
   }

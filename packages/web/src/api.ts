@@ -366,7 +366,7 @@ export interface ProviderAccount {
   auth: 'api-key' | 'none' | 'legacy-subscription-token'; baseUrl: string;
   defaultModel: string; enabled: boolean; revision: number; configured: boolean;
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
-  assignedAgents: string[]; test: { state: string; message: string; checkedAt: string } | null;
+  assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
 }
 export interface ProviderAccountsView {

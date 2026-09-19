@@ -30,6 +30,7 @@ import {
   defaultSleep,
   isRetryableStatus,
   nextDelayMs,
+  providerRetryAt,
   nextTransportDelayMs,
   RETRY_DELAYS_MS,
 } from './retry.js';
@@ -208,6 +209,7 @@ export interface RuntimeProvider {
  * the whole chain is flattened into `detail` for the log.
  */
 export class ProviderError extends Error {
+  readonly retryAt: string | null;
   readonly status: number;
   readonly type: string;
   readonly requestId: string | null;
@@ -221,6 +223,7 @@ export class ProviderError extends Error {
     type: string;
     message: string;
     requestId?: string | null;
+    retryAt?: string | null;
     cause?: unknown;
   }) {
     super(args.message, args.cause === undefined ? undefined : { cause: args.cause });
@@ -228,6 +231,7 @@ export class ProviderError extends Error {
     this.status = args.status;
     this.type = args.type;
     this.requestId = args.requestId ?? null;
+    this.retryAt = args.retryAt ?? null;
     this.code = args.cause === undefined ? null : (errorCodes(args.cause)[0] ?? null);
     this.detail =
       args.cause === undefined ? args.message : `${args.message} <- ${describeCause(args.cause)}`;
@@ -657,7 +661,7 @@ export function createAnthropicProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers) });
   }
 
   const capabilities = providerCapabilities('anthropic');

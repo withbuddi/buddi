@@ -16,6 +16,24 @@ it('renders named accounts without modifying or testing them on load', async () 
   expect(api.testProviderAccount).not.toHaveBeenCalled();
   expect(api.saveProviderAccount).not.toHaveBeenCalled();
 });
+it('labels test time separately from provider retry advice', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
+    state: 'rate-limited', message: 'Provider limit.', checkedAt: '2026-09-19T02:00:00Z', httpStatus: 429, retryAt: '2026-09-19T04:00:00.000Z',
+  } }] });
+  render(<Providers />);
+  expect(await screen.findByText(/HTTP 429/)).toBeInTheDocument();
+  expect(screen.getByText(/Tested at:/)).toHaveTextContent('not a quota reset or subscription renewal date');
+  expect(screen.getByText(/Provider suggested retry time:/)).toHaveTextContent('not a guaranteed quota reset');
+  expect(api.testProviderAccount).not.toHaveBeenCalled();
+});
+it('states reset time is unknown when no retry advice was supplied', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
+    state: 'rate-limited', message: 'Provider limit.', checkedAt: '2026-09-19T02:00:00Z', retryAt: null,
+  } }] });
+  render(<Providers />);
+  expect(await screen.findByText(/Reset time is unknown/)).toBeInTheDocument();
+  expect(screen.queryByText(/Provider suggested retry time:/)).not.toBeInTheDocument();
+});
 it('toggles the add form, focuses its name, and explains the disabled save button', async () => {
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));

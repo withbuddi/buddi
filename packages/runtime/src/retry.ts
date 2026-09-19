@@ -58,6 +58,15 @@ export function isRetryableStatus(status: number): boolean {
  * unusable. Both forms of the header are accepted: delta-seconds and an HTTP
  * date (RFC 9110 §10.2.3).
  */
+/** Provider advice for display, not the locally capped retry sleep budget. */
+export function providerRetryAt(headers: { get?(name: string): string | null } | undefined, now = Date.now()): string | null {
+  const value = headers?.get?.('retry-after')?.trim();
+  if (!value) return null;
+  const at = /^\d+$/.test(value) ? now + Number(value) * 1000
+    : /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) ? Date.parse(value) : NaN;
+  return Number.isFinite(at) && at >= now && at <= now + 366 * 86400_000 ? new Date(at).toISOString() : null;
+}
+
 export function retryAfterMs(
   headers: { get?(name: string): string | null } | undefined,
   now: number = Date.now(),

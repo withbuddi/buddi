@@ -56,6 +56,15 @@ function resolve(kind: 'api-key' | 'subscription-token') {
 
 const noSleep = async () => {};
 
+it('preserves provider retry timing on errors without exposing arbitrary headers', async () => {
+  const provider = createAnthropicProvider(resolve('api-key'), { maxStatusRetries: 0,
+    fetch: vi.fn(async () => jsonResponse(429, { error: { type: 'rate_limit_error', message: 'limited' } }, { 'retry-after': '7200', 'x-private': 'SECRET' })) });
+  const before = Date.now();
+  const error = await provider.complete(request).catch(e => e);
+  expect(Date.parse(error.retryAt)).toBeGreaterThanOrEqual(before + 7200_000);
+  expect(JSON.stringify(error)).not.toContain('SECRET');
+});
+
 it('reports rate limits immediately for connection probes', async () => {
   const fetchMock = vi.fn(async () => jsonResponse(429, { error: { type: 'rate_limit_error', message: 'limited' } }));
   const sleep = vi.fn(noSleep);
