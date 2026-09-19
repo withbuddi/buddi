@@ -136,8 +136,10 @@ const ICONS: Record<string, JSX.Element> = {
   ),
   [SETTINGS_ROUTE]: (
     <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <circle cx="10" cy="10" r="2.6" />
-      <path d="M10 2.8v2.1M10 15.1v2.1M2.8 10h2.1M15.1 10h2.1M4.9 4.9l1.5 1.5M13.6 13.6l1.5 1.5M15.1 4.9l-1.5 1.5M6.4 13.6l-1.5 1.5" />
+      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+      <circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" />
+      <circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" />
+      <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
     </svg>
   ),
 };
