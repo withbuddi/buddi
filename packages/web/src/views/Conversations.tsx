@@ -8,7 +8,23 @@
 import { useEffect, useState } from 'react';
 import { api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
 import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
-import { Empty, ErrorBanner, Panel, useAsync } from '../ui';
+import {
+  Button,
+  ButtonLink,
+  Code,
+  Empty,
+  ErrorBanner,
+  Page,
+  PageHeader,
+  Panel,
+  Pill,
+  Section,
+  Stack,
+  Stat,
+  Stats,
+  Table,
+  useAsync,
+} from '../ui';
 import { chatRoute } from '../routes';
 
 export function Conversations({
@@ -25,15 +41,17 @@ export function Conversations({
   if (selectedId) return <TranscriptView id={selectedId} timezone={timezone} onBack={() => onSelect(null)} />;
 
   return (
-    <>
-      <h2>Conversations</h2>
-      <p className="lede">Every run, newest first — interactive turns, scheduled missions and source-started work alike.</p>
+    <Page>
+      <PageHeader
+        title="Conversations"
+        lede="Every run, newest first — interactive turns, scheduled missions and source-started work alike."
+      />
       <ErrorBanner message={error} />
-      <div className="wrap">
+      <Panel flush>
         {!data || data.conversations.length === 0 ? (
           <Empty>Nothing has run yet.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Agent</th>
@@ -46,25 +64,29 @@ export function Conversations({
             </thead>
             <tbody>
               {data.conversations.map((c: ConversationSummary) => (
-                <tr key={c.id} className="clickable" onClick={() => onSelect(c.id)}>
-                  <td className="mono"><a href={chatRoute(c.agentId, c.id)} onClick={event => event.stopPropagation()} title="Open this conversation in chat">{c.agentId} ↗</a></td>
+                <tr key={c.id} data-clickable="true" onClick={() => onSelect(c.id)}>
+                  <td className="mono">
+                    <a href={chatRoute(c.agentId, c.id)} onClick={(event) => event.stopPropagation()} title="Open this conversation in chat">
+                      {c.agentId} ↗
+                    </a>
+                  </td>
                   <td>{c.opening ? truncate(c.opening, 90) : <span className="muted">(no opening text)</span>}</td>
                   <td className="num">{c.messageCount}</td>
                   <td className="num">{c.runs}</td>
-                  <td className="num muted">
+                  <td className="num muted nowrap">
                     {fmtNumber(c.usage.input)} in / {fmtNumber(c.usage.output)} out
                   </td>
-                  <td>
+                  <td className="nowrap">
                     {fmtTime(c.lastMessageAt ?? c.createdAt, timezone)}
-                    <div className="muted">{fmtRelative(c.lastMessageAt ?? c.createdAt)}</div>
+                    <div className="sub">{fmtRelative(c.lastMessageAt ?? c.createdAt)}</div>
                   </td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
-      </div>
-    </>
+      </Panel>
+    </Page>
   );
 }
 
@@ -96,47 +118,42 @@ function TranscriptView({
   }, [id]);
 
   return (
-    <>
-      <h2>
-        <button onClick={onBack} style={{ marginRight: '10px' }}>
-          ← back
-        </button>
-        Transcript
-      </h2>
-      <p className="lede mono">{id}</p>
+    <Page>
+      <PageHeader
+        before={
+          <Button size="sm" onClick={onBack}>
+            ← Back
+          </Button>
+        }
+        title="Transcript"
+        lede={<span className="mono">{id}</span>}
+        actions={
+          transcript ? (
+            <ButtonLink size="sm" href={chatRoute(transcript.agentId, id)}>
+              Open in chat ↗
+            </ButtonLink>
+          ) : null
+        }
+      />
       <ErrorBanner message={error} />
       {!transcript ? (
         <Empty>Loading…</Empty>
       ) : (
         <>
-          <p><a className="ui-btn" href={chatRoute(transcript.agentId, id)}>Open in chat ↗</a></p>
-          <div className="cards">
-            <div className="card">
-              <div className="k">Agent</div>
-              <div className="v">{transcript.agentId}</div>
-            </div>
-            <div className="card">
-              <div className="k">Runs</div>
-              <div className="v">{transcript.runs.length}</div>
-            </div>
-            <div className="card">
-              <div className="k">Tokens</div>
-              <div className="v">
-                {fmtNumber(transcript.usage.input)} / {fmtNumber(transcript.usage.output)}
-              </div>
-              <div className="n">input / output</div>
-            </div>
-            <div className="card">
-              <div className="k">Started</div>
-              <div className="v" style={{ fontSize: '14px' }}>
-                {fmtTime(transcript.createdAt, timezone)}
-              </div>
-            </div>
-          </div>
+          <Stats>
+            <Stat label="Agent" value={transcript.agentId} size="sm" />
+            <Stat label="Runs" value={transcript.runs.length} />
+            <Stat
+              label="Tokens"
+              value={`${fmtNumber(transcript.usage.input)} / ${fmtNumber(transcript.usage.output)}`}
+              note="input / output"
+            />
+            <Stat label="Started" value={fmtTime(transcript.createdAt, timezone)} size="sm" />
+          </Stats>
 
           {transcript.runs.length > 0 ? (
-            <Panel title="Runs">
-              <table>
+            <Panel title="Runs" flush>
+              <Table>
                 <thead>
                   <tr>
                     <th>Started</th>
@@ -149,68 +166,70 @@ function TranscriptView({
                 <tbody>
                   {transcript.runs.map((run, i) => (
                     <tr key={i}>
-                      <td>
-                        {fmtTime(run.startedAt, timezone)}
-                        {run.resumed ? <span className="pill" style={{ marginLeft: 6 }}>resumed</span> : null}
+                      <td className="nowrap">
+                        {fmtTime(run.startedAt, timezone)} {run.resumed ? <Pill>resumed</Pill> : null}
                       </td>
-                      <td>{fmtTime(run.finishedAt, timezone)}</td>
+                      <td className="nowrap">{fmtTime(run.finishedAt, timezone)}</td>
                       <td className="num">{run.turns ?? '—'}</td>
                       <td>
                         {run.stopped ?? '—'}
-                        {run.actionId ? <div className="muted mono">action {short(run.actionId)}</div> : null}
+                        {run.actionId ? <div className="sub mono">action {short(run.actionId)}</div> : null}
                       </td>
-                      <td className="num muted">
+                      <td className="num muted nowrap">
                         {fmtNumber(run.usage.input)} / {fmtNumber(run.usage.output)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             </Panel>
           ) : null}
 
-          <h3>Messages</h3>
-          {transcript.messages.map((message) => (
-            <div className="msg" key={message.id}>
-              <div className="who">
-                {message.role} · {fmtTime(message.createdAt, timezone)}
-              </div>
-              <div className="body">
-                {message.blocks.length === 0 ? <span className="muted">(empty)</span> : null}
-                {message.blocks.map((block, i) => (
-                  <Block key={i} block={block} />
-                ))}
-              </div>
-            </div>
-          ))}
+          <Section title="Messages">
+            <Stack>
+              {transcript.messages.map((message) => (
+                <article className="transcript-msg" key={message.id}>
+                  <header className="transcript-who">
+                    {message.role} · {fmtTime(message.createdAt, timezone)}
+                  </header>
+                  <div className="transcript-body">
+                    {message.blocks.length === 0 ? <span className="muted">(empty)</span> : null}
+                    {message.blocks.map((block, i) => (
+                      <Block key={i} block={block} />
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </Stack>
+          </Section>
         </>
       )}
-    </>
+    </Page>
   );
 }
 
 function Block({ block }: { block: TranscriptBlock }): JSX.Element {
-  if (block.type === 'text') return <div className="text">{block.text}</div>;
+  if (block.type === 'text') return <div className="transcript-text">{block.text}</div>;
   if (block.type === 'tool_use') {
     return (
-      <div className="tool">
-        <div className="name mono">→ {block.name}</div>
-        <pre>{json(block.input)}</pre>
+      <div className="transcript-tool">
+        <div className="transcript-tool-name mono">→ {block.name}</div>
+        <Code>{json(block.input)}</Code>
       </div>
     );
   }
   if (block.type === 'tool_result') {
     return (
-      <div className={`tool ${block.isError ? 'err' : ''}`}>
-        <div className="name mono">← {block.isError ? 'error' : 'result'}</div>
-        <pre>{block.content ?? ''}</pre>
+      <div className="transcript-tool" data-tone={block.isError ? 'critical' : undefined}>
+        <div className="transcript-tool-name mono">← {block.isError ? 'error' : 'result'}</div>
+        <Code>{block.content ?? ''}</Code>
       </div>
     );
   }
   return (
-    <div className="tool">
-      <div className="name mono">{block.type}</div>
-      <pre>{json(block.ref)}</pre>
+    <div className="transcript-tool">
+      <div className="transcript-tool-name mono">{block.type}</div>
+      <Code>{json(block.ref)}</Code>
     </div>
   );
 }

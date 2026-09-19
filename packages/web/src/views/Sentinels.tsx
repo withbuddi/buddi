@@ -4,22 +4,24 @@
  */
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Empty, ErrorBanner, Panel, useAsync } from '../ui';
+import { Code, Details, Empty, ErrorBanner, Page, PageHeader, Panel, Pill, Table, useAsync } from '../ui';
 
 export function Sentinels({ timezone }: { timezone: string }): JSX.Element {
   const { data, error } = useAsync(() => api.sentinels(), [], 30_000);
 
   return (
-    <>
-      <h2>Sentinels</h2>
-      <p className="lede">Code, not prompts. A finding wakes the owner, waits for the digest, or stays quiet.</p>
+    <Page>
+      <PageHeader
+        title="Sentinels"
+        lede="Code, not prompts. A finding wakes the owner, waits for the digest, or stays quiet."
+      />
       <ErrorBanner message={error} />
 
-      <Panel title="Installed">
+      <Panel title="Installed" flush>
         {!data || data.installed.length === 0 ? (
           <Empty>No sentinels are installed.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Sentinel</th>
@@ -35,27 +37,27 @@ export function Sentinels({ timezone }: { timezone: string }): JSX.Element {
                   <tr key={sentinel.id}>
                     <td>
                       <span className="mono">{sentinel.id}</span>
-                      <div className="muted">{sentinel.description}</div>
+                      <div className="sub">{sentinel.description}</div>
                     </td>
-                    <td>{sentinel.every}s</td>
-                    <td>{run ? `${fmtTime(run.lastRunAt, timezone)} (${fmtRelative(run.lastRunAt)})` : '—'}</td>
-                    <td className={run?.lastError ? 'bad' : 'muted'}>{run?.lastError ?? 'none'}</td>
+                    <td className="nowrap">{sentinel.every}s</td>
+                    <td className="nowrap">{run ? `${fmtTime(run.lastRunAt, timezone)} (${fmtRelative(run.lastRunAt)})` : '—'}</td>
+                    <td className={run?.lastError ? 'critical' : 'muted'}>{run?.lastError ?? 'none'}</td>
                   </tr>
                 );
               })}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
 
       <Findings title="Open findings" findings={data?.open ?? []} timezone={timezone} />
       <Findings title="Resolved" findings={data?.resolved ?? []} timezone={timezone} />
 
-      <Panel title="Waiting for the digest">
+      <Panel title="Waiting for the digest" flush>
         {!data || data.digest.length === 0 ? (
           <Empty>Nothing is queued for the weekly recap.</Empty>
         ) : (
-          <table>
+          <Table>
             <thead>
               <tr>
                 <th>Title</th>
@@ -68,18 +70,24 @@ export function Sentinels({ timezone }: { timezone: string }): JSX.Element {
                 <tr key={item.id}>
                   <td>
                     {item.title}
-                    <div className="muted">{item.detail}</div>
+                    <div className="sub">{item.detail}</div>
                   </td>
-                  <td>{item.severity}</td>
-                  <td>{fmtTime(item.createdAt, timezone)}</td>
+                  <td>
+                    <Severity severity={item.severity} />
+                  </td>
+                  <td className="nowrap">{fmtTime(item.createdAt, timezone)}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         )}
       </Panel>
-    </>
+    </Page>
   );
+}
+
+function Severity({ severity }: { severity: string }): JSX.Element {
+  return <Pill tone={severity === 'urgent' ? 'critical' : undefined}>{severity}</Pill>;
 }
 
 function Findings({
@@ -102,11 +110,11 @@ function Findings({
   timezone: string;
 }): JSX.Element {
   return (
-    <Panel title={title}>
+    <Panel title={title} flush>
       {findings.length === 0 ? (
         <Empty>None.</Empty>
       ) : (
-        <table>
+        <Table>
           <thead>
             <tr>
               <th>Finding</th>
@@ -120,25 +128,26 @@ function Findings({
               <tr key={finding.key}>
                 <td>
                   <strong>{finding.title}</strong>
-                  <div className="muted">{finding.detail}</div>
-                  <div className="muted mono">{finding.key}</div>
+                  <div className="sub">{finding.detail}</div>
+                  <div className="sub mono">{finding.key}</div>
                   {finding.data ? (
-                    <details>
-                      <summary className="muted">evidence</summary>
-                      <pre>{json(finding.data)}</pre>
-                    </details>
+                    <Details summary="evidence">
+                      <Code>{json(finding.data)}</Code>
+                    </Details>
                   ) : null}
                 </td>
-                <td className={finding.severity === 'urgent' ? 'bad' : 'muted'}>{finding.severity}</td>
-                <td>{fmtTime(finding.firstSeenAt, timezone)}</td>
                 <td>
+                  <Severity severity={finding.severity} />
+                </td>
+                <td className="nowrap">{fmtTime(finding.firstSeenAt, timezone)}</td>
+                <td className="nowrap">
                   {fmtTime(finding.lastSeenAt, timezone)}
-                  <div className="muted">{fmtRelative(finding.lastSeenAt)}</div>
+                  <div className="sub">{fmtRelative(finding.lastSeenAt)}</div>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
       )}
     </Panel>
   );
