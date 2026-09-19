@@ -38,3 +38,4 @@ export { rememberPreference, getPreferences, note, recall, forget };
 export { currentPreferences } from './tools/preferences.js';
 export { selectNotes, scopesFor } from './tools/notes.js';
 export * from './preamble.js';
+export * from './admin.js';

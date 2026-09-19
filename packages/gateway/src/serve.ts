@@ -76,6 +76,7 @@ import { startLoop } from './loop.js';
 import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
+import { seedOwnerFromEnv } from './owner-seed.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 
@@ -511,6 +512,12 @@ export async function main(): Promise<void> {
       );
     }, TICK_MS);
     if (typeof sweep.unref === 'function') sweep.unref();
+
+    // What `buddi init` asked and wrote to the env file lands in the owner row,
+    // once, and only into fields nothing has filled yet: the row is the
+    // truth the agents read, and an answer given at install is not lost.
+    await seedOwnerFromEnv(pool, process.env).catch((err) =>
+      console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
 
     // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
     // day old, at start and then hourly. Anything a message carries is kept.

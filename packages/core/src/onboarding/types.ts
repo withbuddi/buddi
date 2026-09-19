@@ -69,6 +69,11 @@ export interface OwnerProfile {
   timezone: string | null;
   /** A language name or tag, as the owner said it. */
   language: string | null;
+  /**
+   * A short paragraph in the owner's words — who they are, how to address
+   * them, how they like answers. Read into every agent's prompt as context.
+   */
+  about: string | null;
   /** The display name pairing recorded, kept separate and never overwritten. */
   displayName: string | null;
 }
@@ -78,4 +83,5 @@ export interface OwnerProfilePatch {
   preferredName?: string | null;
   timezone?: string | null;
   language?: string | null;
+  about?: string | null;
 }

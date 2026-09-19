@@ -1838,3 +1838,7 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .delegate-list .ui-list-row { gap: var(--space-3); }
 .delegate-list label { cursor: pointer; }
 .delegate-list input:disabled + label { opacity: 0.55; cursor: default; }
+
+/* ---- memory ---- */
+.memory-note { max-width: 48ch; white-space: pre-wrap; }
+.memory-expires { color: var(--text-faint); }

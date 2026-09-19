@@ -151,6 +151,12 @@ const setProfileInput = z
       .max(40)
       .optional()
       .describe('The language they want to be answered in, if they said one. Never guessed from their spelling.'),
+    about: z
+      .string()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe('A short line about themselves in their own words — how to address them, what they do, how they like answers — only when they offer it as something every agent should know.'),
   })
   .strict();
 
