@@ -20,6 +20,7 @@ import {
   Notice,
   PageFrame,
   Pill,
+  Sheet,
   Stack,
   Toolbar,
   useAsync,
@@ -73,8 +74,8 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
           <Notice tone="warning">{data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         )}
         <Toolbar>
-          <Button variant={adding ? undefined : 'accent'} disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>
-            {adding ? 'Cancel adding account' : 'Add account'}
+          <Button variant="accent" disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>
+            Add account
           </Button>
           <Button disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>
             {loading ? 'Refreshing…' : 'Refresh status'}
@@ -83,9 +84,18 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
           <span className="muted">Secrets live in the {vaultName(data.vault.kind)}; Postgres holds names and assignments only.</span>
         </Toolbar>
         {adding && (
-          <div id="new-provider-account">
-            <AccountForm codexEnabled={data.codexEnabled} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} onDone={() => setAdding(false)} />
-          </div>
+          <Sheet title="Add an account" onClose={() => setAdding(false)}>
+            <div id="new-provider-account">
+              <AccountWizard
+                accounts={accounts}
+                codexEnabled={data.codexEnabled}
+                anthropicOAuthEnabled={data.anthropicOAuthEnabled}
+                busy={busy}
+                run={run}
+                onDone={(id) => { setAdding(false); if (id) setSelectedId(id); }}
+              />
+            </div>
+          </Sheet>
         )}
         {accounts.length === 0 ? (
           <Empty>No accounts yet. Add one to give your agents a model to run on.</Empty>
@@ -171,7 +181,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
       {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}
       {a.kind === 'codex' && <CodexLogin account={a} busy={busy} run={run} />}
       <Toolbar>
-        <Button disabled={busy || a.removalPending} onClick={() => setEditing(!editing)}>{editing ? 'Cancel edit' : 'Edit account'}</Button>
+        <Button disabled={busy || a.removalPending} onClick={() => setEditing(true)}>Edit account</Button>
         <Button disabled={busy || a.removalPending} onClick={() => void run(() => api.saveProviderAccount({ ...accountSettings(a), enabled: !a.enabled }), a.enabled ? 'Account disabled. Subsequent model calls will stop; already-sent requests cannot be recalled.' : 'Account enabled.')}>{a.enabled ? 'Disable' : 'Enable'}</Button>
         {a.kind !== 'codex' && <Button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(() => api.testProviderAccount(a.id), 'Connection test finished.')}>Test connection</Button>}
         <Button variant="danger" disabled={busy || a.assignedAgents.length > 0} title={a.assignedAgents.length ? 'Reassign its agents before removing this account' : undefined} onClick={() => setRemoving(true)}>Remove account</Button>
@@ -182,7 +192,11 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
         {a.test.retryAt ? <p>Provider suggested retry time: {new Date(a.test.retryAt).toLocaleString()}. This is retry advice, not a guaranteed quota reset.</p>
           : ['rate-limited', 'quota-exhausted'].includes(a.test.state) && <p className="muted">The provider did not supply a usable Retry-After time. Reset time is unknown.</p>}
       </Notice>}
-      {editing && <AccountForm account={a} busy={busy} run={run} onDone={() => setEditing(false)} />}
+      {editing && (
+        <Sheet title={`Edit ${a.label}`} onClose={() => setEditing(false)}>
+          <AccountForm account={a} busy={busy} run={run} onDone={() => setEditing(false)} />
+        </Sheet>
+      )}
       {removing && <Notice tone="critical">
         <p>Remove “{a.label}” and its stored credential from Buddi? This does not revoke it at the provider or remove it from backups.</p>
         <Toolbar>
@@ -239,13 +253,12 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
   };
   const incomplete = !label.trim() || !model.trim();
   return (
-    <form className="ui-card" data-tone="accent" onSubmit={e => {
+    <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
       void run(() => api.saveProviderAccount({ ...(a ? { id: a.id, revision: a.revision } : {}), label, kind, auth, baseUrl,
         defaultModel: model, enabled: a?.enabled ?? true, ...(value.trim() ? { secret: value } : {}) }), 'Account saved. Agent model selections are unchanged.').then(ok => { if (ok) onDone(); });
     }}>
-      <div className="ui-card-head"><h3 className="ui-card-title">{a ? 'Edit account' : 'New account'}</h3></div>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
         <Field label="Account name">
           <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" />
@@ -313,4 +326,127 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
       <Toolbar><Button type="submit" variant="accent" disabled={busy || !code.trim()}>Complete Claude sign-in</Button></Toolbar>
     </form>}
   </>;
+}
+
+
+/**
+ * Adding an account, in the order the facts become available.
+ *
+ * Step one asks only what the owner already knows: a name, the provider, and
+ * the key or endpoint. Step two happens once the account exists, because that
+ * is when the provider can be asked what models it serves, or when a
+ * subscription can be connected. The default model is chosen from a real
+ * list, not typed from memory before there is anything to check it against.
+ */
+const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5' };
+
+function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled }: {
+  accounts: ProviderAccount[]; busy: boolean; run: Run; onDone: (id?: string) => void; codexEnabled?: boolean; anthropicOAuthEnabled?: boolean;
+}): JSX.Element {
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [label, setLabel] = useState('');
+  const [kind, setKind] = useState<ProviderAccount['kind']>('anthropic');
+  const [auth, setAuth] = useState<ProviderAccount['auth']>('api-key');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [endpointModel, setEndpointModel] = useState('');
+  const [secret, setSecret] = useState('');
+  const changeKind = (value: ProviderAccount['kind']) => {
+    setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
+    setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
+  };
+  const saved = savedId ? accounts.find((a) => a.id === savedId) : undefined;
+
+  if (savedId) {
+    if (!saved) return <Empty>Saving…</Empty>;
+    return <ModelStep account={saved} busy={busy} run={run} anthropicOAuthEnabled={anthropicOAuthEnabled} onDone={() => onDone(saved.id)} />;
+  }
+
+  const needsEndpointModel = kind === 'openai-compatible';
+  const incomplete = !label.trim() || (needsEndpointModel && !endpointModel.trim());
+  return (
+    <form className="ui-stack" onSubmit={e => {
+      e.preventDefault();
+      const value = secret; setSecret('');
+      const defaultModel = needsEndpointModel ? endpointModel.trim() : STARTING_MODEL[kind] ?? 'claude-sonnet-5';
+      void (async () => {
+        let created: { id: string } | undefined;
+        const ok = await run(async () => {
+          created = await api.saveProviderAccount({ label, kind, auth, baseUrl, defaultModel, enabled: true, ...(value.trim() ? { secret: value } : {}) });
+          return created;
+        }, 'Account saved.');
+        if (ok && created) setSavedId(created.id);
+      })();
+    }}>
+      <p className="ui-page-lede">Name it, say where it runs, and give it a credential. You pick the model on the next step, from the list the provider returns.</p>
+      <fieldset disabled={busy} className="ui-fields" data-stack="true">
+        <Field label="Account name">
+          <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" />
+        </Field>
+        <Field label="Provider">
+          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : kind} onChange={e => {
+            if (e.target.value === 'anthropic-oauth') { changeKind('anthropic'); setAuth('anthropic-oauth'); }
+            else changeKind(e.target.value as ProviderAccount['kind']);
+          }}>
+            <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint</option>
+            {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription (experimental)</option>}
+            {codexEnabled && <option value="codex">ChatGPT subscription via Codex (experimental)</option>}
+          </select>
+        </Field>
+        {needsEndpointModel && <>
+          <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
+            <input required type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+          </Field>
+          <Field label="Authentication">
+            <select value={auth} onChange={e => { setAuth(e.target.value as ProviderAccount['auth']); setSecret(''); }}>
+              <option value="api-key">API key</option><option value="none">No key (local/self-hosted)</option>
+            </select>
+          </Field>
+          <Field label="Model" hint="The model this endpoint serves, as it names it. You can change it once the endpoint answers.">
+            <input required maxLength={150} value={endpointModel} onChange={e => setEndpointModel(e.target.value)} placeholder="qwen3:8b" />
+          </Field>
+        </>}
+        {auth === 'api-key' && (
+          <Field label="API key" hint="Stored in the vault, never shown again.">
+            <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => setSecret(e.target.value)} />
+          </Field>
+        )}
+        {auth === 'anthropic-oauth' && <p className="muted">You will connect your Claude subscription on the next step, in your browser.</p>}
+        {kind === 'codex' && <p className="muted">You will connect your ChatGPT subscription on the next step, with a device code.</p>}
+        <Toolbar>
+          <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
+          <Button onClick={() => onDone()}>Cancel</Button>
+        </Toolbar>
+      </fieldset>
+      {incomplete && <p className="muted">Enter an account name{needsEndpointModel ? ' and a model' : ''} to enable Save account. The example name is a placeholder.</p>}
+    </form>
+  );
+}
+
+function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { account: ProviderAccount; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean; onDone: () => void }): JSX.Element {
+  const [model, setModel] = useState(a.defaultModel);
+  const connected = a.configured;
+  return (
+    <Stack gap="lg">
+      <Notice tone="good">Saved “{a.label}”.</Notice>
+      {a.auth === 'anthropic-oauth' && !connected ? <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} /> : null}
+      {a.kind === 'codex' && !connected ? <CodexLogin account={a} busy={busy} run={run} /> : null}
+      {connected ? (
+        <>
+          <p className="ui-page-lede">Pick the model this account offers by default. An agent can still choose another when you assign it.</p>
+          <Toolbar valign="end">
+            <ModelPicker key={`${a.id}:${a.revision}`} accountId={a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
+          </Toolbar>
+          <Toolbar>
+            <Button variant="accent" disabled={busy || !model.trim()} onClick={() => {
+              if (model === a.defaultModel) { onDone(); return; }
+              void run(() => api.saveProviderAccount({ ...accountSettings(a), defaultModel: model }), 'Default model saved.').then((ok) => { if (ok) onDone(); });
+            }}>Done</Button>
+            <Button onClick={onDone}>Skip for now</Button>
+          </Toolbar>
+        </>
+      ) : (
+        <Toolbar><Button onClick={onDone}>Finish later</Button></Toolbar>
+      )}
+    </Stack>
+  );
 }

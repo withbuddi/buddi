@@ -438,17 +438,19 @@ export function Details({
 export function Sheet({
   title,
   onClose,
+  size,
   children,
 }: {
   title: ReactNode;
   onClose: () => void;
+  size?: 'wide';
   children: ReactNode;
 }): JSX.Element {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-sheet-overlay" />
-        <Dialog.Content className="ui-sheet" aria-describedby={undefined}>
+        <Dialog.Content className="ui-sheet" data-size={size} aria-describedby={undefined}>
           <div className="ui-sheet-head">
             <Dialog.Title className="ui-sheet-title">{title}</Dialog.Title>
             <Dialog.Close asChild>
