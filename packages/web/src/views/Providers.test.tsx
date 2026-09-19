@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), probeModels: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
@@ -37,8 +37,9 @@ it('shows Codex account creation only when the experiment is enabled', async () 
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true });
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
-  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
+  expect(screen.getByLabelText('Account name')).toHaveValue('Anthropic API');
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex' } });
+  expect(screen.getByLabelText('Account name')).toHaveValue('ChatGPT subscription');
   fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'My subscription' } });
   expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
   expect(screen.queryByLabelText('Default model')).not.toBeInTheDocument();
@@ -82,12 +83,15 @@ it('states reset time is unknown when no retry advice was supplied', async () =>
   expect(await screen.findByText(/Reset time is unknown/)).toBeInTheDocument();
   expect(screen.queryByText(/Provider suggested retry time:/)).not.toBeInTheDocument();
 });
-it('opens the add sheet, focuses its name, and explains the disabled save button', async () => {
+it('opens the add sheet with a proposed name, and explains the disabled save button once it is cleared', async () => {
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
   expect(screen.getByLabelText('Account name')).toHaveFocus();
+  expect(screen.getByLabelText('Account name')).toHaveValue('Anthropic API');
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeEnabled();
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: '' } });
   expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
-  expect(screen.getByText(/The example name is a placeholder/)).toBeInTheDocument();
+  expect(screen.getByText(/Enter an account name/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(screen.queryByLabelText('Account name')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Add account' })).toHaveAttribute('aria-expanded', 'false');
@@ -142,4 +146,25 @@ it('blocks removal of assigned accounts and shows vault guidance', async () => {
   expect(await screen.findByText('Unlock the host vault.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Remove account' })).toBeDisabled();
   expect(screen.getByText('ledger')).toBeInTheDocument();
+});
+
+it('proposes a name per provider and numbers a taken one', async () => {
+  const { suggestedLabel } = await import('./Providers');
+  expect(suggestedLabel('anthropic', 'api-key', [])).toBe('Anthropic API');
+  expect(suggestedLabel('anthropic', 'anthropic-oauth', [])).toBe('Claude subscription');
+  expect(suggestedLabel('codex', 'chatgpt', [])).toBe('ChatGPT subscription');
+  expect(suggestedLabel('openai-compatible', 'none', ['Local endpoint', 'local endpoint 2'])).toBe('Local endpoint 3');
+});
+it('loads models from an endpoint before saving, and saves the picked one', async () => {
+  vi.mocked(api.probeModels).mockResolvedValue({ models: [{ id: 'qwen3:8b', name: 'qwen3:8b', isDefault: false }, { id: 'llama3', name: 'llama3', isDefault: true }], truncated: false });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'openai-compatible' } });
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Authentication'), { target: { value: 'none' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Load models' }));
+  await waitFor(() => expect(api.probeModels).toHaveBeenCalledWith({ kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1' }));
+  expect(await screen.findByLabelText('Model')).toHaveValue('llama3');
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'openai-compatible', auth: 'none', defaultModel: 'llama3', label: 'Local endpoint' })));
 });

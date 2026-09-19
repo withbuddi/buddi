@@ -340,84 +340,143 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
  */
 const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5' };
 
+/** The name the form proposes for a provider, before the owner touches it. */
+export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAccount['auth'], taken: string[]): string {
+  const base = kind === 'codex' ? 'ChatGPT subscription'
+    : kind === 'anthropic' ? (auth === 'anthropic-oauth' ? 'Claude subscription' : 'Anthropic API')
+    : kind === 'openai' ? 'OpenAI API'
+    : 'Local endpoint';
+  const names = new Set(taken.map((t) => t.trim().toLowerCase()));
+  if (!names.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 100; n += 1) if (!names.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
+  return base;
+}
+
+type Probe = { models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean };
+
 function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled }: {
   accounts: ProviderAccount[]; busy: boolean; run: Run; onDone: (id?: string) => void; codexEnabled?: boolean; anthropicOAuthEnabled?: boolean;
 }): JSX.Element {
+  const taken = accounts.map((a) => a.label);
   const [savedId, setSavedId] = useState<string | null>(null);
-  const [label, setLabel] = useState('');
   const [kind, setKind] = useState<ProviderAccount['kind']>('anthropic');
   const [auth, setAuth] = useState<ProviderAccount['auth']>('api-key');
+  const [label, setLabel] = useState(() => suggestedLabel('anthropic', 'api-key', taken));
+  const [labelTouched, setLabelTouched] = useState(false);
   const [baseUrl, setBaseUrl] = useState('');
-  const [endpointModel, setEndpointModel] = useState('');
   const [secret, setSecret] = useState('');
-  const changeKind = (value: ProviderAccount['kind']) => {
-    setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
-    setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
+  const [probe, setProbe] = useState<Probe | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState('');
+  const [model, setModel] = useState('');
+  const [customModel, setCustomModel] = useState(false);
+
+  const choose = (nextKind: ProviderAccount['kind'], nextAuth: ProviderAccount['auth']) => {
+    setKind(nextKind); setAuth(nextAuth); setSecret(''); setProbe(null); setProbeError(''); setModel(''); setCustomModel(false);
+    setBaseUrl(nextKind === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
+    if (!labelTouched) setLabel(suggestedLabel(nextKind, nextAuth, taken));
   };
   const saved = savedId ? accounts.find((a) => a.id === savedId) : undefined;
-
   if (savedId) {
     if (!saved) return <Empty>Saving…</Empty>;
     return <ModelStep account={saved} busy={busy} run={run} anthropicOAuthEnabled={anthropicOAuthEnabled} onDone={() => onDone(saved.id)} />;
   }
 
-  const needsEndpointModel = kind === 'openai-compatible';
-  const incomplete = !label.trim() || (needsEndpointModel && !endpointModel.trim());
+  const endpoint = kind === 'openai-compatible';
+  const subscription = kind === 'codex' || auth === 'anthropic-oauth';
+  const canProbe = !subscription && (auth === 'none' || secret.trim() !== '') && (!endpoint || baseUrl.trim() !== '');
+  const loadModels = async (): Promise<void> => {
+    setProbing(true); setProbeError('');
+    try {
+      const result = await api.probeModels({ kind: kind as 'anthropic' | 'openai' | 'openai-compatible', auth: auth as 'api-key' | 'none', ...(endpoint ? { baseUrl } : {}), ...(secret.trim() ? { secret } : {}) });
+      setProbe(result);
+      if (!model) setModel(result.models.find((m) => m.isDefault)?.id ?? result.models[0]?.id ?? '');
+    } catch (e) {
+      setProbeError(e instanceof Error ? e.message : 'Could not load models. You can still enter a custom model.');
+    } finally { setProbing(false); }
+  };
+  const chosen = model.trim();
+  const incomplete = !label.trim() || (endpoint && !baseUrl.trim()) || (endpoint && !chosen);
   return (
     <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
-      const defaultModel = needsEndpointModel ? endpointModel.trim() : STARTING_MODEL[kind] ?? 'claude-sonnet-5';
+      const defaultModel = chosen || STARTING_MODEL[kind] || 'claude-sonnet-5';
       void (async () => {
         let created: { id: string } | undefined;
         const ok = await run(async () => {
           created = await api.saveProviderAccount({ label, kind, auth, baseUrl, defaultModel, enabled: true, ...(value.trim() ? { secret: value } : {}) });
           return created;
         }, 'Account saved.');
-        if (ok && created) setSavedId(created.id);
+        if (!ok || !created) return;
+        // A model picked here is the whole job; only a subscription has a next step.
+        if (chosen || !subscription) onDone(created.id);
+        else setSavedId(created.id);
       })();
     }}>
-      <p className="ui-page-lede">Name it, say where it runs, and give it a credential. You pick the model on the next step, from the list the provider returns.</p>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
-        <Field label="Account name">
-          <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" />
-        </Field>
         <Field label="Provider">
           <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : kind} onChange={e => {
-            if (e.target.value === 'anthropic-oauth') { changeKind('anthropic'); setAuth('anthropic-oauth'); }
-            else changeKind(e.target.value as ProviderAccount['kind']);
+            if (e.target.value === 'anthropic-oauth') choose('anthropic', 'anthropic-oauth');
+            else { const k = e.target.value as ProviderAccount['kind']; choose(k, k === 'codex' ? 'chatgpt' : 'api-key'); }
           }}>
-            <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint</option>
+            <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
             {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription (experimental)</option>}
             {codexEnabled && <option value="codex">ChatGPT subscription via Codex (experimental)</option>}
           </select>
         </Field>
-        {needsEndpointModel && <>
+        <Field label="Account name" hint="Proposed from the provider. Change it to anything you will recognise.">
+          <input autoFocus required maxLength={100} value={label} onChange={e => { setLabel(e.target.value); setLabelTouched(true); }} placeholder="Anthropic — Personal" />
+        </Field>
+        {endpoint && <>
           <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
-            <input required type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+            <input required type="url" value={baseUrl} onChange={e => { setBaseUrl(e.target.value); setProbe(null); }} />
           </Field>
           <Field label="Authentication">
-            <select value={auth} onChange={e => { setAuth(e.target.value as ProviderAccount['auth']); setSecret(''); }}>
+            <select value={auth} onChange={e => { setAuth(e.target.value as ProviderAccount['auth']); setSecret(''); setProbe(null); }}>
               <option value="api-key">API key</option><option value="none">No key (local/self-hosted)</option>
             </select>
-          </Field>
-          <Field label="Model" hint="The model this endpoint serves, as it names it. You can change it once the endpoint answers.">
-            <input required maxLength={150} value={endpointModel} onChange={e => setEndpointModel(e.target.value)} placeholder="qwen3:8b" />
           </Field>
         </>}
         {auth === 'api-key' && (
           <Field label="API key" hint="Stored in the vault, never shown again.">
-            <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => setSecret(e.target.value)} />
+            <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => { setSecret(e.target.value); setProbe(null); }} />
           </Field>
         )}
-        {auth === 'anthropic-oauth' && <p className="muted">You will connect your Claude subscription on the next step, in your browser.</p>}
-        {kind === 'codex' && <p className="muted">You will connect your ChatGPT subscription on the next step, with a device code.</p>}
+        {subscription ? (
+          <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a device code, and pick a model then.' : 'You will connect your Claude subscription on the next step, in your browser, and pick a model then.'}</p>
+        ) : (
+          <div className="ui-field">
+            <span className="ui-field-label">Model</span>
+            {probe ? (
+              <div className="ui-row">
+                <select aria-label="Model" value={customModel ? '__custom__' : model} onChange={e => {
+                  if (e.target.value === '__custom__') { setCustomModel(true); setModel(''); } else { setCustomModel(false); setModel(e.target.value); }
+                }}>
+                  {probe.models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}</option>)}
+                  <option value="__custom__">Custom model…</option>
+                </select>
+                <Button size="sm" disabled={probing || !canProbe} onClick={() => void loadModels()}>{probing ? 'Loading…' : 'Reload'}</Button>
+              </div>
+            ) : (
+              <div className="ui-row">
+                <Button disabled={probing || !canProbe} onClick={() => void loadModels()}>{probing ? 'Loading models…' : 'Load models'}</Button>
+                {!endpoint ? <span className="muted">Optional now: {STARTING_MODEL[kind]} is used until you pick one.</span> : <span className="muted">Ask the endpoint what it serves.</span>}
+              </div>
+            )}
+            {customModel || (endpoint && !probe) ? (
+              <input aria-label="Custom model" required={endpoint} maxLength={150} value={model} onChange={e => setModel(e.target.value)} placeholder={endpoint ? 'qwen3:8b' : STARTING_MODEL[kind]} />
+            ) : null}
+            {probeError ? <span className="ui-field-hint critical" role="alert">{probeError}</span> : null}
+            {probe?.truncated ? <span className="ui-field-hint">Showing the first part of the provider’s list.</span> : null}
+          </div>
+        )}
         <Toolbar>
           <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
           <Button onClick={() => onDone()}>Cancel</Button>
         </Toolbar>
       </fieldset>
-      {incomplete && <p className="muted">Enter an account name{needsEndpointModel ? ' and a model' : ''} to enable Save account. The example name is a placeholder.</p>}
+      {incomplete && <p className="muted">Enter an account name{endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
     </form>
   );
 }

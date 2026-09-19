@@ -507,6 +507,8 @@ export const chatApi = {
 export const api = {
   providers: () => get<ProvidersView>('/providers'),
   providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
+  probeModels: (body: { kind: 'anthropic' | 'openai' | 'openai-compatible'; auth: 'api-key' | 'none'; baseUrl?: string; secret?: string }) =>
+    post<{ models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
   accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
   testProviderAccount: (id: string) => post<{ state: string; message: string }>(`/provider-accounts/${encodeURIComponent(id)}/test`),

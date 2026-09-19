@@ -790,10 +790,12 @@ export function createWebApp(deps: WebServerDeps): Server {
     const anthropicRoute = /^\/api\/provider-accounts\/([^/]+)\/anthropic\/(login|complete-login|cancel-login|logout)$/.exec(path);
     const accountRoute = /^\/api\/provider-accounts\/([^/]+)\/(test|remove|login|cancel-login|logout|models)$/.exec(path);
     const accountAssignment = /^\/api\/agents\/([^/]+)\/account$/.exec(path);
-    if (path === '/api/provider-accounts/save' || accountRoute || accountAssignment || anthropicRoute) {
+    if (path === '/api/provider-accounts/save' || path === '/api/provider-accounts/probe-models' || accountRoute || accountAssignment || anthropicRoute) {
       if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
       try {
-        const result = anthropicRoute
+        const result = path === '/api/provider-accounts/probe-models'
+          ? await deps.providerAccounts.probeModels(body)
+          : anthropicRoute
           ? await deps.providerAccounts.anthropicAction(decodeURIComponent(anthropicRoute[1]!), anthropicRoute[2] as 'login' | 'complete-login' | 'cancel-login' | 'logout', body, session.id)
           : accountAssignment
           ? await deps.providerAccounts.assign(decodeURIComponent(accountAssignment[1]!), body)
