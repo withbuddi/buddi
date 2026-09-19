@@ -417,6 +417,7 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 /* Said once, and only when it is certainly true: the next message opens a
    new thread. Never a prediction — a warning that is usually wrong is noise. */
 .wb-head-meta[data-tone='note'] { color: var(--warning); }
+.wb-head-model { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
 
 .ui-count {
   font-variant-numeric: tabular-nums;

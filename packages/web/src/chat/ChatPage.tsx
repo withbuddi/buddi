@@ -27,7 +27,7 @@ import { ErrorBanner } from '../ui';
 import { conversationBrowser } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
-import { agentRoute, chatRoute } from '../routes';
+import { agentRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import type { AgentAttention, AgentGroups } from '../shell/roster';
@@ -603,6 +603,7 @@ export function ChatPage({
             <div className="wb-head-text">
               {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s profile`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
+                {agent?.model ? <><span className="wb-head-model" title="The model this agent runs on">{agent.model}</span>{' · '}</> : null}
                 {line.text}
               </span>
             </div>
