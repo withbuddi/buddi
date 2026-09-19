@@ -15,8 +15,13 @@ Supported connections:
   the capabilities used by the agent, especially tool calling and images.
 - Previously configured Claude subscription/setup tokens, imported as legacy accounts.
   These are preserved, not promoted to refreshable OAuth connections. Token expiry and
-  subscription renewal date are unknown. New subscription OAuth/device sign-in is not
-  implemented. The extracted Chrome extension package is not loaded into the server.
+  subscription renewal date are unknown. The extracted Chrome extension package is
+  not loaded into the server.
+- [Experimental Claude OAuth accounts](anthropic-oauth.md), with browser consent,
+  code paste, and coordinated vault-backed token refresh. Requires migration 020
+  and `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT=1`.
+- [Experimental Codex ChatGPT accounts](codex-app-server-experiment.md), with native
+  device sign-in. Requires the pinned Codex client and `BUDDI_CODEX_EXPERIMENT=1`.
 
 ## Storage and migration
 
@@ -94,5 +99,5 @@ migration because it is ambiguous. `buddi agents test <handle>` uses the assigne
 Restart other running processes after a standalone CLI edit, or refresh the Providers
 page. Dashboard edits take effect in its shared serving process immediately.
 
-The account/domain layer is portable; provider-specific native-client login adapters
-and safe coordinated OAuth refresh remain separate future work, not simulated features.
+The account/domain layer is portable. OAuth and native-client credentials are
+resolved server-side; agent tools never receive the credential envelopes.

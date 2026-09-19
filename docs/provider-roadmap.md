@@ -27,8 +27,18 @@ Verified documentation:
   login, cancel/logout, automatic refresh, account information and rate-limit reads.
 - https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use
   directs third-party applications to API authentication and permits end users to
-  sign in through the unmodified Claude Code binary. Do not transplant the existing
-  extension's custom Claude subscription token flow as a supported Buddi login.
+  sign in through the unmodified Claude Code binary. The custom extension flow
+  is not an officially supported third-party login contract.
+
+## Delivered behind a flag: contained Claude OAuth experiment
+
+The owner subsequently chose to implement the Vonzio-style authorization-code +
+PKCE flow on `feature/anthropic-oauth`, independently gated. This supersedes the
+earlier decision to exclude a custom flow, without representing it as official
+provider support. See [implementation and verification](anthropic-oauth.md).
+Existing API-key, legacy-token, and Codex accounts remain unchanged.
+The owner reported a successful sign-in and Garage chat/tool round trip on
+2026-09-19. Automatic refresh is covered by tests but awaits live-expiry verification.
 
 The reusable extension package is browser-storage/text-completion oriented.
 Its direct token endpoints are not a substitute for a supported native runtime.

@@ -3,13 +3,36 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null,
 }] };
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providerAccounts).mockResolvedValue(view); vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'two' }); });
+it('creates a separate Claude OAuth account without a pasted API key', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'anthropic-oauth' } });
+  fireEvent.change(screen.getByLabelText('Account name'), { target: { value: 'Claude personal' } });
+  expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'anthropic', auth: 'anthropic-oauth', label: 'Claude personal' })));
+  expect(api.anthropicAccountAction).not.toHaveBeenCalled();
+});
+it('completes Claude consent from the account card, clears the code, and does not put it in browser storage', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true, accounts: [{ ...view.accounts[0]!, kind: 'anthropic', auth: 'anthropic-oauth',
+    login: { state: 'pending', attemptId: 'attempt', verificationUrl: 'http://localhost/consent-fixture', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+  }] });
+  render(<Providers />);
+  expect(await screen.findByRole('link', { name: /Open Claude consent/ })).toHaveAttribute('rel', 'noreferrer');
+  fireEvent.change(screen.getByLabelText('Claude authorization code'), { target: { value: 'fixture-secret#state' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Complete Claude sign-in' }));
+  await waitFor(() => expect(api.anthropicAccountAction).toHaveBeenCalledWith('one', 'complete-login', 1, { attemptId: 'attempt', code: 'fixture-secret#state' }));
+  expect(screen.getByLabelText('Claude authorization code')).toHaveValue('');
+  expect(JSON.stringify(localStorage)).not.toContain('fixture-secret');
+});
 it('shows Codex account creation only when the experiment is enabled', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true });
   render(<Providers />);

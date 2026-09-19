@@ -23,7 +23,7 @@ export function Providers(): JSX.Element {
     try {
       const result = await work() as { warning?: string } | undefined;
       setNotice(result?.warning ?? message); reload(); return true;
-    } catch (e) { setFailure(e instanceof Error ? e.message : 'Could not apply change.'); return false; }
+    } catch (e) { setFailure(e instanceof Error ? e.message : 'Could not apply change.'); reload(); return false; }
     finally { setBusy(false); }
   };
   return <>
@@ -40,9 +40,9 @@ export function Providers(): JSX.Element {
       {(data.vault.locked || data.vault.kind === 'none') && <p className="attention">{data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</p>}
       <button disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>{adding ? 'Cancel adding account' : 'Add account'}</button>
       <button disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>{loading ? 'Refreshing…' : 'Refresh status'}</button>
-      {adding && <div id="new-provider-account"><AccountForm codexEnabled={data.codexEnabled} busy={busy} run={run} onDone={() => setAdding(false)} /></div>}
+      {adding && <div id="new-provider-account"><AccountForm codexEnabled={data.codexEnabled} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} onDone={() => setAdding(false)} /></div>}
       {data.accounts.length === 0 && <p>No accounts yet. Add one to connect your agents.</p>}
-      {data.accounts.map(account => <AccountCard key={`${account.id}:${account.revision}`} account={account} busy={busy} run={run} />)}
+      {data.accounts.map(account => <AccountCard key={`${account.id}:${account.revision}`} account={account} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} />)}
       <p className="muted">Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry. {data.codexEnabled ? 'Codex ChatGPT device sign-in is experimental; existing account assignments are unchanged.' : 'Codex subscription sign-in is not enabled on this host.'}</p>
     </>}
   </>;
@@ -51,7 +51,7 @@ export function Providers(): JSX.Element {
 function accountSettings(a: ProviderAccount): SaveProviderAccount {
   return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled };
 }
-function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy: boolean; run: Run }): JSX.Element {
+function AccountCard({ account: a, busy, run, anthropicOAuthEnabled }: { account: ProviderAccount; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean }): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   return <section className="attention">
@@ -61,6 +61,7 @@ function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy
     <p>Used by: {a.assignedAgents.length ? a.assignedAgents.join(', ') : 'No agents'}</p>
     {a.removalPending && <p className="attention">Removal is pending. Unlock the vault, then retry Remove account.</p>}
     {a.auth === 'legacy-subscription-token' && <p className="muted">Legacy subscription token · Not refreshable · Token expiry and subscription renewal date unknown</p>}
+    {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}
     {a.kind === 'codex' && <>
       <p className="muted">Experimental Codex App Server · Credentials stay in Buddi’s vault and are staged in a private temporary file during native sessions. Codex manages refresh. Subscription renewal date is unknown.</p>
       <p className="muted">Native tool-step usage reporting is incomplete. Do not use Buddi’s token or API-cost estimates as subscription billing or remaining quota.</p>
@@ -97,7 +98,7 @@ function AccountCard({ account: a, busy, run }: { account: ProviderAccount; busy
   </section>;
 }
 
-function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?: ProviderAccount; busy: boolean; run: Run; onDone: () => void; codexEnabled?: boolean }): JSX.Element {
+function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAuthEnabled }: { account?: ProviderAccount; busy: boolean; run: Run; onDone: () => void; codexEnabled?: boolean; anthropicOAuthEnabled?: boolean }): JSX.Element {
   const [label, setLabel] = useState(a?.label ?? '');
   const [kind, setKind] = useState<ProviderAccount['kind']>(a?.kind ?? 'anthropic');
   const [auth, setAuth] = useState<ProviderAccount['auth']>(a?.auth ?? 'api-key');
@@ -118,8 +119,12 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?
     <h3>{a ? 'Edit account' : 'New account'}</h3>
     <fieldset disabled={busy} className="provider-fields">
       <label>Account name <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" /></label>
-      <label>Provider <select disabled={!!a} value={kind} onChange={e => changeKind(e.target.value as ProviderAccount['kind'])}>
+      <label>Provider <select disabled={!!a} value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : kind} onChange={e => {
+        if (e.target.value === 'anthropic-oauth') { changeKind('anthropic'); setAuth('anthropic-oauth'); }
+        else changeKind(e.target.value as ProviderAccount['kind']);
+      }}>
         <option value="anthropic">Anthropic</option><option value="openai">OpenAI</option><option value="openai-compatible">OpenAI-compatible</option>
+        {(anthropicOAuthEnabled || a?.auth === 'anthropic-oauth') && <option value="anthropic-oauth">Anthropic — Claude subscription (experimental)</option>}
         {(codexEnabled || a?.kind === 'codex') && <option value="codex">Codex — ChatGPT subscription (experimental)</option>}
       </select></label>
       {kind === 'openai-compatible' && <>
@@ -131,6 +136,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?
       </>}
       <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
       {kind === 'codex' && <p className="muted">Enter a model available to your Codex subscription. API model availability is different; there is no automatic model fallback.</p>}
+      {auth === 'anthropic-oauth' && <p className="muted">Save this account, then choose Connect Claude. You will approve in your browser and paste the authorization code here, not in chat. No existing agent assignment changes.</p>}
       {auth === 'api-key' && <label>{a ? 'Replacement API key (leave blank to keep)' : 'API key'}
         <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => setSecret(e.target.value)} />
       </label>}
@@ -139,4 +145,29 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?
     </fieldset>
     {(!label.trim() || !model.trim()) && <p className="muted">Enter an account name and default model to enable Save account. The example name is a placeholder.</p>}
   </form>;
+}
+
+function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAccount; enabled: boolean; busy: boolean; run: Run }) {
+  const [code, setCode] = useState('');
+  useEffect(() => { setCode(''); }, [a.login?.attemptId, a.login?.state]);
+  return <>
+    <p className="muted">Experimental Claude subscription sign-in · Tokens remain in Buddi’s vault and refresh before use. Subscription renewal and remaining quota are unknown.</p>
+    {!enabled && <p className="attention">Claude OAuth is disabled on this host.</p>}
+    {a.tokenExpiresAt && <p className="muted">Access token expires: {new Date(a.tokenExpiresAt).toLocaleString()}. This is not your subscription renewal date.</p>}
+    {a.reconnectRequired && <p className="attention">Token refresh did not finish. Reconnect this Claude account.</p>}
+    <div className="bar">
+      <button disabled={busy || !enabled || !a.enabled || a.removalPending || a.login?.state === 'pending'} onClick={() => void run(() => api.anthropicAccountAction(a.id, 'login', a.revision), 'Open the Claude consent link below. Existing credentials remain until sign-in succeeds.')}>{a.configured ? 'Reconnect Claude' : 'Connect Claude'}</button>
+      {a.login?.state === 'pending' && <button disabled={busy} onClick={() => { setCode(''); void run(() => api.anthropicAccountAction(a.id, 'cancel-login', a.revision), 'Claude sign-in cancelled.'); }}>Cancel sign-in</button>}
+      <button disabled={busy || !a.configured || a.removalPending} onClick={() => { setCode(''); void run(() => api.anthropicAccountAction(a.id, 'logout', a.revision), 'Claude disconnected from Buddi. This does not revoke access at Anthropic.'); }}>Disconnect Claude</button>
+    </div>
+    {a.login?.state === 'pending' && <form onSubmit={e => {
+      e.preventDefault(); const pasted = code; setCode('');
+      void run(() => api.anthropicAccountAction(a.id, 'complete-login', a.revision, { attemptId: a.login!.attemptId!, code: pasted }), 'Claude connected. Edit account to load its model list, then assign it to an agent.');
+    }}>
+      <p><a href={a.login.verificationUrl} target="_blank" rel="noreferrer">Open Claude consent page ↗</a></p>
+      <p className="muted">Use the Claude account you want to connect. Paste the entire code including #state. This attempt expires at {a.login.expiresAt && new Date(a.login.expiresAt).toLocaleTimeString()}; restarting Buddi also ends it.</p>
+      <label>Claude authorization code <input type="password" autoComplete="off" spellCheck={false} maxLength={8192} value={code} onChange={e => setCode(e.target.value)} disabled={busy} /></label>
+      <button disabled={busy || !code.trim()}>Complete Claude sign-in</button>
+    </form>}
+  </>;
 }

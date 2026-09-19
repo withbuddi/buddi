@@ -30,7 +30,7 @@ it('protects provider reads and credential writes with existing owner session, o
 });
 
 it('protects named account creation and assignments and retires global credential writes', async () => {
-  const manager = { models: vi.fn(async () => ({ models: [], truncated: false })), view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
+  const manager = { anthropicAction: vi.fn(async () => ({ completed: true })), models: vi.fn(async () => ({ models: [], truncated: false })), view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
   const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerAccounts: manager as unknown as ProviderAccounts });
@@ -41,13 +41,21 @@ it('protects named account creation and assignments and retires global credentia
   const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
   const csrf = cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
-  for (const route of ['/api/provider-accounts/one/models', '/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
+  for (const route of ['/api/provider-accounts/one/anthropic/login', '/api/provider-accounts/one/anthropic/complete-login', '/api/provider-accounts/one/anthropic/cancel-login', '/api/provider-accounts/one/anthropic/logout', '/api/provider-accounts/one/models', '/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
   }
   expect(manager.save).not.toHaveBeenCalled(); expect(manager.assign).not.toHaveBeenCalled();
   expect(manager.codexAction).not.toHaveBeenCalled();
   expect(manager.models).not.toHaveBeenCalled();
+  expect(manager.anthropicAction).not.toHaveBeenCalled();
+  const completeBody = { revision: 2, attemptId: 'attempt', code: 'fixture-secret#state' };
+  const completed = await fetch(`${origin}/api/provider-accounts/one/anthropic/complete-login`, { method: 'POST', headers, body: JSON.stringify(completeBody) });
+  expect(completed.status).toBe(200); expect(completed.headers.get('cache-control')).toBe('no-store');
+  expect(await completed.text()).not.toContain('fixture-secret');
+  expect(manager.anthropicAction).toHaveBeenCalledWith('one', 'complete-login', completeBody, expect.any(String));
+  await fetch(`${origin}/api/provider-accounts`, { headers });
+  expect(manager.view).toHaveBeenCalledWith(expect.any(String));
   const models = await fetch(`${origin}/api/provider-accounts/one/models`, { method: 'POST', headers, body: JSON.stringify({ refresh: true }) });
   expect(models.status).toBe(200); expect(models.headers.get('cache-control')).toBe('no-store');
   expect(manager.models).toHaveBeenCalledWith('one', true);
