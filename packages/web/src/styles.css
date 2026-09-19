@@ -834,7 +834,7 @@ button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-of
 @keyframes wb-file-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .wb-file[data-state='uploading']::after { animation: none; background: var(--accent); } }
 .wb-file[data-state='failed'] .wb-file-open { border-color: var(--critical); }
-.wb-file[data-state='failed'] .wb-file-meta { color: var(--critical); white-space: normal; }
+.wb-file[data-state='failed'] .wb-file-meta { color: var(--critical); }
 
 /* Remove: a small round button on the tile's corner, visible on hover and focus. */
 .wb-file-x {
@@ -880,7 +880,7 @@ button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-of
 }
 a.wb-composer-model:hover { border-color: var(--line); background: var(--surface-sunken); color: var(--text); }
 .wb-composer-model-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex: 0 0 auto; }
-.wb-hint[data-tone='critical'] { color: var(--critical); }
+.wb-hint[data-tone='critical'] { color: var(--critical); white-space: normal; overflow: visible; text-overflow: clip; }
 
 /* ---- a file on the canvas ---- */
 

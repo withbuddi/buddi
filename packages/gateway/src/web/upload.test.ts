@@ -10,7 +10,6 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import {
-  ACCEPTED_TYPES_NOTE,
   acceptedUpload,
   multipartBoundary,
   readUpload,
@@ -88,15 +87,12 @@ describe('what the runtime can use', () => {
     expect(resolveUploadMime('image/png', 'thing.csv')).toBe('image/png');
   });
 
-  it('refuses the rest, naming what it can take', () => {
-    const refused = acceptedUpload('video/mp4', 'clip.mp4');
-    expect(refused.ok).toBe(false);
-    if (refused.ok) return;
-    expect(refused.error).toContain('clip.mp4');
-    expect(refused.error).toContain(ACCEPTED_TYPES_NOTE);
-
-    expect(acceptedUpload('audio/mpeg', 'note.mp3').ok).toBe(false);
-    expect(acceptedUpload('application/octet-stream', 'thing.bin').ok).toBe(false);
+  it('keeps the rest too, under the mime it resolves to', () => {
+    // A zip, a video, a bare binary: all stored. The runtime tells the model
+    // which of them it can look at and names the others by id.
+    expect(acceptedUpload('application/zip', 'export.zip')).toEqual({ ok: true, mime: 'application/zip' });
+    expect(acceptedUpload('video/mp4', 'clip.mp4').ok).toBe(true);
+    expect(acceptedUpload('application/octet-stream', 'thing.bin').ok).toBe(true);
   });
 });
 
@@ -148,10 +144,10 @@ describe('readUpload', () => {
     expect(result).toMatchObject({ ok: false, status: 413 });
   });
 
-  it('refuses a type the runtime cannot use before storing anything', async () => {
+  it('keeps a type the model cannot look at, under the mime it came with', async () => {
     const result = await readUpload(
       request([{ name: 'file', filename: 'clip.mp4', type: 'video/mp4', body: 'fake' }]),
     );
-    expect(result).toMatchObject({ ok: false, status: 415 });
+    expect(result).toMatchObject({ ok: true, file: { filename: 'clip.mp4', mime: 'video/mp4' } });
   });
 });

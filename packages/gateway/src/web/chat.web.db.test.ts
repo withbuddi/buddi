@@ -796,18 +796,16 @@ suite('the dashboard chat API', () => {
     expect(JSON.stringify(stored_turn[0].content)).not.toContain(png.toString('base64'));
   });
 
-  it('refuses a file the runtime cannot use, naming what it can', async () => {
+  it('keeps a file the model cannot look at, so the agent can reach it by tool', async () => {
     const client = await signedIn();
     const res = await client.upload('/api/chat/attachments', {
       name: 'clip.mp4',
       type: 'video/mp4',
       bytes: Buffer.from('not really a video'),
     });
-    expect(res.status).toBe(415);
+    expect(res.status).toBe(200);
     const body = (await res.json()) as any;
-    expect(body.error).toContain('clip.mp4');
-    expect(body.error).toMatch(/PDFs/);
-    expect(body.error).toMatch(/images/);
+    expect(body).toMatchObject({ filename: 'clip.mp4', mime: 'video/mp4' });
   });
 
   it('refuses a message naming an attachment that does not exist', async () => {

@@ -6,13 +6,15 @@
  * exactly one part, from an authenticated owner, on loopback, and a parser that
  * fits on two screens is easier to audit than a package with a CVE history.
  *
- * Two refusals are the point of the module:
+ * One refusal is the point of the module: **size**. The body is counted as it
+ * arrives and abandoned the moment it crosses the cap, so an oversize upload
+ * costs bandwidth and nothing else.
  *
- *  - **Size.** The body is counted as it arrives and abandoned the moment it
- *    crosses the cap, so an oversize upload costs bandwidth and nothing else.
- *  - **Type.** A file the runtime cannot do anything with is refused *at the
- *    door*, with a sentence naming what it can — not saved, not silently
- *    attached to a run that then says it cannot read it.
+ * Type is not refused. Every file the owner hands over is kept; the runtime
+ * shows the model what it can look at (images, PDFs) and names the rest with
+ * an artifact id so an agent reaches it through a tool — `artifacts.text` for
+ * a CSV, the host shell for an archive. A zip dropped on the chat becomes a
+ * tile, not an error.
  *
  * Nothing here decides where bytes live. That is `saveArtifact`, through the
  * same `ArtifactStore` port every other surface uses.
@@ -27,11 +29,6 @@ export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 /** The largest *part header* block we will read before calling it malformed. */
 const MAX_PART_HEADER_BYTES = 8 * 1024;
-
-/** What the runtime can actually do something with, said as a sentence. */
-export const ACCEPTED_TYPES_NOTE =
-  'images (PNG, JPEG, GIF, WebP), PDFs, and text or office documents ' +
-  '(TXT, Markdown, CSV, TSV, JSON, XML, HTML, DOC, DOCX, XLS, XLSX)';
 
 export interface UploadedFile {
   filename: string;
@@ -58,24 +55,11 @@ export function resolveUploadMime(claimed: string, filename: string): string {
 }
 
 /**
- * Is this something a run can use? `image` and `document` are the two kinds
- * core's own mime rules produce for things a model can either see or read
- * through the artifacts tools. Audio is kept by Telegram because Telegram
- * hands it over unasked; a file chosen deliberately in a file picker is a
- * different act, and refusing it with a reason beats saving something the
- * agent will only be able to say it cannot open.
+ * The mime an upload is stored under. Every type is accepted; what differs is
+ * how the runtime presents it to the model, and that is decided there.
  */
-export function acceptedUpload(
-  mime: string,
-  filename: string,
-): { ok: true; mime: string } | { ok: false; error: string } {
-  const resolved = resolveUploadMime(mime, filename);
-  const kind = kindForMime(resolved);
-  if (kind === 'image' || kind === 'document') return { ok: true, mime: resolved };
-  return {
-    ok: false,
-    error: `I cannot use ${filename} (${resolved}). I can read ${ACCEPTED_TYPES_NOTE}.`,
-  };
+export function acceptedUpload(mime: string, filename: string): { ok: true; mime: string } {
+  return { ok: true, mime: resolveUploadMime(mime, filename) };
 }
 
 /** The boundary this request declares, or undefined when it declares none. */
@@ -206,9 +190,7 @@ export async function readUpload(
           ?.slice('content-type:'.length)
           .trim() ?? '';
       const name = safeFilename(filename);
-      const accepted = acceptedUpload(claimed, name);
-      if (!accepted.ok) return { ok: false, status: 415, error: accepted.error };
-      return { ok: true, file: { filename: name, mime: accepted.mime, bytes } };
+      return { ok: true, file: { filename: name, mime: acceptedUpload(claimed, name).mime, bytes } };
     }
 
     cursor = next;

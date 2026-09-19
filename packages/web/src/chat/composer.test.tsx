@@ -164,8 +164,9 @@ describe('the composer', () => {
     await act(async () => {
       dropFile(new File(['x'], 'huge.bin', { type: 'application/octet-stream' }));
     });
-    await waitFor(() => expect(screen.getByText(/that file is too large/)).toBeDefined());
-    expect(screen.getByText(/failed to upload/)).toBeDefined();
+    // The tile says it failed; the line under the box says why.
+    await waitFor(() => expect(screen.getByText('Upload failed')).toBeDefined());
+    expect(screen.getByText('that file is too large')).toBeDefined();
   });
 
   it('offers a stop button while a run is in flight, and no send', () => {
