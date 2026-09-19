@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
-import { useAsync } from '../ui';
+import { Button, Code, Details, ErrorBanner, Stack, Toolbar, useAsync } from '../ui';
 
 /** Owner controls, never model-authored permission switches. */
 export function HostControls({ agentId, conversationId }: { agentId?: string; conversationId?: string }): JSX.Element {
@@ -16,20 +16,30 @@ export function HostControls({ agentId, conversationId }: { agentId?: string; co
   const permissions = data?.permissions ?? [];
   const running = data?.runs ?? [];
   const label = permissions.some(p => !p.conversationId) ? 'Always allowed' : permissions.length ? 'Conversation auto-mode' : 'Ask each time';
-  return <details className="host-controls">
-    <summary>Host execution · {error ? 'Status unavailable' : label}{running.length ? ` · ${running.length} running` : ''}</summary>
-    <p className="muted">Commands run as your user, not in a sandbox. Auto-mode covers all commands within its scope. Stop interrupts a command; revoke also ends the permission. Neither undoes completed changes.</p>
-    {error || failure ? <p className="err-banner">{failure ?? error}</p> : null}
-    {permissions.map(permission => <div className="bar" key={permission.id}>
-      <span>{permission.agentId}: {permission.conversationId ? 'conversation auto-mode' : 'always allowed'}</span>
-      <button disabled={busy} onClick={() => void run(() => api.revokeHost(permission.id))}>Revoke permission</button>
-    </div>)}
-    {!permissions.length ? <p className="muted">The next command will ask for approval. Choose its permission scope there.</p> : null}
-    {running.map(command => <div key={command.actionId}>
-      <p>{command.agentId} · {command.cwd}</p>
-      <pre>{command.command}</pre>
-      <pre aria-label="Command output">{command.stdout || command.stderr ? `${command.stdout}\n${command.stderr}` : 'Waiting for output…'}</pre>
-      <button disabled={busy} onClick={() => void run(() => api.stopHost(command.agentId, command.conversationId))}>Stop command</button>
-    </div>)}
-  </details>;
+  return (
+    <Details
+      className="host-controls"
+      summary={`Host execution · ${error ? 'Status unavailable' : label}${running.length ? ` · ${running.length} running` : ''}`}
+    >
+      <Stack gap="sm">
+        <p className="muted">Commands run as your user, not in a sandbox. Auto-mode covers all commands within its scope. Stop interrupts a command; revoke also ends the permission. Neither undoes completed changes.</p>
+        <ErrorBanner message={failure ?? error} />
+        {permissions.map(permission => (
+          <Toolbar key={permission.id}>
+            <span>{permission.agentId}: {permission.conversationId ? 'conversation auto-mode' : 'always allowed'}</span>
+            <Button size="sm" disabled={busy} onClick={() => void run(() => api.revokeHost(permission.id))}>Revoke permission</Button>
+          </Toolbar>
+        ))}
+        {!permissions.length ? <p className="muted">The next command will ask for approval. Choose its permission scope there.</p> : null}
+        {running.map(command => (
+          <Stack gap="sm" key={command.actionId}>
+            <p>{command.agentId} · <span className="mono">{command.cwd}</span></p>
+            <Code>{command.command}</Code>
+            <Code label="Command output">{command.stdout || command.stderr ? `${command.stdout}\n${command.stderr}` : 'Waiting for output…'}</Code>
+            <Toolbar><Button size="sm" variant="danger" disabled={busy} onClick={() => void run(() => api.stopHost(command.agentId, command.conversationId))}>Stop command</Button></Toolbar>
+          </Stack>
+        ))}
+      </Stack>
+    </Details>
+  );
 }
