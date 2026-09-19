@@ -91,8 +91,8 @@ export function Home({
             ))}
             {failedJobs > 0 ? (
               <Notice tone="critical">
-                <a href={`${ACTIVITY_ROUTE}/jobs`} onClick={go(`${ACTIVITY_ROUTE}/jobs`)}>
-                  {failedJobs} failed job{failedJobs === 1 ? '' : 's'} waiting for a retry or a cancel.
+                <a href={`${ACTIVITY_ROUTE}/jobs?state=failed`} onClick={go(`${ACTIVITY_ROUTE}/jobs?state=failed`)}>
+                  {failedJobs} failed job{failedJobs === 1 ? '' : 's'}. See why, then retry or cancel them, one by one or all at once.
                 </a>
               </Notice>
             ) : null}

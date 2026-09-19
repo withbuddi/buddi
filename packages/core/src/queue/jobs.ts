@@ -447,7 +447,7 @@ export async function getJobByDedupKey(pool: Pool, dedupKey: string): Promise<Jo
   return rows.length > 0 ? toJob(rows[0] as JobRow) : null;
 }
 
-export type ListJobsInput = { state?: JobState; kind?: string; limit?: number };
+export type ListJobsInput = { state?: JobState; kind?: string; limit?: number; /** Skip this many, for the next page. */ offset?: number };
 
 /** The inspection path: newest first, bounded. */
 export async function listJobs(pool: Pool, input: ListJobsInput = {}): Promise<Job[]> {
@@ -456,8 +456,8 @@ export async function listJobs(pool: Pool, input: ListJobsInput = {}): Promise<J
      where ($1::text is null or state = $1)
        and ($2::text is null or kind = $2)
      order by created_at desc, id
-     limit $3`,
-    [input.state ?? null, input.kind ?? null, Math.max(1, Math.min(input.limit ?? 50, 500))],
+     limit $3 offset $4`,
+    [input.state ?? null, input.kind ?? null, Math.max(1, Math.min(input.limit ?? 50, 500)), Math.max(0, input.offset ?? 0)],
   );
   return rows.map(toJob);
 }

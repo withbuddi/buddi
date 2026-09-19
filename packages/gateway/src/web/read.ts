@@ -504,12 +504,13 @@ export function toJobView(job: Job): JobView {
 
 export async function readJobs(
   pool: Pool,
-  opts: { state?: JobState | undefined; kind?: string | undefined; limit?: number } = {},
+  opts: { state?: JobState | undefined; kind?: string | undefined; limit?: number; offset?: number } = {},
 ): Promise<{ jobs: JobView[]; counts: Record<JobState, number>; paused: boolean }> {
   const jobs = await listJobs(pool, {
     ...(opts.state ? { state: opts.state } : {}),
     ...(opts.kind ? { kind: opts.kind } : {}),
     limit: opts.limit ?? DEFAULT_LIMIT,
+    ...(opts.offset ? { offset: opts.offset } : {}),
   });
   return {
     jobs: jobs.map(toJobView),

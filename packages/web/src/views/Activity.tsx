@@ -52,6 +52,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
     return <TranscriptView id={id} timezone={timezone} navigate={navigate} nameOf={nameOf} />;
   }
   const tab = /^#\/activity\/([a-z]+)/.exec(hash)?.[1] ?? 'conversations';
+  const wantedState = /[?&]state=([a-z]+)/.exec(hash)?.[1];
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   return (
     <div className="ui-page">
@@ -70,7 +71,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
         })}
       </Tabs>
       {tab === 'conversations' ? <Conversations timezone={timezone} navigate={navigate} nameOf={nameOf} agents={agents} /> : null}
-      {tab === 'jobs' ? <Jobs timezone={timezone} embedded /> : null}
+      {tab === 'jobs' ? <Jobs key={wantedState ?? ''} timezone={timezone} embedded initialState={wantedState} /> : null}
       {tab === 'approvals' ? <ApprovalHistory timezone={timezone} nameOf={nameOf} /> : null}
       {tab === 'alerts' ? <Alerts timezone={timezone} embedded /> : null}
       {tab === 'events' ? <Events timezone={timezone} embedded /> : null}
