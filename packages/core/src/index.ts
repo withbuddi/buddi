@@ -2,6 +2,7 @@ export * from './provider.js';
 export * from './time.js';
 export * from './tools.js';
 export * from './views.js';
+export * from './home.js';
 export * from './surfaces.js';
 export * from './registry.js';
 export * from './agent.js';

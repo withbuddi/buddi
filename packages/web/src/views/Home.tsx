@@ -9,7 +9,7 @@
 import { useMemo } from 'react';
 import { api, type ApprovalRow, type ConversationSummary, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
 import type { ChatAgent } from '../chat/types';
-import { fmtMoney, fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
+import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
 import { waitingText } from '../shell/roster';
@@ -61,7 +61,7 @@ export function Home({
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0);
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
-  const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 8);
+  const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
   const allOffers: OfferRow[] = offers.data?.offers ?? [];
   const onOffer = allOffers.slice(0, 8);
   const moreOffers = allOffers.length - onOffer.length;
@@ -160,7 +160,7 @@ export function Home({
       ) : null}
 
       <div className="home-columns">
-        <Section title="Coming up">
+        <Section title="Coming up" aside={<a href={`${AGENTS_ROUTE}?tab=missions`} onClick={go(`${AGENTS_ROUTE}?tab=missions`)}>All missions</a>}>
           <Panel flush>
             {upcoming.length === 0 ? (
               <Empty>Nothing scheduled. Missions and reminders will show here.</Empty>
@@ -205,37 +205,32 @@ export function Home({
         </Section>
       </div>
 
-      {data?.finance?.available ? (
-        <Section title="Money" aside={data.finance.upcoming.length > 0 ? <span className="muted">next 14 days below</span> : null}>
-          <Stats>
-            <Stat label="Cash" value={fmtMoney(data.finance.cashTotal, data.finance.currency)} note="spendable accounts" />
-            <Stat label="Net worth" value={fmtMoney(data.finance.netWorth, data.finance.currency)} note="cash + held − debt" />
-            <Stat label="Debt" value={fmtMoney(data.finance.totalDebt, data.finance.currency)} note="recorded liabilities" />
-            <Stat
-              label="Low point (14d)"
-              value={fmtMoney(data.finance.minBalance, data.finance.currency)}
-              note={data.finance.minBalanceDate ?? ''}
-              tone={data.finance.breachesFloor ? 'critical' : undefined}
-            />
-          </Stats>
-          {data.finance.upcoming.length > 0 ? (
+      {(data?.home ?? []).map((block) => (
+        <Section key={block.id} title={block.title} aside={block.rows.length > 0 && block.rowsTitle ? <span className="muted">{block.rowsTitle.toLowerCase()} below</span> : null}>
+          {block.note ? <Notice tone="warning">{block.note}</Notice> : null}
+          {block.stats.length > 0 ? (
+            <Stats>
+              {block.stats.map((stat) => (
+                <Stat key={stat.label} label={stat.label} value={stat.value} note={stat.note} tone={stat.tone} />
+              ))}
+            </Stats>
+          ) : null}
+          {block.rows.length > 0 ? (
             <Panel flush>
               <List>
-                {data.finance.upcoming.flatMap((day) =>
-                  day.events.map((event, i) => (
-                    <ListRow
-                      key={`${day.date}-${i}`}
-                      title={event.name}
-                      sub={i === day.events.length - 1 ? `${day.date}, balance after ${fmtMoney(day.balance, data.finance.currency)}` : day.date}
-                      side={<span className={event.amount < 0 ? 'critical' : 'good'}>{fmtMoney(event.amount, data.finance.currency)}</span>}
-                    />
-                  )),
-                )}
+                {block.rows.map((row, i) => (
+                  <ListRow
+                    key={`${row.title}-${i}`}
+                    title={row.title}
+                    sub={row.sub}
+                    side={row.side ? <span className={row.tone === 'critical' ? 'critical' : row.tone === 'good' ? 'good' : undefined}>{row.side}</span> : undefined}
+                  />
+                ))}
               </List>
             </Panel>
           ) : null}
         </Section>
-      ) : null}
+      ))}
 
       {data?.jobs && data.missions ? (
         <p className="home-foot muted">
@@ -260,7 +255,7 @@ function upcomingOf(missions: MissionRow[], reminders: ReminderRow[]): Upcoming[
   for (const r of reminders) {
     if (r.state === 'pending') items.push({ key: `r-${r.id}`, at: r.dueAt, title: r.text, kind: 'Reminder', agentId: r.agentId, route: agentRoute(r.agentId, 'reminders') });
   }
-  return items.sort((a, b) => a.at.localeCompare(b.at)).slice(0, 8);
+  return items.sort((a, b) => a.at.localeCompare(b.at)).slice(0, 5);
 }
 
 function hourIn(iso: string | undefined, timezone: string): number {

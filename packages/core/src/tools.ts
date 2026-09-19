@@ -8,6 +8,7 @@ import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
+import type { HomeContribution } from './home.js';
 import type { SystemContext } from './system-context.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -328,6 +329,11 @@ export interface PluginManifest {
    * falls back to a readable structured view of its JSON.
    */
   views?: ViewDescriptor[];
+  /**
+   * Blocks this plugin puts on the dashboard's Home page (optional). See
+   * `home.ts`. Read-only, already formatted, and absent for most plugins.
+   */
+  home?: HomeContribution[];
   /**
    * Agents this plugin proposes (optional). Proposals only, exactly like
    * `missions`: installing a plugin never creates a principal. The owner

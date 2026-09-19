@@ -87,7 +87,7 @@ describe('home', () => {
   it('puts what needs a human above the team', async () => {
     vi.spyOn(api, 'overview').mockResolvedValue({
       now: '2026-09-14T09:00:00Z', timezone: 'UTC', paused: false,
-      finance: { available: true, currency: 'USD', cashTotal: 4210, netWorth: 19_050, totalDebt: 3300, upcoming: [{ date: '2026-09-20', balance: 3910, events: [{ name: 'Rent', amount: -300 }] }], minBalance: 120, minBalanceDate: '2026-09-26', breachesFloor: true },
+      home: [{ id: 'finance.money', title: 'Money', stats: [{ label: 'Cash', value: '$4,210', note: 'spendable accounts' }], rows: [{ title: 'Rent', sub: '2026-09-20', side: '-$300', tone: 'critical' }], rowsTitle: 'Next 14 days' }],
       approvals: { pending: 1, oldestPendingAt: '2026-09-14T07:00:00Z' },
       jobs: { pending: 1, leased: 0, suspended: 0, failed: 3, succeeded: 9, cancelled: 0 },
       missions: { total: 2, enabled: 1, nextRun: '2026-09-19T13:00:00Z' },

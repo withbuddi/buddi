@@ -97,22 +97,16 @@ export function post<T>(path: string, body: unknown = {}): Promise<T> {
  * Shapes — exactly what packages/gateway/src/web/read.ts returns.
  * ------------------------------------------------------------------ */
 
+export interface HomeStat { label: string; value: string; note?: string; tone?: 'good' | 'warning' | 'critical' }
+export interface HomeRow { title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }
+export interface HomeBlock { id: string; title: string; note?: string; stats: HomeStat[]; rows: HomeRow[]; rowsTitle?: string }
+
 export interface Overview {
   now: string;
   timezone: string;
   paused: boolean;
-  finance: {
-    available: boolean;
-    currency: string | null;
-    cashTotal: number | null;
-    netWorth: number | null;
-    totalDebt: number | null;
-    upcoming: Array<{ date: string; balance: number; events: Array<{ name: string; amount: number }> }>;
-    minBalance: number | null;
-    minBalanceDate: string | null;
-    breachesFloor: boolean;
-    note?: string;
-  };
+  /** What the installed plugins put on Home, already formatted, in their order. */
+  home: HomeBlock[];
   approvals: { pending: number; oldestPendingAt: string | null };
   jobs: Record<string, number>;
   missions: { total: number; enabled: number; nextRun: string | null };

@@ -27,7 +27,7 @@ import { Spinner } from './chat/spinner.js';
 import { planDefaultMissions } from './missions/defaults.js';
 import { recapMissionId } from './missions/recap.js';
 import { HELP, NO_MAKER_TEXT, TelegramSurface } from './telegram/surface.js';
-import { readFinance } from './web/read.js';
+import { readHome } from './web/read.js';
 
 /** One agent, no roles — the fixture is the whole installation. */
 const AGENTS_DIR = path.join(
@@ -200,35 +200,11 @@ describe('a generic installation: one agent, no roles, no plugins', () => {
     expect(arc?.mission.enabled).toBe(false);
   });
 
-  it('omits the money block from the dashboard overview', async () => {
-    const catalog = genericCatalog();
-    const finance = await readFinance({
-      registry: new ToolRegistry(),
-      catalog,
-      ctx: {} as any,
-    });
-    expect(finance.available).toBe(false);
-    expect(finance.cashTotal).toBeNull();
-    expect(finance.netWorth).toBeNull();
-    expect(finance.upcoming).toEqual([]);
-    // Not zeros with no explanation: the empty state says what is missing.
-    expect(finance.note).toBeDefined();
-    expect(finance.note).toContain('overview');
-  });
-
-  it('says what to install when the roles exist but the tools do not', async () => {
-    const withRole: AgentCatalog = {
-      ...genericCatalog(),
-      agentForRole: () => ({ ok: true, agent: genericCatalog().defaultAgent() }),
-      agentsWithRole: () => [genericCatalog().defaultAgent()],
-    } as AgentCatalog;
-    const finance = await readFinance({
-      registry: new ToolRegistry(),
-      catalog: withRole,
-      ctx: {} as any,
-    });
-    expect(finance.available).toBe(false);
-    expect(finance.note).toMatch(/install/i);
+  it('puts nothing on Home when no plugin contributes a block', async () => {
+    const blocks = await readHome({ registry: new ToolRegistry(), ctx: {} as any });
+    // Not a money block with zeros and no explanation: no block at all. A
+    // generic install has no idea money is a thing a dashboard could show.
+    expect(blocks).toEqual([]);
   });
 
   it('has no domain words in either surface’s help text', () => {

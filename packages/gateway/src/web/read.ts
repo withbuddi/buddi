@@ -28,8 +28,8 @@ import {
   type JobState,
   type ToolContext,
   type ToolRegistry,
+  type HomeBlock,
 } from '@buddi/core';
-import { ROLE_OVERVIEW } from '../agents/roles.js';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 
@@ -792,34 +792,12 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
  * Overview
  * ------------------------------------------------------------------ */
 
-/**
- * The money block. `available` is false whenever this installation cannot
- * produce it — no finance tools, or no agent claiming the `overview` role —
- * and `note` then says what to install or declare rather than showing zeros.
- */
-export interface OverviewFinance {
-  available: boolean;
-  currency: string | null;
-  cashTotal: number | null;
-  netWorth: number | null;
-  totalDebt: number | null;
-  /** The next fortnight, day by day: only the days something happens. */
-  upcoming: Array<{
-    date: string;
-    balance: number;
-    events: Array<{ name: string; amount: number }>;
-  }>;
-  minBalance: number | null;
-  minBalanceDate: string | null;
-  breachesFloor: boolean;
-  note?: string;
-}
-
 export interface Overview {
   now: string;
   timezone: string;
   paused: boolean;
-  finance: OverviewFinance;
+  /** What the installed plugins put on Home, in registration order. */
+  home: HomeBlock[];
   approvals: { pending: number; oldestPendingAt: string | null };
   jobs: Record<JobState, number>;
   missions: { total: number; enabled: number; nextRun: string | null };
@@ -832,9 +810,6 @@ export interface Overview {
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
 }
-
-/** The horizon the landing page shows. Two weeks is what a person plans in. */
-export const OVERVIEW_HORIZON_DAYS = 14;
 
 export async function readOverview(deps: {
   pool: Pool;
@@ -883,7 +858,7 @@ export async function readOverview(deps: {
     now: now.toISOString(),
     timezone: deps.timezone,
     paused,
-    finance: await readFinance(deps),
+    home: await readHome(deps),
     approvals: {
       pending: pendingActions.length,
       oldestPendingAt: pendingActions[0]?.createdAt.toISOString() ?? null,
@@ -917,92 +892,25 @@ export async function readOverview(deps: {
   };
 }
 
-/** Said as a fact about the install, with the thing to do about it. */
-export const FINANCE_PLUGIN_MISSING_NOTE =
-  'No installed plugin reports balances here. Install a plugin that provides them (packages/tools/finance ships one) and run pnpm db:migrate.';
-
-const EMPTY_FINANCE: OverviewFinance = {
-  available: false,
-  currency: null,
-  cashTotal: null,
-  netWorth: null,
-  totalDebt: null,
-  upcoming: [],
-  minBalance: null,
-  minBalanceDate: null,
-  breachesFloor: false,
-};
-
 /**
- * The money numbers, through the registry.
+ * Every Home block the installed plugins contribute, produced now.
  *
- * Deliberately *not* a query against `finance.*`: core with zero plugins
- * installed is a valid running state, so the dashboard asks the registry for
- * the same read-only tools an agent would call, and an installation without the
- * finance plugin simply reports `available: false` instead of failing.
+ * A block that fails still appears, with the failure as its note, so the owner
+ * sees that a plugin had a problem rather than a page that silently lost a
+ * section. Core with zero plugins produces an empty list, which is a valid
+ * running state.
  */
-export async function readFinance(deps: {
-  registry: ToolRegistry;
-  catalog?: AgentCatalog;
-  ctx: ToolContext;
-}): Promise<OverviewFinance> {
-  const { registry, ctx } = deps;
-  // Two conditions, both about *this* installation: somebody has to be able to
-  // read the numbers, and somebody has to be answerable for them.
-  const overview = deps.catalog?.agentForRole(ROLE_OVERVIEW);
-  if (overview !== undefined && !overview.ok) {
-    return { ...EMPTY_FINANCE, note: overview.problem.message };
-  }
-  if (!registry.has('finance.list_accounts')) {
-    return { ...EMPTY_FINANCE, note: FINANCE_PLUGIN_MISSING_NOTE };
-  }
-
-  const accounts = await registry.invoke('finance.list_accounts', {}, ctx);
-  if (!accounts.ok) return { ...EMPTY_FINANCE, note: accounts.message };
-  const a = accounts.output as Record<string, any>;
-
-  const finance: OverviewFinance = {
-    ...EMPTY_FINANCE,
-    available: true,
-    currency: a.currency ?? null,
-    cashTotal: numberOrNull(a.cashTotal),
-    netWorth: numberOrNull(a.netWorth),
-    totalDebt: numberOrNull(a.totalLiabilities),
-    upcoming: [],
-  };
-
-  if (registry.has('finance.project_cashflow')) {
-    const projection = await registry.invoke(
-      'finance.project_cashflow',
-      { horizonDays: OVERVIEW_HORIZON_DAYS, includeBaseline: false },
-      ctx,
-    );
-    if (projection.ok) {
-      const p = projection.output as Record<string, any>;
-      finance.minBalance = numberOrNull(p.minBalance);
-      finance.minBalanceDate = typeof p.minBalanceDate === 'string' ? p.minBalanceDate : null;
-      finance.breachesFloor = p.breachesFloor === true;
-      finance.upcoming = Array.isArray(p.days)
-        ? p.days
-            .filter((d: any) => Array.isArray(d?.events) && d.events.length > 0)
-            .map((d: any) => ({
-              date: String(d.date),
-              balance: Number(d.balance ?? 0),
-              events: (d.events as any[]).map((e) => ({
-                name: String(e?.name ?? ''),
-                amount: Number(e?.amount ?? 0),
-              })),
-            }))
-        : [];
-    } else {
-      finance.note = projection.message;
+export async function readHome(deps: { registry: ToolRegistry; ctx: ToolContext }): Promise<HomeBlock[]> {
+  const blocks: HomeBlock[] = [];
+  for (const contribution of deps.registry.home()) {
+    try {
+      const block = await contribution.produce(deps.ctx);
+      if (block) blocks.push(block);
+    } catch (err) {
+      blocks.push({ id: contribution.id, title: contribution.title, note: err instanceof Error ? err.message : String(err), stats: [], rows: [] });
     }
   }
-
-  return finance;
+  return blocks;
 }
 
-function numberOrNull(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
+
