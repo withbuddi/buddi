@@ -251,7 +251,9 @@ export async function saveArtifact(
         created_by, conversation_id)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      on conflict on constraint artifacts_source_sha_key do update
-       set caption = coalesce(core.artifacts.caption, excluded.caption)
+       set caption = coalesce(core.artifacts.caption, excluded.caption),
+           -- The same bytes handed in again after a discard: the row comes back.
+           deleted_at = null
      returning ${SELECT_COLUMNS}`,
     [
       kindForMime(mime),

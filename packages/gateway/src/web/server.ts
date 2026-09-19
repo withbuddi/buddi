@@ -50,7 +50,7 @@ import { getAction, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, type PermissionScope } from '@buddi/core';
 import {
   engineChangeFromBody,
   readAgentEngines,
@@ -671,6 +671,20 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
 
       return sendJson(res, 404, { error: 'no such endpoint' });
+    }
+
+    /*
+     * The owner took a file back out of the composer. Only a web upload that no
+     * message carries can go this way: a file already sent belongs to its
+     * message, and a file a surface or an agent made is not the page's to drop.
+     */
+    if (method === 'DELETE') {
+      const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
+      if (!discard) return sendEmpty(res, 405);
+      const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
+      if (outcome === 'missing') return sendEmpty(res, 404);
+      if (outcome === 'discarded') return sendEmpty(res, 204);
+      return sendJson(res, 409, { error: outcome === 'referenced' ? 'This file was already sent with a message.' : 'This file did not come from the dashboard.' });
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);

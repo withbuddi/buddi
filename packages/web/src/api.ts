@@ -85,6 +85,13 @@ export function upload<T>(path: string, form: FormData): Promise<T> {
   });
 }
 
+export function del<T>(path: string): Promise<T> {
+  return request<T>(`/api${path}`, {
+    method: 'DELETE',
+    headers: { [CSRF_HEADER]: csrfToken() },
+  });
+}
+
 export function post<T>(path: string, body: unknown = {}): Promise<T> {
   return request<T>(`/api${path}`, {
     method: 'POST',
@@ -498,6 +505,8 @@ export const chatApi = {
     form.append('file', file, file.name);
     return upload<UploadedAttachment>('/chat/attachments', form);
   },
+  /** A file taken back out of the tray before it was sent. Refused if a message carries it. */
+  discardAttachment: (artifactId: string) => del<null>(`/artifacts/${encodeURIComponent(artifactId)}`),
   /** The SSE endpoint for one conversation's run. */
   streamUrl: (conversationId: string) =>
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/stream`,

@@ -107,13 +107,18 @@ describe('the composer', () => {
     expect(document.querySelectorAll('.wb-file img')).toHaveLength(1);
   });
 
-  it('removes a file from the tray and never sends it', async () => {
+  it('removes a file from the tray, tells the store, and never sends it', async () => {
+    const calls: Array<{ url: string; method: string | undefined }> = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(
-        JSON.stringify({ artifactId: 'art-1', filename: 'a.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 1 }),
-        { status: 200 },
-      )),
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method });
+        if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+        return new Response(
+          JSON.stringify({ artifactId: 'art-1', filename: 'a.pdf', mime: 'application/pdf', kind: 'document', sizeBytes: 1 }),
+          { status: 200 },
+        );
+      }),
     );
     const onSend = vi.fn();
     render(<Composer ref={(h) => { handle = h; }} disabled={false} running={false} onSend={onSend} onStop={() => {}} agentName="Ada" />);
@@ -121,6 +126,8 @@ describe('the composer', () => {
     await waitFor(() => expect(screen.getByText('a.pdf')).toBeDefined());
     await act(async () => { screen.getByRole('button', { name: 'Remove a.pdf' }).click(); });
     expect(screen.queryByText('a.pdf')).toBeNull();
+    // The upload was eager, so the removal reaches the store too.
+    expect(calls.at(-1)).toEqual({ url: '/api/artifacts/art-1', method: 'DELETE' });
     fireEvent.change(screen.getByLabelText(/Message Ada/), { target: { value: 'hi' } });
     await act(async () => { screen.getByRole('button', { name: 'Send' }).click(); });
     expect(onSend).toHaveBeenCalledWith('hi', []);
