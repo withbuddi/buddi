@@ -56,6 +56,9 @@ import {
   setAgentEngineFromWeb,
 } from './agents.js';
 import { readAgentProfile } from './profile.js';
+import { AVATAR_IMAGE } from './chat.js';
+import path_ from 'node:path';
+import { readFileSync } from 'node:fs';
 import {
   ATTACHMENTS_UNAVAILABLE,
   CHAT_CONVERSATIONS_LIMIT,
@@ -560,6 +563,22 @@ export function createWebApp(deps: WebServerDeps): Server {
        * skills, its delegates. A read and only ever a read — a change to any of
        * it goes through the maker agent, where it becomes an approval.
        */
+      const avatar = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);
+      if (avatar) {
+        const agent = deps.catalog.get(decodeURIComponent(avatar[1]!));
+        const name = agent?.avatar;
+        if (!agent || !name || !AVATAR_IMAGE.test(name)) return sendEmpty(res, 404);
+        const file = path_.join(path_.dirname(agent.file), name);
+        let bytes: Buffer;
+        try { bytes = readFileSync(file); } catch { return sendEmpty(res, 404); }
+        const ext = name.toLowerCase().split('.').pop()!;
+        res.setHeader('Content-Type', ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        res.end(method === 'HEAD' ? undefined : bytes);
+        return;
+      }
       const profile = /^\/api\/agents\/([^/]+)\/profile$/.exec(path);
       if (profile) {
         const view = readAgentProfile(

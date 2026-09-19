@@ -117,6 +117,27 @@ export function App(): JSX.Element {
   const [agentId, setAgentId] = useState<string | null>(null);
   const attention = useAttention();
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
+  /** When each agent last spoke, for the roster's quiet line. */
+  const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    const load = (): void => {
+      api
+        .conversations()
+        .then((list) => {
+          const latest = new Map<string, string>();
+          for (const c of list.conversations) {
+            const at = c.lastMessageAt ?? c.createdAt;
+            const seen = latest.get(c.agentId);
+            if (!seen || at > seen) latest.set(c.agentId, at);
+          }
+          setLastActivity(latest);
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => window.clearInterval(timer);
+  }, [hash]);
 
   // The old hashes, sent where their content went. Replaced, not pushed, so
   // Back does not bounce between the two.
@@ -204,6 +225,7 @@ export function App(): JSX.Element {
               currentId={selectedAgentId}
               attention={attention}
               onSelect={selectAgent}
+              lastActivity={lastActivity}
             />
           ) : null}
 

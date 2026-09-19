@@ -169,6 +169,14 @@ export const agentFrontmatterSchema = z
     maxTurns: z.number().int().positive().optional(),
     default: z.boolean().optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
+    /**
+     * The face the dashboard draws: an emoji, or the name of an image file in
+     * this agent's own folder (`face.png`). Never a URL: the page fetches
+     * nothing off-origin, and a file beside the persona is the owner's.
+     */
+    avatar: z.string().min(1).max(120).optional(),
+    /** The agent's own colour, as `#rrggbb`. Absent: a tint from its id. */
+    accent: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'accent must be #rrggbb').optional(),
   })
   .strict()
   // The model catalogue validates *within* the pinned provider and never

@@ -124,6 +124,19 @@ export interface ChatAgentView {
    * front desk, writes its own, or has none keeps the right rail either way.
    */
   anchor: AgentAnchor | null;
+  /** The face to draw, if the file names one. An image is fetched from this origin only. */
+  avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
+  /** `#rrggbb`, the agent's own colour. */
+  accent?: string;
+}
+
+/** An image name is a plain file name with a raster extension; anything else is drawn as text. */
+export const AVATAR_IMAGE = /^[A-Za-z0-9_-]+\.(png|jpe?g|gif|webp)$/i;
+
+export function avatarOf(id: string, value: string | undefined): ChatAgentView['avatar'] {
+  if (!value) return undefined;
+  if (AVATAR_IMAGE.test(value)) return { kind: 'image', url: `/api/agents/${encodeURIComponent(id)}/avatar` };
+  return { kind: 'emoji', value: value.slice(0, 8) };
 }
 
 /** The two ends of the rail an agent can be pinned to. */
@@ -178,6 +191,8 @@ export function readChatAgents(catalog: AgentCatalog): {
       provider: summary.providerKind,
       model: full?.provider.model ?? full?.model ?? '',
       anchor: anchorOf(summary.roles),
+      ...(summary.avatar === undefined ? {} : { avatar: avatarOf(summary.id, summary.avatar) }),
+      ...(summary.accent === undefined ? {} : { accent: summary.accent }),
     };
   });
   return { agents, defaultAgentId: catalog.defaultAgent().id };

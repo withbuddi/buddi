@@ -9,7 +9,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
 
 export { useAsync } from './async';
-export { Avatar } from '../views/parts/Avatar';
+export { Avatar, AgentAvatar } from '../views/parts/Avatar';
 
 export type Tone = 'good' | 'warning' | 'critical' | 'accent' | 'muted';
 

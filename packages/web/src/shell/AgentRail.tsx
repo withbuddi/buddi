@@ -30,7 +30,9 @@
  *    and the reason anyone is waiting.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
+import React, { useState } from 'react';
 import type { ChatAgent } from '../chat/types';
+import { fmtRelative } from '../format';
 import { badgeOf, monogram, waitingText, type AgentAttention, type AgentGroups } from './roster';
 
 export interface AgentRailProps {
@@ -41,6 +43,17 @@ export interface AgentRailProps {
   onSelect: (agentId: string) => void;
   /** Horizontal, for the narrow layout where a second column does not fit. */
   orientation?: 'vertical' | 'horizontal';
+  /** When each agent last spoke, by id, for the quiet line under the name. */
+  lastActivity?: Map<string, string>;
+}
+
+const COLLAPSED_KEY = 'buddi.rosterCollapsed';
+
+function readCollapsed(): boolean {
+  try { return window.localStorage.getItem(COLLAPSED_KEY) === '1'; } catch { return false; }
+}
+function storeCollapsed(value: boolean): void {
+  try { window.localStorage.setItem(COLLAPSED_KEY, value ? '1' : '0'); } catch { /* a private window forgets */ }
 }
 
 export function AgentRail({
@@ -49,8 +62,10 @@ export function AgentRail({
   attention,
   onSelect,
   orientation = 'vertical',
+  lastActivity,
 }: AgentRailProps): JSX.Element {
   const side = orientation === 'vertical' ? 'right' : 'bottom';
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const face = (agent: ChatAgent): JSX.Element => (
     <AgentFace
       key={agent.id}
@@ -59,6 +74,7 @@ export function AgentRail({
       attention={attention.get(agent.id)}
       side={side}
       onSelect={onSelect}
+      lastAt={lastActivity?.get(agent.id) ?? null}
     />
   );
 
@@ -67,6 +83,7 @@ export function AgentRail({
       className={orientation === 'vertical' ? 'wb-agent-rail' : 'wb-agent-strip'}
       aria-label="Agents"
       data-testid="agent-rail"
+      data-collapsed={orientation === 'vertical' && collapsed ? 'true' : undefined}
     >
       {agents.top.map(face)}
 
@@ -97,6 +114,19 @@ export function AgentRail({
         beside this one.
       */}
       {agents.bottom.map(face)}
+
+      {orientation === 'vertical' ? (
+        <button
+          type="button"
+          className="ui-icon-btn wb-roster-toggle"
+          data-size="sm"
+          aria-label={collapsed ? 'Show agent names' : 'Hide agent names'}
+          aria-pressed={collapsed}
+          onClick={() => setCollapsed((value) => { storeCollapsed(!value); return !value; })}
+        >
+          <ChevronIcon direction={collapsed ? 'right' : 'left'} />
+        </button>
+      ) : null}
     </nav>
   );
 }
@@ -107,14 +137,23 @@ export function AgentFace({
   attention,
   side,
   onSelect,
+  lastAt = null,
 }: {
   agent: ChatAgent;
   active: boolean;
   attention: AgentAttention | undefined;
   side: 'right' | 'bottom';
   onSelect: (agentId: string) => void;
+  lastAt?: string | null;
 }): JSX.Element {
   const waiting = waitingText(attention);
+  const status = waiting
+    ? sentence(waiting)
+    : !agent.available
+      ? (agent.unavailableReason ?? 'Cannot run right now')
+      : lastAt
+        ? `Last spoke ${fmtRelative(lastAt)}`
+        : agent.description;
   const badge = badgeOf(attention);
   const reason = agent.unavailableReason ?? 'This agent cannot run on this machine right now.';
 
@@ -144,8 +183,12 @@ export function AgentFace({
           disabled={!agent.available}
           onClick={() => agent.available && onSelect(agent.id)}
         >
-          <span className="wb-face-mark" aria-hidden="true">
-            {monogram(agent.name)}
+          <span className="wb-face-mark" aria-hidden="true" data-kind={agent.avatar?.kind} data-accent={agent.accent ? 'true' : undefined} style={agent.accent ? ({ '--face-accent': agent.accent } as React.CSSProperties) : undefined}>
+            {agent.avatar?.kind === 'image' ? <img src={agent.avatar.url} alt="" /> : agent.avatar?.kind === 'emoji' ? agent.avatar.value : monogram(agent.name)}
+          </span>
+          <span className="wb-face-text" aria-hidden="true">
+            <span className="wb-face-name">{agent.name}</span>
+            <span className="wb-face-status" data-tone={waiting ? 'critical' : undefined}>{status}</span>
           </span>
           {badge ? (
             <span
@@ -208,6 +251,14 @@ function OutIcon(): JSX.Element {
     >
       <circle cx="6" cy="6" r="4.4" />
       <path d="M3.4 8.6 8.6 3.4" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ direction }: { direction: 'left' | 'right' }): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      {direction === 'left' ? <path d="M9 2.5 4.5 7 9 11.5" /> : <path d="M5 2.5 9.5 7 5 11.5" />}
     </svg>
   );
 }
