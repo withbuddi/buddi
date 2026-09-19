@@ -201,7 +201,8 @@ export const Composer = forwardRef<ComposerHandle, {
     take(files);
   };
 
-  const failed = attachments.filter((attachment) => attachment.state === 'failed').length;
+  const failures = attachments.filter((attachment) => attachment.state === 'failed');
+  const failed = failures.length;
 
   return (
     <div className="wb-composer" data-testid="composer">
@@ -292,7 +293,7 @@ export const Composer = forwardRef<ComposerHandle, {
             data-tone={failed > 0 ? 'critical' : undefined}
           >
             {failed > 0
-              ? `${failed === 1 ? 'One file' : `${failed} files`} failed to upload and will not be sent`
+              ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
               : running
                 ? <><span className="wb-pulse" aria-hidden="true" />{agentName} is working…</>
                 : 'Enter sends, Shift+Enter for a new line'}

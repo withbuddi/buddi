@@ -40,7 +40,7 @@ export function FileTile({
       <span className="wb-file-text">
         <span className="wb-file-name" title={name}>{name}</span>
         <span className="wb-file-meta">
-          {state === 'uploading' ? 'Uploading…' : state === 'failed' ? (error ?? 'Upload failed') : meta}
+          {state === 'uploading' ? 'Uploading…' : state === 'failed' ? 'Upload failed' : meta}
         </span>
       </span>
     </>
