@@ -3,22 +3,55 @@
  * waiting for a human. Retry and cancel are the same two verbs `buddi jobs`
  * offers, calling the same core functions.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, type JobRow } from '../api';
 import { fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { Button, Code, Empty, ErrorBanner, PageFrame, Panel, Section, Sheet, StatePill, Table, Toolbar, useAsync } from '../ui';
 
 const STATES = ['pending', 'leased', 'suspended', 'failed', 'succeeded', 'cancelled'] as const;
+const PAGE = 50;
 
-export function Jobs({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
-  const [state, setState] = useState('');
+export function Jobs({ timezone, embedded, initialState }: { timezone: string; embedded?: boolean; initialState?: string }): JSX.Element {
+  const [state, setState] = useState(initialState ?? '');
   const [selected, setSelected] = useState<JobRow | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const { data, error, reload } = useAsync(
-    () => api.jobs(state ? { state } : {}),
+    () => api.jobs({ ...(state ? { state } : {}), limit: String(PAGE) }),
     [state],
     10_000,
   );
+  const [older, setOlder] = useState<{ jobs: JobRow[]; done: boolean; busy: boolean }>({ jobs: [], done: false, busy: false });
+  useEffect(() => { setOlder({ jobs: [], done: false, busy: false }); }, [state]);
+  const loadOlder = async (): Promise<void> => {
+    setOlder((o) => ({ ...o, busy: true }));
+    try {
+      const page = await api.jobs({ ...(state ? { state } : {}), limit: String(PAGE), offset: String(PAGE + older.jobs.length) });
+      setOlder((o) => ({ jobs: [...o.jobs, ...page.jobs], done: page.jobs.length < PAGE, busy: false }));
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+      setOlder((o) => ({ ...o, busy: false }));
+    }
+  };
+  const seen = new Set((data?.jobs ?? []).map((j) => j.id));
+  const rows = [...(data?.jobs ?? []), ...older.jobs.filter((j) => !seen.has(j.id))];
+  const total = state ? (data?.counts[state] ?? 0) : Object.values(data?.counts ?? {}).reduce((a, b) => a + b, 0);
+  const more = !older.done && rows.length < total && (data?.jobs.length ?? 0) >= PAGE;
+
+  /** The 38-at-once verbs: every failed job, retried or cancelled, one by one. */
+  const [sweeping, setSweeping] = useState<string | null>(null);
+  const sweep = async (verb: 'retry' | 'cancel'): Promise<void> => {
+    setFailure(null);
+    setSweeping(verb);
+    try {
+      const failed = (await api.jobs({ state: 'failed', limit: '500' })).jobs;
+      for (const job of failed) await (verb === 'retry' ? api.retryJob(job.id) : api.cancelJob(job.id));
+      reload();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSweeping(null);
+    }
+  };
 
   const act = async (work: Promise<unknown>): Promise<void> => {
     setFailure(null);
@@ -52,12 +85,20 @@ export function Jobs({ timezone, embedded }: { timezone: string; embedded?: bool
             </option>
           ))}
         </select>
+        {(data?.counts.failed ?? 0) > 0 ? (
+          <>
+            <span className="ui-toolbar-spacer" />
+            <span className="muted">{data!.counts.failed} failed.</span>
+            <Button size="sm" disabled={sweeping !== null} onClick={() => void sweep('retry')}>{sweeping === 'retry' ? 'Retrying…' : 'Retry all failed'}</Button>
+            <Button size="sm" variant="danger" disabled={sweeping !== null} onClick={() => void sweep('cancel')}>{sweeping === 'cancel' ? 'Cancelling…' : 'Cancel all failed'}</Button>
+          </>
+        ) : null}
       </Toolbar>
 
       <ErrorBanner message={error ?? failure} />
 
       <Panel flush>
-        {!data || data.jobs.length === 0 ? (
+        {!data || rows.length === 0 ? (
           <Empty>No jobs match.</Empty>
         ) : (
           <Table>
@@ -72,7 +113,7 @@ export function Jobs({ timezone, embedded }: { timezone: string; embedded?: bool
               </tr>
             </thead>
             <tbody>
-              {data.jobs.map((job) => (
+              {rows.map((job) => (
                 <tr key={job.id}>
                   <td className="clickable" onClick={() => setSelected(job)}>
                     {job.kind}
@@ -112,6 +153,13 @@ export function Jobs({ timezone, embedded }: { timezone: string; embedded?: bool
           </Table>
         )}
       </Panel>
+      {more ? (
+        <Toolbar>
+          <span className="muted">{rows.length} of {total} shown.</span>
+          <span className="ui-toolbar-spacer" />
+          <Button disabled={older.busy} onClick={() => void loadOlder()}>{older.busy ? 'Loading…' : 'Load older'}</Button>
+        </Toolbar>
+      ) : null}
 
       {selected ? (
         <Sheet title={selected.kind} onClose={() => setSelected(null)}>

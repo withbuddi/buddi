@@ -494,6 +494,7 @@ export function createWebApp(deps: WebServerDeps): Server {
               state: state && isJobState(state) ? (state as JobState) : undefined,
               kind: q.get('kind') ?? undefined,
               limit: boundedLimit(q.get('limit')),
+              offset: Math.max(0, Math.min(Number(q.get('offset') ?? 0) || 0, 100_000)),
             }),
           );
         }
