@@ -788,11 +788,18 @@ function message(err: unknown): string {
 function transcriptContains(conversation: ChatConversation, optimistic: ChatMessage): boolean {
   const wanted = optimistic.blocks.find((block) => block.type === 'text')?.text.trim();
   if (!wanted) return true;
-  // The server has it once the newest user message says what we sent. No clock
-  // comparison: the two clocks are not the same clock, and a second either way
-  // was enough to show the bubble twice.
-  const latest = [...conversation.messages].reverse().find((message) => message.role === 'user');
-  return !!latest && latest.blocks.some((block) => block.type === 'text' && block.text.trim() === wanted);
+  // The server has it once the newest user message *with words* says what we
+  // sent. Tool results also travel as user messages, without any text, so
+  // those are skipped rather than mistaken for the owner's turn. No clock
+  // comparison: the two clocks are not the same clock.
+  for (let i = conversation.messages.length - 1; i >= 0; i -= 1) {
+    const message = conversation.messages[i]!;
+    if (message.role !== 'user') continue;
+    const text = message.blocks.find((block) => block.type === 'text');
+    if (!text) continue;
+    return text.text.trim() === wanted;
+  }
+  return false;
 }
 
 /** Three dots, vertical: this thing has more to say about itself. */
