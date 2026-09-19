@@ -666,6 +666,8 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
         ...(a.availability.ok
           ? {}
           : { unavailableReason: a.availability.problem.message }),
+        ...(a.avatar === undefined ? {} : { avatar: a.avatar }),
+        ...(a.accent === undefined ? {} : { accent: a.accent }),
       })),
     agentsWithRole: (role) => {
       const wanted = role.trim().toLowerCase();
