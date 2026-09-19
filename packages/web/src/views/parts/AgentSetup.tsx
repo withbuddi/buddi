@@ -270,6 +270,14 @@ function AccountChoice({
         />
       </Toolbar>
       <Toolbar>
+        {dirty && id && model.trim() ? (
+          <span className="warning">Not saved yet. New runs still use {current ? `${current.label}, ${binding?.model ?? ''}` : 'nothing'}.</span>
+        ) : (
+          <span className="muted">
+            {current ? `Running on ${current.label} with ${binding?.model ?? 'no model'}.` : 'No account chosen yet: this agent cannot run until you save one.'}
+          </span>
+        )}
+        <span className="ui-toolbar-spacer" />
         <Button
           variant="accent"
           disabled={busy || !id || !model.trim() || !dirty}
@@ -280,13 +288,6 @@ function AccountChoice({
         >
           Save account selection
         </Button>
-        {dirty && id && model.trim() ? (
-          <span className="warning">Not saved yet. New runs still use {current ? `${current.label}, ${binding?.model ?? ''}` : 'nothing'}.</span>
-        ) : (
-          <span className="muted">
-            {current ? `Running on ${current.label} with ${binding?.model ?? 'no model'}.` : 'No account chosen yet: this agent cannot run until you save one.'}
-          </span>
-        )}
       </Toolbar>
     </div>
   );
