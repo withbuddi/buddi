@@ -602,6 +602,7 @@ export function ChatPage({
                 {line.text}
               </span>
             </div>
+            <button className="ui-btn" data-variant="accent" disabled={!agentId} onClick={() => { setHistoryOpen(false); startNew(); }}>New chat</button>
             <button className="ui-btn" aria-expanded={historyOpen} disabled={!agentId} onClick={() => setHistoryOpen(value => !value)}>History</button>
             {narrow ? (
               <button className="ui-btn" onClick={onOpenCanvas} disabled={renderables.length === 0}>
