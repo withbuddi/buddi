@@ -50,6 +50,15 @@ describe('files in the thread', () => {
     expect(screen.getByText('Spreadsheet')).toBeDefined();
   });
 
+  it('says the agent is working where its reply will land, until something arrives', () => {
+    render(<Tooltip.Provider><MessageList messages={[sent]} live={[]} now={0} onOpen={() => {}} working agentName="Playground" emptyHint="" /></Tooltip.Provider>);
+    expect(screen.getByRole('status').textContent).toContain('Playground is working');
+    cleanup();
+    // A live tool call is a better answer to "what is it doing" than the dots.
+    render(<Tooltip.Provider><MessageList messages={[sent]} live={[{ toolUseId: 't1', name: 'example.tool', startedAt: 0 }]} now={0} onOpen={() => {}} working agentName="Playground" emptyHint="" /></Tooltip.Provider>);
+    expect(screen.queryByTestId('working')).toBeNull();
+  });
+
   it('names families and sizes the way a person would', () => {
     expect(familyOf('image/png')).toBe('image');
     expect(familyOf('application/pdf')).toBe('pdf');

@@ -570,6 +570,31 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-tool[data-ok='false'] .wb-tool-label { color: var(--critical); }
 
 /* The pulse marks a live call. Reduced motion gets a static dot instead. */
+/* "Working", where the answer will appear: the name, the line, three dots
+   that breathe in turn. Under reduced motion they simply stay lit. */
+.wb-working {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: 1.62;
+}
+.wb-dots { display: inline-flex; gap: 3px; margin-left: 4px; align-items: center; }
+.wb-dots i {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: wb-dot 1.2s ease-in-out infinite;
+}
+.wb-dots i:nth-child(2) { animation-delay: 0.2s; }
+.wb-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes wb-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .wb-dots i { animation: none; opacity: 0.7; } }
+
 .wb-pulse {
   flex: 0 0 auto;
   width: 6px;
@@ -580,7 +605,32 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 }
 @keyframes wb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) {
-  .wb-pulse { animation: none; }
+  /* "Working", where the answer will appear: the name, the line, three dots
+   that breathe in turn. Under reduced motion they simply stay lit. */
+.wb-working {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: 1.62;
+}
+.wb-dots { display: inline-flex; gap: 3px; margin-left: 4px; align-items: center; }
+.wb-dots i {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: wb-dot 1.2s ease-in-out infinite;
+}
+.wb-dots i:nth-child(2) { animation-delay: 0.2s; }
+.wb-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes wb-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .wb-dots i { animation: none; opacity: 0.7; } }
+
+.wb-pulse { animation: none; }
 }
 
 /* ---- composer: one control, not three stacked ---- */
