@@ -1,7 +1,9 @@
 # Anthropic subscription login
 
-Status: Proposed
+Status: Accepted
 Captured: 2026-09-19
+
+Implementation: [Claude OAuth experiment](../anthropic-oauth.md).
 
 ## Problem / opportunity
 
@@ -89,9 +91,8 @@ diagnostic, not permission to evade upstream restrictions.
 
 ## Next decision
 
-Approve this scope before implementation. The existing provider roadmap excludes
-this flow today; implementation must update that decision explicitly rather than
-leaving contradictory documentation. Package extraction remains separate work.
+Scope approved on 2026-09-19. Implementation updates the provider roadmap's earlier
+decision to exclude this flow. Package extraction remains separate work.
 
 ## Related work
 

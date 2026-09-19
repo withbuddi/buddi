@@ -9,7 +9,7 @@ conversations and can be reviewed alongside the code.
 | Idea | Status | Summary |
 | --- | --- | --- |
 | [Reusable Codex adapter](reusable-codex-adapter.md) | Proposed | Extract the backend integration into a package other projects can consume. |
-| [Anthropic subscription login](anthropic-subscription-login.md) | Proposed | Contained account-level OAuth login and refresh, using the existing Anthropic runtime. |
+| [Anthropic subscription login](anthropic-subscription-login.md) | Accepted | [Implementation](../anthropic-oauth.md) on the dedicated OAuth branch. |
 
 Existing tracked work remains in the [provider roadmap](../provider-roadmap.md);
 link to it instead of duplicating its checklist here.

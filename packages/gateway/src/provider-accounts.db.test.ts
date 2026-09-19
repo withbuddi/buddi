@@ -26,6 +26,78 @@ suite('named provider accounts', () => {
   }
   const settings = { label: 'Work API', kind: 'anthropic', auth: 'api-key', defaultModel: 'claude-sonnet-5', enabled: true, secret: 'private-fixture-value' };
   const codexSettings = { label: 'Personal Codex', kind: 'codex', auth: 'chatgpt', defaultModel: 'gpt-5', enabled: true };
+  const claudeSettings = { label: 'Personal Claude', kind: 'anthropic', auth: 'anthropic-oauth', defaultModel: 'claude-sonnet-5', enabled: true };
+  const oauthTokens = { version: 1 as const, state: 'ready' as const, accessToken: 'oauth-access', refreshToken: 'oauth-refresh', expiresAt: Date.now() + 3600_000, scopes: ['user:inference'] };
+  async function connectClaude(f: ReturnType<typeof fixture>, expiresAt = oauthTokens.expiresAt) {
+    const { id } = await f.service.save(claudeSettings);
+    vi.spyOn(f.service.anthropic!.protocol, 'exchange').mockResolvedValue({ ...oauthTokens, expiresAt });
+    const login = await f.service.anthropicAction(id, 'login', { revision: 1 }, 'owner') as { verificationUrl: string; attemptId: string };
+    const code = `fixture-code#${new URL(login.verificationUrl).searchParams.get('state')}`;
+    await f.service.anthropicAction(id, 'complete-login', { revision: 2, attemptId: login.attemptId, code }, 'owner');
+    return id;
+  }
+  it('gates Claude OAuth, rejects pasted credentials and wrong provider kinds', async () => {
+    const f = fixture(); await f.service.initialize();
+    await expect(f.service.save(claudeSettings)).rejects.toThrow('experiment');
+    f.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT = '1';
+    await expect(f.service.save({ ...claudeSettings, secret: 'secret' })).rejects.toThrow('not a pasted token');
+    await expect(f.service.save({ ...claudeSettings, kind: 'openai' })).rejects.toThrow('Anthropic account');
+    const id = await connectClaude(f);
+    expect(f.service.view().accounts.find(a => a.id === id)).toMatchObject({ configured: true, refreshable: true, tokenExpiresAt: new Date(oauthTokens.expiresAt).toISOString() });
+    expect(JSON.stringify(f.service.view())).not.toContain('oauth-access');
+    expect(JSON.stringify((await pool.query('select * from core.provider_accounts where id=$1', [id])).rows)).not.toContain('oauth-access');
+    await f.service.models(id); await f.service.test(id);
+    expect(f.listModels).toHaveBeenCalledWith(expect.objectContaining({ secret: 'oauth-access', credentialKind: 'subscription-token' }));
+    expect(f.test).toHaveBeenCalledWith(expect.objectContaining({ secret: 'oauth-access', credentialKind: 'subscription-token' }));
+    f.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT = '0';
+    await expect(f.service.models(id, true)).rejects.toThrow('disabled');
+    await f.service.anthropicAction(id, 'logout', { revision: 3 }, 'owner');
+    expect(f.service.view().accounts.find(a => a.id === id)?.configured).toBe(false);
+  });
+  it('refreshes once across two service instances sharing the same vault and database', async () => {
+    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const id = await connectClaude(f, Date.now() + 1000);
+    const other = new ProviderAccounts(f.service.deps); await other.initialize();
+    let finish!: () => void;
+    const refresh = vi.spyOn(f.service.anthropic!.protocol, 'refresh').mockImplementation(async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { ...oauthTokens, accessToken: 'new-access', refreshToken: 'new-refresh' };
+    });
+    const otherRefresh = vi.spyOn(other.anthropic!.protocol, 'refresh');
+    const first = f.service.models(id);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    const second = other.models(id);
+    finish(); await Promise.all([first, second]);
+    expect(otherRefresh).not.toHaveBeenCalled();
+    expect(f.listModels).toHaveBeenCalledTimes(2);
+    expect(f.listModels).toHaveBeenLastCalledWith(expect.objectContaining({ secret: 'new-access' }));
+  });
+  it('waits for refresh before disconnect and never resurrects the deleted credential', async () => {
+    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const id = await connectClaude(f, Date.now() + 1000);
+    const other = new ProviderAccounts(f.service.deps); await other.initialize();
+    let finish!: () => void;
+    const refresh = vi.spyOn(f.service.anthropic!.protocol, 'refresh').mockImplementation(async () => {
+      await new Promise<void>(resolve => { finish = resolve; }); return oauthTokens;
+    });
+    const pending = f.service.models(id);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    const disconnected = other.anthropicAction(id, 'logout', { revision: 3 }, 'owner');
+    finish(); await Promise.allSettled([pending]); await disconnected;
+    await f.service.refresh();
+    expect(f.service.view().accounts.find(a => a.id === id)?.configured).toBe(false);
+    await expect(f.service.models(id, true)).rejects.toThrow('Connect this Claude');
+  });
+  it('invalidates pending sign-ins after disable or another process starts reconnect', async () => {
+    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const id = await connectClaude(f);
+    const attempt = await f.service.anthropicAction(id, 'login', { revision: 3 }, 'owner') as { attemptId: string };
+    const other = new ProviderAccounts(f.service.deps); await other.initialize();
+    await other.save({ ...claudeSettings, id, revision: 4, enabled: false });
+    await expect(f.service.anthropicAction(id, 'complete-login', { revision: 4, attemptId: attempt.attemptId, code: 'old' }, 'owner')).rejects.toThrow('changed');
+    await other.remove(id, 5);
+    await f.service.refresh(); expect(f.service.view().accounts.some(a => a.id === id)).toBe(false);
+  });
   it('discovers with each account credential and invalidates cached lists after rotation', async () => {
     const f = fixture(); await f.service.initialize();
     const a = await f.service.save(settings);

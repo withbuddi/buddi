@@ -5,11 +5,12 @@ import {
   resolveProviderAccount, vaultState, type AgentCatalog, type AgentFrontmatter,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { createProvider, providerCapabilities, listProviderModels, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
+import { createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
+import { AnthropicAccounts } from './anthropic-accounts.js';
 
 type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean };
 type Binding = { agentId: string; accountId: string; model: string };
@@ -19,7 +20,7 @@ const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as 
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
   label: z.string().trim().min(1).max(100), kind: z.enum(['anthropic', 'openai', 'openai-compatible', 'codex']),
-  auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt']),
+  auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt', 'anthropic-oauth']),
   baseUrl: z.string().trim().max(2048).optional(), defaultModel: z.string().trim().min(1).max(150),
   enabled: z.boolean(), secret: z.string().trim().min(1).max(16384).optional(),
 }).strict();
@@ -37,6 +38,8 @@ export class ProviderAccountError extends Error {
 export class ProviderAccounts {
   readonly vault: Vault | undefined;
   readonly codex: CodexAccounts | undefined;
+  readonly anthropic: AnthropicAccounts | undefined;
+  #tokenInfo = new Map<string, { tokenExpiresAt: string; reconnectRequired: boolean }>();
   #rows = new Map<string, Row>();
   #bindings = new Map<string, Binding>();
   #configured = new Map<string, boolean>();
@@ -54,7 +57,10 @@ export class ProviderAccounts {
   }) {
     this.vault = deps.vault ?? createVault({ env: deps.env });
     if (deps.env.BUDDI_CODEX_EXPERIMENT === '1' && this.vault) this.codex = new CodexAccounts({ vault: this.vault });
+    if (this.vault) this.anthropic = new AnthropicAccounts(this.vault);
   }
+
+  get anthropicOAuthEnabled() { return this.deps.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT === '1' && !!this.anthropic; }
 
   async initialize(): Promise<void> {
     // One atomic, restart-safe migration. Never rewrites private agent files or
@@ -102,8 +108,16 @@ export class ProviderAccounts {
     const result = await this.deps.pool.query(`select ${columns} from core.provider_accounts order by created_at,id`);
     const bindings = await this.deps.pool.query('select agent_id as "agentId", account_id as "accountId", model from core.agent_provider_accounts');
     const configured = new Map<string, boolean>();
+    this.#tokenInfo.clear();
     for (const row of result.rows as Row[]) {
-      try { configured.set(row.id, row.auth === 'none' || !!await this.#secret(row)); }
+      try {
+        const raw = await this.#secret(row);
+        configured.set(row.id, row.auth === 'none' || !!raw);
+        if (row.auth === 'anthropic-oauth' && raw) {
+          const tokens = readAnthropicTokens(raw);
+          this.#tokenInfo.set(row.id, { tokenExpiresAt: new Date(tokens.expiresAt).toISOString(), reconnectRequired: tokens.state !== 'ready' });
+        }
+      }
       catch { configured.set(row.id, false); }
     }
     this.#rows = new Map(result.rows.map((r: Row) => [r.id, r]));
@@ -119,24 +133,27 @@ export class ProviderAccounts {
     const row = binding && this.#rows.get(binding.accountId);
     const provider: ProviderRef = row ? {
       kind: accountProtocol(row.kind), model: binding!.model, accountId: row.id,
-      credential: { kind: row.auth === 'legacy-subscription-token' ? 'subscription-token' : 'api-key', env: row.secretRef ?? 'NO_CREDENTIAL' },
+      credential: { kind: row.auth === 'legacy-subscription-token' || row.auth === 'anthropic-oauth' ? 'subscription-token' : 'api-key', env: row.secretRef ?? 'NO_CREDENTIAL' },
     } as ProviderRef : { ...providerFromEnv(this.deps.env, agent.model, agent.provider), accountId: binding?.accountId ?? '' };
     const issue = !row ? 'Choose a provider account for this agent in Settings → Agents.'
       : row.kind === 'codex' && !this.codex ? 'Codex experiment is not enabled in this process.'
+      : row.auth === 'anthropic-oauth' && !this.anthropicOAuthEnabled ? 'Claude OAuth experiment is not enabled in this process.'
       : !row.enabled ? `Provider account “${row.label}” is disabled.`
       : !this.#configured.get(row.id) ? `Provider account “${row.label}” needs a credential or vault access.`
       : accountModelProblem(row.kind, binding!.model);
     return { provider, availability: issue ? { ok: false, problem: { code: 'missing-credential', message: issue } } : { ok: true } };
   };
 
-  view() {
+  view(ownerSession?: string) {
     return {
       vault: { kind: this.vault?.kind ?? 'none', ...vaultState({ env: this.deps.env }) },
       codexEnabled: !!this.codex,
+      anthropicOAuthEnabled: this.anthropicOAuthEnabled,
       accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, ...row }) => ({
         ...row, configured: this.#configured.get(row.id) ?? false,
         removalPending: deleting,
-        refreshable: row.kind === 'codex', tokenExpiresAt: null, subscriptionRenewsAt: null,
+        refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
+        ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         ...(row.kind === 'codex' ? { login: this.codex?.view(row.id) ?? null } : {}),
         assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
@@ -170,7 +187,7 @@ export class ProviderAccounts {
           const lease = await this.#codexAccess(row);
           try { value = await this.codex.models(lease.access); } finally { await lease.release(); }
         } else {
-          const secret = await this.#secret(row);
+          const secret = await this.#usableSecret(row);
           if (row.auth !== 'none' && !secret) throw new ProviderAccountError(409, 'Save or connect this account’s credential before loading models.');
           value = await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, row.defaultModel, secret));
         }
@@ -194,7 +211,9 @@ export class ProviderAccounts {
     const input = parsed.data;
     if ((input.kind === 'codex') !== (input.auth === 'chatgpt')) throw new ProviderAccountError(400, 'Codex accounts require ChatGPT subscription sign-in.');
     if (input.kind === 'codex' && (!this.codex || input.secret)) throw new ProviderAccountError(400, 'Enable the Codex experiment on the host and use device sign-in, not a pasted token.');
+    if (input.auth === 'anthropic-oauth' && (input.kind !== 'anthropic' || input.secret)) throw new ProviderAccountError(400, 'Claude OAuth requires an Anthropic account and browser sign-in, not a pasted token.');
     const old = input.id ? await this.#row(input.id) : undefined;
+    if (input.auth === 'anthropic-oauth' && !old && !this.anthropicOAuthEnabled) throw new ProviderAccountError(400, 'Enable the Claude OAuth experiment on the host first.');
     if (old?.deleting) throw new ProviderAccountError(409, 'Removal is pending. Unlock the vault and finish removing this account.');
     if (old && input.revision !== old.revision) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
     if (old && (old.kind !== input.kind || old.auth !== input.auth)) throw new ProviderAccountError(400, 'Create a separate account to change provider or authentication type.');
@@ -212,8 +231,10 @@ export class ProviderAccounts {
     const id = old?.id ?? randomUUID();
     if (old?.kind === 'codex') await this.#cancelCodex(id);
     const lease = old?.kind === 'codex' ? await this.#codexAccess(old, false) : undefined;
+    const oauthLease = old?.auth === 'anthropic-oauth' ? await this.#anthropicAccess(old, false) : undefined;
     try {
-    let secretRef = old?.secretRef ?? (input.kind === 'codex' ? `CODEX_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : null);
+    if (old?.auth === 'anthropic-oauth') this.anthropic?.forget(id);
+    let secretRef = old?.secretRef ?? (input.auth === 'anthropic-oauth' ? `ANTHROPIC_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : input.kind === 'codex' ? `CODEX_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : null);
     if (input.secret) {
       if (!this.vault) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
       secretRef = `PROVIDER_ACCOUNT_${randomUUID().replaceAll('-', '_')}`;
@@ -242,7 +263,7 @@ export class ProviderAccounts {
     this.#modelLists.delete(id);
     await this.load();
     return { id, warning };
-    } finally { await lease?.release(); }
+    } finally { await lease?.release(); await oauthLease?.release(); }
   }); }
 
   assign(agentId: string, body: unknown) { return this.#serial(async () => {
@@ -270,7 +291,9 @@ export class ProviderAccounts {
     if (assigned.rows.length) throw new ProviderAccountError(409, 'Reassign the agents using this account before removing it. You can disable it instead.');
     if (row.kind === 'codex') await this.#cancelCodex(id);
     const lease = row.kind === 'codex' ? await this.#codexAccess(row, false) : undefined;
+    const oauthLease = row.auth === 'anthropic-oauth' ? await this.#anthropicAccess(row, false) : undefined;
     try {
+    this.anthropic?.forget(id);
     // A tombstone prevents reactivation even if vault deletion is denied.
     const disabled = await this.deps.pool.query(`update core.provider_accounts set enabled=false,deleting=true,revision=revision+1
       where id=$1 and revision=$2 returning id`, [id,revision]);
@@ -282,7 +305,7 @@ export class ProviderAccounts {
     this.#tests.delete(id); await this.load();
     this.codex?.forget(id);
     return { removed: true };
-    } finally { await lease?.release(); }
+    } finally { await lease?.release(); await oauthLease?.release(); }
   }); }
 
   /** Pins account identity/model for a run; disabling stops its next model call. */
@@ -302,7 +325,7 @@ export class ProviderAccounts {
           try { return await this.codex.complete(lease.access, ref.model, request); }
           finally { await lease.release(); }
         }
-        const resolved = resolveProviderAccount(row, ref.model, await this.#secret(row));
+        const resolved = resolveProviderAccount(row, ref.model, await this.#usableSecret(row, request.signal));
         return createProvider(resolved).complete(request);
       },
     };
@@ -316,7 +339,7 @@ export class ProviderAccounts {
       if (row.kind === 'codex') throw new ProviderAccountError(400, 'Codex connection testing has no verified output-token cap. Connect and send a test chat instead.');
       let diagnostic: ProviderDiagnostic = { state: 'connected', message: 'Connection succeeded.', httpStatus: null, retryAt: null };
       try {
-        const resolved = resolveProviderAccount(row, row.defaultModel, await this.#secret(row));
+        const resolved = resolveProviderAccount(row, row.defaultModel, await this.#usableSecret(row));
         if (this.deps.test) await this.deps.test(resolved);
         else await createProvider(resolved, { maxTokens: 32, maxStatusRetries: 0 }).complete({
           system: 'Reply with OK.', messages: [{ role: 'user', content: [{ type: 'text', text: 'Connection test. Reply OK.' }] }],
@@ -334,6 +357,72 @@ export class ProviderAccounts {
   async #cancelCodex(id: string) {
     await this.codex?.cancel(id);
     await this.#codexReleased.get(id);
+  }
+
+  async #usableSecret(row: Row, signal?: AbortSignal): Promise<string | null> {
+    if (row.auth !== 'anthropic-oauth') return this.#secret(row);
+    if (!this.anthropicOAuthEnabled) throw new ProviderAccountError(409, 'Claude OAuth experiment is disabled.');
+    const lease = await this.#anthropicAccess(row, true, signal);
+    try { return await this.anthropic!.credential(row.secretRef!); }
+    catch (error) {
+      // Never propagate vault or transport errors, which may contain secrets.
+      throw new ProviderAccountError(409, error instanceof Error && /^(Connect this Claude|Claude token refresh|Invalid Claude credential|Claude credentials rotated|Claude authorization)/.test(error.message)
+        ? error.message : 'Could not access Claude credentials securely. Check the vault and reconnect this account.');
+    } finally { await lease.release(); }
+  }
+
+  async #anthropicAccess(row: Row, requireEnabled = true, signal?: AbortSignal) {
+    if (row.auth !== 'anthropic-oauth' || !row.secretRef || !this.anthropic) throw new ProviderAccountError(409, 'Claude OAuth account is unavailable.');
+    const deadline = Date.now() + 25_000;
+    while (true) {
+      signal?.throwIfAborted();
+      const client = await this.deps.pool.connect();
+      let acquired = false;
+      try {
+        acquired = (await client.query("select pg_try_advisory_lock(hashtext('buddi-anthropic-oauth'),hashtext($1)) as acquired", [row.id])).rows[0]?.acquired === true;
+        if (acquired) {
+          const current = (await client.query(`select ${columns} from core.provider_accounts where id=$1`, [row.id])).rows[0] as Row | undefined;
+          if (!current || current.revision !== row.revision || (requireEnabled && (!current.enabled || current.deleting))) throw new ProviderAccountError(409, 'Claude account changed or is disabled. Refresh and try again.');
+          return { release: async () => {
+            try { await client.query("select pg_advisory_unlock(hashtext('buddi-anthropic-oauth'),hashtext($1))", [row.id]); }
+            finally { client.release(); }
+          } };
+        }
+      } catch (error) {
+        if (acquired) await client.query("select pg_advisory_unlock(hashtext('buddi-anthropic-oauth'),hashtext($1))", [row.id]).catch(() => {});
+        client.release(); throw error;
+      }
+      client.release();
+      if (Date.now() >= deadline) throw new ProviderAccountError(423, 'Claude account is busy. Try again shortly.');
+      await delay(100, undefined, { signal });
+    }
+  }
+
+  anthropicAction(id: string, action: 'login' | 'complete-login' | 'cancel-login' | 'logout', body: { revision?: unknown; attemptId?: unknown; code?: unknown }, owner: string) {
+    return this.#serial(async () => {
+      const row = await this.#row(id);
+      if (!owner || row.auth !== 'anthropic-oauth' || row.revision !== body.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
+      if ((action === 'login' || action === 'complete-login') && !this.anthropicOAuthEnabled) throw new ProviderAccountError(409, 'Claude OAuth experiment is disabled.');
+      const lease = await this.#anthropicAccess(row, action === 'login' || action === 'complete-login');
+      try {
+        if (action === 'complete-login') {
+          if (typeof body.attemptId !== 'string' || typeof body.code !== 'string' || body.code.length > 8192) throw new ProviderAccountError(400, 'Paste the full authorization code.');
+          try { await this.anthropic!.finish(id, row.revision, owner, body.attemptId, body.code, row.secretRef!); }
+          catch (error) { throw new ProviderAccountError(409, (error as Error).message); }
+        } else {
+          this.anthropic!.forget(id);
+          if (action === 'logout') {
+            try { await this.vault!.delete(row.secretRef!); }
+            catch { throw new ProviderAccountError(409, 'Could not remove Claude credentials. Unlock the vault and retry.'); }
+          }
+        }
+        // Invalidates pending attempts in other processes, and old run snapshots.
+        await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+        this.#modelLists.delete(id); this.#tests.delete(id);
+        await this.load();
+        return action === 'login' ? this.anthropic!.start(id, row.revision + 1, owner) : { completed: true };
+      } finally { await lease.release(); }
+    });
   }
 
   async #codexCompletionAccess(row: Row, signal?: AbortSignal) {
