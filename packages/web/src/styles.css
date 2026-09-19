@@ -382,18 +382,6 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
    new thread. Never a prediction — a warning that is usually wrong is noise. */
 .wb-head-meta[data-tone='note'] { color: var(--warning); }
 
-.ui-tag {
-  flex: 0 0 auto;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 1px 7px;
-}
-
 .ui-count {
   font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
@@ -893,7 +881,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 
 /* ---- the phone: the canvas becomes a sheet the chat opens ---- */
 
-.wb-sheet-overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 30; }
 .wb-sheet {
   position: fixed;
   inset: 0;
@@ -923,7 +910,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 
 @media (max-width: 900px) {
   .wb-chat { flex: 1 1 auto; width: auto !important; border-right: 0; }
-  .wb-rail { width: 50px; }
+  .rail { width: 64px; }
   .wb-chat-notice { color: var(--text-muted); font-size: var(--text-xs); margin: 10px; }
 
 .wb-messages { padding: 16px 14px 20px; }
@@ -943,7 +930,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-row-end { display: flex; justify-content: flex-end; }
 .wb-row-end-block { display: flex; justify-content: flex-end; margin-bottom: var(--space-2); }
 .wb-section { margin-top: var(--space-4); }
-.wb-scroll-x { overflow-x: auto; }
 .wb-label { margin: 0 0 6px; }
 .wb-block { margin-bottom: var(--space-4); }
 
@@ -970,8 +956,6 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-chart .wb-chart-floor { stroke: var(--chart-floor); stroke-dasharray: 5 4; stroke-width: 1.5; }
 .wb-chart .wb-chart-breach { fill: var(--chart-breach); }
 .wb-chart .wb-chart-min { fill: var(--critical); }
-.wb-chart .wb-chart-bar { fill: var(--chart-bar); }
-.wb-chart .wb-chart-bar-negative { fill: var(--chart-bar-negative); }
 
 .wb-doc {
   white-space: pre-wrap;

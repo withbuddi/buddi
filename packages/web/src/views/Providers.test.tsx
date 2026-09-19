@@ -142,5 +142,5 @@ it('blocks removal of assigned accounts and shows vault guidance', async () => {
   render(<Providers />);
   expect(await screen.findByText('Unlock the host vault.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Remove account' })).toBeDisabled();
-  expect(screen.getByText('Used by: ledger')).toBeInTheDocument();
+  expect(screen.getByText('ledger')).toBeInTheDocument();
 });

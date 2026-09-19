@@ -162,7 +162,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           { label: 'Provider', value: providerName(a) },
           { label: 'Default model', value: <span className="mono">{a.defaultModel || '—'}</span> },
           ...(a.baseUrl ? [{ label: 'Endpoint', value: <span className="mono">{a.baseUrl}</span> }] : []),
-          { label: 'Used by', value: <span>Used by: {a.assignedAgents.length ? a.assignedAgents.join(', ') : 'No agents'}</span> },
+          { label: 'Used by', value: a.assignedAgents.length ? a.assignedAgents.join(', ') : 'No agents' },
           ...(a.tokenExpiresAt ? [{ label: 'Access token', value: `expires ${new Date(a.tokenExpiresAt).toLocaleString()} (not your subscription renewal date)` }] : []),
         ]}
       />
