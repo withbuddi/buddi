@@ -15,6 +15,8 @@ which company sees that agent's conversations.
 
 Design and rationale: [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+Future ideas and possible tasks: [docs/ideas/README.md](./docs/ideas/README.md).
+
 Host shell/Python execution, file processing and permission scopes:
 [docs/host-execution.md](./docs/host-execution.md). Host access is optional and **not sandboxed**.
 

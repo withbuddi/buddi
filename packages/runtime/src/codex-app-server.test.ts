@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CompletionRequest } from './anthropic.js';
-import { codexHistory, createCodexAppServerAdapter } from './codex-app-server.js';
+import { codexHistory, codexTurnError, createCodexAppServerAdapter } from './codex-app-server.js';
 import type { CodexRpc, RpcMessage } from './codex-rpc.js';
 import { CODEX_EXPERIMENT_CONFIG } from './codex-policy.js';
 
@@ -34,6 +34,36 @@ const notification = (method: string, params: object): RpcMessage => ({ method, 
 const call = (tool = 'system_time'): RpcMessage => ({ ...notification('item/tool/call', { callId: 'call1', namespace: null, tool, arguments: {} }), id: 'server1' });
 
 describe('experimental Codex adapter', () => {
+  it('classifies native failures without leaking provider text or details', () => {
+    const unsupported = codexTurnError({ message: "The 'gpt-5' model is not supported when using Codex with a ChatGPT account. SECRET", codexErrorInfo: 'other', additionalDetails: 'SECRET' });
+    expect(unsupported).toMatchObject({ status: 400, type: 'model_not_supported' });
+    for (const error of [unsupported,
+      codexTurnError({ message: 'SECRET', codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } }),
+      codexTurnError({ message: 'SECRET', codexErrorInfo: 'usageLimitExceeded' }),
+      codexTurnError({ message: 'SECRET', codexErrorInfo: { SECRET: { httpStatusCode: 'SECRET' } } })]) {
+      expect(error.message + JSON.stringify(error)).not.toContain('SECRET');
+    }
+    expect(codexTurnError({ codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } })).toMatchObject({ status: 401, type: 'http_error' });
+    expect(codexTurnError({ codexErrorInfo: 'usageLimitExceeded' })).toMatchObject({ status: 429 });
+  });
+
+  it('retains sanitized notification errors when the final failure omits them', async () => {
+    const { adapter, rpc } = fake(emit => {
+      emit(notification('error', { error: { message: "The 'gpt-5' model is not supported for this account." } }));
+      emit(notification('turn/completed', { turn: { status: 'failed' } }));
+    });
+    await expect(adapter.complete(request)).rejects.toMatchObject({ status: 400, type: 'model_not_supported' });
+    expect(rpc.close).toHaveBeenCalled();
+  });
+
+  it('does not fail a successful turn because of a retried error notification', async () => {
+    const { adapter } = fake(emit => {
+      emit(notification('error', { willRetry: true, error: { codexErrorInfo: 'internalServerError' } }));
+      emit(notification('turn/completed', { turn: { status: 'completed' } }));
+    });
+    expect((await adapter.complete(request)).stopReason).toBe('end_turn');
+  });
+
   it('negotiates experimental APIs, injects history and returns text with cleanup', async () => {
     const { adapter, rpc } = fake((emit) => {
       emit(notification('item/completed', { item: { type: 'agentMessage', text: 'Hello.' } }));

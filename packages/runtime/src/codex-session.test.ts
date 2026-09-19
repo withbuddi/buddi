@@ -13,6 +13,25 @@ it('validates subscription envelopes without exposing their values in errors', (
   }
 });
 
+it('recovers Keychain hex output and normalizes native credentials to one line', () => {
+  const data = { tokens: { access_token: 'fixture-access', refresh_token: 'fixture-refresh', id_token: 'fixture-id' }, auth_mode: 'chatgpt', last_refresh: '2026-09-19T00:00:00Z' };
+  const pretty = JSON.stringify(data, null, 2) + '\n';
+  const compact = JSON.stringify(data);
+  expect(validateCodexCredential(pretty)).toBe(compact);
+  expect(validateCodexCredential(Buffer.from(pretty).toString('hex'))).toBe(compact);
+  expect(validateCodexCredential(Buffer.from(pretty).toString('hex').toUpperCase())).toBe(compact);
+  expect(validateCodexCredential(compact)).toBe(compact);
+});
+
+it('rejects invalid hex envelopes without weakening credential validation or size limits', () => {
+  for (const invalid of ['abc', 'ff', 'deadbeef', Buffer.from('{}').toString('hex'),
+    Buffer.from(JSON.stringify({ tokens: { access_token: 'access' } })).toString('hex'),
+    Buffer.from(JSON.stringify({ tokens: { access_token: 'access', refresh_token: 'refresh' }, OPENAI_API_KEY: 'secret' })).toString('hex'),
+    Buffer.from(' '.repeat(65_537)).toString('hex')]) {
+    expect(() => validateCodexCredential(invalid)).toThrow('Invalid Codex subscription credential. Reconnect the account.');
+  }
+});
+
 it('cleans only recognizable private orphan profiles, never live profiles or symlinks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'buddi-codex-cleanup-test-'));
   const create = async (name: string, parent: number, mode = 0o700) => {

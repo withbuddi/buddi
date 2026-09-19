@@ -20,11 +20,55 @@ suite('named provider accounts', () => {
     const agents = ['ledger', 'scout'].map(id => ({ id, model: 'claude-sonnet-5', provider: providerFromEnv(env) } as CatalogAgent));
     const catalog = { list: () => agents, get: (id: string) => agents.find(a => a.id === id) } as unknown as AgentCatalog;
     const vault = createMemoryVault(), reload = vi.fn(), test = vi.fn(async (_resolved: unknown) => {});
-    const service = new ProviderAccounts({ pool, env, vault, catalog: () => catalog, reload, test });
-    return { env, agents, catalog, vault, reload, test, service };
+    const listModels = vi.fn(async (_provider: unknown) => ({ models: [{ id: 'claude-test', name: 'Test', isDefault: false }], truncated: false }));
+    const service = new ProviderAccounts({ pool, env, vault, catalog: () => catalog, reload, test, listModels });
+    return { env, agents, catalog, vault, reload, test, listModels, service };
   }
   const settings = { label: 'Work API', kind: 'anthropic', auth: 'api-key', defaultModel: 'claude-sonnet-5', enabled: true, secret: 'private-fixture-value' };
   const codexSettings = { label: 'Personal Codex', kind: 'codex', auth: 'chatgpt', defaultModel: 'gpt-5', enabled: true };
+  it('discovers with each account credential and invalidates cached lists after rotation', async () => {
+    const f = fixture(); await f.service.initialize();
+    const a = await f.service.save(settings);
+    const b = await f.service.save({ ...settings, secret: 'second-fixture-key' });
+    await f.service.models(a.id); await f.service.models(a.id);
+    expect(f.listModels).toHaveBeenCalledTimes(1);
+    expect(f.listModels.mock.calls[0]?.[0]).toMatchObject({ secret: settings.secret });
+    await f.service.models(b.id);
+    expect(f.listModels.mock.calls[1]?.[0]).toMatchObject({ secret: 'second-fixture-key' });
+    await f.service.models(a.id, true); expect(f.listModels).toHaveBeenCalledTimes(3);
+    await f.service.save({ ...settings, id: a.id, revision: 1, secret: 'rotated-fixture' });
+    await f.service.models(a.id); expect(f.listModels.mock.calls[3]?.[0]).toMatchObject({ secret: 'rotated-fixture' });
+    expect(f.test).not.toHaveBeenCalled();
+    await f.service.save({ ...settings, id: a.id, revision: 2, enabled: false });
+    await expect(f.service.models(a.id)).rejects.toThrow('Enable this account');
+  });
+  it('redacts discovery failures and never falls back to another credential', async () => {
+    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+    f.listModels.mockRejectedValue(Object.assign(new Error('SECRET-RESPONSE'), { status: 401 }));
+    await expect(f.service.models(a.id)).rejects.toThrow('provider rejected this credential');
+    expect(f.listModels).toHaveBeenCalledTimes(1);
+    await expect(f.service.models('missing')).rejects.toThrow('not found');
+  });
+  it('coalesces concurrent discovery and refuses results from an edited account', async () => {
+    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+    let finish!: (value: { models: Array<{ id: string; name: string; isDefault: boolean }>; truncated: boolean }) => void;
+    f.listModels.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const one = f.service.models(a.id), two = f.service.models(a.id, true);
+    const settled = Promise.allSettled([one, two]);
+    await vi.waitFor(() => expect(f.listModels).toHaveBeenCalledTimes(1));
+    await f.service.save({ ...settings, id: a.id, revision: 1, label: 'Edited' });
+    finish({ models: [], truncated: false });
+    const results = await settled;
+    expect(results.every(r => r.status === 'rejected')).toBe(true);
+    expect(f.listModels).toHaveBeenCalledTimes(1);
+  });
+  it('routes Codex discovery through its native account lease, never the API', async () => {
+    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    const a = await f.service.save(codexSettings);
+    vi.spyOn(f.service.codex!, 'models').mockResolvedValue({ models: [{ id: 'gpt-test', name: 'Test', isDefault: true }], truncated: false });
+    expect((await f.service.models(a.id)).models[0]?.isDefault).toBe(true);
+    expect(f.listModels).not.toHaveBeenCalled();
+  });
   const metadata = (f: ReturnType<typeof fixture>, id: string) => {
     const a = f.service.view().accounts.find(a => a.id === id)!;
     return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled };

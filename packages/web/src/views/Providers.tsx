@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { ErrorBanner, useAsync } from '../ui';
+import { ModelPicker } from '../ModelPicker';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 export function Providers(): JSX.Element {
@@ -106,7 +107,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?
   const changeKind = (value: ProviderAccount['kind']) => {
     setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
     setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
-    setModel(value === 'anthropic' ? 'claude-sonnet-5' : value === 'openai' || value === 'codex' ? 'gpt-5' : '');
+    setModel(value === 'anthropic' ? 'claude-sonnet-5' : value === 'openai' ? 'gpt-5' : '');
   };
   return <form className="attention" onSubmit={e => {
     e.preventDefault();
@@ -128,7 +129,8 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled }: { account?
         </select></label>
         <p className="muted">Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.</p>
       </>}
-      <label>Default model <input required value={model} onChange={e => setModel(e.target.value)} maxLength={150} /></label>
+      <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
+      {kind === 'codex' && <p className="muted">Enter a model available to your Codex subscription. API model availability is different; there is no automatic model fallback.</p>}
       {auth === 'api-key' && <label>{a ? 'Replacement API key (leave blank to keep)' : 'API key'}
         <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => setSecret(e.target.value)} />
       </label>}
