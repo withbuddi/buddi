@@ -11,10 +11,12 @@ This is the completion checklist, not a claim that subscription sign-in exists.
   A generic 429 does not prove subscription exhaustion. Retry-After is not a
   guaranteed reset time. Raw provider errors are not returned to the dashboard.
 
-## Next: subscription runtime decision
+## In progress: experimental Codex App Server adapter
 
-Recommended: add native-client backends, starting with official Codex App Server.
-Owner choice requested before implementing this architectural expansion.
+Owner selected official Codex App Server, on `experiment/codex-app-server`.
+An isolated offline protocol prototype is implemented; see
+[the experiment notes](codex-app-server-experiment.md) for verified behavior and
+the native-tool isolation gate. It is not yet an assignable provider account.
 
 Verified documentation:
 
