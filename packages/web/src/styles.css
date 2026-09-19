@@ -482,7 +482,7 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   background: var(--good);
 }
 .wb-tool-mark[data-ok='false'] { background: var(--critical); }
-.wb-tool-mark[data-ok='pending'] { background: var(--warn, #b7791f); }
+.wb-tool-mark[data-ok='pending'] { background: var(--warning); }
 .wb-artifacts { display: grid; gap: 20px; margin-bottom: 20px; }
 .wb-command-result { min-width: 0; display: grid; gap: 16px; }
 .wb-command-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
@@ -523,11 +523,15 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   display: grid;
   gap: 12px;
 }
+.wb-approval-gist { margin: 0; font-size: var(--text-md); color: var(--text-muted); line-height: var(--leading); }
+.wb-link { border: 0; background: transparent; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+.wb-link:hover { text-decoration: underline; }
+
 .wb-inline-approval {
   flex-shrink: 0;
   padding: 14px;
   margin: 12px;
-  border: 1px solid var(--warn, #b7791f);
+  border: 1px solid var(--warning);
   border-radius: 14px;
   overflow: hidden;
   background: var(--surface);

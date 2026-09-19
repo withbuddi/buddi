@@ -23,10 +23,15 @@ export function Envelope({
   props,
   timezone = 'UTC',
   onDecided,
+  compact = false,
+  onOpenFull,
 }: {
   props: EnvelopeProps;
   timezone?: string;
   onDecided?: (action: ApprovalRow) => void;
+  /** In the conversation: the decision and one line, the rest on the Canvas. */
+  compact?: boolean;
+  onOpenFull?: () => void;
 }): JSX.Element {
   const [action, setAction] = useState<ApprovalRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,15 +130,22 @@ export function Envelope({
         </p>
       )}
 
-      <h4 className="ui-stat-k wb-label">Preview</h4>
-      <div className="wb-doc wb-block" data-clamp={longPreview && !showAll ? 'true' : undefined}>
+      {compact ? (
+        <p className="wb-approval-gist">
+          {firstLine(action.preview)}{' '}
+          {onOpenFull ? <button type="button" className="wb-link" onClick={onOpenFull}>See the full request on the Canvas</button> : null}
+        </p>
+      ) : null}
+
+      {compact ? null : <h4 className="ui-stat-k wb-label">Preview</h4>}
+      {compact ? null : <div className="wb-doc wb-block" data-clamp={longPreview && !showAll ? 'true' : undefined}>
         {action.preview || '(this tool wrote no preview)'}
         {longPreview && !showAll ? (
           <button type="button" className="wb-doc-more" onClick={() => setShowAll(true)}>Show the whole preview</button>
         ) : null}
-      </div>
+      </div>}
 
-      <details className="ui-details wb-block">
+      {compact ? null : <details className="ui-details wb-block">
         <summary>The envelope, field by field</summary>
         <dl className="ui-kv">
           {fields.map((field) => (
@@ -143,7 +155,7 @@ export function Envelope({
             </div>
           ))}
         </dl>
-      </details>
+      </details>}
     </div>
   );
 }
@@ -195,4 +207,10 @@ function stateTone(state: string): string {
   if (state === 'approved' || state === 'executed') return 'good';
   if (state === 'rejected' || state === 'expired') return 'critical';
   return 'warning';
+}
+
+/** The first sentence-ish of a preview, for the one-line form. */
+function firstLine(preview: string | null | undefined): string {
+  const line = (preview ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? 'This tool wrote no preview.';
+  return line.length > 160 ? `${line.slice(0, 157)}…` : line;
 }

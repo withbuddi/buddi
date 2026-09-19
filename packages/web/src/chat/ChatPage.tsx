@@ -691,6 +691,8 @@ export function ChatPage({
               props={item.props as { approvalId: string }}
               timezone={timezone}
               onDecided={onDecided}
+              compact
+              onOpenFull={() => { setActiveTab(item.id); if (narrow) onOpenCanvas?.(); }}
             />
           </div>
         )) : null}
