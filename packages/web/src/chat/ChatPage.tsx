@@ -395,6 +395,13 @@ export function ChatPage({
 
   /* ---- actions ---- */
 
+  /** A file, from the thread or the tray, onto the canvas. */
+  const openFile = (file: AttachmentBlock): void => {
+    setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
+    setActiveTab(artifactTabId(file.artifactId));
+    if (narrow) onOpenCanvas?.();
+  };
+
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
     const attachmentIds = attachments.map((file) => file.artifactId);
@@ -749,11 +756,7 @@ export function ChatPage({
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}
-          onOpenFile={(file) => {
-            setOpenedFiles(current => current.some(item => item.artifactId === file.artifactId) ? current : [...current, file]);
-            setActiveTab(artifactTabId(file.artifactId));
-            if (narrow) onOpenCanvas?.();
-          }}
+          onOpenFile={openFile}
           onOpen={(toolUseId) => {
             if (conversationId) setDismissedTabs(current => {
               const next = { ...current, [conversationId]: (current[conversationId] ?? []).filter(id => id !== toolUseId) };
@@ -817,6 +820,7 @@ export function ChatPage({
             draft={draft}
             model={agent?.model ?? null}
             setupHref={agent ? agentRoute(agent.id, 'setup') : null}
+            onOpenFile={openFile}
           />
         )}
       </section>

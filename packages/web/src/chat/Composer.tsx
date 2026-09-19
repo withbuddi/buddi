@@ -31,6 +31,7 @@ import {
 } from 'react';
 import { chatApi, ApiError } from '../api';
 import { FileTile } from './FileTile';
+import type { AttachmentBlock } from './attachments';
 import type { UploadedAttachment } from './types';
 
 export interface PendingAttachment {
@@ -75,7 +76,9 @@ export const Composer = forwardRef<ComposerHandle, {
   model?: string | null;
   /** Where the model is changed. The pill is a link when this is given. */
   setupHref?: string | null;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref }, ref) {
+  /** A file in the tray was clicked. It is stored already, so it can be looked at. */
+  onOpenFile?: (attachment: AttachmentBlock) => void;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, onOpenFile }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [focused, setFocused] = useState(false);
@@ -225,6 +228,9 @@ export const Composer = forwardRef<ComposerHandle, {
                   state={attachment.state}
                   error={attachment.error}
                   onRemove={() => remove(attachment.key)}
+                  {...(onOpenFile && attachment.state === 'ready' && attachment.uploaded
+                    ? { onOpen: () => onOpenFile(asBlock(attachment.uploaded as UploadedAttachment)) }
+                    : {})}
                   size="sm"
                 />
               </span>
@@ -325,6 +331,10 @@ export const Composer = forwardRef<ComposerHandle, {
     </div>
   );
 });
+
+function asBlock(uploaded: UploadedAttachment): AttachmentBlock {
+  return { type: 'attachment', artifactId: uploaded.artifactId, filename: uploaded.filename, mime: uploaded.mime, kind: uploaded.kind, sizeBytes: uploaded.sizeBytes };
+}
 
 const stroke = {
   fill: 'none',
