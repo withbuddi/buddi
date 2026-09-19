@@ -111,7 +111,7 @@ export function Rail({
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
 
-      <div className="flex-1" />
+      <div className="wb-rail-spacer" />
 
       <RailButton
         label={`Theme: ${themeLabel(theme)}`}

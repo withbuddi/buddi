@@ -2,7 +2,7 @@
  * Every colour in the dashboard, in one file.
  *
  * Nothing else in the build is allowed to write a hex value: components name
- * tokens, Tailwind's palette names tokens, and the charts read tokens off the
+ * tokens, and the charts read tokens off the
  * computed style. That is what makes the theme a single decision instead of a
  * hunt.
  *

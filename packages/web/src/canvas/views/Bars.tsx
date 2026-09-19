@@ -17,24 +17,24 @@ export function Bars({ props }: { props: BarsProps }): JSX.Element {
   const span = max - min || 1;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="wb-bars">
       {props.bars.map((bar) => {
         const fraction = Math.abs(bar.value) / span;
         return (
-          <div key={bar.category} className="flex items-center gap-3">
-            <div className="w-[120px] shrink-0 text-[13px] truncate" title={bar.category}>
+          <div key={bar.category} className="wb-bar-row">
+            <div className="wb-bar-cat" title={bar.category}>
               {bar.category}
             </div>
-            <div className="flex-1 min-w-0 h-[18px] relative">
+            <div className="wb-bar-track">
               <div
-                className="absolute top-0 h-full rounded-sm"
+                className="wb-bar-fill"
                 style={{
                   width: `${Math.max(1, fraction * 100)}%`,
                   background: bar.value < 0 ? 'var(--chart-bar-negative)' : 'var(--chart-bar)',
                 }}
               />
             </div>
-            <div className="tnum w-[110px] text-right shrink-0">
+            <div className="wb-bar-val">
               {fmtValue(bar.value, props.unit, props.currency)}
             </div>
           </div>

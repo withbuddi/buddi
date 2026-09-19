@@ -3,7 +3,7 @@
  *
  * **It makes no external request.** The gateway asserts this from the outside,
  * against the served HTML. This asserts it from the inside and across
- * everything the build now pulls in — Tailwind's stylesheet, Radix's
+ * everything the build pulls in — Radix's
  * components, every source file — because a Google Fonts `@import` in a CSS
  * file or a CDN script added by a dependency would both pass the HTML check.
  *

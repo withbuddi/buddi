@@ -89,11 +89,11 @@ export function Envelope({
         </div>
       </div>
 
-      <h4 className="wb-stat-k m-0 mb-1.5">Preview</h4>
-      <div className="wb-doc mb-4">{action.preview || '(this tool wrote no preview)'}</div>
+      <h4 className="wb-stat-k wb-label">Preview</h4>
+      <div className="wb-doc wb-block">{action.preview || '(this tool wrote no preview)'}</div>
 
-      <h4 className="wb-stat-k m-0 mb-1.5">The envelope, field by field</h4>
-      <dl className="wb-kv mb-4">
+      <h4 className="wb-stat-k wb-label">The envelope, field by field</h4>
+      <dl className="wb-kv wb-block">
         {fields.map((field) => (
           <div key={field.label} className="contents">
             <dt>{field.label}</dt>
@@ -105,7 +105,7 @@ export function Envelope({
       {error ? <div className="err-banner">{error}</div> : null}
 
       {pending ? (
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="wb-row-wrap">
           <button
             className="wb-btn"
             data-variant="good"
@@ -129,7 +129,7 @@ export function Envelope({
           <span className="wb-hint">{reusable ? 'Auto-mode and Always also approve future calls to this tool within that scope. Host permissions can be revoked under Host execution.' : 'This runs the action exactly as printed above.'}</span>
         </div>
       ) : (
-        <p className="muted m-0">
+        <p className="muted">
           {action.state} {action.decidedBy ? `by ${action.decidedBy}` : ''}{' '}
           {action.decidedVia ? `via ${action.decidedVia}` : ''}
         </p>

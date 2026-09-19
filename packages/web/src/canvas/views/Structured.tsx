@@ -41,7 +41,7 @@ export function Structured({ props }: { props: StructuredProps }): JSX.Element {
   return (
     <div>
       {!execution && <ArtifactDownloads files={files} />}
-      <div className="flex justify-end mb-2">
+      <div className="wb-row-end">
         <button className="wb-btn" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
           {raw ? 'Readable' : 'Raw JSON'}
         </button>
@@ -192,7 +192,7 @@ function Pairs({ pairs }: { pairs: Stat[] }): JSX.Element {
 function Asides({ asides }: { asides: Aside[] }): JSX.Element | null {
   if (asides.length === 0) return null;
   return (
-    <div className="mt-4">
+    <div className="wb-section">
       {asides.map((aside) => (
         <details key={aside.label} className="wb-aside">
           <summary>{aside.label}</summary>
@@ -222,7 +222,7 @@ function AutoTable({
   return (
     <div>
       {label ? <h4 className="wb-sub">{label}</h4> : null}
-      <div className="wrap overflow-x-auto">
+      <div className="wrap wb-scroll-x">
         <table>
           <thead>
             <tr>
@@ -368,7 +368,7 @@ function Collapsed({
 }): JSX.Element {
   return (
     <details open={open}>
-      <summary className="wb-tree-key cursor-pointer">{summary}</summary>
+      <summary className="wb-tree-key">{summary}</summary>
       {children}
     </details>
   );
