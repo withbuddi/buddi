@@ -99,7 +99,7 @@ export function post<T>(path: string, body: unknown = {}): Promise<T> {
 
 export interface HomeStat { label: string; value: string; note?: string; tone?: 'good' | 'warning' | 'critical' }
 export interface HomeRow { title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }
-export interface HomeBlock { id: string; title: string; note?: string; stats: HomeStat[]; rows: HomeRow[]; rowsTitle?: string }
+export interface HomeBlock { id: string; title: string; note?: string; stats: HomeStat[]; rows: HomeRow[]; rowsTitle?: string; sensitive?: boolean }
 
 export interface Overview {
   now: string;

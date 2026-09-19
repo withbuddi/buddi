@@ -58,6 +58,6 @@ export const financeHome: HomeContribution = {
     } catch (err) {
       note = err instanceof Error ? err.message : String(err);
     }
-    return { id: 'finance.money', title: 'Money', ...(note ? { note } : {}), stats, rows, rowsTitle: `Next ${HOME_HORIZON_DAYS} days` };
+    return { id: 'finance.money', title: 'Money', ...(note ? { note } : {}), stats, rows, rowsTitle: `Next ${HOME_HORIZON_DAYS} days`, sensitive: true };
   },
 };

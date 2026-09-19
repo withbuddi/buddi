@@ -6,8 +6,8 @@
  * an approval decides in place, a face opens a conversation, a mission opens
  * the agent that runs it.
  */
-import { useMemo } from 'react';
-import { api, type ApprovalRow, type ConversationSummary, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
+import { useEffect, useMemo, useState } from 'react';
+import { api, type ApprovalRow, type ConversationSummary, type HomeBlock, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -206,30 +206,7 @@ export function Home({
       </div>
 
       {(data?.home ?? []).map((block) => (
-        <Section key={block.id} title={block.title} aside={block.rows.length > 0 && block.rowsTitle ? <span className="muted">{block.rowsTitle.toLowerCase()} below</span> : null}>
-          {block.note ? <Notice tone="warning">{block.note}</Notice> : null}
-          {block.stats.length > 0 ? (
-            <Stats>
-              {block.stats.map((stat) => (
-                <Stat key={stat.label} label={stat.label} value={stat.value} note={stat.note} tone={stat.tone} />
-              ))}
-            </Stats>
-          ) : null}
-          {block.rows.length > 0 ? (
-            <Panel flush>
-              <List>
-                {block.rows.map((row, i) => (
-                  <ListRow
-                    key={`${row.title}-${i}`}
-                    title={row.title}
-                    sub={row.sub}
-                    side={row.side ? <span className={row.tone === 'critical' ? 'critical' : row.tone === 'good' ? 'good' : undefined}>{row.side}</span> : undefined}
-                  />
-                ))}
-              </List>
-            </Panel>
-          ) : null}
-        </Section>
+        <HomeBlockView key={block.id} block={block} />
       ))}
 
       {data?.jobs && data.missions ? (
@@ -296,4 +273,63 @@ export function needsSentence(needs: number, approvals: number, failed: number, 
 
 function capitalise(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * A plugin's block. A sensitive one starts masked and is revealed for this
+ * tab only; leaving the window masks it again, so a screen left unattended
+ * shows the shape of the block and none of its figures.
+ */
+function HomeBlockView({ block }: { block: HomeBlock }): JSX.Element {
+  const [revealed, setRevealed] = useState(false);
+  const masked = block.sensitive === true && !revealed;
+  useEffect(() => {
+    if (!block.sensitive || !revealed) return undefined;
+    const hide = (): void => { if (document.visibilityState === 'hidden') setRevealed(false); };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('blur', hide);
+    return () => { document.removeEventListener('visibilitychange', hide); window.removeEventListener('blur', hide); };
+  }, [block.sensitive, revealed]);
+
+  const aside = (
+    <span className="ui-row">
+      {block.rows.length > 0 && block.rowsTitle && !masked ? <span className="muted">{block.rowsTitle.toLowerCase()} below</span> : null}
+      {block.sensitive ? (
+        <Button size="sm" variant="ghost" aria-pressed={!masked} onClick={() => setRevealed((v) => !v)}>
+          {masked ? 'Show' : 'Hide'}
+        </Button>
+      ) : null}
+    </span>
+  );
+
+  return (
+    <Section title={block.title} aside={aside}>
+      {block.note ? <Notice tone="warning">{block.note}</Notice> : null}
+      {block.stats.length > 0 ? (
+        <Stats>
+          {block.stats.map((stat) => (
+            <Stat key={stat.label} label={stat.label} value={masked ? '••••' : stat.value} note={masked ? undefined : stat.note} tone={masked ? undefined : stat.tone} />
+          ))}
+        </Stats>
+      ) : null}
+      {block.rows.length > 0 ? (
+        masked ? (
+          <p className="muted">{block.rows.length} item{block.rows.length === 1 ? '' : 's'} hidden.</p>
+        ) : (
+          <Panel flush>
+            <List>
+              {block.rows.map((row, i) => (
+                <ListRow
+                  key={`${row.title}-${i}`}
+                  title={row.title}
+                  sub={row.sub}
+                  side={row.side ? <span className={row.tone === 'critical' ? 'critical' : row.tone === 'good' ? 'good' : undefined}>{row.side}</span> : undefined}
+                />
+              ))}
+            </List>
+          </Panel>
+        )
+      ) : null}
+    </Section>
+  );
 }

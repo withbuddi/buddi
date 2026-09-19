@@ -87,7 +87,7 @@ describe('home', () => {
   it('puts what needs a human above the team', async () => {
     vi.spyOn(api, 'overview').mockResolvedValue({
       now: '2026-09-14T09:00:00Z', timezone: 'UTC', paused: false,
-      home: [{ id: 'finance.money', title: 'Money', stats: [{ label: 'Cash', value: '$4,210', note: 'spendable accounts' }], rows: [{ title: 'Rent', sub: '2026-09-20', side: '-$300', tone: 'critical' }], rowsTitle: 'Next 14 days' }],
+      home: [{ id: 'finance.money', title: 'Money', stats: [{ label: 'Cash', value: '$4,210', note: 'spendable accounts' }], rows: [{ title: 'Rent', sub: '2026-09-20', side: '-$300', tone: 'critical' }], rowsTitle: 'Next 14 days', sensitive: true }],
       approvals: { pending: 1, oldestPendingAt: '2026-09-14T07:00:00Z' },
       jobs: { pending: 1, leased: 0, suspended: 0, failed: 3, succeeded: 9, cancelled: 0 },
       missions: { total: 2, enabled: 1, nextRun: '2026-09-19T13:00:00Z' },
@@ -107,7 +107,11 @@ describe('home', () => {
     await waitFor(() => expect(screen.getByText('Needs you')).toBeDefined());
     expect(screen.getByText(/1 approval waiting, 3 failed jobs and 1 urgent finding/)).toBeDefined();
     expect(screen.getByText('Send the invoice')).toBeDefined();
-    expect(screen.getByText('$4,210')).toBeDefined();
+    // Sensitive: masked until asked, then shown.
+    expect(screen.queryByText('$4,210')).toBeNull();
+    expect(screen.getByText(/1 item hidden/)).toBeDefined();
+    screen.getByRole('button', { name: 'Show' }).click();
+    await waitFor(() => expect(screen.getByText('$4,210')).toBeDefined());
     expect(screen.getByText('Rent')).toBeDefined();
     expect(screen.getByText('Ledger')).toBeDefined();
     vi.restoreAllMocks();
