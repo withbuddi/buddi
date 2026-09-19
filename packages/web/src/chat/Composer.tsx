@@ -295,20 +295,17 @@ export const Composer = forwardRef<ComposerHandle, {
           ) : null}
 
           {/* The hint waits its turn: it appears only once the placeholder is
-              gone, so the two never occupy the same line. While a run is live
-              the line becomes the status, with a pulse that says "now". A
-              failed upload takes the line over both. */}
+              gone, so the two never occupy the same line. A failed upload
+              takes the line over. What the agent is doing is said in the
+              thread, where the reply will land, not here. */}
           <span
             className="wb-hint"
-            data-shown={text !== '' || running || failed > 0}
-            data-live={running ? 'true' : undefined}
+            data-shown={(text !== '' && !running) || failed > 0}
             data-tone={failed > 0 ? 'critical' : undefined}
           >
             {failed > 0
               ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
-              : running
-                ? <><span className="wb-pulse" aria-hidden="true" />{agentName} is working…</>
-                : 'Enter sends, Shift+Enter for a new line'}
+              : 'Enter sends, Shift+Enter for a new line'}
           </span>
 
           {running ? (

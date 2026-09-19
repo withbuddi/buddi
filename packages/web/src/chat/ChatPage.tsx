@@ -756,6 +756,7 @@ export function ChatPage({
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}
           now={now}
+          working={running}
           onOpenFile={openFile}
           onOpen={(toolUseId) => {
             if (conversationId) setDismissedTabs(current => {

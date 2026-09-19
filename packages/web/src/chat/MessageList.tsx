@@ -32,6 +32,7 @@ export function MessageList({
   live,
   now,
   onOpen,
+  working = false,
   onOpenFile,
   children,
   agentName,
@@ -42,6 +43,12 @@ export function MessageList({
   /** Passed in so the elapsed counter ticks without this component owning a clock. */
   now: number;
   onOpen: (toolUseId: string) => void;
+  /**
+   * The agent is on it and has not said anything yet. Drawn where the reply
+   * will land, under the agent's name, so the column never goes quiet between
+   * the owner's message and the first word back.
+   */
+  working?: boolean;
   /** A file in the thread was clicked: show it on the canvas. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
   children?: ReactNode;
@@ -53,7 +60,7 @@ export function MessageList({
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, live.length, Boolean(children)]);
+  }, [messages.length, live.length, working, Boolean(children)]);
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
 
@@ -118,6 +125,15 @@ export function MessageList({
           </div>
         );
       })}
+
+      {working && live.length === 0 ? (
+        <div className="wb-msg" data-role="assistant" data-testid="working">
+          {shown.at(-1)?.role !== 'assistant' ? <div className="wb-msg-who">{agentName ?? 'Assistant'}</div> : null}
+          <span className="wb-working" role="status" aria-live="polite">
+            {agentName ?? 'The agent'} is working<span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
+          </span>
+        </div>
+      ) : null}
 
       {live.map((call) => (
         <div key={call.toolUseId} className="wb-msg" data-role="assistant">
