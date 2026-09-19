@@ -35,6 +35,11 @@ export interface HomeBlock {
   rows: HomeRow[];
   /** A heading for the rows, when they are not obviously what the stats are about. */
   rowsTitle?: string;
+  /**
+   * Draw it masked until the owner asks. For blocks a passer-by should not
+   * read off the screen: balances, not car mileage. The plugin decides.
+   */
+  sensitive?: boolean;
 }
 
 export interface HomeContribution {
