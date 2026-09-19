@@ -131,6 +131,8 @@ describe('the canvas knows no domain', () => {
     "'tool.called'",
     "'tool.result'",
     "'message.appended'",
+    "'live.settle'",
+    "'live.snapshot'",
     "'buddi.theme'",
     "'buddi.chatWidth'",
   ]);

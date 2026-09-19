@@ -24,6 +24,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
+import type { LiveTurns } from './live.js';
 import { baseHeaders, first } from './http.js';
 
 /** How often the log is asked for anything new. */
@@ -156,6 +157,8 @@ export function frame(event: string, data: unknown, id?: string): string {
 export interface StreamOptions {
   pool: Pool;
   conversationId: string;
+  /** The answer being written right now, when the surface keeps one. */
+  live?: LiveTurns | undefined;
   /** Replay from just after this event-log id. Absent: only what happens next. */
   since?: string | undefined;
   pollMs?: number;
@@ -183,6 +186,15 @@ export interface LogStreamOptions {
   pollMs?: number;
   pingMs?: number;
   now?: () => Date;
+  /**
+   * Frames that do not come from the log: what is being written this second.
+   * They carry no id, so a reconnect never resumes from one — the snapshot on
+   * connect is how a mid-turn page catches up.
+   */
+  live?: {
+    snapshot: () => { event: string; data: unknown } | null;
+    subscribe: (write: (frame: { event: string; data: unknown }) => void) => () => void;
+  } | undefined;
 }
 
 export async function streamLog(
@@ -231,6 +243,13 @@ export async function streamLog(
   // before anything has happened.
   write(frame('ping', { at: now().toISOString(), from: cursor }));
 
+  // What is being written right now, then every piece from here on. Written
+  // straight to the socket as it happens: these frames are not in the log
+  // and wait for no poll.
+  const first = opts.live?.snapshot();
+  if (first) write(frame(first.event, first.data));
+  const unsubscribe = opts.live?.subscribe((piece) => { write(frame(piece.event, piece.data)); });
+
   let lastPing = Date.now();
   while (open) {
     let rows: LogRow[];
@@ -256,6 +275,7 @@ export async function streamLog(
   }
 
   await closed;
+  unsubscribe?.();
   res.end();
 }
 
@@ -271,11 +291,21 @@ export async function streamConversation(
   res: ServerResponse,
   opts: StreamOptions,
 ): Promise<void> {
+  const { live, ...rest } = opts;
   await streamLog(req, res, {
-    ...opts,
+    ...rest,
     head: () => head(opts.pool, opts.conversationId),
     tail: (cursor, limit) => tail(opts.pool, opts.conversationId, cursor, limit),
     project: toStreamEvent,
+    ...(live ? {
+      live: {
+        snapshot: () => {
+          const turn = live.snapshot(opts.conversationId);
+          return turn ? { event: 'live.snapshot', data: turn } : null;
+        },
+        subscribe: (write) => live.subscribe(opts.conversationId, write),
+      },
+    } : {}),
   });
 }
 

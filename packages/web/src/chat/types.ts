@@ -35,7 +35,8 @@ export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
-  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null };
+  | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
+  | { type: 'thinking'; text: string };
 
 export interface ChatMessage {
   id: string;
@@ -123,6 +124,11 @@ export type ChatEventName =
   | 'message.appended'
   | 'awaiting-approval'
   | 'run.finished'
+  // The answer as it is written: a piece, a turn settling into the
+  // transcript, or what was written before this page connected.
+  | 'live'
+  | 'live.settle'
+  | 'live.snapshot'
   // The attention stream's only frame: "some agent's claim on you may have
   // changed, ask again". It carries no payload on purpose.
   | 'attention'

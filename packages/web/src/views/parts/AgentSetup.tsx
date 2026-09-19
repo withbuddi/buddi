@@ -187,6 +187,17 @@ function Agent({
               ))}
             </select>
           </Field>
+          <Field label="Thinking" hint="Reasoning before the answer. Off is faster; the model's default is usually on for local models.">
+            <select
+              aria-label="Thinking"
+              value={engine?.thinking ?? 'default'}
+              onChange={(e) => set({ thinking: e.target.value === 'default' ? null : e.target.value })}
+            >
+              <option value="default">Model default</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </Field>
         </Toolbar>
       </Section>
 

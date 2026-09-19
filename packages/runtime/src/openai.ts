@@ -26,6 +26,7 @@
  *    before they can reach a dispatch. A string that is not a JSON object never
  *    becomes a silently-empty tool call.
  */
+import { SseParser, frameJson, type SseFrame } from './sse.js';
 import { providerAuthHeaders, type ResolvedProvider } from '@buddi/core';
 import {
   OPENAI_TOOL_NAME_MAX,
@@ -41,6 +42,7 @@ import {
   type RuntimeProvider,
   type StopReason,
   type ToolSchema,
+  type CompletionDelta,
 } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
 import {
@@ -115,6 +117,14 @@ type WireRequest = {
   /** Chat Completions' modern name for the output cap. */
   max_completion_tokens?: number;
   max_tokens?: number;
+  stream?: boolean;
+  stream_options?: { include_usage: boolean };
+  /**
+   * How hard the model thinks. `none` switches reasoning off on hosts that
+   * expose it that way (Ollama does); OpenAI's own models take `minimal` as
+   * their lowest and refuse `none`.
+   */
+  reasoning_effort?: string;
   messages: WireMessage[];
   tools?: {
     type: 'function';
@@ -128,6 +138,9 @@ type WireResponse = {
     finish_reason?: string | null;
     message?: {
       content?: string | null;
+      /** What the model thought first, on hosts that return it (Ollama). */
+      reasoning?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
     };
   }[];
@@ -221,6 +234,9 @@ export function toWireMessages(
         // reach here through a hand-built history; dropping it is correct —
         // posting Anthropic's `server_tool_use` to this endpoint is not.
         break;
+      case 'thinking':
+        // The model's own earlier thoughts are not replayed on this wire.
+        break;
     }
   }
 
@@ -292,6 +308,8 @@ export function fromWireChoice(
 ): { content: ContentBlock[]; stopReason: StopReason } {
   const choice = json.choices?.[0];
   const out: ContentBlock[] = [];
+  const thought = choice?.message?.reasoning ?? choice?.message?.reasoning_content;
+  if (typeof thought === 'string' && thought.trim() !== '') out.push({ type: 'thinking', text: thought });
   const text = choice?.message?.content;
   if (typeof text === 'string' && text !== '') out.push({ type: 'text', text });
   for (const call of choice?.message?.tool_calls ?? []) {
@@ -364,6 +382,12 @@ export function createOpenAiProvider(
     };
     const tools = toWireTools(req.tools, names);
     if (tools) wire.tools = tools;
+    if (req.thinking === 'off') wire.reasoning_effort = resolved.compatible ? 'none' : 'minimal';
+    else if (req.thinking === 'on' && !resolved.compatible) wire.reasoning_effort = 'medium';
+    if (req.onDelta) {
+      wire.stream = true;
+      wire.stream_options = { include_usage: true };
+    }
     return wire;
   }
 
@@ -406,10 +430,18 @@ export function createOpenAiProvider(
       for (;;) {
         req.signal?.throwIfAborted();
         let res: TransportResponse;
+        // Streaming: see the Anthropic adapter — the chunks are put back into
+        // the non-streaming shape, and a failure after the first delta is final.
+        const assembly = req.onDelta ? new OpenAiStreamAssembly(req.onDelta) : null;
         try {
-          res = await doFetch(url, { method: 'POST', headers: headers(), body: payload, ...(req.signal ? { signal: req.signal } : {}) });
+          res = await doFetch(url, {
+            method: 'POST', headers: headers(), body: payload,
+            ...(req.signal ? { signal: req.signal } : {}),
+            ...(assembly ? { onChunk: (text: string, status: number) => { if (status >= 200 && status < 300) assembly.push(text); } } : {}),
+          });
         } catch (err) {
           req.signal?.throwIfAborted();
+          if (assembly?.spoke) throw new ProviderError({ status: 0, type: 'transport_error', message: err instanceof Error ? err.message : String(err), cause: err });
           transportFailures += 1;
           lastError = new ProviderError({
             status: 0,
@@ -430,7 +462,7 @@ export function createOpenAiProvider(
         }
 
         if (res.ok) {
-          const json = (await res.json()) as WireResponse;
+          const json = assembly ? assembly.finish() : ((await res.json()) as WireResponse);
           const { content, stopReason } = fromWireChoice(json, names);
           return {
             content,
@@ -468,4 +500,91 @@ export function createOpenAiProvider(
       );
     },
   };
+}
+
+/**
+ * The streamed form of one chat completion, put back together.
+ *
+ * Each chunk carries `choices[0].delta` with a piece of `content`, a piece of
+ * `reasoning`, or a piece of a tool call keyed by `index`; the last chunk
+ * with a choice names `finish_reason`, and with `include_usage` a final
+ * chunk carries the counts. The result is the `WireResponse` the
+ * non-streaming path would have received.
+ */
+class OpenAiStreamAssembly {
+  readonly #parser = new SseParser();
+  readonly #calls = new Map<number, { id?: string; function: { name?: string; arguments: string } }>();
+  #content = '';
+  #reasoning = '';
+  #model: string | undefined;
+  #finish: string | null = null;
+  #usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  spoke = false;
+
+  constructor(private readonly onDelta: (delta: CompletionDelta) => void) {}
+
+  push(text: string): void {
+    for (const frame of this.#parser.push(text)) this.#frame(frame);
+  }
+
+  #frame(frame: SseFrame): void {
+    const json = frameJson(frame);
+    if (!json) return;
+    if (json.error && typeof json.error === 'object') {
+      const error = json.error as Record<string, unknown>;
+      throw new ProviderError({
+        status: 0,
+        type: typeof error.type === 'string' ? error.type : 'stream_error',
+        message: typeof error.message === 'string' ? error.message : 'the stream reported an error',
+      });
+    }
+    if (typeof json.model === 'string') this.#model = json.model;
+    const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+    if (usage && typeof usage === 'object') this.#usage = usage;
+    const choices = Array.isArray(json.choices) ? (json.choices as Record<string, unknown>[]) : [];
+    const choice = choices[0];
+    if (!choice) return;
+    if (typeof choice.finish_reason === 'string') this.#finish = choice.finish_reason;
+    const delta = (choice.delta ?? {}) as Record<string, unknown>;
+    if (typeof delta.content === 'string' && delta.content !== '') {
+      this.#content += delta.content;
+      this.spoke = true;
+      this.onDelta({ kind: 'text', text: delta.content });
+    }
+    const thought = typeof delta.reasoning === 'string' ? delta.reasoning
+      : typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
+    if (thought !== '') {
+      this.#reasoning += thought;
+      this.spoke = true;
+      this.onDelta({ kind: 'thinking', text: thought });
+    }
+    if (Array.isArray(delta.tool_calls)) {
+      for (const piece of delta.tool_calls as Record<string, unknown>[]) {
+        const index = typeof piece.index === 'number' ? piece.index : this.#calls.size;
+        const call = this.#calls.get(index) ?? { function: { arguments: '' } };
+        if (typeof piece.id === 'string' && piece.id !== '') call.id = piece.id;
+        const fn = (piece.function ?? {}) as Record<string, unknown>;
+        if (typeof fn.name === 'string' && fn.name !== '') call.function.name = fn.name;
+        if (typeof fn.arguments === 'string') call.function.arguments += fn.arguments;
+        this.#calls.set(index, call);
+      }
+    }
+  }
+
+  finish(): WireResponse {
+    for (const frame of this.#parser.end()) this.#frame(frame);
+    const toolCalls = [...this.#calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
+    return {
+      ...(this.#model ? { model: this.#model } : {}),
+      choices: [{
+        finish_reason: this.#finish,
+        message: {
+          content: this.#content === '' ? null : this.#content,
+          ...(this.#reasoning === '' ? {} : { reasoning: this.#reasoning }),
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+      }],
+      ...(this.#usage ? { usage: this.#usage } : {}),
+    };
+  }
 }

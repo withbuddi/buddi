@@ -37,3 +37,30 @@ it('returns only bounded model metadata, including native defaults', () => {
   expect(modelOptions([{ model: 'gpt-test', displayName: 'Test', isDefault: true, secret: 'LEAK' }], true)).toEqual([{ id: 'gpt-test', name: 'Test', isDefault: true }]);
   expect(modelOptions([{ id: 'bad\nmodel' }, { id: 'x'.repeat(151) }, null])).toEqual([]);
 });
+
+it('tags what an Ollama host says can think, and leaves other hosts untagged', async () => {
+  const calls: string[] = [];
+  const transport = (async (url: string, init: any) => {
+    calls.push(url);
+    if (url.endsWith('/models')) return new Response(JSON.stringify({ data: [{ id: 'gemma4:12b' }, { id: 'smollm:135m' }] }), { status: 200 });
+    if (url.endsWith('/api/show')) {
+      const { model } = JSON.parse(init.body);
+      return new Response(JSON.stringify({ capabilities: model === 'gemma4:12b' ? ['completion', 'thinking'] : ['completion'] }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  }) as any;
+  const local = { kind: 'openai', compatible: true, secret: '', baseUrl: 'http://localhost:11434/v1', model: 'x', credentialKind: 'api-key' } as any;
+  const result = await listProviderModels(local, transport);
+  expect(result.models).toEqual([
+    { id: 'gemma4:12b', name: 'gemma4:12b', isDefault: false, thinks: true },
+    { id: 'smollm:135m', name: 'smollm:135m', isDefault: false, thinks: false },
+  ]);
+  expect(calls.filter((u) => u.endsWith('/api/show'))).toHaveLength(2);
+
+  // A host without a `/v1` suffix has no known sibling to ask.
+  const other = { ...local, baseUrl: 'https://api.example.com' };
+  calls.length = 0;
+  const plain = await listProviderModels(other, transport);
+  expect(plain.models.every((m) => m.thinks === undefined)).toBe(true);
+  expect(calls.some((u) => u.endsWith('/api/show'))).toBe(false);
+});

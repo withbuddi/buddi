@@ -184,7 +184,7 @@ describe('createAnthropicProvider — responses and errors', () => {
           stop_reason: 'tool_use',
           content: [
             { type: 'text', text: 'calling' },
-            { type: 'thinking', thinking: 'ignored' },
+            { type: 'thinking', thinking: 'let me see', signature: 'sig-1' },
             { type: 'tool_use', id: 'tu_1', name: 'finance.balance', input: { a: 1 } },
           ],
         }),
@@ -199,10 +199,72 @@ describe('createAnthropicProvider — responses and errors', () => {
     expect(res.stopReason).toBe('tool_use');
     expect(res.usage).toEqual({ input: 11, output: 3 });
     expect(res.model).toBe('claude-sonnet-5');
+    // Thinking is carried, signature and all: the API wants it back verbatim
+    // when a tool-use turn continues, and a page wants to show it.
     expect(res.content).toEqual([
       { type: 'text', text: 'calling' },
+      { type: 'thinking', text: 'let me see', signature: 'sig-1' },
       { type: 'tool_use', id: 'tu_1', name: 'finance.balance', input: { a: 1 } },
     ]);
+  });
+
+  it('asks for thinking in the API\'s words, and only when told to', async () => {
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => { bodies.push(JSON.parse(init.body)); return jsonResponse(200, okBody()); });
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    await provider.complete({ ...request, thinking: 'on' });
+    await provider.complete({ ...request, thinking: 'off' });
+    await provider.complete(request);
+    expect(bodies[0].thinking).toEqual({ type: 'enabled', budget_tokens: expect.any(Number) });
+    expect(bodies[0].max_tokens).toBeGreaterThan(bodies[0].thinking.budget_tokens);
+    expect(bodies[1].thinking).toEqual({ type: 'disabled' });
+    expect(bodies[2].thinking).toBeUndefined();
+    expect(bodies[2].stream).toBeUndefined();
+  });
+
+  it('streams when asked, hands out each piece, and returns the assembled answer', async () => {
+    const frames = [
+      ['message_start', { type: 'message_start', message: { model: 'claude-sonnet-5-2', usage: { input_tokens: 9 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm ' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Hel' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'lo' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 1 }],
+      ['content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tu_9', name: 'finance_balance', input: {} } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"a":' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '1}' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 2 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ] as const;
+    const wire = frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      expect(JSON.parse(init.body).stream).toBe(true);
+      // Two reads, split inside a frame, so the parser's carry-over is exercised.
+      const cut = Math.floor(wire.length / 2);
+      init.onChunk(wire.slice(0, cut), 200);
+      init.onChunk(wire.slice(cut), 200);
+      return new Response(wire, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const deltas: any[] = [];
+    const res = await provider.complete({ ...request, onDelta: (d) => deltas.push(d) });
+    expect(deltas).toEqual([
+      { kind: 'thinking', text: 'hmm ' },
+      { kind: 'text', text: 'Hel' },
+      { kind: 'text', text: 'lo' },
+    ]);
+    expect(res.content).toEqual([
+      { type: 'thinking', text: 'hmm ', signature: 'sig' },
+      { type: 'text', text: 'Hello' },
+      { type: 'tool_use', id: 'tu_9', name: 'finance.balance', input: { a: 1 } },
+    ]);
+    expect(res.stopReason).toBe('tool_use');
+    expect(res.usage).toEqual({ input: 9, output: 5 });
+    expect(res.model).toBe('claude-sonnet-5-2');
   });
 
   it('maps max_tokens', async () => {

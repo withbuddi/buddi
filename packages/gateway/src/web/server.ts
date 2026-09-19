@@ -663,6 +663,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             conversationId,
             since: resumeCursor(req, q.get('since')),
             now: deps.now,
+            ...(chat ? { live: chat.live } : {}),
           });
         } finally {
           release();

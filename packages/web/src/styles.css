@@ -600,6 +600,50 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 .wb-tool[data-ok='false'] .wb-tool-label { color: var(--critical); }
 
 /* The pulse marks a live call. Reduced motion gets a static dot instead. */
+/* The answer as it is written: the same bubble, with a caret at the end. */
+.wb-bubble[data-live='true'] .wb-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--accent);
+  animation: wb-caret 1s steps(2, start) infinite;
+}
+@keyframes wb-caret { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .wb-bubble[data-live='true'] .wb-caret { animation: none; } }
+
+/* What the model thought: a quiet folded row above the answer. Live, it is
+   the only thing on screen until the first word, and says how long. */
+.wb-thought { display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.wb-thought-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 3px 8px 3px 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.wb-thought-toggle:hover { background: var(--surface-sunken); color: var(--text); }
+.wb-thought-toggle .wb-tool-arrow { transition: transform 120ms ease; }
+.wb-thought[data-open='true'] .wb-thought-toggle .wb-tool-arrow { transform: rotate(90deg); }
+.wb-thought[data-live='true'] .wb-thought-toggle { color: var(--text-muted); }
+.wb-thought-text {
+  padding: 8px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* "Working", where the answer will appear: the name, the line, three dots
    that breathe in turn. Under reduced motion they simply stay lit. */
 .wb-working {
@@ -635,7 +679,51 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 }
 @keyframes wb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) {
-  /* "Working", where the answer will appear: the name, the line, three dots
+  /* The answer as it is written: the same bubble, with a caret at the end. */
+.wb-bubble[data-live='true'] .wb-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--accent);
+  animation: wb-caret 1s steps(2, start) infinite;
+}
+@keyframes wb-caret { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .wb-bubble[data-live='true'] .wb-caret { animation: none; } }
+
+/* What the model thought: a quiet folded row above the answer. Live, it is
+   the only thing on screen until the first word, and says how long. */
+.wb-thought { display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.wb-thought-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 3px 8px 3px 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.wb-thought-toggle:hover { background: var(--surface-sunken); color: var(--text); }
+.wb-thought-toggle .wb-tool-arrow { transition: transform 120ms ease; }
+.wb-thought[data-open='true'] .wb-thought-toggle .wb-tool-arrow { transform: rotate(90deg); }
+.wb-thought[data-live='true'] .wb-thought-toggle { color: var(--text-muted); }
+.wb-thought-text {
+  padding: 8px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* "Working", where the answer will appear: the name, the line, three dots
    that breathe in turn. Under reduced motion they simply stay lit. */
 .wb-working {
   display: inline-flex;

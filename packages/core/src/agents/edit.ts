@@ -65,10 +65,12 @@ export interface EnginePatch {
   model?: string | undefined;
   maxTurns?: number | undefined;
   language?: 'mirror' | 'en' | 'fr' | undefined;
+  /** `null` removes the key: back to the model's own default. */
+  thinking?: 'on' | 'off' | null | undefined;
 }
 
 /** Keys `buddi agents set` and the dashboard may write. Nothing else. */
-export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language'];
+export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language', 'thinking'];
 
 /* ------------------------------------------------------------------ *
  * Serialization
@@ -284,6 +286,7 @@ export function enginePatch(change: EnginePatch): FrontmatterPatch {
   if (change.model !== undefined) patch.model = change.model;
   if (change.maxTurns !== undefined) patch.maxTurns = change.maxTurns;
   if (change.language !== undefined) patch.language = change.language;
+  if (change.thinking !== undefined) patch.thinking = change.thinking;
   return patch;
 }
 

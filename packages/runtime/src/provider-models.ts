@@ -1,7 +1,13 @@
 import type { ResolvedProvider } from '@buddi/core';
 import { defaultHttpTransport, type HttpTransport } from './transport.js';
 
-export interface AccountModel { id: string; name: string; isDefault: boolean }
+export interface AccountModel {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  /** The host says this model reasons before it answers. Only known for hosts that say (Ollama). */
+  thinks?: boolean;
+}
 export interface AccountModels { models: AccountModel[]; truncated: boolean }
 
 /** Only picker metadata crosses this boundary, never arbitrary provider fields. */
@@ -45,9 +51,49 @@ export async function listProviderModels(provider: ResolvedProvider, transport: 
     if (!data || !Array.isArray(data.data)) throw new Error('Invalid provider model list.');
     models.push(...modelOptions(data.data));
     if (models.length > 1000) return { models: modelOptions(models).slice(0, 1000), truncated: true };
-    if (data.has_more !== true) return { models: modelOptions(models), truncated: false };
+    if (data.has_more !== true) return { models: await withCapabilities(provider, modelOptions(models), transport, signal), truncated: false };
     if (typeof data.last_id !== 'string' || data.last_id.length > 2048 || seen.has(data.last_id)) throw new Error('Invalid model pagination.');
     cursor = data.last_id as string; seen.add(cursor);
   }
   return { models: modelOptions(models), truncated: true };
+}
+
+/** How many models a capability sweep will ask about; past this the tag is simply absent. */
+const CAPABILITY_SWEEP_MAX = 40;
+
+/**
+ * Ask a compatible host what each model can do, where the host has a way to
+ * say. Ollama does (`POST /api/show` beside its `/v1`), and answers with a
+ * capability list that names `thinking`. Anything that fails, times out or
+ * answers in another shape leaves the model untagged: this is a hint for a
+ * picker, not a fact the run depends on.
+ */
+async function withCapabilities(
+  provider: ResolvedProvider,
+  models: AccountModel[],
+  transport: HttpTransport,
+  signal: AbortSignal,
+): Promise<AccountModel[]> {
+  if (provider.kind !== 'openai' || !provider.compatible || models.length === 0 || models.length > CAPABILITY_SWEEP_MAX) return models;
+  const root = provider.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+  if (root === provider.baseUrl.replace(/\/+$/, '')) return models;
+  const tagged = await Promise.all(models.map(async (model) => {
+    try {
+      const response = await transport(`${root}/api/show`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ model: model.id }),
+        signal,
+        maxBytes: 4 * 1024 * 1024,
+      });
+      if (!response.ok) return model;
+      const data = await response.json();
+      const capabilities = Array.isArray(data?.capabilities) ? (data.capabilities as unknown[]) : null;
+      if (!capabilities) return model;
+      return { ...model, thinks: capabilities.includes('thinking') };
+    } catch {
+      return model;
+    }
+  }));
+  return tagged;
 }

@@ -14,11 +14,26 @@
  * Every recorded call opens its result or an on-demand input/output inspector.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import type { ChatBlock, ChatMessage } from '../chat/types';
+
+/**
+ * The answer as it is being written: what has arrived of this turn's thinking
+ * and text, and when each began, so "thought for 4s" can be said truthfully.
+ */
+export interface LiveTurnView {
+  runId: string;
+  turn: number;
+  text: string;
+  thinking: string;
+  thinkingStartedAt: number | null;
+  textStartedAt: number | null;
+  /** The transcript now holds this turn; it is hidden once the refresh shows it. */
+  settled: boolean;
+}
 
 /** A tool call that has not come back yet. */
 export interface LiveCall {
@@ -33,6 +48,7 @@ export function MessageList({
   now,
   onOpen,
   working = false,
+  partial = null,
   onOpenFile,
   children,
   agentName,
@@ -49,6 +65,8 @@ export function MessageList({
    * the owner's message and the first word back.
    */
   working?: boolean;
+  /** The turn being written right now, if any. */
+  partial?: LiveTurnView | null;
   /** A file in the thread was clicked: show it on the canvas. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
   children?: ReactNode;
@@ -60,7 +78,9 @@ export function MessageList({
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });
-  }, [messages.length, live.length, working, Boolean(children)]);
+  }, [messages.length, live.length, working, partial?.text.length, partial?.thinking.length, Boolean(children)]);
+
+  const writing = partial && !partial.settled && (partial.text !== '' || partial.thinking !== '');
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
 
@@ -97,6 +117,9 @@ export function MessageList({
               </div>
             ) : null}
             {(message.blocks ?? []).map((block, blockIndex) => {
+              if (block.type === 'thinking') {
+                return block.text.trim() === '' ? null : <Thought key={blockIndex} text={block.text} />;
+              }
               if (block.type === 'text') {
                 return block.text.trim() === '' ? null : (
                   <div key={blockIndex} className="wb-bubble">
@@ -126,7 +149,21 @@ export function MessageList({
         );
       })}
 
-      {working && live.length === 0 ? (
+      {writing ? (
+        <div className="wb-msg" data-role="assistant" data-testid="live-turn">
+          {shown.at(-1)?.role !== 'assistant' ? <div className="wb-msg-who">{agentName ?? 'Assistant'}</div> : null}
+          {partial.thinking !== '' ? (
+            <Thought
+              text={partial.thinking}
+              live={partial.text === ''}
+              seconds={secondsBetween(partial.thinkingStartedAt, partial.textStartedAt ?? now)}
+            />
+          ) : null}
+          {partial.text !== '' ? <div className="wb-bubble" data-live="true">{partial.text}<span className="wb-caret" aria-hidden="true" /></div> : null}
+        </div>
+      ) : null}
+
+      {working && live.length === 0 && !writing ? (
         <div className="wb-msg" data-role="assistant" data-testid="working">
           {shown.at(-1)?.role !== 'assistant' ? <div className="wb-msg-who">{agentName ?? 'Assistant'}</div> : null}
           <span className="wb-working" role="status" aria-live="polite">
@@ -154,13 +191,48 @@ export function MessageList({
   );
 }
 
+function secondsBetween(from: number | null, to: number): number | null {
+  if (from === null) return null;
+  return Math.max(0, Math.round((to - from) / 1000));
+}
+
+/**
+ * What the model thought, folded. Live, it is the line the column shows while
+ * there is nothing else to show — "Thinking", with the clock — and it folds
+ * the moment the answer starts. After the fact it is a quiet row that opens.
+ */
+function Thought({ text, live = false, seconds = null }: { text: string; live?: boolean; seconds?: number | null }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const label = live
+    ? `Thinking${seconds !== null && seconds > 0 ? ` · ${seconds}s` : ''}`
+    : seconds !== null && seconds > 0 ? `Thought for ${seconds}s` : 'Thoughts';
+  return (
+    <div className="wb-thought" data-live={live || undefined} data-open={open || undefined}>
+      <button type="button" className="wb-thought-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {live ? <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span> : <ThoughtIcon />}
+        <span>{label}</span>
+        <ArrowIcon />
+      </button>
+      {open ? <div className="wb-thought-text">{text}</div> : null}
+    </div>
+  );
+}
+
+function ThoughtIcon(): JSX.Element {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" />
+    </svg>
+  );
+}
+
 function files(message: ChatMessage): AttachmentBlock[] {
   return (message.blocks ?? []).filter((block): block is AttachmentBlock => block.type === 'attachment');
 }
 
 /** A block worth a line on screen. A bare tool result is not one. */
 function isVisible(block: ChatBlock): boolean {
-  if (block.type === 'text') return block.text.trim() !== '';
+  if (block.type === 'text' || block.type === 'thinking') return block.text.trim() !== '';
   return block.type === 'tool_use' || block.type === 'attachment';
 }
 

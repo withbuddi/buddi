@@ -17,6 +17,7 @@ import type {
   RuntimeProvider,
   ToolSchema,
   Usage,
+  CompletionDelta,
 } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import {
@@ -89,6 +90,12 @@ export interface RunAgentOptions {
    * after it, or lost to a reader tailing the log by id.
    */
   onText?: (text: string) => void | Promise<void>;
+  /**
+   * The answer as it is being written: a piece of text or of thinking. Never
+   * awaited — it is for a page to draw, not for the record, and the record
+   * is `onText`.
+   */
+  onDelta?: (delta: CompletionDelta) => void;
   onToolCall?: (name: string, input: unknown) => void;
   /**
    * Resuming a run that stopped awaiting an approval.
@@ -614,6 +621,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       tools: waitingForOwner ? [] : tools,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),
+      ...(agent.thinking ? { thinking: agent.thinking } : {}),
+      ...(opts.onDelta ? { onDelta: opts.onDelta } : {}),
     });
     ctx.signal?.throwIfAborted();
     usage.input += res.usage.input;

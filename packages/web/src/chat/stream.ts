@@ -22,6 +22,9 @@ const KNOWN: ChatEventName[] = [
   'message.appended',
   'awaiting-approval',
   'run.finished',
+  'live',
+  'live.settle',
+  'live.snapshot',
   'attention',
   'ping',
 ];
