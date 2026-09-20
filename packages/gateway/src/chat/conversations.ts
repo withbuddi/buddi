@@ -67,7 +67,7 @@ export async function listRecentConversations(
                order by m.created_at asc, m.id asc
                limit 1) as first_user
        from core.conversations c
-      where c.agent_id = $1
+      where c.agent_id = $1 and c.group_id is null
       order by c.created_at desc, c.id desc
       limit $2`,
     [agentId, Math.max(1, Math.trunc(limit))],

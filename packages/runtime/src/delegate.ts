@@ -166,6 +166,14 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         );
       }
 
+      // A room has its own way to bring a colleague in, with a budget and a
+      // shared transcript; delegation would step around both.
+      if (ctx.group) {
+        throw new Error(
+          `delegation refused: this is a group run ("${ctx.group.name}"); ask a member through group.ask, or answer for the room`,
+        );
+      }
+
       const depth = ctx.delegationDepth ?? 0;
       if (depth >= MAX_DELEGATION_DEPTH) {
         throw new Error(

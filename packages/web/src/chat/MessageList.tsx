@@ -19,7 +19,8 @@ import { approvalIdOf, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import { Markdown } from './markdown';
-import type { ChatBlock, ChatMessage } from '../chat/types';
+import type { ChatAgent, ChatBlock, ChatMessage } from '../chat/types';
+import { AgentAvatar } from '../ui';
 
 /**
  * The answer as it is being written: what has arrived of this turn's thinking
@@ -50,6 +51,9 @@ export function MessageList({
   onOpen,
   working = false,
   partial = null,
+  speakers,
+  coordinatorId,
+  workingAs,
   onOpenFile,
   children,
   agentName,
@@ -68,6 +72,11 @@ export function MessageList({
   working?: boolean;
   /** The turn being written right now, if any. */
   partial?: LiveTurnView | null;
+  /** In a room: every agent, so a turn can carry its speaker's face and name. */
+  speakers?: ChatAgent[];
+  coordinatorId?: string;
+  /** Who is working, when the room says so; falls back to `agentName`. */
+  workingAs?: string;
   /** A file in the thread was clicked: show it on the canvas. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
   children?: ReactNode;
@@ -92,13 +101,44 @@ export function MessageList({
       ) : null}
 
       {shown.map((message, index) => {
-        const mine = message.role === 'user';
+        // In a room the speaker decides the side: the owner's turns are the
+        // owner's, everything else is a member speaking, tool results included.
+        const speaker = message.speaker ?? null;
+        const mine = speakers ? speaker === 'owner' || (speaker === null && message.role === 'user') : message.role === 'user';
+        const roomNote = speakers && speaker === 'room';
+        const who = speakers && speaker && speaker !== 'owner' && speaker !== 'room' ? speakers.find((a) => a.id === speaker) ?? null : null;
         // The name is a heading for a run of turns, not a stamp on each one.
-        const opensTurn = index === 0 || shown[index - 1]!.role !== message.role;
+        const previous = shown[index - 1];
+        const opensTurn = index === 0 || (speakers ? (previous?.speaker ?? null) !== speaker : previous!.role !== message.role);
+        if (roomNote) {
+          return (
+            <div key={message.id} className="wb-msg wb-msg-room" data-role="room">
+              {(message.blocks ?? []).filter((b): b is Extract<ChatBlock, { type: 'text' }> => b.type === 'text').map((b, i) => <span key={i}>{b.text}</span>)}
+            </div>
+          );
+        }
+        // The coordinator bringing a member in is coordination, not prose:
+        // one line saying who asked whom for what, the whole request on click.
+        const ask = speakers && who && message.role === 'user' ? askedFor(message) : null;
+        if (ask) {
+          // The member asked is whoever answers next; the request names only the asker.
+          const next = shown.slice(index + 1).find((m) => m.role === 'assistant' && m.speaker && m.speaker !== who!.id);
+          const target = next?.speaker ? speakers!.find((a) => a.id === next.speaker) : undefined;
+          return (
+            <details key={message.id} className="wb-msg wb-msg-room wb-msg-ask" data-role="room">
+              <summary>{who!.name} asked {target?.name ?? 'a member'}{ask.request ? `: ${ask.request.length > 120 ? `${ask.request.slice(0, 119)}…` : ask.request}` : ''}</summary>
+              {ask.request ? <p>{ask.request}</p> : null}
+            </details>
+          );
+        }
         return (
           <div key={message.id} className="wb-msg" data-role={mine ? 'user' : 'assistant'}>
             {opensTurn && !mine ? (
-              <div className="wb-msg-who">{agentName ?? 'Assistant'}</div>
+              <div className="wb-msg-who">
+                {who && speakers ? <AgentAvatar agents={speakers} id={who.id} size="sm" /> : null}
+                <span>{who ? who.name : (agentName ?? 'Assistant')}</span>
+                {who && coordinatorId === who.id ? <span className="wb-msg-role">coordinator</span> : null}
+              </div>
             ) : null}
             {/* The files a message carries sit together, before its words: the
                 thing you handed over, then what you said about it. */}
@@ -154,7 +194,7 @@ export function MessageList({
 
       {writing ? (
         <div className="wb-msg" data-role="assistant" data-testid="live-turn">
-          {shown.at(-1)?.role !== 'assistant' ? <div className="wb-msg-who">{agentName ?? 'Assistant'}</div> : null}
+          {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
           {partial.thinking !== '' ? (
             <Thought
               text={partial.thinking}
@@ -168,9 +208,9 @@ export function MessageList({
 
       {working && live.length === 0 && !writing ? (
         <div className="wb-msg" data-role="assistant" data-testid="working">
-          {shown.at(-1)?.role !== 'assistant' ? <div className="wb-msg-who">{agentName ?? 'Assistant'}</div> : null}
+          {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
           <span className="wb-working" role="status" aria-live="polite">
-            {agentName ?? 'The agent'} is working<span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
+            {workingAs ?? agentName ?? 'The agent'} is working<span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
           </span>
         </div>
       ) : null}
@@ -227,6 +267,17 @@ function ThoughtIcon(): JSX.Element {
       <path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" />
     </svg>
   );
+}
+
+/**
+ * The coordinator's request to a member, as the runtime words it: the member's
+ * handle and the request itself, lifted out of the framing around them.
+ */
+function askedFor(message: ChatMessage): { handle: string; request: string } | null {
+  const text = (message.blocks ?? []).find((b): b is Extract<ChatBlock, { type: 'text' }> => b.type === 'text')?.text ?? '';
+  const match = /You are a member of the group "[^"]*"\. @([\w-]+), the coordinator, asks you now:\n\n([\s\S]*?)(?:\n\nAnswer for the room|$)/.exec(text);
+  if (!match) return null;
+  return { handle: match[1]!, request: match[2]!.trim() };
 }
 
 function files(message: ChatMessage): AttachmentBlock[] {

@@ -175,6 +175,19 @@ export function describeFailure(
   options: DescribeFailureOptions = {},
 ): OwnerFailure {
   const detail = describeCause(err);
+
+  // The room outgrew what its members can be sent, and could not be made to
+  // fit. Sending the same message again would fail the same way: the fix is
+  // a new thread, or a bigger cap for the group.
+  if (typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'ProjectionOverflow') {
+    const { chars, cap } = err as { chars?: number; cap?: number };
+    const sizes = typeof chars === 'number' && typeof cap === 'number' ? ` It is ${chars.toLocaleString()} characters against a cap of ${cap.toLocaleString()}.` : '';
+    return {
+      class: 'permanent', retryable: false, detail,
+      text: `This conversation has grown past what the group's agents can be sent, and one piece of it is too large to shorten.${sizes} Sending the same message again will not help: start a new conversation for the group, or raise its context cap.`,
+    };
+  }
+
   const verdict = classifyFailure(err);
 
   if (verdict.class === 'transient') {

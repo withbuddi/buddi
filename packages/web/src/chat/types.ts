@@ -43,6 +43,18 @@ export interface ChatMessage {
   role: string;
   at: string;
   blocks: ChatBlock[];
+  /** Who spoke, in a group: 'owner', an agent id, or 'room'. */
+  speaker?: string;
+}
+
+/** A group of agents that share one conversation (docs/groups.md). */
+export interface GroupView {
+  id: string;
+  name: string;
+  coordinator: string;
+  members: string[];
+  contextCapChars: number;
+  createdAt: string;
 }
 
 /**
@@ -87,6 +99,8 @@ export interface ChatLifetime {
 export interface ChatConversation {
   conversationId: string;
   agentId: string;
+  /** Set when this conversation belongs to a group. */
+  groupId?: string;
   /** When the conversation row was created. */
   startedAt?: string;
   lifetime?: ChatLifetime;

@@ -74,9 +74,10 @@ import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
-import { memoryPreambleFor } from './agents/catalog.js';
+import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
+import { delegateAllowlist } from './agents/delegation.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 
@@ -363,9 +364,16 @@ export async function main(): Promise<void> {
     const gate = async (): Promise<string | null> => ((await isPaused(pool)) ? PAUSED_TEXT : null);
 
     const inlineMission = createInlineMissionRunner(missionDeps);
+    /** Bound once the dashboard is up; a group decided in Telegram resumes there. */
+    let dashboardChat: import('./web/chat.js').WebChat | undefined;
     const telegram = await startTelegram({
       ...missionDeps,
       gate,
+      resumeGroup: async (action, resume) => {
+        if (!dashboardChat) return false;
+        dashboardChat.resumeHost({ agentId: action.agentId, conversationId: action.conversationId }, resume);
+        return true;
+      },
       // The queue this process runs. An approval decided in a chat wakes the
       // suspended run through exactly this, and through nothing else.
       jobs: { resumeJob },
@@ -663,10 +671,13 @@ export async function main(): Promise<void> {
             providerFor: wiring.providerFor,
             artifacts: createCoreArtifactStore({ pool, env: process.env }),
             memoryPreamble: memoryPreambleFor(pool),
+            groupMemoryPreamble: memoryPreambleForGroup(pool),
+            allowlistFor: (agentId) => delegateAllowlist(agentId, wiring.catalog),
             gate,
           },
           log: (line) => console.error(line),
         });
+        dashboardChat = dashboard.chat;
         console.log(
           `  dashboard: ${dashboard.url} (token in the ${source}${created ? ', created now' : ''}) — \`buddi dashboard\` opens it`,
         );

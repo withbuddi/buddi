@@ -78,12 +78,44 @@ export const Composer = forwardRef<ComposerHandle, {
   setupHref?: string | null;
   /** A file in the tray was clicked. It is stored already, so it can be looked at. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, onOpenFile }, ref) {
+  /** In a room: who can be addressed with `@`. Typing `@` offers them. */
+  mentions?: Array<{ handle: string; name: string }>;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, onOpenFile, mentions }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [focused, setFocused] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+
+  /** The `@word` the caret is inside, when there is one and there are people to offer. */
+  const [mentionAt, setMentionAt] = useState<{ start: number; query: string } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const offered = mentionAt && mentions
+    ? mentions.filter((m) => m.handle.toLowerCase().startsWith(mentionAt.query.toLowerCase()) || m.name.toLowerCase().startsWith(mentionAt.query.toLowerCase())).slice(0, 6)
+    : [];
+  const trackMention = (value: string, caret: number): void => {
+    if (!mentions || mentions.length === 0) { setMentionAt(null); return; }
+    const before = value.slice(0, caret);
+    const match = /(^|\s)@([\w-]*)$/.exec(before);
+    if (!match) { setMentionAt(null); return; }
+    setMentionAt({ start: caret - match[2]!.length - 1, query: match[2]! });
+    setMentionIndex(0);
+  };
+  const completeMention = (handle: string): void => {
+    if (!mentionAt) return;
+    const node = area.current;
+    const caret = node ? node.selectionStart : text.length;
+    const next = `${text.slice(0, mentionAt.start)}@${handle} ${text.slice(caret)}`;
+    setText(next);
+    setMentionAt(null);
+    window.requestAnimationFrame(() => {
+      if (!node) return;
+      const at = mentionAt.start + handle.length + 2;
+      node.focus();
+      node.setSelectionRange(at, at);
+      resize();
+    });
+  };
 
   const uploading = attachments.some((attachment) => attachment.state === 'uploading');
   const canSend = !disabled && !running && !uploading && text.trim() !== '';
@@ -192,6 +224,13 @@ export const Composer = forwardRef<ComposerHandle, {
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // With people on offer, the keys pick one before they do anything else.
+    if (mentionAt && offered.length > 0) {
+      if (event.key === 'ArrowDown') { event.preventDefault(); setMentionIndex((i) => (i + 1) % offered.length); return; }
+      if (event.key === 'ArrowUp') { event.preventDefault(); setMentionIndex((i) => (i - 1 + offered.length) % offered.length); return; }
+      if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); completeMention(offered[mentionIndex]!.handle); return; }
+      if (event.key === 'Escape') { event.preventDefault(); setMentionAt(null); return; }
+    }
     // Enter sends; Shift+Enter is a newline. The usual bargain.
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -249,6 +288,7 @@ export const Composer = forwardRef<ComposerHandle, {
           placeholder={running ? `${agentName} is working…` : `Message ${agentName}`}
           onChange={(event) => {
             setText(event.target.value);
+            trackMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
             resize();
           }}
           onFocus={() => setFocused(true)}
@@ -257,6 +297,25 @@ export const Composer = forwardRef<ComposerHandle, {
           onPaste={onPaste}
           disabled={disabled}
         />
+
+        {mentionAt && offered.length > 0 ? (
+          <div className="wb-mentions" role="listbox" aria-label="Members">
+            {offered.map((m, i) => (
+              <button
+                type="button"
+                key={m.handle}
+                role="option"
+                aria-selected={i === mentionIndex}
+                className="wb-mention"
+                data-active={i === mentionIndex || undefined}
+                onMouseDown={(event) => { event.preventDefault(); completeMention(m.handle); }}
+              >
+                <span className="wb-mention-handle">@{m.handle}</span>
+                <span className="wb-mention-name">{m.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="wb-composer-row">
           <input
