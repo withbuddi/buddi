@@ -101,26 +101,30 @@ try {
     if (recovered.gateway === 'running' && recovered.gatewayPid !== restarted.gatewayPid) break;
   }
   assert.equal(recovered.gateway, 'running'); assert.notEqual(recovered.gatewayPid, restarted.gatewayPid);
-  // The supervisor itself dies: the IPC gateway stops, but the same authenticated
-  // cluster can be adopted without initdb, duplicated gateways, or data loss.
+  // The supervisor itself dies: the IPC gateway stops. The next supervisor stops
+  // the postmaster left behind on its cluster and starts its own in its place —
+  // never adopting it — without initdb, duplicated gateways, or data loss.
   process.kill(pid, 'SIGKILL');
   await new Promise(resolve => setTimeout(resolve, 2500));
   await cli(startArgs);
-  const adopted = JSON.parse(await cli(['service', 'status'])); pid = adopted.supervisorPid;
-  assert.notEqual(adopted.supervisorPid, recovered.supervisorPid);
-  // launchd can reap the complete job's process group after supervisor death.
-  // Detached mode must adopt; under launchd a clean cluster restart is valid too.
-  if (!serviceTest) assert.equal(adopted.databasePid, recovered.databasePid);
-  assert.equal(adopted.database, 'running');
+  const successor = JSON.parse(await cli(['service', 'status'])); pid = successor.supervisorPid;
+  assert.notEqual(successor.supervisorPid, recovered.supervisorPid);
+  assert.equal(recovered.database, 'running'); assert.equal(successor.database, 'running');
+  assert.notEqual(successor.databasePid, recovered.databasePid, 'a leftover postmaster is restarted, not adopted');
+  const survived = new Client(connection);
+  await survived.connect();
+  try { assert.deepEqual((await survived.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
+  finally { await survived.end(); }
   if (!serviceTest) {
-    // This server has no child exit listener in its new supervisor: exercise the probe.
-    process.kill(adopted.databasePid, 'SIGINT');
+    // The database child dies under its own supervisor: gateway and supervisor
+    // follow it down, and the launcher starts the installation again cleanly.
+    process.kill(successor.databasePid, 'SIGINT');
     for (let i = 0; i < 150; i++) {
       try { process.kill(pid, 0); } catch { break; }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    assert.throws(() => process.kill(pid, 0), /ESRCH/, 'adopted database failure stops supervisor');
-    assert.throws(() => process.kill(adopted.gatewayPid, 0), /ESRCH/, 'adopted database failure stops gateway');
+    assert.throws(() => process.kill(pid, 0), /ESRCH/, 'database failure stops supervisor');
+    assert.throws(() => process.kill(successor.gatewayPid, 0), /ESRCH/, 'database failure stops gateway');
     await cli(startArgs);
     pid = JSON.parse(await cli(['service', 'status'])).supervisorPid;
   } else {
@@ -165,7 +169,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart' + (serviceTest ? ', LaunchAgent lifecycle.' : ', adopted database death.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {

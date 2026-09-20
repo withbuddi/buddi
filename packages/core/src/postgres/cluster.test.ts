@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { watchDatabase } from './postgres.js';
+import { watchDatabase } from './cluster.js';
 
 describe('the managed database monitor', () => {
-  test('adopted database is watched without a child exit event', async () => {
+  test('a database that stops answering is declared gone without a child exit event', async () => {
     let probes = 0;
     const monitor = watchDatabase(async () => { probes++; throw new Error('down'); }, { interval: 1, failures: 2 });
     await monitor.exited;
@@ -20,6 +20,19 @@ describe('the managed database monitor', () => {
     }, { interval: 1, failures: 2 });
     await monitor.exited; monitor.stop();
     expect(probes).toBe(4);
+  });
+
+  test('a monitor stopped mid-probe neither reschedules nor declares the database gone', async () => {
+    let probes = 0, gone = false;
+    let entered!: () => void, release!: () => void;
+    const inProbe = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const monitor = watchDatabase(async () => { probes++; entered(); await blocked; throw new Error('down'); }, { interval: 1, failures: 1 });
+    void monitor.exited.then(() => { gone = true; });
+    await inProbe;
+    monitor.stop(); release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(probes).toBe(1); expect(gone).toBe(false); expect(monitor.alive).toBe(true);
   });
 
   test('stopping a monitor cancels future probes', async () => {

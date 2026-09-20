@@ -15,6 +15,7 @@ import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import type { ChildProcess } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 
 /** What a packaged installation persists in `installation.json`. */
@@ -53,6 +54,20 @@ function errorCode(error: unknown): string | undefined {
 export function nativeEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP']
     .filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
+}
+
+/**
+ * Stop a child and make sure it is gone. The managed cluster's own child is
+ * stopped by the identical helper in `@buddi/core`; this copy exists because
+ * nothing in this module may import a `@buddi/*` package (see above).
+ */
+export async function stopChild(child: ChildProcess | undefined, signal: NodeJS.Signals = 'SIGTERM', timeout = 15_000): Promise<void> {
+  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>(resolve => {
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    child.kill(signal);
+  });
 }
 
 /** The one HTTP seam this module has; tests pass their own. */

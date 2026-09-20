@@ -17,9 +17,9 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
-import { acquireLock, initialize, atomicJson } from './environment.js';
+import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
-import { startDatabase, stopChild } from './postgres.js';
+import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
 
 type Gateway = typeof import('@buddi/gateway');
