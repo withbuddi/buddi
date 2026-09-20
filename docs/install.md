@@ -1,6 +1,7 @@
 # Install: one command, then the dashboard
 
-Status: proposed spec, 2026-09-20. Not built.
+Status: proposed spec, 2026-09-20. An experimental [packaged-install foundation](install-foundation.md)
+is implemented separately; the complete install, wizard, plugins and backup contract is not built.
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
