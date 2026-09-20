@@ -1,6 +1,6 @@
 # Groups: a team of agents in one conversation
 
-Status: agreed design, not built. Dated 2026-09-20.
+Status: implementation contract, not built. Agreed 2026-09-20.
 
 A group is a persistent conversation with a chosen team of agents. You create
 "Household finances", add Concierge, Ledger and Finance Advisor, and say
@@ -37,12 +37,17 @@ metadata, never inferred from the text.
 mention goes to the coordinator, which interprets it, asks members for
 contributions, and brings the results together. A message that names members
 with `@handle` goes to those members, in the order named, and the coordinator
-resumes after. Members may address each other, within the budget below.
+resumes after. Members may ask for each other's help, through the coordinator;
+see *Member-to-member requests*.
 
 **Sequential execution.** One active member run per group at a time. The
-coordinator requests a contribution; that member finishes, or pauses on an
-approval; coordination resumes. Parallel research is a later feature, not a
-hidden complication of the first version.
+coordinator requests a contribution; that member finishes; coordination
+resumes. A pending approval suspends the whole group request: no other member
+starts until the decision is made, and new owner messages and scheduled
+requests queue behind it. Stop invalidates every pending continuation, so a
+late approval cannot restart a stopped request; effects already completed stay
+completed. Parallel research is a later feature, not a hidden complication of
+the first version.
 
 **A hard request budget.** Each owner request may spend twelve model calls
 across all members: eleven working calls and one synthesis call reserved for
@@ -62,12 +67,16 @@ Providers know two roles, user and assistant. The stored transcript has many
 speakers. Each model call receives a projection of the transcript built for
 the agent about to speak:
 
-- Its own earlier turns become its assistant history, verbatim, so its tool
-  calls and tool results stay paired.
+- Its own earlier turns become its assistant history, preserving their content
+  and the pairing of each tool call with its result through the provider
+  adapter. Not the wire form: an agent's account or model can change between
+  turns, and provider-specific blocks do not travel.
 - The owner's turns become user turns.
 - Other members' turns become attributed room context in a user turn, built
   from the speaker metadata: `@ledger said: …`. Never assistant turns, never
-  the model's own words, never system text.
+  the model's own words, never system text. Another member's tool results are
+  attributed room data in the same way, never executable tool history of the
+  receiving agent.
 - Shared artifacts stay references, reached through that agent's existing
   artifact tools.
 - Coordination requests ("Ledger, summarise the transactions") are turns like
@@ -85,17 +94,37 @@ and refusal to promote room text.
 - Twelve model calls per owner request, shared across every member, counted on
   the group request row in the database so it survives approval pauses and
   restarts.
-- A call counts when the provider answered, including an answer the run then
-  treated as an error. A transport failure that never reached the model, or a
-  429 the adapter backs off from, does not count.
-- The twelfth call is the synthesis: the coordinator only, no tools, given the
-  transcript and the contributions. It cannot start new work.
+- A call is reserved atomically on that row before it is dispatched. An
+  ambiguous failure, such as a timeout or a crash after dispatch, keeps the
+  reservation: a timeout does not say whether the model ran. An explicit
+  rejection the provider made before doing any work, such as a 429, may
+  release it. Retries on top of that draw on their own bounded attempt and
+  time budget, never on the twelve.
+- One call, the last, is reserved for synthesis: the coordinator only, no
+  tools, given the transcript and the contributions. It cannot start new work.
+  Synthesis may come early; two working calls and a conclusion is a complete
+  request, and eleven is a ceiling, not a target.
 - When the working budget is spent, the coordinator is told and moves to
   synthesis. If synthesis fails, the request ends honestly: the completed
   contributions are already in the thread under their speakers, and the owner
   is told the summary did not come.
-- Members addressing each other spend from the same budget; the existing
-  delegation depth cap still applies, so two members cannot loop.
+- Maintenance has its own budget, recorded on the same row: one call for the
+  rollover summary. It is never taken from a request's twelve, and it is never
+  invisible extra work.
+- Members asking for each other's help spend from the request's twelve; see
+  *Member-to-member requests* for how that is scheduled.
+
+## Member-to-member requests
+
+Members request help through the coordinator, which schedules the next
+contribution sequentially. Group orchestration never invokes ordinary
+delegation recursively: today's delegation cap means a delegate cannot delegate
+again, and a group run is not a delegate.
+
+A request is a structured, validated call, not prose. Mentioning another member
+in generated text schedules nothing. The call is checked against the group's
+membership and against the requesting agent's delegation allowlist, both
+explicitly, before anything is queued.
 
 ## Memory
 
@@ -109,17 +138,26 @@ Two things, kept apart so task details do not become permanent facts:
   coordinator in one counted call when the thread rolls over, and read into the
   next thread's first turn.
 
-Recall in a group run covers the shared scope and the group scope. Agent
-private memory is not recalled automatically, the coordinator's included.
-Bringing private context into the room is an explicit act: the agent says it in
-a turn, where it is visible and attributed. The creation sheet says this in one
-sentence: anything an agent brings into the room is seen by the room.
+A group run can recall only the shared scope and the group scope. No member,
+the coordinator included, performs an automatic private-memory lookup inside a
+group run. Private information enters the room in exactly two ways: an
+owner-authorised import, or a contribution the owner posts. What is in the
+room is seen by the room, and the creation sheet says so in one sentence.
+
+The group scope an agent writes to or reads from comes from the trusted
+execution context of the run, never from a group id the model supplies.
 
 Rollover happens between completed owner requests, never mid tool exchange or
 with an approval pending. The trigger is a conservative character budget for
 the whole room, set per group with a default well under what the smallest
 common model holds, since every member turn re-sends the whole room. Per-model
 limits can replace the group default once the account layer knows them.
+
+The starting cap does not guarantee a request fits: one large tool result can
+exhaust a member's context mid-request. That case ends with a controlled stop,
+not a provider error: the run records that the result was too large to carry,
+the coordinator is told, and the request proceeds to synthesis with what it
+has.
 
 ## What you see
 
