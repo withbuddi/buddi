@@ -241,12 +241,15 @@ reboot, and choose a distribution that includes the backup tools.
 
 ## Wizard
 
-The first-run screens of [install.md §5](install.md#5-the-first-run-wizard) are
-built on this foundation. The dashboard route is `#/welcome`, `?step=<id>` names
-one screen, and the wizard renders without the rail.
+The first run of [install.md §5](install.md#5-first-run-you-meet-buddi) is built
+on this foundation, and what the owner sees is the screen script in
+[onboarding.md](onboarding.md): one thread, four questions, then the assistant
+speaking for itself. The dashboard route is `#/welcome` and it renders without
+the rail. Everything below is about the *record*, which the shape of the screen
+does not change.
 
 - **The record is the server's.** `core.onboarding` already holds it, and the
-  wizard reads and writes it through `GET /api/onboarding` and `POST
+  thread reads and writes it through `GET /api/onboarding` and `POST
   /api/onboarding/step|complete|skip|agent`
   (`packages/gateway/src/web/onboarding.ts`). `GET` also answers what is still
   missing — a name, a usable model account, an agent of the owner's own — and
