@@ -23,6 +23,7 @@ import {
   BACKUP_PASSPHRASE_KEY,
   createBackup,
   createVault,
+  describeSource,
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
   encryptFile,
@@ -102,7 +103,7 @@ export function checkoutBackupOptions(env: NodeJS.ProcessEnv): CreateOptions {
   const pluginsFile = pluginsFilePath({ ownerRoot: search.ownerRoot, env });
   try {
     for (const p of readPluginsFile(pluginsFile).plugins) {
-      plugins.push({ name: p.name, version: p.version, schema: p.schema, source: p.source.path });
+      plugins.push({ name: p.name, version: p.version, schema: p.schema, source: describeSource(p.source) });
     }
   } catch {
     // An unreadable record is `buddi plugins`' problem, not a backup's.

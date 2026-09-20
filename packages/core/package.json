@@ -1,7 +1,22 @@
 {
   "name": "@buddi/core",
   "version": "0.1.0",
-  "private": true,
+  "description": "The contract every buddi plugin is written against: the manifest, the tool registry, the approval machinery and the migration runner.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withbuddi/buddi.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/withbuddi/buddi/blob/main/docs/plugins.md",
+  "keywords": [
+    "buddi",
+    "buddi-plugin",
+    "agents"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,14 +32,16 @@
     "./testing/global-setup": {
       "types": "./dist/testing/global-setup.d.ts",
       "default": "./dist/testing/global-setup.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "bin": {
     "buddi-migrate": "./dist/cli-migrate.js"
   },
   "files": [
     "dist",
-    "migrations"
+    "migrations",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

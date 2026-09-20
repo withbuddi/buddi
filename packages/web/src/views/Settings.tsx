@@ -16,6 +16,7 @@ import { Providers } from './Providers';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
+import { Plugins } from './Plugins';
 
 export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.Element {
   const section = /^#\/settings\/([a-z]+)/.exec(hash)?.[1] ?? 'you';
@@ -39,6 +40,7 @@ export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
       {section === 'backup' ? <Backup /> : null}
+      {section === 'plugins' ? <Plugins /> : null}
       {section === 'system' ? <System timezone={timezone} /> : null}
     </div>
   );

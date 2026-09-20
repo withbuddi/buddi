@@ -11,6 +11,9 @@
  * it from a corrupt file would silently unregister every tool the owner's
  * agents are granted.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { PluginManifest, ToolDefinition } from '../tools.js';
@@ -22,7 +25,7 @@ import {
   removeInstalledPlugin,
   upsertInstalledPlugin,
 } from './record.js';
-import { PLUGINS_FILE_VERSION, type InstalledPlugin } from './types.js';
+import { describeSource, PLUGINS_FILE_VERSION, type InstalledPlugin } from './types.js';
 
 function tool(name: string, tier: 'auto' | 'gated', description: string): ToolDefinition<any, any> {
   return {
@@ -155,6 +158,7 @@ describe('the install record', () => {
   it('refuses a file it cannot parse rather than reporting an empty installation', () => {
     expect(() => parsePluginsFile('{oh no')).toThrow(PluginsFileError);
     expect(() => parsePluginsFile('{"version":99,"plugins":[]}')).toThrow(/version 99/);
+    expect(() => parsePluginsFile('{"version":2,"plugins":[]}').plugins).not.toThrow();
     expect(() => parsePluginsFile('{"version":1,"plugins":[{"name":"x"}]}')).toThrow(/has no "version"/);
     expect(() => parsePluginsFile('{"version":1,"plugins":[]}').plugins).not.toThrow();
   });
@@ -164,10 +168,77 @@ describe('the install record', () => {
     expect(() => parsePluginsFile(two)).toThrow(/twice/);
   });
 
+  it('reads a version 1 file as directory sources with no provenance', () => {
+    // The format before plugins came from npm. Every entry in one is a
+    // developer pointing at their own build, which is exactly what it says.
+    const v1 = JSON.stringify({ version: 1, plugins: [record] });
+    const read = parsePluginsFile(v1);
+    expect(read.version).toBe(PLUGINS_FILE_VERSION);
+    expect(read.plugins[0]?.source).toEqual({ kind: 'directory', path: '/plugins/garden' });
+    expect(read.plugins[0]?.provenance).toBeUndefined();
+  });
+
+  it('carries what was approved for a plugin that came from a registry', () => {
+    const fromNpm: InstalledPlugin = {
+      ...record,
+      source: { kind: 'registry', name: 'buddi-plugin-garden', version: '1.0.0' },
+      provenance: {
+        integrity: 'sha512-abc',
+        publisher: 'someone',
+        installedHash: 'sha256-def',
+        approvedAt: '2026-09-15T12:00:00.000Z',
+        approvedIntegrity: 'sha512-abc',
+      },
+    };
+    const text = JSON.stringify({ version: PLUGINS_FILE_VERSION, plugins: [fromNpm] });
+    expect(parsePluginsFile(text).plugins[0]).toEqual(fromNpm);
+    expect(describeSource(fromNpm.source)).toBe('npm buddi-plugin-garden@1.0.0');
+    expect(describeSource({ kind: 'tarball', path: '/tmp/x.tgz' })).toBe('tarball /tmp/x.tgz');
+  });
+
+  it('refuses a source this build does not understand rather than dropping the plugin', () => {
+    const odd = JSON.stringify({
+      version: 2,
+      plugins: [{ ...record, source: { kind: 'carrier-pigeon' } }],
+    });
+    expect(() => parsePluginsFile(odd)).toThrow(/does not know/);
+  });
+
   it('lives in the owner\'s private directory, and is pinnable', () => {
     expect(pluginsFilePath({ ownerRoot: '/home/me/.buddi' })).toBe('/home/me/.buddi/plugins.json');
     expect(pluginsFilePath({ ownerRoot: '/home/me/.buddi', env: { BUDDI_PLUGINS_FILE: '/tmp/p.json' } })).toBe(
       '/tmp/p.json',
     );
+  });
+});
+
+/**
+ * Core is the one package in this repository that leaves it.
+ *
+ * A plugin depends on `@buddi/core` as a peer, so it has to exist on a
+ * registry for anybody outside this checkout to write one. These are the
+ * fields that decide whether `npm publish` would produce something usable, and
+ * they are asserted here rather than remembered: `private: true` came back
+ * once already, and the symptom is a plugin nobody can install.
+ */
+describe('@buddi/core is publishable', () => {
+  const pkg = JSON.parse(
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'),
+  ) as Record<string, any>;
+
+  it('is not private, and says who may publish it', () => {
+    expect(pkg.private).toBeUndefined();
+    expect(pkg.publishConfig?.access).toBe('public');
+    expect(pkg.repository?.url).toContain('github.com');
+    expect(pkg.license).toBeTypeOf('string');
+  });
+
+  it('ships the built code and the migrations a restore needs', () => {
+    expect(pkg.files).toContain('dist');
+    expect(pkg.files).toContain('migrations');
+  });
+
+  it('exports its own package.json, which is how a staged plugin finds it', () => {
+    expect(pkg.exports['./package.json']).toBe('./package.json');
   });
 });

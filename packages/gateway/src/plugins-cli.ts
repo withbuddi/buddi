@@ -30,10 +30,12 @@ import {
   contributionHeadline,
   contributionOf,
   createPool,
+  describeSource,
   migrate,
   readPluginsFile,
   renderContribution,
   type InstalledPlugin,
+  type PluginContribution,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { loadEnvironment } from './bootstrap.js';
@@ -45,51 +47,101 @@ import {
   recordFile,
   type LoadedPlugins,
 } from './plugins/load.js';
-import { applyInstall, InstallRefusal, planInstall, renderAgentDrift } from './plugins/install.js';
+import { InstallRefusal, renderAgentDrift } from './plugins/install.js';
 import { applyUninstall, planUninstall, UninstallRefusal } from './plugins/uninstall.js';
+import { approveStaged } from './plugins/approve.js';
+import {
+  listStaged,
+  readStaged,
+  rejectStaged,
+  stagePlugin,
+  StageRefusal,
+  TRUST_SENTENCE,
+  type StagedPlan,
+  type StagedPlugin,
+} from './plugins/stage.js';
+import { updatePlugin } from './plugins/update.js';
+import { verifyInstalledHash } from './plugins/hash.js';
 
 export const USAGE = `buddi plugins — what this installation has installed
 
   buddi plugins list                      what is installed, its version, and whether it is healthy
   buddi plugins info <name>               what it is, what it brought, and what it proposes
-  buddi plugins install <directory>       READ what a plugin contributes (installs nothing)
-  buddi plugins install <directory> --yes install it
+  buddi plugins install <spec>            STAGE it and read what it claims (imports nothing)
+  buddi plugins install <spec> --yes      approve it: import it, plan it, install it
+  buddi plugins update <name> [--version] stage the next version; --yes approves it
+  buddi plugins staged                    what is staged and waiting for you
+  buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
+  buddi plugins reject <id>               delete a stage and everything it fetched
   buddi plugins uninstall <name>          what removing it would do (removes nothing)
   buddi plugins uninstall <name> --yes    remove it; its database schema is KEPT
       --detach-agents                     also take its tools out of agents that were granted them
       --purge                             ALSO DROP its schema and everything in it. Irreversible.
 
-A plugin is a built package directory: package.json, the dist/ it points at, and
-migrations/ if it owns tables. Installing one runs its code inside buddi.`;
+A <spec> is a directory that exists, a .tgz on disk, or an npm package:
+\`finance\`, \`@you/buddi-plugin-finance@1.2.3\`. Installing one runs its code inside buddi.`;
 
 export interface ParsedPluginsArgs {
-  command: 'help' | 'list' | 'info' | 'install' | 'uninstall';
+  command: 'help' | 'list' | 'info' | 'install' | 'update' | 'staged' | 'approve' | 'reject' | 'uninstall';
   target?: string;
   yes: boolean;
   detachAgents: boolean;
   purge: boolean;
+  acknowledgeDrift: boolean;
+  /** Passed back at approval. Absent means "the hash this run just showed me". */
+  integrity?: string;
+  version?: string;
+  registry?: string;
 }
+
+const VALUE_FLAGS = ['--integrity', '--version', '--registry'] as const;
+const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
   const [head, ...rest] = argv;
-  const flags = rest.filter((a) => a.startsWith('--'));
-  const positional = rest.filter((a) => !a.startsWith('--'));
-  for (const flag of flags) {
-    if (!['--yes', '--detach-agents', '--purge'].includes(flag)) {
-      throw new Error(`buddi plugins: unknown option ${flag}`);
+  const flags = new Set<string>();
+  const values = new Map<string, string>();
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i] as string;
+    if (!arg.startsWith('--')) {
+      positional.push(arg);
+      continue;
     }
+    const [name, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    if ((VALUE_FLAGS as readonly string[]).includes(name)) {
+      const value = inline ?? rest[++i];
+      if (value === undefined) throw new Error(`buddi plugins: ${name} needs a value`);
+      values.set(name, value);
+      continue;
+    }
+    if (!(BARE_FLAGS as readonly string[]).includes(name)) {
+      throw new Error(`buddi plugins: unknown option ${name}`);
+    }
+    flags.add(name);
   }
   const base = {
-    yes: flags.includes('--yes'),
-    detachAgents: flags.includes('--detach-agents'),
-    purge: flags.includes('--purge'),
+    yes: flags.has('--yes'),
+    detachAgents: flags.has('--detach-agents'),
+    purge: flags.has('--purge'),
+    acknowledgeDrift: flags.has('--acknowledge-drift'),
+    ...(values.has('--integrity') ? { integrity: values.get('--integrity') as string } : {}),
+    ...(values.has('--version') ? { version: values.get('--version') as string } : {}),
+    ...(values.has('--registry') ? { registry: values.get('--registry') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
   if (head === 'list') return { command: 'list', ...base };
-  if (head === 'info' || head === 'install' || head === 'uninstall') {
+  if (head === 'staged') return { command: 'staged', ...base };
+  if (['info', 'install', 'update', 'approve', 'reject', 'uninstall'].includes(head)) {
     const target = positional[0];
-    if (target === undefined) throw new Error(`buddi plugins ${head} needs a ${head === 'install' ? 'directory' : 'plugin name'}`);
-    return { command: head, target, ...base };
+    if (target === undefined) {
+      const what =
+        head === 'install' ? 'plugin to install (a directory, a .tgz, or an npm package)'
+        : head === 'approve' || head === 'reject' ? 'staging id'
+        : 'plugin name';
+      throw new Error(`buddi plugins ${head} needs a ${what}`);
+    }
+    return { command: head as ParsedPluginsArgs['command'], target, ...base };
   }
   throw new Error(`buddi plugins: unknown command "${head}"`);
 }
@@ -190,12 +242,17 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv): Prom
       },
       pool,
     );
+    // What is on disk against what was approved. A plugin runs with everything
+    // buddi can do, so "it changed since you said yes" outranks a schema note.
+    const hash = verifyInstalledHash(loaded.record, { env });
     rows.push({
       name: loaded.record.name,
       version: loaded.manifest.version,
       origin: 'installed',
-      health: health.health,
-      detail: `${contributionHeadline(loaded.contribution)} — ${health.detail}`,
+      health: hash.matches ? health.health : 'warn',
+      detail: hash.matches
+        ? `${contributionHeadline(loaded.contribution)} — ${health.detail}`
+        : hash.message,
     });
   }
   for (const problem of plugins.problems) {
@@ -238,9 +295,17 @@ async function commandInfo(name: string, pool: Pool | undefined, env: NodeJS.Pro
   if (loaded) {
     console.log('');
     console.log('INSTALLED');
-    console.log(`  from ${loaded.record.source.path}`);
+    console.log(`  from ${describeSource(loaded.record.source)}`);
     console.log(`  entry ${loaded.record.entry}`);
     console.log(`  recorded ${loaded.record.version} at ${loaded.record.installedAt}`);
+    const provenance = loaded.record.provenance;
+    if (provenance !== undefined) {
+      if (provenance.publisher !== undefined) console.log(`  published by ${provenance.publisher}`);
+      if (provenance.integrity !== undefined) console.log(`  integrity ${provenance.integrity}`);
+      if (provenance.approvedAt !== undefined) console.log(`  approved ${provenance.approvedAt}`);
+      const hash = verifyInstalledHash(loaded.record, { env });
+      console.log(hash.matches ? '  its files still hash to what you approved' : `  ${hash.message}`);
+    }
   } else {
     console.log('');
     console.log('INSTALLED');
@@ -268,56 +333,202 @@ async function commandInfo(name: string, pool: Pool | undefined, env: NodeJS.Pro
   return 0;
 }
 
-async function commandInstall(
-  directory: string,
+/* ------------------------------------------------------------------ *
+ * Staging and the two approvals
+ * ------------------------------------------------------------------ */
+
+/** Everything the owner reads before the plugin has ever been imported. */
+function renderStaged(staged: StagedPlugin): string[] {
+  const lines: string[] = [];
+  lines.push('');
+  lines.push(`${staged.name} ${staged.version}`);
+  lines.push(`  from      ${describeSource(staged.source)}`);
+  lines.push(`  published by ${staged.publisher ?? '(nobody: nothing was fetched from a registry)'}`);
+  lines.push(`  integrity ${staged.integrity === '' ? '(none: a directory on this disk)' : staged.integrity}`);
+  lines.push(
+    `  depends on ${staged.dependencies.count} package${staged.dependencies.count === 1 ? '' : 's'}` +
+      `${staged.dependencies.withScripts.length === 0 ? ', none of which declares an install script' : ':'}`,
+  );
+  for (const dependency of staged.dependencies.withScripts) {
+    lines.push(`    ${dependency} — WANTS TO RUN CODE AT INSTALL. It was installed with --ignore-scripts,`);
+    lines.push('      so it has not run; approving this plugin does not run it either.');
+  }
+  if (staged.scripts.length > 0) {
+    lines.push(`  it declares the lifecycle script${staged.scripts.length === 1 ? '' : 's'} ${staged.scripts.join(', ')}; none was run`);
+  }
+  lines.push('');
+  lines.push('WHAT IT SAYS ABOUT ITSELF (its buddi.md — its claim, not a fact)');
+  if (staged.claims.missing) {
+    lines.push('  It ships no buddi.md. It stated nothing in advance about what it does.');
+  } else {
+    for (const line of staged.claims.text.split('\n')) lines.push(`  ${line}`);
+  }
+  lines.push('');
+  lines.push(...wrap(TRUST_SENTENCE, 86).map((line) => `  ${line}`));
+  return lines;
+}
+
+/** Hard-wrap a sentence so the terminal never decides where it breaks. */
+function wrap(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let current = '';
+  for (const word of text.split(' ')) {
+    if (current === '') current = word;
+    else if (current.length + 1 + word.length <= width) current += ` ${word}`;
+    else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current !== '') lines.push(current);
+  return lines;
+}
+
+/** What approval 1 found, and what approval 2 would be agreeing to. */
+function renderDrift(plan: StagedPlan): string[] {
+  const lines = ['', 'ITS PROSE AND ITS CODE DO NOT AGREE'];
+  for (const difference of plan.drift) lines.push(`  ${difference}`);
+  lines.push('');
+  lines.push('That is not proof of anything. It is the moment to look: the package described itself');
+  lines.push('one way and its manifest is another. Nothing has been installed, no schema touched.');
+  return lines;
+}
+
+async function approveAndReport(
+  staged: StagedPlugin,
   args: ParsedPluginsArgs,
   pool: Pool | undefined,
   env: NodeJS.ProcessEnv,
 ): Promise<number> {
-  const plan = await planInstall(directory, env);
-  console.log(renderContribution(plan.contribution).join('\n'));
-  console.log(renderAgentDrift(plan).join('\n'));
-  console.log('');
-  console.log(`From: ${plan.directory}`);
-  console.log(`Entry: ${plan.entry}`);
-  if (plan.previous) {
-    console.log(
-      `This REPLACES the installed ${plan.previous.name} ${plan.previous.version} (installed ${plan.previous.installedAt}).`,
-    );
-  }
-  if (!args.yes) {
+  const outcome = await approveStaged(staged.id, {
+    integrity: args.integrity ?? staged.integrity,
+    acknowledgeDrift: args.acknowledgeDrift,
+    env,
+    ...(pool ? { pool } : {}),
+  });
+  if (outcome.kind === 'drift') {
+    console.log(renderContribution(outcome.plan.contribution as PluginContribution).join('\n'));
+    console.log(renderDrift(outcome.plan).join('\n'));
     console.log('');
-    console.log('Nothing has been installed. Reading this summary imported the plugin\'s entry point —');
-    console.log('there is no way to describe a module without loading it — but no tool is registered, no');
-    console.log('schema is created, nothing is scheduled and no agent exists until you say so.');
-    console.log(`\n  buddi plugins install ${directory} --yes`);
-    return 0;
+    console.log(`  buddi plugins approve ${staged.id} --acknowledge-drift`);
+    return 1;
   }
-  const record = applyInstall(plan, { env });
+  console.log(renderContribution(outcome.plan.contribution).join('\n'));
+  console.log(renderAgentDrift(outcome.plan).join('\n'));
   console.log('');
-  console.log(`installed ${record.name} ${record.version} → ${plan.recordFile}`);
-  if (pool && plan.manifest.migrationsDir.trim() !== '') {
-    const applied = await migrate(pool, { schema: plan.manifest.schema, dir: plan.manifest.migrationsDir });
-    if (applied.length === 0) console.log(`migrations: ${plan.manifest.schema} already up to date`);
-    for (const m of applied) console.log(`applied ${m.schema}/${m.filename}`);
-  } else if (plan.manifest.migrationsDir.trim() !== '') {
-    console.log('the database was not reachable: run `buddi migrate` before using it');
+  console.log(`installed ${outcome.record.name} ${outcome.record.version} → ${outcome.plan.recordFile}`);
+  console.log(`  files    ${path.dirname(outcome.record.entry)}`);
+  if (outcome.record.provenance?.installedHash !== undefined) {
+    console.log(`  approved ${outcome.record.provenance.installedHash}`);
+    console.log('  buddi doctor says so if those files ever stop hashing to that.');
   }
+  for (const filename of outcome.migrations) console.log(`applied ${outcome.record.schema}/${filename}`);
+  if (outcome.migrations.length === 0 && outcome.migrationProblem === undefined) {
+    console.log(`migrations: ${outcome.record.schema} already up to date`);
+  }
+  if (outcome.migrationProblem !== undefined) console.log(outcome.migrationProblem);
   console.log('');
   console.log('Its tools are registered the next time a buddi process starts. If `buddi serve` is');
   console.log('running, restart it: `buddi service restart`.');
-  if (plan.contribution.agents.length > 0) {
+  if (outcome.plan.contribution.agents.length > 0) {
     console.log('');
     console.log('It proposes agents. Nothing was created — ask your agent for one by name, for example:');
-    for (const agent of plan.contribution.agents) {
-      console.log(`  "accept the ${agent.id} agent from the ${record.name} plugin"`);
+    for (const agent of outcome.plan.contribution.agents) {
+      console.log(`  "accept the ${agent.id} agent from the ${outcome.record.name} plugin"`);
     }
     console.log('You will be shown the whole tool grant and asked to approve it.');
   }
-  if (plan.contribution.missions.length > 0) {
+  if (outcome.plan.contribution.missions.length > 0) {
     console.log('');
     console.log('It suggests missions. `buddi missions add-defaults` registers the ones it can place.');
   }
+  return 0;
+}
+
+async function commandInstall(
+  spec: string,
+  args: ParsedPluginsArgs,
+  pool: Pool | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  const staged = await stagePlugin(spec, {
+    env,
+    ...(args.registry === undefined ? {} : { registry: args.registry }),
+    onPhase: (phase) => {
+      if (phase === 'fetching') console.log('fetching…');
+      if (phase === 'installing-dependencies') console.log('installing its dependencies (--ignore-scripts)…');
+    },
+  });
+  console.log(renderStaged(staged).join('\n'));
+  if (!args.yes) {
+    console.log('');
+    console.log('NOTHING OF THIS PLUGIN HAS RUN. It was fetched, unpacked and read; its entry point has');
+    console.log('not been imported, no tool is registered, no schema exists and no agent was created.');
+    console.log('Approving is what imports it for the first time.');
+    console.log('');
+    console.log(`  buddi plugins install ${spec} --yes`);
+    console.log(`  buddi plugins approve ${staged.id}     (same thing, later)`);
+    return 0;
+  }
+  return approveAndReport(staged, args, pool, env);
+}
+
+async function commandUpdate(
+  name: string,
+  args: ParsedPluginsArgs,
+  pool: Pool | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  const staged = await updatePlugin(name, {
+    env,
+    ...(args.version === undefined ? {} : { version: args.version }),
+    ...(args.registry === undefined ? {} : { registry: args.registry }),
+  });
+  console.log(renderStaged(staged).join('\n'));
+  console.log('');
+  console.log(
+    `This REPLACES ${staged.previous?.name ?? name} ${staged.previous?.version ?? '?'}. Its migrations run forward only.`,
+  );
+  if (!args.yes) {
+    console.log('');
+    console.log('Nothing has been imported. A new version is somebody else\'s code exactly as the first');
+    console.log('one was, so it is approved the same way.');
+    console.log('');
+    console.log(`  buddi plugins approve ${staged.id}`);
+    return 0;
+  }
+  return approveAndReport(staged, args, pool, env);
+}
+
+function commandStaged(env: NodeJS.ProcessEnv): number {
+  const staged = listStaged(env);
+  if (staged.length === 0) {
+    console.log('Nothing is staged. `buddi plugins install <spec>` stages one.');
+    return 0;
+  }
+  for (const entry of staged) {
+    console.log(`  ${entry.id}  ${entry.name} ${entry.version}  ${entry.state}  staged ${entry.createdAt}`);
+    console.log(`      ${describeSource(entry.source)}`);
+  }
+  console.log('');
+  console.log('A stage nobody decides on is deleted after a day.');
+  return 0;
+}
+
+async function commandApprove(
+  id: string,
+  args: ParsedPluginsArgs,
+  pool: Pool | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  const staged = readStaged(id, env);
+  console.log(renderStaged(staged).join('\n'));
+  return approveAndReport(staged, args, pool, env);
+}
+
+function commandReject(id: string, env: NodeJS.ProcessEnv): number {
+  const removed = rejectStaged(id, env);
+  console.log(removed ? `${id} rejected: everything it fetched was deleted` : `there is no stage "${id}"`);
   return 0;
 }
 
@@ -328,7 +539,9 @@ async function commandUninstall(
   env: NodeJS.ProcessEnv,
 ): Promise<number> {
   const plan = await planUninstall(name, { ...(pool ? { pool } : {}), env });
-  console.log(`Removing ${plan.record.name} ${plan.record.version} (installed from ${plan.record.source.path})`);
+  console.log(
+    `Removing ${plan.record.name} ${plan.record.version} (installed from ${describeSource(plan.record.source)})`,
+  );
   console.log('');
   console.log(`  ${plan.toolNames.length} tools stop being registered${plan.toolNames.length === 0 ? '' : `: ${plan.toolNames.join(', ')}`}`);
   if (plan.manifest === undefined) {
@@ -409,13 +622,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
   try {
     if (args.command === 'list') return await commandList(pool, process.env);
+    if (args.command === 'staged') return commandStaged(process.env);
     if (args.command === 'info') return await commandInfo(args.target as string, pool, process.env);
     if (args.command === 'install') {
       return await commandInstall(args.target as string, args, pool, process.env);
     }
+    if (args.command === 'update') return await commandUpdate(args.target as string, args, pool, process.env);
+    if (args.command === 'approve') return await commandApprove(args.target as string, args, pool, process.env);
+    if (args.command === 'reject') return commandReject(args.target as string, process.env);
     return await commandUninstall(args.target as string, args, pool, process.env);
   } catch (err) {
-    if (err instanceof InstallRefusal || err instanceof UninstallRefusal) {
+    if (err instanceof InstallRefusal || err instanceof UninstallRefusal || err instanceof StageRefusal) {
       console.error(err.message);
       return 1;
     }

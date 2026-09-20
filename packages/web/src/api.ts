@@ -730,6 +730,113 @@ export interface RecoveryView {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Plugins, from `packages/gateway/src/web/plugins.ts`.
+ * ------------------------------------------------------------------ */
+
+/** Where an installed plugin came from. The same three the record keeps. */
+export type PluginSource =
+  | { kind: 'directory'; path: string }
+  | { kind: 'registry'; name: string; version: string; registry?: string }
+  | { kind: 'tarball'; path: string };
+
+/** Where an agent a plugin proposes stands against the owner's own copy. */
+export interface PluginDrift {
+  state:
+    | 'not-accepted'
+    | 'up-to-date'
+    | 'proposal-changed'
+    | 'owner-edited'
+    | 'owner-edited-and-proposal-changed'
+    | 'gone';
+  message: string;
+}
+
+export interface PluginUnlock {
+  id: string;
+  handle: string;
+  drift: PluginDrift;
+}
+
+export interface InstalledPluginView {
+  name: string;
+  version: string;
+  source: PluginSource;
+  publisher?: string;
+  integrity?: string;
+  installedAt: string;
+  contribution: { tools: number; sentinels: number; views: number; agents: number };
+  unlocks: PluginUnlock[];
+  loaded: boolean;
+  /** Why its entry point did not load. Set only when `loaded` is false. */
+  error?: string;
+}
+
+/**
+ * The plan the *first* approval produces.
+ *
+ * `drift` is the list of differences between what the package's prose claims
+ * and what its manifest actually declares. A non-empty one is the whole reason
+ * a second approval exists.
+ */
+export interface PluginPlan {
+  contribution?: unknown;
+  drift: string[];
+  agents: PluginUnlock[];
+}
+
+/** A package fetched and read, but not yet imported or installed. */
+export interface StagedPluginView {
+  id: string;
+  name: string;
+  version: string;
+  source: PluginSource;
+  publisher?: string;
+  integrity?: string;
+  dependencies: { count: number; withScripts: string[] };
+  /** The package's own words about itself, from its buddi.md. Never checked. */
+  claims: { schema?: string; hosts: string[]; text: string; missing: boolean };
+  /** Lifecycle scripts the package itself declares. */
+  scripts: string[];
+  /** Set when this stage came from an update: what it would replace. */
+  previous?: { name: string; version: string };
+  plan?: PluginPlan;
+  state: 'staged' | 'approved' | 'planned';
+}
+
+export interface PluginsView {
+  /** Shown above the install field, verbatim, and never paraphrased. */
+  trust: string;
+  installed: InstalledPluginView[];
+  staged: StagedPluginView[];
+  restartNeeded: boolean;
+  /** True in a developer checkout, where a restart is a command and not a button. */
+  checkout: boolean;
+  /** Set when this build has no plugin engine at all. */
+  unavailable?: string;
+}
+
+export interface PluginJob {
+  id: string;
+  kind: 'stage' | 'update';
+  phase: 'fetching' | 'installing-dependencies' | 'reading' | 'done' | 'failed';
+  error?: string;
+  stagedId?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface PluginApproval {
+  /** Present when the drift still has to be read; absent once it is installed. */
+  plan?: PluginPlan;
+  /** The record that was written. Present only once it is installed. */
+  installed?: { name: string; version: string };
+  restartNeeded?: boolean;
+  /** Migration filenames applied, and why none were when that is the answer. */
+  migrations?: string[];
+  migrationProblem?: string;
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -937,6 +1044,29 @@ export const api = {
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
+  /* ---- plugins ---- */
+  plugins: () => get<PluginsView>('/plugins'),
+  stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),
+  pluginJob: (id: string) => get<PluginJob>(`/plugins/jobs/${encodeURIComponent(id)}`),
+  /**
+   * Approve a staged package.
+   *
+   * `integrity` is the hash the card showed, sent back so the approval can
+   * only ever mean the package that was read about. `acknowledgeDrift` comes
+   * from the second card and nowhere else: it says the owner read the list of
+   * differences between the package's claim and its manifest.
+   */
+  approveStaged: (id: string, body: { integrity?: string; acknowledgeDrift?: boolean }) =>
+    post<PluginApproval>(`/plugins/staged/${encodeURIComponent(id)}/approve`, body),
+  rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
+  updatePlugin: (name: string, version?: string) =>
+    post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, version ? { version } : {}),
+  /** `purge` drops the plugin's schema, and the server asks for the name back. */
+  uninstallPlugin: (name: string, body: { purge?: boolean; confirm?: string }) =>
+    post<{ name: string; purged: boolean; notes: string[]; restartNeeded: boolean }>(
+      `/plugins/${encodeURIComponent(name)}/uninstall`,
+      body,
+    ),
   recovery: () => get<RecoveryView>('/recovery'),
   leaveRecovery: (body: { dropPending: boolean; keepGrants: string[] }) =>
     post<{ accepted?: boolean }>('/recovery/leave', body),

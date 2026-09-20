@@ -276,6 +276,6 @@ it('the checklist compares the archive plugins the restore wrote down, not the l
   const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_DATA_DIR: data });
   const view = await (await fetch(`${origin}/api/recovery`, { headers })).json() as any;
   expect(view.checklist.plugins).toEqual([
-    { name: 'ledger', version: '1.2.0', source: '/plugins/ledger', installed: false },
+    { name: 'ledger', version: '1.2.0', source: 'directory /plugins/ledger', installed: false },
   ]);
 });

@@ -17,8 +17,11 @@ import path from 'node:path';
 import {
   PLUGINS_FILE,
   PLUGINS_FILE_ENV,
+  PLUGINS_FILE_READABLE_VERSIONS,
   PLUGINS_FILE_VERSION,
   type InstalledPlugin,
+  type PluginProvenance,
+  type PluginSource,
   type PluginsFile,
 } from './types.js';
 
@@ -50,6 +53,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * One entry's source.
+ *
+ * A source this build does not understand is an error rather than a skipped
+ * entry, for the reason a corrupt file is: silently dropping a plugin
+ * unregisters every tool an agent was granted, and the failure then surfaces
+ * two layers away as an unresolvable tool name.
+ */
+function parseSource(value: unknown, file: string, i: number, name: string): PluginSource {
+  const bad = (why: string): never => {
+    throw new PluginsFileError(file, `${file}: plugins[${i}] ("${name}") ${why}`);
+  };
+  if (!isRecord(value)) return bad('has no source object');
+  if (value.kind === 'directory') {
+    if (typeof value.path !== 'string' || value.path.trim() === '') return bad('has a directory source with no path');
+    return { kind: 'directory', path: value.path };
+  }
+  if (value.kind === 'tarball') {
+    if (typeof value.path !== 'string' || value.path.trim() === '') return bad('has a tarball source with no path');
+    return { kind: 'tarball', path: value.path };
+  }
+  if (value.kind === 'registry') {
+    if (typeof value.name !== 'string' || value.name.trim() === '') return bad('has a registry source with no package name');
+    if (typeof value.version !== 'string' || value.version.trim() === '') return bad('has a registry source with no version');
+    return {
+      kind: 'registry',
+      name: value.name,
+      version: value.version,
+      ...(typeof value.registry === 'string' && value.registry.trim() !== ''
+        ? { registry: value.registry }
+        : {}),
+    };
+  }
+  return bad(`came from a source this build does not know (${JSON.stringify(value.kind)})`);
+}
+
+/** Provenance, when there is any. Every field is optional and every one is a string. */
+function parseProvenance(value: unknown, file: string, i: number): PluginProvenance | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) throw new PluginsFileError(file, `${file}: plugins[${i}] has a provenance that is not an object`);
+  const provenance: PluginProvenance = {};
+  for (const key of ['integrity', 'publisher', 'installedHash', 'approvedAt', 'approvedIntegrity'] as const) {
+    const field = value[key];
+    if (typeof field === 'string' && field.trim() !== '') provenance[key] = field;
+  }
+  return Object.keys(provenance).length === 0 ? undefined : provenance;
+}
+
 /** Parse the file's text. Exported so a test needs no disk. */
 export function parsePluginsFile(text: string, file = PLUGINS_FILE): PluginsFile {
   let raw: unknown;
@@ -59,10 +110,12 @@ export function parsePluginsFile(text: string, file = PLUGINS_FILE): PluginsFile
     throw new PluginsFileError(file, `${file} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!isRecord(raw)) throw new PluginsFileError(file, `${file} must contain an object`);
-  if (raw.version !== PLUGINS_FILE_VERSION) {
+  if (typeof raw.version !== 'number' || !PLUGINS_FILE_READABLE_VERSIONS.includes(raw.version)) {
     throw new PluginsFileError(
       file,
-      `${file} says version ${JSON.stringify(raw.version)}; this build reads version ${PLUGINS_FILE_VERSION}`,
+      `${file} says version ${JSON.stringify(raw.version)}; this build reads version${
+        PLUGINS_FILE_READABLE_VERSIONS.length === 1 ? '' : 's'
+      } ${PLUGINS_FILE_READABLE_VERSIONS.join(' and ')}`,
     );
   }
   if (!Array.isArray(raw.plugins)) throw new PluginsFileError(file, `${file} has no "plugins" array`);
@@ -73,20 +126,18 @@ export function parsePluginsFile(text: string, file = PLUGINS_FILE): PluginsFile
         throw new PluginsFileError(file, `${file}: plugins[${i}] has no "${key}"`);
       }
     }
-    const source = entry.source;
-    if (!isRecord(source) || source.kind !== 'directory' || typeof source.path !== 'string') {
-      throw new PluginsFileError(
-        file,
-        `${file}: plugins[${i}] ("${String(entry.name)}") has no usable source; this build installs from a directory`,
-      );
-    }
+    const source = parseSource(entry.source, file, i, String(entry.name));
+    const provenance = parseProvenance(entry.provenance, file, i);
     return {
       name: entry.name as string,
       version: entry.version as string,
       entry: entry.entry as string,
       installedAt: entry.installedAt as string,
       schema: entry.schema as string,
-      source: { kind: 'directory', path: source.path },
+      source,
+      // A v1 entry has none, and that is the truthful answer for it: nothing
+      // was fetched, so nothing was hashed and nobody published it.
+      ...(provenance === undefined ? {} : { provenance }),
     };
   });
   const seen = new Set<string>();
