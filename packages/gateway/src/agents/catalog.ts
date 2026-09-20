@@ -251,6 +251,60 @@ export function assertNoDelegationToWriters(catalog: AgentCatalog): void {
   }
 }
 
+/**
+ * Examples that are an offer, not a colleague, and only make sense once the
+ * installation is actually running.
+ *
+ * Agent Father is the only one so far. It is the "make me another one" that
+ * comes *after* the owner has an assistant of their own: on a fresh install it
+ * has no account to think with and nothing to make a second agent beside, so
+ * listing it puts a stranger who cannot answer at the top of the first roster
+ * the owner ever sees.
+ *
+ * This is a hard-coded id rather than a `requires:` frontmatter key. The key
+ * would be a new word in core's agent schema — parsed, validated, documented,
+ * and offered to every owner writing a file — to express one rule about one
+ * agent this repository ships. If a second example ever needs it, this list is
+ * where the rule already is, and that is the moment to make it frontmatter.
+ */
+export const EXAMPLES_HELD_BACK: readonly string[] = ['agent-father'];
+
+/**
+ * The roster, minus the examples the installation has not grown into yet.
+ *
+ * Only `list()` is filtered — the roster, `/api/agents`, the rail and Home all
+ * read it, and §6 of docs/onboarding.md says *listed*. A held-back agent is not
+ * deleted: `get`, `byHandle` and `resolve` still answer for it, so `/new`, a
+ * handle typed by hand and a handle collision check all keep working, and
+ * nothing that already holds its id breaks the moment the rule flips.
+ *
+ * The condition is read on every call rather than captured: the accounts
+ * service reloads the catalog when a credential changes, but a rule about live
+ * state should not depend on somebody remembering to.
+ */
+export function withHeldBackExamples(catalog: AgentCatalog): AgentCatalog {
+  const started = () => {
+    const all = catalog.list();
+    // "The owner has met their assistant" — an agent of their own, made by the
+    // wizard or by hand — and "there is a brain": an agent here can run.
+    return all.some((a) => a.source !== 'example') && all.some((a) => a.available);
+  };
+  return {
+    ...catalog,
+    get: (id) => catalog.get(id),
+    byHandle: (handle) => catalog.byHandle(handle),
+    agentsWithRole: (role) => catalog.agentsWithRole(role),
+    agentForRole: (role) => catalog.agentForRole(role),
+    defaultAgent: () => catalog.defaultAgent(),
+    resolve: (idOrHandle) => catalog.resolve(idOrHandle),
+    list: () => {
+      const all = catalog.list();
+      if (started()) return all;
+      return all.filter((a) => !(a.source === 'example' && EXAMPLES_HELD_BACK.includes(a.id)));
+    },
+  };
+}
+
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   const env = opts.env ?? process.env;
   const registry = opts.registry ?? createToolRegistry(env);
@@ -274,7 +328,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     providerSelection: opts.providerSelection,
   });
   assertNoDelegationToWriters(catalog);
-  return catalog;
+  return withHeldBackExamples(catalog);
 }
 
 /* ------------------------------------------------------------------ *

@@ -291,15 +291,20 @@ one screen, and the wizard renders without the rail.
   `composeAgentFile` and `createAgentDirAtomic`, so an agent made here is the
   same artifact `platform.create_agent` makes: the generic template, no roles,
   no plugin tools, `language: mirror`, `default: true` for the first private
-  agent, and the tool grant named once in the gateway. It writes the *first*
-  agent only — a second one is the maker agent's job, where a grant is proposed
+  agent, and the tool grant named once in the gateway. It is written under the
+  shipped Concierge's id, so the catalog's replacement rule makes it *the*
+  assistant rather than a second agent standing next to an example: the owner's
+  handle, name, face and words, and no Concierge on the roster afterwards. It
+  writes the *first* agent only — a second one is the maker agent's job, where a grant is proposed
   and approved — and creations are serialised in-process, so two requests racing
   cannot both claim `default`. The examples tree is guarded by resolving the
   nearest existing ancestor of both paths through `realpath` before comparing,
   so a private agents directory symlinked into `examples/` is refused rather
   than written to. Where exactly one usable
   model account exists it is assigned to the new agent, because the next screen
-  is the owner talking to it. The write is behind the ordinary session, Origin
+  is the owner talking to it; the wizard may also name the account it just
+  tested (`accountId`), and an account the installation cannot run on is
+  refused before anything is written. The write is behind the ordinary session, Origin
   and CSRF gate — the owner acting on their own installation — and not behind an
   approval.
 - **`buddi init` ends there.** The checkout CLI opens the dashboard at
@@ -310,6 +315,13 @@ one screen, and the wizard renders without the rail.
   the fresh install still needs, CSRF refusal, a recorded step, the first agent
   written, reloaded and listed by `/api/agents`, and the record skipped and read
   back.
+
+- **Examples do not pretend.** Agent Father is held back from the roster —
+  `/api/agents`, the rail and Home — until the owner has an agent of their own
+  that can actually run (`EXAMPLES_HELD_BACK` in
+  `packages/gateway/src/agents/catalog.ts`). It is held back, not removed:
+  `get`, `byHandle` and `resolve` still answer, so `/new` and a handle typed by
+  hand keep working, and the wizard still refuses a handle it holds.
 
 Deferred here, and named in install.md: Ollama detection, restore from the
 dashboard, and the plugins and backup cards of the extras step.
