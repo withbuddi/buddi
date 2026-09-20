@@ -20,6 +20,15 @@ export interface ChatAgent {
    * anchors the front desk and the maker without learning either one's name.
    */
   anchor?: 'top' | 'bottom' | null;
+  /**
+   * The agent's own opening, from its file: one sentence about what it does,
+   * and up to three example requests. A starter may carry `{{default}}`,
+   * which the page resolves to the default agent's name.
+   */
+  intro?: string;
+  starters?: string[];
+  /** Reasoning before the answer: on, off, or null for the model's default. */
+  thinking?: 'on' | 'off' | null;
   /** The face to draw, when the agent file names one. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */

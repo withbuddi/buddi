@@ -31,7 +31,7 @@ import { agentRoute, settingsRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar } from '../ui';
-import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, type AgentAttention, type AgentGroups } from '../shell/roster';
+import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
@@ -54,6 +54,8 @@ export interface ChatPageProps {
    */
   agents: AgentGroups;
   agentId: string | null;
+  /** Whose name a starter's `{{default}}` stands for. */
+  defaultAgentId?: string | null;
   /** Set when the page is a group's room rather than one agent's thread. */
   group?: GroupView | null;
   onSelectAgent: (agentId: string) => void;
@@ -78,6 +80,7 @@ export function ChatPage({
   timezone,
   agents,
   agentId,
+  defaultAgentId = null,
   group = null,
   onSelectAgent,
   attention,
@@ -650,6 +653,50 @@ export function ChatPage({
     };
   }, [width]);
 
+  /**
+   * What an empty thread with one agent shows: its face, what it says it does,
+   * and up to three things to ask it.
+   *
+   * A starter is a *draft*: it fills the composer and puts the caret in it, and
+   * the owner presses the key. Nothing on this page may send a message the
+   * owner did not send, and a suggestion that fires on one click is exactly
+   * that. `{{default}}` in a starter is resolved here, where the roster is.
+   */
+  const defaultAgentName = everyone.find((a) => a.id === defaultAgentId)?.name ?? null;
+  const starters = group ? [] : startersOf(agent, defaultAgentName);
+  const opening = !group && agent ? (
+    <div className="wb-chat-opening" data-testid="chat-opening">
+      <AgentAvatar agents={everyone} id={agent.id} size="xl" />
+      <p className="wb-chat-empty">{introOf(agent)}</p>
+      {starters.length > 0 ? (
+        <div className="wb-starters" role="group" aria-label={`Things to ask ${agent.name}`}>
+          {starters.map((starter) => (
+            <button
+              type="button"
+              key={starter}
+              className="wb-starter"
+              onClick={() => {
+                setDraft({ text: starter, at: Date.now() });
+                composer.current?.focus();
+              }}
+            >
+              {starter}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
+  /**
+   * What an empty canvas says, in the agent's own words rather than in a
+   * domain's. The page knows no domains: the sentence comes from the agent
+   * file, and what could land here comes from the installed view descriptors.
+   */
+  const madeHere = agent
+    ? `${introOf(agent)} What ${agent.name} makes appears here, beside the answer rather than inside it.`
+    : 'Ask for something. Whatever the run looks at is drawn here, beside the answer rather than inside it.';
+
   const canvas = (
     <Canvas
       renderables={renderables}
@@ -670,11 +717,7 @@ export function ChatPage({
       browserPanel={browserTab ? <BrowserPanel key={browserTab.id} data={browser.data} error={browser.error} reload={browser.reload} compact /> : null}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}
-      emptyHint={
-        conversation
-          ? 'Nothing in this conversation has produced a view yet. Ask for a number, a list or a document and it lands here beside the answer.'
-          : 'Ask for something. Whatever the run looks at is drawn here, beside the answer rather than inside it.'
-      }
+      emptyHint={conversation ? `Nothing in this conversation has produced a view yet. ${madeHere}` : madeHere}
     />
   );
 
@@ -844,11 +887,8 @@ export function ChatPage({
             if (narrow) onOpenCanvas?.();
           }}
           {...(agent ? { agentName: agent.name } : {})}
-          emptyHint={
-            agent
-              ? `Nothing here yet. Ask ${agent.name} for something — a projection, a document, a decision.`
-              : 'Loading agents…'
-          }
+          {...(opening ? { empty: opening } : {})}
+          emptyHint={agent ? `Nothing here yet. Ask ${agent.name} for something.` : 'Loading agents…'}
         >
 
         {inlineApprovals.length ? inlineApprovals.map(item => (

@@ -151,6 +151,43 @@ export function useAttention(): Map<string, AgentAttention> {
   return attentionMap(snapshot);
 }
 
+/**
+ * The stand-in an agent file may write where the owner's own assistant's name
+ * belongs: `Rename {{default}} and change its face`.
+ *
+ * A shipped example cannot know what the owner called their assistant, and a
+ * starter reading "Rename your default agent" is not a sentence anybody types.
+ * So the file writes the token and the page — which has the roster in front of
+ * it — puts the name in. Nothing is resolved on the server: the roster is what
+ * knows which agent is the default here, and it is already on this page.
+ */
+export const DEFAULT_AGENT_TOKEN = '{{default}}';
+
+/** One starter, as the owner reads it. Unknown default: a plain noun phrase. */
+export function resolveStarter(text: string, defaultAgentName: string | null): string {
+  return text.split(DEFAULT_AGENT_TOKEN).join(defaultAgentName ?? 'your assistant');
+}
+
+/** The starters of an agent, resolved and capped, or an empty list. */
+export function startersOf(
+  agent: { starters?: string[] } | null,
+  defaultAgentName: string | null,
+): string[] {
+  return (agent?.starters ?? []).slice(0, 3).map((text) => resolveStarter(text, defaultAgentName));
+}
+
+/**
+ * What an agent says it does, to the owner.
+ *
+ * `intro` is written for them; `description` is written for other agents to
+ * read when they decide whom to hand work to. The second is a decent fallback
+ * and a poor first choice.
+ */
+export function introOf(agent: { intro?: string; description?: string } | null): string {
+  const intro = agent?.intro?.trim();
+  return intro && intro !== '' ? intro : (agent?.description?.trim() ?? '');
+}
+
 /** One or two letters, so an agent is recognisable before it is read. */
 export function monogram(name: string | undefined): string {
   const words = (name ?? '·').trim().split(/\s+/).filter(Boolean);

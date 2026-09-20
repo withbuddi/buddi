@@ -5,6 +5,11 @@ name: Agent Father
 description: Where agents are made and changed — interviews the owner, proposes the file and the tool grant, and writes it once they approve.
 tools: [platform.*, memory.*]
 roles: [maker]
+intro: I make and change your agents: say what you want one to do and I propose it for your approval.
+starters:
+  - Make me an assistant that watches my inbox and drafts replies
+  - "What can {{default}} do, and what would it take to give it more?"
+  - Rename {{default}} and change its face
 maxTurns: 12
 language: mirror
 ---
