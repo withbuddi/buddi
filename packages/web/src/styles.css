@@ -2192,17 +2192,69 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
  * ------------------------------------------------------------------ */
 
 .meet {
+  position: relative;
   height: 100%;
   overflow: hidden;
   background: var(--bg);
   display: flex;
   align-items: center;
-  justify-content: center;
+  /* The page is read from the left, and the room on the right is where the
+     backdrop lives. */
+  justify-content: flex-start;
   padding: var(--space-6);
+  isolation: isolate;
+}
+
+/*
+ * The backdrop.
+ *
+ * Four soft shapes in the one accent hue and one warm token, blurred far past
+ * their own edges and faded into `--bg` before they reach any of them, so the
+ * card keeps its own surface and every word keeps its contrast. Generated
+ * here — radial gradients on one pseudo-element — because this page fetches
+ * nothing, and the colours are the tokens', so dark mode gets the deep
+ * version of this rather than a washed one.
+ *
+ * It drifts, once a minute and a half, with nothing but a transform: slow
+ * enough to be noticed only by someone who stops to look, and motionless for
+ * anyone who has asked for less of it.
+ */
+.meet::before {
+  content: '';
+  position: absolute;
+  /* Wider than the page: the blur's own edges must never cross into view. */
+  inset: -25%;
+  z-index: -1;
+  background:
+    radial-gradient(34% 34% at 68% 24%, color-mix(in oklab, var(--accent) 60%, transparent), transparent 68%),
+    radial-gradient(30% 32% at 88% 66%, color-mix(in oklab, var(--warning) 46%, transparent), transparent 68%),
+    radial-gradient(40% 40% at 58% 92%, color-mix(in oklab, var(--accent) 38%, transparent), transparent 70%),
+    radial-gradient(26% 26% at 30% 8%, color-mix(in oklab, var(--accent) 26%, transparent), transparent 70%);
+  filter: blur(80px);
+  opacity: 0.85;
+  animation: meet-drift 90s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+/* A deep version, not a washed one: the same shapes, given the room that a
+   dark page has and the restraint that a dark page needs. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .meet::before { opacity: 0.55; filter: blur(100px); }
+}
+:root[data-theme='dark'] .meet::before { opacity: 0.55; filter: blur(100px); }
+
+@keyframes meet-drift {
+  from { transform: translate3d(-2%, -1%, 0) scale(1.02); }
+  to { transform: translate3d(3%, 2%, 0) scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meet::before { animation: none; }
 }
 
 /* The page's one column: the mark and its line, then the board. */
 .meet-stack {
+  position: relative;
   width: 100%;
   max-width: 660px;
   max-height: calc(100vh - var(--space-6) * 2);
@@ -2223,9 +2275,9 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .meet-head {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
-  text-align: center;
+  text-align: left;
 }
 .meet-head-who { display: inline-flex; align-items: center; gap: var(--space-3); }
 .meet-head-mark {
@@ -2249,10 +2301,14 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   color: var(--text);
   letter-spacing: -0.01em;
 }
+/* It sits on the backdrop rather than on a surface, so it takes the page's
+   own text colour and a little weight: a muted grey over a tinted field is
+   the one line on this screen that could lose its contrast. */
 .meet-head-line {
   margin: 0;
   font-size: var(--text-md);
-  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+  color: var(--text);
 }
 
 .meet-board {
@@ -2447,6 +2503,11 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
 .meet-later:disabled { cursor: default; opacity: 0.5; }
+
+/* More room on the left where there is room to give. */
+@media (min-width: 1100px) {
+  .meet { padding-left: var(--space-8); }
+}
 
 @media (max-width: 700px) {
   .meet { padding: var(--space-3); }
