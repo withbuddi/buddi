@@ -161,6 +161,11 @@ export async function markStepDone(pool: Queryable, step: string): Promise<Onboa
  * The conversation finished. Idempotent, and the *first* surface to finish it
  * keeps the credit — a second call from the other surface changes nothing, so
  * whichever one the owner actually answered on is the one recorded.
+ *
+ * `done` and `skipped` are both terminal, and the `where` is what makes them
+ * so: the update fires only from `pending` or `in-progress`, so a later call
+ * from the other surface reads the record rather than overwriting it. Without
+ * it, "I skipped this" and "I finished this" would take turns being true.
  */
 export async function completeOnboarding(
   pool: Queryable,
@@ -174,15 +179,17 @@ export async function completeOnboarding(
            completed_at = coalesce(core.onboarding.completed_at, now()),
            surface = coalesce(core.onboarding.surface, excluded.surface),
            updated_at = now()
+     where core.onboarding.state in ('pending', 'in-progress')
      returning ${COLUMNS}`,
     [OWNER_ID, surface],
   );
-  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+  return rows[0] ? toOnboarding(rows[0]) : getOnboarding(pool);
 }
 
 /**
  * The owner said no. A first-class outcome, not a failure: `skipped` closes the
- * machine exactly as `done` does, and nothing ever asks again.
+ * machine exactly as `done` does, and nothing ever asks again — and, like
+ * `done`, it is terminal: a skip after a completion changes nothing.
  *
  * The reason is kept in the event log rather than in the row — it is one
  * sentence of history, not state anything reads — and a database with no event
@@ -196,9 +203,13 @@ export async function skipOnboarding(pool: Queryable, reason?: string): Promise<
        set state = 'skipped',
            completed_at = coalesce(core.onboarding.completed_at, now()),
            updated_at = now()
+     where core.onboarding.state in ('pending', 'in-progress')
      returning ${COLUMNS}`,
     [OWNER_ID],
   );
+  // Nothing was skipped if nothing changed: a record that was already finished
+  // keeps its own history rather than acquiring a second ending.
+  if (!rows[0]) return getOnboarding(pool);
   const note = (reason ?? '').trim();
   if (note !== '') {
     await pool
@@ -208,7 +219,7 @@ export async function skipOnboarding(pool: Queryable, reason?: string): Promise<
       ])
       .catch(() => undefined);
   }
-  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+  return toOnboarding(rows[0]);
 }
 
 /**

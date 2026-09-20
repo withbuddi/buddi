@@ -135,6 +135,17 @@ export interface OnboardingWindowState {
  */
 export const BACKFILLED_SURFACE = 'pre-existing';
 
+/**
+ * The surface the dashboard's first-run wizard stamps on the record.
+ *
+ * The arc exists to carry an owner who met buddi *in a chat* through their
+ * first two weeks of it. An owner who set up in the dashboard has the dashboard
+ * — Home says what needs them, and every screen the nudges would point at is
+ * one click away — so the arc has nothing to add and would arrive as unasked-for
+ * Telegram messages about a surface they already have open.
+ */
+export const WEB_WIZARD_SURFACE = 'web';
+
 export interface ArcWindow {
   open: boolean;
   /** One sentence, for the log line and for `buddi nudges status`. */
@@ -148,6 +159,8 @@ export interface ArcWindow {
  *  - no onboarding row at all — this install never ran the interview, so it has
  *    no first run to be inside of, and nowhere to keep the count either;
  *  - `pre-existing` — migration 013 wrote that row, not a conversation;
+ *  - `web` — the owner set up in the dashboard, which is the arc's whole
+ *    subject matter already;
  *  - `skipped` — the owner declined the interview; declining is an answer;
  *  - anything other than `done` — the interview is still going, so yes;
  *  - `done` — yes for fourteen days after `completed_at`, then never again.
@@ -164,6 +177,9 @@ export function arcWindow(onboarding: OnboardingWindowState | null, now: Date): 
       open: false,
       reason: 'this installation predates onboarding — it is long past its first run',
     };
+  }
+  if (onboarding.surface === WEB_WIZARD_SURFACE) {
+    return { open: false, reason: 'the owner set this installation up in the dashboard' };
   }
   if (onboarding.state === 'skipped') {
     return { open: false, reason: 'the owner skipped onboarding' };

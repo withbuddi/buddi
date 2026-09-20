@@ -6,11 +6,12 @@
  * finished or skipped the wizard here is never interviewed again on Telegram.
  */
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
+import { createFirstAgent } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
@@ -58,19 +59,21 @@ function fakePool(profile: { preferredName?: string | null } = {}) {
       }
       if (/select .* from core\.onboarding/s.test(sql)) return { rows: exists ? [row] : [] };
       if (/insert into core\.onboarding/.test(sql)) {
-        if (/'in-progress'/.test(sql)) {
+        // The state the statement *writes*, not one it merely names: the
+        // terminal guards mention 'pending' and 'in-progress' in their `where`.
+        const writing = /values \(\$1, '([a-z-]+)'/.exec(sql)?.[1];
+        if (writing === 'in-progress') {
           if (row.state !== 'pending') return { rows: [] };
           exists = true;
           row.state = 'in-progress';
           row.started_at ??= new Date();
           row.surface ??= String(params[1]);
-        } else if (/'done'/.test(sql)) {
+        } else if (writing === 'done' || writing === 'skipped') {
+          // Terminal, exactly as the store's `where` makes it: a finished
+          // record is read back, never rewritten by the other ending.
+          if (exists && row.state !== 'pending' && row.state !== 'in-progress') return { rows: [] };
           exists = true;
-          row.state = 'done';
-          row.completed_at ??= new Date();
-        } else if (/'skipped'/.test(sql)) {
-          exists = true;
-          row.state = 'skipped';
+          row.state = writing;
           row.completed_at ??= new Date();
         } else {
           exists = true;
@@ -97,7 +100,17 @@ async function boot(opts: {
   pool: ReturnType<typeof fakePool>;
   agentsDir: string;
   providerAccounts?: ProviderAccounts;
+  /** Give the installation an agent of the owner's own before it starts. */
+  privateAgent?: boolean;
 }) {
+  if (opts.privateAgent) {
+    mkdirSync(path.join(opts.agentsDir, 'already'), { recursive: true });
+    writeFileSync(
+      path.join(opts.agentsDir, 'already', 'agent.md'),
+      ['---', 'id: already', 'handle: already', 'name: Already', 'description: An agent the owner already had.', 'tools: [memory.*]', '---', '', 'You are already here.', ''].join('\n'),
+      'utf8',
+    );
+  }
   const env = { ...process.env, BUDDI_AGENTS_DIR: opts.agentsDir, BUDDI_SKILLS_DIR: path.join(opts.agentsDir, '..', 'skills') };
   const registry = new ToolRegistry();
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: opts.agentsDir, env }));
@@ -221,10 +234,70 @@ it('refuses a handle or a name the loader would not take', async () => {
   }
 });
 
+it('writes the first agent once, whatever arrives at the same time', async () => {
+  const pool = fakePool();
+  const dir = agentsDir();
+  const { origin, headers } = await boot({ pool, agentsDir: dir, providerAccounts: accounts([]) });
+  const body = (handle: string) => JSON.stringify({ name: handle, handle, description: 'One of two racing requests.' });
+  const [first, second] = await Promise.all([
+    fetch(`${origin}/api/onboarding/agent`, { method: 'POST', headers, body: body('ada') }),
+    fetch(`${origin}/api/onboarding/agent`, { method: 'POST', headers, body: body('bea') }),
+  ]);
+  const statuses = [first!.status, second!.status].sort();
+  expect(statuses).toEqual([200, 409]);
+  const listed = await json(await fetch(`${origin}/api/agents`, { headers }));
+  expect(listed.agents.filter((a: { isDefault: boolean }) => a.isDefault)).toHaveLength(1);
+  // And afterwards the route is closed: a second agent is the maker's job.
+  const later = await fetch(`${origin}/api/onboarding/agent`, { method: 'POST', headers, body: body('cyd') });
+  expect(later.status).toBe(409);
+  expect((await json(later)).error).toMatch(/already have an agent/);
+});
+
+it('refuses to write into the examples tree even through a symlink', async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'buddi-onboarding-'));
+  dirs.push(root);
+  const examples = path.join(root, 'examples', 'agents');
+  mkdirSync(examples, { recursive: true });
+  // The owner's "private" directory is a link into the platform's own tree, so
+  // the two paths only look unrelated.
+  const linked = path.join(root, 'agents');
+  symlinkSync(examples, linked, 'dir');
+  const deps = {
+    pool: fakePool() as never,
+    catalog: { list: () => [] } as unknown as AgentCatalog,
+    agentsDir: linked,
+    examplesDir: examples,
+    reload: () => {},
+  };
+  await expect(
+    createFirstAgent(deps, { name: 'Ada', handle: 'ada', description: 'Would land in examples.' }),
+  ).rejects.toThrow(/examples/);
+  expect(existsSync(path.join(examples, 'ada'))).toBe(false);
+});
+
+it('refuses to call setup finished while it still needs a model or an agent', async () => {
+  const pool = fakePool();
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  const refused = await fetch(`${origin}/api/onboarding/complete`, { method: 'POST', headers, body: '{}' });
+  expect(refused.status).toBe(409);
+  expect((await json(refused)).error).toMatch(/a model account and an agent of your own/);
+  expect(pool.row.state).toBe('pending');
+  // Skipping is the bypass, and it always works.
+  const skipped = await fetch(`${origin}/api/onboarding/skip`, { method: 'POST', headers, body: '{}' });
+  expect(skipped.status).toBe(200);
+  expect((await json(skipped)).state).toBe('skipped');
+});
+
 it('closes the record so the Telegram interview never opens', async () => {
   for (const action of ['complete', 'skip'] as const) {
     const pool = fakePool();
-    const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
+    const { origin, headers } = await boot({
+      pool,
+      agentsDir: agentsDir(),
+      // Nothing is missing, so `complete` is allowed to mean finished.
+      providerAccounts: accounts([{ id: 'one', enabled: true, configured: true }]),
+      privateAgent: true,
+    });
     expect(await shouldStartFirstRun(pool as never, 'telegram')).toBe(true);
     pool.row.state = 'pending';
     pool.row.started_at = null;
@@ -233,4 +306,18 @@ it('closes the record so the Telegram interview never opens', async () => {
     expect((await json(res)).state).toBe(action === 'complete' ? 'done' : 'skipped');
     expect(await shouldStartFirstRun(pool as never, 'telegram')).toBe(false);
   }
+});
+
+it('keeps a finished record finished when the other ending arrives late', async () => {
+  const pool = fakePool();
+  const { origin, headers } = await boot({
+    pool,
+    agentsDir: agentsDir(),
+    providerAccounts: accounts([{ id: 'one', enabled: true, configured: true }]),
+    privateAgent: true,
+  });
+  expect((await json(await fetch(`${origin}/api/onboarding/complete`, { method: 'POST', headers, body: '{}' }))).state).toBe('done');
+  const late = await fetch(`${origin}/api/onboarding/skip`, { method: 'POST', headers, body: '{}' });
+  expect(late.status).toBe(200);
+  expect((await json(late)).state).toBe('done');
 });

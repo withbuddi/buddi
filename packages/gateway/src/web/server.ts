@@ -1154,8 +1154,27 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 200, await readOnboarding(onboardingDeps()));
     }
     if (path === '/api/onboarding/complete' || path === '/api/onboarding/skip') {
-      if (path.endsWith('/skip')) await skipOnboarding(deps.pool, 'the owner skipped the dashboard wizard');
-      else await completeOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
+      if (path.endsWith('/skip')) {
+        // The explicit bypass. It records that the owner declined, and it is
+        // allowed from anywhere in the wizard — that is what makes it a skip.
+        await skipOnboarding(deps.pool, 'the owner skipped the dashboard wizard');
+        return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+      }
+      const before = await readOnboarding(onboardingDeps());
+      // "Done" has to mean done. An installation with no model account or no
+      // agent cannot answer anything, and recording it as finished would close
+      // the first run — on both surfaces — over an install that does not work.
+      const missing = [
+        ...(before.needs.model ? ['a model account'] : []),
+        ...(before.needs.agent ? ['an agent of your own'] : []),
+      ];
+      if (missing.length > 0) {
+        return sendJson(res, 409, {
+          error: `Setup is not finished: this installation still needs ${missing.join(' and ')}. Go back and add it, or set up later.`,
+          needs: before.needs,
+        });
+      }
+      await completeOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
       return sendJson(res, 200, await readOnboarding(onboardingDeps()));
     }
     if (path === '/api/onboarding/agent') {
