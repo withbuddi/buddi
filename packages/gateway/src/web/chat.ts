@@ -1321,7 +1321,26 @@ export class WebChat {
     const options: RunAgentOptions = {
       // In a room, delegation is the ask tool and nothing else: an agent
       // that could delegate would reach a non-member, off budget, off record.
-      agent: { ...base, tools: [...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools), ...OFFER_TOOLS, ...ASK_TOOLS, ...(room?.askTool ? [GROUP_ASK_TOOL] : [])] },
+      agent: {
+        ...base,
+        /*
+         * The turn that introduces a new assistant is not a turn that asks.
+         *
+         * `conversation.ask` is granted by this surface rather than by any
+         * agent file, and a model handed it on its very first breath uses it:
+         * the owner met their assistant and was shown a form. It is back for
+         * every turn after this one. Reasoning is off for the same reason — a
+         * local model spending a minute thinking before "hello" is the whole
+         * of the owner's first impression.
+         */
+        ...(turn.opening ? { thinking: 'off' as const } : {}),
+        tools: [
+          ...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools),
+          ...OFFER_TOOLS,
+          ...(turn.opening ? [] : ASK_TOOLS),
+          ...(room?.askTool ? [GROUP_ASK_TOOL] : []),
+        ],
+      },
       provider,
       registry,
       ctx: room ? { ...baseCtx, group: room.context } : baseCtx,

@@ -107,9 +107,13 @@ export const SCRIPT = {
     purposeValue: 'Whatever I ask, and remembering what I tell it.',
     submit: 'Introduce us',
   },
+  /** Over the board, above the card. */
+  tagline: 'Your own assistants, on your own computer.',
   handover: {
     /** The one thing buddi says while the assistant is being woken. */
     waiting: 'One moment.',
+    /** What a turn that is calling tools looks like from the owner's side. */
+    looking: (name: string): string => `${name} is looking around…`,
     /** Said once, while the assistant is demonstrably still working. */
     slow: 'Still waking up. A brain on this computer takes a minute the first time.',
     silent:

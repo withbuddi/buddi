@@ -388,13 +388,24 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   return (
     <DockSlot.Provider value={slot}>
     <div className="meet">
+      <div className="meet-stack">
       {/*
         One board, centred, never taller than the window: the thread scrolls
         inside it with the newest line at the bottom, and what is being
         answered is docked under a single hairline. A short thread is a short
         card, and the page itself never scrolls.
       */}
-      <div className="meet-board">
+        <header className="meet-head">
+          <span className="meet-head-who">
+            <span className="meet-head-mark" aria-hidden="true">
+              b
+            </span>
+            <span className="meet-head-name">buddi</span>
+          </span>
+          <p className="meet-head-line">{SCRIPT.tagline}</p>
+        </header>
+
+        <div className="meet-board">
         <div className="meet-scroll" ref={scroller}>
           <div className="meet-thread" data-testid="meet-thread">
               <Buddi>
@@ -455,6 +466,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
             </button>
           )}
         </footer>
+        </div>
       </div>
     </div>
     </DockSlot.Provider>
@@ -1444,7 +1456,9 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
             setRunning(false);
             setSilent(false);
             setPatient(false);
-            void api.completeOnboarding().catch(() => {});
+            // Nothing is recorded here. First run was finished when the
+            // assistant was made and this conversation opened; what this
+            // moment decides is only what the screen offers next.
             return;
           }
           const runs = transcript.runs ?? [];
@@ -1504,6 +1518,12 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
 
   return (
     <>
+      {/*
+        What was said, and nothing about how. The chat draws the folded
+        thoughts and the tool rows because that is its job; here they are the
+        first thing an owner ever sees of an assistant, and "looking around" is
+        the true and sufficient version of it.
+      */}
       <MessageList
         messages={messages}
         live={[]}
@@ -1513,6 +1533,8 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
         agents={agents}
         agentName={assistant?.name ?? ''}
         emptyHint={SCRIPT.handover.waiting}
+        plain
+        workingLine={SCRIPT.handover.looking(assistant?.name ?? '')}
       />
 
       {patient && !silent ? (

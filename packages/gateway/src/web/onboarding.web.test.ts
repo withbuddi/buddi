@@ -564,3 +564,28 @@ it('moves the maker with the assistant when the brain changes, unless it has one
   expect((await json(again)).followed).toEqual([]);
   expect(service.bindings.find((b) => b.agentId === 'agent-father')?.accountId).toBe('mine');
 });
+
+/*
+ * What the first assistant may do, and what it may not.
+ *
+ * `owner.*` also carries the tools the *interview* is conducted with — rename
+ * yourself, finish onboarding — and an assistant holding them opened its first
+ * message by offering to rename itself to an owner who had named it a minute
+ * earlier.
+ */
+it('grants the first agent no tool for running a first run', async () => {
+  const pool = fakePool();
+  const dir = agentsDir();
+  const { origin, headers } = await boot({ pool, agentsDir: dir, providerAccounts: accounts([{ id: 'one', enabled: true, configured: true }]) });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.' }),
+  });
+  expect(created.status).toBe(200);
+  const file = readFileSync((await json(created)).file, 'utf8');
+  expect(file).toMatch(/owner\.get_profile/);
+  expect(file).toMatch(/owner\.set_profile/);
+  expect(file).not.toMatch(/owner\.\*/);
+  expect(file).not.toMatch(/rename_me|finish_onboarding/);
+});

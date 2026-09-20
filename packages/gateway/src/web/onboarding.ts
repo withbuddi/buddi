@@ -23,6 +23,7 @@ import {
   HANDLE_MAX,
   HANDLE_MIN,
   OPENING_TURN_SPEAKER,
+  completeOnboarding,
   getOnboarding,
   getOwnerProfile,
   parseAgentFile,
@@ -73,7 +74,14 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   'memory.*',
   'reminder.*',
   'schedule.*',
-  'owner.*',
+  // Two of the owner tools, named one by one rather than taken as a family.
+  // `owner.*` also carries `rename_me` and `finish_onboarding`, which exist for
+  // the interview another surface conducts — and an assistant holding them
+  // opens its first message by offering to rename itself and closing an
+  // onboarding the owner finished before it spoke. It may read the profile and
+  // write down what it is told; it may not run a first run.
+  'owner.get_profile',
+  'owner.set_profile',
   'canvas.*',
   'platform.list_agents',
   'platform.read_agent',
@@ -589,7 +597,13 @@ export async function withFirstRunFacts(deps: OnboardingDeps, instruction: strin
     ...(owner === '' ? [] : [`The owner is called ${owner}.`]),
     ...(assistant === '' ? [] : [`You are ${assistant}.`]),
   ];
-  return facts.length === 0 ? instruction : `${facts.join(' ')} ${instruction}`;
+  // The model is told the setup is behind it, because the alternative is an
+  // assistant re-asking what the owner answered a minute ago — and asking it
+  // as a form, which on this screen is a box nobody came here to fill in.
+  const settled =
+    'The setup is finished; do not ask about your name, the owner\'s name or onboarding. ' +
+    'Ask your one question in plain words in the message, not with a form.';
+  return [...facts, instruction, settled].join(' ');
 }
 
 /**
@@ -620,6 +634,20 @@ export async function claimOpeningTurn(deps: OnboardingDeps, conversationId: str
     throw new OnboardingRefusal(409, 'Your assistant has already introduced itself in this conversation.');
   }
   await setOnboardingDetails(deps.pool, { conversationId });
+  /*
+   * First run is over here, not when the first message lands.
+   *
+   * There is a name, a clock, an account that answers and an assistant bound
+   * to it, and a conversation open with it: nothing is left to set up. Waiting
+   * for the model's first word to record that left the record saying
+   * "in-progress" for the whole of that first run — and `owner.get_profile`
+   * reports exactly that, which is how a brand-new assistant came to open by
+   * interviewing the owner it had just been introduced to.
+   *
+   * The page still watches for the first message; that moment is what turns
+   * its quiet link into the way out, and nothing more.
+   */
+  await completeOnboarding(deps.pool, WEB_ONBOARDING_SURFACE).catch(() => undefined);
 }
 
 /**
