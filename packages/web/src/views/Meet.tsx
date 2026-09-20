@@ -16,7 +16,8 @@
  * replays the answers from the record, the profile and the accounts, and asks
  * the first question nobody has answered (`meet/machine.ts`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ApiError,
   api,
@@ -29,7 +30,7 @@ import { Composer } from '../chat/Composer';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE } from '../routes';
-import { Avatar, Button, Field } from '../ui';
+import { Button, Field } from '../ui';
 import {
   FACES,
   OPENING_INSTRUCTION,
@@ -137,17 +138,45 @@ function Said({ children, at = 0 }: { children: ReactNode; at?: number }): JSX.E
   );
 }
 
-/** buddi's name and face, over a run of its bubbles. */
+/**
+ * buddi's name and face, over a run of its bubbles.
+ *
+ * The face is the mark from the rail — the same accent tile with the same
+ * letter — because this is the same buddi the owner will see in the corner of
+ * every page afterwards. Initials would be a stand-in for a face we have.
+ */
 function Buddi({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="meet-turn">
       <div className="wb-msg-who">
-        <Avatar id="buddi" name="buddi" size="sm" />
+        <span className="meet-mark" aria-hidden="true">
+          b
+        </span>
         <span>buddi</span>
       </div>
       {children}
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * The dock: one place at the bottom of the board
+ * ------------------------------------------------------------------ */
+
+/**
+ * Where the thing being answered goes.
+ *
+ * The board is one card with the thread scrolling inside it, so whatever the
+ * owner is answering *right now* — a field, a set of cards, the real composer
+ * — is pinned at its bottom rather than sitting at the end of a column that
+ * grows past the window. Each question still owns its own input; it renders
+ * through here, so nothing had to be split in two to be placed in two.
+ */
+const DockSlot = createContext<HTMLElement | null>(null);
+
+function Dock({ children }: { children: ReactNode }): JSX.Element {
+  const slot = useContext(DockSlot);
+  return slot ? createPortal(children, slot) : <>{children}</>;
 }
 
 /** What the owner said, with the way back to it. */
@@ -164,7 +193,11 @@ function Answered({ text, onChange }: { text: string; onChange: () => void }): J
 
 /** Where an answer is given: the composer's place, primary action on the right. */
 function Ask({ children }: { children: ReactNode }): JSX.Element {
-  return <div className="meet-ask">{children}</div>;
+  return (
+    <Dock>
+      <div className="meet-ask">{children}</div>
+    </Dock>
+  );
 }
 
 /** The assistant on disk: what a change edits rather than replaces. */
@@ -200,6 +233,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * the assistant question writes a first agent or changes the one there is.
    */
   const [existing, setExisting] = useState<ExistingAssistant | null>(null);
+  /** The dock's element, once it is on the page, for the open question to fill. */
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
 
   /** The zone this browser is in, which is what the question offers. */
   const browserZone = useMemo(() => {
@@ -290,53 +325,92 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
 
   const shown = open ? thread(answers, open) : [];
 
+  /*
+   * The newest line is the one at the bottom, and it is where the owner is
+   * looking. Anything that lengthens the thread scrolls it down; `auto` is
+   * deliberate, because a jump is what a chat does and reduced motion is
+   * honoured by the browser rather than by us.
+   */
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = scroller.current;
+    if (!node) return undefined;
+    const pin = (): void => {
+      node.scrollTop = node.scrollHeight;
+    };
+    pin();
+    // Everything that lengthens the thread is watched, not just the things
+    // this component happens to re-render for: a scripted bubble landing after
+    // its pause, and the assistant's answer arriving inside the handover, are
+    // both simply the content getting taller.
+    let observer: ResizeObserver | undefined;
+    try {
+      observer = new ResizeObserver(pin);
+      if (node.firstElementChild) observer.observe(node.firstElementChild);
+    } catch {
+      /* No ResizeObserver: the effect above still pins on every render. */
+    }
+    return () => observer?.disconnect();
+  }, [shown.length, open, answers, trouble]);
+
   return (
+    <DockSlot.Provider value={slot}>
     <div className="meet">
-      <div className="meet-column">
-        <div className="meet-thread" data-testid="meet-thread">
-          <Buddi>
-            {SCRIPT.opening.map((line, at) => (
-              <Said key={line} at={at}>
-                {line}
-              </Said>
-            ))}
-          </Buddi>
+      {/*
+        One board, centred, never taller than the window: the thread scrolls
+        inside it with the newest line at the bottom, and what is being
+        answered is docked under a single hairline. A short thread is a short
+        card, and the page itself never scrolls.
+      */}
+      <div className="meet-board">
+        <div className="meet-scroll" ref={scroller}>
+          <div className="meet-thread" data-testid="meet-thread">
+              <Buddi>
+                {SCRIPT.opening.map((line, at) => (
+                  <Said key={line} at={at}>
+                    {line}
+                  </Said>
+                ))}
+              </Buddi>
 
-          {shown.map((id) => (
-            <Question
-              key={id}
-              id={id}
-              openNow={open === id}
-              answers={answers}
-              accounts={accounts}
-              zones={zones}
-              browserZone={browserZone}
-              assistantAgent={assistantAgent}
-              met={met}
-              onMet={setMet}
-              existing={existing}
-              onSettled={(next) => settle(id, next)}
-              onChange={() => change(id)}
-              onTrouble={setTrouble}
-              onReload={() => void load(false)}
-              onPickAnotherBrain={() => change('brain')}
-            />
-          ))}
+              {shown.map((id) => (
+                <Question
+                  key={id}
+                  id={id}
+                  openNow={open === id}
+                  answers={answers}
+                  accounts={accounts}
+                  zones={zones}
+                  browserZone={browserZone}
+                  assistantAgent={assistantAgent}
+                  met={met}
+                  onMet={setMet}
+                  existing={existing}
+                  onSettled={(next) => settle(id, next)}
+                  onChange={() => change(id)}
+                  onTrouble={setTrouble}
+                  onReload={() => void load(false)}
+                  onPickAnotherBrain={() => change('brain')}
+                />
+              ))}
 
-          {trouble ? (
-            <Buddi>
-              <Said>{trouble}</Said>
-            </Buddi>
-          ) : null}
+            {trouble ? (
+              <Buddi>
+                <Said>{trouble}</Said>
+              </Buddi>
+            ) : null}
+          </div>
         </div>
 
-        <footer className="meet-foot">
+        <footer className="meet-dock">
+          <div className="meet-dock-ask" ref={setSlot} />
           <button className="meet-later" type="button" disabled={leaving} onClick={later}>
             {SCRIPT.later}
           </button>
         </footer>
       </div>
     </div>
+    </DockSlot.Provider>
   );
 }
 
@@ -595,39 +669,113 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   }
 
   return (
+    <Dock>
     <div className="meet-cards" role="group" aria-label={SCRIPT.brain.ask}>
-      {claudeOffered ? <BrainCard face="✦" card={SCRIPT.brain.cards.claude} onPick={() => setCard('claude')} /> : null}
-      <BrainCard face="🔑" card={SCRIPT.brain.cards.key} onPick={() => setCard('key')} />
+      {claudeOffered ? <BrainCard mark={<ClaudeMark />} card={SCRIPT.brain.cards.claude} onPick={() => setCard('claude')} /> : null}
+      <BrainCard mark={<KeyMark />} card={SCRIPT.brain.cards.key} onPick={() => setCard('key')} />
       <BrainCard
-        face="🖥"
+        mark={<OllamaMark />}
         card={SCRIPT.brain.cards.ollama}
         note={ollama === null ? SCRIPT.brain.ollama.looking : ollama.running ? SCRIPT.brain.ollama.found : SCRIPT.brain.ollama.missing}
         onPick={() => setCard('ollama')}
       />
-      <BrainCard face="☁" card={SCRIPT.brain.cards.service} onPick={() => setCard('service')} />
+      <BrainCard mark={<CloudMark />} card={SCRIPT.brain.cards.service} onPick={() => setCard('service')} />
     </div>
+    </Dock>
   );
 }
 
 function BrainCard({
-  face,
+  mark,
   card,
   note,
   onPick,
 }: {
-  face: string;
+  mark: ReactNode;
   card: { title: string; line: string };
   note?: string;
   onPick: () => void;
 }): JSX.Element {
   return (
     <button type="button" className="meet-card" onClick={onPick}>
-      <span className="meet-card-face" aria-hidden="true">
-        {face}
+      <span className="meet-card-mark" aria-hidden="true">
+        {mark}
       </span>
-      <span className="meet-card-title">{card.title}</span>
-      <span className="meet-card-line">{note ?? card.line}</span>
+      <span className="meet-card-words">
+        <span className="meet-card-title">{card.title}</span>
+        <span className="meet-card-line">{note ?? card.line}</span>
+      </span>
     </button>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The marks on the cards
+ *
+ * Drawn here, in one colour, from paths — never fetched, never an image file.
+ * Each is the shape that AI is known by, at the weight of the page's own
+ * icons, so the owner recognises what they already pay for rather than reading
+ * four lines of text to find it.
+ * ------------------------------------------------------------------ */
+
+/** Claude: the burst. */
+function ClaudeMark(): JSX.Element {
+  const rays = [0, 45, 90, 135, 180, 225, 270, 315];
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      {rays.map((angle) => (
+        <rect
+          key={angle}
+          x="11.1"
+          y="2.6"
+          width="1.8"
+          height="8.6"
+          rx="0.9"
+          fill="currentColor"
+          transform={`rotate(${angle} 12 12)`}
+        />
+      ))}
+    </svg>
+  );
+}
+
+/** A key: what a key from Anthropic or OpenAI is, in the hand. */
+function KeyMark(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="3.6" />
+      <path d="M10.6 10.6 19.4 19.4" />
+      <path d="M13.8 13.8 11.9 15.7" />
+      <path d="M16.6 16.6 14.7 18.5" />
+    </svg>
+  );
+}
+
+/**
+ * Ollama: this computer.
+ *
+ * Two attempts at the llama were made and both were illegible at the size a
+ * card mark is drawn — a 22px squiggle nobody reads as an animal is worse than
+ * no mark at all. So the card carries what it actually means, and what its own
+ * line says: the AI on this machine. If a proper Ollama mark is ever shipped
+ * as an asset, this is the one place to change.
+ */
+function OllamaMark(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3.2" y="4.6" width="17.6" height="11.2" rx="2" />
+      <path d="M9.4 19.4h5.2" />
+      <path d="M12 15.8v3.6" />
+    </svg>
+  );
+}
+
+/** Anything else that answers over the wire: a cloud. */
+function CloudMark(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7.2 18.3h9.6a3.8 3.8 0 0 0 .5-7.6 5.4 5.4 0 0 0-10.3-1.2 3.9 3.9 0 0 0 .2 8.8Z" />
+    </svg>
   );
 }
 
@@ -1013,6 +1161,12 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
 
   return (
     <Ask>
+      {/* The face is the assistant, so it is shown at the size of a face and
+          not at the size of a control: big, beside its name, changing as the
+          owner picks. */}
+      <span className="meet-chosen-face" aria-hidden="true">
+        {face}
+      </span>
       <Field label={SCRIPT.assistant.name}>
         <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
       </Field>
@@ -1213,6 +1367,7 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
       ) : null}
 
       {assistant ? (
+        <Dock>
         <Composer
           disabled={!conversationId}
           running={running}
@@ -1222,6 +1377,7 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
           }}
           agentName={assistant.name}
         />
+        </Dock>
       ) : null}
     </>
   );

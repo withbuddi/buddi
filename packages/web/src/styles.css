@@ -2120,37 +2120,113 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 
 /* ------------------------------------------------------------------ *
- * First run: one thread, full window, no rail.
+ * First run: one board, centred, contained.
  *
- * The chat's own bubbles, avatar, typing indicator and composer do the
- * talking — the classes here only make the column, place the inline answers
- * where a reply would go, and draw the four cards. When the real assistant
- * takes over, nothing on this screen changes but the speaker.
+ * The screen is a card and nothing else. It is never taller than the window,
+ * the thread scrolls inside it with the newest line at the bottom, and what
+ * the owner is answering right now is docked under one hairline at its foot —
+ * so the page itself never scrolls and the thing to do never moves. A short
+ * thread is a short card, standing in the middle of the window.
+ *
+ * Everything that speaks reuses the chat: the same bubbles, the same face
+ * beside the same name, the same typing dots, the same composer. What is added
+ * here is the box around them, the marks on the cards, and the room to read.
  * ------------------------------------------------------------------ */
 
-.meet { height: 100%; overflow: auto; background: var(--bg); display: flex; justify-content: center; }
-.meet-column {
+.meet {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.meet-board {
   width: 100%;
-  max-width: 680px;
-  padding: var(--space-8) var(--space-6) var(--space-5);
+  max-width: 660px;
+  /* The window, less the page's own margin on each side. Nothing here grows
+     past it: the thread scrolls instead. */
+  max-height: calc(100vh - var(--space-6) * 2);
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
 }
-.meet-thread { display: flex; flex-direction: column; gap: var(--space-3); }
-.meet-turn { display: flex; flex-direction: column; gap: var(--space-2); }
 
-/* An answer goes where a reply would: the composer's place, primary right. */
+.meet-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: var(--space-6) var(--space-6) var(--space-5);
+}
+
+.meet-thread { display: flex; flex-direction: column; gap: var(--space-5); }
+.meet-turn { display: flex; flex-direction: column; gap: var(--space-2); }
+.meet-turn + .meet-turn { margin-top: 0; }
+
+/* Room to read: the page's own body size rather than the transcript's dense
+   one, with more air between lines, because this is the first thing anybody
+   reads here and it is read once, slowly. */
+.meet .wb-bubble { font-size: var(--text-base); line-height: 1.75; }
+.meet .wb-working { font-size: var(--text-base); line-height: 1.75; }
+
+/* buddi speaks once under its name, not once per sentence: a run of its turns
+   carries one heading, exactly as a run of the agent's does in the chat. An
+   owner's bubble between two of them breaks the run and the name comes back. */
+.meet-turn + .meet-turn .wb-msg-who { display: none; }
+.meet .wb-msg { gap: var(--space-2); }
+.meet .wb-messages { padding: 0; gap: var(--space-5); overflow: visible; }
+/* One hairline on this screen, and it is the dock's. The chat draws a rule
+   above its offer chips because they sit against its composer; here they sit
+   in the thread, where a second line is just a line. */
+.meet .wb-offers { border-top: 0; padding: 0; gap: var(--space-2); }
+
+/* buddi's face: the mark from the rail, at the size of a face in a thread. */
+.meet-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+}
+
+/* ---- the dock: what is being answered, pinned under one hairline ---- */
+
+.meet-dock {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6) var(--space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.meet-dock-ask:empty { display: none; }
+
 .meet-ask {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: flex-end;
   gap: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--line);
 }
 .meet-ask > .ui-field { flex: 1 1 200px; }
+.meet-dock .wb-composer { margin: 0; }
 .meet-input {
   flex: 1 1 200px;
   min-width: 0;
@@ -2162,14 +2238,14 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   font: inherit;
   font-size: var(--text-base);
 }
-.meet-line { flex: 1 1 200px; color: var(--text-muted); font-size: var(--text-sm); }
+.meet-line { flex: 1 1 200px; color: var(--text-muted); font-size: var(--text-md); line-height: 1.6; }
 .meet-quiet {
   border: 0;
   background: none;
   padding: 0;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   font-family: inherit;
   text-decoration: underline;
 }
@@ -2185,51 +2261,85 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-change:hover { color: var(--text-muted); text-decoration: underline; }
 
-/* The four brains: two per row, a face, a title and one line. */
-.meet-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+/* ---- the four brains: a mark, a title and one line ---- */
+
+.meet-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); width: 100%; }
 .meet-card {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  gap: var(--space-3);
   text-align: left;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
+  transition: border-color 120ms ease, background-color 120ms ease;
 }
-.meet-card:hover { border-color: var(--accent); }
-.meet-card-face { font-size: var(--text-lg); }
-.meet-card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
-.meet-card-line { font-size: var(--text-sm); color: var(--text-muted); }
+.meet-card:hover { border-color: var(--accent); background: var(--surface-sunken); }
+.meet-card-mark { flex: 0 0 auto; display: inline-flex; color: var(--text-muted); margin-top: 1px; }
+.meet-card:hover .meet-card-mark { color: var(--accent); }
+.meet-card-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.meet-card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); line-height: 1.35; }
+.meet-card-line { font-size: var(--text-md); color: var(--text-muted); line-height: 1.5; }
 
-.meet-faces { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.meet-face {
-  width: 36px;
-  height: 36px;
+/* ---- the assistant: its face, at the size of a face ---- */
+
+.meet-chosen-face {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--line);
+  width: 44px;
+  height: 44px;
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  font-size: 24px;
+  line-height: 1;
+}
+.meet-faces { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.meet-face {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
   cursor: pointer;
   font-size: var(--text-lg);
 }
+.meet-face:hover { background: var(--surface-sunken); }
 .meet-face[data-chosen='true'] { border-color: var(--accent); background: var(--surface-sunken); }
 
+/* ---- the phone ---- */
+
 .meet-pair { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
-.meet-qr { width: 180px; height: 180px; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
+.meet-qr { width: 168px; height: 168px; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
 .meet-link { font-size: var(--text-sm); word-break: break-all; }
 
-.meet-foot { display: flex; justify-content: flex-start; padding-top: var(--space-3); border-top: 1px solid var(--line); }
-.meet-later { border: 0; background: none; padding: 0; cursor: pointer; color: var(--text-faint); font-size: var(--text-sm); font-family: inherit; }
+/* The quiet way out, under everything, all the way through. */
+.meet-later {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
 .meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
 .meet-later:disabled { cursor: default; opacity: 0.5; }
 
 @media (max-width: 700px) {
-  .meet-column { padding: var(--space-5) var(--space-4); }
+  .meet { padding: var(--space-3); }
+  .meet-board { max-height: calc(100vh - var(--space-3) * 2); }
+  .meet-scroll { padding: var(--space-4); }
+  .meet-dock { padding: var(--space-3) var(--space-4); }
   .meet-cards { grid-template-columns: minmax(0, 1fr); }
 }
