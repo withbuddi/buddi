@@ -52,6 +52,7 @@ import {
   createFirstAgent,
   probeOllama,
   readOnboarding,
+  rebindBrain,
   updateFirstAgent,
   withFirstRunFacts,
   type OnboardingDeps,
@@ -1248,6 +1249,26 @@ export function createWebApp(deps: WebServerDeps): Server {
       } catch (error) {
         if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
         return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
+      }
+    }
+
+    /*
+     * The brain, changed after the assistant exists.
+     *
+     * Its own route because two things have to move together: the assistant
+     * onto the account the thread has just tested, and the shipped maker that
+     * was following it. Doing that from the page would be two calls with a
+     * rule between them, and the rule belongs on this side.
+     */
+    if (path === '/api/onboarding/brain') {
+      if (typeof body.accountId !== 'string' || typeof body.model !== 'string') {
+        return sendJson(res, 400, { error: '`accountId` and `model` must be strings' });
+      }
+      try {
+        return sendJson(res, 200, await rebindBrain(onboardingDeps(), { accountId: body.accountId, model: body.model }));
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'That account could not be given to your assistant.' });
       }
     }
 

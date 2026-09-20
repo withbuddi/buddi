@@ -387,7 +387,11 @@ async function writeFirstAgent(
     live = false;
   }
 
-  return { id, handle, file, live, assigned: await assignAccount(deps, id, account) };
+  const assigned = await assignAccount(deps, id, account);
+  // The shipped maker is listed the moment the owner has an assistant, so it
+  // is given the same brain now rather than appearing unable to answer.
+  if (assigned && account) await bindFollowers(deps, { accountId: account.id, model: account.defaultModel });
+  return { id, handle, file, live, assigned };
 }
 
 /* ------------------------------------------------------------------ *
@@ -488,6 +492,84 @@ export function updateFirstAgent(
 function bodyOf(source: string): string {
   const match = /^---\n[\s\S]*?\n---\n?/.exec(source);
   return (match ? source.slice(match[0].length) : source).trim();
+}
+
+/* ------------------------------------------------------------------ *
+ * The agents that follow the assistant onto its brain
+ * ------------------------------------------------------------------ */
+
+/**
+ * Shipped agents that take the owner's choice of AI as their own.
+ *
+ * `agent-father` is the one: it is held back until the owner has an assistant
+ * (`EXAMPLES_HELD_BACK`), and the moment it is listed it has to be able to
+ * run. An agent that appears greyed with "needs an account" the second it
+ * appears is a stranger the owner has to fix before they have asked it for
+ * anything, and nothing about the choice was theirs to make twice — they
+ * picked one AI a minute ago.
+ */
+export const FOLLOWING_AGENTS: readonly string[] = ['agent-father'];
+
+/** One agent's account, as the accounts service has it. */
+function bindingOf(deps: OnboardingDeps, agentId: string): { accountId: string; model: string } | undefined {
+  const view = deps.providerAccounts?.view() as { bindings?: Array<{ agentId: string; accountId: string; model: string }> } | undefined;
+  return (view?.bindings ?? []).find((binding) => binding.agentId === agentId);
+}
+
+/**
+ * Move the following agents onto the account the assistant thinks with.
+ *
+ * Only while they are still following: an agent with no account of its own, or
+ * one still on the account the assistant has just moved off. An owner who gave
+ * `agent-father` its own account on the Agents page has said something, and
+ * this never argues with it.
+ */
+export async function bindFollowers(
+  deps: OnboardingDeps,
+  account: { accountId: string; model: string },
+  previousAccountId?: string | null,
+): Promise<string[]> {
+  const accounts = deps.providerAccounts;
+  if (!accounts) return [];
+  const moved: string[] = [];
+  for (const id of FOLLOWING_AGENTS) {
+    // `get`, not `list`: a held-back example is not on the roster yet, and it
+    // is exactly the one this is for.
+    if (typeof deps.catalog?.get !== 'function' || !deps.catalog.get(id)) continue;
+    const current = bindingOf(deps, id);
+    const follows = current === undefined || (previousAccountId !== undefined && previousAccountId !== null && current.accountId === previousAccountId);
+    if (!follows || current?.accountId === account.accountId) continue;
+    try {
+      await accounts.assign(id, { accountId: account.accountId, model: account.model });
+      moved.push(id);
+    } catch {
+      // Never fatal: the owner's own assistant is bound either way, and the
+      // Agents page is where an account is chosen by hand.
+    }
+  }
+  return moved;
+}
+
+/**
+ * The owner changed their mind about the AI, after the assistant exists.
+ *
+ * One call, so the two things that must move together do: the assistant onto
+ * the account the thread has just tested, and whatever was following it.
+ */
+export async function rebindBrain(
+  deps: OnboardingDeps,
+  account: { accountId: string; model: string },
+): Promise<{ assistant: string | null; followed: string[] }> {
+  const accounts = deps.providerAccounts;
+  const agent = privateAgent(deps.catalog);
+  if (!accounts || !agent) throw new OnboardingRefusal(409, 'There is no assistant of your own to give a brain to.');
+  const previous = bindingOf(deps, agent.id)?.accountId ?? null;
+  try {
+    await accounts.assign(agent.id, { accountId: account.accountId, model: account.model });
+  } catch (error) {
+    throw new OnboardingRefusal(409, error instanceof Error ? error.message : 'That account could not be given to your assistant.');
+  }
+  return { assistant: agent.id, followed: await bindFollowers(deps, account, previous) };
 }
 
 /**

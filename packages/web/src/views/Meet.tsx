@@ -29,8 +29,8 @@ import {
 import { Composer } from '../chat/Composer';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
-import { HOME_ROUTE } from '../routes';
-import { Button, Field } from '../ui';
+import { HOME_ROUTE, chatRoute } from '../routes';
+import { Button, ButtonLink, Field } from '../ui';
 import {
   FACES,
   OPENING_INSTRUCTION,
@@ -74,6 +74,9 @@ export const FIRST_MESSAGE_TIMEOUT_MS = 5 * 60_000;
 
 /** How often the thread asks whether the answer has arrived. */
 const POLL_MS = 1_500;
+
+/** How long the finished board waits before leaving for the dashboard itself. */
+export const LEAVE_MS = 3_000;
 
 /** The longest the thread watches for a phone before offering a fresh code. */
 export const PAIRING_WATCH_MS = 10 * 60_000;
@@ -235,6 +238,14 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   const [existing, setExisting] = useState<ExistingAssistant | null>(null);
   /** The dock's element, once it is on the page, for the open question to fill. */
   const [slot, setSlot] = useState<HTMLElement | null>(null);
+  /**
+   * Where this thread carries on once the assistant has spoken.
+   *
+   * From that moment first run is over — the record says so — and the quiet
+   * link under the dock stops offering to set up later, which is no longer a
+   * thing that can happen, and offers the way out instead.
+   */
+  const [carriesOn, setCarriesOn] = useState<string | null>(null);
 
   /** The zone this browser is in, which is what the question offers. */
   const browserZone = useMemo(() => {
@@ -244,6 +255,10 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       return timezone;
     }
   }, [timezone]);
+
+  /** The caller's navigate, always current, never a reason to reload. */
+  const go = useRef(navigate);
+  go.current = navigate;
 
   /* ---- resume: replay what the server already knows ---- */
   /**
@@ -280,9 +295,26 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       accounts: accountView,
       ...(own ? { assistant: { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '' } } : {}),
     });
+    /*
+     * A finished first run has no thread to show.
+     *
+     * The record is done, so this route is a page the owner has already left;
+     * a reload lands where the conversation is — the same one they met their
+     * assistant in, with the rail around it — or Home when the record does not
+     * name one. Replaced rather than pushed, so Back does not return here.
+     */
+    if (replay && onboarding?.state === 'done') {
+      const carry = onboarding.details?.conversationId;
+      go.current(carry && own ? chatRoute(own.id, carry) : HOME_ROUTE, true);
+      return;
+    }
     if (!replay) return;
     setAnswers(replayed);
     setOpen((current) => current ?? firstOpen(replayed));
+    // Deliberately no dependencies: this reads the server once on mount and
+    // again only when something asks it to. `navigate` is held in a ref rather
+    // than depended on, because a caller that passes a fresh function every
+    // render would otherwise make "read the server" mean "read it for ever".
   }, []);
 
   useEffect(() => {
@@ -386,6 +418,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                   met={met}
                   onMet={setMet}
                   existing={existing}
+                  navigate={navigate}
+                  onCarriesOn={setCarriesOn}
                   onSettled={(next) => settle(id, next)}
                   onChange={() => change(id)}
                   onTrouble={setTrouble}
@@ -404,9 +438,22 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
 
         <footer className="meet-dock">
           <div className="meet-dock-ask" ref={setSlot} />
-          <button className="meet-later" type="button" disabled={leaving} onClick={later}>
-            {SCRIPT.later}
-          </button>
+          {carriesOn ? (
+            <a
+              className="meet-later"
+              href={carriesOn}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(carriesOn, true);
+              }}
+            >
+              {SCRIPT.done.open}
+            </a>
+          ) : (
+            <button className="meet-later" type="button" disabled={leaving} onClick={later}>
+              {SCRIPT.later}
+            </button>
+          )}
         </footer>
       </div>
     </div>
@@ -427,6 +474,9 @@ interface QuestionProps {
   onMet: (conversationId: string) => void;
   /** The assistant this installation already has, if it has one. */
   existing: ExistingAssistant | null;
+  /** The thread is over: where it carries on, as a route. */
+  onCarriesOn: (route: string) => void;
+  navigate: (next: string, replace?: boolean) => void;
   onSettled: (next: MeetAnswers) => void;
   onChange: () => void;
   onTrouble: (message: string | null) => void;
@@ -627,7 +677,9 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     const assistant = answers.assistant;
     if (assistant) {
       try {
-        await api.assignProviderAccount(assistant.id, brain.accountId, brain.model);
+        // One call: the assistant moves, and so does anything shipped that
+        // was following its choice of AI.
+        await api.bindBrain({ accountId: brain.accountId, model: brain.model });
       } catch (err) {
         return err instanceof ApiError ? err.message : String(err);
       }
@@ -1206,7 +1258,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
  * instruction from the script — and does not render it. Everything after it is
  * an ordinary conversation, in the owner's history like any other.
  */
-function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: QuestionProps): JSX.Element {
+function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, onPickAnotherBrain }: QuestionProps): JSX.Element {
   const assistant = answers.assistant;
   const [conversationId, setConversationId] = useState<string | null>(met);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1215,6 +1267,9 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
   const [patient, setPatient] = useState(false);
   const [running, setRunning] = useState(true);
   const [offers, setOffers] = useState<'open' | 'phone' | 'gone'>('open');
+  /** The owner is finished here, and the thread says where it carries on. */
+  const [closing, setClosing] = useState(false);
+  const still = useStill();
   const started = useRef(false);
   const agents = useMemo<ChatAgent[]>(() => (assistantAgent ? [assistantAgent] : []), [assistantAgent]);
 
@@ -1309,6 +1364,34 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
     };
   }, [conversationId]);
 
+  /**
+   * The same conversation, in the shell.
+   *
+   * Not a new thread and not Home: the owner has just met their assistant in
+   * this conversation, and "open buddi" should land them in it with the rail
+   * around it. Replaced rather than pushed, because first run is not a place
+   * to go back to.
+   */
+  const carriesOn = assistant && conversationId ? chatRoute(assistant.id, conversationId) : null;
+  const spoken = messages.some(isSpoken);
+  useEffect(() => {
+    if (spoken && carriesOn) onCarriesOn(carriesOn);
+  }, [spoken, carriesOn, onCarriesOn]);
+
+  /*
+   * Three seconds and the board leaves by itself.
+   *
+   * The owner said they were done — "not now", or a phone that said hello —
+   * and a screen that then just sits there is the dead end this fixes. The
+   * button is always there to do it sooner, and an owner who has asked for
+   * less motion is never moved without pressing it.
+   */
+  useEffect(() => {
+    if (!closing || !carriesOn || still) return undefined;
+    const timer = window.setTimeout(() => navigate(carriesOn, true), LEAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [closing, carriesOn, still, navigate]);
+
   const send = (text: string): void => {
     if (!assistant || !conversationId) return;
     setRunning(true);
@@ -1349,25 +1432,52 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
         </>
       ) : null}
 
-      {messages.some(isSpoken) && offers !== 'gone' ? (
+      {closing ? (
+        <Buddi>
+          <Said>{SCRIPT.done.said}</Said>
+        </Buddi>
+      ) : null}
+
+      {spoken && offers !== 'gone' ? (
         <div className="wb-offers" data-testid="meet-offers">
           {offers === 'open' ? (
             <>
               <button type="button" className="ui-btn" onClick={() => setOffers('phone')}>
                 {SCRIPT.offers.phone}
               </button>
-              <button type="button" className="ui-btn" onClick={() => setOffers('gone')}>
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  setOffers('gone');
+                  setClosing(true);
+                }}
+              >
                 {SCRIPT.offers.notNow}
               </button>
             </>
           ) : (
-            <TelegramCard />
+            <TelegramCard onPaired={() => setClosing(true)} />
           )}
         </div>
       ) : null}
 
       {assistant ? (
         <Dock>
+        {closing && carriesOn ? (
+          <div className="meet-ask">
+            <ButtonLink
+              variant="accent"
+              href={carriesOn}
+              onClick={(event) => {
+                event.preventDefault();
+                navigate(carriesOn, true);
+              }}
+            >
+              {SCRIPT.done.open}
+            </ButtonLink>
+          </div>
+        ) : null}
         <Composer
           disabled={!conversationId}
           running={running}
@@ -1401,7 +1511,7 @@ function isSpoken(message: ChatMessage): boolean {
  * The pairing state is polled rather than assumed — the thread says the phone
  * arrived when the phone says hello, and not before.
  */
-function TelegramCard(): JSX.Element {
+function TelegramCard({ onPaired }: { onPaired: () => void }): JSX.Element {
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -1463,7 +1573,9 @@ function TelegramCard(): JSX.Element {
       api
         .telegram()
         .then((status) => {
-          if (!cancelled && status.paired) setPaired(true);
+          if (cancelled || !status.paired) return;
+          setPaired(true);
+          onPaired();
         })
         .catch(() => {});
     }, 2_000);

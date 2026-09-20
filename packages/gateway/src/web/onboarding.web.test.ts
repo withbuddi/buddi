@@ -15,6 +15,7 @@ import { createFirstAgent } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
+import type { LoadAgentCatalogOptions } from '@buddi/core';
 
 /** `res.json()` is `unknown`; every body here is a small object we assert on. */
 const json = async (res: Response): Promise<any> => res.json();
@@ -93,11 +94,52 @@ function fakePool(profile: { preferredName?: string | null } = {}) {
 }
 
 function accounts(list: Array<{ id: string; enabled: boolean; configured: boolean; defaultModel?: string }>) {
-  return {
-    view: vi.fn(() => ({ vault: { kind: 'file' }, accounts: list.map((a) => ({ defaultModel: 'claude-sonnet-4-5', ...a })), bindings: [] })),
-    assign: vi.fn(async () => ({ changed: ['account'], note: '' })),
+  // Assignments are remembered, because "who is bound to what" is exactly what
+  // the rule about the shipped maker following the assistant is written on.
+  const bindings: Array<{ agentId: string; accountId: string; model: string }> = [];
+  const service = {
+    bindings,
+    view: vi.fn(() => ({
+      vault: { kind: 'file' },
+      accounts: list.map((a) => ({ defaultModel: 'claude-sonnet-4-5', ...a })),
+      bindings: [...bindings],
+    })),
+    assign: vi.fn(async (agentId: string, body: { accountId: string; model: string }) => {
+      const existing = bindings.find((b) => b.agentId === agentId);
+      if (existing) Object.assign(existing, body);
+      else bindings.push({ agentId, ...body });
+      // The real service reloads the catalog after an assignment, which is how
+      // an agent becomes available the moment it has an account. The fixture
+      // does the same or the roster would answer from before the binding.
+      service.reloadCatalog?.();
+      return { changed: ['account'], note: '' };
+    }),
+    /** Set by `boot`, once there is a catalog to reload. */
+    reloadCatalog: undefined as undefined | (() => void),
     refresh: vi.fn(async () => {}),
-  } as unknown as ProviderAccounts & { assign: ReturnType<typeof vi.fn> };
+    /*
+     * What the catalog asks when it decides whether an agent can run. The real
+     * service answers from the binding and the account's credential; this
+     * answers from the binding alone, which is the half these tests are about:
+     * an agent with an account is available, one without is not.
+     */
+    selection: (agent: { id: string; model?: string }) => {
+      const binding = bindings.find((b) => b.agentId === agent.id);
+      const provider = {
+        kind: 'anthropic',
+        model: binding?.model ?? agent.model ?? 'claude-sonnet-4-5',
+        accountId: binding?.accountId ?? '',
+        credential: { kind: 'api-key', env: 'FIXTURE_KEY' },
+      };
+      return binding
+        ? { provider, availability: { ok: true } }
+        : { provider, availability: { ok: false, problem: { code: 'missing-credential', message: 'Choose a provider account for this agent.' } } };
+    },
+  };
+  return service as unknown as ProviderAccounts & {
+    assign: ReturnType<typeof vi.fn>;
+    bindings: Array<{ agentId: string; accountId: string; model: string }>;
+  };
 }
 
 async function boot(opts: {
@@ -106,6 +148,8 @@ async function boot(opts: {
   providerAccounts?: ProviderAccounts;
   /** Give the installation an agent of the owner's own before it starts. */
   privateAgent?: boolean;
+  /** Load the shipped examples too, as the gateway does. */
+  shipped?: boolean;
 }) {
   if (opts.privateAgent) {
     mkdirSync(path.join(opts.agentsDir, 'already'), { recursive: true });
@@ -117,7 +161,18 @@ async function boot(opts: {
   }
   const env = { ...process.env, BUDDI_AGENTS_DIR: opts.agentsDir, BUDDI_SKILLS_DIR: path.join(opts.agentsDir, '..', 'skills') };
   const registry = new ToolRegistry();
-  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: opts.agentsDir, env }));
+  // `shipped` builds the catalog the way the gateway does — the owner's
+  // directory *and* the examples tree, with the held-back rule over it — which
+  // is the only way to see the agents this installation ships.
+  const service = opts.providerAccounts as unknown as
+    | { selection?: LoadAgentCatalogOptions['providerSelection']; reloadCatalog?: () => void }
+    | undefined;
+  const selection = service?.selection;
+  const catalog = reloadableCatalog(() =>
+    opts.shipped
+      ? loadGatewayCatalog({ env, ...(selection ? { providerSelection: selection } : {}) })
+      : loadGatewayCatalog({ dir: opts.agentsDir, env }),
+  );
   const app = await startWebServer({
     pool: opts.pool as never,
     registry,
@@ -130,6 +185,7 @@ async function boot(opts: {
     env,
     ...(opts.providerAccounts ? { providerAccounts: opts.providerAccounts } : {}),
   });
+  if (service) service.reloadCatalog = () => catalog.reload();
   servers.push(app);
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
@@ -439,4 +495,72 @@ it('refuses an account the installation cannot run on, and writes nothing', asyn
     createFirstAgent(deps, { name: 'Ada', handle: 'ada', description: 'x', accountId: 'one' }),
   ).rejects.toThrow(/not one this installation can run on/);
   expect(existsSync(path.join(dir, 'ada'))).toBe(false);
+});
+
+
+/*
+ * The shipped maker follows the owner's choice of AI.
+ *
+ * It is held back until they have an assistant, and the moment it is listed it
+ * has to be able to answer: an agent that appears greyed with "needs an
+ * account" is a stranger the owner has to repair before they have asked it for
+ * anything, over a choice they already made a minute ago.
+ */
+it('gives the shipped maker the same brain as the assistant it was created with', async () => {
+  const pool = fakePool();
+  const service = accounts([{ id: 'one', enabled: true, configured: true }]);
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: service, shipped: true });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.', accountId: 'one' }),
+  });
+  expect(created.status).toBe(200);
+  const assistant = (await json(created)).id as string;
+  expect(service.bindings).toEqual(
+    expect.arrayContaining([
+      { agentId: assistant, accountId: 'one', model: 'claude-sonnet-4-5' },
+      { agentId: 'agent-father', accountId: 'one', model: 'claude-sonnet-4-5' },
+    ]),
+  );
+  // And it is on the roster now, rather than held back — and able to answer,
+  // which is the whole point of giving it the brain.
+  const listed = await json(await fetch(`${origin}/api/agents`, { headers }));
+  const maker = listed.agents.find((agent: { id: string }) => agent.id === 'agent-father');
+  expect(maker, 'the maker is listed once the owner has an assistant').toBeTruthy();
+  expect(listed.engines.find((engine: { id: string }) => engine.id === 'agent-father')?.available).toBe(true);
+});
+
+it('moves the maker with the assistant when the brain changes, unless it has one of its own', async () => {
+  const pool = fakePool();
+  const service = accounts([
+    { id: 'one', enabled: true, configured: true },
+    { id: 'two', enabled: true, configured: true },
+    { id: 'mine', enabled: true, configured: true },
+  ]);
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: service, shipped: true });
+  await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.', accountId: 'one' }),
+  });
+  const changed = await fetch(`${origin}/api/onboarding/brain`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ accountId: 'two', model: 'gpt-5' }),
+  });
+  expect(changed.status).toBe(200);
+  expect(await json(changed)).toEqual({ assistant: expect.any(String), followed: ['agent-father'] });
+  expect(service.bindings.find((b) => b.agentId === 'agent-father')).toEqual({ agentId: 'agent-father', accountId: 'two', model: 'gpt-5' });
+
+  // The owner gave the maker an account of its own on the Agents page. The
+  // next change to the assistant's brain leaves that alone.
+  await service.assign('agent-father', { accountId: 'mine', model: 'claude-sonnet-4-5' });
+  const again = await fetch(`${origin}/api/onboarding/brain`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ accountId: 'one', model: 'claude-sonnet-4-5' }),
+  });
+  expect((await json(again)).followed).toEqual([]);
+  expect(service.bindings.find((b) => b.agentId === 'agent-father')?.accountId).toBe('mine');
 });

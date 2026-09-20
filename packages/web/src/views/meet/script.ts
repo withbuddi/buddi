@@ -114,6 +114,11 @@ export const SCRIPT = {
     phone: 'Talk to me from your phone',
     notNow: 'Not now',
   },
+  /** The end of the thread: it carries on somewhere the owner can find it. */
+  done: {
+    said: "You're all set. This conversation carries on in your dashboard.",
+    open: 'Open buddi',
+  },
   telegram: {
     how: 'Two minutes: open Telegram, message @BotFather, send /newbot, paste the token it gives you here.',
     field: 'The token',
