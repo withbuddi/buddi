@@ -449,6 +449,38 @@ describe('the switch', () => {
     }
   });
 
+  /*
+   * A model that writes its reasoning into its own answer is the runtime's
+   * problem, and it is fixed there — but the board must not be the thing that
+   * shows it if anything ever slips through again.
+   */
+  it('never draws what the assistant thought, only what it said', async () => {
+    ready();
+    vi.mocked(chatApi.conversation).mockResolvedValue({
+      id: 'c1',
+      agentId: 'ada',
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          at: '',
+          blocks: [
+            { type: 'thinking', text: 'The owner is Amen, setup is finished. I should introduce myself…' },
+            { type: 'tool_use', id: 't1', name: 'owner.get_profile', input: {} },
+            { type: 'text', text: "I'm Ada." },
+          ],
+        },
+      ],
+      runs: [],
+    } as never);
+    render(meet());
+    expect(await screen.findByText("I'm Ada.")).toBeInTheDocument();
+    expect(screen.queryByText(/I should introduce myself/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Thought for|Thoughts/)).not.toBeInTheDocument();
+    // And the tool it called is not a row on this screen either.
+    expect(screen.queryByText(/get_profile/)).not.toBeInTheDocument();
+  });
+
   it('says nothing about waiting once the assistant has spoken', async () => {
     vi.useFakeTimers();
     try {
