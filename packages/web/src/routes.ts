@@ -11,6 +11,30 @@ export const CHAT_ROUTE = '#/chat';
 export const AGENTS_ROUTE = '#/agents';
 export const ACTIVITY_ROUTE = '#/activity';
 export const SETTINGS_ROUTE = '#/settings';
+export const FILES_ROUTE = '#/files';
+
+/** One file in the library, by id. Authenticated dashboard links, never sharing links. */
+export interface FileFilters { q?: string; origin?: string; family?: string }
+export function fileRoute(artifactId?: string | null, filters: FileFilters = {}): string {
+  const params = new URLSearchParams();
+  if (filters.q) params.set('q', filters.q);
+  if (filters.origin) params.set('origin', filters.origin);
+  if (filters.family) params.set('family', filters.family);
+  const query = params.toString();
+  return `${FILES_ROUTE}${artifactId ? `/${encodeURIComponent(artifactId)}` : ''}${query ? `?${query}` : ''}`;
+}
+export function parseFileRoute(hash: string): { artifactId?: string; filters: FileFilters } | null {
+  const match = /^#\/files(?:\/([^/?]+))?(?:\?(.*))?$/.exec(hash);
+  if (!match) return null;
+  try {
+    const params = new URLSearchParams(match[2] ?? '');
+    const filters: FileFilters = {};
+    if (params.get('q')) filters.q = params.get('q')!;
+    if (params.get('origin')) filters.origin = params.get('origin')!;
+    if (params.get('family')) filters.family = params.get('family')!;
+    return { ...(match[1] ? { artifactId: decodeURIComponent(match[1]) } : {}), filters };
+  } catch { return null; }
+}
 
 /** Stable owner-only links; the server's normal dashboard authentication applies. */
 export function chatRoute(agentId: string, conversationId?: string | null): string {
@@ -65,6 +89,7 @@ export const PLACES = [
   { route: CHAT_ROUTE, label: 'Chat' },
   { route: AGENTS_ROUTE, label: 'Agents' },
   { route: ACTIVITY_ROUTE, label: 'Activity' },
+  { route: FILES_ROUTE, label: 'Files' },
   { route: SETTINGS_ROUTE, label: 'Settings' },
 ] as const;
 
@@ -108,6 +133,7 @@ export function placeOf(hash: string): (typeof PLACES)[number]['route'] {
   if (hash.startsWith(CHAT_ROUTE)) return CHAT_ROUTE;
   if (hash.startsWith(AGENTS_ROUTE)) return AGENTS_ROUTE;
   if (hash.startsWith(ACTIVITY_ROUTE)) return ACTIVITY_ROUTE;
+  if (hash.startsWith(FILES_ROUTE)) return FILES_ROUTE;
   if (hash.startsWith(SETTINGS_ROUTE)) return SETTINGS_ROUTE;
   return HOME_ROUTE;
 }

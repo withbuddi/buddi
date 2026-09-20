@@ -461,6 +461,29 @@ export interface AgentProfile {
   note: string;
 }
 
+/** One file in the library (docs/files.md). */
+export interface LibraryEntry {
+  id: string;
+  filename: string | null;
+  mime: string;
+  family: 'image' | 'pdf' | 'table' | 'text' | 'code' | 'audio' | 'video' | 'archive' | 'file';
+  sizeBytes: number;
+  createdAt: string;
+  origin: 'uploaded' | 'produced' | 'unknown';
+  agentId: string | null;
+  deleted: boolean;
+  contexts: number;
+}
+export interface LibraryContext {
+  conversationId: string;
+  kind: 'uploaded' | 'produced' | 'reused';
+  agentId: string | null;
+  conversationAgentId: string;
+  groupId: string | null;
+  groupName: string | null;
+  at: string;
+}
+
 /** The owner, as every agent is told about them. All of it may be empty. */
 export interface OwnerView {
   preferredName: string | null;
@@ -622,6 +645,11 @@ export const api = {
    * What one agent is: its grant with every tool's tier, its engine, its
    * skills, its delegates. A read; there is no counterpart that writes.
    */
+  /* ---- files: the library over the artifact store ---- */
+  library: (query: { q?: string; origin?: string; family?: string; cursor?: string; limit?: number }) =>
+    get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
+  libraryEntry: (id: string, contextsOffset = 0) =>
+    get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),

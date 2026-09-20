@@ -11,7 +11,7 @@
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import type { ReactNode } from 'react';
-import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE } from '../routes';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE } from '../routes';
 import { nextTheme, themeLabel, type ThemeChoice } from '../theme';
 
 export function Rail({
@@ -109,6 +109,15 @@ const stroke = {
 };
 
 const ICONS: Record<string, JSX.Element> = {
+  // Files: two sheets, the front one with a folded corner — the shape a
+  // person reads as documents at a glance.
+  [FILES_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M7.5 2.8h5.2L16.5 6.6v8.6a1.2 1.2 0 0 1-1.2 1.2H7.5a1.2 1.2 0 0 1-1.2-1.2V4a1.2 1.2 0 0 1 1.2-1.2z" />
+      <path d="M12.7 2.8v3.8h3.8" />
+      <path d="M4.4 6.2v9.4a1.6 1.6 0 0 0 1.6 1.6h6.6" />
+    </svg>
+  ),
   [HOME_ROUTE]: (
     <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
       <path d="M3.5 9.2 10 3.6l6.5 5.6" />
