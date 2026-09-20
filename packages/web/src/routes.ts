@@ -18,10 +18,24 @@ export function chatRoute(agentId: string, conversationId?: string | null): stri
 }
 
 export function parseChatRoute(hash: string): { agentId: string; conversationId?: string } | null {
+  if (parseGroupChatRoute(hash)) return null;
   const match = /^#\/chat\/([^/]+)(?:\/([^/]+))?$/.exec(hash);
   if (!match) return null;
   try {
     return { agentId: decodeURIComponent(match[1]!), ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}) };
+  } catch { return null; }
+}
+
+/** A group's chat: `#/chat/g/<groupId>[/<conversationId>]`. The `g` keeps it apart from an agent id. */
+export function groupChatRoute(groupId: string, conversationId?: string | null): string {
+  return `#/chat/g/${encodeURIComponent(groupId)}${conversationId ? `/${encodeURIComponent(conversationId)}` : ''}`;
+}
+
+export function parseGroupChatRoute(hash: string): { groupId: string; conversationId?: string } | null {
+  const match = /^#\/chat\/g\/([^/]+)(?:\/([^/]+))?$/.exec(hash);
+  if (!match) return null;
+  try {
+    return { groupId: decodeURIComponent(match[1]!), ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}) };
   } catch { return null; }
 }
 

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { chatApi } from '../api';
-import { chatRoute } from '../routes';
+import { chatRoute, groupChatRoute } from '../routes';
 import { fmtTime } from '../format';
 import type { ConversationListItem } from './types';
 
-export function ConversationHistory({ agentId, currentId, timezone, onSelect, onNew }: {
-  agentId: string; currentId: string | null; timezone: string;
+export function ConversationHistory({ agentId, groupId, currentId, timezone, onSelect, onNew }: {
+  agentId: string; groupId?: string; currentId: string | null; timezone: string;
   onSelect: (id: string) => void; onNew: () => void;
 }): JSX.Element {
   const [items, setItems] = useState<ConversationListItem[] | null>(null);
@@ -14,18 +14,18 @@ export function ConversationHistory({ agentId, currentId, timezone, onSelect, on
   useEffect(() => {
     let cancelled = false;
     setItems(null); setError(null);
-    chatApi.conversations(agentId, 100).then(result => {
+    (groupId ? chatApi.groupConversations(groupId) : chatApi.conversations(agentId, 100)).then(result => {
       if (!cancelled) setItems(result.conversations);
     }).catch(error => { if (!cancelled) setError(error instanceof Error ? error.message : String(error)); });
     return () => { cancelled = true; };
-  }, [agentId, attempt]);
+  }, [agentId, groupId, attempt]);
   return <section className="wb-history" aria-label="Past conversations">
     <div className="ui-toolbar"><strong>Past conversations</strong><button className="ui-btn" onClick={onNew}>New conversation</button></div>
     {error ? <p role="alert">{error} <button className="ui-btn" onClick={() => setAttempt(n => n + 1)}>Retry</button></p>
       : items === null ? <p className="muted">Loading conversations…</p>
       : items.length === 0 ? <p className="muted">No conversations yet.</p>
       : <ul>{items.map(item => <li key={item.id}>
-        <a href={chatRoute(agentId, item.id)} aria-current={item.id === currentId ? 'page' : undefined}
+        <a href={groupId ? groupChatRoute(groupId, item.id) : chatRoute(agentId, item.id)} aria-current={item.id === currentId ? 'page' : undefined}
           onClick={event => { if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onSelect(item.id); } }}>
           <span>{item.preview || item.opening || 'Untitled conversation'}</span>
           <small>{fmtTime(item.lastMessageAt ?? item.startedAt ?? item.createdAt ?? null, timezone)} · {item.messageCount} messages{item.id === currentId ? ' · Current' : ''}</small>
