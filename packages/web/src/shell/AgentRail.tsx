@@ -141,8 +141,13 @@ export function AgentRail({
                 <span className="wb-face-mark wb-group-stack" aria-hidden="true">
                   {group.members.slice(0, 3).map((id) => {
                     const agent = everyone.find((a) => a.id === id);
-                    return <span key={id} className="wb-group-chip" data-tint={tintOf(id)}>{agent ? monogram(agent.name) : '?'}</span>;
+                    return (
+                      <span key={id} className="wb-group-chip" data-tint={tintOf(id)} data-kind={agent?.avatar?.kind} data-accent={agent?.accent ? 'true' : undefined} style={agent?.accent ? ({ '--face-accent': agent.accent } as React.CSSProperties) : undefined}>
+                        {agent?.avatar?.kind === 'image' ? <img src={agent.avatar.url} alt="" /> : agent?.avatar?.kind === 'emoji' ? agent.avatar.value : agent ? monogram(agent.name).slice(0, 1) : '?'}
+                      </span>
+                    );
                   })}
+                  {group.members.length > 3 ? <span className="wb-group-chip wb-group-more">+{group.members.length - 3}</span> : null}
                 </span>
                 <span className="wb-face-text">
                   <span className="wb-face-name">{group.name}</span>

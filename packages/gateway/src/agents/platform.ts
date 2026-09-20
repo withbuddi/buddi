@@ -64,6 +64,10 @@ import {
   type ToolDefinition,
   type ToolRegistry,
   type ToolSpec,
+  listGroups as coreListGroups,
+  createGroup as coreCreateGroup,
+  archiveGroup as coreArchiveGroup,
+  type CatalogAgent,
 } from '@buddi/core';
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
@@ -1351,6 +1355,93 @@ function accountOf(accounts: PlatformAccounts, agentId: string): { account: stri
 }
 
 export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
+  /* ---- groups: a team of agents in one conversation (docs/groups.md) ---- */
+
+  const listGroups: ToolDefinition<Record<string, never>, unknown> = {
+    name: 'platform.list_groups',
+    description:
+      'The owner\'s groups: teams of agents that share one conversation on the dashboard, each with a ' +
+      'coordinator that brings members in. Read this before proposing a group, so you do not propose one that exists.',
+    tier: 'auto',
+    input: z.object({}).strict(),
+    async execute(_input, ctx) {
+      const binding = resolved(registry);
+      const groups = await coreListGroups(ctx.db);
+      return {
+        groups: groups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          coordinator: binding.catalog.get(g.coordinator)?.handle ?? g.coordinator,
+          members: g.members.map((id) => binding.catalog.get(id)?.handle ?? id),
+        })),
+        note: 'Groups live on the dashboard: the owner opens one under Chat and speaks to the team there.',
+      };
+    },
+  };
+
+  const createGroupInput = z.object({
+    name: z.string().min(1).max(80).describe('What the team is for, as the owner would say it: "Household finances".'),
+    coordinator: z.string().min(1).describe('The agent that reads the owner\'s request and brings members in, by handle or id. Usually the front desk.'),
+    members: z.array(z.string().min(1)).min(1).max(12).describe('The other agents in the room, by handle or id. Membership grants no tool and no access; each keeps its own.'),
+  }).strict();
+
+  const createGroup: ToolDefinition<z.infer<typeof createGroupInput>, unknown> = {
+    name: 'platform.create_group',
+    description:
+      'Create a group: a named team of installed agents that share one conversation, with one coordinator. ' +
+      'Propose it in words first and create it only when the owner agrees. Membership grants nothing — each member ' +
+      'keeps its own account, tools and approvals — and what is said in the room is seen by the room.',
+    tier: 'gated',
+    input: createGroupInput,
+    async execute(input, ctx) {
+      const binding = resolved(registry);
+      const find = (ref: string): CatalogAgent | undefined => {
+        const wanted = ref.trim().replace(/^@/, '');
+        return binding.catalog.get(wanted) ?? binding.catalog.byHandle(wanted);
+      };
+      const coordinator = find(input.coordinator);
+      if (!coordinator) throw new PlatformRefusal('unknown-agent', `No installed agent is "${input.coordinator}". Use platform.list_agents.`);
+      const members: CatalogAgent[] = [];
+      for (const ref of input.members) {
+        const agent = find(ref);
+        if (!agent) throw new PlatformRefusal('unknown-agent', `No installed agent is "${ref}". Use platform.list_agents.`);
+        if (agent.id !== coordinator.id && !members.some((m) => m.id === agent.id)) members.push(agent);
+      }
+      if (members.length === 0) throw new PlatformRefusal('too-small', 'A group needs at least one member besides the coordinator.');
+      const existing = (await coreListGroups(ctx.db)).find((g) => g.name.trim().toLowerCase() === input.name.trim().toLowerCase());
+      if (existing) throw new PlatformRefusal('duplicate-group', `A group called "${existing.name}" already exists.`);
+      const group = await coreCreateGroup(ctx.db, { name: input.name.trim(), coordinator: coordinator.id, members: members.map((m) => m.id) });
+      return {
+        id: group.id,
+        name: group.name,
+        coordinator: coordinator.handle,
+        members: group.members.map((id) => binding.catalog.get(id)?.handle ?? id),
+        note: `Created. The owner finds "${group.name}" under Chat, in Groups, on the dashboard.`,
+      };
+    },
+  };
+
+  const archiveInput = z.object({
+    group: z.string().min(1).describe('The group to archive, by name or id.'),
+  }).strict();
+
+  const archiveGroupTool: ToolDefinition<z.infer<typeof archiveInput>, unknown> = {
+    name: 'platform.archive_group',
+    description:
+      'Archive a group: it leaves the dashboard\'s roster and takes no new requests. Its conversations stay readable. ' +
+      'Only when the owner asks for it, naming the group.',
+    tier: 'gated',
+    input: archiveInput,
+    async execute(input, ctx) {
+      const groups = await coreListGroups(ctx.db);
+      const wanted = input.group.trim().toLowerCase();
+      const group = groups.find((g) => g.id === input.group.trim() || g.name.trim().toLowerCase() === wanted);
+      if (!group) throw new PlatformRefusal('unknown-group', `No group is called "${input.group}". Use platform.list_groups.`);
+      const gone = await coreArchiveGroup(ctx.db, group.id, ctx.now());
+      return { id: group.id, name: group.name, archived: gone };
+    },
+  };
+
   const listAccounts: ToolDefinition<Record<string, never>, unknown> = {
     name: 'platform.list_accounts',
     description:
@@ -1845,6 +1936,9 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     schema: 'core',
     migrationsDir: '',
     tools: [
+      listGroups,
+      createGroup,
+      archiveGroupTool,
       listAccounts,
       listAgents,
       installedTools,
