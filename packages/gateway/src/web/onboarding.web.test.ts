@@ -15,6 +15,7 @@ import { createFirstAgent } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
+import { FIRST_AGENT_OPENING } from '../agents/opening.js';
 import type { LoadAgentCatalogOptions } from '@buddi/core';
 
 /** `res.json()` is `unknown`; every body here is a small object we assert on. */
@@ -93,7 +94,7 @@ function fakePool(profile: { preferredName?: string | null } = {}) {
   };
 }
 
-function accounts(list: Array<{ id: string; enabled: boolean; configured: boolean; defaultModel?: string }>) {
+function accounts(list: Array<{ id: string; enabled: boolean; configured: boolean; defaultModel?: string; kind?: string }>) {
   // Assignments are remembered, because "who is bound to what" is exactly what
   // the rule about the shipped maker following the assistant is written on.
   const bindings: Array<{ agentId: string; accountId: string; model: string }> = [];
@@ -101,7 +102,7 @@ function accounts(list: Array<{ id: string; enabled: boolean; configured: boolea
     bindings,
     view: vi.fn(() => ({
       vault: { kind: 'file' },
-      accounts: list.map((a) => ({ defaultModel: 'claude-sonnet-4-5', ...a })),
+      accounts: list.map((a) => ({ defaultModel: 'claude-sonnet-4-5', kind: 'anthropic', ...a })),
       bindings: [...bindings],
     })),
     assign: vi.fn(async (agentId: string, body: { accountId: string; model: string }) => {
@@ -588,4 +589,74 @@ it('grants the first agent no tool for running a first run', async () => {
   expect(file).toMatch(/owner\.set_profile/);
   expect(file).not.toMatch(/owner\.\*/);
   expect(file).not.toMatch(/rename_me|finish_onboarding/);
+});
+
+/*
+ * The one agent nobody writes by hand still carries an opening — and thinks
+ * only where thinking is fast.
+ */
+it('writes the first agent with its opening, and with reasoning off on a local account', async () => {
+  const pool = fakePool();
+  const dir = agentsDir();
+  const { origin, headers } = await boot({
+    pool,
+    agentsDir: dir,
+    providerAccounts: accounts([{ id: 'local', enabled: true, configured: true, kind: 'openai-compatible', defaultModel: 'gemma4:12b' }]),
+  });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.', accountId: 'local' }),
+  });
+  expect(created.status).toBe(200);
+  const file = readFileSync((await json(created)).file, 'utf8');
+  expect(file).toContain(FIRST_AGENT_OPENING.intro);
+  for (const starter of FIRST_AGENT_OPENING.starters) expect(file).toContain(starter);
+  expect(file).toMatch(/^starters:/m);
+  expect(file).toMatch(/^thinking: off$/m);
+});
+
+it('leaves thinking to the model on every other kind of account', async () => {
+  const pool = fakePool();
+  const dir = agentsDir();
+  const { origin, headers } = await boot({
+    pool,
+    agentsDir: dir,
+    providerAccounts: accounts([{ id: 'hosted', enabled: true, configured: true, kind: 'anthropic' }]),
+  });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.', accountId: 'hosted' }),
+  });
+  const file = readFileSync((await json(created)).file, 'utf8');
+  expect(file).toContain(FIRST_AGENT_OPENING.intro);
+  // No key at all: an absent `thinking` is the model's own default, and a
+  // written one would be a claim nobody made.
+  expect(file).not.toMatch(/thinking:/);
+});
+
+it('turns reasoning off when a brain change moves the assistant onto a local account', async () => {
+  const pool = fakePool();
+  const dir = agentsDir();
+  const service = accounts([
+    { id: 'hosted', enabled: true, configured: true, kind: 'anthropic' },
+    { id: 'local', enabled: true, configured: true, kind: 'openai-compatible', defaultModel: 'gemma4:12b' },
+  ]);
+  const { origin, headers } = await boot({ pool, agentsDir: dir, providerAccounts: service });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.', accountId: 'hosted' }),
+  });
+  const file = (await json(created)).file as string;
+  expect(readFileSync(file, 'utf8')).not.toMatch(/thinking:/);
+  const changed = await fetch(`${origin}/api/onboarding/brain`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ accountId: 'local', model: 'gemma4:12b' }),
+  });
+  expect(changed.status).toBe(200);
+  expect((await json(changed)).thinking).toBe('off');
+  expect(readFileSync(file, 'utf8')).toMatch(/^thinking: off$/m);
 });

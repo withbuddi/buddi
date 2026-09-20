@@ -36,6 +36,7 @@ import {
 } from '@buddi/core';
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { composeAgentFile, createAgentDirAtomic, replaceBody, writeFilesAtomic } from '../agents/platform-files.js';
+import { FIRST_AGENT_OPENING, defaultThinkingFor } from '../agents/opening.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
 /** The surface recorded against everything the wizard writes. */
@@ -352,6 +353,11 @@ async function writeFirstAgent(
   // the directory is moved into place.
   const account = chooseAccount(deps, input.accountId);
 
+  // A small model reasoning out loud before every answer makes a first
+  // conversation read as broken, so a local or self-hosted account starts with
+  // it off. Every other kind keeps the model's default.
+  const thinking = defaultThinkingFor(account?.kind);
+
   const dir = path.join(deps.agentsDir, id);
   const file = path.join(dir, AGENT_FILE);
   const examples = resolveThrough(deps.examplesDir);
@@ -374,6 +380,13 @@ async function writeFirstAgent(
     tools: [...FIRST_AGENT_TOOLS],
     language: 'mirror',
     ...(avatar === '' ? {} : { avatar }),
+    // Every agent carries its own opening; the one agent nobody writes by hand
+    // carries the one written for it.
+    intro: FIRST_AGENT_OPENING.intro,
+    starters: [...FIRST_AGENT_OPENING.starters],
+    // Absent unless there is something to say: a missing key is the model's
+    // own default, and writing `thinking: undefined` would be a claim.
+    ...(thinking ? { thinking } : {}),
     persona: firstAgentPersona({ name, description }),
   });
   // The loader's own verdict, before anything is written.
@@ -577,7 +590,42 @@ export async function rebindBrain(
   } catch (error) {
     throw new OnboardingRefusal(409, error instanceof Error ? error.message : 'That account could not be given to your assistant.');
   }
-  return { assistant: agent.id, followed: await bindFollowers(deps, account, previous) };
+  return {
+    assistant: agent.id,
+    followed: await bindFollowers(deps, account, previous),
+    ...(settleThinking(deps, agent.file, agent.id, account.accountId) ? { thinking: 'off' as const } : {}),
+  };
+}
+
+/**
+ * A move onto a local or self-hosted account turns reasoning off, once.
+ *
+ * Only when the file says nothing about it: an owner who set the switch
+ * themselves — in the composer or on the Agents page — has an opinion, and a
+ * default is not entitled to overrule it. The reverse is deliberately not
+ * done: a move *away* keeps whatever the file says, because by then the key is
+ * a setting somebody has seen rather than a guess made on their behalf.
+ */
+function settleThinking(deps: OnboardingDeps, file: string, agentId: string, accountId: string): boolean {
+  const view = deps.providerAccounts?.view() as { accounts?: Array<{ id: string; kind?: string }> } | undefined;
+  const kind = (view?.accounts ?? []).find((account) => account.id === accountId)?.kind;
+  const thinking = defaultThinkingFor(kind);
+  if (!thinking) return false;
+  try {
+    const source = readFileSync(file, 'utf8');
+    if (parseAgentFile(source, { dirName: agentId, file }).frontmatter.thinking !== undefined) return false;
+    writeFilesAtomic([{ path: file, content: patchAgentSource(source, { thinking }, file).text }]);
+  } catch {
+    // Never fatal: the account is bound either way, and the switch beside the
+    // model name is where this is decided in the end.
+    return false;
+  }
+  try {
+    deps.reload();
+  } catch {
+    /* The file is written; the next start reads it. */
+  }
+  return true;
 }
 
 /**
@@ -669,11 +717,11 @@ export async function claimOpeningTurn(deps: OnboardingDeps, conversationId: str
 function chooseAccount(
   deps: OnboardingDeps,
   chosen: string | undefined,
-): { id: string; defaultModel: string } | null {
+): { id: string; defaultModel: string; kind?: string } | null {
   const accounts = deps.providerAccounts;
   if (!accounts) return null;
   const view = accounts.view() as {
-    accounts?: Array<{ id: string; defaultModel: string; enabled?: boolean; configured?: boolean; removalPending?: boolean }>;
+    accounts?: Array<{ id: string; defaultModel: string; kind?: string; enabled?: boolean; configured?: boolean; removalPending?: boolean }>;
   };
   const usable = (view.accounts ?? []).filter(
     (account) => account.enabled === true && account.configured === true && account.removalPending !== true,
@@ -685,7 +733,9 @@ function chooseAccount(
     throw new OnboardingRefusal(409, 'That model account is not one this installation can run on. Pick another one.');
   }
   const only = named ?? (usable.length === 1 ? usable[0]! : undefined);
-  return only?.defaultModel ? { id: only.id, defaultModel: only.defaultModel } : null;
+  // The kind travels with it: what the account *is* decides whether thinking
+  // before every answer is worth the wait on it.
+  return only?.defaultModel ? { id: only.id, defaultModel: only.defaultModel, ...(only.kind ? { kind: only.kind } : {}) } : null;
 }
 
 async function assignAccount(
