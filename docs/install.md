@@ -90,9 +90,7 @@ An owner with their own Postgres sets `DATABASE_URL` in the data directory's
 mentioned anywhere in the install path; `docker compose` remains for the
 development checkout only.
 
-Backups: `buddi backup` already dumps the database. With a bundled cluster it
-uses the bundled `pg_dump`, so a backup never depends on tools the owner did
-not install. The wizard's last step offers to schedule one.
+Backups are §8; with a bundled cluster they use the bundled `pg_dump`.
 
 ---
 
@@ -146,7 +144,7 @@ completed, resumable after a reload or a restart. Steps in order:
    first answer arriving is the moment the install is real.
 6. **Optional extras**, each one a card that can be skipped: Telegram
    (the existing pairing flow, with the token pasted here rather than in a
-   terminal), plugins (§7), a daily backup.
+   terminal), plugins (§7), a daily backup and a copy off the machine (§8).
 7. **Done.** Where things are, how to open buddi again, how to upgrade.
 
 The wizard uses the same API the settings pages use. There is no wizard-only
@@ -224,7 +222,104 @@ should never be public.
 
 ---
 
-## 8. Platforms
+## 8. Backup and restore
+
+`buddi backup` already exists with `create`, `list`, `verify`, `restore`,
+`prune` and `schedule`, and the archive is a plain `tar.gz` that opens without
+buddi: a `pg_dump`, the artifact files, `.env` with every secret removed,
+plugin migration records, and a manifest with per-file hashes, table counts
+and the version that wrote it. Restore verifies before it touches anything and
+refuses to overwrite a live database without the name typed back. This section
+keeps all of that and adds four things: the bundled cluster, the dashboard,
+encryption, and a copy off the machine.
+
+### 8.1 With the bundled cluster
+
+`create` and `restore` use the bundled `pg_dump` and `psql`, so a backup never
+depends on tools the owner did not install. The manifest gains the Postgres
+major version. Restoring into a newer cluster is a load, which the format
+already is; `pg_upgrade` is never needed. The upgrade command takes a backup
+before it migrates, as today.
+
+### 8.2 In the dashboard
+
+Settings gains a Backup page: the schedule as a switch and a time, the list of
+archives with age, size and whether each verified, "Back up now", and
+"Restore…". Restore in the dashboard has the same guard as the CLI: the
+archive is verified first, the page shows what it holds and when it was taken,
+and overwriting a live installation asks for the database name typed back. It
+then stops the gateway's own work, restores, and restarts; the browser waits
+on the health route and reloads. The vault is not in any archive, so the page
+ends by listing the secrets that need pasting again, by name, with a link to
+each.
+
+### 8.3 Encryption
+
+An archive that leaves the machine is encrypted; one that stays may be. The
+scheme is symmetric, streaming, and standard (the `age` format, so an archive
+can be opened without buddi with the passphrase and any age implementation):
+
+- At setup, buddi generates a backup key, stores it in the vault, and shows
+  the owner a recovery passphrase once, to write down. The passphrase derives
+  the key; the key encrypts the archive. Restore on a fresh machine asks for
+  the passphrase; restore on the same machine reads the key from the vault.
+- The manifest stays outside the encryption, so `list` can show what an
+  archive holds without unlocking it; it holds names, sizes, hashes, counts
+  and versions, never data.
+- "Encrypt local backups" is a switch, off by default for the local
+  directory and forced on for every remote target. There is no way to send
+  an unencrypted archive off the machine.
+- Losing the passphrase loses remote backups. The Backup page says so where
+  the passphrase is shown, and once more when a remote target is enabled.
+
+### 8.4 A copy off the machine
+
+Two tiers, the first covering most of the value at almost no cost.
+
+**Tier one: a folder.** The owner points buddi at a directory that something
+else syncs: the Google Drive, Dropbox, iCloud Drive or OneDrive desktop
+client's folder, a Syncthing share, a mounted disk. After each scheduled
+backup, the encrypted archive and its manifest are copied there and pruned
+there by the same retention. No credentials, no API, no network code. The
+Backup page validates that the folder exists and is writable, and shows the
+last copy's age. Restore from a folder is "pick the file".
+
+**Tier two: the provider's API.** Google Drive and Dropbox, through OAuth in
+the browser: buddi opens the consent page, receives the redirect on loopback,
+and keeps the refresh token in the vault. Scope is the narrowest each offers:
+Drive's per-application folder (`drive.appdata` or `drive.file`), Dropbox's
+app folder. After each backup the encrypted archive is uploaded; `list`,
+`verify` and `restore` work against the remote listing; retention prunes
+remotely. This is the tier that makes "restore on a brand-new machine from
+the wizard" possible without a desktop client. It adds two hosts to the
+network allowlist, both named on the Backup page, and a provider outage
+degrades to "the copy is late", reported by doctor, never a failed backup.
+
+The provider layer is one interface (`put`, `list`, `get`, `delete`) behind
+both tiers; the folder is the first implementation and the reference for the
+tests. Adding a third provider is one file.
+
+### 8.5 Restore in the wizard
+
+The welcome screen gains a second button: "I have a backup". It leads to a
+step before "You": choose the source (a file, a folder, or sign in to Drive
+or Dropbox), pick the archive, enter the passphrase, see what it holds, and
+restore. The wizard then continues at the model step, since keys are never in
+a backup, and the "You" step is skipped because the profile came back. This
+is also how an owner moves from the developer checkout to the npm install,
+and from one machine to the next.
+
+### 8.6 What is never backed up
+
+The vault, on purpose: secrets are the owner's to re-enter, and a backup that
+holds them is a backup that can be used against the owner. The bundled
+Postgres binaries and the installed plugin packages, which are reinstalled
+from npm; the archive records their names and versions so restore can say
+what to reinstall. Logs.
+
+---
+
+## 9. Platforms
 
 - **macOS**: the reference platform. Everything above; computer control
   (browser plugin's computer mode) stays macOS-only as it is today.
@@ -246,7 +341,7 @@ runs first-run headless, and asserts the gateway answers.
 
 ---
 
-## 9. Security
+## 10. Security
 
 - The dashboard listens on loopback only, unchanged. The wizard never
   proposes a network bind.
@@ -260,11 +355,13 @@ runs first-run headless, and asserts the gateway answers.
   doctor can say if what is on disk is what was approved.
 - The version check and the plugin install are the only outbound calls the
   install path makes, both to the npm registry, both through the shared
-  transport, both disclosed on the security screen.
+  transport, both disclosed on the security screen. A cloud backup target
+  adds its provider's hosts, named on the Backup page, and nothing leaves
+  for them unencrypted.
 
 ---
 
-## 10. Acceptance
+## 11. Acceptance
 
 1. A clean macOS user account with Node 22: `npm install -g buddi && buddi`
    opens the wizard within a minute; a pasted key and a first agent produce
@@ -282,10 +379,17 @@ runs first-run headless, and asserts the gateway answers.
    unchanged, ending in the same wizard at step 3.
 7. `pnpm test` still passes `generic-install` with zero plugins, and the
    new CI job passes on the three platforms.
+8. A scheduled backup lands encrypted in a synced folder; on a clean machine
+   the wizard's "I have a backup" restores it from that folder with the
+   passphrase, and the first agent answers after the key is pasted once.
+9. The same through Dropbox or Google Drive sign-in, with no desktop client
+   installed; the archive on the provider is unreadable without the
+   passphrase, and `tar` plus an age implementation can open it without
+   buddi.
 
 ---
 
-## 11. Order of work
+## 12. Order of work
 
 1. Bundled Postgres under the gateway's control, `buddi` first run, data
    directory layout. This removes Docker from the owner path and is the
@@ -297,6 +401,9 @@ runs first-run headless, and asserts the gateway answers.
 5. Linux and Windows: vault backends, Task Scheduler unit, the three-platform
    CI job.
 6. Version check and the upgrade action in the dashboard.
+7. Backup in the dashboard, encryption, the folder target, restore in the
+   wizard. The provider APIs (Drive, Dropbox) come after the folder target
+   has been used for real.
 
 The app shell, if it comes, wraps the result of steps 1 to 3 and adds
 signing, auto-update and a tray. It is not on this list.
