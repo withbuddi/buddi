@@ -247,8 +247,8 @@ export function isShippedDefaultUrl(url: string, env: NodeJS.ProcessEnv = {}): b
  *
  * The password is interpolated into the statement, so it is checked against the
  * generated alphabet first: a value with a quote in it never reaches `psql`.
- * The *old* password travels as `PGPASSWORD` in the exec environment, which is
- * the same mechanism `buddi backup` already uses for `pg_dump`.
+ * The *old* password travels as `PGPASSWORD` in the exec environment, never on
+ * the command line, where `ps` would show it.
  */
 export async function alterRolePassword(opts: {
   exec: Exec;

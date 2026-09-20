@@ -30,6 +30,7 @@ import {
   getActiveSchedule,
   getMission,
   getOccurrence,
+  inRecovery,
   isPaused,
   listMissions,
   nextAfter,
@@ -167,6 +168,45 @@ function missionJobPayload(payload: unknown): MissionJobPayload | null {
     ...(approval && typeof approval.actionId === 'string' && typeof approval.state === 'string'
       ? { approval: approval as unknown as ApprovalResume }
       : {}),
+  };
+}
+
+/** The three shapes a loop has when it is not running at all: see `idleLoops`. */
+export interface IdleLoops {
+  loop: { tick: () => Promise<'skipped'>; busy: boolean; stop: () => void };
+  scheduler: ReturnType<typeof runScheduler>;
+  worker: ReturnType<typeof runWorker>;
+}
+
+/**
+ * The stand-ins recovery mode starts instead of the real loops.
+ *
+ * `done` is what `main` waits on, and ending that wait ends the pool. Stand-ins
+ * whose `done` was already resolved made `main` fall straight through to
+ * `pool.end()` while the dashboard server kept the process alive: the restored
+ * installation then answered 500 on every route that reads the database —
+ * including the recovery checklist, on the one installation it exists for. So
+ * these settle on the same signal the real loops do, `stop()`, which is called
+ * from shutdown and nowhere else.
+ */
+export function idleLoops(): IdleLoops {
+  let stop = (): void => {};
+  const done = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  return {
+    loop: { tick: async () => 'skipped' as const, busy: false, stop: () => stop() },
+    scheduler: {
+      tick: async () => ({ materialized: 0, executed: 0 }),
+      stop: async () => stop(),
+      done,
+    },
+    worker: {
+      tick: async () => null,
+      recover: async () => 0,
+      stop: async () => stop(),
+      done,
+    },
   };
 }
 
@@ -340,6 +380,35 @@ export async function main(): Promise<void> {
   }
   const { pool, now } = wiring;
 
+  /*
+   * Recovery: this installation was restored from a backup and the owner has
+   * not been through the checklist yet.
+   *
+   * Read **once**, here, and then used to decide which loops are started at
+   * all. It is deliberately not re-read on a timer: a flag the loops consulted
+   * every tick would mean every loop carrying a "should I be running" branch
+   * for ever, and half-started state in between. So leaving recovery is
+   * finished by restarting the gateway — through the supervisor, which is what
+   * `POST /api/recovery/leave` asks for once it has cleared the row. In a
+   * developer checkout there is no supervisor to do that, and the loops start
+   * in-process the next time `buddi serve` is started.
+   */
+  const recovering = await inRecovery(pool);
+
+  /*
+   * What sleeps, and what does not.
+   *
+   * Everything that acts on restored data without being asked: the scheduler,
+   * the queue worker, the sentinel, source, reminder and dead-letter loops,
+   * the stale-claim and orphan-upload sweeps, the owner seeding, and Telegram
+   * — which also refuses to be started from the dashboard while this is true.
+   * The two timers that remain are neither loops nor unattended: the chat
+   * spinner and Telegram's typing indicator live only inside a turn the owner
+   * is having, and a turn is exactly what recovery leaves working.
+   */
+
+  const idle = idleLoops();
+
   try {
     try { await hostBrowser(process.env).enable(); }
     catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
@@ -405,9 +474,20 @@ export async function main(): Promise<void> {
      * that holds this binding — the approval path, the shutdown — reads it
      * when it runs, so they all see the surface the moment it exists.
      */
-    let telegram = process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
+    let telegram = !recovering && process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
     let starting: Promise<{ botUsername: string | null }> | undefined;
-    const startTelegramNow = async (): Promise<{ botUsername: string | null }> => {
+    const startTelegramNow = async (): Promise<{ botUsername: string | null; refused?: string }> => {
+      // The whole point of recovery is that nothing this installation was told
+      // to do last week happens before the owner has said it still applies,
+      // and a bot answering messages is the loudest of those. The token is
+      // kept either way; the surface comes up on the restart that leaves.
+      if (recovering) {
+        return {
+          botUsername: null,
+          refused:
+            'Your token is saved. Telegram stays quiet until you finish the restore checklist on Settings, and starts on its own after that.',
+        };
+      }
       if (telegram) return { botUsername: telegram.botUsername ?? null };
       starting ??= (async () => {
         const handle = await startTelegram(telegramOptions);
@@ -534,8 +614,9 @@ export async function main(): Promise<void> {
       const released = await releaseStaleClaims(pool, new Date(now().getTime() - STALE_CLAIM_MS));
       if (released > 0) console.error(`scheduler: released ${released} stale claim(s)`);
     };
-    await sweepStaleClaims();
+    if (!recovering) await sweepStaleClaims();
     const sweep = setInterval(() => {
+      if (recovering) return;
       void sweepStaleClaims().catch((err) =>
         console.error(`scheduler: stale-claim sweep failed: ${err instanceof Error ? err.message : String(err)}`),
       );
@@ -545,8 +626,15 @@ export async function main(): Promise<void> {
     // What `buddi init` asked and wrote to the env file lands in the owner row,
     // once, and only into fields nothing has filled yet: the row is the
     // truth the agents read, and an answer given at install is not lost.
-    await seedOwnerFromEnv(pool, process.env).catch((err) =>
-      console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
+    // Not in recovery: the owner row that just came back is the restored
+    // installation's own answer, and an env file that was written for *this*
+    // machine's install would quietly overwrite the empty fields in it before
+    // the owner has seen the checklist. It is seeded on the restart that
+    // leaves recovery instead.
+    if (!recovering) {
+      await seedOwnerFromEnv(pool, process.env).catch((err) =>
+        console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
 
     // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
     // day old, at start and then hourly. Anything a message carries is kept.
@@ -554,8 +642,12 @@ export async function main(): Promise<void> {
       const gone = await sweepOrphanUploads(pool, { surface: 'web', olderThan: new Date(now().getTime() - ORPHAN_UPLOAD_MS), at: now() });
       if (gone > 0) console.error(`artifacts: discarded ${gone} unsent upload(s)`);
     };
-    void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+    // In recovery this would tombstone uploads that came back in the archive
+    // and are a day old by definition, before the owner has looked at any of
+    // them. Every sweep sleeps until the checklist is done.
+    if (!recovering) void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
     const orphanSweep = setInterval(() => {
+      if (recovering) return;
       void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
     }, ORPHAN_SWEEP_MS);
     if (typeof orphanSweep.unref === 'function') orphanSweep.unref();
@@ -565,7 +657,7 @@ export async function main(): Promise<void> {
     // a lease, bounded retries and a failed-job inspection path — so a restart
     // mid-mission resumes instead of losing the work, and a mission that throws
     // does not take the scheduler pass down with it.
-    const worker = runWorker({
+    const worker = recovering ? idle.worker : runWorker({
       pool,
       worker: `serve:${process.pid}`,
       kinds: JOB_KINDS,
@@ -600,14 +692,14 @@ export async function main(): Promise<void> {
     // Non-overlapping: a tick that lands while the previous poll is still
     // running says so and skips, and a poll still going at 2x the deadline is
     // abandoned so the next one starts clean.
-    const sentinelLoop = startLoop({
+    const sentinelLoop = recovering ? idle.loop : startLoop({
       name: 'sentinels',
       everyMs: SENTINEL_TICK_MS,
       abortAfterMs: SENTINEL_TICK_MS * 2,
       run: sentinelTick,
       log: (line) => console.error(line),
     });
-    const sourceLoop = startLoop({
+    const sourceLoop = recovering ? idle.loop : startLoop({
       name: 'sources',
       everyMs: SOURCE_TICK_MS,
       abortAfterMs: sourceAbortMs,
@@ -615,7 +707,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const reminderLoop = startLoop({
+    const reminderLoop = recovering ? idle.loop : startLoop({
       name: 'reminders',
       everyMs: REMINDER_TICK_MS,
       abortAfterMs: REMINDER_TICK_MS * 2,
@@ -635,7 +727,7 @@ export async function main(): Promise<void> {
       deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
       log: (line) => console.error(line),
     });
-    const deadLetterLoop = startLoop({
+    const deadLetterLoop = recovering ? idle.loop : startLoop({
       name: 'dead-letter',
       everyMs: DEAD_LETTER_TICK_MS,
       abortAfterMs: DEAD_LETTER_TICK_MS * 2,
@@ -646,7 +738,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const scheduler = runScheduler({
+    const scheduler = recovering ? idle.scheduler : runScheduler({
       pool,
       now,
       tickMs: TICK_MS,
@@ -727,6 +819,13 @@ export async function main(): Promise<void> {
     const missions = await describeMissions(pool, now());
 
     console.log('buddi serve — telegram surface + scheduler');
+    if (recovering) {
+      console.log(
+        '  RECOVERY — this buddi was restored from a backup. The scheduler, the queue worker, ' +
+          'the sentinels, the sources, the reminders and Telegram are all off until the checklist ' +
+          'on Settings is done. Chat and the dashboard work as usual.',
+      );
+    }
     console.log(telegram ? `  bot: @${telegram.botUsername ?? '(unknown)'} (id ${telegram.botId})` : '  Telegram: not configured');
     console.log(`  paired owner ids: ${telegram ? describePaired(telegram.paired) : '(none)'}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
@@ -768,6 +867,15 @@ export async function main(): Promise<void> {
     console.log(`  last cursor: ${telegram?.cursor ?? '(none)'}`);
 
     let stopping = false;
+    /**
+     * The dashboard's own close, kept so the pool outlives it.
+     *
+     * `close()` stops new connections but lets the ones already open finish,
+     * and a request finishing needs the pool that the `finally` below is about
+     * to end. Awaited after the loops, so a request in flight when the signal
+     * arrives is answered rather than told the pool has been ended.
+     */
+    let closingDashboard: Promise<void> | undefined;
     const shutdown = (signal: string): void => {
       hostService(process.env).stop(wiring.ctx.ownerId);
       if (stopping) return;
@@ -778,7 +886,8 @@ export async function main(): Promise<void> {
       sourceLoop.stop();
       reminderLoop.stop();
       deadLetterLoop.stop();
-      void dashboard?.close();
+      closingDashboard = dashboard?.close();
+      closingDashboard?.catch(() => {});
       void hostBrowser(process.env).shutdown();
       void Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
     };
@@ -786,6 +895,7 @@ export async function main(): Promise<void> {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     await Promise.all([telegram?.done, scheduler.done, worker.done]);
+    await closingDashboard?.catch(() => {});
     console.log('buddi serve stopped cleanly');
   } finally {
     await hostBrowser(process.env).shutdown();

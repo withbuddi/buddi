@@ -45,6 +45,7 @@ import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
 import { Meet } from './views/Meet';
+import { RecoveryBanner, useRecovery } from './views/Recovery';
 
 export { PLACES };
 
@@ -129,6 +130,12 @@ export function App(): JSX.Element {
   const [newGroup, setNewGroup] = useState(false);
   const attention = useAttention();
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
+  /*
+   * Recovery is a property of the installation, not of a page, so the shell is
+   * what reads it: a buddi restored from a backup says so wherever the owner
+   * happens to be, and stops saying it the moment the checklist is finished.
+   */
+  const recovery = useRecovery();
   /** When each agent last spoke, for the roster's quiet line. */
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -297,6 +304,8 @@ export function App(): JSX.Element {
     <Tooltip.Provider delayDuration={400}>
       <Toast.Provider swipeDirection="right">
         {groupSheet}
+        <div className="wb-shell">
+        <RecoveryBanner active={recovery.data?.active === true} onNavigate={navigate} />
         <div className="wb">
           <Rail
             attention={badges.approvals + badges.failed}
@@ -349,6 +358,7 @@ export function App(): JSX.Element {
               />
             </main>
           )}
+        </div>
         </div>
         <Toast.Viewport className="ui-toasts" />
       </Toast.Provider>

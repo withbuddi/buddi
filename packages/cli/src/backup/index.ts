@@ -6,25 +6,36 @@
  * to write an archive at all if scrubbing left anything behind.
  */
 import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import { BACKUP_DIR } from '../paths.js';
-import { createBackup, type CreateOptions } from './create.js';
 import {
+  BACKUP_PASSPHRASE_KEY,
   DEFAULT_KEEP,
+  ENCRYPTED_SUFFIX,
+  createBackup,
+  createPool,
+  createVault,
+  databaseFootprint,
+  encryptFile,
   formatAge,
   formatBytes,
+  generatePassphrase,
+  listArchives,
+  normalizePassphrase,
+  pruneArchives,
+  restoreBackup,
+  urlForDatabase,
+  verifyBackup,
+  writeEnvelope,
   type BackupManifest,
-} from './manifest.js';
-import { listArchives, pruneArchives } from './prune.js';
-import { restoreBackup, type RestoreOptions } from './restore.js';
+  type CreateOptions,
+  type RestoreOptions,
+  type Vault,
+} from '@buddi/core';
+import { BACKUP_DIR } from '../paths.js';
+import { installationOptions, pluginMigrations } from './options.js';
 import { createBackupScheduler } from './schedule.js';
-import { verifyArchive } from './verify.js';
 
-export * from './manifest.js';
-export { createBackup } from './create.js';
-export { verifyArchive, readManifest } from './verify.js';
-export { listArchives, pruneArchives } from './prune.js';
-export { restoreBackup } from './restore.js';
 export {
   BACKUP_LABEL,
   buildBackupPlist,
@@ -45,7 +56,92 @@ export interface BackupCommand {
   into?: string | undefined;
   yes?: boolean;
   force?: boolean;
+  /** `restore --files` — the private directories and artifacts as well. */
+  files?: boolean;
+  /** `create --encrypt`. */
+  encrypt?: boolean;
+  /** `verify|restore --passphrase "<words>"`. */
+  passphrase?: string | undefined;
   scheduleAction?: ScheduleAction | undefined;
+}
+
+/** What opened (or will open) an encrypted archive, and where it came from. */
+export interface ResolvedPassphrase {
+  passphrase: string | undefined;
+  source: 'flag' | 'vault' | 'prompt' | 'none';
+}
+
+/**
+ * The passphrase for a `.age` archive: the flag, then the vault, then a prompt.
+ *
+ * The flag first because an owner restoring on a **new machine** has the words
+ * on paper and no vault yet — that is the case the whole feature exists for.
+ * The vault second, so a scheduled encrypted backup and a same-machine restore
+ * need nothing typed. The prompt last, and only on a terminal: a cron job must
+ * fail with a sentence rather than wait forever for a human who is asleep.
+ */
+export async function resolvePassphrase(opts: {
+  archive: string;
+  given?: string | undefined;
+  vault?: Vault | undefined;
+  ask?: ((question: string) => Promise<string>) | undefined;
+  isTty?: boolean | undefined;
+}): Promise<ResolvedPassphrase> {
+  if (opts.given !== undefined && opts.given.trim() !== '') {
+    return { passphrase: normalizePassphrase(opts.given), source: 'flag' };
+  }
+  if (!opts.archive.endsWith(ENCRYPTED_SUFFIX)) return { passphrase: undefined, source: 'none' };
+
+  if (opts.vault) {
+    try {
+      const stored = await opts.vault.get(BACKUP_PASSPHRASE_KEY);
+      if (stored !== null && stored.trim() !== '') {
+        return { passphrase: normalizePassphrase(stored), source: 'vault' };
+      }
+    } catch {
+      // A locked vault is not the end of the road: the owner can still type it.
+    }
+  }
+
+  const tty = opts.isTty ?? process.stdin.isTTY === true;
+  if (tty && opts.ask) {
+    const typed = await opts.ask(`Passphrase for ${path.basename(opts.archive)}: `);
+    if (typed.trim() !== '') return { passphrase: normalizePassphrase(typed), source: 'prompt' };
+  }
+  return { passphrase: undefined, source: 'none' };
+}
+
+/** The sentence an owner has to act on, printed once, when one is generated. */
+export const WRITE_IT_DOWN =
+  'Write these six words down on paper and keep them away from this machine. ' +
+  'They are the ONLY thing that opens this archive: buddi cannot recover it, ' +
+  'and a copy that lives only in this keychain dies with this machine.';
+
+/**
+ * The passphrase an encrypted backup is written with.
+ *
+ * Resolved *before* anything is written, so a locked vault stops the command
+ * rather than leaving a plain archive on disk that was supposed to be
+ * encrypted. A generated one is stored and printed once; a stored one is used
+ * in silence, because printing a secret nobody asked for is how it ends up in
+ * a scrollback someone else reads.
+ */
+export async function ensureBackupPassphrase(
+  vault: Vault | undefined,
+): Promise<{ passphrase: string; generated: boolean }> {
+  if (!vault) {
+    throw new Error(
+      'there is no vault on this machine to keep the backup passphrase in — ' +
+        'set BUDDI_VAULT_KEY, or take a plain backup and encrypt it yourself',
+    );
+  }
+  const stored = await vault.get(BACKUP_PASSPHRASE_KEY);
+  if (stored !== null && stored.trim() !== '') {
+    return { passphrase: normalizePassphrase(stored), generated: false };
+  }
+  const passphrase = generatePassphrase();
+  await vault.set(BACKUP_PASSPHRASE_KEY, passphrase);
+  return { passphrase, generated: true };
 }
 
 /** A one-screen summary of what an archive holds. */
@@ -91,13 +187,49 @@ export function describeManifest(manifest: BackupManifest): string[] {
 }
 
 async function create(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set — run `buddi init`');
   const opts: CreateOptions = {
-    env,
-    ...(command.out === undefined ? {} : { out: command.out }),
+    ...installationOptions(env),
+    ...(command.out === undefined ? {} : { backupsDir: path.resolve(command.out) }),
     ...(command.noArtifacts ? { noArtifacts: true } : {}),
   };
+  // Before the archive exists, not after: a vault that will not open must stop
+  // the command rather than leave a plain archive where an encrypted one was
+  // asked for.
+  const secret = command.encrypt ? await ensureBackupPassphrase(createVault({ env })) : null;
+
   const started = Date.now();
   const result = await createBackup(opts);
+  if (secret !== null) {
+    const encrypted = `${result.archive}${ENCRYPTED_SUFFIX}`;
+    await encryptFile(result.archive, encrypted, secret.passphrase);
+    const envelope = await writeEnvelope(encrypted);
+    // The plaintext goes: leaving it beside the ciphertext would make the
+    // encryption a decoration.
+    await rm(result.archive, { force: true });
+    console.log(`wrote ${encrypted}`);
+    console.log(`  encrypted with age (passphrase), envelope ${path.basename(envelope.path)}`);
+    console.log(`  ${formatBytes(envelope.envelope.bytes)} in ${((Date.now() - started) / 1000).toFixed(1)}s, mode 0600`);
+    if (secret.generated) {
+      console.log(`\nyour backup passphrase:\n\n    ${secret.passphrase}\n`);
+      console.log(WRITE_IT_DOWN);
+      console.log(`It is also in the vault as ${BACKUP_PASSPHRASE_KEY}.`);
+    } else {
+      console.log(`  passphrase: the one in the vault (${BACKUP_PASSPHRASE_KEY})`);
+    }
+    for (const line of describeManifest(result.manifest)) console.log(line);
+    console.log(`\n${result.manifest.secrets.note}`);
+    for (const line of result.manifest.secrets.restoreWith) console.log(`  ${line}`);
+    console.log(`\nverify it: buddi backup verify ${encrypted}`);
+    if (command.prune !== undefined) {
+      const pruned = await pruneArchives(command.prune, path.dirname(encrypted));
+      console.log(
+        `pruned: kept ${pruned.kept.length}, removed ${pruned.removed.length}` +
+          (pruned.removed.length === 0 ? '' : ` (${formatBytes(pruned.freedBytes)} freed)`),
+      );
+    }
+    return 0;
+  }
   console.log(`wrote ${result.archive}`);
   console.log(`  ${formatBytes(result.bytes)} in ${((Date.now() - started) / 1000).toFixed(1)}s, mode 0600`);
   for (const line of describeManifest(result.manifest)) console.log(line);
@@ -113,6 +245,18 @@ async function create(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<n
     );
   }
   return 0;
+}
+
+/** Ask on the terminal. Returns '' when there is no terminal to ask on. */
+export async function promptLine(question: string): Promise<string> {
+  if (!process.stdin.isTTY) return '';
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
 }
 
 async function list(env: NodeJS.ProcessEnv): Promise<number> {
@@ -154,10 +298,21 @@ function missing(archive: string): number {
   return 1;
 }
 
-async function verify(given: string): Promise<number> {
+async function verify(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
+  const given = command.archive as string;
   const archive = resolveArchive(given);
   if (archive === null) return missing(given);
-  const result = await verifyArchive(archive);
+  const opened = await resolvePassphrase({
+    archive,
+    given: command.passphrase,
+    vault: createVault({ env }),
+    ask: promptLine,
+  });
+  if (opened.source === 'vault') console.log(`passphrase: the one in the vault\n`);
+  const result = await verifyBackup({
+    archive,
+    ...(opened.passphrase === undefined ? {} : { passphrase: opened.passphrase }),
+  });
   console.log(`${result.archive}\n`);
   for (const check of result.checks) {
     console.log(`  ${check.ok ? 'ok  ' : 'FAIL'}  ${check.name.padEnd(10)}  ${check.detail}`);
@@ -179,18 +334,54 @@ async function verify(given: string): Promise<number> {
 async function restore(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
   const archive = resolveArchive(command.archive as string);
   if (archive === null) return missing(command.archive as string);
-  const opts: RestoreOptions = {
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set — run `buddi init`');
+  const installation = installationOptions(env);
+  const database = command.into ?? new URL(env.DATABASE_URL).pathname.replace(/^\//, '');
+
+  // The guard's second half is the CLI's to collect: the engine decides, the
+  // terminal asks. `--yes` alone is never enough over a database with rows in it.
+  let typed: string | undefined;
+  if (command.yes) {
+    const pool = createPool(urlForDatabase(env.DATABASE_URL, database));
+    try {
+      const footprint = await databaseFootprint(pool).catch(() => ({ tables: 0, rows: 0 }));
+      if (footprint.rows > 0) {
+        typed = await promptLine(
+          `This will REPLACE ${footprint.rows} row(s) in "${database}". Type the database name to confirm: `,
+        );
+      }
+    } finally {
+      await pool.end().catch(() => {});
+    }
+  }
+
+  const opened = await resolvePassphrase({
     archive,
-    env,
+    given: command.passphrase,
+    vault: createVault({ env }),
+    ask: promptLine,
+  });
+  if (opened.source === 'vault') console.log('passphrase: the one in the vault');
+
+  const opts: RestoreOptions = {
+    ...installation,
+    archive,
+    ...(opened.passphrase === undefined ? {} : { passphrase: opened.passphrase }),
+    pluginMigrations: pluginMigrations(env),
     ...(command.into === undefined ? {} : { into: command.into }),
     ...(command.yes ? { yes: true } : {}),
+    ...(typed === undefined ? {} : { typed }),
     ...(command.force ? { force: true } : {}),
+    ...(command.files ? { files: true } : {}),
   };
   const report = await restoreBackup(opts);
   console.log('did:');
   for (const line of report.did) console.log(`  ${line}`);
   console.log('\ndid NOT:');
   for (const line of report.didNot) console.log(`  ${line}`);
+  if (report.snapshot !== null) {
+    console.log(`\nthe copy taken of the target before this run: ${report.snapshot}`);
+  }
   if (report.next.length > 0) {
     console.log('\nnow do this, in order:');
     for (const line of report.next) console.log(`  ${line}`);
@@ -236,7 +427,7 @@ export async function runBackup(
     case 'list':
       return list(env);
     case 'verify':
-      return verify(command.archive as string);
+      return verify(command, env);
     case 'restore':
       return restore(command, env);
     case 'prune':

@@ -10,16 +10,21 @@ import { describe, expect, it } from 'vitest';
 import type { OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
 import {
   QUESTIONS,
+  RESTORE_FAILURES,
+  RESTORE_PHASES,
+  afterRestore,
   answered,
   answersFrom,
   firstOpen,
   idFor,
   keyKind,
+  rememberRestore,
+  rememberedRestore,
   reopen,
   suggestedName,
   thread,
 } from './machine';
-import { SUGGESTED_NAMES } from './script';
+import { SCRIPT, SUGGESTED_NAMES } from './script';
 
 const onboarding = (over: Partial<OnboardingView> = {}): OnboardingView => ({
   state: 'pending',
@@ -154,6 +159,65 @@ describe('resume', () => {
   });
 });
 
+/*
+ * The restore branch. A backup carries the owner, the assistant and everything
+ * they said to each other; it deliberately carries no key. So the record that
+ * comes back says first run is done — which is the one state that would
+ * otherwise send the owner off this screen — and the brain is still open.
+ */
+describe('a buddi restored from a backup', () => {
+  it('keeps the thread here and asks for the brain again', () => {
+    const resume = afterRestore({
+      onboarding: onboarding({ state: 'done', needs: { owner: false, model: true, agent: false } }),
+      owner: owner({ preferredName: 'Amen', timezone: 'America/New_York' }),
+      // The account came back; the key that made it work did not.
+      accounts: accounts([{ id: 'one', label: 'Anthropic', configured: false }]),
+      assistant: { id: 'ada', name: 'Ada', avatar: '📚' },
+    });
+    expect(resume.stay).toBe(true);
+    expect(resume.open).toBe('brain');
+    expect(resume.answers.name).toBe('Amen');
+    expect(resume.answers.clock).toBe('America/New_York');
+    expect(resume.answers.assistant).toEqual({ id: 'ada', name: 'Ada', avatar: '📚' });
+    expect(resume.answers.brain).toBeUndefined();
+  });
+
+  it('hands the owner over to the dashboard when nothing is left to ask', () => {
+    const resume = afterRestore({
+      onboarding: onboarding({ state: 'done', needs: { owner: false, model: false, agent: false } }),
+      owner: owner({ preferredName: 'Amen', timezone: 'UTC' }),
+      accounts: accounts([{ id: 'one', label: 'Ollama', defaultModel: 'qwen3:4b' }], [{ agentId: 'ada', accountId: 'one', model: 'qwen3:4b' }]),
+      assistant: { id: 'ada', name: 'Ada', avatar: '📚' },
+    });
+    expect(resume.open).toBe('handover');
+    expect(resume.stay).toBe(false);
+  });
+
+  it('remembers the job across a reload, and forgets it when asked', () => {
+    rememberRestore('job-1');
+    expect(rememberedRestore()).toBe('job-1');
+    rememberRestore(null);
+    expect(rememberedRestore()).toBeNull();
+  });
+
+  it('survives a browser that refuses storage', () => {
+    const real = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new Error('storage is off');
+      },
+    });
+    try {
+      expect(() => rememberRestore('job-2')).not.toThrow();
+      expect(rememberedRestore()).toBeNull();
+    } finally {
+      if (real) Object.defineProperty(window, 'sessionStorage', real);
+      else delete (window as { sessionStorage?: unknown }).sessionStorage;
+    }
+  });
+});
+
 describe('change', () => {
   it('reopens one question and keeps the answers that followed it', () => {
     const answers = {
@@ -199,5 +263,29 @@ describe('the assistant buddi offers', () => {
     expect(idFor('Night Desk')).toBe('night-desk');
     expect(idFor('Rémy')).toBe('remy');
     expect(idFor('42')).toBe('assistant');
+  });
+});
+
+/*
+ * The order a restore actually reports.
+ *
+ * `recovery` is written inside the database step's rollback, before the files
+ * are put back, so a restore that cannot be gated rolls back instead of coming
+ * up ungated. A screen that promised the other order would say "bringing back
+ * your files" after it had already said the installation was marked restored.
+ */
+describe('the restore, as it is narrated', () => {
+  it('names the phases in the order the job reports them', () => {
+    expect([...RESTORE_PHASES]).toEqual([
+      'stopping', 'snapshot', 'database', 'recovery', 'files', 'starting', 'done',
+    ]);
+    expect([...RESTORE_FAILURES]).toEqual(['failed', 'rolled-back']);
+  });
+
+  it('has a sentence for each of them, in the same order', () => {
+    const said = Object.keys(SCRIPT.restore.phases);
+    expect(said.filter((phase) => !RESTORE_FAILURES.includes(phase as 'failed')))
+      .toEqual([...RESTORE_PHASES]);
+    for (const failure of RESTORE_FAILURES) expect(said).toContain(failure);
   });
 });

@@ -32,6 +32,7 @@ import {
   ApiError,
   api,
   chatApi,
+  type BackupJob,
   type OllamaProbe,
   type PairingOffer,
   type ProviderAccountsView,
@@ -49,10 +50,13 @@ import {
 } from './meet/script';
 import {
   STEP_OF,
+  afterRestore,
   answersFrom,
   firstOpen,
   idFor,
   keyKind,
+  rememberRestore,
+  rememberedRestore,
   reopen,
   suggestedName,
   thread,
@@ -306,6 +310,14 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * thing that can happen, and offers the way out instead.
    */
   const [carriesOn, setCarriesOn] = useState<string | null>(null);
+  /**
+   * The other way this screen can go.
+   *
+   * `running` is seeded from what this tab remembered, because the restore
+   * takes the gateway down with it and a reload in the middle of one must not
+   * land back on "what should we call you?".
+   */
+  const [restore, setRestore] = useState<RestoreState>(() => (rememberedRestore() ? 'running' : 'idle'));
 
   /** The zone this browser is in, which is what the question offers. */
   const browserZone = useMemo(() => {
@@ -329,7 +341,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * it would overwrite the newer truth with the older one — the account the
    * assistant was moved onto a moment ago being the case that bites.
    */
-  const load = useCallback(async (replay = true): Promise<void> => {
+  const load = useCallback(async (replay = true, restoredNow = false): Promise<void> => {
     const [onboarding, owner, accountView, roster] = await Promise.all([
       api.onboarding().catch(() => undefined),
       api.owner().catch(() => undefined),
@@ -349,12 +361,28 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         ? { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '', description: own.description }
         : null,
     );
-    const replayed = answersFrom({
+    const facts = {
       onboarding,
       owner,
       accounts: accountView,
       ...(own ? { assistant: { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '' } } : {}),
-    });
+    };
+    const replayed = answersFrom(facts);
+    /*
+     * A restore that just landed brings a finished record with it, which is
+     * the one case where "done" does not mean the owner should be sent away:
+     * the keys did not come back, so there is a question left to ask.
+     */
+    if (restoredNow) {
+      const resume = afterRestore(facts);
+      setAnswers(resume.answers);
+      setOpen(resume.open);
+      if (!resume.stay) {
+        const carry = onboarding?.details?.conversationId;
+        go.current(carry && own ? chatRoute(own.id, carry) : HOME_ROUTE, true);
+      }
+      return;
+    }
     /*
      * A finished first run has no thread to show.
      *
@@ -415,7 +443,9 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       .finally(() => setLeaving(false));
   };
 
-  const shown = open ? thread(answers, open) : [];
+  // While a restore is being asked for or run, it is the only thing on the
+  // screen: there is nothing to answer that it would not overwrite.
+  const shown = restore === 'form' || restore === 'running' ? [] : open ? thread(answers, open) : [];
 
   /*
    * The newest line is the one at the bottom, and it is where the owner is
@@ -476,6 +506,18 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                 ))}
               </Buddi>
 
+              <FromABackup
+                state={restore}
+                offered={open === 'name' && answers.name === undefined}
+                name={answers.name}
+                onState={setRestore}
+                onDone={() => {
+                  setRestore('idle');
+                  void load(true, true);
+                }}
+                onTrouble={setTrouble}
+              />
+
               {shown.map((id) => (
                 <Question
                   key={id}
@@ -530,6 +572,151 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       </div>
     </div>
     </DockSlot.Provider>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 0. There is already a buddi, and this one is meant to become it
+ * ------------------------------------------------------------------ */
+
+/** Idle, being asked for, or under way. */
+export type RestoreState = 'idle' | 'form' | 'running';
+
+/**
+ * Restoring, offered before the first question and never after it.
+ *
+ * It is a quiet link under the opening bubbles because almost nobody has a
+ * backup on the day they install this, and the one person who does is looking
+ * for exactly those words. What follows is the job's own phases, said in
+ * buddi's voice, and then the thread picks up at the brain — the one answer a
+ * backup can never bring back, because it never carries a key.
+ */
+function FromABackup({
+  state,
+  offered,
+  name,
+  onState,
+  onDone,
+  onTrouble,
+}: {
+  state: RestoreState;
+  /** Nothing has been answered yet, so there is nothing a restore would undo. */
+  offered: boolean;
+  name: string | undefined;
+  onState: (next: RestoreState) => void;
+  onDone: () => void;
+  onTrouble: (message: string | null) => void;
+}): JSX.Element | null {
+  const [jobId, setJobId] = useState<string | null>(() => rememberedRestore());
+  const [phases, setPhases] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [passphrase, setPassphrase] = useState('');
+  const [sending, setSending] = useState(false);
+
+  /*
+   * The job outlives this page: halfway through, the gateway is stopped and
+   * every request fails. A failed poll is therefore not news — only an answer
+   * is — and the id that makes the answer findable is what the tab remembers.
+   */
+  useEffect(() => {
+    if (!jobId) return undefined;
+    let stopped = false;
+    const ask = (): void => {
+      api
+        .backupJob(jobId)
+        .then((job: BackupJob) => {
+          if (stopped) return;
+          setPhases((seen) => (seen.includes(job.phase) ? seen : [...seen, job.phase]));
+          if (job.phase === 'done') {
+            stopped = true;
+            rememberRestore(null);
+            setDone(true);
+            onDone();
+          } else if (job.phase === 'rolled-back' || job.phase === 'failed') {
+            // Both are the end of this job. They differ in what is on disk
+            // now, which is what the job's own error says, so it is preferred
+            // over either standing sentence.
+            stopped = true;
+            rememberRestore(null);
+            setJobId(null);
+            onTrouble(job.error ?? SCRIPT.restore.phases[job.phase]);
+            onState('idle');
+          }
+        })
+        .catch(() => {
+          /* Restarting, or not answering yet. Ask again in a moment. */
+        });
+    };
+    ask();
+    const timer = window.setInterval(ask, POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
+
+  const send = (): void => {
+    if (!file || sending) return;
+    setSending(true);
+    onTrouble(null);
+    api
+      .firstRunRestore(file, passphrase.trim())
+      .then((answer) => {
+        rememberRestore(answer.job.id);
+        setJobId(answer.job.id);
+        onState('running');
+      })
+      .catch((error: unknown) => onTrouble(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => setSending(false));
+  };
+
+  const said = phases.filter((phase): phase is keyof typeof SCRIPT.restore.phases => phase in SCRIPT.restore.phases);
+
+  return (
+    <>
+      {offered && state === 'idle' && !done ? (
+        <button type="button" className="meet-later" onClick={() => onState('form')}>
+          {SCRIPT.restore.offer}
+        </button>
+      ) : null}
+
+      {state === 'form' ? (
+        <Ask>
+          <button type="button" className="meet-quiet" onClick={() => onState('idle')}>
+            {SCRIPT.restore.cancel}
+          </button>
+          <Field label={SCRIPT.restore.file} grow>
+            <input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          </Field>
+          <Field label={SCRIPT.restore.passphrase} hint={SCRIPT.restore.passphraseHint}>
+            <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
+          </Field>
+          <Button variant="accent" disabled={sending || !file} onClick={send}>
+            {SCRIPT.restore.submit}
+          </Button>
+        </Ask>
+      ) : null}
+
+      {state === 'running' || done ? (
+        <Buddi>
+          <Said>{SCRIPT.restore.started}</Said>
+          {said.map((phase) => (
+            <Said key={phase}>{SCRIPT.restore.phases[phase]}</Said>
+          ))}
+        </Buddi>
+      ) : null}
+
+      {done ? (
+        <Buddi>
+          {/* The name comes back with the backup; a backup that carried none
+              simply gets the sentence that matters instead. */}
+          {name ? <Said>{SCRIPT.restore.welcome(name)}</Said> : null}
+          <Said>{SCRIPT.restore.keys}</Said>
+        </Buddi>
+      ) : null}
+    </>
   );
 }
 
@@ -1756,7 +1943,9 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
         const saved = await api.saveTelegramToken(token.trim());
         setToken('');
         if (saved.restartNeeded) {
-          setNote(SCRIPT.telegram.restart);
+          // buddi's own reason when it had one — a restored installation says
+          // why it is staying quiet rather than asking for a restart.
+          setNote(saved.note ?? SCRIPT.telegram.restart);
           return;
         }
         await ask();

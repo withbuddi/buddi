@@ -8,15 +8,24 @@
 import { readdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { BACKUP_DIR } from '../paths.js';
-import { archiveTime, isArchiveName, selectForPrune, type ArchiveEntry } from './manifest.js';
+import { envelopePath } from './crypt.js';
+import {
+  PRE_RESTORE_PREFIX,
+  archiveTime,
+  isArchiveName,
+  isEncryptedArchiveName,
+  selectForPrune,
+  type ArchiveEntry,
+} from './manifest.js';
 
 export interface ListedArchive extends ArchiveEntry {
   file: string;
+  /** True for the `.age` form, which is listed exactly like the plain one. */
+  encrypted: boolean;
 }
 
 /** Every buddi archive in `dir`, newest first. */
-export async function listArchives(dir: string = BACKUP_DIR): Promise<ListedArchive[]> {
+export async function listArchives(dir: string): Promise<ListedArchive[]> {
   if (!existsSync(dir)) return [];
   const names = (await readdir(dir)).filter(isArchiveName);
   const out: ListedArchive[] = [];
@@ -32,6 +41,7 @@ export async function listArchives(dir: string = BACKUP_DIR): Promise<ListedArch
       file,
       bytes: info.size,
       at: named ? named.getTime() : info.mtimeMs,
+      encrypted: isEncryptedArchiveName(name),
     });
   }
   return out.sort((a, b) => b.at - a.at || b.name.localeCompare(a.name));
@@ -45,9 +55,13 @@ export interface PruneResult {
 
 export async function pruneArchives(
   keep: number,
-  dir: string = BACKUP_DIR,
+  dir: string,
 ): Promise<PruneResult> {
-  const archives = await listArchives(dir);
+  // `pre-restore-…` archives are the copy taken of an installation immediately
+  // before it was overwritten. They are not part of the rotation and are never
+  // pruned: the one moment they matter is the one where the restore went wrong
+  // and nobody is counting how many backups they have.
+  const archives = (await listArchives(dir)).filter((a) => !a.name.startsWith(PRE_RESTORE_PREFIX));
   const selection = selectForPrune(archives, keep);
   const byName = new Map(archives.map((a) => [a.name, a]));
   const removed: ListedArchive[] = [];
@@ -55,6 +69,10 @@ export async function pruneArchives(
     const listed = byName.get(entry.name);
     if (!listed) continue;
     await rm(listed.file, { force: true });
+    // The envelope is part of the archive, not a file of its own: leaving it
+    // behind would leave the directory full of `.json` files describing
+    // ciphertext nobody has.
+    if (listed.encrypted) await rm(envelopePath(listed.file), { force: true });
     removed.push(listed);
   }
   return {

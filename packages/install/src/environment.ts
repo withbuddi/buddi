@@ -227,7 +227,9 @@ export async function acquireLock(data: string): Promise<() => Promise<void>> {
 }
 
 export async function initialize(ctx: InstallContext): Promise<void> {
-  for (const name of ['logs', 'agents', 'skills', 'artifacts', 'backups']) {
+  // `incoming` is where the dashboard writes an uploaded archive, and the one
+  // directory the control socket accepts a path inside.
+  for (const name of ['logs', 'agents', 'skills', 'artifacts', 'backups', 'incoming']) {
     await mkdir(path.join(ctx.data, name), { recursive: true, mode: 0o700 });
   }
   const envFile = ctx.env.BUDDI_ENV_FILE ?? path.join(ctx.data, '.env');
