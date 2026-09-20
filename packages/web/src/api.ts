@@ -377,6 +377,8 @@ export interface SavedTelegramToken extends TelegramStatus {
   /** The token is kept, but this buddi has to be started again to use it. */
   restartNeeded: boolean;
   botUsername: string | null;
+  /** Why it is not talking yet, when buddi had something to say about it. */
+  note?: string | undefined;
 }
 export interface PairingOffer {
   code: string;

@@ -65,9 +65,26 @@ export interface BackupEnvelope {
 
 export interface EnvelopeCheck {
   ok: boolean;
-  /** Plain words for the owner when `ok` is false. */
+  /**
+   * False when there is no envelope beside the archive at all.
+   *
+   * That is the ordinary case for an uploaded backup: an owner picks one file
+   * in a file dialog, and the `.json` stays on the machine it was written on.
+   * An absent envelope is therefore not a failure — the archive's own age
+   * authentication and its inner manifest are the real proof — it is a check
+   * that could not be run, and the caller says so in those words.
+   */
+  present: boolean;
+  /** Plain words for the owner: why it failed, or why it could not run. */
   reason?: string;
 }
+
+/** What the envelope claims, checked against the archive it came with. */
+export const ENVELOPE_ABSENT_NOTE =
+  'no envelope beside the archive; age authentication and the manifest were checked instead';
+
+/** How far after the manifest an envelope may have been written. */
+const ENVELOPE_SKEW_MS = 24 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------------ *
  * Encrypt and decrypt
@@ -198,27 +215,70 @@ export async function verifyEnvelope(ciphertextPath: string): Promise<EnvelopeCh
   const abs = path.resolve(ciphertextPath);
   const envelope = await readEnvelope(abs);
   if (!envelope) {
-    return { ok: false, reason: `no readable envelope beside ${path.basename(abs)}` };
+    return { ok: true, present: false, reason: ENVELOPE_ABSENT_NOTE };
   }
 
   let bytes: number;
   try {
     bytes = (await stat(abs)).size;
   } catch {
-    return { ok: false, reason: `${path.basename(abs)} is not there` };
+    return { ok: false, present: true, reason: `${path.basename(abs)} is not there` };
   }
   if (bytes !== envelope.bytes) {
     return {
       ok: false,
+      present: true,
       reason: `the archive is ${bytes} bytes, the envelope says ${envelope.bytes}`,
     };
   }
 
   const digest = await sha256File(abs);
   if (digest !== envelope.sha256) {
-    return { ok: false, reason: 'the archive does not hash to what the envelope says' };
+    return { ok: false, present: true, reason: 'the archive does not hash to what the envelope says' };
   }
-  return { ok: true };
+  return { ok: true, present: true };
+}
+
+/**
+ * Does the envelope describe the archive that came out of it?
+ *
+ * The envelope is written outside the ciphertext by whoever wrote the file; the
+ * manifest is inside it, under age's authentication tag, and cannot be edited
+ * without the passphrase. So once the archive is open, the manifest is the
+ * witness and the envelope is the claim, and a claim that disagrees with the
+ * witness means the two files are not a pair — the usual cause being an
+ * envelope left behind from an earlier backup with the same name.
+ *
+ * Pure, so the awkward cases are testable: an envelope cannot have been written
+ * before the archive it describes, and a day is more than enough slack for the
+ * minute or two an encryption of a large archive takes.
+ */
+export function envelopeProblems(
+  envelope: BackupEnvelope,
+  manifest: { createdAt: string; buddiVersion: string },
+  ciphertextBytes: number,
+): string[] {
+  const problems: string[] = [];
+  if (envelope.bytes !== ciphertextBytes) {
+    problems.push(`the envelope says ${envelope.bytes} bytes, the file is ${ciphertextBytes}`);
+  }
+  if (envelope.buddiVersion !== manifest.buddiVersion) {
+    problems.push(
+      `the envelope says buddi ${envelope.buddiVersion}, the archive inside says ${manifest.buddiVersion}`,
+    );
+  }
+  const outer = Date.parse(envelope.createdAt);
+  const inner = Date.parse(manifest.createdAt);
+  if (Number.isNaN(outer) || Number.isNaN(inner)) {
+    problems.push('the envelope or the manifest has no readable createdAt');
+  } else if (outer < inner) {
+    problems.push(`the envelope was written before the archive it describes (${envelope.createdAt})`);
+  } else if (outer - inner > ENVELOPE_SKEW_MS) {
+    problems.push(
+      `the envelope was written ${Math.round((outer - inner) / 3_600_000)}h after the archive inside it`,
+    );
+  }
+  return problems;
 }
 
 /* ------------------------------------------------------------------ *
@@ -229,6 +289,10 @@ export interface EncryptedArchiveCheck {
   /** The decrypted archive, mode 0600, inside `tmpDir`. The caller deletes it. */
   plaintextPath: string;
   envelope: EnvelopeCheck;
+  /** The envelope as it was read, for the check against the inner manifest. */
+  record: BackupEnvelope | null;
+  /** The ciphertext's size on disk, so the caller need not stat it again. */
+  bytes: number;
 }
 
 /**
@@ -246,6 +310,10 @@ export async function verifyEncryptedArchive(
 ): Promise<EncryptedArchiveCheck> {
   const abs = path.resolve(ciphertextPath);
   const envelope = await verifyEnvelope(abs);
+  const record = await readEnvelope(abs);
+  const bytes = await stat(abs)
+    .then((s) => s.size)
+    .catch(() => 0);
 
   const base = path.basename(abs).endsWith(ENCRYPTED_SUFFIX)
     ? path.basename(abs).slice(0, -ENCRYPTED_SUFFIX.length)
@@ -253,5 +321,5 @@ export async function verifyEncryptedArchive(
   const plaintextPath = path.join(path.resolve(tmpDir), base);
 
   await decryptFile(abs, plaintextPath, passphrase);
-  return { plaintextPath, envelope };
+  return { plaintextPath, envelope, record, bytes };
 }

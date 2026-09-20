@@ -13,7 +13,9 @@ import {
   checkRestoreGuard,
   formatBytes,
   isArchiveName,
+  isEncryptedArchiveName,
   copyFileProblem,
+  memberPathProblem,
   isSecretName,
   manifestProblems,
   restoreCommandsFor,
@@ -47,6 +49,32 @@ describe('archive names', () => {
     expect(isArchiveName('buddi-backup-nope.tar.gz')).toBe(false);
     expect(archiveTime('buddi-backup-nope.tar.gz')).toBeNull();
   });
+
+  it('counts the encrypted form as an archive, stamp and all', () => {
+    const name = `${archiveName(new Date(2026, 8, 14, 3, 30, 5))}.age`;
+    expect(isArchiveName(name)).toBe(true);
+    expect(isEncryptedArchiveName(name)).toBe(true);
+    expect(archiveTime(name)?.getTime()).toBe(new Date(2026, 8, 14, 3, 30, 5).getTime());
+    expect(isEncryptedArchiveName(archiveName(new Date()))).toBe(false);
+  });
+});
+
+describe('paths inside an archive', () => {
+  it('accepts the paths a buddi archive actually holds', () => {
+    for (const ok of ['manifest.json', 'db/core.events.copy', 'private/agents/a.md', 'artifacts/2026/09/x']) {
+      expect(memberPathProblem(ok)).toBeNull();
+    }
+  });
+
+  it('refuses anything that could land outside the extraction directory', () => {
+    expect(memberPathProblem('../evil')).toContain('climbs out');
+    expect(memberPathProblem('private/../../evil')).toContain('climbs out');
+    expect(memberPathProblem('/etc/passwd')).toContain('absolute');
+    expect(memberPathProblem('C:\\Windows\\evil')).toContain('absolute');
+    expect(memberPathProblem('private\\agents')).toContain('backslash');
+    expect(memberPathProblem('~/.ssh/id_rsa')).toContain('home directory');
+    expect(memberPathProblem('  ')).toContain('empty');
+  });
 });
 
 describe('scrubbing .env', () => {
@@ -66,6 +94,37 @@ describe('scrubbing .env', () => {
     expect(result.names).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'TELEGRAM_BOT_TOKEN']);
     expect(result.text).not.toContain('REALSECRETVALUE');
     expect(result.text).not.toContain('REALBOTTOKEN');
+  });
+
+  it('scrubs a quoted value that runs over several lines, whole', () => {
+    const raw = [
+      'BUDDI_TZ=America/New_York',
+      'SERVICE_ACCOUNT_KEY="-----BEGIN PRIVATE KEY-----',
+      'LINEONEOFTHEKEY',
+      'LINETWOOFTHEKEY',
+      '-----END PRIVATE KEY-----"',
+      'AFTER=still here',
+    ].join('\n');
+
+    const result = scrubEnv(raw);
+
+    expect(result.text).toContain('SERVICE_ACCOUNT_KEY="<vault>"');
+    expect(result.text).toContain('BUDDI_TZ=America/New_York');
+    expect(result.text).toContain('AFTER=still here');
+    expect(result.text).not.toContain('LINEONEOFTHEKEY');
+    expect(result.text).not.toContain('LINETWOOFTHEKEY');
+    expect(result.names).toEqual(['SERVICE_ACCOUNT_KEY']);
+    // And the proof stays a mechanism: the assertion sees the whole value and
+    // every line of it, so a scrub that missed one would stop the backup.
+    expect(secretValuesIn(raw)).toContain('LINETWOOFTHEKEY');
+    assertNoSecretValues(result.text, secretValuesIn(raw));
+  });
+
+  it('does not swallow the rest of the file when a quote is never closed', () => {
+    const raw = ['API_KEY="unterminated', 'BUDDI_TZ=America/New_York'].join('\n');
+    const result = scrubEnv(raw);
+    expect(result.text).toContain('API_KEY="<vault>"');
+    expect(result.text).toContain('BUDDI_TZ=America/New_York');
   });
 
   it('scrubs a secret however oddly the line is written', () => {
@@ -176,6 +235,11 @@ describe('the manifest', () => {
     expect(manifestProblems({ ...good, format: MANIFEST_FORMAT + 1 })).toEqual([
       `format ${MANIFEST_FORMAT + 1} is newer than this build understands (${MANIFEST_FORMAT})`,
     ]);
+  });
+
+  it('rejects a manifest from an older format in plain words', () => {
+    const problems = manifestProblems({ ...good, format: 1 });
+    expect(problems.join()).toContain('older backup than this build can read');
   });
 
   it('rejects a member whose checksum is not a sha256', () => {

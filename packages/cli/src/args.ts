@@ -118,6 +118,10 @@ export type Command =
       out?: string;
       /** `create --no-artifacts`. */
       noArtifacts?: boolean;
+      /** `create --encrypt` — write the `.age` form with the vault passphrase. */
+      encrypt?: boolean;
+      /** `verify|restore --passphrase "<six words>"` for a `.age` archive. */
+      passphrase?: string;
       /** `create --prune [n]` — what the nightly job passes. */
       prune?: number;
       /** `prune --keep n` / `schedule install --keep n`. */
@@ -128,6 +132,8 @@ export type Command =
       into?: string;
       yes?: boolean;
       force?: boolean;
+      /** `restore --files` — restore agents, skills and artifacts too. */
+      files?: boolean;
       scheduleAction?: BackupScheduleAction;
     };
 
@@ -409,6 +415,17 @@ function parseBackup(rest: string[]): Command {
       i += 1;
     } else if (arg === '--no-artifacts' && action === 'create') {
       command.noArtifacts = true;
+    } else if (arg === '--encrypt' && action === 'create') {
+      command.encrypt = true;
+    } else if (arg === '--passphrase' && (action === 'verify' || action === 'restore')) {
+      const value = args[i + 1];
+      // Six words with spaces in them: the shell has to be told they are one
+      // argument, and a missing quote is the mistake worth naming here.
+      if (value === undefined || value.startsWith('-')) {
+        throw new UsageError('--passphrase needs the words, quoted: --passphrase "able acid …"');
+      }
+      command.passphrase = value;
+      i += 1;
     } else if (arg === '--prune' && action === 'create') {
       const value = args[i + 1];
       if (value === undefined || value.startsWith('-')) command.prune = DEFAULT_KEEP;
@@ -428,6 +445,8 @@ function parseBackup(rest: string[]): Command {
       command.yes = true;
     } else if (arg === '--force' && action === 'restore') {
       command.force = true;
+    } else if (arg === '--files' && action === 'restore') {
+      command.files = true;
     } else {
       throw new UsageError(`unknown option for buddi backup ${action}: ${arg}`);
     }
@@ -482,9 +501,13 @@ export const USAGE = `buddi — your personal agents, one command
 
   buddi backup create        one archive: database, private agents, artifacts
   buddi backup create --out <dir> --no-artifacts
+  buddi backup create --encrypt   the .age form, passphrase from the vault
   buddi backup list          every archive, newest first
-  buddi backup verify <archive>   checksums + manifest, no database needed
+  buddi backup verify <archive> [--passphrase "<words>"]
   buddi backup restore <archive> [--into <db>] [--yes] [--force]
+                             [--passphrase "<words>"]  .age: vault, then a prompt
+                             --into restores the database only; --files adds
+                             agents, skills and artifacts
   buddi backup prune [--keep n]   default keep ${DEFAULT_KEEP}
   buddi backup schedule install|uninstall|status   nightly at 03:30, prune included
 

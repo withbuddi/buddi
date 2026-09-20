@@ -633,11 +633,14 @@ function FromABackup({
             rememberRestore(null);
             setDone(true);
             onDone();
-          } else if (job.phase === 'rolled-back') {
+          } else if (job.phase === 'rolled-back' || job.phase === 'failed') {
+            // Both are the end of this job. They differ in what is on disk
+            // now, which is what the job's own error says, so it is preferred
+            // over either standing sentence.
             stopped = true;
             rememberRestore(null);
             setJobId(null);
-            onTrouble(job.error ?? SCRIPT.restore.phases['rolled-back']);
+            onTrouble(job.error ?? SCRIPT.restore.phases[job.phase]);
             onState('idle');
           }
         })
@@ -1940,7 +1943,9 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
         const saved = await api.saveTelegramToken(token.trim());
         setToken('');
         if (saved.restartNeeded) {
-          setNote(SCRIPT.telegram.restart);
+          // buddi's own reason when it had one — a restored installation says
+          // why it is staying quiet rather than asking for a restart.
+          setNote(saved.note ?? SCRIPT.telegram.restart);
           return;
         }
         await ask();

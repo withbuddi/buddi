@@ -7,7 +7,8 @@
  * paths, what a bad schedule is answered with, and that a passphrase is
  * normalized before it is stored. The engine is tested in `@buddi/core`.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,6 +16,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   DEFAULT_SCHEDULE,
   backupDue,
+  createBackupService,
+  sweepIncoming,
   incomingDir,
   isIncomingPath,
   isSafeArchiveName,
@@ -75,6 +78,7 @@ function fakeControl(): { control: BackupControl; seen: unknown[] } {
     setPassphrase: async (value) => { seen.push({ passphrase: value }); },
     lastBackupAt: async () => '2026-01-01T03:30:00.000Z',
     inRecovery: async () => true,
+    busy: () => false,
     tick: async () => {},
   };
   return { control, seen };
@@ -266,5 +270,217 @@ describe('the job store', () => {
     store.finish(restore, 'rolled-back', { error: 'the artifacts directory is read-only' });
     expect(restore.phase).toBe('rolled-back');
     expect(restore.error).toBe('the artifacts directory is read-only');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The service itself
+ * ------------------------------------------------------------------ */
+
+/**
+ * A `Core` and a `Gateway` as far as a restore can tell.
+ *
+ * Neither package is imported here: the service takes both as arguments
+ * precisely so the supervisor can hand it the ones it loaded after rewriting
+ * the environment, and that is what makes it testable without a database, an
+ * archive or a gateway process. Only the members a restore touches are
+ * answered; anything else would be a test of `@buddi/core`.
+ */
+function fakeWorld(restore: (opts: any) => Promise<any>, recover?: () => Promise<void>) {
+  const calls: string[] = [];
+  const pool = {
+    query: async () => { throw new Error('no schema'); },
+    end: async () => {},
+  };
+  const core = {
+    CORE_SCHEMA: 'core',
+    CORE_MIGRATIONS_DIR: '/migrations',
+    timezoneFromEnv: () => 'UTC',
+    createVault: () => undefined,
+    pluginsFilePath: () => '/nowhere/plugins.json',
+    readPluginsFile: () => { throw new Error('none'); },
+    databaseIn: () => 'buddi',
+    normalizePassphrase: (value: string) => value.trim().replace(/\s+/g, ' '),
+    createPool: () => pool,
+    envelopePath: (file: string) => `${file}.json`,
+    verifyEnvelope: async () => ({ ok: true }),
+    countPending: async () => ({ jobs: 0, missions: 0, approvals: 0, telegramChats: 0 }),
+    enterRecovery: async () => { calls.push('enterRecovery'); if (recover) await recover(); },
+    inRecovery: async () => false,
+    restoreBackup: async (opts: any) => { calls.push('restoreBackup'); return restore(opts); },
+  };
+  const gateway = {
+    agentSearchPath: () => ({ ownerRoot: '/owner', owner: { dir: '/owner/agents', skillsDir: '/owner/skills' } }),
+    installedManifests: () => [],
+  };
+  return { core, gateway, calls };
+}
+
+function report(over: Record<string, unknown> = {}) {
+  return { ok: true, did: [], didNot: [], next: [], manifest: null, snapshot: null, rolledBack: false, database: null, ...over };
+}
+
+/**
+ * The engine, as far as the service is concerned.
+ *
+ * It runs the caller's `afterDatabase` where the real one does — inside the
+ * region the snapshot covers — and rolls back when it throws, which is the
+ * whole contract the supervisor is relying on for the recovery row.
+ */
+function engine(over: Record<string, unknown> = {}) {
+  return async (opts: any) => {
+    try {
+      if (opts.afterDatabase) await opts.afterDatabase({});
+    } catch (err) {
+      return report({ ok: false, didNot: [`the restore failed: ${(err as Error).message}`], rolledBack: true, ...over });
+    }
+    return report(over);
+  };
+}
+
+async function settled(control: BackupControl, id: string): Promise<BackupJob> {
+  for (let i = 0; i < 200; i += 1) {
+    const job = control.job(id);
+    if (job?.finishedAt) return job;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('the job never finished');
+}
+
+async function makeService(world: ReturnType<typeof fakeWorld>): Promise<{
+  control: BackupControl; data: string; started: string[];
+}> {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-service-'));
+  const started: string[] = [];
+  const control = createBackupService({
+    ctx: { root: '/install', data, env: { DATABASE_URL: 'postgres://u@localhost/buddi' }, state: {} as any },
+    core: world.core as any,
+    gateway: world.gateway as any,
+    stopGateway: async () => { started.push('stop'); },
+    startGateway: () => { started.push('start'); },
+    log: () => {},
+  });
+  return { control, data, started };
+}
+
+/** An archive in this installation's own backups directory. */
+async function archived(data: string, name = 'buddi-backup-20260101-033000.tar.gz'): Promise<string> {
+  await mkdir(path.join(data, 'backups'), { recursive: true });
+  await writeFile(path.join(data, 'backups', name), 'archive');
+  return name;
+}
+
+/** An upload, where the gateway would have put one. */
+async function upload(data: string, name = 'upload-1.tar.gz'): Promise<string> {
+  await mkdir(incomingDir(data), { recursive: true });
+  const file = path.join(incomingDir(data), name);
+  await writeFile(file, 'archive');
+  return file;
+}
+
+describe('a restore, as the service runs it', () => {
+  test('a rolled-back restore says so; anything else says failed', async () => {
+    const back = await makeService(fakeWorld(async () => report({ ok: false, didNot: ['the files came back wrong'], rolledBack: true })));
+    const first = await back.control.restore({ name: await archived(back.data) }) as BackupJob;
+    const rolled = await settled(back.control, first.id);
+    expect(rolled.phase).toBe('rolled-back');
+    expect(rolled.error).toContain('the files came back wrong');
+    // Whatever happened, the installation is up again.
+    expect(back.started).toEqual(['stop', 'start']);
+
+    // A throw is not a rollback: something happened and it is still there.
+    const broke = await makeService(fakeWorld(async () => { throw new Error('the archive is not readable'); }));
+    const second = await broke.control.restore({ name: await archived(broke.data) }) as BackupJob;
+    const failed = await settled(broke.control, second.id);
+    expect(failed.phase).toBe('failed');
+    expect(failed.error).toContain('the archive is not readable');
+    expect(broke.started).toEqual(['stop', 'start']);
+  });
+
+  test('a recovery row that cannot be written takes the whole restore back with it', async () => {
+    // Restored and ungated is the one outcome that must not exist: the row is
+    // what keeps every loop asleep until the owner has seen the checklist.
+    const world = fakeWorld(engine(), async () => { throw new Error('the row could not be written'); });
+    const { control, data, started } = await makeService(world);
+    const job = await control.restore({ name: await archived(data) }) as BackupJob;
+    const done = await settled(control, job.id);
+    expect(world.calls).toContain('enterRecovery');
+    expect(done.phase).toBe('rolled-back');
+    expect(done.error).toContain('the row could not be written');
+    expect(started).toEqual(['stop', 'start']);
+  });
+
+  test('the upload a restore was given is removed when it is over, and kept when nothing was undone', async () => {
+    const good = await makeService(fakeWorld(engine()));
+    const kept = await upload(good.data);
+    const job = await good.control.restore({ path: kept }) as BackupJob;
+    expect((await settled(good.control, job.id)).phase).toBe('done');
+    expect(existsSync(kept)).toBe(false);
+
+    const broke = await makeService(fakeWorld(async () => { throw new Error('half way through'); }));
+    const stranded = await upload(broke.data);
+    const second = await broke.control.restore({ path: stranded }) as BackupJob;
+    const failed = await settled(broke.control, second.id);
+    expect(failed.phase).toBe('failed');
+    expect(existsSync(stranded)).toBe(true);
+    expect(failed.error).toContain(stranded);
+  });
+
+  test('one chain: nothing else runs while a restore does', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const { control, data } = await makeService(fakeWorld(async (opts) => { await waiting; return engine()(opts); }));
+    const name = await archived(data);
+    const job = await control.restore({ name }) as BackupJob;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(control.busy()).toBe(true);
+    expect(await control.restore({ name })).toEqual({ status: 409, error: 'A restore is running.' });
+    expect(control.create(true)).toEqual({ status: 409, error: 'A restore is running.' });
+    // The schedule waits too, and keeps its place: `lastRunAt` is untouched.
+    await writeSchedule(data, { ...DEFAULT_SCHEDULE, enabled: true, time: '00:00' });
+    await control.tick(new Date(2026, 0, 2, 4, 0));
+    expect(await readSchedule(data)).toMatchObject({ lastRunAt: null });
+    release();
+    expect((await settled(control, job.id)).phase).toBe('done');
+    expect(control.busy()).toBe(false);
+  });
+
+  test('the socket refuses start, stop, restart and a backup while a restore runs', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-backup-socket-'));
+    const socket = supervisorSocket(data);
+    const { control } = fakeControl();
+    const action = vi.fn(async (_name: string) => {});
+    const server = controlSocket({ status: () => STATUS, action, backup: { ...control, busy: () => true }, data });
+    servers.push(server);
+    await listenOnSocket(server, socket);
+    for (const route of ['/start', '/stop', '/restart', '/backup']) {
+      const refused = await call(socket, route, 'POST', {});
+      expect(refused.status, route).toBe(409);
+      expect(refused.body.error).toBe('A restore is running.');
+    }
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test('stop and restart are acknowledged before they are carried out', async () => {
+    const { socket } = await serve();
+    expect((await call(socket, '/start', 'POST', {})).status).toBe(200);
+    for (const route of ['/stop', '/restart']) {
+      // The caller is the process about to be killed, so the reply goes first.
+      expect((await call(socket, route, 'POST', {})).status, route).toBe(202);
+    }
+  });
+});
+
+describe('uploads nobody restored from', () => {
+  test('are swept once they are a day old, and never before', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-incoming-'));
+    expect(await sweepIncoming(data)).toEqual([]);
+    const old = await upload(data, 'upload-old.tar.gz');
+    const fresh = await upload(data, 'upload-new.tar.gz');
+    const then = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await utimes(old, then, then);
+    expect(await sweepIncoming(data)).toEqual(['upload-old.tar.gz']);
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
   });
 });

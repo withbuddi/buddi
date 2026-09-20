@@ -1235,35 +1235,41 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (body.dropPending !== undefined && typeof body.dropPending !== 'boolean') {
         return sendJson(res, 400, { error: '`dropPending` must be true or false' });
       }
-      const keep = body.keepGrants ?? [];
-      if (!Array.isArray(keep) || keep.some((id) => typeof id !== 'string')) {
+      const keep = body.keepGrants;
+      if (keep !== undefined && (!Array.isArray(keep) || keep.some((id) => typeof id !== 'string'))) {
         return sendJson(res, 400, { error: '`keepGrants` must be a list of grant ids' });
       }
-      const outcome = await leaveRecoveryMode(
-        { pool: deps.pool, env: deps.env ?? process.env },
-        deps.ctx.ownerId,
-        { dropPending: body.dropPending !== false, keepGrants: keep as string[] },
-        now,
-      );
       /*
        * The loops are decided once, at startup (see `serve.ts`), so leaving
        * recovery is finished by a restart rather than by flipping anything
-       * live. Accepted first and restarted once the reply is on the wire, for
-       * the same reason `/api/service/restart` is: this process is what the
-       * supervisor is about to kill.
+       * live — and a row cleared without that restart is an installation that
+       * says it has recovered while every loop it needs is still off.
+       *
+       * So the supervisor is asked first and answers the *request*, not the
+       * restart; only then is the row cleared. If it cannot be asked, nothing
+       * is dropped and nothing is cleared, and the owner is told where the
+       * button is. In a checkout there is no supervisor to ask and the loops
+       * start the next time `buddi serve` is started by whoever started this.
        */
       const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
       if (socket) {
-        res.once('finish', () => {
-          void supervisorCall(socket, '/restart', 'POST').catch((err: unknown) => {
-            log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+        try {
+          const accepted = await supervisorCall(socket, '/restart', 'POST');
+          if (accepted.status >= 300) throw new Error(`the supervisor answered ${accepted.status}`);
+        } catch (err) {
+          log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+          return sendJson(res, 502, {
+            error: 'Recovery is finished but the service could not be restarted; use Settings → Service → Restart',
           });
-        });
-        return sendJson(res, 202, { ...outcome, restarting: true });
+        }
       }
-      // A checkout has no supervisor to restart it. Say so: the loops start
-      // the next time `buddi serve` is started by whoever started this one.
-      return sendJson(res, 200, { ...outcome, restarting: false });
+      const outcome = await leaveRecoveryMode(
+        { pool: deps.pool, env: deps.env ?? process.env, log },
+        deps.ctx.ownerId,
+        { dropPending: body.dropPending !== false, keepGrants: keep as string[] | undefined },
+        now,
+      );
+      return sendJson(res, socket ? 202 : 200, { ...outcome, restarting: socket !== undefined });
     }
 
     /*

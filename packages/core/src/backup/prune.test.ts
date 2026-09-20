@@ -6,6 +6,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { envelopePath } from './crypt.js';
 import { archiveName } from './manifest.js';
 import { listArchives, pruneArchives } from './prune.js';
 
@@ -58,6 +59,42 @@ describe('listing and pruning archives', () => {
     expect(left).toContain('notes.txt');
     expect(left.filter((f) => f.endsWith('.tar.gz')).length).toBe(2);
     expect(left).toContain(archiveName(new Date(2026, 8, 5, 3, 30, 0)));
+  });
+
+  it('lists an encrypted archive exactly like a plain one', async () => {
+    const plain = await write(new Date(2026, 8, 14, 3, 30, 0));
+    const encrypted = `${archiveName(new Date(2026, 8, 15, 3, 30, 0))}.age`;
+    await writeFile(path.join(dir, encrypted), Buffer.alloc(64));
+    await writeFile(path.join(dir, encrypted.replace(/\.tar\.gz\.age$/, '.tar.gz.json')), '{}');
+
+    const listed = await listArchives(dir);
+    expect(listed.map((a) => a.name)).toEqual([encrypted, plain]);
+    expect(listed[0]?.encrypted).toBe(true);
+    expect(new Date(listed[0]!.at).getDate()).toBe(15);
+  });
+
+  it('removes an encrypted archive together with its envelope', async () => {
+    for (let day = 1; day <= 3; day += 1) {
+      const file = path.join(dir, `${archiveName(new Date(2026, 8, day, 3, 30, 0))}.age`);
+      await writeFile(file, Buffer.alloc(10));
+      await writeFile(envelopePath(file), '{}');
+    }
+
+    const result = await pruneArchives(1, dir);
+    expect(result.removed.length).toBe(2);
+    const left = (await readdir(dir)).sort();
+    // One archive and one envelope, both the newest.
+    expect(left.length).toBe(2);
+    expect(left.filter((f) => f.endsWith('.json')).length).toBe(1);
+  });
+
+  it('never prunes the copy taken before a restore', async () => {
+    for (let day = 1; day <= 3; day += 1) await write(new Date(2026, 8, day, 3, 30, 0));
+    await writeFile(path.join(dir, 'pre-restore-20260901-033000.tar.gz'), Buffer.alloc(10));
+
+    const result = await pruneArchives(1, dir);
+    expect(result.removed.length).toBe(2);
+    expect(await readdir(dir)).toContain('pre-restore-20260901-033000.tar.gz');
   });
 
   it('removes nothing when there is nothing to remove', async () => {

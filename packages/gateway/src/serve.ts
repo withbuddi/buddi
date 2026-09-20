@@ -356,6 +356,18 @@ export async function main(): Promise<void> {
    */
   const recovering = await inRecovery(pool);
 
+  /*
+   * What sleeps, and what does not.
+   *
+   * Everything that acts on restored data without being asked: the scheduler,
+   * the queue worker, the sentinel, source, reminder and dead-letter loops,
+   * the stale-claim and orphan-upload sweeps, the owner seeding, and Telegram
+   * — which also refuses to be started from the dashboard while this is true.
+   * The two timers that remain are neither loops nor unattended: the chat
+   * spinner and Telegram's typing indicator live only inside a turn the owner
+   * is having, and a turn is exactly what recovery leaves working.
+   */
+
   /** The three shapes a loop has, when it is not running at all. */
   const idleLoop = { tick: async () => 'skipped' as const, busy: false, stop: () => {} };
   const idleScheduler = (): ReturnType<typeof runScheduler> => ({
@@ -437,7 +449,18 @@ export async function main(): Promise<void> {
      */
     let telegram = !recovering && process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
     let starting: Promise<{ botUsername: string | null }> | undefined;
-    const startTelegramNow = async (): Promise<{ botUsername: string | null }> => {
+    const startTelegramNow = async (): Promise<{ botUsername: string | null; refused?: string }> => {
+      // The whole point of recovery is that nothing this installation was told
+      // to do last week happens before the owner has said it still applies,
+      // and a bot answering messages is the loudest of those. The token is
+      // kept either way; the surface comes up on the restart that leaves.
+      if (recovering) {
+        return {
+          botUsername: null,
+          refused:
+            'Your token is saved. Telegram stays quiet until you finish the restore checklist on Settings, and starts on its own after that.',
+        };
+      }
       if (telegram) return { botUsername: telegram.botUsername ?? null };
       starting ??= (async () => {
         const handle = await startTelegram(telegramOptions);
@@ -576,8 +599,15 @@ export async function main(): Promise<void> {
     // What `buddi init` asked and wrote to the env file lands in the owner row,
     // once, and only into fields nothing has filled yet: the row is the
     // truth the agents read, and an answer given at install is not lost.
-    await seedOwnerFromEnv(pool, process.env).catch((err) =>
-      console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
+    // Not in recovery: the owner row that just came back is the restored
+    // installation's own answer, and an env file that was written for *this*
+    // machine's install would quietly overwrite the empty fields in it before
+    // the owner has seen the checklist. It is seeded on the restart that
+    // leaves recovery instead.
+    if (!recovering) {
+      await seedOwnerFromEnv(pool, process.env).catch((err) =>
+        console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
 
     // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
     // day old, at start and then hourly. Anything a message carries is kept.
@@ -585,8 +615,12 @@ export async function main(): Promise<void> {
       const gone = await sweepOrphanUploads(pool, { surface: 'web', olderThan: new Date(now().getTime() - ORPHAN_UPLOAD_MS), at: now() });
       if (gone > 0) console.error(`artifacts: discarded ${gone} unsent upload(s)`);
     };
-    void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+    // In recovery this would tombstone uploads that came back in the archive
+    // and are a day old by definition, before the owner has looked at any of
+    // them. Every sweep sleeps until the checklist is done.
+    if (!recovering) void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
     const orphanSweep = setInterval(() => {
+      if (recovering) return;
       void sweepOrphans().catch((err) => console.error(`artifacts: orphan sweep failed: ${err instanceof Error ? err.message : String(err)}`));
     }, ORPHAN_SWEEP_MS);
     if (typeof orphanSweep.unref === 'function') orphanSweep.unref();

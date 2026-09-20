@@ -130,6 +130,7 @@ export const SCRIPT = {
       starting: 'Starting back up.',
       done: 'That is everything.',
       'rolled-back': 'That did not work, so I put everything back the way it was.',
+      failed: 'That did not work.',
     },
     welcome: (name: string): string => `Welcome back, ${name}.`,
     /** One sentence, because the next question would otherwise look like a bug. */
