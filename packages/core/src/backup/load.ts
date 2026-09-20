@@ -24,8 +24,8 @@
  * machine should get their core installation back even if one plugin is still
  * to be reinstalled.
  */
-import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Pool, PoolClient } from 'pg';
@@ -33,6 +33,8 @@ import copyStreams from 'pg-copy-streams';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, migrate, type AppliedMigration } from '../db.js';
 import {
   DB_MIGRATIONS_NAME,
+  MANIFEST_FORMAT,
+  MANIFEST_NAME,
   SEQUENCES_NAME,
   TABLES_NAME,
   copyFileName,
@@ -127,6 +129,85 @@ export function planSchemas(
   return { rebuild, missing };
 }
 
+/**
+ * Schema names a restore will never drop, whoever asks it to.
+ *
+ * `public` is not buddi's — it is Postgres's own, and on a shared server it
+ * holds whatever else that database does. The catalog schemas are worse: a
+ * `drop schema pg_catalog cascade` is the end of the cluster. The archive is
+ * the untrusted half of a restore, so a name it supplies is checked against
+ * this list rather than quoted into SQL and hoped about.
+ */
+const NEVER_DROP = new Set(['public', 'information_schema']);
+
+export function schemaDropProblem(schema: string): string | null {
+  if (NEVER_DROP.has(schema) || schema.startsWith('pg_')) {
+    return `refusing to drop schema "${schema}": it is not buddi's to drop`;
+  }
+  try {
+    quote(schema);
+  } catch {
+    return `refusing to use ${JSON.stringify(schema)} as a schema name`;
+  }
+  return null;
+}
+
+/**
+ * Which schemas this restore may drop.
+ *
+ * Three sources, and the archive is not one of them: `core`, the schemas this
+ * build ships migrations for, and the schemas the *target's own* ledger says it
+ * migrated. A schema that only the archive names cannot be rebuilt here anyway
+ * (`planSchemas` reports it as missing), so dropping it on the archive's word
+ * would be taking an instruction from a file someone else wrote.
+ */
+export function schemasToDrop(
+  sources: readonly MigrationSource[],
+  targetLedger: readonly string[],
+): string[] {
+  const owned = new Set<string>([CORE_SCHEMA]);
+  for (const source of sources) if (source.schema.trim() !== '') owned.add(source.schema);
+  for (const schema of targetLedger) owned.add(schema);
+  return [...owned].sort();
+}
+
+/** Is `upTo` a file this build actually ships for that schema? */
+async function assertUpTo(schema: string, dir: string, upTo: string | undefined): Promise<void> {
+  if (upTo === undefined) return;
+  let files: string[];
+  try {
+    files = (await readdir(dir)).filter((f) => f.endsWith('.sql'));
+  } catch {
+    throw new LoadError(`${schema}: ${dir} is not a migrations directory this build can read`);
+  }
+  if (!files.includes(upTo)) {
+    throw new LoadError(
+      `the archive's schema for "${schema}" stops at ${upTo}, which this build does not ship. ` +
+        'The backup was taken by a newer buddi; upgrade before restoring it. Nothing was changed.',
+    );
+  }
+}
+
+/** The manifest's format, when the stage holds one. Refused before any drop. */
+async function assertManifestFormat(stageDir: string): Promise<void> {
+  const file = path.join(stageDir, MANIFEST_NAME);
+  if (!existsSync(file)) return;
+  let format: unknown;
+  try {
+    format = (JSON.parse(await readFile(file, 'utf8')) as { format?: unknown }).format;
+  } catch (err) {
+    throw new LoadError(
+      `${MANIFEST_NAME} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (typeof format !== 'number' || format > MANIFEST_FORMAT) {
+    throw new LoadError(
+      `this archive is format ${String(format)}; this build reads format ${MANIFEST_FORMAT}. ` +
+        'Upgrade buddi before restoring it. Nothing was changed.',
+    );
+  }
+}
+
 async function tablesPresent(client: PoolClient, schemas: string[]): Promise<Set<string>> {
   const { rows } = await client.query<{ schema: string; table: string }>(
     `select n.nspname as schema, c.relname as "table"
@@ -151,24 +232,44 @@ export async function loadDatabase(
   const coreDir = opts.coreMigrationsDir ?? CORE_MIGRATIONS_DIR;
   const rebuilt = new Set<string>([CORE_SCHEMA, ...plan.rebuild.map((r) => r.schema)]);
 
+  /* 0. everything that can refuse, before anything is dropped -------- */
+  // A restore that fails in the middle is a restore that destroyed a working
+  // installation to load an archive it then could not load. Everything that
+  // can say no — the format, the schema names, the migration levels — says it
+  // here, with the target still untouched.
+  await assertManifestFormat(stageDir);
+
+  const coreUpTo = migrations.core[migrations.core.length - 1];
+  const targetLedger: string[] = [];
+  try {
+    const { rows } = await pool.query<{ schema: string }>(`select distinct schema from core.migrations`);
+    for (const row of rows) targetLedger.push(row.schema);
+  } catch {
+    // Nothing has ever migrated here. There is nothing to drop.
+  }
+
+  // Both lists are checked: the archive's names never reach a `drop`, but one
+  // naming `public` is a malformed or hostile archive and is worth refusing
+  // outright rather than quietly ignoring.
+  const owned = schemasToDrop(opts.pluginMigrations ?? [], targetLedger);
+  for (const schema of [...Object.keys(migrations.plugins), ...owned]) {
+    const problem = schemaDropProblem(schema);
+    if (problem !== null) throw new LoadError(`${problem}. Nothing was changed.`);
+  }
+
+  await assertUpTo(CORE_SCHEMA, coreDir, coreUpTo);
+  for (const entry of plan.rebuild) await assertUpTo(entry.schema, entry.dir, entry.upTo);
+
   /* 1. the schema, at the dump's level ------------------------------- */
   progress({ phase: 'database', detail: 'rebuilding the schema at the level the dump was taken at' });
 
   // Every schema this installation owns goes, not only the ones the dump has:
   // a table left behind from a schema the dump does not know would survive the
   // restore and be a row of somebody else's data in a restored installation.
-  const owned = new Set<string>([CORE_SCHEMA, ...Object.keys(migrations.plugins)]);
-  try {
-    const { rows } = await pool.query<{ schema: string }>(`select distinct schema from core.migrations`);
-    for (const row of rows) owned.add(row.schema);
-  } catch {
-    // Nothing has ever migrated here. There is nothing to drop.
-  }
-  for (const schema of [...owned].sort()) {
+  for (const schema of owned) {
     await pool.query(`drop schema if exists ${quote(schema)} cascade`);
   }
 
-  const coreUpTo = migrations.core[migrations.core.length - 1];
   await migrate(pool, { schema: CORE_SCHEMA, dir: coreDir, ...(coreUpTo ? { upTo: coreUpTo } : {}) });
   for (const entry of plan.rebuild) {
     await migrate(pool, {
@@ -228,6 +329,12 @@ export async function loadDatabase(
     }
 
     /* 3. the sequences ---------------------------------------------- */
+    // On the same client, inside the transaction, after the COPYs — but note
+    // that `setval` is NOT transactional: a rollback below this point leaves
+    // the sequences where these calls put them. That is why it runs last, when
+    // nothing except the commit itself is still to fail, and why a rolled-back
+    // load leaves sequences advanced rather than wrong: the next id is simply
+    // higher than it needed to be, which nothing depends on.
     let reset = 0;
     for (const sequence of sequences) {
       if (!rebuilt.has(sequence.schema)) continue;

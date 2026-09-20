@@ -73,6 +73,36 @@ export function incomingDir(data: string): string {
   return path.join(data, 'incoming');
 }
 
+/** An upload older than this at supervisor start was never restored from. */
+export const INCOMING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Forget uploads nobody restored from.
+ *
+ * An archive is gigabytes and lands here before the owner has typed the
+ * confirmation, so an abandoned restore leaves the whole of last night's
+ * database in a directory nothing else ever reads. A restore removes its own
+ * input (see `runRestore`); this is the sweep for the ones that never ran.
+ */
+export async function sweepIncoming(
+  data: string,
+  olderThanMs = INCOMING_MAX_AGE_MS,
+  now = Date.now(),
+): Promise<string[]> {
+  const dir = incomingDir(data);
+  if (!existsSync(dir)) return [];
+  const gone: string[] = [];
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const file = path.join(dir, name);
+    const info = await stat(file).catch(() => null);
+    if (!info || !info.isFile()) continue;
+    if (now - info.mtimeMs < olderThanMs) continue;
+    await rm(file, { force: true }).catch(() => {});
+    gone.push(name);
+  }
+  return gone;
+}
+
 /**
  * Is `candidate` a file inside `<data>/incoming/`?
  *
@@ -112,11 +142,11 @@ export function stampedAt(name: string): number | null {
 /**
  * What is in the backups directory, newest first.
  *
- * Core's `listArchives` is not used: its name test predates encryption and
- * refuses `.age`, so it would hide exactly the archives a packaged
- * installation writes. This one lists both forms, and an encrypted one is
- * checked against the envelope written beside it so the list can say straight
- * away which copies are still whole.
+ * Core's `listArchives` is not used: it lists the backups an installation
+ * took, and this list is the dashboard's, which also has to show the
+ * pre-restore copies a restore leaves behind and to say which encrypted
+ * archives still match the envelope written beside them. Both of those are
+ * this page's business rather than the engine's.
  */
 export async function listBackups(dir: string, core: Core): Promise<ListedBackup[]> {
   if (!existsSync(dir)) return [];
@@ -142,11 +172,9 @@ export async function listBackups(dir: string, core: Core): Promise<ListedBackup
 /**
  * Keep the newest `keep` archives and remove the rest, envelope and all.
  *
- * Again not core's `pruneArchives`, and for the same reason: it cannot see an
- * `.age` file, so it would count only the plain ones towards `keep` and leave
- * every encrypted archive on disk for ever. Pre-restore snapshots are left
- * alone — they are the copy taken of what the owner was about to replace, and
- * a schedule must never be what deletes one.
+ * Again not core's `pruneArchives`, and for the same reason as the listing.
+ * Pre-restore snapshots are left alone — they are the copy taken of what the
+ * owner was about to replace, and a schedule must never be what deletes one.
  */
 export async function pruneBackups(dir: string, keep: number, core: Core): Promise<string[]> {
   const listed = (await listBackups(dir, core)).filter((a) => a.name.startsWith('buddi-backup-'));
@@ -417,7 +445,7 @@ export function installationPluginMigrations(
 export interface BackupControl {
   dir: string;
   list(): Promise<{ dir: string; database: string; archives: ListedBackup[] }>;
-  create(encrypt: boolean | undefined): BackupJob;
+  create(encrypt: boolean | undefined): BackupJob | { status: number; error: string };
   verify(name: string): BackupJob;
   restore(input: RestoreRequest): Promise<BackupJob | { status: number; error: string }>;
   job(id: string): BackupJob | undefined;
@@ -428,6 +456,16 @@ export interface BackupControl {
   lastBackupAt(): Promise<string | null>;
   /** Is the installation still in recovery? Reported by `/status`. */
   inRecovery(): Promise<boolean>;
+  /**
+   * Is a restore running?
+   *
+   * A restore stops the gateway, replaces the database under it and starts it
+   * again. Anything else that stops, starts or writes to that database in the
+   * meantime is a second hand on the same lever, so the socket refuses it
+   * while this is true rather than queueing it behind a job that may well
+   * roll the database back.
+   */
+  busy(): boolean;
   /** One minute has passed: run the scheduled backup if it is due. */
   tick(now?: Date): Promise<void>;
 }
@@ -463,6 +501,16 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
   const queue = (work: () => Promise<void>): void => {
     chain = chain.catch(() => {}).then(work);
   };
+
+  /**
+   * The restore that is under way, if there is one.
+   *
+   * Held from the moment the job is accepted until the job has an outcome, and
+   * read by everything that would otherwise act on the same database or the
+   * same gateway process while it is being replaced. See `busy` above.
+   */
+  let restoring: BackupJob | undefined;
+  const RESTORE_RUNNING = 'A restore is running.';
 
   const vault = (): ReturnType<Core['createVault']> => core.createVault({ env: ctx.env });
 
@@ -549,12 +597,35 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
   };
 
   /**
+   * The archive a restore was given, when it was an upload.
+   *
+   * An upload is a copy of a whole installation sitting in a directory nothing
+   * else reads. Once the restore has an outcome the copy has served its
+   * purpose, so it goes — except when the rollback itself failed, where the
+   * file is the only way back and the job says where it is.
+   */
+  const clearIncoming = async (archive: string): Promise<boolean> => {
+    if (!isIncomingPath(ctx.data, archive)) return false;
+    await rm(archive, { force: true }).catch(() => {});
+    await rm(core.envelopePath(archive), { force: true }).catch(() => {});
+    return true;
+  };
+
+  /**
    * A restore, with the gateway out of the way.
    *
    * The order is the contract: stop, snapshot, database, files, write the
-   * recovery row, start. A failure anywhere after the snapshot leaves the
-   * engine's rollback in place and the gateway started again on it, because a
-   * failed restore that also leaves the installation down is two problems.
+   * recovery row, start. A failure anywhere up to and including the engine
+   * leaves the engine's rollback in place and the gateway started again on it,
+   * because a failed restore that also leaves the installation down is two
+   * problems.
+   *
+   * The recovery row is written inside the restore, through the engine's
+   * `afterDatabase` hook, because it is what keeps the restored installation's
+   * loops off until the owner has been through the checklist: a gateway
+   * started without it would run a week-old queue against today's world. A row
+   * that cannot be written therefore rolls the whole restore back rather than
+   * leaving an installation that is restored and ungated.
    */
   const runRestore = async (job: BackupJob, archive: string, phrase: string | undefined): Promise<void> => {
     jobs.phase(job, 'stopping', 'stopping the gateway');
@@ -569,35 +640,42 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
         typed: core.databaseIn(databaseUrl),
         force: true,
         ...(phrase === undefined ? {} : { passphrase: phrase }),
+        afterDatabase: async (pool) => {
+          jobs.phase(job, 'recovery', 'noting what came back');
+          const pending: RecoveryPending = await core.countPending(pool);
+          await core.enterRecovery(pool, {
+            archive: path.basename(archive),
+            buddiVersion: report?.manifest?.buddiVersion ?? null,
+            pending,
+          });
+        },
         onProgress: (step) => jobs.phase(job, step.phase, step.detail),
       });
       if (!report.ok) throw new Error(report.didNot.join('; ') || 'the restore did not finish');
-
-      jobs.phase(job, 'recovery', 'noting what came back');
-      const pool = core.createPool(databaseUrl);
-      try {
-        const pending: RecoveryPending = await core.countPending(pool);
-        await core.enterRecovery(pool, {
-          archive: path.basename(archive),
-          buddiVersion: report.manifest?.buddiVersion ?? null,
-          pending,
-        });
-      } finally {
-        await pool.end().catch(() => {});
-      }
-
-      jobs.phase(job, 'starting', 'starting the gateway again');
-      opts.startGateway();
-      jobs.finish(job, 'done', { report: summarizeRestore(report) });
     } catch (err) {
       // Whatever happened, the installation has to be up again afterwards.
       jobs.phase(job, 'starting', 'starting the gateway again');
       opts.startGateway();
-      jobs.finish(job, 'rolled-back', {
-        error: message(err),
+      // `rolledBack` is the engine saying it put the snapshot back. Anything
+      // else failed without undoing itself, and must not be reported as if it
+      // had: that is the difference between "nothing happened" and "something
+      // did, and it is still there".
+      const rolledBack = report?.rolledBack === true;
+      if (rolledBack) await clearIncoming(archive);
+      const stranded = !rolledBack && isIncomingPath(ctx.data, archive);
+      jobs.finish(job, rolledBack ? 'rolled-back' : 'failed', {
+        error: stranded
+          ? `${message(err)}. The file you uploaded is still at ${archive}.`
+          : message(err),
         ...(report ? { report: summarizeRestore(report) } : {}),
       });
+      return;
     }
+
+    jobs.phase(job, 'starting', 'starting the gateway again');
+    opts.startGateway();
+    await clearIncoming(archive);
+    jobs.finish(job, 'done', { report: summarizeRestore(report) });
   };
 
   /** Does this database hold work the owner would be sorry to lose? */
@@ -629,6 +707,7 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
     },
 
     create(encrypt) {
+      if (restoring) return { status: 409, error: RESTORE_RUNNING };
       const job = jobs.start('backup');
       queue(async () => {
         try {
@@ -653,6 +732,7 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
     },
 
     async restore(input) {
+      if (restoring) return { status: 409, error: RESTORE_RUNNING };
       const archive =
         input.path !== undefined ? path.resolve(input.path) : path.join(dir, input.name as string);
       if (!existsSync(archive)) return { status: 404, error: 'There is no such backup.' };
@@ -669,13 +749,20 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
         }
       }
       const job = jobs.start('restore');
-      queue(() =>
-        runRestore(
-          job,
-          archive,
-          input.passphrase === undefined ? undefined : core.normalizePassphrase(input.passphrase),
-        ),
-      );
+      restoring = job;
+      queue(async () => {
+        try {
+          await runRestore(
+            job,
+            archive,
+            input.passphrase === undefined ? undefined : core.normalizePassphrase(input.passphrase),
+          );
+        } catch (err) {
+          jobs.finish(job, 'failed', { error: message(err) });
+        } finally {
+          restoring = undefined;
+        }
+      });
       return job;
     },
 
@@ -718,7 +805,13 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
       }
     },
 
+    busy: () => restoring !== undefined,
+
     async tick(now = new Date()) {
+      // A scheduled backup of a database that is being replaced would archive
+      // whichever half won. `lastRunAt` is left alone, so the backup happens
+      // on the next tick after the restore is over.
+      if (restoring) return;
       const file = await readSchedule(ctx.data);
       if (!backupDue(file, now)) return;
       // Written before the run, not after: a backup that crashes must not be

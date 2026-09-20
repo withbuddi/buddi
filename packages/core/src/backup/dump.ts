@@ -118,16 +118,30 @@ export function orderTables(tables: readonly TableRef[], foreignKeys: readonly F
 /** `core`, plus every schema a plugin has migrated here. */
 export async function ownedSchemas(client: PoolClient | Pool): Promise<string[]> {
   const schemas = new Set<string>(['core']);
-  try {
+  if (await hasLedger(client)) {
     const { rows } = await client.query<{ schema: string }>(
       `select distinct schema from core.migrations`,
     );
     for (const row of rows) schemas.add(row.schema);
-  } catch {
-    // No `core.migrations` is a real state: a database nothing has migrated.
-    // `core` alone is then the honest answer, and it will hold no tables.
   }
   return [...schemas].filter((s) => IDENT.test(s)).sort();
+}
+
+/**
+ * Is there a migration ledger to read?
+ *
+ * Asked rather than attempted, because the whole dump runs inside one
+ * `repeatable read` transaction: a `select` against a table that is not there
+ * aborts that transaction, and every query after it fails with "current
+ * transaction is aborted" however carefully the first one was caught. A
+ * database nothing has migrated is a real state — it is what a restore into a
+ * brand new database starts from — so this has to be a question.
+ */
+async function hasLedger(client: PoolClient | Pool): Promise<boolean> {
+  const { rows } = await client.query<{ present: boolean }>(
+    `select to_regclass('core.migrations') is not null as present`,
+  );
+  return rows[0]?.present === true;
 }
 
 async function tablesIn(client: PoolClient, schemas: string[]): Promise<TableRef[]> {
@@ -170,6 +184,15 @@ async function foreignKeysIn(client: PoolClient, schemas: string[]): Promise<For
  * Generated columns are left out on purpose — Postgres computes them and
  * refuses to have them copied in — so the COPY file and the column list in
  * `tables.json` agree with what the loader is allowed to write.
+ *
+ * An **identity** column (`attidentity <> ''`) is kept, including
+ * `generated always as identity`. `COPY … FROM` is allowed to supply a value
+ * for one where `INSERT` would need `OVERRIDING SYSTEM VALUE` (a clause COPY
+ * has no syntax for at all), which is the same exemption `pg_dump` relies on.
+ * Leaving such a column out would be the alternative, and it would mean
+ * restoring every row with a new id and every foreign key pointing at the
+ * wrong one: data loss, to avoid a clause that is not needed. The sequence
+ * behind the column is dumped and reset with the others.
  */
 async function columnsOf(client: PoolClient, table: TableRef): Promise<string[]> {
   const { rows } = await client.query<{ name: string }>(
@@ -209,20 +232,17 @@ async function sequencesIn(client: PoolClient, schemas: string[]): Promise<Dumpe
 }
 
 async function ledger(client: PoolClient): Promise<MigrationRecord[]> {
-  try {
-    const { rows } = await client.query<{ schema: string; filename: string; applied_at: unknown }>(
-      `select schema, filename, applied_at from core.migrations order by schema, filename`,
-    );
-    return rows.map((row) => ({
-      schema: row.schema,
-      filename: row.filename,
-      appliedAt:
-        row.applied_at instanceof Date ? row.applied_at.toISOString() : (row.applied_at as string | null),
-      sha256: null,
-    }));
-  } catch {
-    return [];
-  }
+  if (!(await hasLedger(client))) return [];
+  const { rows } = await client.query<{ schema: string; filename: string; applied_at: unknown }>(
+    `select schema, filename, applied_at from core.migrations order by schema, filename`,
+  );
+  return rows.map((row) => ({
+    schema: row.schema,
+    filename: row.filename,
+    appliedAt:
+      row.applied_at instanceof Date ? row.applied_at.toISOString() : (row.applied_at as string | null),
+    sha256: null,
+  }));
 }
 
 /** The ledger, split the way `db/migrations.json` carries it. */

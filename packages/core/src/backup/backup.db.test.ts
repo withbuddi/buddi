@@ -17,27 +17,41 @@
  * Every database this suite touches is one it created, named after this
  * process, and dropped again.
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate, migrateCore } from '../db.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
+import { createArchive, extractAll } from './archive.js';
 import { createBackup } from './create.js';
+import { encryptFile } from './crypt.js';
+import { loadDatabase } from './load.js';
+import { generatePassphrase } from './passphrase.js';
 import { urlForDatabase } from './restore.js';
 import { restoreBackup } from './restore.js';
 import { verifyBackup } from './verify.js';
+
+/** One passphrase for the encrypted round trip; scrypt is not free. */
+const PASSPHRASE = generatePassphrase();
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const DRILL_SCHEMA = 'drill';
 const DB = `buddi_backup_drill_${process.pid}`;
+/** The second database, for the `--into` drill. Dropped with the first. */
+const INTO_DB = `${DB}_into`;
 
 const OLD_MIGRATION = `
 create table accounts (id serial primary key, name text not null, cents bigint not null);
 create table entries (id serial primary key, account int not null references accounts(id), note text);
+-- An identity column, because it is the one column shape that COPY treats
+-- differently from every other: generated always refuses an INSERT without
+-- overriding system value, a clause COPY has no syntax for at all.
+create table ledgers (id int generated always as identity primary key, label text not null);
 `;
 const NEW_MIGRATION = `alter table accounts add column note text;`;
 
@@ -50,6 +64,7 @@ suite('a backup can actually be restored', () => {
   let dataDir: string;
   let agentsDir: string;
   let skillsDir: string;
+  let pluginsFile: string;
   let url: string;
 
   const base = (): Parameters<typeof createBackup>[0] => ({
@@ -60,6 +75,7 @@ suite('a backup can actually be restored', () => {
     skillsDir,
     timezone: 'America/New_York',
     vault: false,
+    pluginsFile,
     migrationDirs: [
       { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR },
       { schema: DRILL_SCHEMA, dir: oldDir },
@@ -81,6 +97,7 @@ suite('a backup can actually be restored', () => {
         `insert into drill.entries (account, note)
          values (1, 'rent'), (1, 'groceries'), (2, 'transfer'), (2, 'interest'), (3, 'coffee')`,
       );
+      await pool.query(`insert into drill.ledgers (label) values ('opening'), ('closing')`);
     } finally {
       await pool.end().catch(() => {});
     }
@@ -105,6 +122,7 @@ suite('a backup can actually be restored', () => {
     dataDir = path.join(work, 'data');
     agentsDir = path.join(work, 'agents');
     skillsDir = path.join(work, 'skills');
+    pluginsFile = path.join(work, 'plugins.json');
     await mkdir(oldDir, { recursive: true });
     await mkdir(newDir, { recursive: true });
     await mkdir(agentsDir, { recursive: true });
@@ -113,6 +131,7 @@ suite('a backup can actually be restored', () => {
     await writeFile(path.join(oldDir, '001_tables.sql'), OLD_MIGRATION);
     await writeFile(path.join(newDir, '001_tables.sql'), OLD_MIGRATION);
     await writeFile(path.join(newDir, '002_note.sql'), NEW_MIGRATION);
+    await writeFile(pluginsFile, `${JSON.stringify([{ name: 'buddi-plugin-drill', version: '1.0.0' }])}\n`);
     await writeFile(path.join(agentsDir, 'drill-agent.md'), '# a private agent\n');
     await writeFile(path.join(skillsDir, 'drill-skill.md'), '# a private skill\n');
     await writeFile(path.join(dataDir, 'artifacts', '2026', '09', 'deadbeef.txt'), 'artifact bytes\n');
@@ -122,6 +141,7 @@ suite('a backup can actually be restored', () => {
 
   afterAll(async () => {
     if (admin) {
+      await admin.query(`drop database if exists ${INTO_DB}`).catch(() => {});
       await admin.query(`drop database if exists ${DB}`).catch(() => {});
       await admin.end().catch(() => {});
     }
@@ -259,6 +279,9 @@ suite('a backup can actually be restored', () => {
     const brokenData = path.join(work, 'broken');
     await mkdir(brokenData, { recursive: true });
     await writeFile(path.join(brokenData, 'artifacts'), 'not a directory\n');
+    // A file the archive does not have: if the private directory were merged
+    // rather than replaced, or not put back after the failure, it would go.
+    await writeFile(path.join(agentsDir, 'not-in-the-archive.md'), '# mine\n');
 
     const report = await restoreBackup({
       ...base(),
@@ -282,5 +305,295 @@ suite('a backup can actually be restored', () => {
     } finally {
       await after.end().catch(() => {});
     }
+
+    // And the files the failed restore wrote are gone: the private directory
+    // holds what it held before, including the file the archive never had.
+    expect(existsSync(path.join(agentsDir, 'not-in-the-archive.md'))).toBe(true);
+    expect(existsSync(path.join(brokenData, 'restored-plugins.json'))).toBe(false);
+    const leftovers = (await readdir(work)).filter(
+      (name) => name.includes('.restoring-') || name.includes('.previous-'),
+    );
+    expect(leftovers).toEqual([]);
   }, 900_000);
+
+  it('restores an identity column, its values and the sequence behind it', async () => {
+    await seed(oldDir);
+    const created = await createBackup(base());
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: created.archive,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    expect(report.ok).toBe(true);
+
+    const pool = createPool(url);
+    try {
+      const { rows } = await pool.query<{ id: number; label: string }>(
+        `select id, label from drill.ledgers order by id`,
+      );
+      // The ids themselves came back, not new ones: anything pointing at them
+      // still points at the same row.
+      expect(rows).toEqual([
+        { id: 1, label: 'opening' },
+        { id: 2, label: 'closing' },
+      ]);
+      const { rows: next } = await pool.query<{ id: number }>(
+        `insert into drill.ledgers (label) values ('next') returning id`,
+      );
+      expect(next[0]?.id).toBe(3);
+    } finally {
+      await pool.end().catch(() => {});
+    }
+  }, 600_000);
+
+  it('restores an encrypted archive that arrived with no envelope beside it', async () => {
+    await seed(oldDir);
+    const created = await createBackup(base());
+    // An upload: one `.age` file, picked in a file dialog, with the `.json`
+    // envelope left behind on the machine that made it.
+    const encrypted = `${created.archive}.age`;
+    await encryptFile(created.archive, encrypted, PASSPHRASE);
+    await rm(created.archive);
+
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+
+    const verified = await verifyBackup({ archive: encrypted, passphrase: PASSPHRASE });
+    expect(verified.problems).toEqual([]);
+    expect(verified.checks.find((c) => c.name === 'envelope')?.detail).toContain('no envelope');
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: encrypted,
+      passphrase: PASSPHRASE,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    expect(report.didNot.join('\n')).not.toMatch(/did not verify/);
+    expect(report.ok).toBe(true);
+
+    // The archive's plugin record is left where the recovery checklist reads it.
+    const restoredPlugins = path.join(dataDir, 'restored-plugins.json');
+    expect(existsSync(restoredPlugins)).toBe(true);
+    expect((await stat(restoredPlugins)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(restoredPlugins, 'utf8'))[0].name).toBe('buddi-plugin-drill');
+
+    const pool = createPool(url);
+    try {
+      expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+    } finally {
+      await pool.end().catch(() => {});
+    }
+  }, 900_000);
+
+  it('refuses a manifest that points the private directories out of the archive', async () => {
+    await seed(oldDir);
+    const created = await createBackup(base());
+
+    // The manifest is not covered by the member checksums — it is the document
+    // that lists them — so editing it is exactly the attack this guards.
+    const unpacked = path.join(work, 'tampered-stage');
+    await rm(unpacked, { recursive: true, force: true });
+    await extractAll(created.archive, unpacked);
+    const manifestFile = path.join(unpacked, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+    manifest.private.agents.archivePath = '../../../outside';
+    await writeFile(manifestFile, JSON.stringify(manifest, null, 2));
+    const tampered = path.join(backupsDir, 'buddi-backup-20260101-000000.tar.gz');
+    await createArchive(unpacked, tampered);
+
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: tampered,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    // The rest of the restore is fine; the private agents are not read at all.
+    expect(report.didNot.join('\n')).toMatch(/refusing to read from it/);
+    expect(report.did.join('\n')).not.toMatch(/private agents/);
+    expect(existsSync(path.join(work, 'outside'))).toBe(false);
+  }, 900_000);
+
+  it('rolls the whole restore back when the afterDatabase hook throws', async () => {
+    await seed(oldDir);
+    const created = await createBackup(base());
+    const before = createPool(url);
+    try {
+      await before.query(`insert into drill.accounts (name, cents) values ('brokerage', 99)`);
+    } finally {
+      await before.end().catch(() => {});
+    }
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: created.archive,
+      yes: true,
+      typed: DB,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+      afterDatabase: async () => {
+        throw new Error('the recovery record could not be written');
+      },
+    });
+    expect(report.ok).toBe(false);
+    expect(report.rolledBack).toBe(true);
+    expect(report.didNot.join('\n')).toMatch(/the recovery record could not be written/);
+
+    const after = createPool(url);
+    try {
+      expect(await counts(after)).toEqual({ accounts: 4, entries: 5 });
+    } finally {
+      await after.end().catch(() => {});
+    }
+  }, 900_000);
+
+  it('snapshots an empty database when the installation still holds files', async () => {
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+    await seed(oldDir);
+    const created = await createBackup(base());
+
+    // A target with no tables at all, but agents and artifacts on disk: there
+    // is everything to lose here and the old rule gave it no snapshot.
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: created.archive,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    expect(report.ok).toBe(true);
+    expect(report.snapshot).not.toBeNull();
+    expect(report.did.join('\n')).toMatch(/snapshotted/);
+  }, 900_000);
+
+  it('restores the database only when --into names another database', async () => {
+    await seed(oldDir);
+    const created = await createBackup(base());
+    await writeFile(path.join(agentsDir, 'only-here.md'), '# not in that archive\n');
+
+    // The checklist record an earlier restore in this suite left behind.
+    await rm(path.join(dataDir, 'restored-plugins.json'), { force: true });
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: created.archive,
+      into: INTO_DB,
+      yes: true,
+      typed: INTO_DB,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    expect(report.ok).toBe(true);
+    expect(report.didNot.join('\n')).toContain(
+      'files were not touched; add --files to restore agents, skills and artifacts too',
+    );
+    expect(report.did.join('\n')).not.toMatch(/private agents/);
+    // The installation beside it is untouched, including the file the archive
+    // has never heard of and the checklist record a full restore would write.
+    expect(existsSync(path.join(agentsDir, 'only-here.md'))).toBe(true);
+    expect(existsSync(path.join(dataDir, 'restored-plugins.json'))).toBe(false);
+
+    const pool = createPool(urlForDatabase(databaseUrl as string, INTO_DB));
+    try {
+      expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+    } finally {
+      await pool.end().catch(() => {});
+    }
+  }, 900_000);
+
+  it('restores the files as well when --files is asked for', async () => {
+    await seed(oldDir);
+    // Out of the way before the archive is taken, so it is genuinely a file
+    // the archive does not have when it goes back in below.
+    await rm(path.join(agentsDir, 'only-here.md'), { force: true });
+    const created = await createBackup(base());
+    await writeFile(path.join(agentsDir, 'only-here.md'), '# not in that archive\n');
+
+    const report = await restoreBackup({
+      ...base(),
+      archive: created.archive,
+      into: INTO_DB,
+      yes: true,
+      typed: INTO_DB,
+      files: true,
+      pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      force: true,
+    });
+    expect(report.ok).toBe(true);
+    expect(report.didNot.join('\n')).not.toContain('files were not touched');
+    expect(report.did.join('\n')).toMatch(/private agents/);
+    // Replaced, not merged: the file the archive does not have is gone.
+    expect(existsSync(path.join(agentsDir, 'only-here.md'))).toBe(false);
+    expect(existsSync(path.join(dataDir, 'restored-plugins.json'))).toBe(true);
+  }, 900_000);
+
+  describe('what the loader refuses before it drops anything', () => {
+    /** A stage directory holding only the three index files a load reads. */
+    const stageWith = async (
+      name: string,
+      migrations: Record<string, unknown>,
+      manifest?: Record<string, unknown>,
+    ): Promise<string> => {
+      const dir = path.join(work, name);
+      await mkdir(path.join(dir, 'db'), { recursive: true });
+      await writeFile(path.join(dir, 'db', 'migrations.json'), JSON.stringify(migrations));
+      await writeFile(path.join(dir, 'db', 'tables.json'), '[]');
+      await writeFile(path.join(dir, 'db', 'sequences.json'), '[]');
+      if (manifest) await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+      return dir;
+    };
+
+    it('refuses an archive that names "public" as one of its schemas', async () => {
+      await seed(oldDir);
+      const stage = await stageWith('stage-public', {
+        core: [],
+        plugins: { public: { schema: 'public', filenames: ['001_x.sql'] } },
+      });
+      const pool = createPool(url);
+      try {
+        await expect(loadDatabase(pool, stage)).rejects.toThrow(/not buddi's to drop/);
+        // Nothing was dropped: the target is exactly as it was.
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('refuses a dump from a newer buddi with the target untouched', async () => {
+      await seed(oldDir);
+      const stage = await stageWith('stage-newer', {
+        core: ['999_from_the_future.sql'],
+        plugins: {},
+      });
+      const pool = createPool(url);
+      try {
+        await expect(loadDatabase(pool, stage)).rejects.toThrow(/taken by a newer buddi/);
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('refuses an archive whose manifest format is newer than this build', async () => {
+      await seed(oldDir);
+      const stage = await stageWith('stage-format', { core: [], plugins: {} }, { format: 99 });
+      const pool = createPool(url);
+      try {
+        await expect(loadDatabase(pool, stage)).rejects.toThrow(/this build reads format/);
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+  });
 });

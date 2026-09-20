@@ -14,8 +14,22 @@
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { extractAll, listMembers, readMember, sha256File, walkFiles } from './archive.js';
-import { verifyEncryptedArchive } from './crypt.js';
+import {
+  archiveSafetyProblems,
+  extractAll,
+  listMembers,
+  readMember,
+  sha256File,
+  walkFiles,
+} from './archive.js';
+import {
+  ENVELOPE_ABSENT_NOTE,
+  PassphraseError,
+  envelopeProblems,
+  verifyEncryptedArchive,
+  type BackupEnvelope,
+  type EnvelopeCheck,
+} from './crypt.js';
 import {
   DB_MIGRATIONS_NAME,
   ENCRYPTED_SUFFIX,
@@ -59,17 +73,31 @@ export async function readManifest(archive: string): Promise<BackupManifest> {
  * Decrypt first when the archive is an encrypted one, so everything below this
  * line works on a plain `.tar.gz` and knows nothing about encryption.
  */
+export interface OpenedArchive {
+  path: string;
+  envelope?: EnvelopeCheck;
+  /** The envelope as written, for the check against the inner manifest. */
+  record?: BackupEnvelope | null;
+  bytes?: number;
+  problem?: string;
+}
+
 export async function openArchive(
   archive: string,
   passphrase: string | undefined,
   tmpDir: string,
-): Promise<{ path: string; envelope?: { ok: boolean; reason?: string }; problem?: string }> {
+): Promise<OpenedArchive> {
   if (!archive.endsWith(ENCRYPTED_SUFFIX)) return { path: archive };
   if (passphrase === undefined || passphrase === '') {
     return { path: archive, problem: `${path.basename(archive)} is encrypted and no passphrase was given` };
   }
   const opened = await verifyEncryptedArchive(archive, passphrase, tmpDir);
-  return { path: opened.plaintextPath, envelope: opened.envelope };
+  return {
+    path: opened.plaintextPath,
+    envelope: opened.envelope,
+    record: opened.record,
+    bytes: opened.bytes,
+  };
 }
 
 export async function verifyBackup(opts: VerifyOptions): Promise<VerifyResult> {
@@ -98,15 +126,24 @@ export async function verifyBackup(opts: VerifyOptions): Promise<VerifyResult> {
       return { archive: abs, bytes, ok: false, manifest: null, checks, problems };
     }
     if (opened.envelope) {
-      if (opened.envelope.ok) pass('envelope', 'the outer envelope matches the ciphertext');
+      // An uploaded `.age` arrives alone: the `.json` was never part of the
+      // file the owner picked. That is a check that could not run, not a
+      // backup that failed, and the two must not read the same.
+      if (!opened.envelope.present) pass('envelope', ENVELOPE_ABSENT_NOTE);
+      else if (opened.envelope.ok) pass('envelope', 'the outer envelope matches the ciphertext');
       else fail('envelope', opened.envelope.reason ?? 'the outer envelope does not match the ciphertext');
     }
     const tarball = opened.path;
 
-    /* 1. is it a tar we can read at all? ----------------------------- */
+    /* 1. is it a tar we can read at all, and is every member ours? ---- */
     let members: string[];
     try {
       members = await listMembers(tarball);
+      const unsafe = await archiveSafetyProblems(tarball);
+      if (unsafe.length > 0) {
+        fail('members', unsafe.slice(0, 3).join('; '));
+        return { archive: abs, bytes, ok: false, manifest: null, checks, problems };
+      }
       pass('archive', `${members.length} member(s), ${formatBytes(bytes)}`);
     } catch (err) {
       fail('archive', err instanceof Error ? err.message : String(err));
@@ -125,6 +162,16 @@ export async function verifyBackup(opts: VerifyOptions): Promise<VerifyResult> {
           'manifest',
           `format ${manifest.format}, buddi ${manifest.buddiVersion}, created ${manifest.createdAt}`,
         );
+        // The envelope is a claim about the archive, made outside it. Now that
+        // the archive is open, the manifest can answer the claim.
+        if (opened.record) {
+          const mismatches = envelopeProblems(opened.record, manifest, opened.bytes ?? bytes);
+          if (mismatches.length > 0) {
+            fail('envelope', `the envelope does not describe this archive: ${mismatches.join('; ')}`);
+          } else {
+            pass('envelope', 'the envelope agrees with the manifest inside the archive');
+          }
+        }
       }
     } catch (err) {
       fail('manifest', err instanceof Error ? err.message : String(err));
@@ -207,7 +254,12 @@ export async function verifyBackup(opts: VerifyOptions): Promise<VerifyResult> {
       }
     }
   } catch (err) {
-    fail('extract', err instanceof Error ? err.message : String(err));
+    // The wrong passphrase is the ordinary failure here, not a damaged file,
+    // and it deserves its own row rather than appearing under "extract".
+    fail(
+      err instanceof PassphraseError ? 'encryption' : 'extract',
+      err instanceof Error ? err.message : String(err),
+    );
   } finally {
     await rm(stage, { recursive: true, force: true }).catch(() => {});
   }

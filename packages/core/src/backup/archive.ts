@@ -13,7 +13,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { DIR_MODE } from './manifest.js';
+import { DIR_MODE, memberPathProblem } from './manifest.js';
 
 /** sha256 of a file, streamed — an artifact may be large. */
 export async function sha256File(file: string): Promise<string> {
@@ -124,6 +124,61 @@ export async function listMembers(archive: string): Promise<string[]> {
     .split('\n')
     .map((l) => l.replace(/^\.\//, '').trim())
     .filter((l) => l !== '' && !l.endsWith('/'));
+}
+
+/**
+ * Everything wrong with an archive's member list, before a byte is unpacked.
+ *
+ * `tar -xzf` happily writes `../../etc/whatever` and follows a symlink out of
+ * the extraction directory, and a restore is the one moment an owner takes an
+ * archive from somewhere else — a laptop, a USB stick, an upload — and hands it
+ * to a process that can write anywhere. So the member list is read first and
+ * anything that could land outside the directory is a refusal, not a warning.
+ *
+ * Links of any kind are refused wholesale: a buddi backup holds regular files
+ * and directories, so a link in one did not come from `createBackup`.
+ */
+export async function archiveSafetyProblems(archive: string): Promise<string[]> {
+  const res = await spawnCapture('tar', ['-tvzf', archive]);
+  if (res.code !== 0) {
+    throw new TarError(`tar could not read ${archive} (exit ${res.code}): ${res.stderr.trim()}`);
+  }
+  const problems: string[] = [];
+  let links = 0;
+  for (const raw of res.stdout.toString('utf8').split('\n')) {
+    const line = raw.trimEnd();
+    if (line === '') continue;
+    // The mode column: `l` is a symlink, `h` a hard link in GNU tar's listing.
+    const kind = line[0];
+    if (kind === 'l' || kind === 'h') {
+      links += 1;
+      continue;
+    }
+    // The member name is the rest of the line after the timestamp. Both bsdtar
+    // and GNU tar put it last, so the tail after the date is the path.
+    const member = memberNameIn(line);
+    if (member === null) continue;
+    const relative = member.replace(/^\.\//, '').replace(/\/$/, '');
+    // `./` itself: the archive's own root, which every tar lists.
+    if (relative === '' || relative === '.') continue;
+    const problem = memberPathProblem(relative);
+    if (problem !== null) problems.push(problem);
+  }
+  if (links > 0) {
+    problems.push(`${links} link(s): a buddi archive holds regular files only`);
+  }
+  return problems;
+}
+
+/**
+ * The path out of one `tar -tv` line.
+ *
+ * The columns before it differ between bsdtar and GNU tar, but both end with
+ * the name, and both put a time field immediately before it.
+ */
+function memberNameIn(line: string): string | null {
+  const match = /(?:\d{2}:\d{2}(?::\d{2})?|\s\d{4})\s+(.+)$/.exec(line);
+  return match?.[1] ?? null;
 }
 
 /** One member's bytes, without unpacking the rest. */

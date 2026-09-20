@@ -193,6 +193,22 @@ it('keeps the token and asks for a restart when this process cannot start the su
   expect(vault.set).toHaveBeenCalled();
 });
 
+it('keeps the token and repeats the refusal when the process is in recovery', async () => {
+  const vault = { kind: 'memory' as const, set: vi.fn(async () => {}), get: vi.fn(async () => null), delete: vi.fn(async () => {}), list: vi.fn(async () => []) };
+  const env: NodeJS.ProcessEnv = {};
+  const refused = 'Your token is saved. Telegram stays quiet until you finish the restore checklist on Settings.';
+  const saved = await saveTelegramToken({
+    pool: fakePool() as never,
+    env,
+    vault: vault as never,
+    // What `serve.ts` hands the dashboard while a restored installation is
+    // still in recovery: it could start the surface, and is choosing not to.
+    telegram: { running: () => false, start: async () => ({ botUsername: null, refused }) },
+  }, TOKEN);
+  expect(vault.set).toHaveBeenCalledWith('TELEGRAM_BOT_TOKEN', TOKEN);
+  expect(saved).toMatchObject({ configured: true, running: false, restartNeeded: true, note: refused });
+});
+
 it('mints a pairing code and its link from the running bot, and refuses before there is a token', async () => {
   const pool = fakePool();
   const env: NodeJS.ProcessEnv = {};

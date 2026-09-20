@@ -73,6 +73,8 @@ export interface RecoveryView {
 export interface RecoveryDeps {
   pool: Pool;
   env: NodeJS.ProcessEnv;
+  /** Where leaving recovery says what it dropped. Optional; defaults to stderr. */
+  log?: ((line: string) => void) | undefined;
 }
 
 const ACCOUNTS_ROUTE = '#/settings/accounts';
@@ -155,11 +157,24 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
   return out;
 }
 
+/**
+ * What the archive said was installed, against what is installed here.
+ *
+ * The restore writes the archive's own `plugins.json` to
+ * `<dataDir>/restored-plugins.json` rather than over the live record, so this
+ * is the one place that can say "the backup had this and this machine does
+ * not". The live record is only a fallback: on an installation restored by an
+ * older engine there is no such file, and the record beside the agents is the
+ * closest thing to what came back.
+ */
 function pluginsFromArchive(env: NodeJS.ProcessEnv): RecoveryPlugin[] {
   const search = agentSearchPath(env);
   const installed = new Set(installedManifests(env).map((m) => m.name));
+  const data = env.BUDDI_DATA_DIR?.trim();
+  const restored = data ? path.join(data, 'restored-plugins.json') : undefined;
+  const from = restored && existsSync(restored) ? restored : pluginsFilePath({ ownerRoot: search.ownerRoot, env });
   try {
-    const file = readPluginsFile(pluginsFilePath({ ownerRoot: search.ownerRoot, env }));
+    const file = readPluginsFile(from);
     return file.plugins.map((p) => ({
       name: p.name,
       version: p.version,
@@ -214,7 +229,12 @@ export async function readRecoveryView(deps: RecoveryDeps, ownerId: string): Pro
 
 export interface LeaveInput {
   dropPending: boolean;
-  keepGrants: string[];
+  /**
+   * The grants to keep. `undefined` is not "keep none": it is a caller that
+   * said nothing about grants, and nothing said is never a reason to revoke
+   * every standing permission the owner has.
+   */
+  keepGrants: string[] | undefined;
 }
 
 export interface LeaveResult {
@@ -230,6 +250,11 @@ export interface LeaveResult {
  * `dropPending` defaults to true at the route, because the common case is an
  * owner restoring last week's backup today: the queued work is for a world
  * that has already happened, and running it would be the surprise.
+ *
+ * Nothing is dropped unless there is an open recovery row. The page can be
+ * left open, reloaded or posted twice, and this is destructive in one
+ * direction only: without the guard a second POST would cancel the jobs and
+ * revoke the grants of an installation that finished recovering days ago.
  */
 export async function leaveRecoveryMode(
   deps: RecoveryDeps,
@@ -237,6 +262,11 @@ export async function leaveRecoveryMode(
   input: LeaveInput,
   now: Date,
 ): Promise<LeaveResult> {
+  const state = await readRecovery(deps.pool).catch(() => null);
+  if (!state || !state.active) {
+    return { left: false, droppedJobs: 0, droppedApprovals: 0, droppedGrants: 0 };
+  }
+  const log = deps.log ?? ((line: string) => console.error(line));
   let droppedJobs = 0;
   let droppedApprovals = 0;
   if (input.dropPending) {
@@ -251,14 +281,24 @@ export async function leaveRecoveryMode(
     );
     droppedApprovals = approvals.rowCount ?? 0;
   }
-  const keep = new Set(input.keepGrants);
-  const grants = await listToolPermissions(deps.pool, ownerId).catch(() => [] as ToolPermission[]);
   let droppedGrants = 0;
-  for (const grant of grants) {
-    if (keep.has(grant.id)) continue;
-    if (await revokeToolPermission(deps.pool, ownerId, grant.id)) droppedGrants += 1;
+  const dropped: string[] = [];
+  if (input.keepGrants !== undefined) {
+    const keep = new Set(input.keepGrants);
+    const grants = await listToolPermissions(deps.pool, ownerId).catch(() => [] as ToolPermission[]);
+    for (const grant of grants) {
+      if (keep.has(grant.id)) continue;
+      if (await revokeToolPermission(deps.pool, ownerId, grant.id)) {
+        droppedGrants += 1;
+        dropped.push(`${grant.agentId}:${grant.tool}`);
+      }
+    }
   }
   const left = await leaveRecovery(deps.pool, now);
+  log(
+    `recovery: left recovery — ${droppedJobs} job(s) cancelled, ${droppedApprovals} approval(s) expired, ` +
+      `${droppedGrants} grant(s) revoked${dropped.length > 0 ? ` (${dropped.join(', ')})` : ''}`,
+  );
   return { left, droppedJobs, droppedApprovals, droppedGrants };
 }
 

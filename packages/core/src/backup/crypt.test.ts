@@ -15,6 +15,7 @@ import {
   decryptFile,
   encryptFile,
   envelopePath,
+  envelopeProblems,
   readEnvelope,
   verifyEncryptedArchive,
   verifyEnvelope,
@@ -110,7 +111,7 @@ describe('the envelope', () => {
       expect(written.envelope.buddiVersion).toMatch(/^\d+\.\d+\.\d+/);
 
       expect(await readEnvelope(cipher)).toEqual(written.envelope);
-      expect(await verifyEnvelope(cipher)).toEqual({ ok: true });
+      expect(await verifyEnvelope(cipher)).toEqual({ ok: true, present: true });
     },
     SLOW,
   );
@@ -148,17 +149,56 @@ describe('the envelope', () => {
   );
 
   it(
-    'fails, rather than passes, when there is no envelope',
+    'says the check could not run, rather than failing, when there is no envelope',
     async () => {
+      // An uploaded `.age` arrives alone: the owner picked one file in a file
+      // dialog and the `.json` stayed behind. Treating that as a failed backup
+      // is what made every uploaded archive unrestorable.
       const { cipher } = await freshArchive('no-envelope');
       expect(await readEnvelope(cipher)).toBeNull();
 
       const check = await verifyEnvelope(cipher);
-      expect(check.ok).toBe(false);
-      expect(check.reason).toContain('envelope');
+      expect(check.present).toBe(false);
+      expect(check.ok).toBe(true);
+      expect(check.reason).toContain('age authentication and the manifest');
     },
     SLOW,
   );
+});
+
+describe('the envelope against the manifest inside the archive', () => {
+  const envelope = {
+    format: ENVELOPE_FORMAT,
+    createdAt: '2026-09-14T03:30:10.000Z',
+    buddiVersion: '1.4.0',
+    bytes: 4096,
+    sha256: 'a'.repeat(64),
+  };
+  const manifest = { createdAt: '2026-09-14T03:30:00.000Z', buddiVersion: '1.4.0' };
+
+  it('agrees when the envelope was written just after the archive', () => {
+    expect(envelopeProblems(envelope, manifest, 4096)).toEqual([]);
+  });
+
+  it('catches a size the file does not have', () => {
+    expect(envelopeProblems(envelope, manifest, 4097).join()).toContain('4096 bytes');
+  });
+
+  it('catches an envelope from another buddi', () => {
+    expect(envelopeProblems({ ...envelope, buddiVersion: '1.3.0' }, manifest, 4096).join()).toContain(
+      'the archive inside says 1.4.0',
+    );
+  });
+
+  it('refuses an envelope written before the archive it describes', () => {
+    const stale = { ...envelope, createdAt: '2026-09-01T00:00:00.000Z' };
+    expect(envelopeProblems(stale, manifest, 4096).join()).toContain('before the archive');
+  });
+
+  it('refuses an envelope written a week after the archive', () => {
+    const late = { ...envelope, createdAt: '2026-09-21T03:30:00.000Z' };
+    expect(envelopeProblems(late, manifest, 4096).join()).toContain('after the archive');
+  });
 });
 
 describe('verifyEncryptedArchive', () => {
@@ -171,7 +211,8 @@ describe('verifyEncryptedArchive', () => {
       const out = await mkdtemp(path.join(dir, 'hook-tmp-'));
       const result = await verifyEncryptedArchive(cipher, PASSPHRASE, out);
 
-      expect(result.envelope).toEqual({ ok: true });
+      expect(result.envelope).toEqual({ ok: true, present: true });
+      expect(result.record?.buddiVersion).toBeTypeOf('string');
       expect(path.dirname(result.plaintextPath)).toBe(out);
       expect(path.basename(result.plaintextPath)).toBe('hook.tar.gz');
       expect(await readFile(result.plaintextPath)).toEqual(PLAINTEXT);
@@ -181,13 +222,15 @@ describe('verifyEncryptedArchive', () => {
   );
 
   it(
-    'still decrypts when the envelope is missing, and says the envelope is not ok',
+    'still decrypts when the envelope is missing, and says the check did not run',
     async () => {
       const { cipher } = await freshArchive('hook-no-envelope');
       const out = await mkdtemp(path.join(dir, 'hook-tmp-'));
       const result = await verifyEncryptedArchive(cipher, PASSPHRASE, out);
 
-      expect(result.envelope.ok).toBe(false);
+      expect(result.envelope.present).toBe(false);
+      expect(result.envelope.ok).toBe(true);
+      expect(result.record).toBeNull();
       expect(await readFile(result.plaintextPath)).toEqual(PLAINTEXT);
     },
     SLOW,

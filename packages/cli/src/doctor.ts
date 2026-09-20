@@ -73,6 +73,11 @@ export interface DoctorProbes {
    * before this row existed still satisfies the interface.
    */
   backups?(): Promise<ProbeResult>;
+  /**
+   * Whether this installation is still in recovery after a restore. Optional
+   * for the same reason `config` is.
+   */
+  recovery?(): Promise<ProbeResult>;
   timezone(): ProbeResult;
 }
 
@@ -102,6 +107,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'dashboard', critical: false, probe: 'dashboard' },
   { name: 'service', critical: false, probe: 'service' },
   { name: 'backups', critical: false, probe: 'backups' },
+  { name: 'recovery', critical: false, probe: 'recovery' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];
 
@@ -359,6 +365,52 @@ export function checkBackups(facts: BackupFacts, staleAfterMs: number): ProbeRes
     return { status: 'warn', detail: summary };
   }
   return { status: 'ok', detail: summary };
+}
+
+/* ------------------------------------------------------------------ *
+ * The recovery row
+ * ------------------------------------------------------------------ */
+
+/** What the doctor needs to know about a restore that has not been finished. */
+export interface RecoveryFacts {
+  /** True when `core.recovery` holds a row with no `left_at`. */
+  active: boolean;
+  /** When the restore ran. */
+  restoredAt?: Date | undefined;
+  /** The archive it was restored from. */
+  archive?: string | undefined;
+  /** What the archive carried and the owner has still to decide about. */
+  pending?: { jobs: number; missions: number; approvals: number; grants: number } | undefined;
+  /** The database could not be asked at all; the postgres row says why. */
+  unknown?: boolean | undefined;
+}
+
+/**
+ * A warning, never a failure, and never silent.
+ *
+ * An installation in recovery is working — chat and the dashboard are up — but
+ * nothing else is running: no queue, no missions, no Telegram. That is a state
+ * an owner can sit in for a week without any surface mentioning it, and then
+ * wonder why their reminders stopped. So the doctor says it out loud, with the
+ * date, whenever the row is open.
+ */
+export function checkRecovery(facts: RecoveryFacts): ProbeResult {
+  if (facts.unknown) {
+    return { status: 'warn', detail: 'not known — the database could not be asked' };
+  }
+  if (!facts.active) return { status: 'ok', detail: 'not in recovery' };
+
+  const since = facts.restoredAt ? facts.restoredAt.toISOString().slice(0, 16).replace('T', ' ') : 'an unknown date';
+  const waiting = facts.pending
+    ? `${facts.pending.jobs} queued job(s), ${facts.pending.missions} mission(s), ` +
+      `${facts.pending.approvals} approval(s), ${facts.pending.grants} tool grant(s) came back with the archive`
+    : 'the archive’s pending work was not counted';
+  return {
+    status: 'warn',
+    detail:
+      `in recovery since ${since} (restored from ${facts.archive ?? 'an archive'}) — ` +
+      `the queue, the missions and Telegram are asleep until you finish the checklist. ${waiting}`,
+  };
 }
 
 /** Kept here so the row is a pure function of its facts, with no imports. */

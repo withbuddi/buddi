@@ -18,7 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
-import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule } from './backup.js';
+import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, sweepIncoming } from './backup.js';
 import type { BackupControl } from './backup.js';
 import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
@@ -121,8 +121,28 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
       return send(res, 200, { ...base, recovery: await recovery(), lastBackupAt: await backup.lastBackupAt() });
     }
     if (method === 'POST' && ['/start', '/stop', '/restart'].includes(route)) {
-      await action(route.slice(1));
-      return send(res, 200, status());
+      // One hand on the lever at a time: a restore is already stopping and
+      // starting the gateway around a database it is replacing.
+      if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
+      const name = route.slice(1);
+      if (name === 'start') {
+        await action(name);
+        return send(res, 200, status());
+      }
+      /*
+       * `stop` and `restart` kill the caller.
+       *
+       * The only client is the gateway's own dashboard, and a reply composed
+       * after the child is gone would be written to a socket nobody is
+       * reading. So the request is acknowledged first and performed after —
+       * which is also what lets the dashboard treat the acknowledgement as
+       * "the supervisor has this now" before it finishes leaving recovery.
+       */
+      const running = action(name);
+      running.catch(() => {});
+      send(res, 202, status());
+      await running;
+      return;
     }
 
     if (route === '/backups' && method === 'GET') {
@@ -131,12 +151,15 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
     }
     if (route === '/backup' && method === 'POST') {
       if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      if (backup.busy()) return send(res, 409, { error: 'A restore is running.' });
       const body = await readBody(req);
       if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
       if (body.encrypt !== undefined && typeof body.encrypt !== 'boolean') {
         return send(res, 400, { error: '"encrypt" must be true or false.' });
       }
-      return send(res, 202, { job: backup.create(body.encrypt as boolean | undefined) });
+      const started = backup.create(body.encrypt as boolean | undefined);
+      if ('status' in started) return send(res, started.status, { error: started.error });
+      return send(res, 202, { job: started });
     }
     if (route === '/verify' && method === 'POST') {
       if (!backup) return send(res, 404, { error: 'no such endpoint' });
@@ -305,6 +328,11 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       startGateway: () => start(),
       log: line => console.error(line),
     });
+    // An upload the owner never restored from is a whole installation's worth
+    // of bytes in a directory nothing reads. A day is long enough for anyone
+    // who meant to go through with it.
+    const swept = await sweepIncoming(ready.data).catch(() => [] as string[]);
+    if (swept.length > 0) console.error(`backup: discarded ${swept.length} uploaded archive(s) nobody restored from`);
     scheduleTick = setInterval(() => {
       void backup!.tick().catch(err => console.error(`backup: the schedule tick failed: ${err instanceof Error ? err.message : String(err)}`));
     }, 60_000);

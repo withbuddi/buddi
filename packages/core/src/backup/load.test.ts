@@ -3,7 +3,7 @@
  * sequence reset that decides what id the first insert after a restore gets.
  */
 import { describe, expect, it } from 'vitest';
-import { planSchemas, setvalFor } from './load.js';
+import { planSchemas, schemaDropProblem, schemasToDrop, setvalFor } from './load.js';
 import type { DumpedMigrations } from './manifest.js';
 
 const dumped = (plugins: Record<string, string[]>): DumpedMigrations => ({
@@ -41,6 +41,30 @@ describe('which schemas a restore can rebuild', () => {
       { schema: 'finance', dir: '/f' },
     ]);
     expect(plan.rebuild.map((r) => r.schema)).toEqual(['finance', 'zed']);
+  });
+});
+
+describe('which schemas a restore may drop', () => {
+  it('drops core, what this build ships, and what the target says it migrated', () => {
+    expect(
+      schemasToDrop([{ schema: 'finance', dir: '/f' }], ['weather']),
+    ).toEqual(['core', 'finance', 'weather']);
+  });
+
+  it('never drops a schema only the archive names', () => {
+    // The archive is the untrusted half of a restore. A schema it names that
+    // this build cannot rebuild is reported as missing, never dropped.
+    expect(schemasToDrop([], [])).toEqual(['core']);
+  });
+
+  it('refuses the schemas that are not buddi’s', () => {
+    expect(schemaDropProblem('public')).toContain('not buddi');
+    expect(schemaDropProblem('information_schema')).toContain('not buddi');
+    expect(schemaDropProblem('pg_catalog')).toContain('not buddi');
+    expect(schemaDropProblem('pg_toast')).toContain('not buddi');
+    expect(schemaDropProblem('drill"; drop database x --')).toContain('refusing to use');
+    expect(schemaDropProblem('finance')).toBeNull();
+    expect(schemaDropProblem('core')).toBeNull();
   });
 });
 

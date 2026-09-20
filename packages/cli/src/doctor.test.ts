@@ -5,6 +5,7 @@ import {
   checkDatabaseExposure,
   checkNodeVersion,
   checkPlugins,
+  checkRecovery,
   checkVault,
   collectChecks,
   exitCodeFor,
@@ -496,5 +497,28 @@ describe('the plugins row', () => {
   it('is skipped entirely by a caller whose probes predate it', async () => {
     const checks = await collectChecks(fakeProbes());
     expect(checks.some((c) => c.name === 'plugins')).toBe(false);
+  });
+});
+
+describe('the recovery row', () => {
+  it('is quiet when the installation was never restored', () => {
+    expect(checkRecovery({ active: false })).toEqual({ status: 'ok', detail: 'not in recovery' });
+  });
+
+  it('says since when, and what is asleep', () => {
+    const result = checkRecovery({
+      active: true,
+      restoredAt: new Date('2026-09-14T03:30:00.000Z'),
+      archive: 'buddi-backup-20260913-033000.tar.gz',
+      pending: { jobs: 11, missions: 2, approvals: 1, grants: 4 },
+    });
+    expect(result.status).toBe('warn');
+    expect(result.detail).toContain('in recovery since 2026-09-14 03:30');
+    expect(result.detail).toContain('buddi-backup-20260913-033000.tar.gz');
+    expect(result.detail).toContain('11 queued job(s)');
+  });
+
+  it('says so plainly when the database could not be asked', () => {
+    expect(checkRecovery({ active: false, unknown: true }).status).toBe('warn');
   });
 });

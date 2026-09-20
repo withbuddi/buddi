@@ -46,8 +46,11 @@ describe('the supervisor', () => {
     // The filesystem is the whole credential, so the mode is the whole check.
     expect(((await stat(socket)).mode & 0o777).toString(8)).toBe('600');
     expect(await call(socket, '/status')).toEqual({ status: 200, body: STATUS });
-    for (const name of ['start', 'stop', 'restart']) {
-      expect(await call(socket, `/${name}`, 'POST')).toEqual({ status: 200, body: STATUS });
+    expect(await call(socket, '/start', 'POST')).toEqual({ status: 200, body: STATUS });
+    // `stop` and `restart` kill the client, so they are acknowledged first and
+    // carried out after: a reply composed afterwards would reach nobody.
+    for (const name of ['stop', 'restart']) {
+      expect(await call(socket, `/${name}`, 'POST')).toEqual({ status: 202, body: STATUS });
     }
     expect(action.mock.calls.map(([name]) => name)).toEqual(['start', 'stop', 'restart']);
   });

@@ -192,3 +192,64 @@ it('reads the vault markers a scrubbed .env carries and nothing else', () => {
     '# ANTHROPIC_API_KEY="<vault>"',
   ].join('\n'))).toEqual(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'TAVILY_API_KEY']);
 });
+
+it('leaving when nothing was restored touches nothing', async () => {
+  const { socket, seen } = await fakeSupervisor();
+  const pool = fakePool(state({ active: false }));
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: socket });
+
+  const left = await fetch(`${origin}/api/recovery/leave`, {
+    method: 'POST', headers, body: JSON.stringify({ dropPending: true, keepGrants: [] }),
+  });
+  expect(left.status).toBe(202);
+  expect(await left.json()).toMatchObject({ left: false, droppedJobs: 0, droppedApprovals: 0, droppedGrants: 0 });
+  // A page left open and posted twice must not cancel the queue of an
+  // installation that finished recovering days ago.
+  expect(pool.updates).toEqual([]);
+  expect(pool.state.grants.map((g) => g.id)).toEqual(['g1', 'g2']);
+  expect(seen).toContain('POST /restart');
+});
+
+it('a body with no grants in it keeps every grant', async () => {
+  const { socket } = await fakeSupervisor();
+  const pool = fakePool(state());
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: socket });
+
+  const left = await fetch(`${origin}/api/recovery/leave`, {
+    method: 'POST', headers, body: JSON.stringify({ dropPending: false }),
+  });
+  expect(await left.json()).toMatchObject({ left: true, droppedGrants: 0 });
+  expect(pool.state.grants.map((g) => g.id)).toEqual(['g1', 'g2']);
+});
+
+it('a supervisor that will not restart leaves the installation in recovery', async () => {
+  const socket = path.join(await mkdtemp(path.join(tmpdir(), 'buddi-recovery-')), 'nothing.sock');
+  const pool = fakePool(state());
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_SUPERVISOR_SOCKET: socket });
+
+  const left = await fetch(`${origin}/api/recovery/leave`, {
+    method: 'POST', headers, body: JSON.stringify({ dropPending: true, keepGrants: [] }),
+  });
+  expect(left.status).toBe(502);
+  expect((await left.json() as { error: string }).error).toContain('could not be restarted');
+  // Nothing was dropped and the row is still open, so the button still works.
+  expect(pool.updates).toEqual([]);
+  expect(pool.state.active).toBe(true);
+});
+
+it('the checklist compares the archive plugins the restore wrote down, not the live record', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-data-'));
+  await writeFile(path.join(data, 'restored-plugins.json'), JSON.stringify({
+    version: 1,
+    plugins: [{
+      name: 'ledger', version: '1.2.0', entry: 'index.js', installedAt: RESTORED_AT.toISOString(),
+      schema: 'finance', source: { kind: 'directory', path: '/plugins/ledger' },
+    }],
+  }));
+  const pool = fakePool(state());
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_DATA_DIR: data });
+  const view = await (await fetch(`${origin}/api/recovery`, { headers })).json() as any;
+  expect(view.checklist.plugins).toEqual([
+    { name: 'ledger', version: '1.2.0', source: '/plugins/ledger', installed: false },
+  ]);
+});
