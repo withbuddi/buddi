@@ -8,7 +8,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 
 const exec = promisify(execFile);
@@ -22,8 +24,44 @@ const label = `com.buddi.install.${createHash('sha256').update(data).digest('hex
 const launchTarget = `gui/${process.getuid?.()}/${label}`;
 const startArgs = serviceTest ? ['--no-open'] : ['--no-service', '--no-open'];
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(BUDDI_|DATABASE_URL$|TELEGRAM_|ANTHROPIC_|OPENAI_|CLAUDE_|GMAIL_)/.test(name)));
-Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file' });
+/*
+ * A port nobody wanted.
+ *
+ * The launcher prefers 4317, which is the port the owner's own installation
+ * and the Docker trial listen on — so a smoke that takes it makes the machine
+ * unusable for the thing the smoke is testing, and a fixture left behind holds
+ * it until somebody hunts down the pid. The kernel picks a free one instead,
+ * and `freePort` starts from it.
+ */
+const webPort = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.on('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const { port } = probe.address();
+    probe.close(() => resolve(port));
+  });
+});
+Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file', BUDDI_WEB_PORT: String(webPort) });
 let pid;
+
+/**
+ * Stop the fixture even when this script is killed.
+ *
+ * The `finally` below covers a failure; it does not cover ^C, and a supervisor
+ * that outlives the run keeps a port and a Postgres of its own. The pid is
+ * read from the lock file because the variable may not be set yet.
+ */
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    let victim = pid;
+    if (!victim) {
+      try { victim = Number(readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim()); } catch {}
+    }
+    if (victim) { try { process.kill(victim, 'SIGTERM'); } catch {} }
+    console.error(`\n${signal}: stopped the smoke fixture${victim ? ` (pid ${victim})` : ''}; data is at ${testRoot}`);
+    process.exit(130);
+  });
+}
 console.log(`Isolated smoke directory: ${testRoot}`);
 try {
   await mkdir(data, { recursive: true, mode: 0o700 });
@@ -144,7 +182,7 @@ try {
   const stopped = JSON.parse(await cli(['service', 'stop']));
   assert.equal(stopped.gateway, 'stopped'); assert.equal(stopped.databasePid, status.databasePid);
   // A different application at the persisted dashboard port must not look ready.
-  const impostor = createServer((_req, res) => { res.writeHead(401); res.end(); });
+  const impostor = createHttpServer((_req, res) => { res.writeHead(401); res.end(); });
   await new Promise((resolve, reject) => { impostor.once('error', reject); impostor.listen(initialState.webPort, '127.0.0.1', resolve); });
   try {
     assert.equal(await dashboardReady(initialState.webPort, await vault.get('BUDDI_WEB_TOKEN')), false);

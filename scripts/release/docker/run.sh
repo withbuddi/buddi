@@ -38,9 +38,16 @@ fi
 # The trial is only worth doing if the browser can send the origin the gateway
 # expects, and that means the same port on both sides.
 if nc -z 127.0.0.1 "$HOST_PORT" >/dev/null 2>&1; then
+  # Say *who* holds it. "Something is on 4317" sends the owner hunting; a
+  # leftover test fixture and their own running buddi need different answers,
+  # and the difference is one line of lsof.
+  HOLDER=$(lsof -nP -iTCP:"$HOST_PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print "  " $1 " (pid " $2 ")" }' | sort -u)
   cat >&2 <<EOF
 Port $HOST_PORT is already listening on this machine — most likely your own
 Buddi installation, which uses 4317 too.
+
+Held by:
+${HOLDER:-  (could not tell: lsof said nothing)}
 
 The dashboard refuses writes whose Origin is not its own, and the browser's
 origin is http://127.0.0.1:<host port> while the gateway's is
