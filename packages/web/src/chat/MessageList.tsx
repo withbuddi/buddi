@@ -59,6 +59,8 @@ export function MessageList({
   children,
   agentName,
   emptyHint,
+  plain = false,
+  workingLine,
 }: {
   messages: ChatMessage[];
   live: LiveCall[];
@@ -86,6 +88,17 @@ export function MessageList({
   /** Whose turn the agent's turn is. Shown once per run of its messages. */
   agentName?: string;
   emptyHint: string;
+  /**
+   * Draw what was said and nothing else: no folded thoughts, no tool rows.
+   *
+   * First run uses it. An owner meeting their assistant for the first time is
+   * shown one line saying it is looking around and then what it said; the
+   * machinery of a turn is the chat's business, and the chat still shows all
+   * of it.
+   */
+  plain?: boolean;
+  /** The whole sentence to show while the agent is working, in place of the default. */
+  workingLine?: string;
 }): JSX.Element {
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -163,7 +176,8 @@ export function MessageList({
             ) : null}
             {(message.blocks ?? []).map((block, blockIndex) => {
               if (block.type === 'thinking') {
-                return block.text.trim() === '' ? null : <Thought key={blockIndex} text={block.text} />;
+                if (plain || block.text.trim() === '') return null;
+                return <Thought key={blockIndex} text={block.text} />;
               }
               if (block.type === 'text') {
                 // The owner's words stay exactly as typed; the agent's are
@@ -176,6 +190,7 @@ export function MessageList({
               }
               if (block.type === 'attachment') return null;
               if (block.type === 'tool_use') {
+                if (plain) return null;
                 const result = findResult(messages, block.id);
                 return (
                   <ToolRow
@@ -199,7 +214,7 @@ export function MessageList({
       {writing ? (
         <div className="wb-msg" data-role="assistant" data-testid="live-turn">
           {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
-          {partial.thinking !== '' ? (
+          {partial.thinking !== '' && !plain ? (
             <Thought
               text={partial.thinking}
               live={partial.text === ''}
@@ -214,7 +229,8 @@ export function MessageList({
         <div className="wb-msg" data-role="assistant" data-testid="working">
           {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
           <span className="wb-working" role="status" aria-live="polite">
-            {workingAs ?? agentName ?? 'The agent'} is working<span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
+            {workingLine ?? `${workingAs ?? agentName ?? 'The agent'} is working`}
+            <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
           </span>
         </div>
       ) : null}
