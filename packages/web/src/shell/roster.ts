@@ -152,6 +152,38 @@ export function useAttention(): Map<string, AgentAttention> {
 }
 
 /**
+ * The role the server gives whoever configures the installation.
+ *
+ * Named here as a *role* and never as an agent: the page does not know that
+ * the shipped maker is called Agent Father, and an owner who writes their own
+ * maker gets the same behaviour.
+ */
+export const ROLE_MAKER = 'maker';
+
+/**
+ * Who could be put in a group together.
+ *
+ * A group is two or more colleagues in one conversation. The maker is not one
+ * of them: it is the door to the installation's settings, and a "group" of the
+ * agent that makes agents and the one agent you have is not a team, it is the
+ * only two faces on the rail. An agent that cannot run is not one either — a
+ * room whose member has no account answers nothing.
+ */
+export function groupableAgents(agents: readonly ChatAgent[]): ChatAgent[] {
+  return agents.filter((agent) => agent.available && !agent.roles.includes(ROLE_MAKER));
+}
+
+/** Is there anyone to group? Two is the smallest room. */
+export function canGroup(agents: readonly ChatAgent[]): boolean {
+  return groupableAgents(agents).length >= 2;
+}
+
+/** Whoever makes agents here, by role, for a sentence that sends the owner there. */
+export function makerName(agents: readonly ChatAgent[]): string {
+  return agents.find((agent) => agent.roles.includes(ROLE_MAKER))?.name ?? 'the agent maker';
+}
+
+/**
  * The stand-in an agent file may write where the owner's own assistant's name
  * belongs: `Rename {{default}} and change its face`.
  *

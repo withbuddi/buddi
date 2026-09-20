@@ -16,12 +16,14 @@ import { AgentRail } from './AgentRail';
 import {
   attentionMap,
   badgeOf,
+  canGroup,
   groupAgents,
+  groupableAgents,
   orderAgents,
   waitingText,
   type AgentAttention,
 } from './roster';
-import type { ChatAgent } from '../chat/types';
+import type { ChatAgent, GroupView } from '../chat/types';
 
 afterEach(() => {
   cleanup();
@@ -80,6 +82,54 @@ function railOf(agents: ChatAgent[], defaultAgentId: string | null): void {
     </Tooltip.Provider>,
   );
 }
+
+/*
+ * A fresh installation has one assistant and the agent that makes agents. The
+ * second is a settings door, not a colleague, so there is nobody to group —
+ * and offering a room that cannot be filled is worse than not offering one.
+ */
+describe('the groups section', () => {
+  const railWith = (roster: ChatAgent[], groups: GroupView[] = []): void => {
+    render(
+      <Tooltip.Provider>
+        <AgentRail
+          agents={groupAgents(roster, roster[0]?.id ?? null)}
+          currentId={null}
+          attention={new Map()}
+          onSelect={() => {}}
+          groups={groups}
+          onSelectGroup={() => {}}
+          onNewGroup={() => {}}
+        />
+      </Tooltip.Provider>,
+    );
+  };
+  const maker = agent({ id: 'father', name: 'Agent Father', anchor: 'bottom', roles: ['maker'] });
+
+  it('counts who could actually be in a room, and the maker is not one', () => {
+    expect(canGroup([agent({ id: 'ada', name: 'Ada' }), maker])).toBe(false);
+    expect(canGroup([agent({ id: 'ada', name: 'Ada' }), agent({ id: 'ledger', name: 'Ledger' })])).toBe(true);
+    // An agent with no account answers nothing, so it makes no room either.
+    expect(canGroup([
+      agent({ id: 'ada', name: 'Ada' }),
+      agent({ id: 'scout', name: 'Scout', available: false, unavailableReason: 'no key' }),
+    ])).toBe(false);
+    expect(groupableAgents([agent({ id: 'ada', name: 'Ada' }), maker]).map((a) => a.id)).toEqual(['ada']);
+  });
+
+  it('is absent, + button and all, with one assistant and the maker', () => {
+    railWith([agent({ id: 'ada', name: 'Ada' }), maker]);
+    expect(screen.queryByTestId('group-rail')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New group' })).toBeNull();
+    expect(screen.getByTestId('agent-face-ada')).toBeDefined();
+  });
+
+  it('appears once there are two agents to group', () => {
+    railWith([agent({ id: 'ada', name: 'Ada' }), agent({ id: 'ledger', name: 'Ledger' }), maker]);
+    expect(screen.getByTestId('group-rail')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'New group' })).toBeDefined();
+  });
+});
 
 describe('the order', () => {
   it('pins the front desk to the head and the maker to the foot, work in between', () => {
