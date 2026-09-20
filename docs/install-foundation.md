@@ -124,6 +124,56 @@ that test unit. It also replaces a loaded job and verifies its new arguments.
 Fixture data is retained for inspection. Tests should also run
 on Node 22 before publishing a release.
 
+## Try it in Docker
+
+To meet the packaged install the way a stranger on a clean Linux machine would,
+from the browser of the machine you are already sitting at:
+
+```sh
+pnpm release:docker            # build the tarball, then an image containing only it
+scripts/release/docker/run.sh  # start it and print the dashboard link
+```
+
+`scripts/release/docker/Dockerfile` is `node:22-bookworm-slim` plus the tarball
+installed with `npm install -g --ignore-scripts` — **optional dependencies stay
+on**, which is how `@embedded-postgres/linux-<arch>` arrives, and the build
+fails if the architecture the image will run as did not get its package. There
+is no checkout in the image, no pnpm and no build tools. The one addition is
+`socat`, and the install runs as the unprivileged `node` user in its own home.
+
+`run.sh` starts `buddi --no-service --no-open`: Linux has no background-service
+installation in this slice, so the detached supervisor is what runs, and the
+launcher says as much for the default command. The gateway keeps binding
+127.0.0.1 inside the container — `environment()` forces that and this harness
+does not relax it — so `socat` forwards the container's own address to it, and
+Docker publishes that to `127.0.0.1:4317` on the host. The link printed is the
+launcher's own, ticket and all: readiness is proved at `/_buddi/ready` with the
+installation secret, not by spending the ticket, so the first link is unused.
+It still expires in five minutes; `docker exec buddi-trial buddi --no-service
+--no-open` mints another.
+
+**The port is the same on both sides, and that is not a detail.** The dashboard
+refuses a write whose `Origin` is not its own, so the browser must reach it at
+the port the gateway bound. Inside a fresh container nothing holds 4317, so the
+gateway takes it; `run.sh` asserts that and tells you to `--reset` if a
+persisted `installation.json` chose otherwise. On the host, `run.sh` refuses to
+start when 4317 is already listening — most likely your own Buddi — rather than
+handing you a dashboard whose wizard cannot save. `BUDDI_TRIAL_PORT=4318
+scripts/release/docker/run.sh` is the read-only way around it: login and every
+`GET` work, and writes answer 403 until both sides are 4317. Trying the wizard
+for real means stopping the local installation first.
+
+Data lives in the named volume `buddi-trial` between runs, so the container is
+disposable and the installation is not. `--reset` removes that volume, which is
+what makes the next start a true first run. A supervisor pid left in the volume
+was written in a previous container's pid namespace, where it meant something;
+`run.sh` removes the lock and socket on start, because nothing in a container it
+has just created is supervising anything. Ctrl-C stops the container and keeps
+the volume.
+
+This image is a trial harness, not a distribution: it exists to try an install,
+not to run one.
+
 ## Explicit limitations / next slices
 
 - The chosen `@embedded-postgres` binary package supplies `initdb`, `postgres`
