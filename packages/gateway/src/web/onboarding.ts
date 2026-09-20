@@ -491,6 +491,26 @@ function bodyOf(source: string): string {
 }
 
 /**
+ * The two facts the assistant should not have to ask for.
+ *
+ * The owner gave their name a minute ago and the assistant was named by them
+ * in the same thread; a first message that opens with "what should I call
+ * you?" is the installation forgetting, in front of the person who just told
+ * it. The three asks stay the page's words — they are the script — and this
+ * puts what the *server* knows in front of them.
+ */
+export async function withFirstRunFacts(deps: OnboardingDeps, instruction: string): Promise<string> {
+  const profile = await getOwnerProfile(deps.pool).catch(() => null);
+  const owner = profile?.preferredName?.trim() ?? '';
+  const assistant = privateAgent(deps.catalog)?.name.trim() ?? '';
+  const facts = [
+    ...(owner === '' ? [] : [`The owner is called ${owner}.`]),
+    ...(assistant === '' ? [] : [`You are ${assistant}.`]),
+  ];
+  return facts.length === 0 ? instruction : `${facts.join(' ')} ${instruction}`;
+}
+
+/**
  * Claim the one turn first run is allowed to send on the owner's behalf.
  *
  * The assistant has to speak first and the runtime has no turn nobody asked
