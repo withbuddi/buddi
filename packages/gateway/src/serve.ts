@@ -74,9 +74,10 @@ import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
-import { memoryPreambleFor } from './agents/catalog.js';
+import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
+import { delegateAllowlist } from './agents/delegation.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
 import { describePaired, startTelegram } from './telegram/main.js';
 
@@ -663,6 +664,8 @@ export async function main(): Promise<void> {
             providerFor: wiring.providerFor,
             artifacts: createCoreArtifactStore({ pool, env: process.env }),
             memoryPreamble: memoryPreambleFor(pool),
+            groupMemoryPreamble: memoryPreambleForGroup(pool),
+            allowlistFor: (agentId) => delegateAllowlist(agentId, wiring.catalog),
             gate,
           },
           log: (line) => console.error(line),
