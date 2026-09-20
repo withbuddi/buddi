@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
+import { Markdown } from './markdown';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 
 /**
@@ -121,10 +122,12 @@ export function MessageList({
                 return block.text.trim() === '' ? null : <Thought key={blockIndex} text={block.text} />;
               }
               if (block.type === 'text') {
-                return block.text.trim() === '' ? null : (
-                  <div key={blockIndex} className="wb-bubble">
-                    {block.text}
-                  </div>
+                // The owner's words stay exactly as typed; the agent's are
+                // markdown, because that is how a model writes a list.
+                return block.text.trim() === '' ? null : mine ? (
+                  <div key={blockIndex} className="wb-bubble">{block.text}</div>
+                ) : (
+                  <div key={blockIndex} className="wb-bubble" data-rich="true"><Markdown text={block.text} /></div>
                 );
               }
               if (block.type === 'attachment') return null;
@@ -159,7 +162,7 @@ export function MessageList({
               seconds={secondsBetween(partial.thinkingStartedAt, partial.textStartedAt ?? now)}
             />
           ) : null}
-          {partial.text !== '' ? <div className="wb-bubble" data-live="true">{partial.text}<span className="wb-caret" aria-hidden="true" /></div> : null}
+          {partial.text !== '' ? <div className="wb-bubble" data-live="true" data-rich="true"><Markdown text={partial.text} /><span className="wb-caret" aria-hidden="true" /></div> : null}
         </div>
       ) : null}
 
@@ -213,7 +216,7 @@ function Thought({ text, live = false, seconds = null }: { text: string; live?: 
         <span>{label}</span>
         <ArrowIcon />
       </button>
-      {open ? <div className="wb-thought-text">{text}</div> : null}
+      {open ? <div className="wb-thought-text"><Markdown text={text} /></div> : null}
     </div>
   );
 }
