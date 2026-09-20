@@ -57,7 +57,7 @@ describe('markdown from a model', () => {
     const { container } = render(<Tooltip.Provider><MarkdownAgents.Provider value={agents}><Markdown text={'Ask @garage, not @nobody or mail@x.test.'} /></MarkdownAgents.Provider></Tooltip.Provider>);
     const links = container.querySelectorAll('a');
     expect(links).toHaveLength(1);
-    expect(links[0]!.getAttribute('href')).toBe('#/agents/garage');
+    expect(links[0]!.getAttribute('href')).toBe('#/chat/garage');
     expect(container.textContent).toContain('@nobody');
     expect(container.textContent).toContain('mail@x.test');
   });
