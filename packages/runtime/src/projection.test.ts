@@ -75,10 +75,48 @@ describe('the projection', () => {
       { role: 'assistant', speaker: 'concierge', content: [text('So: 1,200.')] },
     ];
     const out = projectTranscript({ turns, agentId: 'concierge', handles });
-    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user', 'assistant']);
-    expect(out[1]!.content.map((b) => b.type)).toEqual(['tool_use', 'text']);
+    // The call, its answer, then — in the order it happened — the request the
+    // coordinator wrote, the member's words, the coordinator's conclusion.
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+    expect(out[1]!.content.map((b) => b.type)).toEqual(['tool_use']);
     expect(out[2]!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 't1' });
-    expect((out[3]!.content[0] as { text: string }).text).toBe('@ledger said:\n1,200.');
+    expect((out[3]!.content[0] as { text: string }).text).toContain('asks you now');
+    expect((out[4]!.content[0] as { text: string }).text).toBe('@ledger said:\n1,200.');
+    expect((out[5]!.content[0] as { text: string }).text).toBe('So: 1,200.');
+  });
+
+  it('holds everything until every open call is answered, with two asks in one response', () => {
+    const turns: StoredTurn[] = [
+      { role: 'user', speaker: 'owner', content: [text('Go')] },
+      { role: 'assistant', speaker: 'concierge', content: [{ type: 'tool_use', id: 'a', name: 'group.ask', input: {} }, { type: 'tool_use', id: 'b', name: 'group.ask', input: {} }] },
+      { role: 'user', speaker: 'concierge', content: [text('@concierge asks you now:\n\nOne.')] },
+      { role: 'assistant', speaker: 'ledger', content: [text('1,200.')] },
+      { role: 'user', speaker: 'concierge', content: [text('@concierge asks you now:\n\nTwo.')] },
+      { role: 'assistant', speaker: 'advisor', content: [text('Save 300.')] },
+      { role: 'user', speaker: 'concierge', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'x' }, { type: 'tool_result', tool_use_id: 'b', content: 'y' }] },
+    ];
+    const out = projectTranscript({ turns, agentId: 'concierge', handles });
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user']);
+    expect(out[1]!.content.map((b) => b.type)).toEqual(['tool_use', 'tool_use']);
+    expect(out[2]!.content.map((b) => (b as { tool_use_id: string }).tool_use_id)).toEqual(['a', 'b']);
+    expect((out[3]!.content[0] as { text: string }).text).toContain('One.');
+    expect((out[4]!.content[0] as { text: string }).text).toBe('@ledger said:\n1,200.');
+    expect((out[6]!.content[0] as { text: string }).text).toBe('@advisor said:\nSave 300.');
+  });
+
+  it('bounds pictures too, counts its own markers, and refuses what cannot fit', async () => {
+    const { boundProjection, ProjectionOverflow } = await import('./projection.js');
+    const picture = { type: 'image' as const, mime: 'image/png', data: 'A'.repeat(100_000) };
+    const two = [
+      { role: 'user' as const, content: [text('opening'), picture] },
+      { role: 'assistant' as const, content: [text('ok')] },
+    ];
+    const bounded = boundProjection(two, 4000);
+    expect(JSON.stringify(bounded.map((m) => m.content)).length).toBeLessThanOrEqual(4000);
+    expect(bounded[0]!.content.some((b) => b.type === 'image')).toBe(false);
+    // A tool_use whose input alone exceeds the cap cannot be clipped: say so.
+    const huge = [{ role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: 'z', name: 't', input: { blob: 'B'.repeat(5000) } }] }];
+    expect(() => boundProjection(huge, 1000)).toThrow(ProjectionOverflow);
   });
 
   it('bounds a room: clips the agent\'s own big tool results, drops the oldest turns, and always fits', async () => {
@@ -92,11 +130,13 @@ describe('the projection', () => {
       { role: 'user' as const, content: [text('latest ' + 'y'.repeat(3000))] },
     ];
     const bounded = boundProjection(messages, 4000);
-    expect(JSON.stringify(bounded.map((m) => m.content)).length).toBeLessThanOrEqual(4000 + 400);
+    expect(JSON.stringify(bounded.map((m) => m.content)).length).toBeLessThanOrEqual(4000);
     expect((bounded[0]!.content[0] as { text: string }).text).toBe('opening');
     // Two turns that are still too big get clipped rather than sent whole.
     const two = boundProjection([messages[0]!, messages[4]!], 1000);
-    expect(JSON.stringify(two.map((m) => m.content)).length).toBeLessThanOrEqual(1000 + 100);
+    expect(JSON.stringify(two.map((m) => m.content)).length).toBeLessThanOrEqual(1000);
+    // Never in place.
+    expect((messages[4]!.content[0] as { text: string }).text.length).toBeGreaterThan(3000);
   });
 
   it('never mutates the stored turns', () => {

@@ -206,8 +206,9 @@ dynamic membership, workflow builders.
 ## What the first version does
 
 Built: group rows and membership; the shared transcript with a speaker on
-every turn; the projection with its tests, holding what the room said while
-one of the agent's tool calls is open so call and result stay adjacent; the
+every turn; the projection with its tests, holding everything that arrives while any
+of the agent's tool calls is open — keyed on the call ids, so two asks in one
+response are answered together — so calls and results stay adjacent; the
 coordinator loop with mention override and sequential member runs through
 `group.ask`, serialised per group in the process and by a partial unique
 index on the request row; the twelve-call budget reserved on the request row
@@ -234,10 +235,13 @@ Deliberate deviations, to be closed later:
   no second, tool-less call is made; otherwise the separate synthesis call
   runs. Two answers to one request read worse than one answer with tools
   available.
-- **Oversized output is bounded, not externalised.** An agent's own tool
-  results are clipped in its projection and the oldest turns are dropped to
-  fit the group's cap; the transcript keeps the whole. Moving an oversized
-  result into an artifact is not built.
+- **Oversized output is bounded, not externalised.** Before every call the
+  room is reduced to the group's cap in this order: an agent's own tool
+  results clipped, the oldest turns dropped whole, pictures and documents
+  turned into one-line references, long text clipped, every marker counted.
+  A room that still cannot fit ends the run with a named refusal rather than
+  a silent shortfall. Moving an oversized result into an artifact is not
+  built.
 - **A rejection the provider confirmed is counted on retry.** The adapters
   retry a 429 themselves; each dispatch reserves, and only the final refusal
   releases. Never fewer reservations than dispatches.
