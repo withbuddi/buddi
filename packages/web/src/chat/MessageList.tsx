@@ -18,7 +18,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
-import { Markdown } from './markdown';
+import { Markdown, MarkdownAgents } from './markdown';
 import type { ChatAgent, ChatBlock, ChatMessage } from '../chat/types';
 import { AgentAvatar } from '../ui';
 
@@ -51,6 +51,7 @@ export function MessageList({
   onOpen,
   working = false,
   partial = null,
+  agents,
   speakers,
   coordinatorId,
   workingAs,
@@ -72,6 +73,8 @@ export function MessageList({
   working?: boolean;
   /** The turn being written right now, if any. */
   partial?: LiveTurnView | null;
+  /** Every agent, so an `@handle` in an answer opens that agent. */
+  agents?: ChatAgent[];
   /** In a room: every agent, so a turn can carry its speaker's face and name. */
   speakers?: ChatAgent[];
   coordinatorId?: string;
@@ -95,6 +98,7 @@ export function MessageList({
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
 
   return (
+    <MarkdownAgents.Provider value={agents ?? speakers ?? []}>
     <div className="wb-messages" data-testid="messages">
       {shown.length === 0 && live.length === 0 ? (
         <p className="wb-chat-empty">{emptyHint}</p>
@@ -231,6 +235,7 @@ export function MessageList({
       {children}
       <div ref={bottom} />
     </div>
+    </MarkdownAgents.Provider>
   );
 }
 

@@ -823,6 +823,7 @@ export function ChatPage({
           now={now}
           working={running}
           partial={partial}
+          agents={everyone}
           {...(group ? { speakers: everyone, coordinatorId: group.coordinator } : {})}
           {...(runningAgentId ? { workingAs: everyone.find((a) => a.id === runningAgentId)?.name ?? runningAgentId } : {})}
           onOpenFile={openFile}

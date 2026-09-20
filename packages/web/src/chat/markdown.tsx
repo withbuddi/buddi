@@ -11,13 +11,23 @@
  * block quotes, tables, horizontal rules, links. That is what an answer needs.
  * Anything else stays readable as text, which is the point.
  */
-import { Fragment, type ReactNode } from 'react';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { Fragment, createContext, useContext, useState, type ReactNode } from 'react';
+import type { ChatAgent } from './types';
+import { agentRoute } from '../routes';
+import { Avatar } from '../views/parts/Avatar';
+
+/**
+ * Who `@handle` may refer to. Provided by the thread, which knows the roster;
+ * absent, a handle is just text. Never a link to anywhere but an agent page.
+ */
+export const MarkdownAgents = createContext<readonly ChatAgent[]>([]);
 
 type Block =
   | { type: 'p'; text: string }
   | { type: 'h'; level: number; text: string }
   | { type: 'code'; lang: string | null; text: string }
-  | { type: 'quote'; blocks: Block[] }
+  | { type: 'quote'; blocks: Block[]; raw: string }
   | { type: 'list'; ordered: boolean; start: number; items: Block[][] }
   | { type: 'table'; head: string[]; rows: string[][]; align: Array<'left' | 'right' | 'center' | null> }
   | { type: 'hr' };
@@ -66,7 +76,7 @@ export function parseBlocks(lines: string[]): Block[] {
     if (QUOTE.test(line)) {
       const inner: string[] = [];
       while (i < lines.length && QUOTE.test(lines[i]!)) { inner.push(QUOTE.exec(lines[i]!)![1]!); i += 1; }
-      out.push({ type: 'quote', blocks: parseBlocks(inner) });
+      out.push({ type: 'quote', blocks: parseBlocks(inner), raw: inner.join('\n') });
       continue;
     }
 
@@ -147,8 +157,18 @@ function BlockView({ block }: { block: Block }): JSX.Element {
       const Tag = `h${Math.min(level + 2, 6)}` as 'h3' | 'h4' | 'h5' | 'h6';
       return <Tag className="wb-md-h" data-level={level}>{inline(block.text)}</Tag>;
     }
-    case 'code': return <pre className="wb-md-code" data-lang={block.lang ?? undefined}><code>{block.text}</code></pre>;
-    case 'quote': return <blockquote>{block.blocks.map((b, i) => <BlockView key={i} block={b} />)}</blockquote>;
+    case 'code': return (
+      <div className="wb-md-copyable">
+        <pre className="wb-md-code" data-lang={block.lang ?? undefined}><code>{block.text}</code></pre>
+        <CopyButton text={block.text} what="code" />
+      </div>
+    );
+    case 'quote': return (
+      <div className="wb-md-copyable">
+        <blockquote>{block.blocks.map((b, i) => <BlockView key={i} block={b} />)}</blockquote>
+        <CopyButton text={block.raw} what="quote" />
+      </div>
+    );
     case 'hr': return <hr />;
     case 'list': {
       const items = block.items.map((item, i) => (
@@ -165,11 +185,58 @@ function BlockView({ block }: { block: Block }): JSX.Element {
   }
 }
 
+/** A small copy control on the corner of a quote or a code block. */
+function CopyButton({ text, what }: { text: string; what: string }): JSX.Element {
+  const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle');
+  const copy = (): void => {
+    if (!navigator.clipboard?.writeText) { setState('failed'); return; }
+    void navigator.clipboard.writeText(text).then(() => setState('done'), () => setState('failed'));
+    window.setTimeout(() => setState('idle'), 1500);
+  };
+  return (
+    <button type="button" className="wb-md-copy" data-state={state} aria-label={`Copy ${what}`} title={`Copy ${what}`} onClick={copy}>
+      {state === 'done' ? 'Copied' : state === 'failed' ? 'Select to copy' : (
+        <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4.5" y="4.5" width="6.5" height="6.5" rx="1.2" /><path d="M8.5 4.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v4.5a1 1 0 0 0 1 1h1.5" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/**
+ * `@handle`, when the roster has that handle: a link to the agent's page,
+ * with the agent's card on hover. An unknown handle stays plain text — the
+ * renderer never invents a destination.
+ */
+function AgentMention({ handle }: { handle: string }): JSX.Element {
+  const agents = useContext(MarkdownAgents);
+  const agent = agents.find((a) => a.handle.toLowerCase() === handle.toLowerCase());
+  if (!agent) return <>@{handle}</>;
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <a className="wb-mention-link" href={agentRoute(agent.id)}>@{agent.handle}</a>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="wb-agent-card" sideOffset={6}>
+          <Avatar id={agent.id} name={agent.name} face={agent} unavailable={!agent.available} />
+          <span className="wb-agent-card-text">
+            <span className="wb-agent-card-name">{agent.name}</span>
+            <span className="wb-agent-card-desc">{agent.description}</span>
+            <span className="wb-agent-card-meta">{agent.model}{agent.available ? '' : ' · unavailable'}</span>
+          </span>
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * inline
  * ------------------------------------------------------------------ */
 
-const INLINE = /(`+)([\s\S]*?[^`])\1(?!`)|\*\*([^*]+?)\*\*|__([^_]+?)__|~~([^~]+?)~~|(?<![\w*])\*([^*\n]+?)\*(?![\w*])|(?<![\w_])_([^_\n]+?)_(?![\w_])|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|<?(https?:\/\/[^\s<>)\]]+[^\s<>)\].,;:!?'"])>?/;
+const INLINE = /(`+)([\s\S]*?[^`])\1(?!`)|\*\*([^*]+?)\*\*|__([^_]+?)__|~~([^~]+?)~~|(?<![\w*])\*([^*\n]+?)\*(?![\w*])|(?<![\w_])_([^_\n]+?)_(?![\w_])|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|<?(https?:\/\/[^\s<>)\]]+[^\s<>)\].,;:!?'"])>?|(?<![\w@/])@([a-z0-9][a-z0-9_-]{0,63})(?![\w-])/i;
 
 export function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -188,6 +255,7 @@ export function inline(text: string): ReactNode[] {
     else if (m[7] !== undefined) out.push(<em key={key}>{inline(m[7])}</em>);
     else if (m[8] !== undefined && m[9] !== undefined) out.push(<a key={key} href={m[9]} target="_blank" rel="noopener noreferrer">{inline(m[8])}</a>);
     else if (m[10] !== undefined) out.push(<a key={key} href={m[10]} target="_blank" rel="noopener noreferrer">{m[10]}</a>);
+    else if (m[11] !== undefined) out.push(<AgentMention key={key} handle={m[11]} />);
     rest = rest.slice(m.index + m[0].length);
   }
   return out;
