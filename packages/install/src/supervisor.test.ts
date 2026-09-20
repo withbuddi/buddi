@@ -1,7 +1,8 @@
-import { mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { controlSocket, listenOnSocket, restartDelay, supervisorSocket, type SupervisorStatus } from './supervisor.js';
 
@@ -68,11 +69,24 @@ describe('the supervisor', () => {
   test('replaces the socket a killed supervisor left behind', async () => {
     const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
     const socket = supervisorSocket(data);
-    await writeFile(socket, 'stale');
+    // A process killed while listening leaves its socket file behind; a clean
+    // close would remove it, so the stale file has to come from a real kill.
+    spawnSync(process.execPath, ['-e', `require('node:net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))`, socket]);
+    expect((await lstat(socket)).isSocket()).toBe(true);
     const server = controlSocket({ status: () => STATUS, action: async () => {} });
     servers.push(server);
     await listenOnSocket(server, socket);
     expect((await call(socket, '/status')).status).toBe(200);
+  });
+
+  test('refuses to replace something at the socket path that is not a socket', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+    const socket = supervisorSocket(data);
+    await writeFile(socket, 'not a socket');
+    const server = controlSocket({ status: () => STATUS, action: async () => {} });
+    servers.push(server);
+    await expect(listenOnSocket(server, socket)).rejects.toThrow(/not a socket/);
+    expect(await readFile(socket, 'utf8')).toBe('not a socket');
   });
 
   test('gateway restart backoff is exponential and bounded', () => {
