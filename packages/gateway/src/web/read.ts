@@ -22,6 +22,7 @@ import {
   countJobsByState,
   isPaused,
   nextAfter,
+  OPENING_TURN_SPEAKER,
   pendingDigestItems,
   toActionRecord,
   type AgentCatalog,
@@ -214,8 +215,9 @@ async function openingByConversation(
     `select distinct on (conversation_id) conversation_id, content
        from core.messages
       where conversation_id = any($1::uuid[]) and role = 'user'
+        and speaker is distinct from $2
       order by conversation_id, created_at asc, id asc`,
-    [ids],
+    [ids, OPENING_TURN_SPEAKER],
   );
   for (const row of rows) {
     const text = textOfContent(row.content);
@@ -276,11 +278,14 @@ export async function readConversation(
   const conversation = head[0];
   if (!conversation) return null;
 
+  // The turn first run sent on the owner's behalf is left out here for the
+  // same reason the chat leaves it out: it is an instruction to a new
+  // assistant, and Activity reads as a record of what the owner did.
   const { rows: messages } = await pool.query(
     `select id, role, content, created_at from core.messages
-      where conversation_id = $1::uuid
+      where conversation_id = $1::uuid and speaker is distinct from $2
       order by created_at asc, id asc`,
-    [conversationId],
+    [conversationId, OPENING_TURN_SPEAKER],
   );
   const { rows: events } = await pool.query(
     `select kind, payload, created_at from core.events

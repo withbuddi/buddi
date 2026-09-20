@@ -157,13 +157,23 @@ questions from the record, the profile and the accounts, and asks the first one
 nobody has answered.
 
 The server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
-`/complete`, `/skip` and `/agent`, plus `GET /api/onboarding/ollama` (is Ollama
+`/complete`, `/skip`, `/agent` and `/agent/update` (the script promises the
+owner can change their assistant's name, face and purpose, and once one exists
+that is an edit of its file rather than a second agent), plus
+`GET /api/onboarding/ollama` (is Ollama
 running on *this* machine — the page never reaches `localhost:11434` itself)
 and `POST /api/telegram/token` and `/api/telegram/pairing`, which is Telegram
 without a terminal: the token BotFather gave the owner goes into the vault, the
 surface starts in the running gateway when the process can start it, and the
 pairing code comes back as a link the thread draws as a QR code. All of them
 are behind the dashboard's ordinary session, Origin and CSRF gate.
+A step carries what its name cannot — the account the owner chose, and the
+conversation the handover opened — and `GET /api/onboarding` answers with both
+under `details`. That is what a reload mid-handover reads: the assistant is
+introduced by one turn, sent on the owner's behalf, claimed against the record
+so it can happen only once, marked as first run's on the message row and left
+out of every transcript the owner reads.
+
 `/complete` refuses while the installation still has no model account or no
 agent — "done" has to mean done — and `/skip` is the explicit bypass that
 always works. `done` and `skipped` are terminal in core, so the two endings

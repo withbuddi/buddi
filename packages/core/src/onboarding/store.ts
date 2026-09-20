@@ -23,13 +23,14 @@
 import { OWNER_ID, ensureOwner, type Queryable } from '../owner.js';
 import type {
   Onboarding,
+  OnboardingDetails,
   OnboardingStart,
   OwnerProfile,
   OwnerProfilePatch,
 } from './types.js';
 
 /** Every column, in one place, so the row mapper and the SQL cannot drift. */
-const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done,
+const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done, details,
                  nudges_sent, last_nudge_at, unanswered, quiet_until, updated_at`;
 
 function date(value: unknown): Date | null {
@@ -52,6 +53,21 @@ function steps(value: unknown): string[] {
   return raw.filter((item): item is string => typeof item === 'string');
 }
 
+/**
+ * `details` as an object, whatever the driver handed back. A column holding
+ * something that is not an object is data we did not write, and it degrades to
+ * "nothing recorded" rather than throwing.
+ */
+function details(value: unknown): OnboardingDetails {
+  const raw = typeof value === 'string' ? safeParse(value) : value;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: OnboardingDetails = {};
+  const row = raw as Record<string, unknown>;
+  if (typeof row.conversationId === 'string') out.conversationId = row.conversationId;
+  if (typeof row.accountId === 'string') out.accountId = row.accountId;
+  return out;
+}
+
 function safeParse(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -68,6 +84,7 @@ function toOnboarding(row: any): Onboarding {
     completedAt: date(row.completed_at),
     surface: row.surface === null || row.surface === undefined ? null : String(row.surface),
     stepsDone: steps(row.steps_done),
+    details: details(row.details),
     nudgesSent: Number(row.nudges_sent ?? 0),
     lastNudgeAt: date(row.last_nudge_at),
     unanswered: Number(row.unanswered ?? 0),
@@ -85,6 +102,7 @@ export function pendingOnboarding(ownerId: string = OWNER_ID): Onboarding {
     completedAt: null,
     surface: null,
     stepsDone: [],
+    details: {},
     nudgesSent: 0,
     lastNudgeAt: null,
     unanswered: 0,
@@ -153,6 +171,33 @@ export async function markStepDone(pool: Queryable, step: string): Promise<Onboa
            updated_at = now()
      returning ${COLUMNS}`,
     [OWNER_ID, name],
+  );
+  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+}
+
+/**
+ * Record what the steps cannot say: the handover conversation, the account.
+ *
+ * A merge, not a replacement — two surfaces recording two different facts
+ * about the same first run must not erase each other — and an empty patch is a
+ * read. Nothing here is state the runtime branches on; it is what a reload
+ * needs to rejoin a conversation it already started.
+ */
+export async function setOnboardingDetails(
+  pool: Queryable,
+  patch: OnboardingDetails,
+): Promise<Onboarding> {
+  const entries = Object.entries(patch).filter(([, value]) => typeof value === 'string' && value !== '');
+  if (entries.length === 0) return getOnboarding(pool);
+  const merge = JSON.stringify(Object.fromEntries(entries));
+  const { rows } = await pool.query(
+    `insert into core.onboarding (owner_id, details, updated_at)
+     values ($1, $2::jsonb, now())
+     on conflict (owner_id) do update
+       set details = core.onboarding.details || excluded.details,
+           updated_at = now()
+     returning ${COLUMNS}`,
+    [OWNER_ID, merge],
   );
   return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
 }

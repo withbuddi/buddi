@@ -56,6 +56,7 @@ import {
   openQuestion,
   askQuestion,
   answerQuestion,
+  OPENING_TURN_SPEAKER,
   ToolRegistry,
   type AgentAvailability,
   type AgentCatalog,
@@ -389,11 +390,20 @@ export async function readChatTranscript(
   const conversation = head[0];
   if (!conversation) return null;
 
+  /*
+   * The turn first run sent on the owner's behalf is not in the transcript.
+   *
+   * It is a real message — the model was given it, and the assistant's first
+   * words are an answer to it — but it was never the owner speaking, and a
+   * thread that opens with an instruction to introduce oneself reads as if the
+   * owner typed it. One `where`, in the reader, so every surface that draws a
+   * conversation leaves it out and the runtime's own history is untouched.
+   */
   const { rows: messages } = await pool.query(
     `select id, role, content, created_at, speaker from core.messages
-      where conversation_id = $1::uuid
+      where conversation_id = $1::uuid and speaker is distinct from $2
       order by created_at asc, id asc`,
-    [conversationId],
+    [conversationId, OPENING_TURN_SPEAKER],
   );
 
   const parsed = messages.map((m) => ({
@@ -711,6 +721,16 @@ export interface SendRequest {
   conversationId?: string | undefined;
   text: string;
   attachmentIds?: string[] | undefined;
+  /**
+   * The turn is first run's, not the owner's: the instruction that makes a
+   * brand-new assistant introduce itself.
+   *
+   * The model is given it exactly like any other opening turn — it is the
+   * prompt — and every transcript reader leaves it out, because the owner
+   * never said it. The route above this is what decides a caller may set it,
+   * and it may be claimed once per installation.
+   */
+  opening?: boolean | undefined;
 }
 
 export type SendResult =
@@ -868,7 +888,8 @@ export class WebChat {
 
     const runId = randomUUID();
     const target = conversationId;
-    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files }); });
+    const opening = request.opening === true;
+    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening }); });
     return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
@@ -1213,6 +1234,8 @@ export class WebChat {
     resume?: RunAgentOptions['resume'];
     /** Set for a run inside a room: which group, which request, and whose voice. */
     group?: RoomTurn;
+    /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
+    opening?: boolean;
   }): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
@@ -1310,6 +1333,7 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
+      ...(turn.opening ? { openingSpeaker: OPENING_TURN_SPEAKER } : {}),
       systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),

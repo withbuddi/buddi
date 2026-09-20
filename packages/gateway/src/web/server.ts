@@ -48,9 +48,11 @@ import {
   OnboardingRefusal,
   WEB_ONBOARDING_STEPS,
   WEB_ONBOARDING_SURFACE,
+  claimOpeningTurn,
   createFirstAgent,
   probeOllama,
   readOnboarding,
+  updateFirstAgent,
   type OnboardingDeps,
 } from './onboarding.js';
 import {
@@ -69,7 +71,7 @@ import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
-import { beginOnboarding, completeOnboarding, markStepDone, skipOnboarding } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -1179,10 +1181,23 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!(WEB_ONBOARDING_STEPS as readonly string[]).includes(step)) {
         return sendJson(res, 400, { error: `\`step\` must be one of ${WEB_ONBOARDING_STEPS.join(', ')}` });
       }
+      // A step may carry the two facts the step name cannot: which
+      // conversation the handover opened, and which account the owner chose.
+      // Both are provenance a reload reads back, and both are refused as
+      // anything but a string.
+      for (const key of ['conversationId', 'accountId'] as const) {
+        if (body[key] !== undefined && typeof body[key] !== 'string') {
+          return sendJson(res, 400, { error: `\`${key}\` must be a string` });
+        }
+      }
       // The first step recorded is also what starts the record, with this
       // surface's name on it. Already in progress, done or skipped: unchanged.
       await beginOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
       await markStepDone(deps.pool, step);
+      await setOnboardingDetails(deps.pool, {
+        ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+        ...(typeof body.accountId === 'string' ? { accountId: body.accountId } : {}),
+      });
       return sendJson(res, 200, await readOnboarding(onboardingDeps()));
     }
     if (path === '/api/onboarding/complete' || path === '/api/onboarding/skip') {
@@ -1232,6 +1247,28 @@ export function createWebApp(deps: WebServerDeps): Server {
       } catch (error) {
         if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
         return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
+      }
+    }
+
+    /*
+     * "Change either, or keep them" — after the assistant exists.
+     *
+     * Writing a *first* agent is refused once there is one, and the thread
+     * promises the owner can still change its name, face and purpose. Same
+     * file, same writer, reloaded in place: no second agent appears.
+     */
+    if (path === '/api/onboarding/agent/update') {
+      try {
+        const changed = updateFirstAgent(onboardingDeps(), {
+          ...(typeof body.name === 'string' ? { name: body.name } : {}),
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
+        });
+        const view = readAgents(deps.catalog).find((agent) => agent.id === changed.id);
+        return sendJson(res, 200, { agent: view ?? null, ...changed, accountId: null });
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The assistant could not be changed.' });
       }
     }
 
@@ -1396,11 +1433,31 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))) {
         return sendJson(res, 400, { error: '`attachmentIds` must be an array of artifact ids' });
       }
+      /*
+       * The one turn first run sends on the owner's behalf.
+       *
+       * Claimed against the onboarding record before it is queued, so a reload
+       * mid-handover rejoins the conversation it already started instead of
+       * opening a second one and having the assistant introduce itself twice.
+       * It needs a conversation to claim, so it is refused without one.
+       */
+      if (body.opening === true) {
+        if (typeof body.conversationId !== 'string') {
+          return sendJson(res, 400, { error: '`opening` needs the conversation it opens' });
+        }
+        try {
+          await claimOpeningTurn(onboardingDeps(), body.conversationId);
+        } catch (error) {
+          if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+          throw error;
+        }
+      }
       const sent = await chat.send({
         agentId: decodeURIComponent(messages[1] as string),
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
         text: body.text,
         ...(ids ? { attachmentIds: ids as string[] } : {}),
+        ...(body.opening === true ? { opening: true } : {}),
       });
       if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
       // 202: the turn is *accepted*, not answered. What happens next is on the

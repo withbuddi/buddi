@@ -9,12 +9,15 @@
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type ToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
-import { probeOllama, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { OPENING_TURN_SPEAKER } from '@buddi/core';
+import { claimOpeningTurn, probeOllama, updateFirstAgent, OLLAMA_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { readChatTranscript } from './chat.js';
+import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 
@@ -92,7 +95,9 @@ it('reports the models Ollama has pulled when it answers here', async () => {
       arrayBuffer: async () => new ArrayBuffer(0),
     }),
   });
-  expect(probe).toEqual({ running: true, models: ['llama3.2:3b', 'qwen3:4b'], downloadUrl: OLLAMA_DOWNLOAD_URL });
+  // The address travels with the answer: the page names no host, not even
+  // this one, so an account for Ollama is built from what the server says.
+  expect(probe).toEqual({ running: true, models: ['llama3.2:3b', 'qwen3:4b'], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${OLLAMA_BASE_URL}/v1` });
 });
 
 it('says it is not running rather than failing, whatever the local machine does', async () => {
@@ -100,7 +105,7 @@ it('says it is not running rather than failing, whatever the local machine does'
     async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434'); },
     async () => ({ ok: false, status: 500, statusText: '', headers: { get: () => null }, text: async () => '', json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) }),
   ]) {
-    expect(await probeOllama({ transport: transport as never })).toEqual({ running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL });
+    expect(await probeOllama({ transport: transport as never })).toEqual({ running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${OLLAMA_BASE_URL}/v1` });
   }
 });
 
@@ -124,6 +129,7 @@ it('answers the probe over the API, and never asks the page to do it', async () 
   expect(typeof body.running).toBe('boolean');
   expect(Array.isArray(body.models)).toBe(true);
   expect(body.downloadUrl).toBe(OLLAMA_DOWNLOAD_URL);
+  expect(body.baseUrl).toBe(`${OLLAMA_BASE_URL}/v1`);
 });
 
 /* ------------------------------------------------------------------ *
@@ -182,4 +188,121 @@ it('mints a pairing code and its link from the running bot, and refuses before t
   });
   expect(offer.code).toMatch(/\S/);
   expect(offer.link).toBe(`https://t.me/smoke_bot?start=${offer.code}`);
+});
+
+
+/* ------------------------------------------------------------------ *
+ * The one turn first run sends on the owner's behalf
+ * ------------------------------------------------------------------ */
+
+/** A record with `details`, and the statements core writes against it. */
+function recordPool(details: Record<string, string> = {}) {
+  const row = { owner_id: 'owner', state: 'pending', steps_done: [] as string[], details: { ...details } };
+  const messages: Array<{ speaker: string | null }> = [];
+  return {
+    row,
+    messages,
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (/from core\.onboarding/.test(sql)) return { rows: [row] };
+      if (/insert into core\.onboarding/.test(sql) && /details/.test(sql)) {
+        row.details = { ...row.details, ...(JSON.parse(String(params[1])) as Record<string, string>) };
+        return { rows: [row] };
+      }
+      if (/from core\.messages/.test(sql)) {
+        return { rows: messages.filter((m) => m.speaker === params[1]).map(() => ({ '?column?': 1 })) };
+      }
+      return { rows: [] };
+    }),
+  };
+}
+
+const onboardingDeps = (pool: ReturnType<typeof recordPool>) =>
+  ({ pool, catalog: { list: () => [] }, agentsDir: '/nowhere', examplesDir: '/nowhere-else', reload: () => {} }) as never;
+
+it('claims the opening turn once, and refuses a second conversation', async () => {
+  const pool = recordPool();
+  await claimOpeningTurn(onboardingDeps(pool), 'c1');
+  expect(pool.row.details).toEqual({ conversationId: 'c1' });
+  // The same conversation again is a retry — the send may never have gone out —
+  // and is allowed until that conversation actually holds the turn.
+  await claimOpeningTurn(onboardingDeps(pool), 'c1');
+  pool.messages.push({ speaker: OPENING_TURN_SPEAKER });
+  await expect(claimOpeningTurn(onboardingDeps(pool), 'c1')).rejects.toThrow(/already introduced itself/);
+  // Another conversation is the reload case, and is refused outright.
+  await expect(claimOpeningTurn(onboardingDeps(pool), 'c2')).rejects.toThrow(/another conversation/);
+});
+
+/**
+ * Both transcript readers ask the *database* to leave the opening turn out.
+ *
+ * The end-to-end proof lives in the DB suites, which need Postgres; this is
+ * the property that can be checked without one, and it is the one that would
+ * silently regress: a reader that stops passing the speaker starts showing the
+ * owner an instruction they never wrote.
+ */
+it('leaves the opening turn out of the chat transcript and of Activity', async () => {
+  const asked: Array<{ sql: string; params: unknown[] }> = [];
+  const pool = {
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      asked.push({ sql, params });
+      if (/from core\.conversations/.test(sql)) {
+        return { rows: [{ id: 'c1', agent_id: 'ada', group_id: null, created_at: new Date() }] };
+      }
+      return { rows: [] };
+    }),
+  } as never;
+  await readChatTranscript(pool, '11111111-1111-1111-1111-111111111111');
+  await readConversation(pool, '11111111-1111-1111-1111-111111111111');
+  const reads = asked.filter((call) => /select id, role, content/.test(call.sql));
+  expect(reads.length).toBe(2);
+  for (const call of reads) {
+    expect(call.sql).toMatch(/speaker is distinct from \$2/);
+    expect(call.params[1]).toBe(OPENING_TURN_SPEAKER);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Changing the assistant that already exists
+ * ------------------------------------------------------------------ */
+
+it('changes the assistant in place: same file, same id, new name, face and purpose', async () => {
+  const dir = agentsDir();
+  const agentDir = path.join(dir, 'concierge');
+  mkdirSync(agentDir, { recursive: true });
+  const file = path.join(agentDir, 'agent.md');
+  writeFileSync(
+    file,
+    ['---', 'id: concierge', 'handle: ada', 'name: Ada', 'description: Whatever I ask.', 'default: true',
+      'tools: [memory.*]', 'language: mirror', 'avatar: "📚"', '---', '', 'You are Ada. Keep notes.', ''].join('\n'),
+    'utf8',
+  );
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const changed = updateFirstAgent(
+    { pool: fakePool() as never, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => catalog.reload() },
+    { name: 'Noor', avatar: '🧭', description: 'Whatever I ask, and reminders.' },
+  );
+  expect(changed.id).toBe('concierge');
+  const written = readFileSync(file, 'utf8');
+  expect(written).toMatch(/name: Noor/);
+  expect(written).toMatch(/description: Whatever I ask, and reminders\./);
+  expect(written).toMatch(/avatar: "?🧭"?/);
+  // Nothing else in the file moved, and there is still exactly one agent.
+  expect(written).toMatch(/id: concierge/);
+  expect(written).toMatch(/tools: \[memory\.\*\]/);
+  expect(catalog.list().filter((agent) => agent.source !== 'example').length).toBe(1);
+  // A persona the owner wrote themselves is not rewritten under them.
+  expect(written).toMatch(/You are Ada\. Keep notes\./);
+});
+
+it('refuses to change an assistant that does not exist yet', () => {
+  const dir = agentsDir();
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  expect(() =>
+    updateFirstAgent(
+      { pool: fakePool() as never, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => {} },
+      { name: 'Noor' },
+    ),
+  ).toThrow(/no assistant of your own/i);
 });

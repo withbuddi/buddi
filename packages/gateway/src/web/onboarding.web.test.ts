@@ -38,6 +38,7 @@ function fakePool(profile: { preferredName?: string | null } = {}) {
     completed_at: null as Date | null,
     surface: null as string | null,
     steps_done: [] as string[],
+    details: {} as Record<string, string>,
     nudges_sent: 0,
     last_nudge_at: null,
     unanswered: 0,
@@ -75,6 +76,9 @@ function fakePool(profile: { preferredName?: string | null } = {}) {
           exists = true;
           row.state = writing;
           row.completed_at ??= new Date();
+        } else if (/\(owner_id, details, updated_at\)/.test(sql)) {
+          exists = true;
+          row.details = { ...row.details, ...(JSON.parse(String(params[1])) as Record<string, string>) };
         } else {
           exists = true;
           const step = String(params[1]);
@@ -147,7 +151,7 @@ it('answers what first run still needs, and creates nothing by being read', asyn
   const pool = fakePool();
   const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
   const view = await json(await fetch(`${origin}/api/onboarding`, { headers }));
-  expect(view).toEqual({ state: 'pending', stepsDone: [], needs: { owner: true, model: true, agent: true } });
+  expect(view).toEqual({ state: 'pending', stepsDone: [], details: {}, needs: { owner: true, model: true, agent: true } });
   expect(pool.row.state).toBe('pending');
 });
 
@@ -183,6 +187,31 @@ it('starts the record on the first step and records only steps it knows', async 
   expect((await json(ok)).stepsDone).toEqual(['welcome']);
   expect(pool.row.state).toBe('in-progress');
   expect(pool.row.surface).toBe('web');
+});
+
+it('records what a step learned, and answers with it', async () => {
+  const pool = fakePool();
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  const bad = await fetch(`${origin}/api/onboarding/step`, { method: 'POST', headers, body: JSON.stringify({ step: 'model', accountId: 7 }) });
+  expect(bad.status).toBe(400);
+  const saved = await fetch(`${origin}/api/onboarding/step`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ step: 'model', accountId: 'the-one-they-chose' }),
+  });
+  expect((await json(saved)).details).toEqual({ accountId: 'the-one-they-chose' });
+  // A later step adds to it rather than replacing it: which conversation the
+  // assistant was met in, beside which account it thinks with.
+  const met = await fetch(`${origin}/api/onboarding/step`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ step: 'hello', conversationId: 'c-1' }),
+  });
+  expect((await json(met)).details).toEqual({ accountId: 'the-one-they-chose', conversationId: 'c-1' });
+  expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).details).toEqual({
+    accountId: 'the-one-they-chose',
+    conversationId: 'c-1',
+  });
 });
 
 it('writes the first agent, makes it the default, assigns the only account and serves it as /api/agents does', async () => {
