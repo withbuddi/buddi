@@ -64,6 +64,23 @@ export function projectTranscript(input: ProjectionInput): NeutralMessage[] {
     out.push(turn);
   };
 
+  /*
+   * A tool call the agent made that has not been answered yet. Anything the
+   * room said in between — a member's contribution inside group.ask — is held
+   * back until the answer, so the call and its result stay adjacent, which
+   * every provider requires; the held context follows the result.
+   */
+  let awaitingResult = false;
+  let held: string[] = [];
+  const flushHeld = (): void => {
+    for (const text of held) pushRoom(text);
+    held = [];
+  };
+  const room = (text: string): void => {
+    if (awaitingResult) held.push(text);
+    else pushRoom(text);
+  };
+
   for (const turn of input.turns) {
     const speaker = turn.speaker;
 
@@ -73,19 +90,29 @@ export function projectTranscript(input: ProjectionInput): NeutralMessage[] {
     // instruction to it. Consecutive own turns of one role run together.
     if (speaker === input.agentId) {
       const blocks = blocksOf(turn);
-      const role: NeutralMessage['role'] = turn.role === 'user' && !blocks.some((b) => b.type === 'tool_result') ? 'assistant' : turn.role;
+      const answers = blocks.some((b) => b.type === 'tool_result');
+      const role: NeutralMessage['role'] = turn.role === 'user' && !answers ? 'assistant' : turn.role;
+      if (role === 'assistant' && !answers) flushHeld();
       const last = out[out.length - 1];
       if (last && last.role === 'assistant' && role === 'assistant' && !(last as RoomTurn).room) {
         last.content.push(...blocks);
-        continue;
+      } else {
+        out.push({ role, content: blocks });
       }
-      out.push({ role, content: blocks });
+      if (answers) { awaitingResult = false; flushHeld(); }
+      if (role === 'assistant' && blocks.some((b) => b.type === 'tool_use')) awaitingResult = true;
       continue;
     }
 
     // The owner: a user turn, with files and text as they were sent. A legacy
     // row with no speaker and the user role was the owner too.
     if (speaker === OWNER_SPEAKER || (speaker === null && turn.role === 'user' && !turn.content.some((b) => b.type === 'tool_result'))) {
+      if (awaitingResult) {
+        // The owner spoke while a call was open (a resumed request): their
+        // words wait for the result too, as room context.
+        held.push(textOf(blocksOf(turn)));
+        continue;
+      }
       out.push({ role: 'user', content: blocksOf(turn).filter((b) => b.type !== 'tool_result') });
       continue;
     }
@@ -93,7 +120,7 @@ export function projectTranscript(input: ProjectionInput): NeutralMessage[] {
     // A note the orchestration wrote: the room speaking.
     const blocks = blocksOf(turn);
     if (speaker === ROOM_SPEAKER) {
-      pushRoom(textOf(blocks));
+      room(textOf(blocks));
       continue;
     }
 
@@ -104,15 +131,19 @@ export function projectTranscript(input: ProjectionInput): NeutralMessage[] {
       const used = blocks
         .filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use')
         .map((b) => `[${who} used ${b.name}]`);
-      pushRoom([said === '' ? '' : `${who} said:\n${said}`, ...used].filter(Boolean).join('\n'));
+      room([said === '' ? '' : `${who} said:\n${said}`, ...used].filter(Boolean).join('\n'));
     } else {
       const results = blocks
         .filter((b): b is Extract<ContentBlock, { type: 'tool_result' }> => b.type === 'tool_result')
         .map((b) => `[${who}'s tool ${b.is_error ? 'failed' : 'returned'}: ${clip(b.content, ROOM_TOOL_RESULT_CHARS)}]`);
       const said = textOf(blocks);
-      pushRoom([said === '' ? '' : `${who} said:\n${said}`, ...results].filter(Boolean).join('\n'));
+      room([said === '' ? '' : `${who} said:\n${said}`, ...results].filter(Boolean).join('\n'));
     }
   }
+  // A call still open at the end (the run that is about to answer it) keeps
+  // its held context for after; nothing is lost, it is simply last.
+  awaitingResult = false;
+  flushHeld();
 
   return out.map(({ role, content }) => ({ role, content }));
 }
@@ -149,9 +180,10 @@ export const OWN_TOOL_RESULT_CHARS = 8000;
  * with a provider refusing the whole thing. (docs/groups.md, "Memory".)
  */
 export function boundProjection(messages: NeutralMessage[], maxChars: number): NeutralMessage[] {
+  // A copy: the caller's history is the run's own and must not be clipped in place.
   const clipped = messages.map((m) => ({
     role: m.role,
-    content: m.content.map((b) => {
+    content: m.content.map((b) => cloneBlock(b)).map((b) => {
       if (b.type === 'tool_result' && b.content.length > OWN_TOOL_RESULT_CHARS) {
         return { ...b, content: `${b.content.slice(0, OWN_TOOL_RESULT_CHARS)}\n[…truncated: the result was ${b.content.length} characters; the whole of it is in the transcript]` };
       }
@@ -160,7 +192,7 @@ export function boundProjection(messages: NeutralMessage[], maxChars: number): N
   }));
   const size = (m: NeutralMessage): number => JSON.stringify(m.content).length;
   let total = clipped.reduce((sum, m) => sum + size(m), 0);
-  if (total <= maxChars || clipped.length <= 2) return clipped;
+  if (total <= maxChars) return clipped;
   // Drop from the second turn on, oldest first, whole turns at a time, but
   // never split a tool_use from its result: a dropped assistant turn takes
   // the user turn that answers it.
@@ -180,6 +212,24 @@ export function boundProjection(messages: NeutralMessage[], maxChars: number): N
   }
   if (dropped > 0) {
     kept.splice(1, 0, { role: 'user', content: [{ type: 'text', text: `[${dropped} earlier turn${dropped === 1 ? '' : 's'} of this room left out for room: the transcript keeps them.]` }] });
+  }
+  // Two turns can still be over the cap when one of them is huge: clip the
+  // largest text and tool-result blocks until it fits, oldest first.
+  let over = kept.reduce((sum, m) => sum + size(m), 0) - maxChars;
+  for (const m of kept) {
+    if (over <= 0) break;
+    for (const b of m.content) {
+      if (over <= 0) break;
+      if (b.type === 'text' && b.text.length > 200) {
+        const cut = Math.min(b.text.length - 200, over);
+        b.text = `${b.text.slice(0, b.text.length - cut)}\n[…clipped to fit]`;
+        over -= cut;
+      } else if (b.type === 'tool_result' && b.content.length > 200) {
+        const cut = Math.min(b.content.length - 200, over);
+        b.content = `${b.content.slice(0, b.content.length - cut)}\n[…clipped to fit]`;
+        over -= cut;
+      }
+    }
   }
   return kept;
 }

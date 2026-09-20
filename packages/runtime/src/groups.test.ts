@@ -58,6 +58,13 @@ describe('the request budget', () => {
     await expect(budgetedProvider(dry, ledgerOf(['work']), { canSynthesise: true }).complete(request)).rejects.toBeInstanceOf(BudgetExhausted);
   });
 
+  it('never lets a retry take the conclusion\'s call', async () => {
+    const inner: RuntimeProvider = { complete: vi.fn(async (req: any) => { await req.onDispatch(); await req.onDispatch(); return ok; }) };
+    const ledger = ledgerOf(['work', 'synthesis']);
+    await expect(budgetedProvider(inner, ledger, { canSynthesise: true }).complete(request)).rejects.toBeInstanceOf(BudgetExhausted);
+    expect(ledger.release).toHaveBeenCalledTimes(1);
+  });
+
   it('forces the conclusion when told to, whatever the ledger answers', async () => {
     const inner: RuntimeProvider = { complete: vi.fn(async () => ok) };
     await budgetedProvider(inner, ledgerOf(['work']), { canSynthesise: true, forceSynthesis: true }).complete(request);
@@ -132,16 +139,19 @@ describe('group.ask', () => {
     await expect(strict.execute({ agent: 'ledger', request: 'x' }, base())).rejects.toThrow(/may not ask/);
   });
 
-  it('reports a member that stopped on an approval, and tells the orchestration', async () => {
+  it('reports a member that stopped on an approval, tells the orchestration, and suspends the caller', async () => {
     const onSuspended = vi.fn();
+    const suspend = vi.fn();
     const paused = createGroupAskTool({
       catalog: () => ({ get: (id) => agents.get(id) }), provider: () => ({ complete: async () => ok }), registry: {} as ToolRegistry,
       transcript: async () => undefined, allowlistFor: () => ['ledger'], pool: {} as any, onSuspended,
       runAgent: async () => ({ text: '', turns: 1, stopped: 'awaiting-approval', pendingActionId: 'a-9', usage: { input: 0, output: 0 }, snapshot: {} } as any),
     });
-    const out = await paused.execute({ agent: 'ledger', request: 'x' }, base());
+    const out = await paused.execute({ agent: 'ledger', request: 'x' }, base({ suspend }));
     expect(out).toMatchObject({ status: 'awaiting-approval', actionId: 'a-9' });
     expect(onSuspended).toHaveBeenCalledWith({ agentId: 'ledger', actionId: 'a-9' });
+    // The coordinator's own run stops on the same action: no further tool runs.
+    expect(suspend).toHaveBeenCalledWith('a-9');
   });
 
   it('says out-of-budget instead of throwing when the member draws a blank', async () => {

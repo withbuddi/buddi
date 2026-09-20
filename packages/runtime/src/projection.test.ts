@@ -63,6 +63,42 @@ describe('the projection', () => {
     expect((only!.content[0] as { text: string }).text).toBe('@mystery said:\nhi\n\na colleague said:\nold');
   });
 
+  it('keeps a tool call next to its result: what the room said in between follows the result', () => {
+    // The coordinator asked a member through a tool; the member's turns were
+    // stored before the coordinator's tool result was.
+    const turns: StoredTurn[] = [
+      { role: 'user', speaker: 'owner', content: [text('Go')] },
+      { role: 'assistant', speaker: 'concierge', content: [{ type: 'tool_use', id: 't1', name: 'group.ask', input: { agent: 'ledger' } }] },
+      { role: 'user', speaker: 'concierge', content: [text('You are a member… @concierge asks you now:\n\nSummarise.')] },
+      { role: 'assistant', speaker: 'ledger', content: [text('1,200.')] },
+      { role: 'user', speaker: 'concierge', content: [{ type: 'tool_result', tool_use_id: 't1', content: '{"said":"@ledger said: 1,200."}' }] },
+      { role: 'assistant', speaker: 'concierge', content: [text('So: 1,200.')] },
+    ];
+    const out = projectTranscript({ turns, agentId: 'concierge', handles });
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user', 'assistant']);
+    expect(out[1]!.content.map((b) => b.type)).toEqual(['tool_use', 'text']);
+    expect(out[2]!.content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 't1' });
+    expect((out[3]!.content[0] as { text: string }).text).toBe('@ledger said:\n1,200.');
+  });
+
+  it('bounds a room: clips the agent\'s own big tool results, drops the oldest turns, and always fits', async () => {
+    const { boundProjection } = await import('./projection.js');
+    const big = 'x'.repeat(20_000);
+    const messages = [
+      { role: 'user' as const, content: [text('opening')] },
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: 'a', name: 't', input: {} }] },
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: 'a', content: big }] },
+      { role: 'assistant' as const, content: [text('middle')] },
+      { role: 'user' as const, content: [text('latest ' + 'y'.repeat(3000))] },
+    ];
+    const bounded = boundProjection(messages, 4000);
+    expect(JSON.stringify(bounded.map((m) => m.content)).length).toBeLessThanOrEqual(4000 + 400);
+    expect((bounded[0]!.content[0] as { text: string }).text).toBe('opening');
+    // Two turns that are still too big get clipped rather than sent whole.
+    const two = boundProjection([messages[0]!, messages[4]!], 1000);
+    expect(JSON.stringify(two.map((m) => m.content)).length).toBeLessThanOrEqual(1000 + 100);
+  });
+
   it('never mutates the stored turns', () => {
     const turns: StoredTurn[] = [{ role: 'assistant', speaker: 'ledger', content: [text('a')] }];
     const out = projectTranscript({ turns, agentId: 'ledger', handles });

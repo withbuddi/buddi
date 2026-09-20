@@ -206,14 +206,20 @@ dynamic membership, workflow builders.
 ## What the first version does
 
 Built: group rows and membership; the shared transcript with a speaker on
-every turn; the projection with its tests; the coordinator loop with mention
-override and sequential member runs through `group.ask`; the twelve-call
-budget reserved on the request row before every dispatch, retries included;
-the conclusion as a separate no-tools call when members spoke; approval
-suspension and resume by the exact action; stop, which rejects the pending
-approval; the group memory scope with private memory never recalled and
+every turn; the projection with its tests, holding what the room said while
+one of the agent's tool calls is open so call and result stay adjacent; the
+coordinator loop with mention override and sequential member runs through
+`group.ask`, serialised per group in the process and by a partial unique
+index on the request row; the twelve-call budget reserved on the request row
+before every dispatch, retries included, with no retry ever drawing the
+conclusion's call; the room bounded before every call, not once; the
+conclusion as a separate no-tools call when members spoke; a member's
+approval pause ending the coordinator's turn too, so nothing else in that
+turn runs; approval suspension and resume by the exact action; stop, which
+rejects the pending approval; the group memory scope with private memory never recalled and
 every write in a room landing in the room; rollover on a character cap with a
-one-call maintenance summary; the roster entry, creation sheet, `@`
+one-call maintenance summary made through the same accounting and the same
+bound, and the new thread reading the summary just written; the roster entry, creation sheet, `@`
 completion, attribution and the activity line; routes under `/api/groups`.
 
 Deliberate deviations, to be closed later:
