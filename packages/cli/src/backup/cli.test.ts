@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseArgs, UsageError } from '../args.js';
 import { checkBackups } from '../doctor.js';
-import { DEFAULT_KEEP, STALE_AFTER_MS } from './manifest.js';
+import { DEFAULT_KEEP, STALE_AFTER_MS } from '@buddi/core';
 
 const parse = (line: string): ReturnType<typeof parseArgs> => parseArgs(line.split(' '));
 

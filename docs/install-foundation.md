@@ -99,6 +99,24 @@ from a root the caller supplies. `packages/install/src/postgres.ts` is only the
 adapter that chooses between that cluster and an external `DATABASE_URL`, so
 the checkout CLI can later share the same manager.
 
+The backup engine is **not** install-specific either and lives in
+`packages/core/src/backup` (`dump.ts`, `load.ts`, `create.ts`, `verify.ts`,
+`restore.ts`, `manifest.ts`, `archive.ts`, `prune.ts`, `crypt.ts`): a
+driver-based logical dump, so it needs no `pg_dump` and works the same against
+the bundled cluster, a developer's Docker Postgres and a restore on another
+machine. Nothing in it reads `process.env` or looks for a repository root —
+every path arrives in an options object — so the CLI
+(`packages/cli/src/backup`, thin wrappers plus the OS schedule), the supervisor
+and the dashboard all drive the same engine. Its tests are
+`packages/core/src/backup/*.test.ts` (pure: the manifest, the scrub, the dump
+order, the sequence reset) and `backup.db.test.ts`, the restore drill, which
+creates its own throwaway database, dumps, drops and recreates it, restores and
+checks the rows, the sequences and the rollback:
+
+```sh
+pnpm --filter @buddi/core test -- src/backup
+```
+
 The release tarball declares exactly one `bin`, `@buddi/install`'s `buddi`
 launcher; `build.mjs` strips `bin` from every other staged workspace package so
 nothing else claims `node_modules/.bin/buddi`.
@@ -232,7 +250,8 @@ not to run one.
   inspect the lock/process state before manually removing that recovery marker.
 
 Before publication, verify on a clean macOS user with Node 22, exercise login after
-reboot, and choose a distribution that includes the backup tools.
+reboot. No distribution choice is needed for backups: they use the driver, not
+`pg_dump`.
 
 ## Verification on 2026-09-20
 

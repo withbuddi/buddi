@@ -50,8 +50,7 @@ import {
   searchConfiguration,
 } from '@buddi/tool-web';
 import type { Pool } from 'pg';
-import { listArchives } from './backup/prune.js';
-import { STALE_AFTER_MS } from './backup/manifest.js';
+import { STALE_AFTER_MS, listArchives } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {

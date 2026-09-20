@@ -17,7 +17,7 @@ import path from 'node:path';
 import { BACKUP_DIR, CLI_ENTRY, LOG_DIR, REPO_ROOT } from '../paths.js';
 import { run } from '../proc.js';
 import { escapeXml, parseLaunchctlPrint } from '../service/units.js';
-import { DEFAULT_KEEP, DIR_MODE } from './manifest.js';
+import { DEFAULT_KEEP, DIR_MODE } from '@buddi/core';
 
 export const BACKUP_LABEL = 'com.buddi.backup';
 

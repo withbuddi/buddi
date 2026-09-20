@@ -13,7 +13,7 @@ import {
   checkRestoreGuard,
   formatBytes,
   isArchiveName,
-  isCustomFormatDump,
+  copyFileProblem,
   isSecretName,
   manifestProblems,
   restoreCommandsFor,
@@ -149,11 +149,13 @@ describe('the manifest', () => {
     format: MANIFEST_FORMAT,
     createdAt: '2026-09-14T07:30:00.000Z',
     timezone: 'America/New_York',
-    buddiVersion: 'v0.1.0-4-g4b5d456',
+    buddiVersion: '0.1.0',
+    postgresMajor: 16,
     host: 'laptop',
     database: { name: 'buddi', host: 'localhost', port: '55433', user: 'buddi' },
     migrations: [{ schema: 'core', filename: '001_init.sql', appliedAt: null, sha256: 'a'.repeat(64) }],
     tables: [{ table: 'core.events', rows: 12 }],
+    plugins: [],
     artifacts: { included: true, count: 2, bytes: 100 },
     private: { agents: null, skills: null },
     secrets: {
@@ -163,7 +165,7 @@ describe('the manifest', () => {
       note: 'n',
       restoreWith: ['buddi vault set ANTHROPIC_API_KEY'],
     },
-    members: [{ path: 'database.dump', bytes: 10, sha256: 'b'.repeat(64) }],
+    members: [{ path: 'db/core.events.copy', bytes: 10, sha256: 'b'.repeat(64) }],
   };
 
   it('accepts a manifest this build wrote', () => {
@@ -194,15 +196,23 @@ describe('the manifest', () => {
   });
 });
 
-describe('pg_dump header sanity', () => {
-  it('recognises a custom-format archive', () => {
-    expect(isCustomFormatDump(Buffer.from('PGDMP\x01\x0e\x00'))).toBe(true);
+describe('COPY file sanity', () => {
+  const table = { schema: 'drill', table: 'accounts', columns: ['id', 'name'], rows: 2 };
+
+  it('accepts a file whose lines match the columns and the row count', () => {
+    expect(copyFileProblem('1\tchecking\n2\tsavings\n', table)).toBeNull();
   });
 
-  it('rejects plain SQL, an error message and an empty file', () => {
-    expect(isCustomFormatDump(Buffer.from('--\n-- PostgreSQL database dump\n'))).toBe(false);
-    expect(isCustomFormatDump(Buffer.from('Error: no such container\n'))).toBe(false);
-    expect(isCustomFormatDump(Buffer.alloc(0))).toBe(false);
+  it('accepts an empty file for an empty table, and refuses one for a full table', () => {
+    expect(copyFileProblem('', { ...table, rows: 0 })).toBeNull();
+    expect(copyFileProblem('', table)).toMatch(/the COPY file is empty/);
+  });
+
+  it('catches a truncated transfer and an error message in place of data', () => {
+    expect(copyFileProblem('1\tchecking\n', table)).toMatch(/1 line\(s\), manifest says 2/);
+    expect(copyFileProblem('Error: no such container\n', { ...table, rows: 1 })).toMatch(
+      /has 1 field\(s\), not 2/,
+    );
   });
 });
 

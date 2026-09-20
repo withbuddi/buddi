@@ -13,18 +13,41 @@
  * `.env`.
  */
 
+import { VAULT_PLACEHOLDER, VAULT_PLACEHOLDER_LINE } from '../vault/resolve.js';
+
 /** Archive layout. These names are the format — changing one is a format change. */
 export const MANIFEST_NAME = 'manifest.json';
-export const DUMP_NAME = 'database.dump';
-export const ENV_NAME = 'env.scrubbed';
+/** The database, as text: one COPY file per table plus three small indexes. */
+export const DB_DIR_NAME = 'db';
+export const TABLES_NAME = `${DB_DIR_NAME}/tables.json`;
+export const SEQUENCES_NAME = `${DB_DIR_NAME}/sequences.json`;
+export const DB_MIGRATIONS_NAME = `${DB_DIR_NAME}/migrations.json`;
+export const ENV_NAME = 'env.txt';
 export const PRIVATE_DIR_NAME = 'private';
 export const ARTIFACTS_DIR_NAME = 'artifacts';
+/** The installed-plugins record, copied in as it was. */
+export const PLUGINS_NAME = 'plugins.json';
+
+/** One table's COPY file, inside the archive. */
+export function copyFileName(schema: string, table: string): string {
+  return `${DB_DIR_NAME}/${schema}.${table}.copy`;
+}
 
 export const ARCHIVE_PREFIX = 'buddi-backup-';
 export const ARCHIVE_SUFFIX = '.tar.gz';
+/** The encrypted form, written beside a `<name>.json` envelope. */
+export const ENCRYPTED_SUFFIX = '.age';
+/** What `restore` calls the snapshot it takes of the target before it starts. */
+export const PRE_RESTORE_PREFIX = 'pre-restore-';
 
-/** Bumped only when an older archive would be read wrongly by this code. */
-export const MANIFEST_FORMAT = 1;
+/**
+ * Bumped only when an older archive would be read wrongly by this code.
+ *
+ * 2 is the driver-based dump: `db/` holds COPY text per table rather than one
+ * `pg_dump` custom-format file. Format 1 archives cannot be restored by this
+ * build at all, so they are refused rather than half-read.
+ */
+export const MANIFEST_FORMAT = 2;
 
 /** Directory mode 0700, archive mode 0600 — a backup is the whole installation. */
 export const DIR_MODE = 0o700;
@@ -61,6 +84,33 @@ export interface TableCount {
   rows: number;
 }
 
+/** One table in the dump, in the order the loader must copy it back. */
+export interface DumpedTable {
+  schema: string;
+  table: string;
+  /** Column names, in the order the COPY file has them. */
+  columns: string[];
+  rows: number;
+}
+
+/** One sequence, so a restored installation's next id is not id 1 again. */
+export interface DumpedSequence {
+  schema: string;
+  name: string;
+  /** Text, because a sequence is bigint and a bigint is not a JS number. */
+  lastValue: string;
+  isCalled: boolean;
+}
+
+/**
+ * Which migrations the dumped schema was at: core's own, then one entry per
+ * plugin schema. Restore rebuilds exactly this much and no more.
+ */
+export interface DumpedMigrations {
+  core: string[];
+  plugins: Record<string, { schema: string; filenames: string[] }>;
+}
+
 export interface PrivateDirRecord {
   /** Where it was resolved from on the machine that made the backup. */
   source: string;
@@ -75,13 +125,19 @@ export interface BackupManifest {
   createdAt: string;
   /** The owner's timezone, so a restored installation means the same "today". */
   timezone: string;
-  /** `git describe`, or the package version when this is not a git checkout. */
+  /** `@buddi/core`'s own package version. Never `git describe`: a packaged
+   * install is not a git checkout, and a version that only a checkout can
+   * answer is a version that reads "unknown" on every machine that matters. */
   buddiVersion: string;
+  /** The server's major version, from `select version()`. */
+  postgresMajor: number;
   host: string;
   /** Never a password: the connection string is recorded in pieces. */
   database: { name: string; host: string; port: string; user: string };
   migrations: MigrationRecord[];
   tables: TableCount[];
+  /** The plugins installed when the backup was taken, by name and version. */
+  plugins: Array<{ name: string; version: string; schema: string; source: string }>;
   artifacts: {
     included: boolean;
     count: number;
@@ -167,12 +223,8 @@ export function archiveTime(name: string): Date | null {
  * Scrubbing `.env`
  * ------------------------------------------------------------------ */
 
-/**
- * The marker `buddi vault import-env` already writes, quoted for the same
- * reason: bare `<vault>` is a here-document to a shell sourcing the file.
- */
-export const VAULT_PLACEHOLDER = '<vault>';
-export const VAULT_PLACEHOLDER_LINE = `"${VAULT_PLACEHOLDER}"`;
+// The marker `buddi vault import-env` already writes. One definition, in the
+// vault, so a scrubbed `.env` and a hydrated one cannot drift apart.
 
 /**
  * Names that are secrets by shape, on top of the ones buddi knows by name.
@@ -346,11 +398,32 @@ export function assertNoSecretValues(scrubbed: string, values: readonly string[]
  * Verification
  * ------------------------------------------------------------------ */
 
-/** The five bytes every `pg_dump -Fc` archive starts with. */
-export const PGDUMP_MAGIC = 'PGDMP';
-
-export function isCustomFormatDump(head: Buffer | Uint8Array): boolean {
-  return Buffer.from(head.subarray(0, 5)).toString('latin1') === PGDUMP_MAGIC;
+/**
+ * Is this text a COPY file at all?
+ *
+ * There is no magic number to check — a COPY file of an empty table is
+ * genuinely zero bytes — so the shape is what can be checked: every line is
+ * tab-separated with the column count the manifest claims. That is enough to
+ * catch the failure this guards, which is an error message or a truncated
+ * transfer sitting where table data should be.
+ */
+export function copyFileProblem(
+  text: string,
+  table: { schema: string; table: string; columns: string[]; rows: number },
+): string | null {
+  const name = `${table.schema}.${table.table}`;
+  if (text === '') {
+    return table.rows === 0 ? null : `${name}: the COPY file is empty, manifest says ${table.rows} row(s)`;
+  }
+  const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n');
+  if (lines.length !== table.rows) {
+    return `${name}: the COPY file has ${lines.length} line(s), manifest says ${table.rows} row(s)`;
+  }
+  const wrong = lines.findIndex((line) => line.split('\t').length !== table.columns.length);
+  if (wrong !== -1) {
+    return `${name}: line ${wrong + 1} has ${lines[wrong]?.split('\t').length} field(s), not ${table.columns.length}`;
+  }
+  return null;
 }
 
 /** Problems with the manifest's *shape*. Empty means it is readable. */
@@ -374,6 +447,7 @@ export function manifestProblems(raw: unknown): string[] {
       }
     }
   }
+  if (typeof m.postgresMajor !== 'number') problems.push('postgresMajor is missing');
   if (!Array.isArray(m.tables)) problems.push('tables is missing');
   if (!Array.isArray(m.migrations)) problems.push('migrations is missing');
   const secrets = m.secrets as Record<string, unknown> | undefined;
