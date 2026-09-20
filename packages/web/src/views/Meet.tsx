@@ -96,14 +96,47 @@ export const PAIRING_WATCH_MS = 10 * 60_000;
  *
  * Every question puts its input in the dock, one at a time, so the thing that
  * just appeared is the only thing to type into — and asking someone to click
- * it first is asking them to do the obvious by hand. `autoFocus` would do it
- * too, but this is the same behaviour whether the field is rendered here or
- * through the portal into the dock, and it is a behaviour a test can see.
+ * it first is asking them to do the obvious by hand.
+ *
+ * Focusing once on mount is not enough, and the reason is not React: measured
+ * in Chrome, the field *was* `document.activeElement` while `document.
+ * hasFocus()` was false, because the dashboard opens in a tab the owner is
+ * not looking at yet. The first thing they do is click the window to bring it
+ * forward, and that click lands where they clicked — usually the board — and
+ * takes the caret with it. So this asks three times: after the frame is
+ * painted, once more on the next turn of the loop if nothing has claimed the
+ * focus, and again whenever the window itself comes back, as long as nobody
+ * else holds it. It never takes focus away from something the owner chose.
  */
 function useOpened<T extends HTMLElement>(): RefObject<T> {
   const field = useRef<T>(null);
   useEffect(() => {
-    field.current?.focus();
+    let frame = 0;
+    let later = 0;
+    /** Nobody is typing anywhere: the open question may have the caret. */
+    const free = (node: T): boolean => {
+      const active = node.ownerDocument.activeElement;
+      return active === null || active === node.ownerDocument.body || active === node.ownerDocument.documentElement;
+    };
+    const take = (): void => {
+      const node = field.current;
+      if (node && free(node)) node.focus();
+    };
+    // After the paint, not during the commit: a field that is not laid out yet
+    // is a field whose focus the browser may have nothing to put a caret in.
+    // Somewhere with no frames to wait for, the field is simply focused.
+    const painted = (): void => {
+      take();
+      later = window.setTimeout(take, 0);
+    };
+    if (typeof window.requestAnimationFrame === 'function') frame = window.requestAnimationFrame(painted);
+    else painted();
+    window.addEventListener('focus', take);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearTimeout(later);
+      window.removeEventListener('focus', take);
+    };
   }, []);
   return field;
 }
