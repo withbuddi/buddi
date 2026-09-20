@@ -371,7 +371,9 @@ describe('the switch', () => {
     // And the conversation is on the record before the turn goes out, so a
     // reload rejoins it instead of opening a second one.
     expect(api.onboardingStep).toHaveBeenCalledWith('hello', { conversationId: 'c1' });
-    await waitFor(() => expect(api.completeOnboarding).toHaveBeenCalled());
+    // Nothing is completed from here: the server recorded that when it claimed
+    // the opening turn, which is the moment nothing was left to set up.
+    expect(api.completeOnboarding).not.toHaveBeenCalled();
     expect(screen.getByText(SCRIPT.offers.phone)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.offers.notNow)).toBeInTheDocument();
   });

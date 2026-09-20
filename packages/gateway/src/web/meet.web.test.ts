@@ -221,8 +221,14 @@ function recordPool(details: Record<string, string> = {}) {
     messages,
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       if (/from core\.onboarding/.test(sql)) return { rows: [row] };
-      if (/insert into core\.onboarding/.test(sql) && /details/.test(sql)) {
+      if (/insert into core\.onboarding \(owner_id, details, updated_at\)/.test(sql)) {
         row.details = { ...row.details, ...(JSON.parse(String(params[1])) as Record<string, string>) };
+        return { rows: [row] };
+      }
+      // The state the statement writes, as core's own upserts spell it.
+      const writing = /values \(\$1, '([a-z-]+)'/.exec(sql)?.[1];
+      if (writing) {
+        row.state = writing;
         return { rows: [row] };
       }
       if (/from core\.messages/.test(sql)) {
@@ -240,6 +246,13 @@ it('claims the opening turn once, and refuses a second conversation', async () =
   const pool = recordPool();
   await claimOpeningTurn(onboardingDeps(pool), 'c1');
   expect(pool.row.details).toEqual({ conversationId: 'c1' });
+  /*
+   * And first run is over at that moment. The record saying "in-progress"
+   * while the assistant writes its first message is what `owner.get_profile`
+   * reports, and it is why a brand-new assistant opened by interviewing the
+   * owner who had just made it.
+   */
+  expect(pool.row.state).toBe('done');
   // The same conversation again is a retry — the send may never have gone out —
   // and is allowed until that conversation actually holds the turn.
   await claimOpeningTurn(onboardingDeps(pool), 'c1');
@@ -344,11 +357,16 @@ it('puts the two names it knows in front of the opening instruction', async () =
   const deps = (pool: unknown) => ({ pool, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => {} }) as never;
   // The owner said their name a minute ago and named the assistant themselves;
   // a first message that asks either again is the install forgetting.
-  expect(await withFirstRunFacts(deps(named), 'Introduce yourself.')).toBe('The owner is called Amen. You are Ada. Introduce yourself.');
+  const said = await withFirstRunFacts(deps(named), 'Introduce yourself.');
+  expect(said).toMatch(/^The owner is called Amen\. You are Ada\. Introduce yourself\./);
+  // And it is told the setup is behind it, in both senses: nothing to ask
+  // about, and nothing to ask *with* except words.
+  expect(said).toContain('The setup is finished; do not ask about your name, the owner\'s name or onboarding.');
+  expect(said).toContain('Ask your one question in plain words in the message, not with a form.');
   // And an installation that knows neither still gets the three asks, whole.
   const anonymous = { query: vi.fn(async () => ({ rows: [{ preferred_name: null, timezone: null, language: null, about: null, display_name: null }] })) };
   const empty = reloadableCatalog(() => loadGatewayCatalog({ dir: agentsDir(), env }));
   expect(
     await withFirstRunFacts({ pool: anonymous, catalog: empty, agentsDir: dir, examplesDir: dir, reload: () => {} } as never, 'Introduce yourself.'),
-  ).toBe('Introduce yourself.');
+  ).toMatch(/^Introduce yourself\. The setup is finished;/);
 });
