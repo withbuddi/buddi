@@ -89,7 +89,12 @@ export function budgetedProvider(
       const onDispatch = async (): Promise<void> => {
         dispatched += 1;
         if (dispatched === 1) return;
-        if ((await ledger.reserve()) === 'spent') throw new BudgetExhausted();
+        const again = await ledger.reserve();
+        if (again === 'work') return;
+        // A retry may not take the conclusion's call: that one is the
+        // coordinator's, made on purpose, never drawn by accident.
+        if (again === 'synthesis') await ledger.release();
+        throw new BudgetExhausted('the request budget is spent; only the conclusion remains');
       };
       const request: CompletionRequest = {
         ...req,
@@ -245,6 +250,9 @@ export function createGroupAskTool(deps: GroupAskDeps): ToolDefinition<GroupAskI
       const said = result.text.trim() === '' ? '' : `@${target.handle} said:\n${result.text.trim()}`;
       if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
         await deps.onSuspended?.({ agentId: target.id, actionId: result.pendingActionId });
+        // The coordinator's run stops here too: no further tool in its turn
+        // runs, and its run ends waiting on the member's action.
+        ctx.suspend?.(result.pendingActionId);
         return {
           agent: target.id,
           handle: target.handle,

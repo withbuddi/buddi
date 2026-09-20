@@ -37,6 +37,7 @@ import {
   getGroupRequest,
   latestGroupConversation,
   openGroupRequest,
+  openGroupRequestForGroup,
   readGroupTurns,
   releaseGroupCall,
   reserveGroupCall,
@@ -670,6 +671,11 @@ export interface WebChatDeps {
   log?: ((line: string) => void) | undefined;
 }
 
+/** The queue a group's runs serialise on: the group, not any one of its conversations. */
+function groupKey(groupId: string): string {
+  return `group:${groupId}`;
+}
+
 /** A run inside a room: which group, which request, whose voice, and what opens it. */
 interface RoomTurn {
   row: GroupRow;
@@ -719,6 +725,8 @@ export class WebChat {
   readonly #deps: WebChatDeps;
   /** The answer being written, per conversation, for the stream to hand on. */
   readonly live = new LiveTurns();
+  /** One send at a time per group decides its conversation and opens its request. */
+  readonly #groupLocks = new Map<string, Promise<void>>();
   readonly #queues = new Map<string, Promise<void>>();
   readonly #running = new Map<string, { runId: string; cancel: () => void }>();
   readonly #log: (line: string) => void;
@@ -889,16 +897,17 @@ export class WebChat {
     const agent = this.#deps.catalog.get(action.agentId);
     if (!agent) return;
     const conversationId = action.conversationId;
-    this.#enqueue(conversationId, async () => {
-      // A group conversation resumes as a group request: the member that
-      // stopped runs on with the outcome, then the coordinator picks up.
+    void (async () => {
+      // A group conversation resumes as a group request, on the group's own
+      // queue: the member that stopped runs on with the outcome, then the
+      // coordinator picks up.
       const groupId = await conversationGroup(this.#deps.pool, conversationId).catch(() => null);
       if (groupId) {
-        await this.#resumeGroup(groupId, conversationId, agent, resume);
+        this.#enqueue(groupKey(groupId), () => this.#resumeGroup(groupId, conversationId, agent, resume));
         return;
       }
-      await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume });
-    });
+      this.#enqueue(conversationId, async () => { await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume }); });
+    })();
   }
 
   /* ------------------------------------------------------------------ *
@@ -915,7 +924,7 @@ export class WebChat {
     | { ok: false; status: number; error: string }
   > {
     const pool = this.#deps.pool;
-    const group = await getGroup(pool, request.groupId);
+    let group = await getGroup(pool, request.groupId);
     if (!group) return { ok: false, status: 404, error: 'no such group' };
     const text = request.text.trim();
     if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };
@@ -925,24 +934,6 @@ export class WebChat {
     const coordinator = this.#deps.catalog.get(group.coordinator);
     if (!coordinator) return { ok: false, status: 409, error: `the coordinator (${group.coordinator}) is not installed` };
 
-    let conversationId = request.conversationId ?? (await latestGroupConversation(pool, group.id)) ?? undefined;
-    if (conversationId !== undefined) {
-      const owner = await conversationGroup(pool, conversationId);
-      if (owner !== group.id) return { ok: false, status: 409, error: 'that conversation does not belong to this group' };
-      const open = await openGroupRequest(pool, conversationId);
-      if (open) return { ok: false, status: 409, error: open.state === 'suspended' ? 'The group is waiting for an approval. Decide it first.' : 'The group is still working on the last request.' };
-    }
-    let rolledOver = false;
-    if (conversationId === undefined) {
-      conversationId = await createGroupConversation(pool, group);
-    } else if ((await roomChars(pool, conversationId)) > group.contextCapChars) {
-      // Between requests only, never mid-exchange: the room has grown past
-      // what every member can be sent, so it closes on a summary.
-      await this.#rolloverGroup(group, conversationId, coordinator);
-      conversationId = await createGroupConversation(pool, group);
-      rolledOver = true;
-    }
-
     const files: ArtifactRow[] = [];
     for (const id of attachmentIds) {
       const row = await getArtifact(pool, id).catch(() => null);
@@ -950,19 +941,55 @@ export class WebChat {
       files.push(row);
     }
 
-    let requestRow: GroupRequestRow;
-    try {
-      requestRow = await createGroupRequest(pool, { groupId: group.id, conversationId, text });
-    } catch (err) {
-      // The index says another request is open on this conversation: a send
-      // that raced this one got there first.
-      if ((err as { code?: string }).code === '23505') return { ok: false, status: 409, error: 'The group is still working on the last request.' };
-      throw err;
-    }
-    const runId = randomUUID();
-    const target = conversationId;
-    this.#enqueue(target, () => this.#groupRequest({ group, request: requestRow, conversationId: target, runId, text, files }));
-    return { ok: true, conversationId, runId, requestId: requestRow.id, ...(rolledOver ? { rolledOver: true } : {}) };
+    // Deciding the conversation, rolling over and opening the request happen
+    // under the group's lock, one send at a time; the row's index is the
+    // durable version of the same rule.
+    return this.#withGroupLock(group.id, async () => {
+      const g = group as GroupRow;
+      const open = await openGroupRequestForGroup(pool, g.id);
+      if (open) return { ok: false as const, status: 409, error: open.state === 'suspended' ? 'The group is waiting for an approval. Decide it first.' : 'The group is still working on the last request.' };
+
+      let conversationId = request.conversationId ?? (await latestGroupConversation(pool, g.id)) ?? undefined;
+      if (conversationId !== undefined) {
+        const owner = await conversationGroup(pool, conversationId);
+        if (owner !== g.id) return { ok: false as const, status: 409, error: 'that conversation does not belong to this group' };
+      }
+      let rolledOver = false;
+      let current = g;
+      if (conversationId === undefined) {
+        conversationId = await createGroupConversation(pool, g);
+      } else if ((await roomChars(pool, conversationId)) > g.contextCapChars) {
+        // Between requests only, never mid-exchange: the room has grown past
+        // what every member can be sent, so it closes on a summary — and the
+        // group is read again, so the new thread starts from that summary.
+        await this.#rolloverGroup(g, conversationId, coordinator);
+        current = (await getGroup(pool, g.id)) ?? g;
+        conversationId = await createGroupConversation(pool, current);
+        rolledOver = true;
+      }
+
+      let requestRow: GroupRequestRow;
+      try {
+        requestRow = await createGroupRequest(pool, { groupId: current.id, conversationId, text });
+      } catch (err) {
+        // The index says another request is open for this group.
+        if ((err as { code?: string }).code === '23505') return { ok: false as const, status: 409, error: 'The group is still working on the last request.' };
+        throw err;
+      }
+      const runId = randomUUID();
+      const target = conversationId;
+      const groupRow = current;
+      this.#enqueue(groupKey(groupRow.id), () => this.#groupRequest({ group: groupRow, request: requestRow, conversationId: target, runId, text, files }));
+      return { ok: true as const, conversationId, runId, requestId: requestRow.id, ...(rolledOver ? { rolledOver: true } : {}) };
+    });
+  }
+
+  /** Serialise the sends of one group, the way runs are serialised per queue. */
+  #withGroupLock<T>(groupId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.#groupLocks.get(groupId) ?? Promise.resolve();
+    const run = previous.then(work, work);
+    this.#groupLocks.set(groupId, run.then(() => undefined, () => undefined));
+    return run;
   }
 
   /** The members a message names with `@handle`, in the order named. */
@@ -1084,12 +1111,17 @@ export class WebChat {
     const pool = this.#deps.pool;
     const last = await openGroupRequest(pool, conversationId) ?? null;
     const requestForBudget = last ?? (await createGroupRequest(pool, { groupId: group.id, conversationId, text: '(rollover summary)', budgetTotal: 0 }));
-    if (!(await reserveMaintenanceCall(pool, requestForBudget.id))) return;
     try {
       const turns = await readGroupTurns(pool, conversationId);
       const handles = this.#handles();
-      const history = projectTranscript({ turns, agentId: coordinator.id, handles });
-      const provider = this.#deps.providerFor(coordinator);
+      const history = boundProjection(projectTranscript({ turns, agentId: coordinator.id, handles }), group.contextCapChars);
+      // One maintenance call, counted like any other dispatch: a retry the
+      // adapter makes draws on the same single reservation and is refused.
+      const maintenance = {
+        reserve: async () => ((await reserveMaintenanceCall(pool, requestForBudget.id)) ? 'work' as const : 'spent' as const),
+        release: async () => undefined,
+      };
+      const provider = budgetedProvider(this.#deps.providerFor(coordinator), maintenance, { canSynthesise: true });
       const res = await provider.complete({
         system: 'You are the coordinator of a group of agents. The conversation below is closing because it has grown long. Write a short summary of where it stopped: what was decided, what is still open, which questions are unanswered, and any artifact ids that matter. Plain prose, under 200 words. No tools.',
         messages: [...history, { role: 'user', content: [{ type: 'text', text: 'Summarise where this discussion stopped.' }] }],
@@ -1099,7 +1131,7 @@ export class WebChat {
       const summary = res.content.filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text').map((b) => b.text).join('\n').trim();
       await setGroupSummary(pool, group.id, summary === '' ? null : summary);
     } catch (err) {
-      this.#log(`group ${group.id}: rollover summary failed: ${message(err)}`);
+      if (!(err instanceof BudgetExhausted)) this.#log(`group ${group.id}: rollover summary failed: ${message(err)}`);
     } finally {
       if (!last) await setGroupRequestState(pool, requestForBudget.id, { state: 'done', from: ['running'], finishedAt: this.#deps.now() });
     }
@@ -1416,10 +1448,12 @@ export class WebChat {
     const handles = this.#handles();
     // Every call is made through a bounded projection: the room as this
     // agent may see it, clipped to what the group's cap allows.
+    const cap = group.row.contextCapChars;
     const transcriptFor = (conversationId: string, agentId: string, openingSpeaker: string): NonNullable<RunAgentOptions['transcript']> => ({
-      load: async () => boundProjection(projectTranscript({ turns: await readGroupTurns(pool, conversationId), agentId, handles }), group.row.contextCapChars),
+      load: async () => boundProjection(projectTranscript({ turns: await readGroupTurns(pool, conversationId), agentId, handles }), cap),
       speaker: agentId,
       openingSpeaker,
+      bound: (messages) => boundProjection(messages, cap),
     });
     const memberNames = group.row.members
       .map((id) => deps.catalog.get(id))

@@ -108,6 +108,11 @@ export interface RunAgentOptions {
     load: () => Promise<NeutralMessage[]>;
     speaker: string;
     openingSpeaker: string;
+    /**
+     * Applied to the history before every call, not once at the start: tool
+     * output the run gathers as it goes has to fit the same cap.
+     */
+    bound?: (messages: NeutralMessage[]) => NeutralMessage[];
   };
   /**
    * Resuming a run that stopped awaiting an approval.
@@ -550,8 +555,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // action, which is how the decision later finds the run that is suspended.
   // The surface rides along too: a delegated run reaches the same screen as the
   // run that asked for it, so the delegate must be told about that screen.
+  /** An action a tool reported the run must wait on, without gating itself. */
+  let suspendedBy: string | undefined;
   const toolCtx: ToolContext = {
     ...ctx,
+    suspend: (actionId: string) => { suspendedBy = actionId; },
     ...(platformContext ? { timezone: platformContext.timezone } : {}),
     conversationId,
     agentId: agent.id,
@@ -640,7 +648,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     turns++;
     const res = await provider.complete({
       system: waitingForOwner ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.` : system,
-      messages,
+      messages: opts.transcript?.bound ? opts.transcript.bound(messages) : messages,
       tools: waitingForOwner ? [] : tools,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),
@@ -729,6 +737,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
             message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {
         if (registry.waitsForOwner(call.name)) waitingForOwner = true;
+        // The tool finished, but it left the run waiting on a decision the
+        // owner has to make elsewhere: nothing more is dispatched this turn,
+        // and the run ends resumable on that action.
+        if (suspendedBy !== undefined && pendingActionId === undefined) {
+          pendingActionId = suspendedBy;
+          opts.onApprovalRequired?.(suspendedBy, 'a member of the group is waiting for the owner');
+        }
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,

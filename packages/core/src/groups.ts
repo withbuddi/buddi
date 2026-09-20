@@ -231,6 +231,17 @@ export async function openGroupRequest(pool: Queryable, conversationId: string):
   return rows[0] ? toRequest(rows[0]) : null;
 }
 
+/** The request this group is in the middle of, in any of its conversations. */
+export async function openGroupRequestForGroup(pool: Queryable, groupId: string): Promise<GroupRequestRow | null> {
+  const { rows } = await pool.query(
+    `select * from core.group_requests
+      where group_id = $1::uuid and state in ('running', 'suspended')
+      order by created_at desc limit 1`,
+    [groupId],
+  );
+  return rows[0] ? toRequest(rows[0]) : null;
+}
+
 export async function countGroupRequests(pool: Queryable, conversationId: string): Promise<number> {
   const { rows } = await pool.query(
     `select count(*)::int as n from core.group_requests where conversation_id = $1::uuid`,

@@ -63,6 +63,13 @@ export interface ToolContext {
    */
   group?: GroupContext;
   /**
+   * Set by the loop. A tool that completed but left the run waiting on an
+   * owner decision elsewhere — a group member paused inside `group.ask` —
+   * says so here, and the loop stops dispatching and ends the run as
+   * awaiting that action, exactly as if the gate had been its own.
+   */
+  suspend?: (actionId: string) => void;
+  /**
    * How many delegations deep this run is: absent or 0 for a run the owner
    * started, 1 inside a run another agent delegated. The delegation tool reads
    * it and refuses at >= 1, so a delegate never delegates again and a cycle
