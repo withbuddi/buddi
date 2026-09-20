@@ -110,7 +110,14 @@ export function Memory({ embedded, agents, timezone }: { embedded?: boolean; age
           existing={data?.preferences ?? []}
           initial={adding}
           onClose={() => setAdding(null)}
-          onSave={(body) => run(api.setPreference(body)).then(() => setAdding(null))}
+          onSave={async (body) => {
+            // Moved to another scope: it lives there now, and the old row is retired.
+            await run((async () => {
+              await api.setPreference(body);
+              if (adding.key === body.key && adding.scope !== body.scope) await api.forgetPreference({ key: adding.key, scope: adding.scope });
+            })());
+            setAdding(null);
+          }}
         />
       ) : null}
       {editing ? (
@@ -145,13 +152,15 @@ function PreferenceSheet({ agents, existing, initial, onClose, onSave }: {
   onClose: () => void;
   onSave: (body: { key: string; value: string; scope: string }) => Promise<void>;
 }): JSX.Element {
+  const opened = existing.find((p) => p.key === initial.key && p.scope === initial.scope);
   const [key, setKey] = useState(initial.key);
-  const [value, setValue] = useState('');
+  const [value, setValue] = useState(opened?.value ?? '');
   const [scope, setScope] = useState(initial.scope);
   const [busy, setBusy] = useState(false);
   const normalised = key.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   const current = existing.find((p) => p.key === normalised && p.scope === scope);
-  const ok = normalised !== '' && value.trim() !== '';
+  const changed = !opened || normalised !== opened.key || value.trim() !== opened.value || scope !== opened.scope;
+  const ok = normalised !== '' && value.trim() !== '' && changed;
   return (
     <Sheet title="A preference" onClose={onClose}>
       <Stack>
@@ -159,17 +168,18 @@ function PreferenceSheet({ agents, existing, initial, onClose, onSave }: {
         <Field label="Key" hint={normalised && normalised !== key ? `Stored as ${normalised}` : 'Short and stable, like reporting_currency or tone.'}>
           <input value={key} autoFocus={initial.key === ''} onChange={(e) => setKey(e.target.value)} placeholder="reporting_currency" />
         </Field>
-        <Field label={current ? 'New value' : 'Value'}>
-          <textarea rows={3} value={value} maxLength={2000} autoFocus={initial.key !== ''} onChange={(e) => setValue(e.target.value)} placeholder={current?.value ?? 'EUR'} />
+        <Field label="Value">
+          <textarea rows={3} value={value} maxLength={2000} autoFocus={initial.key !== ''} onChange={(e) => setValue(e.target.value)} placeholder="EUR" />
         </Field>
         <Field label="Who should know" hint="Shared reaches every agent. Private stays with one.">
           <ScopeSelect value={scope} agents={agents} onChange={setScope} />
         </Field>
-        {current ? <Notice tone="warning">This replaces the current value, "{current.value}" (revision {current.revision}).</Notice> : null}
+        {current && current !== opened ? <Notice tone="warning">This replaces the value already stored for this key here, "{current.value}" (revision {current.revision}).</Notice> : null}
+        {opened && scope !== opened.scope ? <Notice>It moves: the copy for {opened.scope === 'shared' ? 'everyone' : 'that agent'} is retired and this one takes over.</Notice> : null}
         <Toolbar align="end">
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="accent" disabled={!ok || busy} onClick={() => { setBusy(true); void onSave({ key: normalised, value: value.trim(), scope }).finally(() => setBusy(false)); }}>
-            {current ? 'Save correction' : 'Save'}
+            {opened ? 'Save change' : 'Save'}
           </Button>
         </Toolbar>
       </Stack>
