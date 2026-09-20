@@ -60,6 +60,41 @@ try {
   const assets = await fetch(new URL('/', dashboard), { headers: { cookie } });
   assert.equal(assets.status, 200); assert.match(await assets.text(), /<html/);
   assert.equal((await fetch(dashboard, { redirect: 'manual' })).status, 401, 'ticket cannot be replayed');
+  /*
+   * First run, as the wizard drives it. No model call is made here — the chat
+   * step is the one thing this cannot exercise — so it goes as far as the API
+   * does: what is still needed, a step recorded, the first agent written and
+   * loaded, and the record closed.
+   */
+  const wizardCsrf = decodeURIComponent(cookie.match(/buddi_csrf=([^;]+)/)[1]);
+  const wizardHeaders = { cookie, origin: dashboard.origin, 'x-buddi-csrf': wizardCsrf, 'content-type': 'application/json' };
+  const onboarding = async () => (await fetch(new URL('/api/onboarding', dashboard), { headers: { cookie } })).json();
+  const firstRun = await onboarding();
+  assert.equal(firstRun.state, 'pending');
+  assert.equal(firstRun.needs.model, true, 'a fresh install has no model account');
+  assert.equal((await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'first-run writes require CSRF');
+  const stepped = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'welcome' }) });
+  assert.equal(stepped.status, 200);
+  assert.deepEqual((await stepped.json()).stepsDone, ['welcome']);
+  const madeAgent = await fetch(new URL('/api/onboarding/agent', dashboard), {
+    method: 'POST', headers: wizardHeaders,
+    body: JSON.stringify({ name: 'Smoke', handle: 'smoke', description: 'The agent this release smoke test creates.' }),
+  });
+  const madeText = await madeAgent.text();
+  assert.equal(madeAgent.status, 200, madeText);
+  const madeBody = JSON.parse(madeText);
+  assert.equal(madeBody.id, 'smoke');
+  assert.equal(madeBody.live, true, 'the running catalog reloaded the new agent');
+  assert.equal(madeBody.agent.isDefault, true, 'the first private agent is the default one');
+  const roster = await (await fetch(new URL('/api/agents', dashboard), { headers: { cookie } })).json();
+  assert.ok(roster.agents.some(agent => agent.id === 'smoke'), 'the new agent is in /api/agents');
+  assert.match(await readFile(path.join(data, 'agents/smoke/agent.md'), 'utf8'), /language: mirror/);
+  const skippedRun = await fetch(new URL('/api/onboarding/skip', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(skippedRun.status, 200);
+  assert.equal((await skippedRun.json()).state, 'skipped');
+  const afterSkip = await onboarding();
+  assert.equal(afterSkip.state, 'skipped');
+  assert.equal(afterSkip.needs.agent, false, 'the agent it wrote counts as the owner\'s own');
   const again = await cli(startArgs); assert.match(again, /Dashboard:/);
   const repeated = JSON.parse(await cli(['service', 'status']));
   assert.equal(repeated.supervisorPid, pid); assert.equal(repeated.databasePid, status.databasePid);
@@ -191,7 +226,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {

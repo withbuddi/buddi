@@ -182,3 +182,46 @@ reboot, and choose a distribution that includes the backup tools.
   pass readiness, and the gateway exits when its required bind fails.
 - Test LaunchAgents are unloaded and removed; fixture directories are retained.
   The live Buddi installation was not restarted or reconfigured.
+
+## Wizard
+
+The first-run screens of [install.md §5](install.md#5-the-first-run-wizard) are
+built on this foundation. The dashboard route is `#/welcome`, `?step=<id>` names
+one screen, and the wizard renders without the rail.
+
+- **The record is the server's.** `core.onboarding` already holds it, and the
+  wizard reads and writes it through `GET /api/onboarding` and `POST
+  /api/onboarding/step|complete|skip|agent`
+  (`packages/gateway/src/web/onboarding.ts`). `GET` also answers what is still
+  missing — a name, a usable model account, an agent of the owner's own — and
+  that, not anything the page believes, is what opens each Next button.
+- **One first run, two surfaces.** Completing or skipping here closes the same
+  state machine the Telegram interview claims, so an owner who set up on the
+  dashboard is never interviewed again and the nudge arc never starts: both
+  speak only while the state is `pending`.
+- **The redirect is conservative.** The dashboard replaces the location with
+  `#/welcome` only when the record is `pending` or `in-progress` *and* there is
+  no enabled, credentialed provider account. A finished record, a skipped one,
+  or any installation that already has an account is left where it is — which
+  is what keeps a developer's live dashboard out of it. Settings → System has
+  "Run setup again" for everyone else.
+- **The agent step writes a file, not a tool call.** It reuses
+  `composeAgentFile` and `createAgentDirAtomic`, so an agent made here is the
+  same artifact `platform.create_agent` makes: the generic template, no roles,
+  no plugin tools, `language: mirror`, `default: true` for the first private
+  agent, and the tool grant named once in the gateway. Where exactly one usable
+  model account exists it is assigned to the new agent, because the next screen
+  is the owner talking to it. The write is behind the ordinary session, Origin
+  and CSRF gate — the owner acting on their own installation — and not behind an
+  approval.
+- **`buddi init` ends there.** The checkout CLI opens the dashboard at
+  `#/welcome?step=model`, since it has already asked for a name and a zone. The
+  ticket redirect answers with a `Location` carrying no fragment, so the
+  browser keeps the one the CLI put on the URL.
+- **The release smoke covers it** as far as it can without a model call: what
+  the fresh install still needs, CSRF refusal, a recorded step, the first agent
+  written, reloaded and listed by `/api/agents`, and the record skipped and read
+  back.
+
+Deferred here, and named in install.md: Ollama detection, restore from the
+dashboard, and the plugins and backup cards of the extras step.

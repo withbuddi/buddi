@@ -396,10 +396,18 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     /* 10b. The background service. */
     if (willRun(plan, 'service')) await ensureService(confirm);
 
-    /* 10c. The dashboard. */
+    /*
+     * 10c. The dashboard, on the wizard's model screen.
+     *
+     * `init` has already asked who the owner is and what zone they are in, so
+     * the first two screens of the wizard are behind them; the model account is
+     * the next thing and the first one that has no terminal answer here. The
+     * wizard resumes from the record either way — the step is an opening
+     * position, not a claim about what is done.
+     */
     if (willRun(plan, 'dashboard')) {
       if (await confirm('\nOpen the local dashboard now?', true)) {
-        const open = opts.openDashboard ?? (() => runDashboard('open'));
+        const open = opts.openDashboard ?? (() => runDashboard('open', { hash: WIZARD_MODEL_STEP }));
         await open();
       }
     }
@@ -427,6 +435,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     rl?.close();
   }
 }
+
+/** The wizard's third screen: a model account, which is where `init` stops. */
+export const WIZARD_MODEL_STEP = '#/welcome?step=model';
 
 /** This process's own entry point — what `buddi chat` is, from inside init. */
 const CLI_ENTRY = path.join(REPO_ROOT, 'packages', 'cli', 'dist', 'main.js');
