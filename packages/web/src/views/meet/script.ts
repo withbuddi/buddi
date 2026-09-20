@@ -107,6 +107,34 @@ export const SCRIPT = {
     purposeValue: 'Whatever I ask, and remembering what I tell it.',
     submit: 'Introduce us',
   },
+  /**
+   * The other way this screen can go: there is already a buddi somewhere, and
+   * this one is meant to become it. Offered before the first question, because
+   * afterwards there would be answers to overwrite.
+   */
+  restore: {
+    offer: 'I have a backup from another buddi',
+    file: 'The backup file',
+    passphrase: 'Its passphrase',
+    passphraseHint: 'Only if it was locked with one.',
+    submit: 'Restore',
+    cancel: 'Never mind',
+    started: 'Right. Give me a couple of minutes.',
+    /** Where it has got to, one bubble each, in the order they happen. */
+    phases: {
+      stopping: 'Putting everything down for a moment.',
+      snapshot: 'Keeping a copy of what is here now, just in case.',
+      database: 'Bringing back your conversations and everything you told it to remember.',
+      files: 'Bringing back your files.',
+      recovery: 'Almost there. Nothing will run on its own until you say so.',
+      starting: 'Starting back up.',
+      done: 'That is everything.',
+      'rolled-back': 'That did not work, so I put everything back the way it was.',
+    },
+    welcome: (name: string): string => `Welcome back, ${name}.`,
+    /** One sentence, because the next question would otherwise look like a bug. */
+    keys: 'A backup never carries keys, so the AI you think with needs its key one more time.',
+  },
   /** Over the board, above the card. */
   tagline: 'Your own assistants, on your own computer.',
   handover: {

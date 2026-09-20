@@ -10,6 +10,7 @@ import { api } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { SETTINGS_SECTIONS, WELCOME_ROUTE, settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
+import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
 import { Watchers } from './Watchers';
@@ -37,6 +38,7 @@ export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
+      {section === 'backup' ? <Backup /> : null}
       {section === 'system' ? <System timezone={timezone} /> : null}
     </div>
   );

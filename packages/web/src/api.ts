@@ -101,6 +101,45 @@ export function post<T>(path: string, body: unknown = {}): Promise<T> {
   });
 }
 
+/**
+ * An archive, sent as the body it is.
+ *
+ * Not multipart: the gateway streams this request straight to a file under
+ * `<data>/incoming/` without buffering it, and an archive is measured in
+ * gigabytes. So the two small strings that go with it — the passphrase, and
+ * the typed-back confirmation — travel as headers, which is also what keeps
+ * them out of the URL and therefore out of any log. The name is sanitised
+ * because a header may hold nothing but Latin-1, and because the server uses
+ * only its suffix anyway; it never becomes a path.
+ */
+export function sendArchive<T>(
+  path: string,
+  file: File,
+  fields: { passphrase?: string | undefined; confirm?: string | undefined },
+): Promise<T> {
+  const name = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'backup.tar.gz';
+  return request<T>(`/api${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      [CSRF_HEADER]: csrfToken(),
+      'X-Filename': name,
+      ...(fields.passphrase ? { 'X-Backup-Passphrase': fields.passphrase } : {}),
+      ...(fields.confirm ? { 'X-Backup-Confirm': fields.confirm } : {}),
+    },
+    body: file,
+  });
+}
+
+/** Replacing a whole setting the server keeps one of: the schedule, the passphrase. */
+export function put<T>(path: string, body: unknown = {}): Promise<T> {
+  return request<T>(`/api${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', [CSRF_HEADER]: csrfToken() },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Shapes — exactly what packages/gateway/src/web/read.ts returns.
  * ------------------------------------------------------------------ */
@@ -606,6 +645,89 @@ export interface ServiceView {
   pending?: 'stop' | 'restart';
 }
 
+/* ------------------------------------------------------------------ *
+ * Backups and recovery, from the supervisor through the gateway.
+ * ------------------------------------------------------------------ */
+
+/** One archive in `<data>/backups`. Callers send the name back, never a path. */
+export interface BackupArchive {
+  name: string;
+  createdAt: string;
+  bytes: number;
+  encrypted: boolean;
+  /** Null for a plain archive: there is no envelope to have an opinion about. */
+  envelopeOk: boolean | null;
+}
+
+export interface BackupsView {
+  dir: string;
+  archives: BackupArchive[];
+  /**
+   * What a restore has to be confirmed with, when the server offers it. The
+   * guard itself lives on the server; this only lets the panel say the word
+   * out loud instead of asking for one the owner has to guess.
+   */
+  database?: string;
+  /** False in a developer checkout, where a restore has no supervisor to run it. */
+  supervised?: boolean;
+}
+
+/** The phases a backup or restore passes through, in order. */
+export type BackupPhase =
+  | 'stopping'
+  | 'snapshot'
+  | 'database'
+  | 'files'
+  | 'recovery'
+  | 'starting'
+  | 'encrypt'
+  | 'done'
+  | 'failed'
+  | 'rolled-back';
+
+export interface BackupJob {
+  id: string;
+  kind: string;
+  phase: BackupPhase | string;
+  detail?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+  report?: unknown;
+  /** A backup that was made but could not be copied to the folder tier. */
+  copyLate?: boolean;
+}
+
+export interface BackupSchedule {
+  /**
+   * False where the schedule is not the supervisor's to keep: a checkout's
+   * backups are a launchd or systemd unit, and the page says so rather than
+   * offering a switch that would change nothing.
+   */
+  supervised?: boolean;
+  error?: string;
+  enabled: boolean;
+  /** Local time, `HH:MM`. */
+  time: string;
+  keep: number;
+  encryptLocal: boolean;
+  copyTo: string | null;
+  lastRunAt?: string | null;
+}
+
+/** What a restored installation still needs a person for. */
+export interface RecoveryView {
+  active: boolean;
+  restoredAt: string | null;
+  archive: string | null;
+  checklist: {
+    secrets: Array<{ name: string; kind: 'account' | 'telegram' | 'plugin'; settingsRoute: string }>;
+    plugins: Array<{ name: string; version: string; source: string; installed: boolean }>;
+    pending: { jobs: number; missions: number; approvals: number; telegramChats: number };
+    grants: Array<{ id: string; agent: string; tool: string; scope: string; description: string }>;
+  };
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -792,6 +914,36 @@ export const api = {
    * terminal, not this page, is what starts a gateway that is down.
    */
   serviceAction: (action: 'start' | 'stop' | 'restart') => post<ServiceView>(`/service/${action}`),
+  /* ---- backups and recovery ---- */
+  backups: () => get<BackupsView>('/backups'),
+  startBackup: (encrypt: boolean) => post<{ job: BackupJob }>('/backups', { encrypt }),
+  verifyArchive: (name: string) => post<{ job: BackupJob }>('/backups/verify', { name }),
+  /**
+   * Restore an archive this installation already holds.
+   *
+   * `confirm` is the typed-back guard, checked on the server: a target with
+   * anything in it refuses without it. A checkout has no supervisor to stop
+   * the gateway, and answers 409 with what to run instead.
+   */
+  restoreArchive: (body: { name: string; passphrase?: string; confirm?: string }) =>
+    post<{ job: BackupJob }>('/backups/restore', body),
+  /** The same restore, from a file on the owner's own machine. */
+  restoreUpload: (file: File, fields: { passphrase?: string; confirm?: string }) =>
+    sendArchive<{ job: BackupJob }>('/backups/restore', file, fields),
+  backupJob: (id: string) => get<BackupJob>(`/backups/jobs/${encodeURIComponent(id)}`),
+  backupSchedule: () => get<BackupSchedule>('/backups/schedule'),
+  setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
+  backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
+  setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
+  recovery: () => get<RecoveryView>('/recovery'),
+  leaveRecovery: (body: { dropPending: boolean; keepGrants: string[] }) =>
+    post<{ accepted?: boolean }>('/recovery/leave', body),
+  /**
+   * The restore first run offers, before a single question has been answered.
+   * No typed-back guard: there is nothing in this installation to lose.
+   */
+  firstRunRestore: (file: File, passphrase: string) =>
+    sendArchive<{ job: BackupJob }>('/onboarding/restore', file, { passphrase }),
   setMissionEnabled: (id: string, enabled: boolean) =>
     post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/enabled`, { enabled }),
   setMisfirePolicy: (id: string, misfirePolicy: string, deadlineMinutes?: number | null) =>

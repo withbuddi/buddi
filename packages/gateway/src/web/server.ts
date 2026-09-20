@@ -68,7 +68,7 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, isJobState, snoozeFinding } from '@buddi/core';
+import { getAction, inRecovery, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
@@ -104,6 +104,7 @@ import {
   CSRF_HEADER,
   SESSION_COOKIE,
   BodyTooLargeError,
+  first,
   cookieHeader,
   parseCookies,
   parseUrl,
@@ -139,6 +140,19 @@ import {
   type SessionScope,
 } from './sessions.js';
 import { supervisorCall } from './service.js';
+import {
+  backupJobRoute,
+  createBackupRoute,
+  discardUpload,
+  listBackups,
+  passphraseRoute,
+  receiveUpload,
+  restoreRoute,
+  scheduleRoute,
+  verifyBackupRoute,
+  type RouteReply,
+} from './backups.js';
+import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
@@ -254,6 +268,11 @@ function groupView(group: GroupRow): { id: string; name: string; coordinator: st
 }
 
 /** Every IANA zone this Node knows, for a picker. */
+/** A reply the backup module composed, on the wire. */
+function reply(res: ServerResponse, out: RouteReply): void {
+  sendJson(res, out.status, out.body);
+}
+
 function knownTimezones(): string[] {
   const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
   try { return intl.supportedValuesOf ? intl.supportedValuesOf('timeZone') : []; } catch { return []; }
@@ -470,6 +489,28 @@ export function createWebApp(deps: WebServerDeps): Server {
       examplesDir: EXAMPLES_AGENTS_DIR,
       reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
     });
+    /** What the backup routes need: the environment, and somewhere to log. */
+    const backupDeps = (): { env: NodeJS.ProcessEnv; log: (line: string) => void } => ({
+      env: deps.env ?? process.env,
+      log,
+    });
+    /**
+     * May this installation still be restored over from the first-run screen?
+     *
+     * Only while nothing has been answered and the owner has no agent of their
+     * own: after that a restore is a replacement and needs the typed-back
+     * confirmation the ordinary route asks for.
+     */
+    const onboardingRestoreRefusal = async (): Promise<{ status: number; message: string } | null> => {
+      const view = await readOnboarding(onboardingDeps());
+      if (view.state !== 'pending') {
+        return { status: 409, message: 'This buddi has already been set up. Restore from Settings, where it asks you to confirm.' };
+      }
+      if (!view.needs.agent) {
+        return { status: 409, message: 'This buddi already has an agent. Restore from Settings, where it asks you to confirm.' };
+      }
+      return null;
+    };
     /** What the two Telegram routes need. The environment is the live one. */
     const telegramDeps = (): TelegramWebDeps => ({
       pool: deps.pool,
@@ -589,6 +630,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             timezone: deps.timezone,
             host: deps.config.host,
             port: deps.config.port,
+            // Restored from a backup and not yet checked over. The shell reads
+            // this on every page, because the banner belongs on every page.
+            recovery: await inRecovery(deps.pool),
             // Where this session was established and when it would lapse if
             // nothing touched it again. Said out loud so the model is legible
             // from the page rather than implied by a number in a source file.
@@ -704,6 +748,19 @@ export function createWebApp(deps: WebServerDeps): Server {
          * ask for. A read, and only a read — an installation that has never
          * been asked anything must not acquire a row because a page loaded.
          */
+        /*
+         * Recovery: the checklist a restored installation has to get through.
+         * Read-only, and it says `active: false` on an installation that was
+         * never restored rather than 404 — the shell asks unconditionally.
+         */
+        case '/api/recovery':
+          return sendJson(res, 200, await readRecoveryView({ pool: deps.pool, env: deps.env ?? process.env }, deps.ctx.ownerId));
+        case '/api/backups':
+          return reply(res, await listBackups(backupDeps()));
+        case '/api/backups/schedule':
+          return reply(res, await scheduleRoute(backupDeps(), 'GET'));
+        case '/api/backups/passphrase':
+          return reply(res, await passphraseRoute(backupDeps(), 'GET'));
         case '/api/onboarding':
           return sendJson(res, 200, await readOnboarding(onboardingDeps()));
         /*
@@ -736,6 +793,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         default:
           break;
       }
+
+      const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
+      if (backupJob) return reply(res, await backupJobRoute(backupDeps(), backupJob[1] as string));
 
       const conversation = /^\/api\/conversations\/([^/]+)$/.exec(path);
       if (conversation) {
@@ -899,6 +959,25 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 409, { error: outcome === 'referenced' ? 'This file was already sent with a message.' : 'This file did not come from the dashboard.' });
     }
 
+    /*
+     * The two settings a backup has that are edited rather than commanded. PUT
+     * because they are a whole value replaced, not an action taken; the gate
+     * above treats any non-GET as mutating, so they are CSRF-checked like
+     * everything else.
+     */
+    if (method === 'PUT') {
+      if (path !== '/api/backups/schedule' && path !== '/api/backups/passphrase') return sendEmpty(res, 405);
+      let put: Record<string, unknown>;
+      try {
+        put = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      return reply(res, path === '/api/backups/schedule'
+        ? await scheduleRoute(backupDeps(), 'PUT', put)
+        : await passphraseRoute(backupDeps(), 'PUT', put));
+    }
+
     if (method !== 'POST') return sendEmpty(res, 405);
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
       const body = await readJsonBody(req);
@@ -926,8 +1005,39 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
+     * A restore from a file the owner picked on their own machine.
+     *
+     * Handled before the JSON body is read, for the same reason the chat
+     * attachment is: `readJsonBody` caps at 64 KB and an archive is megabytes.
+     * The bytes go straight to `<data>/incoming/` and the *path* the gateway
+     * chose is what the supervisor is told — the browser's filename never
+     * becomes a path. The passphrase and the typed-back confirmation travel as
+     * headers rather than in the URL, so neither can end up in a log line.
+     */
+    if ((path === '/api/backups/restore' || path === '/api/onboarding/restore') &&
+        !(req.headers['content-type'] ?? '').toLowerCase().includes('application/json')) {
+      if (path === '/api/onboarding/restore') {
+        const refusal = await onboardingRestoreRefusal();
+        if (refusal) return sendJson(res, refusal.status, { error: refusal.message });
+      }
+      const received = await receiveUpload(backupDeps(), req, first(req.headers['x-filename']));
+      if ('status' in received) return reply(res, received);
+      const out = await restoreRoute(backupDeps(), {
+        path: received.path,
+        ...(first(req.headers['x-backup-passphrase']) === undefined ? {} : { passphrase: first(req.headers['x-backup-passphrase']) }),
+        ...(path === '/api/onboarding/restore' || first(req.headers['x-backup-confirm']) === undefined
+          ? {}
+          : { confirm: first(req.headers['x-backup-confirm']) }),
+      });
+      // A refused restore leaves nothing behind: the upload is the owner's
+      // file, and keeping a copy of it after saying no would be a surprise.
+      if (out.status >= 400) await discardUpload(received.path);
+      return reply(res, out);
+    }
+
+    /*
      * The upload is handled before the JSON body is read, and it is the only
-     * route that is: everything else on this server is a small object, and
+     * other route that is: everything else on this server is a small object, and
      * `readJsonBody` caps at 64 KB for exactly that reason. A 20 MB statement
      * would be refused by that cap before the multipart parser ever saw it.
      */
@@ -1088,6 +1198,72 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, error instanceof ProviderSettingsError ? error.status : 500,
           { error: error instanceof ProviderSettingsError ? error.message : 'Provider settings could not be applied. Check vault access and database availability, then retry.' });
       }
+    }
+
+    /*
+     * Backups, and leaving recovery.
+     *
+     * Every one of these is forwarded to the supervisor when there is one and
+     * run in this process when there is not; `backups.ts` is where that fork
+     * lives, so the routes here are the gate and nothing else.
+     */
+    if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
+    if (path === '/api/backups/verify') return reply(res, await verifyBackupRoute(backupDeps(), body));
+    if (path === '/api/backups/restore') {
+      return reply(res, await restoreRoute(backupDeps(), {
+        ...(typeof body.name === 'string' ? { name: body.name } : {}),
+        ...(typeof body.passphrase === 'string' ? { passphrase: body.passphrase } : {}),
+        ...(typeof body.confirm === 'string' ? { confirm: body.confirm } : {}),
+      }));
+    }
+    /*
+     * First run, restoring instead of starting: the one restore that needs no
+     * typed-back confirmation, because there is nothing here to lose yet. That
+     * is also exactly what is checked — a pending onboarding and no agent of
+     * the owner's own. The moment either is false this is an ordinary restore
+     * and goes through `/api/backups/restore`, confirmation and all.
+     */
+    if (path === '/api/onboarding/restore') {
+      const refusal = await onboardingRestoreRefusal();
+      if (refusal) return sendJson(res, refusal.status, { error: refusal.message });
+      return reply(res, await restoreRoute(backupDeps(), {
+        ...(typeof body.name === 'string' ? { name: body.name } : {}),
+        ...(typeof body.passphrase === 'string' ? { passphrase: body.passphrase } : {}),
+      }));
+    }
+    if (path === '/api/recovery/leave') {
+      if (body.dropPending !== undefined && typeof body.dropPending !== 'boolean') {
+        return sendJson(res, 400, { error: '`dropPending` must be true or false' });
+      }
+      const keep = body.keepGrants ?? [];
+      if (!Array.isArray(keep) || keep.some((id) => typeof id !== 'string')) {
+        return sendJson(res, 400, { error: '`keepGrants` must be a list of grant ids' });
+      }
+      const outcome = await leaveRecoveryMode(
+        { pool: deps.pool, env: deps.env ?? process.env },
+        deps.ctx.ownerId,
+        { dropPending: body.dropPending !== false, keepGrants: keep as string[] },
+        now,
+      );
+      /*
+       * The loops are decided once, at startup (see `serve.ts`), so leaving
+       * recovery is finished by a restart rather than by flipping anything
+       * live. Accepted first and restarted once the reply is on the wire, for
+       * the same reason `/api/service/restart` is: this process is what the
+       * supervisor is about to kill.
+       */
+      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
+      if (socket) {
+        res.once('finish', () => {
+          void supervisorCall(socket, '/restart', 'POST').catch((err: unknown) => {
+            log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        });
+        return sendJson(res, 202, { ...outcome, restarting: true });
+      }
+      // A checkout has no supervisor to restart it. Say so: the loops start
+      // the next time `buddi serve` is started by whoever started this one.
+      return sendJson(res, 200, { ...outcome, restarting: false });
     }
 
     /*

@@ -154,6 +154,26 @@ describe('who is sent here', () => {
   });
 });
 
+describe('a backup from another buddi', () => {
+  it('offers itself under the opening, and takes the screen over once opened', async () => {
+    render(meet());
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.restore.offer }));
+    expect(await screen.findByLabelText(SCRIPT.restore.file)).toBeInTheDocument();
+    // One thing at a time: the name question is not underneath waiting to be
+    // answered into a buddi that is about to be replaced.
+    expect(screen.queryByPlaceholderText(SCRIPT.name.placeholder)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.restore.cancel }));
+    expect(await screen.findByPlaceholderText(SCRIPT.name.placeholder)).toBeInTheDocument();
+  });
+
+  it('is not offered once there is an answer a restore would overwrite', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen' }));
+    render(meet());
+    expect(await screen.findByText(/I'll set your clock to/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SCRIPT.restore.offer })).not.toBeInTheDocument();
+  });
+});
+
 describe('the questions', () => {
   it('opens with buddi saying hello and asking for a name', async () => {
     render(meet());
