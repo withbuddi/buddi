@@ -349,6 +349,7 @@ function toBlocks(raw: unknown): TranscriptBlock[] {
     const type = typeof b.type === 'string' ? b.type : 'unknown';
     switch (type) {
       case 'text':
+      case 'thinking':
         return { type, text: String(b.text ?? '') };
       case 'tool_use':
         return { type, name: String(b.name ?? ''), input: b.input ?? null };

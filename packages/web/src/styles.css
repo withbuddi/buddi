@@ -631,15 +631,34 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
 }
+/* A code block is a small frame: the language and the copy control on a
+   header line, the code under it. Never a hover-only affordance for code. */
+.wb-md-code-frame { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); overflow: hidden; }
+.wb-md-code-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-sunken) 60%, var(--surface));
+}
+.wb-md-code-lang { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-faint); letter-spacing: 0.04em; }
+.wb-md-code-head .wb-md-copy { position: static; opacity: 1; border-color: transparent; background: transparent; }
+.wb-md-code-head .wb-md-copy:hover { border-color: var(--line); background: var(--surface-raised); }
 .wb-md-code {
+  margin: 0;
   padding: 10px 12px;
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
+  background: transparent;
   overflow-x: auto;
+  font-family: var(--font-mono);
   font-size: var(--text-md);
-  line-height: 1.5;
+  line-height: 1.55;
+  tab-size: 2;
 }
 .wb-md-code code { padding: 0; background: transparent; font-size: inherit; }
+.wb-md-copy[data-always='true'] { opacity: 1; }
+
+/* The Activity transcript's thoughts, folded like the chat's. */
+.transcript-thinking { margin: 4px 0 8px; }
+.transcript-thinking summary { cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); }
+.transcript-thinking-text { margin-top: 6px; padding: 6px 12px; border-left: 2px solid var(--line); color: var(--text-muted); font-size: var(--text-sm); }
 .wb-md blockquote {
   margin: 0;
   padding: 2px 12px;

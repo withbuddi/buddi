@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
+import { Markdown } from '../chat/markdown';
 import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { ACTIVITY_ROUTE, chatRoute, transcriptRoute } from '../routes';
 import {
@@ -259,7 +260,15 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
 }
 
 function Block({ block }: { block: TranscriptBlock }): JSX.Element {
-  if (block.type === 'text') return <div className="transcript-text">{block.text}</div>;
+  if (block.type === 'text') return <div className="transcript-text"><Markdown text={block.text ?? ''} /></div>;
+  if (block.type === 'thinking') {
+    return (
+      <details className="transcript-thinking">
+        <summary>Thoughts</summary>
+        <div className="transcript-thinking-text"><Markdown text={block.text ?? ''} /></div>
+      </details>
+    );
+  }
   if (block.type === 'tool_use') {
     return (
       <div className="transcript-tool">
