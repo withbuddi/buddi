@@ -16,7 +16,17 @@
  * replays the answers from the record, the profile and the accounts, and asks
  * the first question nobody has answered (`meet/machine.ts`).
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { createPortal } from 'react-dom';
 import {
   ApiError,
@@ -80,6 +90,23 @@ export const LEAVE_MS = 3_000;
 
 /** The longest the thread watches for a phone before offering a fresh code. */
 export const PAIRING_WATCH_MS = 10 * 60_000;
+
+/**
+ * A field that opens is a field the owner is being asked to fill in.
+ *
+ * Every question puts its input in the dock, one at a time, so the thing that
+ * just appeared is the only thing to type into — and asking someone to click
+ * it first is asking them to do the obvious by hand. `autoFocus` would do it
+ * too, but this is the same behaviour whether the field is rendered here or
+ * through the portal into the dock, and it is a behaviour a test can see.
+ */
+function useOpened<T extends HTMLElement>(): RefObject<T> {
+  const field = useRef<T>(null);
+  useEffect(() => {
+    field.current?.focus();
+  }, []);
+  return field;
+}
 
 /** Reduced motion means no theatre: the bubbles are simply there. */
 function useStill(): boolean {
@@ -559,6 +586,7 @@ function Question(props: QuestionProps): JSX.Element | null {
  * ------------------------------------------------------------------ */
 
 function NameAsk({ answers, onSettled, onTrouble }: QuestionProps): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
   const [value, setValue] = useState(answers.name ?? '');
   const [saving, setSaving] = useState(false);
   const submit = (): void => {
@@ -574,12 +602,12 @@ function NameAsk({ answers, onSettled, onTrouble }: QuestionProps): JSX.Element 
   return (
     <Ask>
       <input
+        ref={field}
         className="meet-input"
         aria-label={SCRIPT.name.placeholder}
         placeholder={SCRIPT.name.placeholder}
         maxLength={80}
         value={value}
-        autoFocus
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
@@ -942,6 +970,7 @@ function KeyCard({
   onBack: () => void;
   onUse: Adopt;
 }): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
   const [secret, setSecret] = useState('');
   const [override, setOverride] = useState<'anthropic' | 'openai' | null>(null);
   const kind = override ?? keyKind(secret);
@@ -978,12 +1007,12 @@ function KeyCard({
       <Ask>
         <Field label={SCRIPT.brain.key.field} grow>
           <input
+            ref={field}
             type="password"
             autoComplete="off"
             spellCheck={false}
             placeholder={SCRIPT.brain.key.placeholder}
             value={secret}
-            autoFocus
             onChange={(event) => setSecret(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -1097,6 +1126,7 @@ function ServiceCard({
   onBack: () => void;
   onOffer: Offer;
 }): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
   const [address, setAddress] = useState(offered);
   const [secret, setSecret] = useState('');
   const submit = (): void => {
@@ -1141,9 +1171,9 @@ function ServiceCard({
       <Ask>
         <Field label={SCRIPT.brain.service.address} grow>
           <input
+            ref={field}
             value={address}
             placeholder={SCRIPT.brain.service.addressPlaceholder}
-            autoFocus
             onChange={(event) => setAddress(event.target.value)}
           />
         </Field>
@@ -1263,7 +1293,7 @@ function ClaudeCard({
               {SCRIPT.brain.claude.open}
             </a>
             <Field label={SCRIPT.brain.claude.paste} grow>
-              <input type="password" autoComplete="off" spellCheck={false} value={code} onChange={(event) => setCode(event.target.value)} />
+              <ClaudeCode value={code} onChange={setCode} />
             </Field>
             <Button variant="accent" disabled={working || code.trim() === ''} onClick={finish}>
               {SCRIPT.brain.claude.finish}
@@ -1281,6 +1311,22 @@ function ClaudeCard({
         </Ask>
       )}
     </>
+  );
+}
+
+/** The code from the consent page. Its own component so it takes focus when
+    the step that asks for it appears, rather than when the card does. */
+function ClaudeCode({ value, onChange }: { value: string; onChange: (next: string) => void }): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
+  return (
+    <input
+      ref={field}
+      type="password"
+      autoComplete="off"
+      spellCheck={false}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
   );
 }
 
@@ -1651,6 +1697,7 @@ function isSpoken(message: ChatMessage): boolean {
  * arrived when the phone says hello, and not before.
  */
 function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -1769,6 +1816,7 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
       <Ask>
         <Field label={SCRIPT.telegram.field} grow>
           <input
+            ref={field}
             type="password"
             value={token}
             autoComplete="off"

@@ -2198,9 +2198,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   background: var(--bg);
   display: flex;
   align-items: center;
-  /* The page is read from the left, and the room on the right is where the
-     backdrop lives. */
-  justify-content: flex-start;
+  justify-content: center;
   padding: var(--space-6);
   isolation: isolate;
 }
@@ -2257,7 +2255,13 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   .meet::before { animation: none; }
 }
 
-/* The page's one column: the mark and its line, then the board. */
+/*
+ * The page's one column: the mark and its line, then the board.
+ *
+ * The column is centred in the window, horizontally and vertically, and
+ * everything in it is aligned to its left edge — so the header stands over
+ * the board's own edge rather than over its middle.
+ */
 .meet-stack {
   position: relative;
   width: 100%;
@@ -2513,11 +2517,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
 .meet-later:disabled { cursor: default; opacity: 0.5; }
-
-/* More room on the left where there is room to give. */
-@media (min-width: 1100px) {
-  .meet { padding-left: var(--space-8); }
-}
 
 @media (max-width: 700px) {
   .meet { padding: var(--space-3); }
