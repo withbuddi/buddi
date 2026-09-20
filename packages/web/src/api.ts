@@ -301,6 +301,28 @@ export interface SentinelFinding {
   snoozedAt: string | null;
 }
 
+/**
+ * First run, as the server sees it: where the record stands and what the
+ * wizard still has to ask for (`packages/gateway/src/web/onboarding.ts`).
+ */
+export interface OnboardingView {
+  state: 'pending' | 'in-progress' | 'done' | 'skipped';
+  stepsDone: string[];
+  needs: { owner: boolean; model: boolean; agent: boolean };
+}
+
+/** What writing the first agent answers with: the row, as /api/agents shapes it. */
+export interface CreatedAgent {
+  agent: AgentRow | null;
+  id: string;
+  handle: string;
+  file: string;
+  /** False when the file is written but the running catalog could not reload. */
+  live: boolean;
+  /** The model account it was given, when there was exactly one to give. */
+  accountId: string | null;
+}
+
 export interface AgentRow {
   id: string;
   handle: string;
@@ -674,6 +696,13 @@ export const api = {
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
+  /* ---- first run ---- */
+  onboarding: () => get<OnboardingView>('/onboarding'),
+  onboardingStep: (step: string) => post<OnboardingView>('/onboarding/step', { step }),
+  completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
+  skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
+  createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string }) =>
+    post<CreatedAgent>('/onboarding/agent', body),
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
