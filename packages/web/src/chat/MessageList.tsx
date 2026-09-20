@@ -143,6 +143,19 @@ export function MessageList({
         }
         // The coordinator bringing a member in is coordination, not prose:
         // one line saying who asked whom for what, the whole request on click.
+        // A decided action coming back is not a turn anybody took: it is the
+        // result of something the owner already approved, drawn where the call
+        // that asked for it is drawn — a tool row, not a bubble in their column.
+        const decided = (message.blocks ?? []).filter(
+          (b): b is Extract<ChatBlock, { type: 'approval_result' }> => b.type === 'approval_result',
+        );
+        if (decided.length > 0) {
+          return (
+            <div key={message.id} className="wb-msg" data-role="assistant" data-testid="approval-result">
+              {decided.map((block, i) => <ApprovalResult key={i} block={block} />)}
+            </div>
+          );
+        }
         const ask = speakers && who && message.role === 'user' ? askedFor(message) : null;
         if (ask) {
           // The member asked is whoever answers next; the request names only the asker.
@@ -315,7 +328,44 @@ function files(message: ChatMessage): AttachmentBlock[] {
 /** A block worth a line on screen. A bare tool result is not one. */
 function isVisible(block: ChatBlock): boolean {
   if (block.type === 'text' || block.type === 'thinking') return block.text.trim() !== '';
-  return block.type === 'tool_use' || block.type === 'attachment';
+  return block.type === 'tool_use' || block.type === 'attachment' || block.type === 'approval_result';
+}
+
+/**
+ * What the owner approved, and how it went: the tool's own label, the state the
+ * action row holds, and the result itself one click away. Built out of the tool
+ * row's parts because that is what it is — the other half of a call the thread
+ * already shows.
+ */
+function ApprovalResult({ block }: { block: Extract<ChatBlock, { type: 'approval_result' }> }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ok = block.state === 'succeeded';
+  return (
+    <div className="wb-approval" data-open={open || undefined}>
+      <button
+        type="button"
+        className="wb-tool"
+        data-ok={ok}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="wb-tool-mark" data-ok={ok ? 'true' : 'false'} aria-hidden="true" />
+        <span className="wb-tool-label">{block.name === '' ? 'Approved action' : labelFor(block.name)}</span>
+        <span className="wb-tool-elapsed">{block.state}</span>
+        <ArrowIcon />
+      </button>
+      {open ? <pre className="wb-approval-output mono">{stringify(block.output)}</pre> : null}
+    </div>
+  );
+}
+
+function stringify(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? 'null';
+  } catch {
+    return String(value);
+  }
 }
 
 function ToolRow({

@@ -246,6 +246,12 @@ export interface TranscriptMessage {
   role: string;
   createdAt: string;
   blocks: TranscriptBlock[];
+  /**
+   * Who spoke, when it was not simply the owner or the agent: a room member,
+   * or `approval:resume` for the turn that carries a decided action's result.
+   * Activity draws that one as the tool result it is.
+   */
+  speaker?: string;
 }
 
 export interface TranscriptRun {
@@ -282,7 +288,7 @@ export async function readConversation(
   // same reason the chat leaves it out: it is an instruction to a new
   // assistant, and Activity reads as a record of what the owner did.
   const { rows: messages } = await pool.query(
-    `select id, role, content, created_at from core.messages
+    `select id, role, content, created_at, speaker from core.messages
       where conversation_id = $1::uuid and speaker is distinct from $2
       order by created_at asc, id asc`,
     [conversationId, OPENING_TURN_SPEAKER],
@@ -340,6 +346,7 @@ export async function readConversation(
       role: m.role,
       createdAt: new Date(m.created_at).toISOString(),
       blocks: toBlocks(m.content),
+      ...(typeof m.speaker === 'string' && m.speaker !== '' ? { speaker: m.speaker } : {}),
     })),
     runs,
     usage,

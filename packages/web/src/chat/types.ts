@@ -45,14 +45,20 @@ export type ChatBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
-  | { type: 'thinking'; text: string };
+  | { type: 'thinking'; text: string }
+  /** A gated action the owner decided, come back into the thread as its result. */
+  | { type: 'approval_result'; actionId: string; name: string; state: string; output: unknown };
 
 export interface ChatMessage {
   id: string;
   role: string;
   at: string;
   blocks: ChatBlock[];
-  /** Who spoke, in a group: 'owner', an agent id, or 'room'. */
+  /**
+   * Who spoke, in a group: 'owner', an agent id, or 'room' — and
+   * 'approval:resume' on the turn that carries a decided action's result,
+   * which is nobody speaking at all.
+   */
   speaker?: string;
 }
 

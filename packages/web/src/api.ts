@@ -168,7 +168,7 @@ export interface Transcript {
   id: string;
   agentId: string;
   createdAt: string;
-  messages: Array<{ id: string; role: string; createdAt: string; blocks: TranscriptBlock[] }>;
+  messages: Array<{ id: string; role: string; createdAt: string; blocks: TranscriptBlock[]; speaker?: string }>;
   runs: Array<{
     startedAt: string | null;
     finishedAt: string | null;

@@ -42,6 +42,19 @@ export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 export const OPENING_TURN_SPEAKER = 'first-run:opening';
 
 /**
+ * The speaker written on the turn that carries a decided approval's outcome.
+ *
+ * A run that stopped awaiting an approval resumes with the result delivered
+ * late, as a user turn — the API requires it, because the tool_use it belongs
+ * to was answered before the run suspended. But the owner did not type "tool
+ * result (deferred) for action …: succeeded", and a transcript that draws it
+ * as their words is telling them they said something they did not. The same
+ * shape as `OPENING_TURN_SPEAKER`, and for the same reason: the model still
+ * sees the turn, and the readers know what it is.
+ */
+export const APPROVAL_RESUME_SPEAKER = 'approval:resume';
+
+/**
  * What first run learned that is not a question: which conversation the owner
  * met their assistant in, and which account they chose while meeting it.
  *

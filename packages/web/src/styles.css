@@ -805,6 +805,21 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   word-break: break-word;
 }
 
+/* A decided action, back in the thread: the tool's row, its result one click away. */
+.wb-approval { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; max-width: 68ch; }
+.wb-approval .wb-tool-arrow { transition: transform 120ms ease; }
+.wb-approval[data-open='true'] .wb-tool-arrow { transform: rotate(90deg); }
+.wb-approval-output {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--line);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* A quote or a code block carries a copy control on its corner, shown on hover. */
 .wb-md-copyable { position: relative; }
 .wb-md-copy {
