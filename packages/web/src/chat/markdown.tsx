@@ -14,7 +14,7 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { Fragment, createContext, useContext, useState, type ReactNode } from 'react';
 import type { ChatAgent } from './types';
-import { agentRoute } from '../routes';
+import { chatRoute } from '../routes';
 import { Avatar } from '../views/parts/Avatar';
 
 /**
@@ -216,7 +216,7 @@ function AgentMention({ handle }: { handle: string }): JSX.Element {
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <a className="wb-mention-link" href={agentRoute(agent.id)}>@{agent.handle}</a>
+        <a className="wb-mention-link" href={chatRoute(agent.id)}>@{agent.handle}</a>
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content className="wb-agent-card" sideOffset={6}>
