@@ -96,10 +96,11 @@ and refusal to promote room text.
   restarts.
 - A call is reserved atomically on that row before it is dispatched. An
   ambiguous failure, such as a timeout or a crash after dispatch, keeps the
-  reservation: a timeout does not say whether the model ran. An explicit
-  rejection the provider made before doing any work, such as a 429, may
-  release it. Retries on top of that draw on their own bounded attempt and
-  time budget, never on the twelve.
+  reservation: a timeout does not say whether the model ran. Only a rejection
+  the provider confirmed before doing any work, such as a 429, releases it. A
+  retry after an ambiguous failure reserves another call from the twelve; the
+  separate limit on retry attempts and retry time is a second ceiling on top
+  of the twelve, never a source of free calls.
 - One call, the last, is reserved for synthesis: the coordinator only, no
   tools, given the transcript and the contributions. It cannot start new work.
   Synthesis may come early; two working calls and a conclusion is a complete
@@ -155,9 +156,12 @@ limits can replace the group default once the account layer knows them.
 
 The starting cap does not guarantee a request fits: one large tool result can
 exhaust a member's context mid-request. That case ends with a controlled stop,
-not a provider error: the run records that the result was too large to carry,
-the coordinator is told, and the request proceeds to synthesis with what it
-has.
+not a provider error: the oversized output is kept as an artifact and replaced
+in the transcript by a reference, the run records that it was too large to
+carry, the coordinator is told, and the request proceeds to synthesis.
+Synthesis always receives a bounded projection, with references in place of
+anything oversized, so the coordinator cannot hit the same overflow while
+summarising.
 
 ## What you see
 
