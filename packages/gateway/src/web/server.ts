@@ -53,6 +53,7 @@ import {
   probeOllama,
   readOnboarding,
   updateFirstAgent,
+  withFirstRunFacts,
   type OnboardingDeps,
 } from './onboarding.js';
 import {
@@ -1455,7 +1456,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const sent = await chat.send({
         agentId: decodeURIComponent(messages[1] as string),
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
-        text: body.text,
+        text: body.opening === true ? await withFirstRunFacts(onboardingDeps(), body.text) : body.text,
         ...(ids ? { attachmentIds: ids as string[] } : {}),
         ...(body.opening === true ? { opening: true } : {}),
       });

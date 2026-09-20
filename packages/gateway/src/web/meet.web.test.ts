@@ -15,7 +15,7 @@ import path from 'node:path';
 import { ToolRegistry, type ToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
-import { claimOpeningTurn, probeOllama, updateFirstAgent, OLLAMA_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
 import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
@@ -305,4 +305,33 @@ it('refuses to change an assistant that does not exist yet', () => {
       { name: 'Noor' },
     ),
   ).toThrow(/no assistant of your own/i);
+});
+
+it('puts the two names it knows in front of the opening instruction', async () => {
+  const dir = agentsDir();
+  mkdirSync(path.join(dir, 'concierge'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'concierge', 'agent.md'),
+    ['---', 'id: concierge', 'handle: ada', 'name: Ada', 'description: Whatever I ask.', 'default: true', 'tools: [memory.*]', '---', '', 'You are Ada.', ''].join('\n'),
+    'utf8',
+  );
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const named = {
+    query: vi.fn(async (sql: string) =>
+      /from core\.owner/.test(sql)
+        ? { rows: [{ preferred_name: 'Amen', timezone: null, language: null, about: null, display_name: null }] }
+        : { rows: [] },
+    ),
+  };
+  const deps = (pool: unknown) => ({ pool, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => {} }) as never;
+  // The owner said their name a minute ago and named the assistant themselves;
+  // a first message that asks either again is the install forgetting.
+  expect(await withFirstRunFacts(deps(named), 'Introduce yourself.')).toBe('The owner is called Amen. You are Ada. Introduce yourself.');
+  // And an installation that knows neither still gets the three asks, whole.
+  const anonymous = { query: vi.fn(async () => ({ rows: [{ preferred_name: null, timezone: null, language: null, about: null, display_name: null }] })) };
+  const empty = reloadableCatalog(() => loadGatewayCatalog({ dir: agentsDir(), env }));
+  expect(
+    await withFirstRunFacts({ pool: anonymous, catalog: empty, agentsDir: dir, examplesDir: dir, reload: () => {} } as never, 'Introduce yourself.'),
+  ).toBe('Introduce yourself.');
 });

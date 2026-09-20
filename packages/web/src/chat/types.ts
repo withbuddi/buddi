@@ -109,6 +109,27 @@ export interface ChatConversation {
   offers?: ChatOffer[];
   /** A durable input request. It supplies information and never grants permission. */
   question?: ChatQuestion | null;
+  /**
+   * Every run this conversation has had, open ones included: a run with no
+   * `finishedAt` is still going. What the server already sends
+   * (`packages/gateway/src/web/chat.ts`), written down here because first run
+   * reads it to tell "slow" from "never".
+   */
+  runs?: ChatRun[];
+}
+
+/** One run of the agent in this conversation. */
+export interface ChatRun {
+  runId: string | null;
+  surface: string | null;
+  startedAt: string | null;
+  /** Null while the run is alive. */
+  finishedAt: string | null;
+  turns: number | null;
+  stopped: string | null;
+  usage: { input: number; output: number };
+  actionId: string | null;
+  resumed: boolean;
 }
 
 export interface ConversationListItem {

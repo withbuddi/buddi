@@ -104,6 +104,8 @@ export const SCRIPT = {
   handover: {
     /** The one thing buddi says while the assistant is being woken. */
     waiting: 'One moment.',
+    /** Said once, while the assistant is demonstrably still working. */
+    slow: 'Still waking up. A brain on this computer takes a minute the first time.',
     silent:
       "Your assistant isn't answering. The AI you picked may be down; try again, or pick another brain above.",
     again: 'Pick another brain',

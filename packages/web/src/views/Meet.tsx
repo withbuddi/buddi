@@ -54,8 +54,22 @@ import { qrSvgDataUrl } from './meet/qr';
 /** How long a scripted bubble "types" before it lands. */
 const TYPING_MS = 550;
 
-/** How long the assistant has to say its first word before buddi says so. */
-export const FIRST_MESSAGE_TIMEOUT_MS = 60_000;
+/**
+ * How long a silent, *living* run goes before buddi says something about it.
+ *
+ * A brain on this computer loads for a minute before it says a word, and the
+ * first message may take several turns. So this is not a deadline: it is when
+ * one more line appears saying what the wait is.
+ */
+export const PATIENCE_MS = 60_000;
+
+/**
+ * The longest first run waits at all.
+ *
+ * Past this, with nothing said, the thread stops claiming anything is coming —
+ * whatever the run says about itself.
+ */
+export const FIRST_MESSAGE_TIMEOUT_MS = 5 * 60_000;
 
 /** How often the thread asks whether the answer has arrived. */
 const POLL_MS = 1_500;
@@ -1043,6 +1057,8 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
   const [conversationId, setConversationId] = useState<string | null>(met);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [silent, setSilent] = useState(false);
+  /** The run is alive and slow, and the owner has been watching for a minute. */
+  const [patient, setPatient] = useState(false);
   const [running, setRunning] = useState(true);
   const [offers, setOffers] = useState<'open' | 'phone' | 'gone'>('open');
   const started = useRef(false);
@@ -1091,40 +1107,51 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
     };
   }, [assistant?.id, met]);
 
-  /* The answer, when it comes. Polled: a run outlives any one page. */
+  /*
+   * The answer, when it comes. Polled: a run outlives any one page.
+   *
+   * Waiting is not the failure. A model on this computer takes a minute to
+   * load, and a first message that looks up the owner's profile before it
+   * writes takes several turns — a fixed deadline told the owner their
+   * assistant was not answering while it was demonstrably working. So the
+   * transcript's own runs decide: while one is open the thread stays patient
+   * and says so after a minute, and only a run that ended without a word, or
+   * five minutes of nothing at all, brings out the script's fallback.
+   */
   useEffect(() => {
     if (!conversationId) return undefined;
     let cancelled = false;
+    const since = Date.now();
     const read = (): void => {
       chatApi
         .conversation(conversationId)
         .then((transcript) => {
           if (cancelled) return;
           setMessages(transcript.messages);
+          const waited = Date.now() - since;
           if (transcript.messages.some(isSpoken)) {
             setRunning(false);
             setSilent(false);
+            setPatient(false);
             void api.completeOnboarding().catch(() => {});
+            return;
+          }
+          const runs = transcript.runs ?? [];
+          const alive = runs.some((run) => run.finishedAt === null);
+          const ended = runs.length > 0 && !alive;
+          setPatient(alive && waited >= PATIENCE_MS);
+          if (ended || waited >= FIRST_MESSAGE_TIMEOUT_MS) {
+            setRunning(false);
+            setSilent(true);
           }
         })
         .catch(() => {});
     };
     read();
     const timer = window.setInterval(read, POLL_MS);
-    const deadline = window.setTimeout(() => {
-      if (cancelled) return;
-      setRunning(false);
-      // Nothing said in a minute is the failure the script has words for; a
-      // thread that has already spoken is simply idle.
-      setMessages((current) => {
-        if (!current.some(isSpoken)) setSilent(true);
-        return current;
-      });
-    }, FIRST_MESSAGE_TIMEOUT_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      window.clearTimeout(deadline);
     };
   }, [conversationId]);
 
@@ -1148,6 +1175,12 @@ function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: Q
         agentName={assistant?.name ?? ''}
         emptyHint={SCRIPT.handover.waiting}
       />
+
+      {patient && !silent ? (
+        <Buddi>
+          <Said>{SCRIPT.handover.slow}</Said>
+        </Buddi>
+      ) : null}
 
       {silent ? (
         <>

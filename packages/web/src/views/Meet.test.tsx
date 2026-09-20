@@ -11,7 +11,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, chatApi, type OnboardingView, type OwnerView, type ProviderAccountsView } from '../api';
 import { App } from '../App';
-import { Meet, FIRST_MESSAGE_TIMEOUT_MS } from './Meet';
+import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS } from './Meet';
 import { BANNED_WORDS, SCRIPT } from './meet/script';
 
 vi.mock('../api', async (load) => {
@@ -281,16 +281,61 @@ describe('the switch', () => {
     expect(chatApi.conversation).toHaveBeenCalledWith('c-earlier');
   });
 
-  it('says so, and offers the brains again, when nothing ever answers', async () => {
+  /** One run, still going. A brain on this computer is slow, not broken. */
+  const alive = { runId: 'r1', surface: 'web', startedAt: '', finishedAt: null, turns: null, stopped: null, usage: { input: 0, output: 0 }, actionId: null, resumed: false };
+
+  it('waits while the run is alive, and says why rather than giving up at a minute', async () => {
     vi.useFakeTimers();
     try {
       ready();
-      vi.mocked(chatApi.conversation).mockResolvedValue({ id: 'c1', agentId: 'ada', messages: [] } as never);
+      vi.mocked(chatApi.conversation).mockResolvedValue({ id: 'c1', agentId: 'ada', messages: [], runs: [alive] } as never);
       render(meet());
       await vi.advanceTimersByTimeAsync(10);
-      await vi.advanceTimersByTimeAsync(FIRST_MESSAGE_TIMEOUT_MS + 100);
+      await vi.advanceTimersByTimeAsync(PATIENCE_MS + 2_000);
+      expect(screen.getByText(SCRIPT.handover.slow)).toBeInTheDocument();
+      expect(screen.queryByText(SCRIPT.handover.silent)).not.toBeInTheDocument();
+      // Still nothing after five minutes is the end of waiting, even alive.
+      await vi.advanceTimersByTimeAsync(FIRST_MESSAGE_TIMEOUT_MS);
+      expect(screen.getByText(SCRIPT.handover.silent)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up at once when the run ended without a word', async () => {
+    vi.useFakeTimers();
+    try {
+      ready();
+      vi.mocked(chatApi.conversation).mockResolvedValue({
+        id: 'c1',
+        agentId: 'ada',
+        messages: [],
+        runs: [{ ...alive, finishedAt: '2026-09-20T16:36:40.079Z', stopped: 'error' }],
+      } as never);
+      render(meet());
+      await vi.advanceTimersByTimeAsync(10);
       expect(screen.getByText(SCRIPT.handover.silent)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: SCRIPT.handover.again })).toBeInTheDocument();
+      expect(screen.queryByText(SCRIPT.handover.slow)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says nothing about waiting once the assistant has spoken', async () => {
+    vi.useFakeTimers();
+    try {
+      ready();
+      vi.mocked(chatApi.conversation).mockResolvedValue({
+        id: 'c1',
+        agentId: 'ada',
+        messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: "I'm Ada." }] }],
+        runs: [alive],
+      } as never);
+      render(meet());
+      await vi.advanceTimersByTimeAsync(PATIENCE_MS + FIRST_MESSAGE_TIMEOUT_MS);
+      expect(screen.queryByText(SCRIPT.handover.slow)).not.toBeInTheDocument();
+      expect(screen.queryByText(SCRIPT.handover.silent)).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
