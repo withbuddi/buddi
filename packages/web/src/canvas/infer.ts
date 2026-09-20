@@ -426,3 +426,112 @@ function detailOf(value: unknown): unknown {
 
 /** How many rows the panel shows before it asks. */
 export const ROW_CAP = 25;
+
+/* ------------------------------------------------------------------ *
+ * Is there anything here to look at?
+ *
+ * One place, because the same question is asked twice — "does this result
+ * deserve a tab" and "may it take the screen" — and two answers that drift
+ * apart produce a canvas that opens panels it then refuses to show.
+ *
+ * The thresholds below are the whole judgement. They are deliberately about
+ * *quantity of readable value*: the canvas earns its place by laying data out
+ * in a way a sentence cannot, and a sentence is exactly what two or three
+ * fields are. The transcript's tool row still expands to show every result,
+ * so nothing decided here is ever hidden — it is only kept off the canvas.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Items an inferred list needs before it is a list rather than an aside. Two
+ * things are a phrase ("Bramley and Russet"); three start to be a column.
+ */
+export const MIN_LIST_ITEMS = 3;
+
+/**
+ * Leaf values a record or tree needs before it is a view rather than a
+ * receipt. A profile of four fields, an `{ok: true, note}` acknowledgement and
+ * an "Ok" all sit well under this; a settings dump, a nested report or a
+ * status with a dozen readings sits well over it. Eight is where reading a
+ * paragraph stops being easier than reading a panel.
+ */
+export const MIN_LEAVES = 8;
+
+/** How deep leaf counting goes before it decides it has seen enough. */
+const MAX_DEPTH = 6;
+
+/**
+ * Readable values in a result, nesting included. Prose does not count: words
+ * are what the answer is already made of, and a reply whose body is one long
+ * string is quoted in the transcript a moment earlier. Blanks do not count
+ * either — an absent field tells the reader nothing.
+ */
+export function countLeaves(value: unknown, depth = 0): number {
+  if (depth > MAX_DEPTH) return 0;
+  if (isBlank(value)) return 0;
+  if (isProse(value)) return 0;
+  if (isScalar(value)) return 1;
+  if (Array.isArray(value)) {
+    let total = 0;
+    for (const item of value) {
+      total += countLeaves(item, depth + 1);
+      if (total >= MIN_LEAVES) return total;
+    }
+    return total;
+  }
+  if (isRecord(value)) {
+    let total = 0;
+    for (const child of Object.values(value)) {
+      total += countLeaves(child, depth + 1);
+      if (total >= MIN_LEAVES) return total;
+    }
+    return total;
+  }
+  return 0;
+}
+
+/**
+ * A file the canvas could draw as itself: an artifact the tool stored, or a
+ * document it points at. Shape only — an id plus a type, or a type plus
+ * somewhere to fetch it — so no tool name is involved.
+ */
+export function carriesFile(value: unknown, depth = 0): boolean {
+  if (depth > MAX_DEPTH) return false;
+  if (Array.isArray(value)) return value.some((item) => carriesFile(item, depth + 1));
+  if (!isRecord(value)) return false;
+
+  const artifactId = value['artifactId'] ?? value['artifact_id'];
+  if (typeof artifactId === 'string' && artifactId.trim() !== '') return true;
+
+  const mime = value['mime'] ?? value['mimeType'] ?? value['contentType'];
+  const locator = value['url'] ?? value['src'] ?? value['downloadUrl'] ?? value['path'];
+  if (typeof mime === 'string' && mime.includes('/') && typeof locator === 'string' && locator.trim() !== '') {
+    return true;
+  }
+
+  return Object.values(value).some((child) => carriesFile(child, depth + 1));
+}
+
+/**
+ * Is this result worth a tab of its own?
+ *
+ * Rows, a list of a few items, a file, or enough separate values that laying
+ * them out beats spelling them out. Everything else — an acknowledgement, a
+ * handful of pairs, an empty note, a failure — is quiet: the answer already
+ * said it, and the tool row in the transcript still opens it in full.
+ */
+export function isSubstantialResult(value: unknown): boolean {
+  if (carriesFile(value)) return true;
+  const shape = inferShape(value);
+  switch (shape.kind) {
+    case 'table':
+      return shape.rows.length > 0;
+    case 'list':
+      return shape.items.length >= MIN_LIST_ITEMS;
+    case 'record':
+    case 'tree':
+      return countLeaves(value) >= MIN_LEAVES;
+    default:
+      // 'empty' and 'error' say their piece in one sentence.
+      return false;
+  }
+}
