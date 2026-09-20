@@ -164,15 +164,26 @@ function Stats({ stats }: { stats: Stat[] }): JSX.Element | null {
   );
 }
 
+/** Past this, a note is a paragraph for the model, not a line for a person. */
+const NOTE_FOLD_CHARS = 200;
+
 function Notes({ notes }: { notes: string[] }): JSX.Element | null {
   if (notes.length === 0) return null;
+  const short = notes.filter((note) => note.length <= NOTE_FOLD_CHARS);
+  const long = notes.filter((note) => note.length > NOTE_FOLD_CHARS);
   return (
     <>
-      {notes.map((note) => (
+      {short.map((note) => (
         <p key={note} className="wb-note">
           {note}
         </p>
       ))}
+      {long.length > 0 ? (
+        <details className="wb-aside">
+          <summary>{long.length === 1 ? 'A note that came with this result' : `${long.length} notes that came with this result`}</summary>
+          {long.map((note) => <p key={note} className="wb-note">{note}</p>)}
+        </details>
+      ) : null}
     </>
   );
 }
