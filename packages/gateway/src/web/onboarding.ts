@@ -16,21 +16,25 @@
  * standing as saving their name or adding a model account.
  */
 import path from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import {
   AGENT_FILE,
   HANDLE,
   HANDLE_MAX,
   HANDLE_MIN,
+  OPENING_TURN_SPEAKER,
   getOnboarding,
   getOwnerProfile,
   parseAgentFile,
+  patchAgentSource,
+  setOnboardingDetails,
   type AgentCatalog,
   type Onboarding,
+  type OnboardingDetails,
   type Queryable,
 } from '@buddi/core';
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
-import { composeAgentFile, createAgentDirAtomic } from '../agents/platform-files.js';
+import { composeAgentFile, createAgentDirAtomic, replaceBody, writeFilesAtomic } from '../agents/platform-files.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
 /** The surface recorded against everything the wizard writes. */
@@ -90,6 +94,8 @@ export interface OnboardingNeeds {
 export interface OnboardingView {
   state: Onboarding['state'];
   stepsDone: string[];
+  /** What the steps do not say: the handover conversation, the account chosen. */
+  details: OnboardingDetails;
   needs: OnboardingNeeds;
 }
 
@@ -135,6 +141,7 @@ export async function readOnboarding(deps: OnboardingDeps): Promise<OnboardingVi
   return {
     state: record.state,
     stepsDone: record.stepsDone,
+    details: record.details,
     needs: {
       owner: profile.preferredName === null,
       model: !hasUsableModel(deps.providerAccounts),
@@ -383,6 +390,136 @@ async function writeFirstAgent(
   return { id, handle, file, live, assigned: await assignAccount(deps, id, account) };
 }
 
+/* ------------------------------------------------------------------ *
+ * Changing the assistant, and claiming the turn that introduces it
+ * ------------------------------------------------------------------ */
+
+/** What "change" may alter about the assistant after it exists. */
+export interface FirstAgentUpdate {
+  name?: string;
+  description?: string;
+  avatar?: string;
+}
+
+/** The owner's own agent, if they have one. Examples are not it. */
+export function privateAgent(catalog: AgentCatalog): { id: string; handle: string; file: string; name: string; description: string } | undefined {
+  const list = typeof catalog?.list === 'function' ? catalog.list() : [];
+  const own = list.filter((agent) => agent.source !== 'example');
+  const summary = own.find((agent) => agent.isDefault) ?? own[0];
+  // The summary says who; the whole agent says which file, which is what an
+  // edit needs.
+  const chosen = summary && typeof catalog.get === 'function' ? catalog.get(summary.id) : undefined;
+  return chosen
+    ? { id: chosen.id, handle: chosen.handle, file: chosen.file, name: chosen.name, description: chosen.description }
+    : undefined;
+}
+
+/**
+ * Change the assistant's name, face or purpose — in place.
+ *
+ * The screen promises "change either, or keep them", and the owner may take it
+ * up after the agent exists, when writing a *first* agent is refused. So this
+ * edits the same file through the same primitives the maker agent edits with:
+ * the frontmatter is patched key by key (everything else in the block survives
+ * byte for byte), and the persona is rewritten only while it is still the one
+ * first run generated — an owner who has since written their own words keeps
+ * them.
+ */
+export function updateFirstAgent(
+  deps: OnboardingDeps,
+  input: FirstAgentUpdate,
+): { id: string; handle: string; file: string; live: boolean } {
+  const agent = privateAgent(deps.catalog);
+  if (!agent) {
+    throw new OnboardingRefusal(409, 'There is no assistant of your own to change yet.');
+  }
+  const name = input.name === undefined ? undefined : input.name.trim();
+  if (name !== undefined && (name === '' || name.length > 60)) {
+    throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
+  }
+  const description = input.description === undefined ? undefined : input.description.trim();
+  if (description !== undefined && (description === '' || description.length > 1000)) {
+    throw new OnboardingRefusal(400, 'Say in a sentence or two what this agent is for (up to 1,000 characters).');
+  }
+  const avatar = input.avatar === undefined ? undefined : input.avatar.trim();
+  if (avatar !== undefined && avatar !== '' && /[A-Za-z0-9./\\]/.test(avatar)) {
+    throw new OnboardingRefusal(400, 'A face is an emoji.');
+  }
+
+  const source = readFileSync(agent.file, 'utf8');
+  let patched: string;
+  try {
+    patched = patchAgentSource(
+      source,
+      {
+        ...(name === undefined ? {} : { name }),
+        ...(description === undefined ? {} : { description }),
+        ...(avatar === undefined || avatar === '' ? {} : { avatar }),
+      },
+      agent.file,
+    ).text;
+  } catch (err) {
+    throw new OnboardingRefusal(400, err instanceof Error ? err.message : String(err));
+  }
+  // The persona quotes the name and the purpose, so leaving it alone would
+  // leave an assistant introducing itself by its old name. It is rewritten
+  // only while it is still word for word the one this module generated.
+  const untouched = bodyOf(patched) === firstAgentPersona({ name: agent.name, description: agent.description }).trim();
+  const content = untouched
+    ? replaceBody(patched, firstAgentPersona({ name: name ?? agent.name, description: description ?? agent.description }), agent.file)
+    : patched;
+  try {
+    parseAgentFile(content, { dirName: agent.id, file: agent.file });
+  } catch (err) {
+    throw new OnboardingRefusal(400, `That would write a file the loader refuses: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  writeFilesAtomic([{ path: agent.file, content }]);
+
+  let live = true;
+  try {
+    deps.reload();
+  } catch {
+    live = false;
+  }
+  return { id: agent.id, handle: deps.catalog.get(agent.id)?.handle ?? agent.handle, file: agent.file, live };
+}
+
+/** Everything after the frontmatter block, trimmed. */
+function bodyOf(source: string): string {
+  const match = /^---\n[\s\S]*?\n---\n?/.exec(source);
+  return (match ? source.slice(match[0].length) : source).trim();
+}
+
+/**
+ * Claim the one turn first run is allowed to send on the owner's behalf.
+ *
+ * The assistant has to speak first and the runtime has no turn nobody asked
+ * for, so the thread sends the instruction as a message. That must happen
+ * exactly once per installation: a reload during the handover would otherwise
+ * open a second conversation and have the assistant introduce itself twice,
+ * to an owner who is watching the first one.
+ *
+ * The conversation is recorded on the record, which is also what a reload
+ * rejoins. A second claim for another conversation is refused, and a repeat
+ * claim for the same one is refused once that conversation already holds the
+ * turn — so a retry after a failed send still works.
+ */
+export async function claimOpeningTurn(deps: OnboardingDeps, conversationId: string): Promise<void> {
+  const record = await getOnboarding(deps.pool);
+  const claimed = record.details.conversationId;
+  if (claimed !== undefined && claimed !== conversationId) {
+    throw new OnboardingRefusal(409, 'Your assistant has already been introduced, in another conversation.');
+  }
+  const { rows } = await deps.pool.query(
+    `select 1 from core.messages where conversation_id = $1::uuid and speaker = $2 limit 1`,
+    [conversationId, OPENING_TURN_SPEAKER],
+  );
+  if (rows.length > 0) {
+    throw new OnboardingRefusal(409, 'Your assistant has already introduced itself in this conversation.');
+  }
+  await setOnboardingDetails(deps.pool, { conversationId });
+}
+
 /**
  * Give the new agent a brain: the account the wizard just tested.
  *
@@ -464,6 +601,12 @@ export interface OllamaProbe {
   /** The models it has pulled, in the order it lists them. */
   models: string[];
   downloadUrl: string;
+  /**
+   * Where an account for it points. Travels as data for the same reason the
+   * download link does: the page names no address, not even a local one, and
+   * the machine Ollama runs on is this one rather than the browser's.
+   */
+  baseUrl: string;
 }
 
 /**
@@ -487,15 +630,19 @@ export async function probeOllama(
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(opts.timeoutMs ?? OLLAMA_TIMEOUT_MS),
     });
-    if (!res.ok) return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL };
+    if (!res.ok) return notRunning(base);
     const body = (await res.json()) as { models?: Array<{ name?: unknown; model?: unknown }> };
     const models = (Array.isArray(body?.models) ? body.models : [])
       .map((row) => (typeof row?.name === 'string' ? row.name : typeof row?.model === 'string' ? row.model : ''))
       .filter((name) => name !== '');
-    return { running: true, models, downloadUrl: OLLAMA_DOWNLOAD_URL };
+    return { running: true, models, downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1` };
   } catch {
     // Nothing listening, a refused connection, a second gone by: all of them
     // are "not running", which is what the card says and then polls.
-    return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL };
+    return notRunning(base);
   }
+}
+
+function notRunning(base: string): OllamaProbe {
+  return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1` };
 }

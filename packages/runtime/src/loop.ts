@@ -115,6 +115,17 @@ export interface RunAgentOptions {
     bound?: (messages: NeutralMessage[]) => NeutralMessage[];
   };
   /**
+   * Who the opening turn is from, when it is not simply the owner.
+   *
+   * Written to the turn's `speaker` column and read by nothing in this file:
+   * it is provenance for the surfaces, and the one caller is first run, which
+   * sends the instruction that makes a new assistant introduce itself and does
+   * not want that instruction read back as something the owner said. The
+   * model still sees the turn — it is the prompt — and only the transcript
+   * readers leave it out.
+   */
+  openingSpeaker?: string;
+  /**
    * Resuming a run that stopped awaiting an approval.
    *
    * The tool_use that asked for it was already answered (with "awaiting owner
@@ -651,7 +662,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const resumedProduced: ArtifactUse[] = resume?.state === 'succeeded' && resume.tool && registry.lookup(resume.tool)?.producesArtifacts
     ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: agent.id }))
     : [];
-  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker, [
+  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker ?? opts.openingSpeaker, [
     ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
     ...resumedProduced,
   ]);

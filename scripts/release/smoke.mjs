@@ -80,6 +80,13 @@ try {
   const stepped = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'welcome' }) });
   assert.equal(stepped.status, 200);
   assert.deepEqual((await stepped.json()).stepsDone, ['welcome']);
+  // A step may carry what its name cannot: which conversation the owner met
+  // their assistant in. That is what a reload mid-handover reads back, so the
+  // assistant introduces itself exactly once.
+  const learned = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'hello', conversationId: 'c-smoke' }) });
+  assert.equal(learned.status, 200);
+  assert.equal((await learned.json()).details.conversationId, 'c-smoke');
+  assert.equal((await onboarding()).details.conversationId, 'c-smoke');
   const madeAgent = await fetch(new URL('/api/onboarding/agent', dashboard), {
     method: 'POST', headers: wizardHeaders,
     body: JSON.stringify({ name: 'Smoke', handle: 'smoke', description: 'The agent this release smoke test creates.' }),
@@ -262,7 +269,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe and the Telegram token gate, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {
