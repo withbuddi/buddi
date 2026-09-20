@@ -7,24 +7,26 @@
  */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { BACKUP_DIR } from '../paths.js';
-import { createBackup, type CreateOptions } from './create.js';
 import {
   DEFAULT_KEEP,
+  createBackup,
+  createPool,
+  databaseFootprint,
   formatAge,
   formatBytes,
+  listArchives,
+  pruneArchives,
+  restoreBackup,
+  urlForDatabase,
+  verifyBackup,
   type BackupManifest,
-} from './manifest.js';
-import { listArchives, pruneArchives } from './prune.js';
-import { restoreBackup, type RestoreOptions } from './restore.js';
+  type CreateOptions,
+  type RestoreOptions,
+} from '@buddi/core';
+import { BACKUP_DIR } from '../paths.js';
+import { installationOptions, pluginMigrations } from './options.js';
 import { createBackupScheduler } from './schedule.js';
-import { verifyArchive } from './verify.js';
 
-export * from './manifest.js';
-export { createBackup } from './create.js';
-export { verifyArchive, readManifest } from './verify.js';
-export { listArchives, pruneArchives } from './prune.js';
-export { restoreBackup } from './restore.js';
 export {
   BACKUP_LABEL,
   buildBackupPlist,
@@ -91,9 +93,10 @@ export function describeManifest(manifest: BackupManifest): string[] {
 }
 
 async function create(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set — run `buddi init`');
   const opts: CreateOptions = {
-    env,
-    ...(command.out === undefined ? {} : { out: command.out }),
+    ...installationOptions(env),
+    ...(command.out === undefined ? {} : { backupsDir: path.resolve(command.out) }),
     ...(command.noArtifacts ? { noArtifacts: true } : {}),
   };
   const started = Date.now();
@@ -113,6 +116,18 @@ async function create(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<n
     );
   }
   return 0;
+}
+
+/** Ask on the terminal. Returns '' when there is no terminal to ask on. */
+export async function promptLine(question: string): Promise<string> {
+  if (!process.stdin.isTTY) return '';
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
 }
 
 async function list(env: NodeJS.ProcessEnv): Promise<number> {
@@ -157,7 +172,7 @@ function missing(archive: string): number {
 async function verify(given: string): Promise<number> {
   const archive = resolveArchive(given);
   if (archive === null) return missing(given);
-  const result = await verifyArchive(archive);
+  const result = await verifyBackup({ archive });
   console.log(`${result.archive}\n`);
   for (const check of result.checks) {
     console.log(`  ${check.ok ? 'ok  ' : 'FAIL'}  ${check.name.padEnd(10)}  ${check.detail}`);
@@ -179,11 +194,34 @@ async function verify(given: string): Promise<number> {
 async function restore(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
   const archive = resolveArchive(command.archive as string);
   if (archive === null) return missing(command.archive as string);
+  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set — run `buddi init`');
+  const installation = installationOptions(env);
+  const database = command.into ?? new URL(env.DATABASE_URL).pathname.replace(/^\//, '');
+
+  // The guard's second half is the CLI's to collect: the engine decides, the
+  // terminal asks. `--yes` alone is never enough over a database with rows in it.
+  let typed: string | undefined;
+  if (command.yes) {
+    const pool = createPool(urlForDatabase(env.DATABASE_URL, database));
+    try {
+      const footprint = await databaseFootprint(pool).catch(() => ({ tables: 0, rows: 0 }));
+      if (footprint.rows > 0) {
+        typed = await promptLine(
+          `This will REPLACE ${footprint.rows} row(s) in "${database}". Type the database name to confirm: `,
+        );
+      }
+    } finally {
+      await pool.end().catch(() => {});
+    }
+  }
+
   const opts: RestoreOptions = {
+    ...installation,
     archive,
-    env,
+    pluginMigrations: pluginMigrations(env),
     ...(command.into === undefined ? {} : { into: command.into }),
     ...(command.yes ? { yes: true } : {}),
+    ...(typed === undefined ? {} : { typed }),
     ...(command.force ? { force: true } : {}),
   };
   const report = await restoreBackup(opts);
@@ -191,6 +229,9 @@ async function restore(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<
   for (const line of report.did) console.log(`  ${line}`);
   console.log('\ndid NOT:');
   for (const line of report.didNot) console.log(`  ${line}`);
+  if (report.snapshot !== null) {
+    console.log(`\nthe copy taken of the target before this run: ${report.snapshot}`);
+  }
   if (report.next.length > 0) {
     console.log('\nnow do this, in order:');
     for (const line of report.next) console.log(`  ${line}`);

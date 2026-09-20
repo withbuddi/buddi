@@ -8,7 +8,6 @@
 import { readdir, rm, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { BACKUP_DIR } from '../paths.js';
 import { archiveTime, isArchiveName, selectForPrune, type ArchiveEntry } from './manifest.js';
 
 export interface ListedArchive extends ArchiveEntry {
@@ -16,7 +15,7 @@ export interface ListedArchive extends ArchiveEntry {
 }
 
 /** Every buddi archive in `dir`, newest first. */
-export async function listArchives(dir: string = BACKUP_DIR): Promise<ListedArchive[]> {
+export async function listArchives(dir: string): Promise<ListedArchive[]> {
   if (!existsSync(dir)) return [];
   const names = (await readdir(dir)).filter(isArchiveName);
   const out: ListedArchive[] = [];
@@ -45,7 +44,7 @@ export interface PruneResult {
 
 export async function pruneArchives(
   keep: number,
-  dir: string = BACKUP_DIR,
+  dir: string,
 ): Promise<PruneResult> {
   const archives = await listArchives(dir);
   const selection = selectForPrune(archives, keep);

@@ -64,7 +64,7 @@ interface SpawnResult {
   stderr: string;
 }
 
-/** Spawn, capturing stdout as *bytes* — `pg_dump -Fc` output is not text. */
+/** Spawn, capturing stdout as *bytes* — a tar member is not text. */
 export function spawnCapture(
   command: string,
   args: string[],

@@ -32,13 +32,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "age-encryption": "^0.3.1",
     "dotenv": "^16.4.7",
     "pg": "^8.13.1",
+    "pg-copy-streams": "^7.0.0",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24.1"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
+    "@types/pg-copy-streams": "^1.2.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   }

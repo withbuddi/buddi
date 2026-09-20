@@ -8,7 +8,7 @@
  * this file must not learn `--resume`.
  */
 
-import { DEFAULT_KEEP } from './backup/manifest.js';
+import { DEFAULT_KEEP } from '@buddi/core';
 
 export class UsageError extends Error {
   constructor(message: string) {

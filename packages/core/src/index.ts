@@ -25,6 +25,7 @@ export * from './questions/index.js';
 export * from './owner.js';
 export * from './onboarding/index.js';
 export * from './plugins/index.js';
+export * from './backup/index.js';
 export { runMigrations } from './cli-migrate.js';
 export * from './provider-accounts.js';
 export * from './system-context.js';

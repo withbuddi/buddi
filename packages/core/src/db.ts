@@ -11,6 +11,18 @@ export type MigrateOptions = {
   schema: string;
   /** Directory of *.sql files, applied in filename order. */
   dir: string;
+  /**
+   * Stop after this filename (inclusive), leaving anything later unapplied.
+   *
+   * A restore rebuilds the schema at the level the dump was taken at, not at
+   * the level this build happens to ship: data copied back into a table that a
+   * newer migration has already reshaped would not fit. The newer migrations
+   * are then applied on top, in a second pass, with the data in place — which
+   * is exactly what they were written to handle.
+   *
+   * A name that is not in the directory is an error, not a silent full run.
+   */
+  upTo?: string | undefined;
 };
 
 export type AppliedMigration = { schema: string; filename: string };
@@ -75,7 +87,17 @@ export async function migrate(
     if (e.code === 'ENOENT') return [];
     throw err;
   }
-  const files = entries.filter((f) => f.endsWith('.sql')).sort();
+  let files = entries.filter((f) => f.endsWith('.sql')).sort();
+  if (opts.upTo !== undefined) {
+    const stop = files.indexOf(opts.upTo);
+    if (stop === -1) {
+      throw new Error(
+        `migrate upTo: ${schema}/${opts.upTo} is not in ${opts.dir} ` +
+          `(this build ships ${files.length} migration(s) for that schema)`,
+      );
+    }
+    files = files.slice(0, stop + 1);
+  }
 
   const { rows } = await pool.query<{ filename: string }>(
     `select filename from core.migrations where schema = $1`,
