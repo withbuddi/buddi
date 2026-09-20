@@ -25,6 +25,15 @@ const env = (): NodeJS.ProcessEnv => ({
 });
 
 describe('buddi dashboard', () => {
+  it('mints an authenticated loopback link for a packaged installation', async () => {
+    const e = { ...env(), BUDDI_WEB_REQUIRE_AUTH: '1' };
+    const opened: string[] = [];
+    await runDashboard('open', { env: e, out: () => {}, launch: url => opened.push(url) });
+    const url = new URL(opened[0]!);
+    expect(url.origin).toBe('http://127.0.0.1:4317');
+    const { token } = await ensureWebToken({ env: e });
+    expect(verifyTicket(token, url.searchParams.get('t')!).ok).toBe(true);
+  });
   it('opens the bare URL on the default loopback binding, and touches no token', async () => {
     const e = env();
     const lines: string[] = [];
