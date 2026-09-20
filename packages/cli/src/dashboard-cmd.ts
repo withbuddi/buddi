@@ -97,7 +97,7 @@ export async function runDashboard(
    * worth having. `token` is the one action that still mints a ticket even
    * here — it is the escape hatch for scripting against a non-loopback bind.
    */
-  if (isLoopback(config.host) && action !== 'token') {
+  if (isLoopback(config.host) && env.BUDDI_WEB_REQUIRE_AUTH !== '1' && action !== 'token') {
     const url = webUrl(config);
     out(`buddi dashboard — ${url}`);
     out('  open on this machine: bookmark it, nothing here expires');

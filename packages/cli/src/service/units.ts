@@ -16,6 +16,9 @@ export interface UnitSpec {
   nodePath: string;
   /** Absolute path to `packages/gateway/dist/serve.js`. */
   serveEntry: string;
+  /** Optional entry arguments and non-secret environment for packaged supervision. */
+  args?: string[];
+  environment?: Record<string, string>;
   /** The repo root; `serve` resolves `.env`, `agents/` and `data/` from it. */
   workingDirectory: string;
   logFile: string;
@@ -51,6 +54,7 @@ export function buildPlist(spec: UnitSpec): string {
   <array>
     <string>${e(spec.nodePath)}</string>
     <string>${e(spec.serveEntry)}</string>
+${(spec.args ?? []).map(arg => `    <string>${e(arg)}</string>`).join('\n')}
   </array>
   <key>WorkingDirectory</key>
   <string>${e(spec.workingDirectory)}</string>
@@ -66,6 +70,7 @@ export function buildPlist(spec: UnitSpec): string {
   <dict>
     <key>PATH</key>
     <string>${e(spec.path)}</string>
+${Object.entries(spec.environment ?? {}).map(([key, value]) => `    <key>${e(key)}</key>\n    <string>${e(value)}</string>`).join('\n')}
   </dict>
   <key>ProcessType</key>
   <string>Background</string>

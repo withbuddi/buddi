@@ -50,7 +50,7 @@ export function createVault(opts: CreateVaultOptions = {}): Vault | undefined {
   const env = opts.env ?? process.env;
   switch (vaultSelection(opts)) {
     case 'keychain':
-      return createKeychainVault();
+      return createKeychainVault({ service: env.BUDDI_VAULT_SERVICE });
     case 'file':
       return createFileVault({ env });
     case 'memory':

@@ -21,6 +21,14 @@ const SPEC: UnitSpec = {
 describe('buildPlist', () => {
   const plist = buildPlist(SPEC);
 
+  it('supports a packaged supervisor with an isolated non-secret data directory', () => {
+    const packed = buildPlist({ ...SPEC, args: ['supervise'], environment: { BUDDI_DATA_DIR: '/owner/A & B' } });
+    expect(packed).toContain('<string>supervise</string>');
+    expect(packed).toContain('<key>BUDDI_DATA_DIR</key>');
+    expect(packed).toContain('<string>/owner/A &amp; B</string>');
+    expect(packed).not.toMatch(/TOKEN|API_KEY|DATABASE_URL/);
+  });
+
   it('runs the built serve entry with node, from the repo root', () => {
     expect(plist).toContain('<string>/opt/homebrew/bin/node</string>');
     expect(plist).toContain('<string>/Users/o/buddi/packages/gateway/dist/serve.js</string>');

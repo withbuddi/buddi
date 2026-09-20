@@ -1,0 +1,186 @@
+import { mkdir, readFile, writeFile, rename, open, stat, unlink } from 'node:fs/promises';
+import { existsSync, constants } from 'node:fs';
+import { randomBytes, createHash, createHmac } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import { createRequire } from 'node:module';
+
+/** Native utilities need OS context, not provider, vault or database credentials. */
+export function nativeEnvironment(env = process.env) {
+  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP']
+    .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
+}
+
+export async function dashboardReady(port, token, request = fetch) {
+  const challenge = randomBytes(32).toString('hex');
+  const response = await request(`http://127.0.0.1:${port}/_buddi/ready?challenge=${challenge}`, { signal: AbortSignal.timeout(1000), redirect: 'error' });
+  if (response.status !== 200) return false;
+  const body = await response.json();
+  return body.proof === createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
+}
+
+export async function reloadLaunchAgent(exec, domain, label, plist) {
+  let unloaded = false;
+  try { await exec('launchctl', ['bootout', `${domain}/${label}`]); unloaded = true; }
+  catch (error) {
+    if (error.code !== 3 || !/No such process|Could not find service/i.test(error.stderr ?? '')) throw error;
+  }
+  // bootout returns while launchd may still be removing a running job.
+  if (unloaded) {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      try { await exec('launchctl', ['print', `${domain}/${label}`]); }
+      catch (error) {
+        if (error.code === 113 && /Could not find service/i.test(error.stderr ?? '')) break;
+        throw error;
+      }
+      if (Date.now() >= deadline) throw new Error('LaunchAgent did not unload within 20 seconds; inspect its log before retrying.');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  await exec('launchctl', ['bootstrap', domain, plist]);
+}
+
+/** Open without following a symlink, then validate the actual file descriptor. */
+export async function readPrivateFile(file) {
+  let fd;
+  try {
+    fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const info = await fd.stat();
+    if (!info.isFile() || (process.getuid && info.uid !== process.getuid()) || (info.mode & 0o077)) {
+      throw new Error(`Unsafe private file ${file}: expected an owner-only regular file (mode 0600).`);
+    }
+    return await fd.readFile('utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined;
+    if (error.code === 'ELOOP') throw new Error(`Unsafe private file ${file}: symbolic links are not allowed.`);
+    throw error;
+  } finally { await fd?.close(); }
+}
+
+export function defaultDataDir(platform = process.platform, env = process.env, home = os.homedir()) {
+  if (env.BUDDI_DATA_DIR) return path.resolve(env.BUDDI_DATA_DIR);
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'buddi');
+  if (platform === 'win32') return path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'buddi');
+  return path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'buddi');
+}
+
+export async function atomicJson(file, value) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  await rename(tmp, file);
+}
+
+export async function freePort(preferred = 0) {
+  const server = net.createServer();
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(preferred, '127.0.0.1', resolve); });
+    return server.address().port;
+  } catch (error) {
+    if (preferred && error.code === 'EADDRINUSE') return freePort();
+    throw error;
+  } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
+}
+
+/** Called before importing any Buddi package: path constants are evaluated on import. */
+export async function environment(root, env = process.env) {
+  const data = defaultDataDir(process.platform, env);
+  env.BUDDI_INSTALL_ROOT = root;
+  env.BUDDI_DATA_DIR = data;
+  env.BUDDI_ENV_FILE = path.join(data, '.env');
+  env.BUDDI_AGENTS_DIR = path.join(data, 'agents');
+  env.BUDDI_SKILLS_DIR = path.join(data, 'skills');
+  env.BUDDI_HOME = data;
+  env.BUDDI_WEB_ASSETS = path.join(root, 'packages/web/dist');
+  env.BUDDI_WEB_REQUIRE_AUTH = '1';
+  const require = createRequire(path.join(root, 'package.json'));
+  const { parse, populate } = require('dotenv');
+  const settings = await readPrivateFile(env.BUDDI_ENV_FILE);
+  if (settings !== undefined) populate(env, parse(settings));
+  // A separate keychain namespace prevents a test or second install sharing credentials.
+  env.BUDDI_VAULT_SERVICE = `buddi.install.${createHash('sha256').update(data).digest('hex').slice(0, 20)}`;
+  env.BUDDI_VAULT_FILE = path.join(data, 'vault.json');
+  if ((env.BUDDI_VAULT || (process.platform === 'darwin' ? 'keychain' : 'file')) === 'file') {
+    const keyFile = path.join(data, 'vault-key');
+    const key = await readPrivateFile(keyFile);
+    if (key !== undefined) env.BUDDI_VAULT_KEY = key.trim();
+  }
+  const stateFile = path.join(data, 'installation.json');
+  let state;
+  if (existsSync(stateFile)) {
+    state = JSON.parse(await readFile(stateFile, 'utf8'));
+    if (state.version !== 1 || !['managed', 'external'].includes(state.database) ||
+        ![state.webPort, state.controlPort, state.dbPort].every(p => Number.isInteger(p) && p > 0 && p <= 65535)) {
+      throw new Error('Invalid installation.json; preserve the data directory and restore its configuration.');
+    }
+    env.BUDDI_WEB_PORT = String(state.webPort);
+    env.BUDDI_DB_PORT = String(state.dbPort);
+  }
+  // The packaged foundation never expands the network bind through ambient settings.
+  env.BUDDI_WEB_HOST = '127.0.0.1';
+  delete env.BUDDI_WEB_PUBLIC_ORIGIN;
+  return { root, data, env, state, require };
+}
+
+/** The supervisor holds this lock throughout its lifetime, including initialization. */
+export async function acquireLock(data) {
+  await mkdir(data, { recursive: true, mode: 0o700 });
+  const file = path.join(data, 'supervisor.lock');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = await open(file, 'wx', 0o600);
+      await fd.writeFile(String(process.pid));
+      await fd.close();
+      return async () => {
+        if ((await readFile(file, 'utf8').catch(() => '')) === String(process.pid)) {
+          await unlink(file);
+        }
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      // Serialize stale-lock recovery too. Otherwise two starters could move
+      // each other's newly acquired lock after both observed the old pid.
+      let recovery;
+      try { recovery = await open(`${file}.recovery`, 'wx', 0o600); }
+      catch { throw new Error('Supervisor lock recovery is in progress. If interrupted, inspect supervisor.lock.recovery before retrying.'); }
+      try {
+        const pid = Number(await readFile(file, 'utf8').catch(() => ''));
+        let stale = false;
+        if (Number.isInteger(pid) && pid > 0) {
+          try { process.kill(pid, 0); } catch (e) { stale = e.code === 'ESRCH'; }
+        } else if (existsSync(file)) {
+          stale = Date.now() - (await stat(file)).mtimeMs > 30_000;
+        }
+        if (existsSync(file)) {
+          if (!stale) throw new Error('This installation already has a supervisor (or startup is in progress).');
+          await rename(file, `${file}.stale-${Date.now()}-${process.pid}`);
+        }
+      } finally { await recovery.close(); await unlink(`${file}.recovery`); }
+    }
+  }
+  throw new Error('Could not acquire the installation lock.');
+}
+
+export async function initialize(ctx) {
+  for (const name of ['logs', 'agents', 'skills', 'artifacts', 'backups']) {
+    await mkdir(path.join(ctx.data, name), { recursive: true, mode: 0o700 });
+  }
+  if (!existsSync(ctx.env.BUDDI_ENV_FILE)) await writeFile(ctx.env.BUDDI_ENV_FILE, '# Buddi settings. Credentials belong in the vault.\n', { flag: 'wx', mode: 0o600 });
+  if ((ctx.env.BUDDI_VAULT || (process.platform === 'darwin' ? 'keychain' : 'file')) === 'file' && !ctx.env.BUDDI_VAULT_KEY) {
+    const key = randomBytes(32).toString('base64url');
+    await writeFile(path.join(ctx.data, 'vault-key'), key, { flag: 'wx', mode: 0o600 });
+    ctx.env.BUDDI_VAULT_KEY = key;
+  }
+  if (!ctx.state) {
+    const webPort = await freePort(Number(ctx.env.BUDDI_WEB_PORT) || 4317);
+    let controlPort = await freePort();
+    while (controlPort === webPort) controlPort = await freePort();
+    let dbPort = await freePort();
+    while ([webPort, controlPort].includes(dbPort)) dbPort = await freePort();
+    ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, controlPort, dbPort, phase: 'provisioning' };
+    await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
+  }
+  ctx.env.BUDDI_WEB_PORT = String(ctx.state.webPort);
+  ctx.env.BUDDI_DB_PORT = String(ctx.state.dbPort);
+}

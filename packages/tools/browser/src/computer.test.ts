@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ComputerDriver, settingsSchema, type ComputerBridge } from './computer.js';
+import { ComputerDriver, computerEnvironment, settingsSchema, type ComputerBridge } from './computer.js';
 import { BrowserPreconditionError, commandSchema } from './types.js';
 
 const node = { path: [0, 1], role: 'AXButton', name: 'Continue', value: '', secure: false, enabled: true, bounds: { x: 10, y: 20, width: 100, height: 30 } };
@@ -15,6 +15,9 @@ function setup() {
 }
 const open = commandSchema.parse({ action: 'open', appId: 'com.google.Chrome' });
 describe('native computer driver', () => {
+  it('does not pass application credentials or loader overrides to the helper', () => {
+    expect(computerEnvironment({ HOME: '/owner', PATH: '/bin', BUDDI_VAULT_KEY: 'secret', DATABASE_URL: 'secret', ANTHROPIC_API_KEY: 'secret', DYLD_INSERT_LIBRARIES: 'unsafe' })).toEqual({ HOME: '/owner', PATH: '/bin' });
+  });
   it('defaults to OS control and requires a permitted browser', () => {
     expect(settingsSchema.parse({}).mode).toBe('computer');
     expect(settingsSchema.safeParse({ browserApp: 'com.google.Chrome', allowedApps: ['com.apple.TextEdit'] }).success).toBe(false);

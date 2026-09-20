@@ -37,12 +37,12 @@ export function findRepoRoot(start: string, exists: (dir: string) => boolean = i
   }
 }
 
-export const REPO_ROOT = findRepoRoot(MODULE_DIR);
+export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? findRepoRoot(MODULE_DIR);
 
 /** Everything the installation writes: artifacts, logs. Overridable for tests. */
 export const DATA_DIR = process.env.BUDDI_DATA_DIR ?? path.join(REPO_ROOT, 'data');
 export const LOG_DIR = path.join(DATA_DIR, 'logs');
-export const ENV_FILE = path.join(REPO_ROOT, '.env');
+export const ENV_FILE = process.env.BUDDI_ENV_FILE ?? path.join(REPO_ROOT, '.env');
 export const ENV_EXAMPLE_FILE = path.join(REPO_ROOT, '.env.example');
 /** What the service supervises: the built long-running process. */
 export const SERVE_ENTRY = path.join(REPO_ROOT, 'packages', 'gateway', 'dist', 'serve.js');
