@@ -24,6 +24,7 @@ import { SUGGESTED_NAMES } from './script';
 const onboarding = (over: Partial<OnboardingView> = {}): OnboardingView => ({
   state: 'pending',
   stepsDone: [],
+  details: {},
   needs: { owner: true, model: true, agent: true },
   ...over,
 });
@@ -39,9 +40,12 @@ const owner = (over: Partial<OwnerView> = {}): OwnerView => ({
   ...over,
 });
 
-const accounts = (list: Array<Partial<ProviderAccountsView['accounts'][number]>>): ProviderAccountsView => ({
+const accounts = (
+  list: Array<Partial<ProviderAccountsView['accounts'][number]>>,
+  bindings: ProviderAccountsView['bindings'] = [],
+): ProviderAccountsView => ({
   vault: { kind: 'file', locked: false, advice: '' },
-  bindings: [],
+  bindings,
   accounts: list.map((account, at) => ({
     id: `a${at}`,
     label: 'Anthropic',
@@ -78,7 +82,7 @@ describe('resume', () => {
     const answers = answersFrom({
       onboarding: onboarding({ needs: { owner: false, model: false, agent: false } }),
       owner: owner({ preferredName: 'Amen', timezone: 'America/New_York' }),
-      accounts: accounts([{ id: 'one', label: 'Ollama', defaultModel: 'qwen3:4b' }]),
+      accounts: accounts([{ id: 'one', label: 'Ollama', defaultModel: 'qwen3:4b' }], [{ agentId: 'ada', accountId: 'one', model: 'qwen3:4b' }]),
       assistant: { id: 'ada', name: 'Ada', avatar: '📚' },
     });
     expect(answers.name).toBe('Amen');
@@ -98,15 +102,49 @@ describe('resume', () => {
 
   it('counts no account the installation could not run on', () => {
     for (const broken of [{ enabled: false }, { configured: false }, { removalPending: true }]) {
-      const answers = answersFrom({ owner: owner({ preferredName: 'A', timezone: 'UTC' }), accounts: accounts([broken]) });
+      const answers = answersFrom({
+        onboarding: onboarding({ details: { accountId: 'a0' } }),
+        owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+        accounts: accounts([broken]),
+      });
       expect(answered(answers, 'brain')).toBe(false);
       expect(firstOpen(answers)).toBe('brain');
     }
   });
 
+  /*
+   * An installation may hold several accounts — a developer checkout usually
+   * does — and only one of them is this assistant's brain. Guessing would put
+   * a model in buddi's confirmation that the assistant does not think with.
+   */
+  it('takes the brain from what the assistant is bound to, never from the first account', () => {
+    const answers = answersFrom({
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: false }, details: { accountId: 'first' } }),
+      owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+      accounts: accounts(
+        [{ id: 'first', label: 'Anthropic' }, { id: 'second', label: 'Ollama', defaultModel: 'qwen3:4b' }],
+        [{ agentId: 'ada', accountId: 'second', model: 'qwen3:8b' }],
+      ),
+      assistant: { id: 'ada', name: 'Ada', avatar: '📚' },
+    });
+    expect(answers.brain).toEqual({ accountId: 'second', label: 'Ollama', model: 'qwen3:8b' });
+  });
+
+  it('takes it from the account this first run recorded when there is no assistant yet', () => {
+    const facts = {
+      onboarding: onboarding({ details: { accountId: 'second' } }),
+      owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+      accounts: accounts([{ id: 'first', label: 'Anthropic' }, { id: 'second', label: 'Ollama', defaultModel: 'qwen3:4b' }]),
+    };
+    expect(answersFrom(facts).brain).toEqual({ accountId: 'second', label: 'Ollama', model: 'qwen3:4b' });
+    // And nothing recorded means the question is still open, however many
+    // accounts this installation happens to hold.
+    expect(answersFrom({ ...facts, onboarding: onboarding() }).brain).toBeUndefined();
+  });
+
   it('does not count an assistant the record says is still missing', () => {
     const answers = answersFrom({
-      onboarding: onboarding({ needs: { owner: false, model: false, agent: true } }),
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0' } }),
       owner: owner({ preferredName: 'A', timezone: 'UTC' }),
       accounts: accounts([{}]),
       // A shipped example is in the roster; it is not the owner's own.

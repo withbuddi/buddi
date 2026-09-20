@@ -308,6 +308,11 @@ export interface SentinelFinding {
 export interface OnboardingView {
   state: 'pending' | 'in-progress' | 'done' | 'skipped';
   stepsDone: string[];
+  /**
+   * What the steps cannot say: the conversation the owner met their assistant
+   * in, and the account they chose while meeting it. A reload reads both.
+   */
+  details: { conversationId?: string; accountId?: string };
   needs: { owner: boolean; model: boolean; agent: boolean };
 }
 
@@ -317,6 +322,8 @@ export interface OllamaProbe {
   models: string[];
   /** Where to get it. It travels as data so this bundle names no outside host. */
   downloadUrl: string;
+  /** Where an account for it points — also data, for the same reason. */
+  baseUrl: string;
 }
 
 /** Telegram, as this installation stands: a token, a surface, a phone. */
@@ -623,7 +630,7 @@ export const chatApi = {
   startConversation: (agentId: string) =>
     post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
-  send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>
+  send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[]; opening?: boolean }) =>
     post<{
       conversationId: string;
       runId: string;
@@ -723,7 +730,8 @@ export const api = {
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),
-  onboardingStep: (step: string) => post<OnboardingView>('/onboarding/step', { step }),
+  onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string } = {}) =>
+    post<OnboardingView>('/onboarding/step', { step, ...learned }),
   completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
   skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
   createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string; accountId?: string }) =>
@@ -735,6 +743,14 @@ export const api = {
    * reaches no host but its own, and the answer is about that machine anyway.
    */
   ollama: () => get<OllamaProbe>('/onboarding/ollama'),
+  /**
+   * Change the assistant after it exists — its name, face or purpose.
+   *
+   * A separate route because writing the *first* agent is refused once there
+   * is one, and "change either, or keep them" has to keep working.
+   */
+  updateFirstAgent: (body: { name?: string; description?: string; avatar?: string }) =>
+    post<CreatedAgent>('/onboarding/agent/update', body),
   /* ---- Telegram, from the first-run thread ---- */
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),

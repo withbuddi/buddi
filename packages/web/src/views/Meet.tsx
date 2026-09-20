@@ -60,6 +60,9 @@ export const FIRST_MESSAGE_TIMEOUT_MS = 60_000;
 /** How often the thread asks whether the answer has arrived. */
 const POLL_MS = 1_500;
 
+/** The longest the thread watches for a phone before offering a fresh code. */
+export const PAIRING_WATCH_MS = 10 * 60_000;
+
 /** Reduced motion means no theatre: the bubbles are simply there. */
 function useStill(): boolean {
   const [still, setStill] = useState(() => {
@@ -150,6 +153,14 @@ function Ask({ children }: { children: ReactNode }): JSX.Element {
   return <div className="meet-ask">{children}</div>;
 }
 
+/** The assistant on disk: what a change edits rather than replaces. */
+export interface ExistingAssistant {
+  id: string;
+  name: string;
+  avatar: string;
+  description: string;
+}
+
 export interface MeetProps {
   navigate: (next: string, replace?: boolean) => void;
   /** The installation's zone. The clock question offers the browser's own. */
@@ -165,6 +176,16 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   /** Anything that failed, said in the thread rather than in a banner. */
   const [trouble, setTrouble] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
+  /** The handover conversation the record already knows about, if any. */
+  const [met, setMet] = useState<string | null>(null);
+  /**
+   * The assistant that already exists, whatever the answers currently say.
+   *
+   * "Change" empties the answer, and the answer is what the thread draws; this
+   * is what the *installation* holds, and it is what decides whether saving
+   * the assistant question writes a first agent or changes the one there is.
+   */
+  const [existing, setExisting] = useState<ExistingAssistant | null>(null);
 
   /** The zone this browser is in, which is what the question offers. */
   const browserZone = useMemo(() => {
@@ -176,7 +197,15 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   }, [timezone]);
 
   /* ---- resume: replay what the server already knows ---- */
-  const load = useCallback(async (): Promise<void> => {
+  /**
+   * Read the server and, on the first pass, replay what it already knows.
+   *
+   * A refresh after a write does not replay: the thread has just decided
+   * something, and re-deriving the answers from a read that may not yet show
+   * it would overwrite the newer truth with the older one — the account the
+   * assistant was moved onto a moment ago being the case that bites.
+   */
+  const load = useCallback(async (replay = true): Promise<void> => {
     const [onboarding, owner, accountView, roster] = await Promise.all([
       api.onboarding().catch(() => undefined),
       api.owner().catch(() => undefined),
@@ -185,14 +214,24 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     ]);
     setAccounts(accountView);
     setZones(owner?.zones ?? []);
+    // The conversation the handover opened, if it already did. Held on the
+    // record rather than in this component, because a reload is exactly when
+    // it matters: the assistant introduces itself once.
+    setMet(onboarding?.details?.conversationId ?? null);
     const own = roster?.agents.find((agent) => agent.id === roster.defaultAgentId) ?? roster?.agents[0];
     if (own) setAssistantAgent(own);
+    setExisting(
+      onboarding && !onboarding.needs.agent && own
+        ? { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '', description: own.description }
+        : null,
+    );
     const replayed = answersFrom({
       onboarding,
       owner,
       accounts: accountView,
       ...(own ? { assistant: { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '' } } : {}),
     });
+    if (!replay) return;
     setAnswers(replayed);
     setOpen((current) => current ?? firstOpen(replayed));
   }, []);
@@ -201,15 +240,17 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     void load();
   }, [load]);
 
-  const record = (id: QuestionId): void => {
-    void api.onboardingStep(STEP_OF[id]).catch(() => {});
+  const record = (id: QuestionId, learned: { conversationId?: string; accountId?: string } = {}): void => {
+    void api.onboardingStep(STEP_OF[id], learned).catch(() => {});
   };
 
   /** One answer saved: keep it, record the step, move on. */
   const settle = (id: QuestionId, next: MeetAnswers): void => {
     setTrouble(null);
     setAnswers(next);
-    record(id);
+    // The account chosen here is recorded with the step, so a reload knows
+    // which of several accounts is this assistant's brain.
+    record(id, id === 'brain' && next.brain ? { accountId: next.brain.accountId } : {});
     setOpen(firstOpen(next));
   };
 
@@ -257,10 +298,13 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
               zones={zones}
               browserZone={browserZone}
               assistantAgent={assistantAgent}
+              met={met}
+              onMet={setMet}
+              existing={existing}
               onSettled={(next) => settle(id, next)}
               onChange={() => change(id)}
               onTrouble={setTrouble}
-              onReload={() => void load()}
+              onReload={() => void load(false)}
               onPickAnotherBrain={() => change('brain')}
             />
           ))}
@@ -290,6 +334,11 @@ interface QuestionProps {
   zones: string[];
   browserZone: string;
   assistantAgent: ChatAgent | null;
+  /** The handover conversation the record already holds, if any. */
+  met: string | null;
+  onMet: (conversationId: string) => void;
+  /** The assistant this installation already has, if it has one. */
+  existing: ExistingAssistant | null;
   onSettled: (next: MeetAnswers) => void;
   onChange: () => void;
   onTrouble: (message: string | null) => void;
@@ -476,7 +525,30 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     };
   }, []);
 
-  /** Save the account, test it, and let buddi name the model it will think with. */
+  /**
+   * Save the account, test it, bind it, and let buddi name the model the
+   * assistant will think with.
+   *
+   * The binding is the part that is easy to forget: changing the brain after
+   * the assistant exists has to move *that agent* onto the new account, or the
+   * thread would confirm one thing and the assistant would keep answering on
+   * another. A new assistant is bound at creation instead, with this account's
+   * id, so nothing is assigned twice.
+   */
+  const bind = async (brain: BrainAnswer): Promise<string | null> => {
+    const assistant = answers.assistant;
+    if (assistant) {
+      try {
+        await api.assignProviderAccount(assistant.id, brain.accountId, brain.model);
+      } catch (err) {
+        return err instanceof ApiError ? err.message : String(err);
+      }
+    }
+    onReload();
+    onSettled({ ...answers, brain });
+    return null;
+  };
+
   const adopt = async (
     body: Parameters<typeof api.saveProviderAccount>[0],
     label: string,
@@ -490,9 +562,8 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         setProblem(verdict.message);
         return;
       }
-      const brain: BrainAnswer = { accountId: saved.id, label, model: body.defaultModel };
-      onReload();
-      onSettled({ ...answers, brain });
+      const refused = await bind({ accountId: saved.id, label, model: body.defaultModel });
+      if (refused) setProblem(refused);
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -506,7 +577,7 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onUse={adopt} />;
   }
   if (card === 'claude') {
-    return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} {...props} />;
+    return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} onConnected={bind} {...props} />;
   }
 
   return (
@@ -642,12 +713,15 @@ function OllamaCard({
 }): JSX.Element {
   const model = probe?.models[0] ?? '';
   const use = (): void => {
+    if (!probe) return;
     void onUse(
       {
         label: SCRIPT.brain.cards.ollama.title,
         kind: 'openai-compatible',
         auth: 'none',
-        baseUrl: 'http://localhost:11434/v1',
+        // The address comes from the probe, not from here: this page names no
+        // host, and the machine Ollama answers on is the gateway's.
+        baseUrl: probe.baseUrl,
         defaultModel: model,
         enabled: true,
       },
@@ -770,14 +844,14 @@ function ClaudeCard({
   busy,
   problem,
   onBack,
-  answers,
+  onConnected,
   accounts,
-  onSettled,
-  onReload,
 }: {
   busy: boolean;
   problem: string | null;
   onBack: () => void;
+  /** Saves the answer and moves the assistant onto it. Returns what refused it. */
+  onConnected: (brain: BrainAnswer) => Promise<string | null>;
 } & QuestionProps): JSX.Element {
   const [working, setWorking] = useState(false);
   const [trouble, setTrouble] = useState<string | null>(null);
@@ -835,8 +909,7 @@ function ClaudeCard({
           setTrouble(verdict.message);
           return;
         }
-        onReload();
-        onSettled({ ...answers, brain: { accountId: attempt.id, label: SCRIPT.brain.cards.claude.title, model } });
+        setTrouble(await onConnected({ accountId: attempt.id, label: SCRIPT.brain.cards.claude.title, model }));
       } catch (err) {
         setTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {
@@ -887,27 +960,38 @@ function ClaudeCard({
  * 4. The assistant
  * ------------------------------------------------------------------ */
 
-function AssistantAsk({ answers, onSettled, onTrouble, onReload }: QuestionProps): JSX.Element {
+function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: QuestionProps): JSX.Element {
   const [at] = useState(() => Math.floor(Math.random() * SUGGESTED_NAMES.length));
-  const [name, setName] = useState(() => suggestedName(SUGGESTED_NAMES, at));
-  const [face, setFace] = useState<string>(FACES[0]);
-  const [purpose, setPurpose] = useState<string>(SCRIPT.assistant.purposeValue);
+  const [name, setName] = useState(() => existing?.name ?? suggestedName(SUGGESTED_NAMES, at));
+  const [face, setFace] = useState<string>(existing?.avatar || FACES[0]);
+  const [purpose, setPurpose] = useState<string>(existing?.description || SCRIPT.assistant.purposeValue);
   const [saving, setSaving] = useState(false);
 
+  /*
+   * Two ways to save one answer.
+   *
+   * The first time there is no agent and this writes one, bound to the account
+   * the thread just tested. Afterwards — the owner took up "change either" —
+   * writing a *first* agent is refused, and rightly: there is one, and the
+   * change belongs in its file. Same name, same face, same purpose, one
+   * assistant either way.
+   */
   const submit = (): void => {
     if (name.trim() === '' || saving) return;
     setSaving(true);
-    api
-      .createFirstAgent({
-        name: name.trim(),
-        handle: idFor(name),
-        description: purpose.trim(),
-        avatar: face,
-        ...(answers.brain ? { accountId: answers.brain.accountId } : {}),
-      })
-      .then((created) => {
+    const written = existing
+      ? api.updateFirstAgent({ name: name.trim(), description: purpose.trim(), avatar: face })
+      : api.createFirstAgent({
+          name: name.trim(),
+          handle: idFor(name),
+          description: purpose.trim(),
+          avatar: face,
+          ...(answers.brain ? { accountId: answers.brain.accountId } : {}),
+        });
+    written
+      .then((saved) => {
         onReload();
-        onSettled({ ...answers, assistant: { id: created.id, name: name.trim(), avatar: face } });
+        onSettled({ ...answers, assistant: { id: saved.id, name: name.trim(), avatar: face } });
       })
       .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
       .finally(() => setSaving(false));
@@ -954,9 +1038,9 @@ function AssistantAsk({ answers, onSettled, onTrouble, onReload }: QuestionProps
  * instruction from the script — and does not render it. Everything after it is
  * an ordinary conversation, in the owner's history like any other.
  */
-function Handover({ answers, assistantAgent, onPickAnotherBrain }: QuestionProps): JSX.Element {
+function Handover({ answers, assistantAgent, met, onMet, onPickAnotherBrain }: QuestionProps): JSX.Element {
   const assistant = answers.assistant;
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(met);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [silent, setSilent] = useState(false);
   const [running, setRunning] = useState(true);
@@ -964,16 +1048,37 @@ function Handover({ answers, assistantAgent, onPickAnotherBrain }: QuestionProps
   const started = useRef(false);
   const agents = useMemo<ChatAgent[]>(() => (assistantAgent ? [assistantAgent] : []), [assistantAgent]);
 
+  /*
+   * The introduction happens once per installation, not once per page.
+   *
+   * A conversation the record already names is rejoined and polled — the run
+   * outlived the reload — and only an installation that has none opens one.
+   * The server holds the same rule from the other side: the opening turn is
+   * claimed against the record, and a second claim is refused, so two tabs
+   * racing this cannot make the assistant introduce itself twice.
+   */
   useEffect(() => {
     if (!assistant || started.current) return undefined;
     started.current = true;
+    if (met) {
+      setConversationId(met);
+      return undefined;
+    }
     let cancelled = false;
     void (async () => {
       try {
         const opened = await chatApi.startConversation(assistant.id);
         if (cancelled) return;
         setConversationId(opened.conversationId);
-        await chatApi.send(assistant.id, { conversationId: opened.conversationId, text: OPENING_INSTRUCTION });
+        onMet(opened.conversationId);
+        // Recorded before the turn is sent: a reload a second later has to
+        // find the conversation even if the send never came back.
+        await api.onboardingStep(STEP_OF.handover, { conversationId: opened.conversationId }).catch(() => {});
+        await chatApi.send(assistant.id, {
+          conversationId: opened.conversationId,
+          text: OPENING_INSTRUCTION,
+          opening: true,
+        });
       } catch {
         if (!cancelled) {
           setRunning(false);
@@ -984,7 +1089,7 @@ function Handover({ answers, assistantAgent, onPickAnotherBrain }: QuestionProps
     return () => {
       cancelled = true;
     };
-  }, [assistant?.id]);
+  }, [assistant?.id, met]);
 
   /* The answer, when it comes. Polled: a run outlives any one page. */
   useEffect(() => {
@@ -1031,12 +1136,10 @@ function Handover({ answers, assistantAgent, onPickAnotherBrain }: QuestionProps
       .catch(() => setRunning(false));
   };
 
-  const spoken = messages.filter((message) => !isOpeningInstruction(message));
-
   return (
     <>
       <MessageList
-        messages={spoken}
+        messages={messages}
         live={[]}
         now={Date.now()}
         onOpen={() => {}}
@@ -1099,14 +1202,6 @@ function isSpoken(message: ChatMessage): boolean {
   );
 }
 
-/** The turn the owner never wrote, and never sees. */
-function isOpeningInstruction(message: ChatMessage): boolean {
-  return (
-    message.role === 'user' &&
-    (message.blocks ?? []).some((block) => block.type === 'text' && block.text.trim() === OPENING_INSTRUCTION)
-  );
-}
-
 /* ------------------------------------------------------------------ *
  * The phone
  * ------------------------------------------------------------------ */
@@ -1124,6 +1219,15 @@ function TelegramCard(): JSX.Element {
   const [offer, setOffer] = useState<PairingOffer | null>(null);
   const [square, setSquare] = useState<string | null>(null);
   const [paired, setPaired] = useState(false);
+  /** The code stopped being valid, so watching for it stopped too. */
+  const [stale, setStale] = useState(false);
+
+  const ask = async (): Promise<void> => {
+    const pairing = await api.telegramPairing();
+    setOffer(pairing);
+    setStale(false);
+    setSquare(await qrSvgDataUrl(pairing.link).catch(() => ''));
+  };
 
   const save = (): void => {
     if (token.trim() === '' || saving) return;
@@ -1137,9 +1241,7 @@ function TelegramCard(): JSX.Element {
           setNote(SCRIPT.telegram.restart);
           return;
         }
-        const pairing = await api.telegramPairing();
-        setOffer(pairing);
-        setSquare(await qrSvgDataUrl(pairing.link).catch(() => ''));
+        await ask();
       } catch (err) {
         setNote(err instanceof ApiError ? err.message : String(err));
       } finally {
@@ -1148,10 +1250,27 @@ function TelegramCard(): JSX.Element {
     })();
   };
 
+  const again = (): void => {
+    setNote(null);
+    void ask().catch((err: unknown) => setNote(err instanceof ApiError ? err.message : String(err)));
+  };
+
+  /*
+   * Watch for the phone — until the code stops being worth watching.
+   *
+   * A code expires, and a page left open overnight asking every two seconds
+   * whether a dead code was used is a page doing nothing, loudly. The code's
+   * own expiry decides, capped at ten minutes, and then buddi offers a new one.
+   */
   useEffect(() => {
-    if (!offer || paired) return undefined;
+    if (!offer || paired || stale) return undefined;
     let cancelled = false;
+    const until = Math.min(Date.parse(offer.expiresAt) || Date.now() + PAIRING_WATCH_MS, Date.now() + PAIRING_WATCH_MS);
     const timer = window.setInterval(() => {
+      if (Date.now() >= until) {
+        setStale(true);
+        return;
+      }
       api
         .telegram()
         .then((status) => {
@@ -1163,7 +1282,7 @@ function TelegramCard(): JSX.Element {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [offer, paired]);
+  }, [offer, paired, stale]);
 
   if (paired) {
     return (
@@ -1177,12 +1296,20 @@ function TelegramCard(): JSX.Element {
     return (
       <div className="meet-pair">
         <Buddi>
-          <Said>{SCRIPT.telegram.scan}</Said>
+          <Said>{stale ? SCRIPT.telegram.expired : SCRIPT.telegram.scan}</Said>
         </Buddi>
-        {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
-        <a className="meet-link" href={offer.link} target="_blank" rel="noreferrer">
-          {offer.link}
-        </a>
+        {stale ? (
+          <Button variant="accent" onClick={again}>
+            {SCRIPT.telegram.newCode}
+          </Button>
+        ) : (
+          <>
+            {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
+            <a className="meet-link" href={offer.link} target="_blank" rel="noreferrer">
+              {offer.link}
+            </a>
+          </>
+        )}
       </div>
     );
   }
@@ -1196,6 +1323,7 @@ function TelegramCard(): JSX.Element {
       <Ask>
         <Field label={SCRIPT.telegram.field} grow>
           <input
+            type="password"
             value={token}
             autoComplete="off"
             spellCheck={false}

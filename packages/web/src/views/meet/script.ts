@@ -118,6 +118,8 @@ export const SCRIPT = {
     submit: 'Save it',
     restart: "Saved. It will be ready the next time buddi starts.",
     scan: 'Scan this with your phone and press Start.',
+    expired: 'That code has run out. I can make you another one.',
+    newCode: 'Show a new code',
     paired: 'That is your phone, talking to me. You can close this and carry on there.',
   },
   change: 'change',
