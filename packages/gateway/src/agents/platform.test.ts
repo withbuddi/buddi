@@ -493,6 +493,120 @@ describe('update', () => {
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * Renaming, refacing, and who the default is
+ * ------------------------------------------------------------------ */
+
+/**
+ * The owner's own first agent, which is written under the shipped example's id
+ * on purpose: a private file with that id replaces Concierge wholesale. So the
+ * one agent every installation has is also the one whose id reads like an
+ * example's, and nothing here may refuse it on that ground.
+ */
+const REMY = `---
+id: concierge
+handle: remy
+name: Remy
+description: The owner's own front desk.
+default: true
+tools: [memory.note]
+avatar: "🐭"
+---
+
+Remy's persona, written by the wizard.
+`;
+
+const LEDGER = `---
+id: ledger
+handle: ledger
+name: Ledger
+description: Keeps the books.
+tools: [memory.note]
+---
+
+Ledger's persona.
+`;
+
+function writePrivate(harness: Harness, id: string, source: string): void {
+  mkdirSync(path.join(harness.agentsDir, id), { recursive: true });
+  writeFileSync(path.join(harness.agentsDir, id, 'agent.md'), source, 'utf8');
+  harness.catalog.reload();
+}
+
+describe('a rename is an edit, never a second agent', () => {
+  beforeEach(() => writePrivate(h, 'concierge', REMY));
+
+  it('renames and refaces in place: same id, same file, same everything else', async () => {
+    const file = path.join(h.agentsDir, 'concierge', 'agent.md');
+    const result = (await h.tool('platform.update_agent').execute(
+      { id: 'concierge', name: 'Albert', avatar: '🧑‍🍳' },
+      h.ctx,
+    )) as { id: string; file: string; handle: string; message: string };
+    expect(result.id).toBe('concierge');
+    expect(result.file).toBe(file);
+    const renamed = h.catalog.resolve('concierge');
+    expect(renamed.name).toBe('Albert');
+    expect(renamed.avatar).toBe('🧑‍🍳');
+    // The handle is not carried along by the name: the owner types it.
+    expect(renamed.handle).toBe('remy');
+    expect(renamed.isDefault).toBe(true);
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('id: concierge');
+    expect(text).toContain("Remy's persona, written by the wizard.");
+    expect(h.catalog.list().filter((a) => a.id === 'concierge')).toHaveLength(1);
+  });
+
+  it('moves the handle too, when the owner asked for that', async () => {
+    await h.tool('platform.update_agent').execute({ id: 'concierge', name: 'Albert', handle: 'albert' }, h.ctx);
+    expect(h.catalog.resolve('@albert').id).toBe('concierge');
+    expect(h.catalog.byHandle('remy')).toBeUndefined();
+  });
+
+  it('refuses a handle another agent already answers to', () => {
+    expect(refusalOf(h, 'platform.update_agent', { id: 'concierge', handle: 'scout' })).toContain(
+      '@scout is already Scout',
+    );
+    expect(refusalOf(h, 'platform.update_agent', { id: 'concierge', handle: 'father' })).toContain(
+      'already Agent Father',
+    );
+    // And the file was not touched by the refusal.
+    expect(readFileSync(path.join(h.agentsDir, 'concierge', 'agent.md'), 'utf8')).toBe(REMY);
+  });
+
+  it('still refuses an example, by what the catalog says it is and not by its id', () => {
+    const message = refusalOf(h, 'platform.update_agent', { id: 'agent-father', name: 'Father' });
+    expect(message).toContain('one of the examples this repository ships');
+  });
+});
+
+describe('the default claim moves in one approval', () => {
+  beforeEach(() => {
+    writePrivate(h, 'concierge', REMY);
+    writePrivate(h, 'ledger', LEDGER);
+  });
+
+  it('gives it to the named agent and takes it off the one that had it', async () => {
+    const { preview } = described<UpdateAgentEnvelope>(h, 'platform.update_agent', { id: 'ledger', default: true });
+    expect(preview).toContain('BECOMES THE DEFAULT AGENT');
+    expect(preview).toContain('concierge stops being the default');
+
+    const result = (await h.tool('platform.update_agent').execute({ id: 'ledger', default: true }, h.ctx)) as {
+      message: string;
+    };
+    expect(h.catalog.defaultAgent().id).toBe('ledger');
+    expect(h.catalog.get('concierge')!.isDefault).toBe(false);
+    expect(readFileSync(path.join(h.agentsDir, 'concierge', 'agent.md'), 'utf8')).not.toContain('default: true');
+    expect(readFileSync(path.join(h.agentsDir, 'ledger', 'agent.md'), 'utf8')).toContain('default: true');
+    expect(result.message).toContain('default agent now');
+  });
+
+  it('points at the move rather than refusing the delete and stopping there', () => {
+    const message = refusalOf(h, 'platform.delete_agent', { id: 'concierge' });
+    expect(message).toContain('platform.update_agent');
+    expect(message).toContain('default: true');
+  });
+});
+
 describe('delete moves, it does not destroy', () => {
   it('moves the directory aside and says where it went', async () => {
     const dir = path.join(h.agentsDir, 'scout');
