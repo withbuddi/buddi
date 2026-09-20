@@ -11,7 +11,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, chatApi, type OnboardingView, type OwnerView, type ProviderAccountsView } from '../api';
 import { App } from '../App';
-import { Meet, FIRST_MESSAGE_TIMEOUT_MS, PATIENCE_MS } from './Meet';
+import { Meet, FIRST_MESSAGE_TIMEOUT_MS, LEAVE_MS, PATIENCE_MS } from './Meet';
 import { BANNED_WORDS, SCRIPT } from './meet/script';
 
 vi.mock('../api', async (load) => {
@@ -27,6 +27,7 @@ vi.mock('../api', async (load) => {
       createFirstAgent: vi.fn(),
       updateFirstAgent: vi.fn(),
       assignProviderAccount: vi.fn(),
+      bindBrain: vi.fn(),
       owner: vi.fn(),
       setOwner: vi.fn(),
       providerAccounts: vi.fn(),
@@ -35,6 +36,8 @@ vi.mock('../api', async (load) => {
       probeModels: vi.fn(),
       ollama: vi.fn(),
       telegram: vi.fn(),
+      saveTelegramToken: vi.fn(),
+      telegramPairing: vi.fn(),
       session: vi.fn(),
       overview: vi.fn(),
       conversations: vi.fn(),
@@ -120,7 +123,9 @@ beforeEach(() => {
   quiet();
 });
 
-const meet = (): JSX.Element => <Meet navigate={() => {}} timezone="UTC" />;
+const meet = (navigate: (next: string, replace?: boolean) => void = () => {}): JSX.Element => (
+  <Meet navigate={navigate} timezone="UTC" />
+);
 
 describe('who is sent here', () => {
   it('sends a fresh installation with no model account to first run', async () => {
@@ -342,6 +347,112 @@ describe('the switch', () => {
   });
 });
 
+describe('the way out', () => {
+  /** The assistant has spoken: first run is over and the board says so. */
+  function spoken(): void {
+    vi.mocked(api.onboarding).mockResolvedValue(
+      view({ state: 'in-progress', details: { accountId: 'a0', conversationId: 'c1' }, needs: { owner: false, model: false, agent: false } }),
+    );
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}], { bindings: [{ agentId: 'ada', accountId: 'a0', model: 'qwen3:4b' }] }));
+    vi.mocked(chatApi.agents).mockResolvedValue({
+      agents: [{ id: 'ada', handle: 'ada', name: 'Ada', description: '', available: true, roles: [], provider: 'openai-compatible', model: 'qwen3:4b' }],
+      defaultAgentId: 'ada',
+    });
+    vi.mocked(chatApi.conversation).mockResolvedValue({
+      id: 'c1',
+      agentId: 'ada',
+      messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: "I'm Ada." }] }],
+      runs: [],
+    } as never);
+  }
+
+  it('stops offering to set up later once there is nothing left to set up', async () => {
+    spoken();
+    render(meet());
+    expect(await screen.findByText(/I'm Ada\./)).toBeInTheDocument();
+    // First run is complete at this point; "later" is no longer a thing that
+    // can happen, and the quiet link is the way to the dashboard instead.
+    await waitFor(() => expect(screen.getByRole('link', { name: SCRIPT.done.open })).toHaveAttribute('href', '#/chat/ada/c1'));
+    expect(screen.queryByRole('button', { name: SCRIPT.later })).not.toBeInTheDocument();
+  });
+
+  it('ends the thread on "Not now", and leaves for the conversation by itself', async () => {
+    // Motion allowed: this is the path where the board shows itself out.
+    window.matchMedia = ((query: string) => ({ matches: false, media: query, addEventListener: () => {}, removeEventListener: () => {} })) as unknown as typeof window.matchMedia;
+    spoken();
+    const navigate = vi.fn();
+    render(meet(navigate));
+    // The thread first: the chips exist only once the assistant has spoken.
+    await screen.findByText(SCRIPT.offers.notNow);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByText(SCRIPT.offers.notNow));
+      expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+      const open = screen.getAllByRole('link', { name: SCRIPT.done.open });
+      expect(open.some((link) => link.getAttribute('href') === '#/chat/ada/c1')).toBe(true);
+      // The composer is still the composer: this is a conversation, not a page
+      // that has ended.
+      expect(screen.getByPlaceholderText(/Message Ada/)).toBeInTheDocument();
+      expect(navigate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(LEAVE_MS + 100);
+      expect(navigate).toHaveBeenCalledWith('#/chat/ada/c1', true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never moves an owner who asked for less motion; the button is the whole offer', async () => {
+    // `quiet()` answers the reduced-motion query with "yes".
+    spoken();
+    const navigate = vi.fn();
+    render(meet(navigate));
+    fireEvent.click(await screen.findByText(SCRIPT.offers.notNow));
+    expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, LEAVE_MS + 200));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
+  });
+
+  it('ends it the same way when the phone says hello', async () => {
+    spoken();
+    vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
+    vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
+    render(meet(vi.fn()));
+    fireEvent.click(await screen.findByText(SCRIPT.offers.phone));
+    fireEvent.change(await screen.findByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.submit }));
+    // The pairing is watched until the phone says hello, and then the thread
+    // ends exactly as "not now" ends it.
+    expect(await screen.findByText(SCRIPT.telegram.paired, {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
+  });
+
+  it('sends a reload after first run to the conversation it happened in', async () => {
+    spoken();
+    vi.mocked(api.onboarding).mockResolvedValue(
+      view({ state: 'done', details: { accountId: 'a0', conversationId: 'c1' }, needs: { owner: false, model: false, agent: false } }),
+    );
+    const navigate = vi.fn();
+    render(meet(navigate));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/chat/ada/c1', true));
+    // Nothing of the thread is drawn on the way past.
+    expect(screen.queryByText(SCRIPT.name.ask)).not.toBeInTheDocument();
+  });
+
+  it('sends it Home when the record names no conversation', async () => {
+    spoken();
+    vi.mocked(api.onboarding).mockResolvedValue(
+      view({ state: 'done', details: {}, needs: { owner: false, model: false, agent: false } }),
+    );
+    const navigate = vi.fn();
+    render(meet(navigate));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/', true));
+  });
+});
+
 describe('change', () => {
   /** Answered through the assistant, so both answers carry a change link. */
   function met(): void {
@@ -377,6 +488,7 @@ describe('change', () => {
     vi.mocked(api.probeModels).mockRejectedValue(new Error('no list'));
     vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'second' });
     vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    vi.mocked(api.bindBrain).mockResolvedValue({ assistant: 'ada', followed: ['agent-father'] });
     render(meet());
     const changes = await screen.findAllByRole('button', { name: SCRIPT.change });
     // Name, clock, brain, assistant — the brain's is the third.
@@ -384,7 +496,8 @@ describe('change', () => {
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
     fireEvent.change(screen.getByPlaceholderText(SCRIPT.brain.key.placeholder), { target: { value: 'sk-ant-new' } });
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
-    await waitFor(() => expect(api.assignProviderAccount).toHaveBeenCalledWith('ada', 'second', 'claude-sonnet-5'));
+    // One call moves the assistant and anything following it.
+    await waitFor(() => expect(api.bindBrain).toHaveBeenCalledWith({ accountId: 'second', model: 'claude-sonnet-5' }));
     // And buddi names the model the assistant was actually moved onto.
     expect(await screen.findByText(SCRIPT.brain.works('claude-sonnet-5'))).toBeInTheDocument();
   });

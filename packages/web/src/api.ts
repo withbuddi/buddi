@@ -751,6 +751,12 @@ export const api = {
    */
   updateFirstAgent: (body: { name?: string; description?: string; avatar?: string }) =>
     post<CreatedAgent>('/onboarding/agent/update', body),
+  /**
+   * Give the assistant the brain the thread just tested — and move whatever
+   * was following it onto the same account, in one call.
+   */
+  bindBrain: (body: { accountId: string; model: string }) =>
+    post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
   /* ---- Telegram, from the first-run thread ---- */
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
