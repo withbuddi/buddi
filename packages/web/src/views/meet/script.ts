@@ -81,6 +81,12 @@ export const SCRIPT = {
       download: 'Get Ollama',
       looking: 'Looking for it on this computer…',
     },
+    /** Asked only when the choice is real: several models and no obvious one. */
+    model: {
+      ask: 'Which one should it think with?',
+      label: 'The model',
+      submit: 'Use this one',
+    },
     service: {
       address: 'Address',
       addressPlaceholder: 'The address they gave you',
