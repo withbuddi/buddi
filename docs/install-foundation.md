@@ -9,6 +9,15 @@ published to npm. The full contract remains [install.md](install.md).
   helper and dashboard into one npm tarball with bundled runtime dependencies.
   No private configuration, source checkout, developer dependencies or data are
   copied. Per-platform Postgres binaries are pinned optional dependencies.
+- **Platform plugins only.** The staged package list is core, runtime, gateway,
+  cli, install and the platform tools (artifacts, browser, host, email, memory,
+  web). `tools/finance` is not staged: money is one owner's domain, not
+  something every installation should claim a `finance.*` family for, and it is
+  installed like any other plugin. The gateway therefore resolves that manifest
+  optionally (`packages/gateway/src/plugins/optional-finance.ts`): a checkout
+  registers it exactly as before, a packaged install has no such module and no
+  such family, and an agent file granting `finance.*` is refused by the loader
+  with the same sentence it uses for any other missing plugin.
 - The packaged `buddi` launcher initializes a platform data directory, an
   installation-specific vault and a private SCRAM-authenticated Postgres cluster.
   The application database role is not a superuser; the administrator credential

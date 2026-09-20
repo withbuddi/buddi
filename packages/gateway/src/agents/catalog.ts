@@ -21,7 +21,6 @@ import {
 } from '@buddi/core';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
-import { manifest as financeManifest } from '@buddi/tool-finance';
 import { buildPreamble, manifest as memoryManifest,
   buildPreambleForScopes,
   groupScope,
@@ -31,6 +30,7 @@ import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
 import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
+import { optionalFinanceManifest } from '../plugins/optional-finance.js';
 import { createCanvasManifest } from './canvas.js';
 import { createSystemManifest } from '../system-context.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
@@ -116,7 +116,11 @@ export function builtInManifests(env: NodeJS.ProcessEnv = process.env): PluginMa
 function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest[]): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(createSystemManifest());
-  registry.register(financeManifest);
+  // Finance is the last domain plugin that is still compiled in, and only
+  // where the workspace has it: the release stages no `tools/finance`, so in a
+  // packaged install this is `undefined` and no `finance.*` family exists.
+  // See `plugins/optional-finance.ts`.
+  if (optionalFinanceManifest) registry.register(optionalFinanceManifest);
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
