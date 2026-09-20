@@ -46,6 +46,19 @@ export const HANDLE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 export const HANDLE_MIN = 2;
 export const HANDLE_MAX = 20;
 
+/**
+ * How long an agent's own opening may be.
+ *
+ * `intro` is one sentence — what this agent does, in its own words, shown on
+ * an empty thread where `description` (written for *other agents* to read)
+ * sounds like a catalogue entry. A starter is a short example request the
+ * owner can click; three is the most that reads as a suggestion rather than a
+ * menu, and a long one stops looking like something you would type.
+ */
+export const INTRO_MAX = 200;
+export const STARTER_MAX = 80;
+export const STARTERS_MAX = 3;
+
 /** Split `---\n<yaml>\n---\n<body>`. The leading `---` must be the first line. */
 export function splitFrontmatter(source: string, file?: string): {
   frontmatter: string;
@@ -164,6 +177,20 @@ export const agentFrontmatterSchema = z
      * of roles, and an installation with different agents invents its own.
      */
     roles: z.array(z.string().regex(KEBAB, 'a role must be kebab-case')).optional(),
+    /**
+     * One sentence in the agent's own voice: what it does, said to the owner.
+     * Absent, a surface falls back to `description`, which is written for
+     * other agents and reads like one.
+     */
+    intro: z.string().min(1).max(INTRO_MAX, `intro must be at most ${INTRO_MAX} characters`).optional(),
+    /**
+     * Up to three short example requests. They are *drafts* a surface may put
+     * in the owner's mouth — never sent on the owner's behalf.
+     */
+    starters: z
+      .array(z.string().min(1).max(STARTER_MAX, `a starter must be at most ${STARTER_MAX} characters`))
+      .max(STARTERS_MAX, `at most ${STARTERS_MAX} starters`)
+      .optional(),
     /** Shared skills to load by name; private skills are always loaded. */
     skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),

@@ -69,6 +69,25 @@ describe('the examples this repository ships', () => {
     }
   });
 
+  /*
+   * Every shipped agent opens for itself. `description` is written for other
+   * agents deciding whom to hand work to; an owner looking at an empty thread
+   * is owed a sentence written for them and something to click.
+   */
+  it('carry their own opening through to the agent view the page fetches', () => {
+    const { agents } = readChatAgents(catalog());
+    for (const view of agents) {
+      expect(view.intro, `${view.id} has no intro`).toBeTruthy();
+      expect((view.starters ?? []).length, `${view.id} offers no starters`).toBeGreaterThan(0);
+      expect((view.starters ?? []).length).toBeLessThanOrEqual(3);
+    }
+    const father = agents.find((a) => a.id === 'agent-father');
+    expect(father?.intro).toContain('I make and change your agents');
+    // The maker's starters name the owner's own assistant, which it cannot
+    // know: the token is resolved by the page, against the roster.
+    expect(father?.starters?.some((starter) => starter.includes('{{default}}'))).toBe(true);
+  });
+
   it('ship Agent Father, the one agent that may write an agent file', () => {
     const loaded = catalog();
     const father = loaded.resolve('father');

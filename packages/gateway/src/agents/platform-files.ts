@@ -40,6 +40,9 @@ export const FRONTMATTER_ORDER: readonly string[] = [
   'skills',
   'maxTurns',
   'language',
+  'thinking',
+  'intro',
+  'starters',
   'avatar',
   'accent',
 ];
@@ -63,6 +66,11 @@ export interface AgentFileSpec {
   roles?: string[];
   maxTurns?: number;
   language?: string;
+  /** Reasoning before the answer: `on`, `off`, or absent for the model's default. */
+  thinking?: 'on' | 'off';
+  /** The agent's own opening: one sentence, and up to three example requests. */
+  intro?: string;
+  starters?: string[];
   /** An emoji face, and the agent's own colour as #rrggbb. */
   avatar?: string;
   accent?: string;
@@ -93,12 +101,22 @@ export function composeAgentFile(spec: AgentFileSpec): string {
     roles: spec.roles === undefined || spec.roles.length === 0 ? undefined : spec.roles,
     maxTurns: spec.maxTurns,
     language: spec.language,
+    thinking: spec.thinking,
+    intro: spec.intro,
+    starters: spec.starters === undefined || spec.starters.length === 0 ? undefined : spec.starters,
     avatar: spec.avatar,
     accent: spec.accent,
   };
   const lines = FRONTMATTER_ORDER.flatMap((key) => {
     const value = values[key];
-    return value === undefined ? [] : [`${key}: ${serializeYamlValue(value)}`];
+    if (value === undefined) return [];
+    // A starter is a sentence, and a sentence has commas in it. The flow list
+    // `[a, b]` splits on those, so the one key whose items are prose is
+    // written as a block list — which the parser reads back item by item.
+    if (key === 'starters' && Array.isArray(value)) {
+      return [`${key}:`, ...value.map((item) => `  - ${serializeYamlValue(item)}`)];
+    }
+    return [`${key}: ${serializeYamlValue(value)}`];
   });
   return `---\n${lines.join('\n')}\n---\n\n${spec.persona.trim()}\n`;
 }

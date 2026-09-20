@@ -59,6 +59,7 @@ export function MessageList({
   children,
   agentName,
   emptyHint,
+  empty,
   plain = false,
   workingLine,
 }: {
@@ -89,6 +90,12 @@ export function MessageList({
   agentName?: string;
   emptyHint: string;
   /**
+   * What an empty thread shows instead of `emptyHint`: an agent's own opening,
+   * built by the page because it is the page that holds the roster. A node
+   * rather than a string because it carries a face and buttons.
+   */
+  empty?: ReactNode;
+  /**
    * Draw what was said and nothing else: no folded thoughts, no tool rows.
    *
    * First run uses it. An owner meeting their assistant for the first time is
@@ -114,7 +121,7 @@ export function MessageList({
     <MarkdownAgents.Provider value={agents ?? speakers ?? []}>
     <div className="wb-messages" data-testid="messages">
       {shown.length === 0 && live.length === 0 ? (
-        <p className="wb-chat-empty">{emptyHint}</p>
+        empty ?? <p className="wb-chat-empty">{emptyHint}</p>
       ) : null}
 
       {shown.map((message, index) => {

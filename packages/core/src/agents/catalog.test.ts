@@ -16,7 +16,14 @@ import {
   toDateString,
   UnknownAgentError,
 } from './catalog.js';
-import { AgentFileError, parseAgentFile, parseYamlSubset, splitFrontmatter } from './frontmatter.js';
+import {
+  AgentFileError,
+  INTRO_MAX,
+  STARTER_MAX,
+  parseAgentFile,
+  parseYamlSubset,
+  splitFrontmatter,
+} from './frontmatter.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, providerFromEnv } from './provider-from-env.js';
 import { parseSkillFile } from './skills.js';
 
@@ -204,6 +211,58 @@ describe('parseAgentFile', () => {
       expect(parseAgentFile(file).frontmatter.handle).toBe(handle);
     },
   );
+
+  /*
+   * An agent's own opening: one sentence to the owner and up to three example
+   * requests. Both are capped, because a "starter" that does not fit on a chip
+   * is not an example request and an intro that runs to a paragraph is a
+   * persona in the wrong field.
+   */
+  it('parses an intro and a block list of starters', () => {
+    const file = agentFile(
+      [
+        'id: a',
+        'handle: aa',
+        'name: A',
+        'description: d',
+        'tools: []',
+        'intro: I keep your calendar, and I say so when I cannot reach something.',
+        'starters:',
+        '  - "What is on today, and what moved?"',
+        '  - Move my 3pm to tomorrow',
+      ].join('\n'),
+    );
+    const { frontmatter } = parseAgentFile(file);
+    expect(frontmatter.intro).toBe('I keep your calendar, and I say so when I cannot reach something.');
+    // The comma survives: a starter is prose, so it is written as a block list
+    // rather than a flow list that would split on it.
+    expect(frontmatter.starters).toEqual(['What is on today, and what moved?', 'Move my 3pm to tomorrow']);
+  });
+
+  it('leaves both absent when the file says nothing', () => {
+    const { frontmatter } = parseAgentFile(agentFile('id: a\nhandle: aa\nname: A\ndescription: d\ntools: []'));
+    expect(frontmatter.intro).toBeUndefined();
+    expect(frontmatter.starters).toBeUndefined();
+  });
+
+  it('refuses an intro longer than one sentence\'s worth', () => {
+    const file = agentFile(`id: a\nhandle: aa\nname: A\ndescription: d\ntools: []\nintro: ${'x'.repeat(INTRO_MAX + 1)}`);
+    expect(() => parseAgentFile(file)).toThrow(/intro must be at most/);
+  });
+
+  it('refuses a starter longer than a chip', () => {
+    const file = agentFile(
+      `id: a\nhandle: aa\nname: A\ndescription: d\ntools: []\nstarters:\n  - ${'x'.repeat(STARTER_MAX + 1)}`,
+    );
+    expect(() => parseAgentFile(file)).toThrow(/starter must be at most/);
+  });
+
+  it('refuses a fourth starter', () => {
+    const file = agentFile(
+      ['id: a', 'handle: aa', 'name: A', 'description: d', 'tools: []', 'starters:', '  - one', '  - two', '  - three', '  - four'].join('\n'),
+    );
+    expect(() => parseAgentFile(file)).toThrow(/at most 3 starters/);
+  });
 
   it('refuses an empty persona body', () => {
     expect(() => parseAgentFile('---\nid: a\nhandle: aa\nname: A\ndescription: d\ntools: []\n---\n\n')).toThrow(

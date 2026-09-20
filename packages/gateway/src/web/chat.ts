@@ -150,6 +150,13 @@ export interface ChatAgentView {
    * front desk, writes its own, or has none keeps the right rail either way.
    */
   anchor: AgentAnchor | null;
+  /**
+   * The agent's own opening: one sentence about what it does, and up to three
+   * example requests. Both come from the agent file; a surface that has
+   * neither falls back to `description`.
+   */
+  intro?: string;
+  starters?: string[];
   /** The face to draw, if the file names one. An image is fetched from this origin only. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
@@ -231,6 +238,10 @@ export function readChatAgents(catalog: AgentCatalog): {
       provider: summary.providerKind,
       model: full?.provider.model ?? full?.model ?? '',
       anchor: anchorOf(summary.roles),
+      ...(summary.intro === undefined ? {} : { intro: summary.intro }),
+      ...(summary.starters === undefined || summary.starters.length === 0
+        ? {}
+        : { starters: [...summary.starters] }),
       ...(summary.avatar === undefined ? {} : { avatar: avatarOf(summary.id, summary.avatar) }),
       ...(summary.accent === undefined ? {} : { accent: summary.accent }),
     };

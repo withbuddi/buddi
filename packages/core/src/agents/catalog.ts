@@ -106,6 +106,10 @@ export interface AgentSummary {
   available: boolean;
   /** Why not, in one sentence. Present only when `available` is false. */
   unavailableReason?: string;
+  /** One sentence in the agent's own voice, for a surface that opens on it. */
+  intro?: string;
+  /** Up to three example requests a surface may offer as drafts. */
+  starters?: string[];
   /** An emoji, or an image file name inside the agent's folder. */
   avatar?: string;
   /** `#rrggbb`, the agent's own colour. */
@@ -438,6 +442,8 @@ function buildAgent(
     providerKind: provider.kind,
     available: availability.ok,
     ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
+    ...(frontmatter.intro === undefined ? {} : { intro: frontmatter.intro }),
+    ...(frontmatter.starters === undefined ? {} : { starters: [...frontmatter.starters] }),
     ...(frontmatter.avatar === undefined ? {} : { avatar: frontmatter.avatar }),
     ...(frontmatter.accent === undefined ? {} : { accent: frontmatter.accent }),
     file,
@@ -670,6 +676,8 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
         ...(a.availability.ok
           ? {}
           : { unavailableReason: a.availability.problem.message }),
+        ...(a.intro === undefined ? {} : { intro: a.intro }),
+        ...(a.starters === undefined ? {} : { starters: [...a.starters] }),
         ...(a.avatar === undefined ? {} : { avatar: a.avatar }),
         ...(a.accent === undefined ? {} : { accent: a.accent }),
       })),

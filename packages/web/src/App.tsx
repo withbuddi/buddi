@@ -325,6 +325,7 @@ export function App(): JSX.Element {
               timezone={timezone}
               agents={ordered}
               agentId={selectedGroup ? selectedGroup.coordinator : selectedAgentId}
+              defaultAgentId={defaultAgentId}
               group={selectedGroup}
               requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
               onConversationOpened={conversationOpened}
