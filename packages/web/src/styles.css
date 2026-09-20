@@ -2112,42 +2112,117 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   .files-back { display: inline-flex; }
 }
 
-/* ---- first run: the wizard, full window, no rail ---- */
+/* ------------------------------------------------------------------ *
+ * First run: one thread, full window, no rail.
+ *
+ * The chat's own bubbles, avatar, typing indicator and composer do the
+ * talking — the classes here only make the column, place the inline answers
+ * where a reply would go, and draw the four cards. When the real assistant
+ * takes over, nothing on this screen changes but the speaker.
+ * ------------------------------------------------------------------ */
 
-.welcome { height: 100%; overflow: auto; background: var(--bg); display: flex; justify-content: center; }
-.welcome-frame { width: 100%; max-width: 720px; padding: var(--space-8) var(--space-6); display: flex; flex-direction: column; gap: var(--space-6); }
-.welcome-frame[data-wide='true'] { max-width: 940px; }
-.welcome-body { flex: 1 1 auto; min-height: 0; }
-.welcome-head { display: flex; flex-direction: column; gap: var(--space-2); }
-.welcome-title { margin: 0; font-family: var(--font-display); font-size: var(--text-2xl); font-weight: var(--weight-semibold); }
-.welcome-lede { margin: 0; color: var(--text-muted); font-size: var(--text-base); line-height: 1.5; }
-.welcome-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
-.welcome-list li { padding: var(--space-3) 0; border-top: 1px solid var(--line); font-size: var(--text-base); line-height: 1.5; color: var(--text-muted); }
-.welcome-list li:first-child { border-top: 0; }
-.welcome-list strong { color: var(--text); font-weight: var(--weight-semibold); }
+.meet { height: 100%; overflow: auto; background: var(--bg); display: flex; justify-content: center; }
+.meet-column {
+  width: 100%;
+  max-width: 680px;
+  padding: var(--space-8) var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.meet-thread { display: flex; flex-direction: column; gap: var(--space-3); }
+.meet-turn { display: flex; flex-direction: column; gap: var(--space-2); }
 
-.welcome-progress { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; padding: 0 0 var(--space-4); list-style: none; border-bottom: 1px solid var(--line); }
-.welcome-progress-step { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-faint); }
-.welcome-progress-step[data-state='here'] { color: var(--text); }
-.welcome-progress-step[data-state='done'] { color: var(--text-muted); }
-.welcome-progress-mark { width: 6px; height: 6px; border-radius: var(--radius-pill); background: currentColor; opacity: 0.35; }
-.welcome-progress-step[data-state='here'] .welcome-progress-mark { opacity: 1; background: var(--accent); }
-.welcome-progress-step[data-state='done'] .welcome-progress-mark { opacity: 0.7; }
+/* An answer goes where a reply would: the composer's place, primary right. */
+.meet-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.meet-ask > .ui-field { flex: 1 1 200px; }
+.meet-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+}
+.meet-line { flex: 1 1 200px; color: var(--text-muted); font-size: var(--text-sm); }
+.meet-quiet {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  text-decoration: underline;
+}
+.meet-change {
+  align-self: flex-end;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-family: inherit;
+}
+.meet-change:hover { color: var(--text-muted); text-decoration: underline; }
 
-.welcome-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
-.welcome-foot-right { display: flex; align-items: center; gap: var(--space-4); }
-.welcome-later { border: 0; background: none; padding: 0; cursor: pointer; color: var(--text-faint); font-size: var(--text-sm); font-family: inherit; }
-.welcome-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
-.welcome-later:disabled { cursor: default; opacity: 0.5; }
-.welcome-quiet { border: 0; background: none; padding: 0; cursor: pointer; color: var(--text-muted); font-size: var(--text-sm); font-family: inherit; text-decoration: underline; }
+/* The four brains: two per row, a face, a title and one line. */
+.meet-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.meet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+}
+.meet-card:hover { border-color: var(--accent); }
+.meet-card-face { font-size: var(--text-lg); }
+.meet-card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.meet-card-line { font-size: var(--text-sm); color: var(--text-muted); }
 
-.welcome-faces { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.welcome-face { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; font-size: var(--text-lg); }
-.welcome-face[data-chosen='true'] { border-color: var(--accent); background: var(--surface-sunken); }
+.meet-faces { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.meet-face {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--text-lg);
+}
+.meet-face[data-chosen='true'] { border-color: var(--accent); background: var(--surface-sunken); }
 
-.welcome-chat { display: flex; height: 60vh; min-height: 320px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.welcome-chat .wb-chat { flex: 1 1 auto; border-right: 0; }
+.meet-pair { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
+.meet-qr { width: 180px; height: 180px; background: #fff; padding: var(--space-2); border-radius: var(--radius); }
+.meet-link { font-size: var(--text-sm); word-break: break-all; }
+
+.meet-foot { display: flex; justify-content: flex-start; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.meet-later { border: 0; background: none; padding: 0; cursor: pointer; color: var(--text-faint); font-size: var(--text-sm); font-family: inherit; }
+.meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
+.meet-later:disabled { cursor: default; opacity: 0.5; }
 
 @media (max-width: 700px) {
-  .welcome-frame { padding: var(--space-5) var(--space-4); }
+  .meet-column { padding: var(--space-5) var(--space-4); }
+  .meet-cards { grid-template-columns: minmax(0, 1fr); }
 }
