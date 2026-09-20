@@ -98,6 +98,23 @@ export interface RunAgentOptions {
   onDelta?: (delta: CompletionDelta) => void;
   onToolCall?: (name: string, input: unknown) => void;
   /**
+   * A run inside a shared room (docs/groups.md). The history is the room as
+   * this agent is allowed to see it — the projection — instead of the raw
+   * rows; every turn this run writes carries `speaker`, and the opening
+   * message carries `openingSpeaker` (the owner, or the coordinator that
+   * asked). Absent for an ordinary conversation, where nothing changes.
+   */
+  transcript?: {
+    load: () => Promise<NeutralMessage[]>;
+    speaker: string;
+    openingSpeaker: string;
+    /**
+     * Applied to the history before every call, not once at the start: tool
+     * output the run gathers as it goes has to fit the same cap.
+     */
+    bound?: (messages: NeutralMessage[]) => NeutralMessage[];
+  };
+  /**
    * Resuming a run that stopped awaiting an approval.
    *
    * The tool_use that asked for it was already answered (with "awaiting owner
@@ -286,11 +303,22 @@ async function persistMessage(
   conversationId: string,
   role: 'user' | 'assistant',
   content: ContentBlock[],
+  speaker?: string,
 ): Promise<void> {
+  // The column is written only when a room needs it, so a single-agent
+  // conversation's rows keep the shape they always had.
+  if (speaker === undefined) {
+    await pool.query(
+      `insert into core.messages (conversation_id, role, content)
+       values ($1, $2, $3::jsonb)`,
+      [conversationId, role, JSON.stringify(content)],
+    );
+    return;
+  }
   await pool.query(
-    `insert into core.messages (conversation_id, role, content)
-     values ($1, $2, $3::jsonb)`,
-    [conversationId, role, JSON.stringify(content)],
+    `insert into core.messages (conversation_id, role, content, speaker)
+     values ($1, $2, $3::jsonb, $4)`,
+    [conversationId, role, JSON.stringify(content), speaker],
   );
 }
 
@@ -527,8 +555,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // action, which is how the decision later finds the run that is suspended.
   // The surface rides along too: a delegated run reaches the same screen as the
   // run that asked for it, so the delegate must be told about that screen.
+  /** An action a tool reported the run must wait on, without gating itself. */
+  let suspendedBy: string | undefined;
   const toolCtx: ToolContext = {
     ...ctx,
+    suspend: (actionId: string) => { suspendedBy = actionId; },
     ...(platformContext ? { timezone: platformContext.timezone } : {}),
     conversationId,
     agentId: agent.id,
@@ -547,7 +578,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const attachments = opts.attachments ?? [];
   assertAttachmentCount(attachments);
 
-  const history = await loadMessages(pool, conversationId);
+  const history = opts.transcript ? await opts.transcript.load() : await loadMessages(pool, conversationId);
   // Stored history carries artifact_ref blocks; the provider needs the bytes.
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 
@@ -559,7 +590,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     enforceCaps: true,
   });
   // What is persisted is the reference, never the base64.
-  await persistMessage(pool, conversationId, 'user', userBlocks);
+  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker);
   // Degrade what the provider cannot carry into a placeholder the model can
   // read and talk about. Only what is *sent* changes: the persisted turn above
   // still holds the artifact reference, so the same history sent to a provider
@@ -617,7 +648,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     turns++;
     const res = await provider.complete({
       system: waitingForOwner ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.` : system,
-      messages,
+      messages: opts.transcript?.bound ? opts.transcript.bound(messages) : messages,
       tools: waitingForOwner ? [] : tools,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),
@@ -638,7 +669,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     // What is *sent back* keeps the provider's own blocks — a paused turn is
     // only continuable with them. What is *stored* does not: see `persistable`.
     messages.push({ role: 'assistant', content: assistantContent });
-    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent));
+    await persistMessage(pool, conversationId, 'assistant', persistable(assistantContent), opts.transcript?.speaker);
 
     // The audit line for a search nobody dispatched. Written before the run can
     // end, and before the next request, so the order in the log is the order it
@@ -706,6 +737,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
             message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {
         if (registry.waitsForOwner(call.name)) waitingForOwner = true;
+        // The tool finished, but it left the run waiting on a decision the
+        // owner has to make elsewhere: nothing more is dispatched this turn,
+        // and the run ends resumable on that action.
+        if (suspendedBy !== undefined && pendingActionId === undefined) {
+          pendingActionId = suspendedBy;
+          opts.onApprovalRequired?.(suspendedBy, 'a member of the group is waiting for the owner');
+        }
         results.push({
           type: 'tool_result',
           tool_use_id: call.id,
@@ -768,7 +806,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     }
 
     messages.push({ role: 'user', content: results });
-    await persistMessage(pool, conversationId, 'user', results);
+    await persistMessage(pool, conversationId, 'user', results, opts.transcript?.speaker);
     // Ephemeral observations: only the latest picture is sent, never base64 in
     // durable transcripts or stale screenshots repeated on every later turn.
     for (const message of messages) message.content = message.content.filter((b) => !ephemeralImages.has(b));

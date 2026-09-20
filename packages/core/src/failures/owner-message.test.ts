@@ -185,3 +185,17 @@ describe('credentialEnvVar', () => {
     expect(credentialEnvVar(new Error('nothing about credentials'))).toBeUndefined();
   });
 });
+
+describe('a room that cannot fit', () => {
+  it('is told as a context limit, with no retry offered', async () => {
+    const { describeFailure } = await import('./owner-message.js');
+    const overflow = Object.assign(new Error('the room is 100129 characters and cannot be reduced'), { name: 'ProjectionOverflow', chars: 100_129, cap: 40_000 });
+    const told = describeFailure(overflow);
+    expect(told.class).toBe('permanent');
+    expect(told.retryable).toBe(false);
+    expect(told.text).toContain('grown past');
+    expect(told.text).toContain('100,129');
+    expect(told.text).toContain('new conversation');
+    expect(told.text).not.toMatch(/try again/i);
+  });
+});

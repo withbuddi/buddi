@@ -433,6 +433,8 @@ export function createOpenAiProvider(
         // Streaming: see the Anthropic adapter — the chunks are put back into
         // the non-streaming shape, and a failure after the first delta is final.
         const assembly = req.onDelta ? new OpenAiStreamAssembly(req.onDelta) : null;
+        // Every attempt is a dispatch; a caller counting calls is told of each.
+        await req.onDispatch?.();
         try {
           res = await doFetch(url, {
             method: 'POST', headers: headers(), body: payload,

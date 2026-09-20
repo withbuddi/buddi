@@ -34,6 +34,7 @@ import React, { useState } from 'react';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
 import { badgeOf, monogram, waitingText, type AgentAttention, type AgentGroups } from './roster';
+import type { GroupView } from '../chat/types';
 
 export interface AgentRailProps {
   /** Already grouped and ordered — `groupAgents` decides, in one place. */
@@ -45,6 +46,11 @@ export interface AgentRailProps {
   orientation?: 'vertical' | 'horizontal';
   /** When each agent last spoke, by id, for the quiet line under the name. */
   lastActivity?: Map<string, string>;
+  /** The owner's groups, drawn under the agents with stacked faces. */
+  groups?: GroupView[];
+  currentGroupId?: string | null;
+  onSelectGroup?: (groupId: string) => void;
+  onNewGroup?: () => void;
 }
 
 const COLLAPSED_KEY = 'buddi.rosterCollapsed';
@@ -63,7 +69,12 @@ export function AgentRail({
   onSelect,
   orientation = 'vertical',
   lastActivity,
+  groups = [],
+  currentGroupId = null,
+  onSelectGroup,
+  onNewGroup,
 }: AgentRailProps): JSX.Element {
+  const everyone = [...agents.top, ...agents.middle, ...agents.bottom];
   const side = orientation === 'vertical' ? 'right' : 'bottom';
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const face = (agent: ChatAgent): JSX.Element => (
@@ -104,7 +115,44 @@ export function AgentRail({
         scrolls between the front desk and the maker, and neither of them ever
         leaves the screen.
       */}
-      <div className="wb-agent-scroll">{agents.middle.map(face)}</div>
+      <div className="wb-agent-scroll">
+        {agents.middle.map(face)}
+        {onSelectGroup ? (
+          <div className="wb-groups" data-testid="group-rail">
+            <span className="wb-agent-sep" aria-hidden="true" />
+            <div className="wb-groups-head">
+              <span className="wb-groups-label">Groups</span>
+              {onNewGroup ? (
+                <button type="button" className="ui-icon-btn" data-size="sm" aria-label="New group" title="A team of agents in one conversation" onClick={onNewGroup}>
+                  <PlusIcon />
+                </button>
+              ) : null}
+            </div>
+            {groups.map((group) => (
+              <button
+                type="button"
+                key={group.id}
+                className="wb-face wb-group-face"
+                data-active={group.id === currentGroupId ? 'true' : undefined}
+                aria-current={group.id === currentGroupId ? 'true' : undefined}
+                aria-label={`${group.name}, ${group.members.length} agents`}
+                onClick={() => onSelectGroup(group.id)}
+              >
+                <span className="wb-face-mark wb-group-stack" aria-hidden="true">
+                  {group.members.slice(0, 3).map((id) => {
+                    const agent = everyone.find((a) => a.id === id);
+                    return <span key={id} className="wb-group-chip" data-tint={tintOf(id)}>{agent ? monogram(agent.name) : '?'}</span>;
+                  })}
+                </span>
+                <span className="wb-face-text">
+                  <span className="wb-face-name">{group.name}</span>
+                  <span className="wb-face-status">{group.members.map((id) => everyone.find((a) => a.id === id)?.name ?? id).join(', ')}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       {/*
         No second line at the foot. One line says "the desk, then the work"; two
@@ -259,6 +307,14 @@ function ChevronIcon({ direction }: { direction: 'left' | 'right' }): JSX.Elemen
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       {direction === 'left' ? <path d="M9 2.5 4.5 7 9 11.5" /> : <path d="M5 2.5 9.5 7 5 11.5" />}
+    </svg>
+  );
+}
+
+function PlusIcon(): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M7 2.5v9M2.5 7h9" />
     </svg>
   );
 }

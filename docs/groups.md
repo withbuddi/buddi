@@ -1,6 +1,7 @@
 # Groups: a team of agents in one conversation
 
-Status: implementation contract, not built. Agreed 2026-09-20.
+Status: implementation contract, agreed 2026-09-20. First version built on the
+`groups` branch the same day; see *What the first version does* at the end.
 
 A group is a persistent conversation with a chosen team of agents. You create
 "Household finances", add Concierge, Ledger and Finance Advisor, and say
@@ -201,3 +202,54 @@ The existing chat and Canvas carry it:
 
 Postponed on purpose: parallel member runs, voting, autonomous debates,
 dynamic membership, workflow builders.
+
+## What the first version does
+
+Built: group rows and membership; the shared transcript with a speaker on
+every turn; the projection with its tests, holding everything that arrives while any
+of the agent's tool calls is open — keyed on the call ids, so two asks in one
+response are answered together — so calls and results stay adjacent; the
+coordinator loop with mention override and sequential member runs through
+`group.ask`, serialised per group in the process and by a partial unique
+index on the request row; the twelve-call budget reserved on the request row
+before every dispatch, retries included, with no retry ever drawing the
+conclusion's call; the room bounded before every call, not once; the
+conclusion as a separate no-tools call when members spoke; a member's
+approval pause ending the coordinator's turn too, so nothing else in that
+turn runs; approval suspension and resume by the exact action; stop, which
+rejects the pending approval; the group memory scope with private memory never recalled and
+every write in a room landing in the room; rollover on a character cap with a
+one-call maintenance summary made through the same accounting and the same
+bound, and the new thread reading the summary just written; the roster entry, creation sheet, `@`
+completion, attribution and the activity line; routes under `/api/groups`.
+
+Deliberate deviations, to be closed later:
+
+- **A member's answer reaches the coordinator through the tool result.** The
+  coordinator's loop holds its history in memory during a run, so the
+  contribution has to come back through `group.ask`. It comes back attributed
+  (`@ledger said: …`) with a note that it is context, never bare. In later
+  runs the transcript shows it under the member's name.
+- **The conclusion is skipped when the coordinator already concluded.** If the
+  coordinator wrote prose after the last member spoke, that prose stands and
+  no second, tool-less call is made; otherwise the separate synthesis call
+  runs. Two answers to one request read worse than one answer with tools
+  available.
+- **Oversized output is bounded, not externalised.** Before every call the
+  room is reduced to the group's cap in this order: an agent's own tool
+  results clipped, the oldest turns dropped whole, pictures and documents
+  turned into one-line references, long text clipped, every marker counted.
+  A room that still cannot fit ends the run with a named refusal rather than
+  a silent shortfall. Moving an oversized result into an artifact is not
+  built.
+- **A rejection the provider confirmed is counted on retry.** The adapters
+  retry a 429 themselves; each dispatch reserves, and only the final refusal
+  releases. Never fewer reservations than dispatches.
+- **Groups are a dashboard surface.** Telegram and the terminal know nothing
+  of them: no group can be created, addressed or read there. The one place
+  the surfaces meet is an approval: a member's pending action can be decided
+  from Telegram like any other, and that decision is handed to the
+  dashboard's group path, which resumes the request; Telegram says so and
+  never runs the member as an ordinary turn. With no dashboard running, the
+  request stays suspended until there is one.
+- **Missions cannot target a group yet.**

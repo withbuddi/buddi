@@ -28,6 +28,8 @@ import {
   type ToolContext,
   listToolPermissions,
   revokeToolPermission,
+  conversationGroup,
+  type ActionRecord,
 } from '@buddi/core';
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
@@ -50,6 +52,7 @@ import {
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import type { Pool } from 'pg';
+import type { ApprovalResume } from '@buddi/runtime';
 import { memoryPreambleFor } from '../agents/catalog.js';
 import { ROLE_MAKER } from '../agents/roles.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
@@ -234,6 +237,12 @@ export interface TelegramDeps {
   artifacts?: ArtifactStore;
   log?: (line: string) => void;
   /**
+   * Where a group's suspended request resumes. Groups live on the dashboard
+   * (docs/groups.md); a decision taken here is handed over, never run here as
+   * an ordinary turn. Returns false when no dashboard is running to take it.
+   */
+  resumeGroup?: (action: ActionRecord, resume: ApprovalResume) => Promise<boolean>;
+  /**
    * Runs a mission inline for `/recap`. `buddi serve` owns the executor and
    * passes it; the standalone surface has no scheduler and leaves it out.
    */
@@ -341,6 +350,16 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     resumeInteractive: async (chatId, action, resume) => {
       const agent = deps.catalog.get(action.agentId);
       if (!agent || !action.conversationId) return;
+      // A room never runs as one agent's ordinary turn: it has a budget, a
+      // projection and a memory scope of its own, all of which live with the
+      // dashboard's group path.
+      if (await conversationGroup(pool, action.conversationId).catch(() => null)) {
+        const taken = (await deps.resumeGroup?.(action, resume)) === true;
+        await api.sendMessage(chatId, taken
+          ? `Decided. The group "${agent.name}" was waiting on continues on the dashboard.`
+          : 'Decided. That was a group\'s request; it continues when the dashboard is running.');
+        return;
+      }
       const reply = await runInteractive({ chatId, conversationId: action.conversationId, agent, text: '', resume });
       const text = replyText(reply);
       if (text) await api.sendMessage(chatId, text);

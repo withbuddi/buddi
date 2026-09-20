@@ -38,7 +38,7 @@ import { QuestionPicker } from './QuestionPicker';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
-import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttachment } from './types';
+import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
 
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 440;
@@ -54,6 +54,8 @@ export interface ChatPageProps {
    */
   agents: AgentGroups;
   agentId: string | null;
+  /** Set when the page is a group's room rather than one agent's thread. */
+  group?: GroupView | null;
   onSelectAgent: (agentId: string) => void;
   /** Who is waiting on the owner — drawn on the narrow strip's faces. */
   attention: Map<string, AgentAttention>;
@@ -76,6 +78,7 @@ export function ChatPage({
   timezone,
   agents,
   agentId,
+  group = null,
   onSelectAgent,
   attention,
   agentsInHeader,
@@ -140,8 +143,11 @@ export function ChatPage({
     if (left) setDraft({ text: left, at: Date.now() });
   }, [agentId]);
 
-  const agent =
-    [...agents.top, ...agents.middle, ...agents.bottom].find((c) => c.id === agentId) ?? null;
+  const everyone = [...agents.top, ...agents.middle, ...agents.bottom];
+  const agent = everyone.find((c) => c.id === agentId) ?? null;
+  const members = group ? group.members.map((id) => everyone.find((a) => a.id === id)).filter((a): a is ChatAgent => Boolean(a)) : [];
+  /** Who is speaking right now in a room, from the run's own event. */
+  const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
 
   /* ---- what the page knows before anyone types ---- */
 
@@ -183,8 +189,7 @@ export function ChatPage({
       if (requestedConversationId !== 'new') setConversationId(requestedConversationId);
       return () => { cancelled = true; };
     }
-    chatApi
-      .conversations(agentId)
+    (group ? chatApi.groupConversations(group.id) : chatApi.conversations(agentId))
       .then((list) => {
         if (cancelled) return;
         const latest = [...(list.conversations ?? [])].sort(byRecency)[0];
@@ -199,7 +204,7 @@ export function ChatPage({
     return () => {
       cancelled = true;
     };
-  }, [agentId, requestedConversationId, onConversationOpened]);
+  }, [agentId, group?.id, requestedConversationId, onConversationOpened]);
 
   const refresh = useCallback((id: string) => {
     return chatApi
@@ -263,6 +268,7 @@ export function ChatPage({
           case 'run.started':
             setRunning(true);
             setPartial(null);
+            setRunningAgentId(str(event.data['agentId']));
             break;
           case 'live': {
             const runId = str(event.data['runId']) ?? '';
@@ -329,6 +335,7 @@ export function ChatPage({
             setRunning(false);
             setLive([]);
             setPartial(null);
+            setRunningAgentId(null);
             // A turn that failed says so in words the server already wrote for
             // a person. The raw error stays in the log: the page is never
             // handed it, so it can never put it on the screen.
@@ -462,13 +469,14 @@ export function ChatPage({
     setError(null);
     setNotice(null);
     setRunning(true);
-    chatApi
-      .send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
-      .then((result) => {
+    (group
+      ? chatApi.sendToGroup(group.id, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
+      : chatApi.send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds }))
+      .then((result: { conversationId: string; boundary?: { note: string; previousConversationId: string }; rolledOver?: boolean }) => {
         if (selection.current.agentId !== agentId || selection.current.conversationId !== conversationId) return;
         // The conversation the page was in had ended, and this message opened a
         // new one. The empty thread is explained rather than surprising.
-        setNotice(result.boundary?.note ?? null);
+        setNotice(result.boundary?.note ?? (result.rolledOver ? '(New thread — the room had grown long. Where it stopped carries over as a summary.)' : null));
         if (result.conversationId !== conversationId) {
           setConversation(null);
           setConversationId(result.conversationId);
@@ -583,8 +591,16 @@ export function ChatPage({
     setAwaiting(new Map());
     setActiveTab(null); setOpenedFiles([]);
     previousFocus.current = null;
+    if (group) {
+      // A room needs its row before the first message: the request goes to a conversation, not to a group.
+      chatApi.startGroupConversation(group.id).then(({ conversationId: next }) => {
+        setConversationId(next);
+        if (agentId) onConversationOpened?.(agentId, next);
+      }).catch((err: unknown) => setError(message(err)));
+      return;
+    }
     if (agentId) onConversationOpened?.(agentId, 'new');
-  }, [agentId, onConversationOpened]);
+  }, [agentId, group, onConversationOpened]);
 
   useEffect(() => {
     if (newConversationSignal && newConversationSignal !== previousNewSignal.current) {
@@ -715,11 +731,17 @@ export function ChatPage({
           <div className="wb-head-row">
             {/* Whose column this is: the same face as in the roster, then the
                 name, then the one fact the transcript hides — how old it is. */}
-            {agent ? <a className="wb-head-face" href={agentRoute(agent.id)} aria-label={`${agent.name}'s page`}><AgentAvatar agents={[...agents.top, ...agents.middle, ...agents.bottom]} id={agent.id} /></a> : null}
+            {group ? (
+              <span className="wb-head-face wb-head-group" aria-hidden="true">
+                {members.slice(0, 3).map((m) => <AgentAvatar key={m.id} agents={everyone} id={m.id} size="sm" />)}
+              </span>
+            ) : agent ? <a className="wb-head-face" href={agentRoute(agent.id)} aria-label={`${agent.name}'s page`}><AgentAvatar agents={everyone} id={agent.id} /></a> : null}
             <div className="wb-head-text">
-              {agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
-              <span className="wb-head-meta" data-tone={line.tone} title={line.title}>
-                {line.text}
+              {group ? (
+                <span className="wb-head-title">{group.name}</span>
+              ) : agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
+              <span className="wb-head-meta" data-tone={line.tone} title={group ? `${members.map((m) => m.name).join(', ')}. Coordinator: ${agent?.name ?? group.coordinator}.` : line.title}>
+                {group ? `${members.map((m) => m.name).join(', ')} · ${line.text}` : line.text}
               </span>
             </div>
             <button className="ui-btn" data-variant="accent" disabled={!agentId} onClick={() => { setHistoryOpen(false); startNew(); }}>New chat</button>
@@ -747,7 +769,9 @@ export function ChatPage({
             */}
             <HeadMenu
               disabled={!agentId}
-              items={[
+              items={group ? [
+                ...members.map((m) => ({ label: m.name, hint: m.id === group.coordinator ? 'Coordinator · open page' : 'Member · open page', href: agentRoute(m.id) })),
+              ] : [
                 { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
                 ...(agent ? [
                   { label: 'Set up', hint: 'Account, model, tools and skills', href: agentRoute(agent.id, 'setup') },
@@ -774,7 +798,7 @@ export function ChatPage({
             />
           ) : null}
         </header>
-        {historyOpen && agentId ? <ConversationHistory agentId={agentId} currentId={conversationId} timezone={timezone}
+        {historyOpen && agentId ? <ConversationHistory agentId={agentId} {...(group ? { groupId: group.id } : {})} currentId={conversationId} timezone={timezone}
           onNew={() => { setHistoryOpen(false); startNew(); }}
           onSelect={id => {
             if (id === conversationId) { setHistoryOpen(false); return; }
@@ -799,6 +823,8 @@ export function ChatPage({
           now={now}
           working={running}
           partial={partial}
+          {...(group ? { speakers: everyone, coordinatorId: group.coordinator } : {})}
+          {...(runningAgentId ? { workingAs: everyone.find((a) => a.id === runningAgentId)?.name ?? runningAgentId } : {})}
           onOpenFile={openFile}
           onOpen={(toolUseId) => {
             if (conversationId) setDismissedTabs(current => {
@@ -859,10 +885,11 @@ export function ChatPage({
             running={running}
             onSend={send}
             onStop={stop}
-            agentName={agent?.name ?? 'the agent'}
+            agentName={group ? group.name : (agent?.name ?? 'the agent')}
             draft={draft}
-            model={agent?.model ?? null}
-            setupHref={agent ? agentRoute(agent.id, 'setup') : null}
+            model={group ? null : (agent?.model ?? null)}
+            setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup') : null)}
+            {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />
         )}

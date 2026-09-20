@@ -24,11 +24,15 @@ import {
   PLACES,
   SETTINGS_ROUTE,
   chatRoute,
+  groupChatRoute,
   legacyRedirect,
   parseChatRoute,
+  parseGroupChatRoute,
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
+import { GroupSheet } from './shell/GroupSheet';
+import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
@@ -115,6 +119,9 @@ export function App(): JSX.Element {
   const [agents, setAgents] = useState<ChatAgent[]>([]);
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  /** The owner's groups: a team of agents in one conversation (docs/groups.md). */
+  const [groups, setGroups] = useState<GroupView[]>([]);
+  const [newGroup, setNewGroup] = useState(false);
   const attention = useAttention();
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
   /** When each agent last spoke, for the roster's quiet line. */
@@ -174,14 +181,31 @@ export function App(): JSX.Element {
     };
   }, [hash]);
 
+  // Groups, on the same cadence as the roster they sit under.
+  useEffect(() => {
+    let cancelled = false;
+    const load = (): void => {
+      chatApi.groups().then((list) => { if (!cancelled) setGroups(list.groups); }).catch(() => {});
+    };
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [hash]);
+
   const ordered = groupAgents(agents, defaultAgentId);
   const chatLocation = parseChatRoute(hash);
-  const selectedAgentId = chatLocation?.agentId ?? agentId;
+  const groupLocation = parseGroupChatRoute(hash);
+  const selectedGroup = groupLocation ? (groups.find((g) => g.id === groupLocation.groupId) ?? null) : null;
+  const selectedAgentId = groupLocation ? null : (chatLocation?.agentId ?? agentId);
   useEffect(() => {
     if (chatLocation) setAgentId(chatLocation.agentId);
   }, [chatLocation?.agentId]);
   const selectAgent = (id: string): void => { setAgentId(id); navigate(chatRoute(id)); };
-  const conversationOpened = useCallback((id: string, conversation: string, replace = true) => navigate(chatRoute(id, conversation), replace), [navigate]);
+  const selectGroup = (id: string): void => navigate(groupChatRoute(id));
+  const conversationOpened = useCallback(
+    (id: string, conversation: string, replace = true) => navigate(groupLocation ? groupChatRoute(groupLocation.groupId, conversation) : chatRoute(id, conversation), replace),
+    [navigate, groupLocation?.groupId],
+  );
 
   useEffect(() => {
     api
@@ -206,10 +230,18 @@ export function App(): JSX.Element {
 
   const place = placeOf(hash);
   const onChat = place === CHAT_ROUTE;
+  const groupSheet = newGroup ? (
+    <GroupSheet
+      agents={agents}
+      onClose={() => setNewGroup(false)}
+      onCreated={(group) => { setGroups((current) => [...current, group]); setNewGroup(false); navigate(groupChatRoute(group.id)); }}
+    />
+  ) : null;
 
   return (
     <Tooltip.Provider delayDuration={400}>
       <Toast.Provider swipeDirection="right">
+        {groupSheet}
         <div className="wb">
           <Rail
             attention={badges.approvals + badges.failed}
@@ -226,6 +258,10 @@ export function App(): JSX.Element {
               attention={attention}
               onSelect={selectAgent}
               lastActivity={lastActivity}
+              groups={groups}
+              currentGroupId={selectedGroup?.id ?? null}
+              onSelectGroup={selectGroup}
+              onNewGroup={() => setNewGroup(true)}
             />
           ) : null}
 
@@ -233,8 +269,9 @@ export function App(): JSX.Element {
             <ChatPage
               timezone={timezone}
               agents={ordered}
-              agentId={selectedAgentId}
-              requestedConversationId={chatLocation?.conversationId}
+              agentId={selectedGroup ? selectedGroup.coordinator : selectedAgentId}
+              group={selectedGroup}
+              requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
               onConversationOpened={conversationOpened}
               onSelectAgent={selectAgent}
               attention={attention}

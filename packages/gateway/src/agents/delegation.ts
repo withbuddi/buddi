@@ -111,6 +111,23 @@ export interface DelegationManifestOptions {
  * migrations and is not in `installedManifests()`, which is the list `db:migrate`
  * walks.
  */
+/**
+ * The allowlist as delegation applies it: the file's entries, minus any agent
+ * that can write the installation, which is refused at the point of use. The
+ * same list serves `group.ask`, so a room never widens who may ask whom.
+ */
+export function delegateAllowlist(
+  agentId: string,
+  catalog: { get(id: string): { definition(now: Date): { tools: string[] } } | undefined },
+  agentsDir: string = AGENTS_DIR,
+): string[] {
+  return readDelegates(agentId, agentsDir).filter((targetId) => {
+    const held = writeToolsIn(catalog.get(targetId)?.definition(new Date()).tools ?? []);
+    if (held.length === 0) return true;
+    throw new Error(delegateToWriterRefusal(agentId, targetId, held));
+  });
+}
+
 export function createDelegationManifest(
   registry: ToolRegistry,
   opts: DelegationManifestOptions = {},
