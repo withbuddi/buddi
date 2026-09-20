@@ -13,7 +13,9 @@ import {
   checkRestoreGuard,
   formatBytes,
   isArchiveName,
-  isCustomFormatDump,
+  isEncryptedArchiveName,
+  copyFileProblem,
+  memberPathProblem,
   isSecretName,
   manifestProblems,
   restoreCommandsFor,
@@ -47,6 +49,32 @@ describe('archive names', () => {
     expect(isArchiveName('buddi-backup-nope.tar.gz')).toBe(false);
     expect(archiveTime('buddi-backup-nope.tar.gz')).toBeNull();
   });
+
+  it('counts the encrypted form as an archive, stamp and all', () => {
+    const name = `${archiveName(new Date(2026, 8, 14, 3, 30, 5))}.age`;
+    expect(isArchiveName(name)).toBe(true);
+    expect(isEncryptedArchiveName(name)).toBe(true);
+    expect(archiveTime(name)?.getTime()).toBe(new Date(2026, 8, 14, 3, 30, 5).getTime());
+    expect(isEncryptedArchiveName(archiveName(new Date()))).toBe(false);
+  });
+});
+
+describe('paths inside an archive', () => {
+  it('accepts the paths a buddi archive actually holds', () => {
+    for (const ok of ['manifest.json', 'db/core.events.copy', 'private/agents/a.md', 'artifacts/2026/09/x']) {
+      expect(memberPathProblem(ok)).toBeNull();
+    }
+  });
+
+  it('refuses anything that could land outside the extraction directory', () => {
+    expect(memberPathProblem('../evil')).toContain('climbs out');
+    expect(memberPathProblem('private/../../evil')).toContain('climbs out');
+    expect(memberPathProblem('/etc/passwd')).toContain('absolute');
+    expect(memberPathProblem('C:\\Windows\\evil')).toContain('absolute');
+    expect(memberPathProblem('private\\agents')).toContain('backslash');
+    expect(memberPathProblem('~/.ssh/id_rsa')).toContain('home directory');
+    expect(memberPathProblem('  ')).toContain('empty');
+  });
 });
 
 describe('scrubbing .env', () => {
@@ -66,6 +94,37 @@ describe('scrubbing .env', () => {
     expect(result.names).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'TELEGRAM_BOT_TOKEN']);
     expect(result.text).not.toContain('REALSECRETVALUE');
     expect(result.text).not.toContain('REALBOTTOKEN');
+  });
+
+  it('scrubs a quoted value that runs over several lines, whole', () => {
+    const raw = [
+      'BUDDI_TZ=America/New_York',
+      'SERVICE_ACCOUNT_KEY="-----BEGIN PRIVATE KEY-----',
+      'LINEONEOFTHEKEY',
+      'LINETWOOFTHEKEY',
+      '-----END PRIVATE KEY-----"',
+      'AFTER=still here',
+    ].join('\n');
+
+    const result = scrubEnv(raw);
+
+    expect(result.text).toContain('SERVICE_ACCOUNT_KEY="<vault>"');
+    expect(result.text).toContain('BUDDI_TZ=America/New_York');
+    expect(result.text).toContain('AFTER=still here');
+    expect(result.text).not.toContain('LINEONEOFTHEKEY');
+    expect(result.text).not.toContain('LINETWOOFTHEKEY');
+    expect(result.names).toEqual(['SERVICE_ACCOUNT_KEY']);
+    // And the proof stays a mechanism: the assertion sees the whole value and
+    // every line of it, so a scrub that missed one would stop the backup.
+    expect(secretValuesIn(raw)).toContain('LINETWOOFTHEKEY');
+    assertNoSecretValues(result.text, secretValuesIn(raw));
+  });
+
+  it('does not swallow the rest of the file when a quote is never closed', () => {
+    const raw = ['API_KEY="unterminated', 'BUDDI_TZ=America/New_York'].join('\n');
+    const result = scrubEnv(raw);
+    expect(result.text).toContain('API_KEY="<vault>"');
+    expect(result.text).toContain('BUDDI_TZ=America/New_York');
   });
 
   it('scrubs a secret however oddly the line is written', () => {
@@ -149,11 +208,13 @@ describe('the manifest', () => {
     format: MANIFEST_FORMAT,
     createdAt: '2026-09-14T07:30:00.000Z',
     timezone: 'America/New_York',
-    buddiVersion: 'v0.1.0-4-g4b5d456',
+    buddiVersion: '0.1.0',
+    postgresMajor: 16,
     host: 'laptop',
     database: { name: 'buddi', host: 'localhost', port: '55433', user: 'buddi' },
     migrations: [{ schema: 'core', filename: '001_init.sql', appliedAt: null, sha256: 'a'.repeat(64) }],
     tables: [{ table: 'core.events', rows: 12 }],
+    plugins: [],
     artifacts: { included: true, count: 2, bytes: 100 },
     private: { agents: null, skills: null },
     secrets: {
@@ -163,7 +224,7 @@ describe('the manifest', () => {
       note: 'n',
       restoreWith: ['buddi vault set ANTHROPIC_API_KEY'],
     },
-    members: [{ path: 'database.dump', bytes: 10, sha256: 'b'.repeat(64) }],
+    members: [{ path: 'db/core.events.copy', bytes: 10, sha256: 'b'.repeat(64) }],
   };
 
   it('accepts a manifest this build wrote', () => {
@@ -174,6 +235,11 @@ describe('the manifest', () => {
     expect(manifestProblems({ ...good, format: MANIFEST_FORMAT + 1 })).toEqual([
       `format ${MANIFEST_FORMAT + 1} is newer than this build understands (${MANIFEST_FORMAT})`,
     ]);
+  });
+
+  it('rejects a manifest from an older format in plain words', () => {
+    const problems = manifestProblems({ ...good, format: 1 });
+    expect(problems.join()).toContain('older backup than this build can read');
   });
 
   it('rejects a member whose checksum is not a sha256', () => {
@@ -194,15 +260,23 @@ describe('the manifest', () => {
   });
 });
 
-describe('pg_dump header sanity', () => {
-  it('recognises a custom-format archive', () => {
-    expect(isCustomFormatDump(Buffer.from('PGDMP\x01\x0e\x00'))).toBe(true);
+describe('COPY file sanity', () => {
+  const table = { schema: 'drill', table: 'accounts', columns: ['id', 'name'], rows: 2 };
+
+  it('accepts a file whose lines match the columns and the row count', () => {
+    expect(copyFileProblem('1\tchecking\n2\tsavings\n', table)).toBeNull();
   });
 
-  it('rejects plain SQL, an error message and an empty file', () => {
-    expect(isCustomFormatDump(Buffer.from('--\n-- PostgreSQL database dump\n'))).toBe(false);
-    expect(isCustomFormatDump(Buffer.from('Error: no such container\n'))).toBe(false);
-    expect(isCustomFormatDump(Buffer.alloc(0))).toBe(false);
+  it('accepts an empty file for an empty table, and refuses one for a full table', () => {
+    expect(copyFileProblem('', { ...table, rows: 0 })).toBeNull();
+    expect(copyFileProblem('', table)).toMatch(/the COPY file is empty/);
+  });
+
+  it('catches a truncated transfer and an error message in place of data', () => {
+    expect(copyFileProblem('1\tchecking\n', table)).toMatch(/1 line\(s\), manifest says 2/);
+    expect(copyFileProblem('Error: no such container\n', { ...table, rows: 1 })).toMatch(
+      /has 1 field\(s\), not 2/,
+    );
   });
 });
 

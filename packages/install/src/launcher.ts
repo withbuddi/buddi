@@ -39,7 +39,12 @@ async function control(ctx: InstallContext, action = 'status'): Promise<Supervis
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });
       res.on('end', () => {
-        if (res.statusCode !== 200) return reject(new Error(`Supervisor refused the request (${res.statusCode}).`));
+        // 200 is "done, and here is the status"; 202 is "accepted, and here is
+        // the status it had when you asked" — which is what `restart` answers,
+        // because the reply has to leave before the child it replaces dies.
+        if (res.statusCode !== 200 && res.statusCode !== 202) {
+          return reject(new Error(`Supervisor refused the request (${res.statusCode}).`));
+        }
         try { resolve(JSON.parse(text) as SupervisorStatus); }
         catch { reject(new Error('The supervisor answered with something that is not its status.')); }
       });

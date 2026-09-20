@@ -105,7 +105,7 @@ An owner with their own Postgres sets `DATABASE_URL` in the data directory's
 mentioned anywhere in the install path; `docker compose` remains for the
 development checkout only.
 
-Backups are §8; with a bundled cluster they use the bundled `pg_dump`.
+Backups are §8; they need no `pg_dump`, so the bundled cluster changes nothing.
 
 ---
 
@@ -311,7 +311,7 @@ should never be public.
 
 `buddi backup` already exists with `create`, `list`, `verify`, `restore`,
 `prune` and `schedule`, and the archive is a plain `tar.gz` that opens without
-buddi: a `pg_dump`, the artifact files, `.env` with every secret removed,
+buddi: the database as text, the artifact files, `.env` with every secret removed,
 plugin migration records, and a manifest with per-file hashes, table counts
 and the version that wrote it. Restore verifies before it touches anything and
 refuses to overwrite a live database without the name typed back. This section
@@ -320,13 +320,25 @@ encryption, and a copy off the machine.
 
 ### 8.1 With the bundled cluster
 
-`create` and `restore` use the bundled `pg_dump` and `pg_restore` (the dump
-is custom format and restore is `pg_restore --single-transaction`, so a
-failed restore leaves the target as it was), and never a tool the owner did
-not install. The bundled binaries package must ship both, plus `psql` for
-doctor. The manifest gains the Postgres major version. Restoring into a newer
-cluster is a load, which the format already is; `pg_upgrade` is never needed.
-The upgrade command takes a backup before it migrates, as today.
+There is no `pg_dump`: the bundled Postgres (`@embedded-postgres/*`, and the
+zonky jars behind it) ships `initdb`, `pg_ctl` and `postgres` and nothing else,
+so an engine that shelled out to one would work only on a developer machine
+with Homebrew Postgres on it. Instead every table in the buddi-owned schemas
+(`core`, plus each plugin schema recorded in `core.migrations`) is copied out
+with `COPY … TO STDOUT` over the ordinary connection, inside one repeatable-read
+transaction so the whole archive is one snapshot of a live installation, and
+restore rebuilds the schema from our own migrations up to the level the dump
+recorded, loads the data back with `session_replication_role = replica`, resets
+the sequences and then applies the migrations the dump did not have. For a
+cross-version restore that means the *code* has to know the schema, not the
+server: any Postgres this build runs on can read any archive this build wrote,
+newer or older cluster alike, and `pg_upgrade` is never needed.
+
+The engine is `packages/core/src/backup` so the CLI, the supervisor and the
+dashboard all call the same one. The manifest records the Postgres major
+version, the `@buddi/core` version that wrote the archive (never `git
+describe`, which says nothing on a packaged install) and the migration level of
+every schema. The upgrade command takes a backup before it migrates, as today.
 
 What an archive holds, so that a fresh machine comes back whole:
 
@@ -367,7 +379,7 @@ is a flag in `core` set by restore and cleared only by the owner:
 **Files after the database.** The database is restored first, then the
 artifact files and private directories. If any file step fails, restore rolls
 the database back to the snapshot it took of the *target* before starting
-(a `pg_dump` of the live database into `backups/pre-restore-<time>`), so a
+(a plain backup of the live installation into `backups/pre-restore-<time>`), so a
 half-restore cannot exist; the pre-restore snapshot is kept and named in the
 report. `--force` skips nothing here either.
 

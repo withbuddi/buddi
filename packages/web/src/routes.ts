@@ -122,8 +122,12 @@ export const SETTINGS_SECTIONS = [
   { id: 'accounts', label: 'Model accounts' },
   { id: 'computer', label: 'Computer & browser' },
   { id: 'watchers', label: 'Watchers' },
+  { id: 'backup', label: 'Backup' },
   { id: 'system', label: 'System' },
 ] as const;
+
+/** Where the recovery banner sends the owner, and where a restore is started. */
+export const BACKUP_ROUTE = settingsRoute('backup');
 
 /**
  * The old monitoring hashes, and where each now lives. A conversation link

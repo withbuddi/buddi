@@ -138,6 +138,83 @@ export function reopen(answers: MeetAnswers, id: QuestionId): MeetAnswers {
   return next;
 }
 
+/* ------------------------------------------------------------------ *
+ * The other branch: this buddi is an old one, coming back
+ * ------------------------------------------------------------------ */
+
+/**
+ * The phases a restore passes through, in the order the job reports them.
+ *
+ * `recovery` comes before `files`: the recovery row is written through the
+ * engine's `afterDatabase` hook, inside the rollback, so a restore that cannot
+ * be gated rolls back rather than coming up ungated. The job also reports
+ * phases of its own (`verify`, `archive`, `encrypt`) in between, so this is a
+ * subsequence of what arrives, never the whole of it.
+ */
+export const RESTORE_PHASES = [
+  'stopping',
+  'snapshot',
+  'database',
+  'recovery',
+  'files',
+  'starting',
+  'done',
+] as const;
+
+/** The two ways a restore ends badly. Nothing follows either. */
+export const RESTORE_FAILURES = ['failed', 'rolled-back'] as const;
+
+/**
+ * Where a restore in flight is remembered.
+ *
+ * Session storage, not the record: the restore takes the gateway down with it,
+ * so for a minute there is nowhere on the server to ask, and the tab that
+ * started it is the only thing that knows a job id. It is deliberately gone
+ * when the tab is, because a job id from yesterday is not worth resuming.
+ * Every access is guarded: a browser may refuse storage outright.
+ */
+const RESTORE_KEY = 'buddi.firstRun.restore';
+
+export function rememberRestore(jobId: string | null): void {
+  try {
+    if (jobId === null) window.sessionStorage.removeItem(RESTORE_KEY);
+    else window.sessionStorage.setItem(RESTORE_KEY, jobId);
+  } catch {
+    /* Private browsing, or storage turned off. A reload simply starts over. */
+  }
+}
+
+export function rememberedRestore(): string | null {
+  try {
+    return window.sessionStorage.getItem(RESTORE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Where the thread carries on once a restore has finished. */
+export interface RestoreResume {
+  answers: MeetAnswers;
+  open: QuestionId;
+  /** False when nothing is left to ask and the owner belongs in the dashboard. */
+  stay: boolean;
+}
+
+/**
+ * The thread after a restore.
+ *
+ * The record the archive carried normally says first run is done, which is
+ * exactly the state that would otherwise send the owner away from this screen.
+ * It is not done: a backup never carries keys, so the restored accounts cannot
+ * answer and the brain is the one question that always has to be asked again.
+ * Everything else — the name, the clock, the assistant — came back with it.
+ */
+export function afterRestore(facts: MeetFacts): RestoreResume {
+  const answers = answersFrom(facts);
+  const open = firstOpen(answers);
+  return { answers, open, stay: open !== 'handover' };
+}
+
 /**
  * Which AI a pasted key belongs to.
  *

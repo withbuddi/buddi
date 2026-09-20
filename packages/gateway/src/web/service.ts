@@ -23,9 +23,17 @@ export interface SupervisorReply {
   body: unknown;
 }
 
-export function supervisorCall(socketPath: string, route: string, method: 'GET' | 'POST', timeoutMs = 20_000): Promise<SupervisorReply> {
+export type SupervisorMethod = 'GET' | 'POST' | 'PUT';
+
+export function supervisorCall(socketPath: string, route: string, method: SupervisorMethod, body?: unknown, timeoutMs = 20_000): Promise<SupervisorReply> {
+  // A body is small and known here, so it is serialized up front and sent with
+  // a length: the supervisor reads one object, never a stream it has to bound.
+  const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath, path: route, method, headers: { host: 'localhost' }, timeout: timeoutMs }, (res) => {
+    const req = request({ socketPath, path: route, method, headers: {
+      host: 'localhost',
+      ...(payload ? { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': payload.length } : {}),
+    }, timeout: timeoutMs }, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => {
@@ -44,6 +52,6 @@ export function supervisorCall(socketPath: string, route: string, method: 'GET' 
     });
     req.once('timeout', () => req.destroy(new Error('The supervisor did not answer in time.')));
     req.once('error', reject);
-    req.end();
+    req.end(payload);
   });
 }

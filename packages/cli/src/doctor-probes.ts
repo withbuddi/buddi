@@ -50,8 +50,7 @@ import {
   searchConfiguration,
 } from '@buddi/tool-web';
 import type { Pool } from 'pg';
-import { listArchives } from './backup/prune.js';
-import { STALE_AFTER_MS } from './backup/manifest.js';
+import { STALE_AFTER_MS, listArchives, readRecovery } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {
@@ -59,6 +58,7 @@ import {
   checkBackups,
   checkConfig,
   checkDatabaseExposure,
+  checkRecovery,
   checkNodeVersion,
   checkPlugins,
   checkVault,
@@ -613,6 +613,36 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         },
         STALE_AFTER_MS,
       );
+    },
+
+    /**
+     * Is this installation still in recovery after a restore?
+     *
+     * Read through core's own `readRecovery`, so the doctor and the dashboard
+     * cannot disagree about what the row means.
+     */
+    async recovery(): Promise<ProbeResult> {
+      const pool = await connected();
+      if (pool === null) return checkRecovery({ active: false, unknown: true });
+      try {
+        const state = await readRecovery(pool);
+        if (state === null || !state.active) return checkRecovery({ active: false });
+        return checkRecovery({
+          active: true,
+          restoredAt: state.restoredAt,
+          archive: state.archive,
+          pending: {
+            jobs: state.pending.jobs,
+            missions: state.pending.missions,
+            approvals: state.pending.approvals,
+            grants: state.pending.grants,
+          },
+        });
+      } catch {
+        // No `core.recovery` table is an installation that has never been
+        // restored, which is not in recovery.
+        return checkRecovery({ active: false });
+      }
     },
 
     timezone(): ProbeResult {

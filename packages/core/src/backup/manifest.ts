@@ -13,18 +13,74 @@
  * `.env`.
  */
 
+import { VAULT_PLACEHOLDER, VAULT_PLACEHOLDER_LINE } from '../vault/resolve.js';
+
 /** Archive layout. These names are the format — changing one is a format change. */
 export const MANIFEST_NAME = 'manifest.json';
-export const DUMP_NAME = 'database.dump';
-export const ENV_NAME = 'env.scrubbed';
+/** The database, as text: one COPY file per table plus three small indexes. */
+export const DB_DIR_NAME = 'db';
+export const TABLES_NAME = `${DB_DIR_NAME}/tables.json`;
+export const SEQUENCES_NAME = `${DB_DIR_NAME}/sequences.json`;
+export const DB_MIGRATIONS_NAME = `${DB_DIR_NAME}/migrations.json`;
+export const ENV_NAME = 'env.txt';
 export const PRIVATE_DIR_NAME = 'private';
 export const ARTIFACTS_DIR_NAME = 'artifacts';
+/** The installed-plugins record, copied in as it was. */
+export const PLUGINS_NAME = 'plugins.json';
+/** Where a restore leaves that record, for the recovery checklist to read. */
+export const RESTORED_PLUGINS_NAME = 'restored-plugins.json';
+
+/**
+ * The only three directories a restore will ever write out of an archive.
+ *
+ * The manifest says where the private directories live *inside* the archive,
+ * and a manifest is not a trusted document: it arrives with the archive, from
+ * wherever the archive came from. So the restore does not follow that path, it
+ * checks it against this list. Anything else — an absolute path, a `..`, a
+ * different directory entirely — is refused rather than resolved.
+ */
+export const PRIVATE_AGENTS_PATH = `${PRIVATE_DIR_NAME}/agents`;
+export const PRIVATE_SKILLS_PATH = `${PRIVATE_DIR_NAME}/skills`;
+
+/**
+ * Is this archive-relative path one we are willing to read from?
+ *
+ * Returns the reason it is not, or null when it is fine. Absolute paths, `..`
+ * components, Windows drive letters and backslashes are all ways of naming a
+ * file outside the extraction directory, and a backup restored as root writing
+ * `../../etc/…` is the failure this exists to make impossible.
+ */
+export function memberPathProblem(member: string): string | null {
+  const name = JSON.stringify(member);
+  if (member.trim() === '') return 'an empty path';
+  if (member.startsWith('/') || /^[A-Za-z]:[\\/]/.test(member)) return `${name} is an absolute path`;
+  if (member.includes('\\')) return `${name} holds a backslash`;
+  const parts = member.split('/');
+  if (parts.includes('..')) return `${name} climbs out of the archive with ".."`;
+  if (parts.includes('~')) return `${name} names a home directory`;
+  return null;
+}
+
+/** One table's COPY file, inside the archive. */
+export function copyFileName(schema: string, table: string): string {
+  return `${DB_DIR_NAME}/${schema}.${table}.copy`;
+}
 
 export const ARCHIVE_PREFIX = 'buddi-backup-';
 export const ARCHIVE_SUFFIX = '.tar.gz';
+/** The encrypted form, written beside a `<name>.json` envelope. */
+export const ENCRYPTED_SUFFIX = '.age';
+/** What `restore` calls the snapshot it takes of the target before it starts. */
+export const PRE_RESTORE_PREFIX = 'pre-restore-';
 
-/** Bumped only when an older archive would be read wrongly by this code. */
-export const MANIFEST_FORMAT = 1;
+/**
+ * Bumped only when an older archive would be read wrongly by this code.
+ *
+ * 2 is the driver-based dump: `db/` holds COPY text per table rather than one
+ * `pg_dump` custom-format file. Format 1 archives cannot be restored by this
+ * build at all, so they are refused rather than half-read.
+ */
+export const MANIFEST_FORMAT = 2;
 
 /** Directory mode 0700, archive mode 0600 — a backup is the whole installation. */
 export const DIR_MODE = 0o700;
@@ -61,6 +117,33 @@ export interface TableCount {
   rows: number;
 }
 
+/** One table in the dump, in the order the loader must copy it back. */
+export interface DumpedTable {
+  schema: string;
+  table: string;
+  /** Column names, in the order the COPY file has them. */
+  columns: string[];
+  rows: number;
+}
+
+/** One sequence, so a restored installation's next id is not id 1 again. */
+export interface DumpedSequence {
+  schema: string;
+  name: string;
+  /** Text, because a sequence is bigint and a bigint is not a JS number. */
+  lastValue: string;
+  isCalled: boolean;
+}
+
+/**
+ * Which migrations the dumped schema was at: core's own, then one entry per
+ * plugin schema. Restore rebuilds exactly this much and no more.
+ */
+export interface DumpedMigrations {
+  core: string[];
+  plugins: Record<string, { schema: string; filenames: string[] }>;
+}
+
 export interface PrivateDirRecord {
   /** Where it was resolved from on the machine that made the backup. */
   source: string;
@@ -75,13 +158,19 @@ export interface BackupManifest {
   createdAt: string;
   /** The owner's timezone, so a restored installation means the same "today". */
   timezone: string;
-  /** `git describe`, or the package version when this is not a git checkout. */
+  /** `@buddi/core`'s own package version. Never `git describe`: a packaged
+   * install is not a git checkout, and a version that only a checkout can
+   * answer is a version that reads "unknown" on every machine that matters. */
   buddiVersion: string;
+  /** The server's major version, from `select version()`. */
+  postgresMajor: number;
   host: string;
   /** Never a password: the connection string is recorded in pieces. */
   database: { name: string; host: string; port: string; user: string };
   migrations: MigrationRecord[];
   tables: TableCount[];
+  /** The plugins installed when the backup was taken, by name and version. */
+  plugins: Array<{ name: string; version: string; schema: string; source: string }>;
   artifacts: {
     included: boolean;
     count: number;
@@ -140,18 +229,37 @@ export function archiveName(at: Date): string {
   return `${ARCHIVE_PREFIX}${stamp}${ARCHIVE_SUFFIX}`;
 }
 
+/**
+ * `<name>.tar.gz.age` without its `.age`, so one rule covers both forms.
+ *
+ * An encrypted archive is still an archive: a `list` that cannot see one, a
+ * `prune` that never removes one and a doctor that reports "no backup has ever
+ * been taken" are all the same bug, and it is the bug an owner discovers on the
+ * day they need the backup.
+ */
+function archiveStem(name: string): string {
+  return name.endsWith(ENCRYPTED_SUFFIX) ? name.slice(0, -ENCRYPTED_SUFFIX.length) : name;
+}
+
 export function isArchiveName(name: string): boolean {
+  const stem = archiveStem(name);
   return (
-    name.startsWith(ARCHIVE_PREFIX) &&
-    name.endsWith(ARCHIVE_SUFFIX) &&
-    /^\d{8}-\d{6}$/.test(name.slice(ARCHIVE_PREFIX.length, -ARCHIVE_SUFFIX.length))
+    stem.startsWith(ARCHIVE_PREFIX) &&
+    stem.endsWith(ARCHIVE_SUFFIX) &&
+    /^\d{8}-\d{6}$/.test(stem.slice(ARCHIVE_PREFIX.length, -ARCHIVE_SUFFIX.length))
   );
+}
+
+/** Is this the encrypted form? */
+export function isEncryptedArchiveName(name: string): boolean {
+  return name.endsWith(ENCRYPTED_SUFFIX);
 }
 
 /** The instant in the name, or null when the name is not one of ours. */
 export function archiveTime(name: string): Date | null {
   if (!isArchiveName(name)) return null;
-  const s = name.slice(ARCHIVE_PREFIX.length, -ARCHIVE_SUFFIX.length);
+  const stem = archiveStem(name);
+  const s = stem.slice(ARCHIVE_PREFIX.length, -ARCHIVE_SUFFIX.length);
   const date = new Date(
     Number(s.slice(0, 4)),
     Number(s.slice(4, 6)) - 1,
@@ -167,12 +275,8 @@ export function archiveTime(name: string): Date | null {
  * Scrubbing `.env`
  * ------------------------------------------------------------------ */
 
-/**
- * The marker `buddi vault import-env` already writes, quoted for the same
- * reason: bare `<vault>` is a here-document to a shell sourcing the file.
- */
-export const VAULT_PLACEHOLDER = '<vault>';
-export const VAULT_PLACEHOLDER_LINE = `"${VAULT_PLACEHOLDER}"`;
+// The marker `buddi vault import-env` already writes. One definition, in the
+// vault, so a scrubbed `.env` and a hydrated one cannot drift apart.
 
 /**
  * Names that are secrets by shape, on top of the ones buddi knows by name.
@@ -216,10 +320,68 @@ export function isSecretName(name: string, known: readonly string[] = []): boole
 /** Strip one matching pair of surrounding quotes, the way `dotenv` does. */
 function unquote(value: string): string {
   const first = value[0];
-  if ((first === '"' || first === "'") && value.length >= 2 && value.endsWith(first)) {
-    return value.slice(1, -1);
+  const body = value.trimEnd();
+  if ((first === '"' || first === "'") && body.length >= 2 && body.endsWith(first)) {
+    return body.slice(1, -1);
   }
   return value;
+}
+
+/** Does this text end the quoted value that `quote` opened? */
+function closesQuote(text: string, quote: string): boolean {
+  const body = text.trimEnd();
+  return body.length >= 1 && body.endsWith(quote) && !body.endsWith(`\\${quote}`);
+}
+
+/** One `KEY=value` in a `.env`, however many lines its value takes. */
+interface EnvEntry {
+  key: string;
+  /** The raw text after `=`, newlines and all. */
+  value: string;
+  commented: boolean;
+  /** The first line's leading whitespace, kept in the rewrite. */
+  indent: string;
+  /** Line indexes, inclusive. */
+  start: number;
+  end: number;
+}
+
+/**
+ * Parse a `.env` into entries, keeping a quoted value that runs over several
+ * lines in one piece.
+ *
+ * A private key is the ordinary case of this: `KEY="-----BEGIN…` followed by
+ * twenty lines of base64 and a closing quote. Scrubbing that line by line
+ * replaced the first line and left the key itself in the archive — which
+ * `assertNoSecretValues` then refused to write at all, so no backup was
+ * possible on such a machine. The whole value is the unit.
+ */
+function parseEnvEntries(lines: readonly string[]): EnvEntry[] {
+  const out: EnvEntry[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    const parsed = splitLine(line);
+    if (parsed === null) continue;
+    const indent = line.slice(0, line.length - line.trimStart().length);
+    let value = parsed.value;
+    let end = i;
+    const quote = value[0];
+    if ((quote === '"' || quote === "'") && !(value.length >= 2 && closesQuote(value, quote))) {
+      for (let j = i + 1; j < lines.length; j += 1) {
+        value += `\n${lines[j] ?? ''}`;
+        // An unterminated quote is a broken file, not an invitation to swallow
+        // the rest of it: without a closing line the entry stays one line.
+        if (closesQuote(lines[j] ?? '', quote)) {
+          end = j;
+          break;
+        }
+      }
+      if (end === i) value = parsed.value;
+    }
+    out.push({ key: parsed.key, value, commented: parsed.commented, indent, start: i, end });
+    i = end;
+  }
+  return out;
 }
 
 /** `[key, rawValue]` for a `.env` line, comments and `export ` included. */
@@ -270,11 +432,18 @@ export function scrubEnv(text: string, opts: ScrubOptions = {}): ScrubResult {
   const inVault = new Set<string>();
   const redacted = new Set<string>();
 
-  const lines = text.split('\n').map((line) => {
-    const parsed = splitLine(line);
-    if (parsed === null) return line;
-    const { key, value, commented } = parsed;
+  const lines = text.split('\n');
+  const rewritten = [...lines];
+  // Lines a multi-line value occupied and that are gone from the rewrite.
+  const dropped = new Set<number>();
+
+  for (const entry of parseEnvEntries(lines)) {
+    const { key, value, commented, indent } = entry;
     const bare = unquote(value).trim();
+    const replace = (line: string): void => {
+      rewritten[entry.start] = line;
+      for (let i = entry.start + 1; i <= entry.end; i += 1) dropped.add(i);
+    };
 
     if (isSecretName(key, known)) {
       // A name with no value at all is not a secret anyone holds; keep the
@@ -287,23 +456,23 @@ export function scrubEnv(text: string, opts: ScrubOptions = {}): ScrubResult {
       } else if (bare !== '') {
         names.add(key);
       }
-      const prefix = line.slice(0, line.indexOf(line.trim()[0] ?? ''));
-      return commented
-        ? `${prefix}# ${key}=${VAULT_PLACEHOLDER_LINE}`
-        : `${prefix}${key}=${VAULT_PLACEHOLDER_LINE}`;
+      replace(
+        commented
+          ? `${indent}# ${key}=${VAULT_PLACEHOLDER_LINE}`
+          : `${indent}${key}=${VAULT_PLACEHOLDER_LINE}`,
+      );
+      continue;
     }
 
     const url = redactUrlPassword(value);
     if (url !== null) {
       redacted.add(key);
-      const prefix = line.slice(0, line.indexOf(line.trim()[0] ?? ''));
-      return commented ? `${prefix}# ${key}=${url}` : `${prefix}${key}=${url}`;
+      replace(commented ? `${indent}# ${key}=${url}` : `${indent}${key}=${url}`);
     }
-    return line;
-  });
+  }
 
   return {
-    text: lines.join('\n'),
+    text: rewritten.filter((_, i) => !dropped.has(i)).join('\n'),
     names: [...names].sort(),
     inVault: [...inVault].sort(),
     redacted: [...redacted].sort(),
@@ -316,14 +485,21 @@ export function scrubEnv(text: string, opts: ScrubOptions = {}): ScrubResult {
  */
 export function secretValuesIn(text: string, known: readonly string[] = []): string[] {
   const values: string[] = [];
-  for (const line of text.split('\n')) {
-    const parsed = splitLine(line);
-    if (parsed === null) continue;
-    if (!isSecretName(parsed.key, known)) continue;
-    const bare = unquote(parsed.value).trim();
+  for (const entry of parseEnvEntries(text.split('\n'))) {
+    if (!isSecretName(entry.key, known)) continue;
+    const bare = unquote(entry.value).trim();
     // One- and two-character "secrets" would match half the file by accident;
     // they are also not secrets. Below this length there is nothing to leak.
     if (bare.length >= 3 && bare !== VAULT_PLACEHOLDER) values.push(bare);
+    // A multi-line value is also checked line by line: a scrub that replaced
+    // the first line and left the other twenty would otherwise pass, because
+    // the whole value is not in the text any more either.
+    if (bare.includes('\n')) {
+      for (const piece of bare.split('\n')) {
+        const trimmed = piece.trim();
+        if (trimmed.length >= 3 && trimmed !== VAULT_PLACEHOLDER) values.push(trimmed);
+      }
+    }
   }
   return values;
 }
@@ -346,11 +522,32 @@ export function assertNoSecretValues(scrubbed: string, values: readonly string[]
  * Verification
  * ------------------------------------------------------------------ */
 
-/** The five bytes every `pg_dump -Fc` archive starts with. */
-export const PGDUMP_MAGIC = 'PGDMP';
-
-export function isCustomFormatDump(head: Buffer | Uint8Array): boolean {
-  return Buffer.from(head.subarray(0, 5)).toString('latin1') === PGDUMP_MAGIC;
+/**
+ * Is this text a COPY file at all?
+ *
+ * There is no magic number to check — a COPY file of an empty table is
+ * genuinely zero bytes — so the shape is what can be checked: every line is
+ * tab-separated with the column count the manifest claims. That is enough to
+ * catch the failure this guards, which is an error message or a truncated
+ * transfer sitting where table data should be.
+ */
+export function copyFileProblem(
+  text: string,
+  table: { schema: string; table: string; columns: string[]; rows: number },
+): string | null {
+  const name = `${table.schema}.${table.table}`;
+  if (text === '') {
+    return table.rows === 0 ? null : `${name}: the COPY file is empty, manifest says ${table.rows} row(s)`;
+  }
+  const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n');
+  if (lines.length !== table.rows) {
+    return `${name}: the COPY file has ${lines.length} line(s), manifest says ${table.rows} row(s)`;
+  }
+  const wrong = lines.findIndex((line) => line.split('\t').length !== table.columns.length);
+  if (wrong !== -1) {
+    return `${name}: line ${wrong + 1} has ${lines[wrong]?.split('\t').length} field(s), not ${table.columns.length}`;
+  }
+  return null;
 }
 
 /** Problems with the manifest's *shape*. Empty means it is readable. */
@@ -361,6 +558,13 @@ export function manifestProblems(raw: unknown): string[] {
   if (typeof m.format !== 'number') problems.push('format is missing');
   else if (m.format > MANIFEST_FORMAT) {
     problems.push(`format ${m.format} is newer than this build understands (${MANIFEST_FORMAT})`);
+  } else if (m.format < MANIFEST_FORMAT) {
+    // Format 1 was one `pg_dump` custom-format file. Nothing in this build can
+    // read it, and half-reading it would be worse than saying so.
+    problems.push(
+      `format ${m.format} is an older backup than this build can read (it reads format ${MANIFEST_FORMAT}); ` +
+        'restore it with the buddi it was made by',
+    );
   }
   for (const key of ['createdAt', 'timezone', 'buddiVersion'] as const) {
     if (typeof m[key] !== 'string' || (m[key] as string) === '') problems.push(`${key} is missing`);
@@ -374,6 +578,7 @@ export function manifestProblems(raw: unknown): string[] {
       }
     }
   }
+  if (typeof m.postgresMajor !== 'number') problems.push('postgresMajor is missing');
   if (!Array.isArray(m.tables)) problems.push('tables is missing');
   if (!Array.isArray(m.migrations)) problems.push('migrations is missing');
   const secrets = m.secrets as Record<string, unknown> | undefined;

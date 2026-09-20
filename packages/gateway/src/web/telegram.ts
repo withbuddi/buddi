@@ -24,9 +24,11 @@ export interface TelegramControl {
    * Start it, now, with whatever `TELEGRAM_BOT_TOKEN` currently holds.
    *
    * Absent when the process cannot: then the token is stored and the owner is
-   * told it will be there the next time buddi starts.
+   * told it will be there the next time buddi starts. `refused` is the other
+   * way of saying no — this process could start the surface and is choosing
+   * not to, in words the card shows as they are (recovery mode does this).
    */
-  start?: (() => Promise<{ botUsername: string | null }>) | undefined;
+  start?: (() => Promise<{ botUsername: string | null; refused?: string | undefined }>) | undefined;
   /** The @username of the running bot, when one is running. */
   botUsername?: (() => string | null) | undefined;
 }
@@ -74,6 +76,8 @@ export interface SavedToken extends TelegramStatus {
   /** True when the token is kept but this process could not start the surface. */
   restartNeeded: boolean;
   botUsername: string | null;
+  /** Why the surface is not up, when the process had a reason worth saying. */
+  note?: string | undefined;
 }
 
 /**
@@ -99,9 +103,15 @@ export async function saveTelegramToken(deps: TelegramWebDeps, value: unknown): 
 
   let botUsername: string | null = null;
   let restartNeeded = false;
+  let note: string | undefined;
   if (deps.telegram?.start && !deps.telegram.running()) {
     try {
-      ({ botUsername } = await deps.telegram.start());
+      const started = await deps.telegram.start();
+      botUsername = started.botUsername;
+      if (started.refused !== undefined) {
+        restartNeeded = true;
+        note = started.refused;
+      }
     } catch (error) {
       // The token is kept either way: a bot that refuses us now may be a
       // network that is down, and asking for it again would be rude.
@@ -113,7 +123,7 @@ export async function saveTelegramToken(deps: TelegramWebDeps, value: unknown): 
   } else if (!deps.telegram?.running()) {
     restartNeeded = true;
   }
-  return { ...(await telegramStatus(deps)), restartNeeded, botUsername };
+  return { ...(await telegramStatus(deps)), restartNeeded, botUsername, ...(note === undefined ? {} : { note }) };
 }
 
 export interface PairingOffer {
