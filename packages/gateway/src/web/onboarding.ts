@@ -29,6 +29,7 @@ import {
   type Onboarding,
   type Queryable,
 } from '@buddi/core';
+import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { composeAgentFile, createAgentDirAtomic } from '../agents/platform-files.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
@@ -155,6 +156,15 @@ export interface FirstAgentInput {
   handle: string;
   description: string;
   avatar?: string;
+  /**
+   * The account this agent thinks with, when the caller knows which one.
+   *
+   * The thread does: it has just saved and tested exactly one account, and
+   * that is the one the assistant must be bound to. Absent — an older page, a
+   * script — the rule below is unchanged: exactly one usable account is
+   * assigned, two are left to the Agents page.
+   */
+  accountId?: string;
 }
 
 function checkHandle(value: string, catalog: AgentCatalog): string {
@@ -333,18 +343,21 @@ async function writeFirstAgent(
     live = false;
   }
 
-  return { id, handle, file, live, assigned: await assignOnlyAccount(deps, id) };
+  return { id, handle, file, live, assigned: await assignAccount(deps, id, input.accountId) };
 }
 
 /**
  * Give the new agent the account the owner just added.
+ *
+ * Named by the caller when the caller knows it — the thread tested one a
+ * moment ago — and otherwise inferred.
  *
  * An agent with no account cannot answer, and the step after this one is the
  * owner saying hello to it. With exactly one usable account there is nothing
  * to choose, so choosing is not a question worth asking; with two, the wizard
  * leaves it to the Agents page rather than picking for them.
  */
-async function assignOnlyAccount(deps: OnboardingDeps, agentId: string): Promise<string | null> {
+async function assignAccount(deps: OnboardingDeps, agentId: string, preferred?: string): Promise<string | null> {
   const accounts = deps.providerAccounts;
   if (!accounts) return null;
   const view = accounts.view() as {
@@ -353,8 +366,8 @@ async function assignOnlyAccount(deps: OnboardingDeps, agentId: string): Promise
   const usable = (view.accounts ?? []).filter(
     (account) => account.enabled === true && account.configured === true && account.removalPending !== true,
   );
-  if (usable.length !== 1) return null;
-  const only = usable[0]!;
+  const only = preferred ? usable.find((account) => account.id === preferred) : usable.length === 1 ? usable[0] : undefined;
+  if (!only) return null;
   if (!only.defaultModel) return null;
   try {
     await accounts.assign(agentId, { accountId: only.id, model: only.defaultModel });
@@ -363,5 +376,67 @@ async function assignOnlyAccount(deps: OnboardingDeps, agentId: string): Promise
     // Not fatal: the agent exists, and the Agents page is where an account is
     // chosen. Saying nothing here is better than failing a write that worked.
     return null;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Ollama, from the server side
+ * ------------------------------------------------------------------ */
+
+/** Where Ollama answers when it is running on this machine. */
+export const OLLAMA_BASE_URL = 'http://localhost:11434';
+
+/**
+ * Where the owner gets Ollama. It travels as *data* to the page: the dashboard
+ * bundle may name no external host, and a link the server hands over is the
+ * one way the card can offer it without breaking that rule.
+ */
+export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
+
+/** How long the probe waits. It is a question about this machine, not the network. */
+export const OLLAMA_TIMEOUT_MS = 1_000;
+
+/** One connection per probe, nothing pooled — the rule the whole repo keeps. */
+const ollamaTransport: HttpTransport = createHttpTransport({ idleTimeoutMs: OLLAMA_TIMEOUT_MS });
+
+export interface OllamaProbe {
+  /** Ollama answered on its usual port, here, now. */
+  running: boolean;
+  /** The models it has pulled, in the order it lists them. */
+  models: string[];
+  downloadUrl: string;
+}
+
+/**
+ * Ask Ollama whether it is running, from here.
+ *
+ * The page must not do this itself: a dashboard that fetches
+ * `localhost:11434` is a page reaching off its own origin, which is the one
+ * thing the bundle is not allowed to do — and the answer would be about the
+ * *browser's* machine rather than the installation's. So the gateway asks, on
+ * the shared transport, with a second's patience and no retry: "is it there"
+ * has no useful slow answer.
+ */
+export async function probeOllama(
+  opts: { transport?: HttpTransport; baseUrl?: string; timeoutMs?: number } = {},
+): Promise<OllamaProbe> {
+  const transport = opts.transport ?? ollamaTransport;
+  const base = (opts.baseUrl ?? OLLAMA_BASE_URL).replace(/\/+$/, '');
+  try {
+    const res = await transport(`${base}/api/tags`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(opts.timeoutMs ?? OLLAMA_TIMEOUT_MS),
+    });
+    if (!res.ok) return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL };
+    const body = (await res.json()) as { models?: Array<{ name?: unknown; model?: unknown }> };
+    const models = (Array.isArray(body?.models) ? body.models : [])
+      .map((row) => (typeof row?.name === 'string' ? row.name : typeof row?.model === 'string' ? row.model : ''))
+      .filter((name) => name !== '');
+    return { running: true, models, downloadUrl: OLLAMA_DOWNLOAD_URL };
+  } catch {
+    // Nothing listening, a refused connection, a second gone by: all of them
+    // are "not running", which is what the card says and then polls.
+    return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL };
   }
 }

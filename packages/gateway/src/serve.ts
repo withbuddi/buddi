@@ -79,7 +79,7 @@ import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
 import { delegateAllowlist } from './agents/delegation.js';
 import { notifyOwner, ownerChatId } from './telegram/notify.js';
-import { describePaired, startTelegram } from './telegram/main.js';
+import { describePaired, startTelegram, type TelegramDeps } from './telegram/main.js';
 
 /**
  * `/recap` now lives in `missions/inline.ts`, so a surface that is not this
@@ -366,7 +366,7 @@ export async function main(): Promise<void> {
     const inlineMission = createInlineMissionRunner(missionDeps);
     /** Bound once the dashboard is up; a group decided in Telegram resumes there. */
     let dashboardChat: import('./web/chat.js').WebChat | undefined;
-    const telegram = process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram({
+    const telegramOptions: TelegramDeps = {
       ...missionDeps,
       gate,
       resumeGroup: async (action, resume) => {
@@ -395,7 +395,28 @@ export async function main(): Promise<void> {
         if (blocked !== null) return { ok: true, text: blocked };
         return inlineMission(missionId, chatId, onToolCall);
       },
-    }) : undefined;
+    };
+    /*
+     * The Telegram surface, when there is a token for it.
+     *
+     * `let`, because the token may arrive later: the owner pastes it into the
+     * dashboard during first run, and `startTelegramNow` brings the surface up
+     * in this process rather than asking them to restart anything. Everything
+     * that holds this binding — the approval path, the shutdown — reads it
+     * when it runs, so they all see the surface the moment it exists.
+     */
+    let telegram = process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
+    let starting: Promise<{ botUsername: string | null }> | undefined;
+    const startTelegramNow = async (): Promise<{ botUsername: string | null }> => {
+      if (telegram) return { botUsername: telegram.botUsername ?? null };
+      starting ??= (async () => {
+        const handle = await startTelegram(telegramOptions);
+        telegram = handle;
+        console.log(`  telegram: @${handle.botUsername ?? '(unknown)'} started from the dashboard`);
+        return { botUsername: handle.botUsername ?? null };
+      })().finally(() => { starting = undefined; });
+      return starting;
+    };
 
     // An unattended run has no chat of its own. When one proposes a gated
     // effect, the request is posted to the paired owner chat on its behalf —
@@ -661,6 +682,13 @@ export async function main(): Promise<void> {
           env: process.env,
           providerSettings: wiring.providerSettings,
           providerAccounts: wiring.providerAccounts,
+          // The owner can hand this process a bot token from the dashboard and
+          // have their phone working before they put it down.
+          telegram: {
+            running: () => telegram !== undefined,
+            start: startTelegramNow,
+            botUsername: () => telegram?.botUsername ?? null,
+          },
           jobs: { resumeJob },
           // The browser as a talking surface. Every one of these is the object
           // the other surfaces already use — the per-agent provider adapter,
