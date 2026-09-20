@@ -1,6 +1,7 @@
 # Groups: a team of agents in one conversation
 
-Status: implementation contract, not built. Agreed 2026-09-20.
+Status: implementation contract, agreed 2026-09-20. First version built on the
+`groups` branch the same day; see *What the first version does* at the end.
 
 A group is a persistent conversation with a chosen team of agents. You create
 "Household finances", add Concierge, Ledger and Finance Advisor, and say
@@ -201,3 +202,37 @@ The existing chat and Canvas carry it:
 
 Postponed on purpose: parallel member runs, voting, autonomous debates,
 dynamic membership, workflow builders.
+
+## What the first version does
+
+Built: group rows and membership; the shared transcript with a speaker on
+every turn; the projection with its tests; the coordinator loop with mention
+override and sequential member runs through `group.ask`; the twelve-call
+budget reserved on the request row before every dispatch, retries included;
+the conclusion as a separate no-tools call when members spoke; approval
+suspension and resume by the exact action; stop, which rejects the pending
+approval; the group memory scope with private memory never recalled and
+every write in a room landing in the room; rollover on a character cap with a
+one-call maintenance summary; the roster entry, creation sheet, `@`
+completion, attribution and the activity line; routes under `/api/groups`.
+
+Deliberate deviations, to be closed later:
+
+- **A member's answer reaches the coordinator through the tool result.** The
+  coordinator's loop holds its history in memory during a run, so the
+  contribution has to come back through `group.ask`. It comes back attributed
+  (`@ledger said: …`) with a note that it is context, never bare. In later
+  runs the transcript shows it under the member's name.
+- **The conclusion is skipped when the coordinator already concluded.** If the
+  coordinator wrote prose after the last member spoke, that prose stands and
+  no second, tool-less call is made; otherwise the separate synthesis call
+  runs. Two answers to one request read worse than one answer with tools
+  available.
+- **Oversized output is bounded, not externalised.** An agent's own tool
+  results are clipped in its projection and the oldest turns are dropped to
+  fit the group's cap; the transcript keeps the whole. Moving an oversized
+  result into an artifact is not built.
+- **A rejection the provider confirmed is counted on retry.** The adapters
+  retry a 429 themselves; each dispatch reserves, and only the final refusal
+  releases. Never fewer reservations than dispatches.
+- **Missions cannot target a group yet.**

@@ -12,6 +12,7 @@ import type {
   ChatConversation,
   ConversationListItem,
   UploadedAttachment,
+  GroupView,
 } from './chat/types';
 
 export const CSRF_COOKIE = 'buddi_csrf';
@@ -553,6 +554,15 @@ export const chatApi = {
   },
   /** A file taken back out of the tray before it was sent. Refused if a message carries it. */
   discardAttachment: (artifactId: string) => del<null>(`/artifacts/${encodeURIComponent(artifactId)}`),
+  /* ---- groups ---- */
+  groups: () => get<{ groups: GroupView[] }>('/groups'),
+  group: (id: string) => get<GroupView & { latestConversationId: string | null; openRequest: { id: string; state: string; awaitingAgentId: string | null; budgetReserved: number; budgetTotal: number } | null }>(`/groups/${encodeURIComponent(id)}`),
+  createGroup: (body: { name: string; coordinator: string; members: string[] }) => post<GroupView>('/groups', body),
+  archiveGroup: (id: string) => post<null>(`/groups/${encodeURIComponent(id)}/archive`),
+  groupConversations: (id: string) => get<{ conversations: ConversationListItem[] }>(`/groups/${encodeURIComponent(id)}/conversations`),
+  startGroupConversation: (id: string) => post<{ conversationId: string }>(`/groups/${encodeURIComponent(id)}/conversations`),
+  sendToGroup: (id: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>
+    post<{ conversationId: string; runId: string; requestId: string; rolledOver?: boolean }>(`/groups/${encodeURIComponent(id)}/messages`, body),
   /** The SSE endpoint for one conversation's run. */
   streamUrl: (conversationId: string) =>
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/stream`,
