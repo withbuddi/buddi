@@ -29,6 +29,26 @@
 import { randomUUID } from 'node:crypto';
 import {
   WEB_SURFACE,
+  appendRoomNote,
+  conversationGroup,
+  createGroupConversation,
+  createGroupRequest,
+  getGroup,
+  getGroupRequest,
+  latestGroupConversation,
+  openGroupRequest,
+  readGroupTurns,
+  releaseGroupCall,
+  reserveGroupCall,
+  reserveMaintenanceCall,
+  roomChars,
+  setGroupRequestState,
+  setGroupSummary,
+  suspendedGroupRequest,
+  decideApproval,
+  type GroupContext,
+  type GroupRequestRow,
+  type GroupRow,
   getAction,
   getArtifact,
   listOpenOffers,
@@ -42,8 +62,15 @@ import {
   type ToolContext,
 } from '@buddi/core';
 import {
+  BudgetExhausted,
+  DELEGATE_TOOL,
+  GROUP_ASK_TOOL,
   MAX_ATTACHMENTS_PER_MESSAGE,
+  boundProjection,
+  budgetedProvider,
   createConversation,
+  createGroupAskTool,
+  projectTranscript,
   runAgent,
   type AttachmentRef,
   type RunAgentOptions,
@@ -249,6 +276,8 @@ export interface ChatMessageView {
   role: string;
   at: string;
   blocks: ChatBlock[];
+  /** Who spoke, in a group conversation: 'owner', an agent id, or 'room'. */
+  speaker?: string;
 }
 
 export interface ChatRunView {
@@ -301,6 +330,8 @@ export interface ChatLifetimeView {
 export interface ChatTranscript {
   conversationId: string;
   agentId: string;
+  /** Set when this conversation belongs to a group. */
+  groupId?: string;
   startedAt: string;
   /** What would end this conversation, and how close it is. */
   lifetime: ChatLifetimeView;
@@ -336,14 +367,14 @@ export async function readChatTranscript(
   now: Date = new Date(),
 ): Promise<ChatTranscript | null> {
   const { rows: head } = await pool.query(
-    `select id, agent_id, created_at from core.conversations where id = $1::uuid`,
+    `select id, agent_id, group_id, created_at from core.conversations where id = $1::uuid`,
     [conversationId],
   );
   const conversation = head[0];
   if (!conversation) return null;
 
   const { rows: messages } = await pool.query(
-    `select id, role, content, created_at from core.messages
+    `select id, role, content, created_at, speaker from core.messages
       where conversation_id = $1::uuid
       order by created_at asc, id asc`,
     [conversationId],
@@ -354,6 +385,7 @@ export async function readChatTranscript(
     role: String(m.role),
     at: new Date(m.created_at).toISOString(),
     raw: rawBlocks(m.content),
+    speaker: typeof m.speaker === 'string' ? m.speaker : null,
   }));
 
   // The name of every tool call in this conversation, by its id.
@@ -404,6 +436,7 @@ export async function readChatTranscript(
     question,
     conversationId: String(conversation.id),
     agentId: String(conversation.agent_id),
+    ...(conversation.group_id ? { groupId: String(conversation.group_id) } : {}),
     startedAt: new Date(conversation.created_at).toISOString(),
     messages: parsed.map((m) => ({
       id: m.id,
@@ -411,6 +444,7 @@ export async function readChatTranscript(
       at: m.at,
       blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
         .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
+      ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
     ...(await runsOf(pool, conversationId)),
   };
@@ -627,9 +661,28 @@ export interface WebChatDeps {
   providerFor(agent: CatalogAgent): RuntimeProvider;
   artifacts?: ArtifactStore | undefined;
   memoryPreamble?: ((agentId: string) => Promise<string>) | undefined;
+  /** What a group run remembers: shared plus the room's scope, never private. */
+  groupMemoryPreamble?: ((groupId: string) => Promise<string>) | undefined;
+  /** The coordinator's delegation allowlist: the room does not widen who may ask whom. */
+  allowlistFor?: ((agentId: string) => string[]) | undefined;
   /** Refuse the turn with this sentence — the global pause, in practice. */
   gate?: (() => Promise<string | null>) | undefined;
   log?: ((line: string) => void) | undefined;
+}
+
+/** A run inside a room: which group, which request, whose voice, and what opens it. */
+interface RoomTurn {
+  row: GroupRow;
+  request: GroupRequestRow;
+  role: 'coordinator' | 'member';
+  openingSpeaker: string;
+  opening: string;
+  /** The conclusion: no tools, whatever the ledger says. */
+  synthesis?: boolean;
+  /** A member spoke through group.ask. */
+  onContribution?: () => void;
+  /** The agent running this turn said something (after any contribution). */
+  onSpoke?: () => void;
 }
 
 export interface SendRequest {
@@ -720,6 +773,11 @@ export class WebChat {
       if (owner === null) {
         return { ok: false, status: 404, error: 'no such conversation' };
       }
+      // A room is only ever spoken to as a room: through the group path, with
+      // its budget, its projection and its memory scope. Never as its coordinator.
+      if (await conversationGroup(this.#deps.pool, conversationId)) {
+        return { ok: false, status: 409, error: 'that conversation belongs to a group; send to the group' };
+      }
       if (owner !== agent.id) {
         // Two agents never share a history — the same rule the terminal and
         // Telegram keep. Silently re-pointing the conversation would put one
@@ -779,7 +837,7 @@ export class WebChat {
 
     const runId = randomUUID();
     const target = conversationId;
-    this.#enqueue(target, () => this.#run({ agent, conversationId: target, runId, text, files }));
+    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files }); });
     return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
@@ -797,6 +855,11 @@ export class WebChat {
     if (!settled.ok) {
       const status = settled.reason === 'unknown' ? 404 : 409;
       return { ok: false, status, error: 'That question is no longer waiting for an answer.' };
+    }
+    const groupId = await conversationGroup(this.#deps.pool, settled.question.conversationId).catch(() => null);
+    if (groupId) {
+      const sent = await this.sendToGroup({ groupId, conversationId: settled.question.conversationId, text: input.answer });
+      return sent.ok ? { ok: true, conversationId: sent.conversationId, runId: sent.runId } : sent;
     }
     return this.send({
       agentId: settled.question.agentId,
@@ -826,7 +889,243 @@ export class WebChat {
     const agent = this.#deps.catalog.get(action.agentId);
     if (!agent) return;
     const conversationId = action.conversationId;
-    this.#enqueue(conversationId, () => this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume }));
+    this.#enqueue(conversationId, async () => {
+      // A group conversation resumes as a group request: the member that
+      // stopped runs on with the outcome, then the coordinator picks up.
+      const groupId = await conversationGroup(this.#deps.pool, conversationId).catch(() => null);
+      if (groupId) {
+        await this.#resumeGroup(groupId, conversationId, agent, resume);
+        return;
+      }
+      await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume });
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Groups (docs/groups.md)
+   * ------------------------------------------------------------------ */
+
+  /**
+   * One owner request to a group. The message goes to the members it names
+   * with `@handle`, in order, or to the coordinator when it names none. Every
+   * run of the request spends from one budget row.
+   */
+  async sendToGroup(request: { groupId: string; conversationId?: string | undefined; text: string; attachmentIds?: string[] | undefined }): Promise<
+    | { ok: true; conversationId: string; runId: string; requestId: string; rolledOver?: boolean }
+    | { ok: false; status: number; error: string }
+  > {
+    const pool = this.#deps.pool;
+    const group = await getGroup(pool, request.groupId);
+    if (!group) return { ok: false, status: 404, error: 'no such group' };
+    const text = request.text.trim();
+    if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };
+    if (text.length > MAX_CHAT_MESSAGE_CHARS) return { ok: false, status: 413, error: `a message may be at most ${MAX_CHAT_MESSAGE_CHARS} characters` };
+    const attachmentIds = request.attachmentIds ?? [];
+    if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) return { ok: false, status: 400, error: `at most ${MAX_ATTACHMENTS_PER_MESSAGE} files may ride with one message` };
+    const coordinator = this.#deps.catalog.get(group.coordinator);
+    if (!coordinator) return { ok: false, status: 409, error: `the coordinator (${group.coordinator}) is not installed` };
+
+    let conversationId = request.conversationId ?? (await latestGroupConversation(pool, group.id)) ?? undefined;
+    if (conversationId !== undefined) {
+      const owner = await conversationGroup(pool, conversationId);
+      if (owner !== group.id) return { ok: false, status: 409, error: 'that conversation does not belong to this group' };
+      const open = await openGroupRequest(pool, conversationId);
+      if (open) return { ok: false, status: 409, error: open.state === 'suspended' ? 'The group is waiting for an approval. Decide it first.' : 'The group is still working on the last request.' };
+    }
+    let rolledOver = false;
+    if (conversationId === undefined) {
+      conversationId = await createGroupConversation(pool, group);
+    } else if ((await roomChars(pool, conversationId)) > group.contextCapChars) {
+      // Between requests only, never mid-exchange: the room has grown past
+      // what every member can be sent, so it closes on a summary.
+      await this.#rolloverGroup(group, conversationId, coordinator);
+      conversationId = await createGroupConversation(pool, group);
+      rolledOver = true;
+    }
+
+    const files: ArtifactRow[] = [];
+    for (const id of attachmentIds) {
+      const row = await getArtifact(pool, id).catch(() => null);
+      if (!row) return { ok: false, status: 404, error: `no such attachment: ${id}` };
+      files.push(row);
+    }
+
+    let requestRow: GroupRequestRow;
+    try {
+      requestRow = await createGroupRequest(pool, { groupId: group.id, conversationId, text });
+    } catch (err) {
+      // The index says another request is open on this conversation: a send
+      // that raced this one got there first.
+      if ((err as { code?: string }).code === '23505') return { ok: false, status: 409, error: 'The group is still working on the last request.' };
+      throw err;
+    }
+    const runId = randomUUID();
+    const target = conversationId;
+    this.#enqueue(target, () => this.#groupRequest({ group, request: requestRow, conversationId: target, runId, text, files }));
+    return { ok: true, conversationId, runId, requestId: requestRow.id, ...(rolledOver ? { rolledOver: true } : {}) };
+  }
+
+  /** The members a message names with `@handle`, in the order named. */
+  #mentioned(group: GroupRow, text: string): CatalogAgent[] {
+    const out: CatalogAgent[] = [];
+    for (const match of text.matchAll(/(^|[^\w@])@([a-z0-9][a-z0-9_-]*)/gi)) {
+      const agent = this.#deps.catalog.byHandle(match[2]!.toLowerCase());
+      if (agent && group.members.includes(agent.id) && !out.some((a) => a.id === agent.id)) out.push(agent);
+    }
+    return out;
+  }
+
+  /** Whole request: the runs it takes, and the row's state at the end. */
+  async #groupRequest(turn: { group: GroupRow; request: GroupRequestRow; conversationId: string; runId: string; text: string; files: ArtifactRow[] }): Promise<void> {
+    const { group, request, conversationId } = turn;
+    const pool = this.#deps.pool;
+    const coordinator = this.#deps.catalog.get(group.coordinator);
+    if (!coordinator) return;
+    const mentioned = this.#mentioned(group, turn.text).filter((agent) => agent.id !== group.coordinator);
+    /** Whether anyone but the coordinator spoke: then the conclusion is its own call. */
+    let contributions = 0;
+    /** Whether the coordinator already concluded in prose after the last contribution. */
+    let concluded = false;
+    let outcome: 'done' | 'suspended' | 'failed' = 'done';
+    try {
+      if (mentioned.length > 0) {
+        // The owner addressed members directly: each answers in turn, seeing
+        // the ones before it; the coordinator concludes after.
+        let first = true;
+        for (const member of mentioned) {
+          const result = await this.#run({
+            agent: member, conversationId, runId: first ? turn.runId : randomUUID(), text: turn.text, files: first ? turn.files : [],
+            group: { row: group, request, role: 'member', openingSpeaker: first ? 'owner' : 'room', opening: first ? turn.text : `@${member.handle}, the owner addressed you too. Your turn.` },
+          });
+          first = false;
+          contributions += 1;
+          if (result === 'suspended') { outcome = 'suspended'; break; }
+          if (result === 'failed') { outcome = 'failed'; break; }
+        }
+      } else {
+        const result = await this.#run({
+          agent: coordinator, conversationId, runId: turn.runId, text: turn.text, files: turn.files,
+          group: { row: group, request, role: 'coordinator', openingSpeaker: 'owner', opening: turn.text, onContribution: () => { contributions += 1; concluded = false; }, onSpoke: () => { concluded = true; } },
+        });
+        if (result === 'suspended') outcome = 'suspended';
+        if (result === 'failed') outcome = 'failed';
+      }
+      // The conclusion: one call of the coordinator's, without tools, once
+      // members have spoken. A request the coordinator answered alone, or
+      // concluded itself after the last member spoke, needs no second answer.
+      if (outcome === 'done' && contributions > 0 && !concluded && (await getGroupRequest(pool, request.id))?.state === 'running') {
+        const result = await this.#run({
+          agent: coordinator, conversationId, runId: randomUUID(), text: '', files: [],
+          group: { row: group, request, role: 'coordinator', openingSpeaker: 'room', synthesis: true, opening: `Everyone asked has answered. Conclude now for the owner's request: "${turn.text}".` },
+        });
+        if (result === 'failed') outcome = 'failed';
+      }
+    } catch (err) {
+      this.#log(`group ${group.id}: request ${request.id} failed: ${message(err)}`);
+      outcome = 'failed';
+    }
+    // Only a running request finishes here: one that was suspended by the ask
+    // tool, or stopped by the owner, keeps that state.
+    if (outcome !== 'suspended') {
+      await setGroupRequestState(pool, request.id, { state: outcome, from: ['running'], finishedAt: this.#deps.now() });
+    }
+  }
+
+  /**
+   * The member that was waiting runs on with the outcome; then the
+   * coordinator continues. Only the request waiting on exactly this action,
+   * by this agent, resumes — a stopped request, or a newer one, never does.
+   */
+  async #resumeGroup(groupId: string, conversationId: string, agent: CatalogAgent, resume: NonNullable<RunAgentOptions['resume']>): Promise<void> {
+    const pool = this.#deps.pool;
+    const group = await getGroup(pool, groupId);
+    const request = group ? await suspendedGroupRequest(pool, conversationId, resume.actionId, agent.id) : null;
+    if (!group || !request) {
+      this.#log(`group ${groupId}: approval ${resume.actionId} has no request waiting on it; nothing resumes`);
+      return;
+    }
+    if (!(await setGroupRequestState(pool, request.id, { state: 'running', from: ['suspended'], awaitingActionId: null, awaitingAgentId: null }))) return;
+    const running = { ...request, state: 'running' as const };
+    let contributions = 0;
+    let concluded = false;
+    const memberResult = await this.#run({
+      agent, conversationId, runId: randomUUID(), text: '', files: [], resume,
+      group: { row: group, request: running, role: agent.id === group.coordinator ? 'coordinator' : 'member', openingSpeaker: agent.id, opening: '', onContribution: () => { contributions += 1; concluded = false; } },
+    });
+    if (memberResult === 'suspended') return;
+    let outcome: 'done' | 'failed' = memberResult === 'failed' ? 'failed' : 'done';
+    if (agent.id !== group.coordinator && memberResult === 'ran') {
+      const coordinator = this.#deps.catalog.get(group.coordinator);
+      if (coordinator) {
+        await appendRoomNote(pool, conversationId, `@${agent.handle} has finished the work it was waiting on. The coordinator continues.`);
+        const result = await this.#run({
+          agent: coordinator, conversationId, runId: randomUUID(), text: '', files: [],
+          group: { row: group, request: running, role: 'coordinator', openingSpeaker: 'room', opening: `@${agent.handle} has finished. Continue the owner's request: "${request.text}". Bring in whoever is still needed, then stop; you will be asked to conclude.`, onContribution: () => { contributions += 1; concluded = false; }, onSpoke: () => { concluded = true; } },
+        });
+        if (result === 'suspended') return;
+        if (result === 'failed') outcome = 'failed';
+        else if (!concluded && (await getGroupRequest(pool, request.id))?.state === 'running') {
+          const concluded = await this.#run({
+            agent: coordinator, conversationId, runId: randomUUID(), text: '', files: [],
+            group: { row: group, request: running, role: 'coordinator', openingSpeaker: 'room', synthesis: true, opening: `Everyone asked has answered. Conclude now for the owner's request: "${request.text}".` },
+          });
+          if (concluded === 'failed') outcome = 'failed';
+        }
+      }
+    }
+    await setGroupRequestState(pool, request.id, { state: outcome, from: ['running'], finishedAt: this.#deps.now() });
+  }
+
+  /**
+   * The room closed: one maintenance call writes where it stopped, for the
+   * next thread's first turn. Never taken from a request's twelve.
+   */
+  async #rolloverGroup(group: GroupRow, conversationId: string, coordinator: CatalogAgent): Promise<void> {
+    const pool = this.#deps.pool;
+    const last = await openGroupRequest(pool, conversationId) ?? null;
+    const requestForBudget = last ?? (await createGroupRequest(pool, { groupId: group.id, conversationId, text: '(rollover summary)', budgetTotal: 0 }));
+    if (!(await reserveMaintenanceCall(pool, requestForBudget.id))) return;
+    try {
+      const turns = await readGroupTurns(pool, conversationId);
+      const handles = this.#handles();
+      const history = projectTranscript({ turns, agentId: coordinator.id, handles });
+      const provider = this.#deps.providerFor(coordinator);
+      const res = await provider.complete({
+        system: 'You are the coordinator of a group of agents. The conversation below is closing because it has grown long. Write a short summary of where it stopped: what was decided, what is still open, which questions are unanswered, and any artifact ids that matter. Plain prose, under 200 words. No tools.',
+        messages: [...history, { role: 'user', content: [{ type: 'text', text: 'Summarise where this discussion stopped.' }] }],
+        tools: [],
+        maxTokens: 600,
+      });
+      const summary = res.content.filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text').map((b) => b.text).join('\n').trim();
+      await setGroupSummary(pool, group.id, summary === '' ? null : summary);
+    } catch (err) {
+      this.#log(`group ${group.id}: rollover summary failed: ${message(err)}`);
+    } finally {
+      if (!last) await setGroupRequestState(pool, requestForBudget.id, { state: 'done', from: ['running'], finishedAt: this.#deps.now() });
+    }
+  }
+
+  #handles(): Map<string, string> {
+    return new Map(this.#deps.catalog.list().map((agent) => [agent.id, agent.handle]));
+  }
+
+  /**
+   * Stop the request a group conversation is in the middle of. A pending
+   * approval it was waiting on is rejected here, so a late decision cannot
+   * execute the effect or restart the request.
+   */
+  async stopGroupRequest(conversationId: string): Promise<boolean> {
+    const pool = this.#deps.pool;
+    const open = await openGroupRequest(pool, conversationId);
+    if (!open) return false;
+    const stopped = await setGroupRequestState(pool, open.id, { state: 'stopped', from: ['running', 'suspended'], finishedAt: this.#deps.now() });
+    if (!stopped) return false;
+    if (open.awaitingActionId) {
+      await decideApproval(pool, { actionId: open.awaitingActionId, decision: 'rejected', by: this.#deps.ctx.ownerId, via: 'web', now: this.#deps.now() })
+        .catch((err) => this.#log(`group ${open.groupId}: rejecting the pending approval on stop failed: ${message(err)}`));
+    }
+    this.cancel(conversationId);
+    return true;
   }
 
   async drain(): Promise<void> {
@@ -857,7 +1156,9 @@ export class WebChat {
     text: string;
     files: ArtifactRow[];
     resume?: RunAgentOptions['resume'];
-  }): Promise<void> {
+    /** Set for a run inside a room: which group, which request, and whose voice. */
+    group?: RoomTurn;
+  }): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
     let toolsCalled = 0;
@@ -865,7 +1166,7 @@ export class WebChat {
     const blocked = deps.gate ? await deps.gate() : null;
     if (blocked !== null) {
       await this.#failed(conversationId, runId, 'refused', blocked);
-      return;
+      return 'failed';
     }
 
     // A brand-new installation's first words are the interview, whoever is
@@ -890,12 +1191,12 @@ export class WebChat {
       filename: row.filename,
       sizeBytes: row.sizeBytes,
     }));
-    const userMessage = turn.text;
+    const userMessage = turn.group ? turn.group.opening : turn.text;
 
     // "The owner said something, and it is in the transcript." Written before
     // the provider is called, so a page that connected mid-flight still sees
     // its own message appear.
-    await this.#event(conversationId, 'chat.message.appended', { role: 'user', runId });
+    await this.#event(conversationId, 'chat.message.appended', { role: 'user', runId, ...(turn.group ? { agentId: agent.id } : {}) });
 
     let provider: RuntimeProvider;
     try {
@@ -905,8 +1206,14 @@ export class WebChat {
       // It is permanent by construction, so nothing is offered: the sentence
       // names the variable and what to do about it, and the log gets the rest.
       await this.#failedTurn({ err, agent, conversationId, runId, toolsCalled: 0 });
-      return;
+      return 'failed';
     }
+
+    // A room: the budget wraps the provider, the transcript is the projection,
+    // the coordinator gets the one tool that brings a member in, and memory is
+    // the room's — shared plus group scope, never anyone's private notes.
+    const room = turn.group ? this.#room(turn.group, agent, provider) : null;
+    if (room) provider = room.provider;
 
     // `conversation.offer` is registered per run into a copy of the base
     // registry, the way the mission tools and `conversation.ask` are: nothing
@@ -925,17 +1232,21 @@ export class WebChat {
     for (const manifest of deps.registry.manifests()) registry.register(manifest);
     registry.register(createOfferManifest(offers));
     registry.register(createAskManifest(ask));
+    if (room?.askTool) registry.register({ name: 'group', version: '0.1.0', schema: 'group', migrationsDir: '', tools: [room.askTool] });
 
     // An offer belongs to the turn that made it; this turn retires the last
     // one's, so a chip cannot still fire after the conversation moved on.
     await withdrawTurnOffers(deps.pool, conversationId, deps.now(), this.#log);
 
     const base = agent.definition(deps.now(), deps.timezone);
+    const baseCtx = turn.resume ? deps.ctx : ownerRequestContext(deps.ctx, turn.text, runId);
     const options: RunAgentOptions = {
-      agent: { ...base, tools: [...base.tools, ...OFFER_TOOLS, ...ASK_TOOLS] },
+      // In a room, delegation is the ask tool and nothing else: an agent
+      // that could delegate would reach a non-member, off budget, off record.
+      agent: { ...base, tools: [...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools), ...OFFER_TOOLS, ...ASK_TOOLS, ...(room?.askTool ? [GROUP_ASK_TOOL] : [])] },
       provider,
       registry,
-      ctx: turn.resume ? deps.ctx : ownerRequestContext(deps.ctx, turn.text, runId),
+      ctx: room ? { ...baseCtx, group: room.context } : baseCtx,
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.
@@ -944,11 +1255,14 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
-      systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : [])].join(
+      systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),
       ...(attachments.length > 0 ? { attachments } : {}),
-      ...(deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),
+      ...(room ? { transcript: room.transcript } : {}),
+      ...(room && deps.groupMemoryPreamble
+        ? { memoryPreamble: () => deps.groupMemoryPreamble!(room.context.id) }
+        : deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),
       ...(deps.artifacts ? { loadArtifact: (id: string) => deps.artifacts!.load(id) } : {}),
       // Awaited: the runtime waits for this row before it writes anything
       // else, so "the assistant appended a message" is always ordered before
@@ -956,7 +1270,8 @@ export class WebChat {
       // two inserts race on separate pool connections and the page can be told
       // the run is over before — or instead of — being told what it said.
       onText: async () => {
-        await this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId });
+        turn.group?.onSpoke?.();
+        await this.#event(conversationId, 'chat.message.appended', { role: 'assistant', runId, ...(room ? { agentId: agent.id } : {}) });
         // Told after the row landed, so a page that clears the live text on
         // settle finds the message already there when it refreshes.
         this.live.settle(conversationId, runId);
@@ -992,9 +1307,23 @@ export class WebChat {
         'cancelled',
         'the turn was already sent, so whatever it wrote stays in the transcript',
       );
-      return;
+      return 'failed';
     }
     if (result === undefined) {
+      // Out of budget is not a failure of the run: the room said what it could
+      // and the coordinator was told to conclude. It ends the request honestly.
+      if (failure instanceof BudgetExhausted) {
+        // The ledger also answers "spent" while the request is paused or
+        // stopped, so say which it was.
+        const state = turn.group ? (await getGroupRequest(deps.pool, turn.group.request.id))?.state : undefined;
+        const why = state === 'suspended'
+          ? 'The group is waiting for your approval before it goes on.'
+          : state === 'stopped'
+            ? 'The request was stopped.'
+            : 'The request budget is spent. The room stops here with what it has.';
+        await this.#event(conversationId, 'chat.run.failed', { runId, stopped: state === 'suspended' ? 'awaiting-approval' : state === 'stopped' ? 'stopped' : 'budget', message: why });
+        return 'ran';
+      }
       // The run threw. What the owner reads, the cause chain that goes to the
       // log, and the retry chip when one is honest — all decided in one place,
       // the same one Telegram and the terminal use.
@@ -1006,7 +1335,7 @@ export class WebChat {
         prompt: turn.text,
         toolsCalled,
       });
-      return;
+      return 'failed';
     }
 
     // Stored before the page is told the run is over, so the refresh that
@@ -1050,8 +1379,91 @@ export class WebChat {
         runId,
         actionId: result.pendingActionId,
         tool: action?.tool ?? null,
+        ...(room ? { agentId: agent.id } : {}),
       });
+      // A pending approval suspends the whole request; nothing else starts.
+      if (turn.group) {
+        await setGroupRequestState(deps.pool, turn.group.request.id, { state: 'suspended', from: ['running'], awaitingActionId: result.pendingActionId, awaitingAgentId: agent.id });
+      }
+      return 'suspended';
     }
+    return 'ran';
+  }
+
+  /**
+   * Everything a run inside a room needs, built from the group row and the
+   * request row — trusted context, never something the model supplied.
+   */
+  #room(
+    group: RoomTurn,
+    agent: CatalogAgent,
+    provider: RuntimeProvider,
+  ): { provider: RuntimeProvider; context: GroupContext; transcript: NonNullable<RunAgentOptions['transcript']>; policy: string; askTool: ReturnType<typeof createGroupAskTool> | null } {
+    const deps = this.#deps;
+    const pool = deps.pool;
+    const requestId = group.request.id;
+    const context: GroupContext = {
+      id: group.row.id,
+      name: group.row.name,
+      coordinator: group.row.coordinator,
+      members: group.row.members,
+      requestId,
+    };
+    const ledger = {
+      reserve: () => reserveGroupCall(pool, requestId),
+      release: () => releaseGroupCall(pool, requestId),
+    };
+    const handles = this.#handles();
+    // Every call is made through a bounded projection: the room as this
+    // agent may see it, clipped to what the group's cap allows.
+    const transcriptFor = (conversationId: string, agentId: string, openingSpeaker: string): NonNullable<RunAgentOptions['transcript']> => ({
+      load: async () => boundProjection(projectTranscript({ turns: await readGroupTurns(pool, conversationId), agentId, handles }), group.row.contextCapChars),
+      speaker: agentId,
+      openingSpeaker,
+    });
+    const memberNames = group.row.members
+      .map((id) => deps.catalog.get(id))
+      .filter((a): a is CatalogAgent => Boolean(a))
+      .map((a) => `@${a.handle} (${a.name})`)
+      .join(', ');
+    const remaining = Math.max(0, group.request.budgetTotal - 1 - group.request.budgetReserved);
+    const summary = group.row.lastSummary && group.request.budgetReserved === 0 ? `\n\nWhere the previous thread of this group stopped:\n${group.row.lastSummary}` : '';
+    const policy = group.role === 'coordinator'
+      ? `You are the coordinator of the group "${group.row.name}". Members: ${memberNames}. The owner asked the group, and you answer for it. ` +
+        `Bring a member in with ${GROUP_ASK_TOOL} only when it holds something you do not; each ask, and each of your own model calls, spends from a budget of ${group.request.budgetTotal} calls per request, ` +
+        `of which about ${remaining} remain. When members have spoken, stop: a separate final call asks you to conclude, without tools, and there you credit each member by handle. ` +
+        `If nobody needs asking, answer the owner yourself. Never claim a member said something it did not; what members said is in the room, attributed.` + summary
+      : `You are a member of the group "${group.row.name}" (members: ${memberNames}; coordinator: @${deps.catalog.get(group.row.coordinator)?.handle ?? group.row.coordinator}). ` +
+        `Answer for the room with what you find and stop; the coordinator brings the answer together. Do not address other members.` + summary;
+    const askTool = group.role === 'coordinator' && !group.synthesis
+      ? createGroupAskTool({
+          catalog: () => ({ get: (id) => deps.catalog.get(id), byHandle: (h) => deps.catalog.byHandle(h) }),
+          provider: (member) => budgetedProvider(deps.providerFor(member as CatalogAgent), ledger, { canSynthesise: false }),
+          registry: deps.registry,
+          transcript: async (conversationId, agentId) => transcriptFor(conversationId, agentId, group.row.coordinator),
+          allowlistFor: (id) => deps.allowlistFor?.(id) ?? [],
+          ...(deps.groupMemoryPreamble ? { memoryPreamble: () => deps.groupMemoryPreamble!(context.id) } : {}),
+          onSuspended: async ({ agentId, actionId }) => {
+            await setGroupRequestState(pool, requestId, { state: 'suspended', from: ['running'], awaitingActionId: actionId, awaitingAgentId: agentId });
+            // The member paused inside the coordinator's tool call, so the
+            // page is told here what `#run` would have told it.
+            const action = await getAction(pool, actionId).catch(() => null);
+            await this.#event(group.request.conversationId, 'chat.awaiting-approval', { runId: null, actionId, tool: action?.tool ?? null, agentId });
+          },
+          onMemberRun: async ({ agentId, result }) => {
+            group.onContribution?.();
+            await this.#event(group.request.conversationId, 'chat.message.appended', { role: 'assistant', agentId, runId: null, stopped: result.stopped });
+          },
+          pool,
+        })
+      : null;
+    return {
+      provider: budgetedProvider(provider, ledger, { canSynthesise: group.role === 'coordinator', ...(group.synthesis ? { forceSynthesis: true } : {}) }),
+      context,
+      transcript: transcriptFor(group.request.conversationId, agent.id, group.openingSpeaker),
+      policy,
+      askTool,
+    };
   }
 
   /**

@@ -22,7 +22,11 @@ import {
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
 import { manifest as financeManifest } from '@buddi/tool-finance';
-import { buildPreamble, manifest as memoryManifest } from '@buddi/tool-memory';
+import { buildPreamble, manifest as memoryManifest,
+  buildPreambleForScopes,
+  groupScope,
+  SHARED,
+} from '@buddi/tool-memory';
 import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
 import { createHostManifest, hostService } from '@buddi/tool-host';
@@ -197,6 +201,14 @@ export function installedManifests(env: NodeJS.ProcessEnv = process.env): Plugin
  */
 export function memoryPreambleFor(pool: Queryable): (agentId: string) => Promise<string> {
   return (agentId) => buildPreamble(pool, agentId);
+}
+
+/**
+ * The same hook for a group run: shared plus the room's own scope, and never
+ * a member's private notes (docs/groups.md, "Memory").
+ */
+export function memoryPreambleForGroup(pool: Queryable): (groupId: string) => Promise<string> {
+  return (groupId) => buildPreambleForScopes(pool, [SHARED, groupScope(groupId)]);
 }
 
 export interface GatewayCatalogOptions {

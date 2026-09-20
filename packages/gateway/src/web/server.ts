@@ -50,7 +50,7 @@ import { getAction, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, getOwnerProfile, setOwnerProfile, isKnownTimezone, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -200,6 +200,11 @@ export interface WebServer {
 const WEB_CHATS = new WeakMap<Server, WebChat>();
 
 /** The chat surface this server is running, if any. */
+/** A group as the page draws it. */
+function groupView(group: GroupRow): { id: string; name: string; coordinator: string; members: string[]; contextCapChars: number; createdAt: string } {
+  return { id: group.id, name: group.name, coordinator: group.coordinator, members: group.members, contextCapChars: group.contextCapChars, createdAt: group.createdAt.toISOString() };
+}
+
 /** Every IANA zone this Node knows, for a picker. */
 function knownTimezones(): string[] {
   const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
@@ -547,6 +552,8 @@ export function createWebApp(deps: WebServerDeps): Server {
             providers: readEngineOptions(deps.env ?? process.env),
             providerAccounts: deps.providerAccounts?.view(),
           });
+        case '/api/groups':
+          return sendJson(res, 200, { groups: (await listGroups(deps.pool)).map(groupView) });
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -619,6 +626,31 @@ export function createWebApp(deps: WebServerDeps): Server {
 
       /* ---------------- chat ---------------- */
 
+      const groupConversations = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/conversations$/i.exec(path);
+      if (groupConversations) {
+        const group = await getGroup(deps.pool, groupConversations[1]!);
+        if (!group) return sendJson(res, 404, { error: 'no such group' });
+        const rows = await listGroupConversations(deps.pool, group.id);
+        // The same shape an agent's list has, so the page draws both alike.
+        return sendJson(res, 200, {
+          conversations: rows.map((row) => ({
+            id: row.id,
+            createdAt: row.createdAt.toISOString(),
+            startedAt: row.createdAt.toISOString(),
+            lastMessageAt: row.lastAt?.toISOString() ?? null,
+            messageCount: row.messages,
+            ...(row.first ? { preview: row.first, opening: row.first } : {}),
+          })),
+        });
+      }
+      const groupOne = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (groupOne) {
+        const group = await getGroup(deps.pool, groupOne[1]!);
+        if (!group) return sendJson(res, 404, { error: 'no such group' });
+        const latest = await latestGroupConversation(deps.pool, group.id);
+        const open = latest ? await openGroupRequest(deps.pool, latest) : null;
+        return sendJson(res, 200, { ...groupView(group), latestConversationId: latest, openRequest: open ? { id: open.id, state: open.state, awaitingAgentId: open.awaitingAgentId, budgetReserved: open.budgetReserved, budgetTotal: open.budgetTotal } : null });
+      }
       const chatConversations = /^\/api\/chat\/([^/]+)\/conversations$/.exec(path);
       if (chatConversations) {
         const agentId = decodeURIComponent(chatConversations[1] as string);
@@ -897,6 +929,48 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
     }
 
+    /* Groups: create one, send to one, stop its current request. */
+    if (path === '/api/groups') {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const coordinator = typeof body.coordinator === 'string' ? body.coordinator.trim() : '';
+      if (!Array.isArray(body.members) || body.members.some((m) => typeof m !== 'string' || m.trim() === '')) return sendJson(res, 400, { error: '`members` must be a list of agent ids.' });
+      const members = (body.members as string[]).map((m) => m.trim());
+      if (name === '' || name.length > 80) return sendJson(res, 400, { error: 'A group needs a name, up to 80 characters.' });
+      if (!deps.catalog.get(coordinator)) return sendJson(res, 400, { error: 'Pick a coordinator from the installed agents.' });
+      const unknown = members.filter((m) => !deps.catalog.get(m));
+      if (unknown.length > 0) return sendJson(res, 400, { error: `Not installed: ${unknown.join(', ')}` });
+      if (new Set([coordinator, ...members]).size < 2) return sendJson(res, 400, { error: 'A group needs at least one member besides the coordinator.' });
+      const group = await createGroup(deps.pool, { name, coordinator, members });
+      return sendJson(res, 200, groupView(group));
+    }
+    const groupMessages = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/messages$/i.exec(path);
+    if (groupMessages) {
+      if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
+      if (typeof body.text !== 'string') return sendJson(res, 400, { error: '`text` must be a string' });
+      if (body.conversationId !== undefined && typeof body.conversationId !== 'string') return sendJson(res, 400, { error: '`conversationId` must be a string' });
+      const ids = body.attachmentIds;
+      if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))) return sendJson(res, 400, { error: '`attachmentIds` must be an array of artifact ids' });
+      const sent = await chat.sendToGroup({
+        groupId: groupMessages[1]!,
+        ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+        text: body.text,
+        ...(ids ? { attachmentIds: ids as string[] } : {}),
+      });
+      if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
+      return sendJson(res, 202, { conversationId: sent.conversationId, runId: sent.runId, requestId: sent.requestId, ...(sent.rolledOver ? { rolledOver: true } : {}) });
+    }
+    const groupNewConversation = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/conversations$/i.exec(path);
+    if (groupNewConversation) {
+      const group = await getGroup(deps.pool, groupNewConversation[1]!);
+      if (!group) return sendJson(res, 404, { error: 'no such group' });
+      return sendJson(res, 200, { conversationId: await createGroupConversation(deps.pool, group) });
+    }
+    const groupArchive = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/archive$/i.exec(path);
+    if (groupArchive) {
+      return (await archiveGroup(deps.pool, groupArchive[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+    }
+
     /*
      * The owner's own profile. What an agent may write through owner.set_profile
      * the owner may write here directly; the same validation, the same row.
@@ -1075,6 +1149,10 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     const cancel = /^\/api\/chat\/conversations\/([^/]+)\/cancel$/.exec(path);
+    if (cancel && chat && (await conversationGroup(deps.pool, decodeURIComponent(cancel[1]!)).catch(() => null))) {
+      await chat.stopGroupRequest(decodeURIComponent(cancel[1]!));
+      return sendJson(res, 200, { stopped: true });
+    }
     if (cancel) {
       hostService(deps.env ?? process.env).stop(deps.ctx.ownerId, undefined, decodeURIComponent(cancel[1]!));
       if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
