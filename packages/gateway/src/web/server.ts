@@ -49,9 +49,18 @@ import {
   WEB_ONBOARDING_STEPS,
   WEB_ONBOARDING_SURFACE,
   createFirstAgent,
+  probeOllama,
   readOnboarding,
   type OnboardingDeps,
 } from './onboarding.js';
+import {
+  TelegramWebError,
+  saveTelegramToken,
+  telegramPairing,
+  telegramStatus,
+  type TelegramControl,
+  type TelegramWebDeps,
+} from './telegram.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -164,6 +173,14 @@ export interface WebServerDeps {
   env?: NodeJS.ProcessEnv | undefined;
   providerSettings?: ProviderSettings;
   providerAccounts?: ProviderAccounts;
+  /**
+   * This process's Telegram surface, when it runs one.
+   *
+   * The dashboard can then take a token from the owner and have the phone
+   * working before they put it down. A process without one keeps the token and
+   * says it will be there next time buddi starts.
+   */
+  telegram?: TelegramControl | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   /**
@@ -449,6 +466,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       examplesDir: EXAMPLES_AGENTS_DIR,
       reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
     });
+    /** What the two Telegram routes need. The environment is the live one. */
+    const telegramDeps = (): TelegramWebDeps => ({
+      pool: deps.pool,
+      env: deps.env ?? process.env,
+      ...(deps.telegram ? { telegram: deps.telegram } : {}),
+    });
 
     if (method === 'GET' || method === 'HEAD') {
       /*
@@ -679,6 +702,15 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/onboarding':
           return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+        /*
+         * Is Ollama running on this machine? Asked from here, never from the
+         * page: the dashboard bundle reaches no host but its own, and the
+         * answer is about the machine buddi runs on rather than the browser's.
+         */
+        case '/api/onboarding/ollama':
+          return sendJson(res, 200, await probeOllama());
+        case '/api/telegram':
+          return sendJson(res, 200, await telegramStatus(telegramDeps()));
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1200,6 +1232,27 @@ export function createWebApp(deps: WebServerDeps): Server {
       } catch (error) {
         if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
         return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
+      }
+    }
+
+    /*
+     * Telegram, without a terminal: the token BotFather gave the owner, and
+     * then a pairing code for the phone. Both behind the same session, Origin
+     * and CSRF gate as every other write — this is the owner acting on their
+     * own installation.
+     */
+    if (path === '/api/telegram/token' || path === '/api/telegram/pairing') {
+      try {
+        return sendJson(
+          res,
+          200,
+          path === '/api/telegram/token'
+            ? await saveTelegramToken(telegramDeps(), body.token)
+            : await telegramPairing(telegramDeps()),
+        );
+      } catch (error) {
+        if (error instanceof TelegramWebError) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: 'Telegram could not be set up from here.' });
       }
     }
 

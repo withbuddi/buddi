@@ -2,7 +2,7 @@
 
 Status: proposed spec, 2026-09-20. An experimental [packaged-install
 foundation](install-foundation.md) is implemented separately, and the first-run
-wizard of §5 is now built on top of it (screens 1–7, minus the deferrals named
+first run of §5 is now built on top of it (the thread of onboarding.md, minus the deferrals named
 there). Plugins from npm and the backup contract are not built.
 
 Someone who is not a developer but can type `npm` should get from nothing to a
@@ -135,64 +135,50 @@ directory is the trust boundary) is stated in the security page of the wizard.
 
 ---
 
-## 5. The first-run wizard
+## 5. First run: you meet buddi
 
-**Built**, except where a step below says otherwise. The route is `#/welcome`,
-with `?step=<id>` naming one screen. The dashboard sends the owner there —
+**Built.** The seven screens this section used to describe are gone; the screen
+script is [onboarding.md](onboarding.md), and that document is the contract.
+What is here is only what the rest of this page depends on.
+
+The route is unchanged: `#/welcome`, and the dashboard sends the owner there —
 replacing the entry, not pushing it — when `core.onboarding` is still `pending`
-*and* the installation has no usable model account; a record that is `done`,
+*and* the installation has no usable model account. A record that is `done`,
 `skipped` or `in-progress` (an interview another surface already claimed), and
-any installation that already has an account, never sees it. Settings → System has "Run setup again" regardless. The wizard's
-own server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
-`/complete`, `/skip` and `/agent`, all behind the dashboard's ordinary session,
-Origin and CSRF gate. `/complete` refuses while the installation still has no
-model account or no agent — "done" has to mean done — and `/skip` is the
-explicit bypass that always works. `done` and `skipped` are terminal in core, so
-the two endings cannot overwrite each other. Finishing or skipping here also
-closes the Telegram nudge arc, which has nothing to add to an owner who set up
-in the dashboard.
+any installation that already has an account, never sees it. Settings → System
+has "Run setup again" regardless.
 
-Each step is one screen with one job, saved as it is completed, and resumable
-after a reload or a restart: the page resumes at the first screen whose
-question is still unanswered, or at the one after the last it recorded. Steps
-in order:
+What the owner sees is one thread, not a tour: buddi asks four things in
+message bubbles — a name, a clock, a brain for the assistant, and the assistant
+itself — each answered inline where a reply would go, each answer staying above
+with a "change" link. Then the assistant speaks first, on the model, and the
+screen does not change; only the speaker does. Reload replays the answered
+questions from the record, the profile and the accounts, and asks the first one
+nobody has answered.
 
-1. **Welcome and security.** What buddi is, that it runs on this machine only,
-   what is stored where, and that the dashboard listens on loopback. One
-   button.
-2. **You.** Name, how the agents address you, timezone. The existing "You"
-   settings page, reused.
-3. **A model.** Pick a provider: Anthropic, OpenAI, or an OpenAI-compatible
-   endpoint. The key is pasted once and lands in the vault. The
-   provider-accounts page is the screen, embedded, so the storage and the
-   choice of model are the ones already built. *Deferred: Ollama detection —
-   the wizard says nothing about it.*
-4. **Your first agent.** A name, a handle (suggested from the name, editable),
-   an optional emoji face, and a short description of what it is for. Written
-   by the same writer `platform.create_agent` uses, from the generic template:
-   no roles, no plugin tools, `language: mirror`, and `default: true` when it
-   is the first private agent. It is given the model account added on the
-   previous screen when there is exactly one to give, so the next screen can
-   actually answer.
-5. **Say hello.** The chat itself, with the new agent, mounted inside the
-   wizard frame. The first answer arriving is the moment the install is real;
-   sending a message is not required to move on.
-6. **Optional extras**, each one a card that can be skipped. Built: Telegram,
-   as the `buddi telegram pair` command with a Skip. *Deferred: pairing
-   without a terminal, the plugins card (§7) and the backup card (§8).*
-7. **Done.** Where things are, how to open buddi again, how to upgrade.
+The server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
+`/complete`, `/skip` and `/agent`, plus `GET /api/onboarding/ollama` (is Ollama
+running on *this* machine — the page never reaches `localhost:11434` itself)
+and `POST /api/telegram/token` and `/api/telegram/pairing`, which is Telegram
+without a terminal: the token BotFather gave the owner goes into the vault, the
+surface starts in the running gateway when the process can start it, and the
+pairing code comes back as a link the thread draws as a QR code. All of them
+are behind the dashboard's ordinary session, Origin and CSRF gate.
+`/complete` refuses while the installation still has no model account or no
+agent — "done" has to mean done — and `/skip` is the explicit bypass that
+always works. `done` and `skipped` are terminal in core, so the two endings
+cannot overwrite each other. Finishing or skipping here also closes the
+Telegram nudge arc, which has nothing to add to an owner who set up in the
+dashboard.
 
-The welcome screen offers the CLI restore command for an owner who has a backup
-from another machine; *restoring from the dashboard (§8.5) is deferred*.
+Everything else uses the API the settings pages use: the owner profile, the
+provider accounts (saved, then tested with one small call), and `/onboarding/agent`,
+which has an endpoint of its own because the alternative — an approval-gated
+tool call — is the wrong shape for the owner acting directly from their own
+dashboard. It takes the id of the account the thread just tested, so the
+assistant is bound to the brain the owner chose.
 
-The wizard uses the same API the settings pages use. The one exception is the agent step, which has an endpoint
-of its own because the alternative — an approval-gated tool call — is the wrong
-shape for the owner acting directly from their own dashboard; it reuses the
-same writer, the same file format and the same validation. `core.onboarding` already records steps done; the wizard reads
-and writes that record so the CLI and the dashboard agree on progress.
-
-Developer install (`git clone`, `buddi init`) ends by opening the same route
-at step 3, since steps 1 and 2 are what `init` already asked in the terminal.
+Developer install (`git clone`, `buddi init`) ends by opening the same route.
 
 ---
 

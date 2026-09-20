@@ -44,7 +44,7 @@ import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
-import { Welcome } from './views/Welcome';
+import { Meet } from './views/Meet';
 
 export { PLACES };
 
@@ -280,13 +280,13 @@ export function App(): JSX.Element {
     />
   ) : null;
 
-  // The wizard takes the whole window: no rail, no place, nothing to navigate
-  // away to until it is finished or set aside.
+  // First run takes the whole window: no rail, no place, nothing to navigate
+  // away to until the owner has met their assistant or set it aside.
   if (welcome) {
     return (
       <Tooltip.Provider delayDuration={400}>
         <Toast.Provider swipeDirection="right">
-          <Welcome step={welcome.step} navigate={navigate} timezone={timezone} />
+          <Meet navigate={navigate} timezone={timezone} />
           <Toast.Viewport className="ui-toasts" />
         </Toast.Provider>
       </Tooltip.Provider>
