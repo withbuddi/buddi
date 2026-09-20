@@ -40,7 +40,7 @@ import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
-export const REPO_ROOT = path.resolve(
+export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   '..',

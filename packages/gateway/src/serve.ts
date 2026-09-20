@@ -366,7 +366,7 @@ export async function main(): Promise<void> {
     const inlineMission = createInlineMissionRunner(missionDeps);
     /** Bound once the dashboard is up; a group decided in Telegram resumes there. */
     let dashboardChat: import('./web/chat.js').WebChat | undefined;
-    const telegram = await startTelegram({
+    const telegram = process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram({
       ...missionDeps,
       gate,
       resumeGroup: async (action, resume) => {
@@ -395,16 +395,16 @@ export async function main(): Promise<void> {
         if (blocked !== null) return { ok: true, text: blocked };
         return inlineMission(missionId, chatId, onToolCall);
       },
-    });
+    }) : undefined;
 
     // An unattended run has no chat of its own. When one proposes a gated
     // effect, the request is posted to the paired owner chat on its behalf —
     // same preview, same buttons, same bound action as an interactive turn.
     const askApproval = async (action: ActionRecord): Promise<void> => {
       const chatId = await ownerChatId(pool);
-      if (!chatId) {
+      if (!chatId || !telegram) {
         console.error(
-          `approval ${action.id} (${action.tool}) is waiting, but no owner chat is paired`,
+          `approval ${action.id} (${action.tool}) is waiting in the dashboard; ${!telegram ? 'Telegram is not configured' : 'no owner chat is paired'}`,
         );
         return;
       }
@@ -685,6 +685,12 @@ export async function main(): Promise<void> {
         console.error(
           `dashboard not started: ${err instanceof Error ? err.message : String(err)}`,
         );
+        if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
+          clearInterval(sweep); clearInterval(orphanSweep);
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop();
+          await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
+          throw err;
+        }
       }
     } else {
       console.log('  dashboard: off (BUDDI_WEB=0)');
@@ -693,8 +699,8 @@ export async function main(): Promise<void> {
     const missions = await describeMissions(pool, now());
 
     console.log('buddi serve — telegram surface + scheduler');
-    console.log(`  bot: @${telegram.botUsername ?? '(unknown)'} (id ${telegram.botId})`);
-    console.log(`  paired owner ids: ${describePaired(telegram.paired)}`);
+    console.log(telegram ? `  bot: @${telegram.botUsername ?? '(unknown)'} (id ${telegram.botId})` : '  Telegram: not configured');
+    console.log(`  paired owner ids: ${telegram ? describePaired(telegram.paired) : '(none)'}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
     console.log(
@@ -731,7 +737,7 @@ export async function main(): Promise<void> {
         : `  missions (${missions.length}):`,
     );
     for (const line of missions) console.log(formatMissionLine(line));
-    console.log(`  last cursor: ${telegram.cursor ?? '(none)'}`);
+    console.log(`  last cursor: ${telegram?.cursor ?? '(none)'}`);
 
     let stopping = false;
     const shutdown = (signal: string): void => {
@@ -746,12 +752,12 @@ export async function main(): Promise<void> {
       deadLetterLoop.stop();
       void dashboard?.close();
       void hostBrowser(process.env).shutdown();
-      void Promise.all([scheduler.stop(), worker.stop(), telegram.stop()]);
+      void Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-    await Promise.all([telegram.done, scheduler.done, worker.done]);
+    await Promise.all([telegram?.done, scheduler.done, worker.done]);
     console.log('buddi serve stopped cleanly');
   } finally {
     await hostBrowser(process.env).shutdown();

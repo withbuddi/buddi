@@ -22,6 +22,12 @@ export interface ComputerBridge {
   cancel(): void;
 }
 
+/** Do not copy vault/provider/database secrets into the native UI helper. */
+export function computerEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME']
+    .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
+}
+
 /** One-shot, bounded, fixed native executable. No shell or model-supplied code. */
 export class NativeComputerBridge implements ComputerBridge {
   #children = new Set<ChildProcessWithoutNullStreams>();
@@ -29,7 +35,7 @@ export class NativeComputerBridge implements ComputerBridge {
   run(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (process.platform !== 'darwin') return Promise.reject(new BrowserPreconditionError('Computer control currently requires macOS 14+. Select Browser automation explicitly to use Playwright on this host.'));
     return new Promise((resolve, reject) => {
-      const child = spawn(this.executable, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(this.executable, [], { env: computerEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
       this.#children.add(child);
       const chunks: Buffer[] = []; let size = 0; let failure: Error | undefined;
       const timer = setTimeout(() => { failure = new Error('Computer helper timed out. Input may have partially completed; inspect before retrying.'); child.kill('SIGKILL'); }, input.operation === 'permissions' && input.prompt ? 60_000 : 20_000);
