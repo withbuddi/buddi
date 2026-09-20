@@ -1,0 +1,13 @@
+{
+  // The same program as `tsconfig.json`, with the tests put back in. See the
+  // note in `packages/cli/tsconfig.test.json`: tests are checked, not only run.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false
+  },
+  "exclude": []
+}

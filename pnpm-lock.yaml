@@ -167,6 +167,37 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.2)(jsdom@25.0.1)
 
+  packages/install:
+    dependencies:
+      '@buddi/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@buddi/core':
+        specifier: workspace:*
+        version: link:../core
+      '@buddi/gateway':
+        specifier: workspace:*
+        version: link:../gateway
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      pg:
+        specifier: ^8.13.1
+        version: 8.23.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.2
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.23.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.2)(jsdom@25.0.1)
+
   packages/runtime:
     dependencies:
       '@buddi/core':

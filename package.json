@@ -7,7 +7,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "release:pack": "node scripts/release/build.mjs",
-    "release:test": "node --test scripts/release/foundation.test.mjs",
+    "release:test": "pnpm --filter @buddi/install test",
     "release:smoke": "node scripts/release/smoke.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "node scripts/check-boundaries.mjs && pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm check:generic",

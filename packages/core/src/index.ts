@@ -12,6 +12,7 @@ export * from './actions/index.js';
 export * from './vault/index.js';
 export * from './db.js';
 export * from './database-url.js';
+export * from './postgres/index.js';
 export * from './events.js';
 export * from './failures/index.js';
 export * from './queue/index.js';

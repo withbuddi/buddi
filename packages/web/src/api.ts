@@ -527,6 +527,29 @@ export interface MemoryView {
   notes: MemoryNote[];
 }
 
+/**
+ * The supervisor's own report, verbatim. A packaged installation has one; a
+ * developer checkout does not, and then `supervised` is false and there is
+ * nothing to show.
+ */
+export interface ServiceStatus {
+  phase?: string;
+  supervisorPid: number;
+  installRoot: string;
+  nodePath: string;
+  database: string;
+  databasePid: number | null;
+  gateway: string;
+  gatewayPid: number | null;
+}
+
+export interface ServiceView {
+  supervised: boolean;
+  status?: ServiceStatus;
+  /** A stop or a restart that was accepted; it takes this page down with it. */
+  pending?: 'stop' | 'restart';
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -672,6 +695,14 @@ export const api = {
       permissionScope ? { permissionScope } : undefined,
     ),
   setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }),
+  service: () => get<ServiceView>('/service'),
+  /**
+   * Start, stop or restart the gateway through the supervisor. A `stop` or a
+   * `restart` is *accepted* rather than completed: it ends the gateway serving
+   * this page, so the answer arrives before the action does — and `buddi` in a
+   * terminal, not this page, is what starts a gateway that is down.
+   */
+  serviceAction: (action: 'start' | 'stop' | 'restart') => post<ServiceView>(`/service/${action}`),
   setMissionEnabled: (id: string, enabled: boolean) =>
     post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/enabled`, { enabled }),
   setMisfirePolicy: (id: string, misfirePolicy: string, deadlineMinutes?: number | null) =>

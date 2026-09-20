@@ -1,37 +1,62 @@
 #!/usr/bin/env node
+/**
+ * `buddi` in a packaged installation: the one binary the tarball installs.
+ *
+ * It prepares the environment, then either supervises, runs the gateway child,
+ * controls the supervisor, or hands the arguments to the checkout CLI. Every
+ * `@buddi/*` import below is dynamic and happens after `environment()` has
+ * run, because those packages compute their path constants on import.
+ */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
-import { open, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { request } from 'node:http';
+import { open, mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { environment, dashboardReady, reloadLaunchAgent, nativeEnvironment } from '../install/environment.mjs';
-import { supervise, controlToken } from '../install/supervisor.mjs';
+import { environment, dashboardReady, reloadLaunchAgent, nativeEnvironment } from './environment.js';
+import type { InstallContext } from './environment.js';
+import { supervise, supervisorSocket } from './supervisor.js';
+import type { SupervisorStatus } from './supervisor.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const entry = fileURLToPath(import.meta.url);
+// <root>/packages/install/dist/launcher.js — the installation root is three up.
+const root = path.resolve(path.dirname(entry), '../../..');
 const exec = promisify(execFile);
-const entry = path.join(root, 'bin/buddi.mjs');
 const args = process.argv.slice(2);
 
-async function control(ctx, action = 'status') {
+/**
+ * Ask this installation's supervisor. The socket in the data directory is the
+ * whole credential, and `fetch` cannot address a Unix socket, so this is
+ * `node:http`'s client: one request, no agent, nothing pooled.
+ */
+async function control(ctx: InstallContext, action = 'status'): Promise<SupervisorStatus> {
   if (!ctx.state) throw new Error('Not initialized. Run buddi first.');
-  const gateway = await import(ctx.require.resolve('@buddi/gateway'));
-  const { token } = await gateway.ensureWebToken({ env: ctx.env, readOnly: true });
-  const response = await fetch(`http://127.0.0.1:${ctx.state.controlPort}/${action}`, {
-    method: action === 'status' ? 'GET' : 'POST', headers: { Authorization: `Bearer ${controlToken(token)}` }, signal: AbortSignal.timeout(25_000),
+  return await new Promise<SupervisorStatus>((resolve, reject) => {
+    const req = request({ socketPath: supervisorSocket(ctx.data), path: `/${action}`, method: action === 'status' ? 'GET' : 'POST', headers: { host: 'localhost' }, timeout: 25_000 }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) return reject(new Error(`Supervisor refused the request (${res.statusCode}).`));
+        try { resolve(JSON.parse(text) as SupervisorStatus); }
+        catch { reject(new Error('The supervisor answered with something that is not its status.')); }
+      });
+    });
+    req.once('timeout', () => req.destroy(new Error('The supervisor did not answer within 25 seconds.')));
+    req.once('error', reject);
+    req.end();
   });
-  if (!response.ok) throw new Error(`Supervisor refused the request (${response.status}).`);
-  return response.json();
 }
 
-async function launchService(ctx, temporary) {
+async function launchService(ctx: InstallContext, temporary: boolean): Promise<void> {
   await mkdir(path.join(ctx.data, 'logs'), { recursive: true, mode: 0o700 });
   if (!temporary && process.platform === 'darwin') {
     const label = `com.buddi.install.${createHash('sha256').update(ctx.data).digest('hex').slice(0, 12)}`;
     const dir = path.join(os.homedir(), 'Library/LaunchAgents');
     const plist = path.join(dir, `${label}.plist`);
-    const { buildPlist } = await import(ctx.require.resolve('@buddi/cli'));
+    const { buildPlist } = await import('@buddi/cli');
     await mkdir(dir, { recursive: true });
     await writeFile(plist, buildPlist({
       label, nodePath: process.execPath, serveEntry: entry, args: ['supervise'],
@@ -39,7 +64,7 @@ async function launchService(ctx, temporary) {
       path: [path.dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
       logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
     }), { mode: 0o600 });
-    const domain = `gui/${process.getuid()}`;
+    const domain = `gui/${process.getuid!()}`;
     await reloadLaunchAgent((cmd, argv) => exec(cmd, argv, { env: nativeEnvironment(ctx.env) }), domain, label, plist);
     return;
   }
@@ -47,12 +72,12 @@ async function launchService(ctx, temporary) {
   const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
   try {
     const child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: ctx.env });
-    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
   } finally { await log.close(); }
 }
 
-async function run() {
+async function run(): Promise<void> {
   let ctx = await environment(root);
   if (args[0] === 'supervise') return supervise(ctx);
   if (args[0] === '__gateway') {
@@ -60,12 +85,12 @@ async function run() {
     if (!process.send) throw new Error('The gateway child must be started by buddi supervise.');
     const parentGone = () => process.kill(process.pid, 'SIGTERM');
     process.once('disconnect', parentGone);
-    const gateway = await import(ctx.require.resolve('@buddi/gateway'));
+    const gateway = await import('@buddi/gateway');
     try { await gateway.runServe(); }
     finally { process.removeListener('disconnect', parentGone); if (process.connected) process.disconnect(); }
     return;
   }
-  if (args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1])) {
+  if (args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1] as string)) {
     console.log(JSON.stringify(await control(ctx, args[1]), null, 2)); return;
   }
   if (args[0] === 'doctor') {
@@ -94,33 +119,32 @@ async function run() {
         }
       }
     }
-    const gateway = await import(ctx.require.resolve('@buddi/gateway'));
+    const gateway = await import('@buddi/gateway');
     const { token } = await gateway.ensureWebToken({ env: ctx.env, readOnly: true });
-    const url = gateway.webUrl({ host: '127.0.0.1', port: ctx.state.webPort }, gateway.mintTicket(token));
-    const serviceUrl = `http://127.0.0.1:${ctx.state.controlPort}/?t=${encodeURIComponent(gateway.mintTicket(controlToken(token)))}`;
+    const url = gateway.webUrl({ host: '127.0.0.1', port: ctx.state!.webPort }, gateway.mintTicket(token));
     // A process pid is not dashboard readiness. Wait for its authenticated HTTP surface.
     const deadline = Date.now() + 30_000;
     for (;;) {
       try {
-        if (await dashboardReady(ctx.state.webPort, token)) break;
+        if (await dashboardReady(ctx.state!.webPort, token)) break;
       } catch { /* startup */ }
       if (Date.now() > deadline) throw new Error(`Gateway did not become ready. Inspect ${path.join(ctx.data, 'logs/gateway.log')}`);
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     console.log(`Dashboard: ${url}`);
-    console.log(`Service controls: ${serviceUrl}`);
-    console.log('Links expire in five minutes; reuse is rejected within the current server lifetime (not across restarts). Run buddi again for fresh links.');
+    console.log('The link expires in five minutes; reuse is rejected within the current server lifetime (not across restarts). Run buddi again for a fresh link.');
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }
-  if (['init', 'upgrade', 'db', 'backup', 'migrate', 'serve'].includes(args[0]) || args[0] === 'service') {
+  if (['init', 'upgrade', 'db', 'backup', 'migrate', 'serve'].includes(args[0] as string) || args[0] === 'service') {
     throw new Error('This checkout-oriented command is not yet supported in packaged installs. Run buddi; use service status|start|stop|restart for the gateway.');
   }
   if (ctx.state?.database === 'managed') {
-    const core = await import(ctx.require.resolve('@buddi/core'));
+    const core = await import('@buddi/core');
     await core.hydrateDatabaseUrl(ctx.env);
   }
-  const cli = await import(ctx.require.resolve('@buddi/cli'));
+  const cli = await import('@buddi/cli');
   process.exitCode = await cli.main(args);
 }
-run().catch(error => { console.error(`buddi: ${error.message}`); process.exitCode = 1; });
+
+run().catch((error: Error) => { console.error(`buddi: ${error.message}`); process.exitCode = 1; });
