@@ -182,17 +182,24 @@ children: it starts Postgres, waits for it to answer, then starts the
 gateway; it restarts the gateway when it exits; and it keeps Postgres up
 while the gateway is down. Maintenance therefore never needs the gateway:
 
+- The supervisor's whole control surface is a Unix domain socket,
+  `supervisor.sock` in the data directory, mode 0600 inside a 0700 directory.
+  It answers `GET /status` and `POST /start|/stop|/restart`, JSON in and out,
+  with no token and no session: the filesystem is the credential, because only
+  the owning user can open the socket. There is no second web surface to log
+  in to.
 - `buddi upgrade`, `buddi backup restore` and `buddi db migrate` talk to the
-  supervisor over a loopback control socket in the data directory: "stop the
-  gateway, keep the database", do the work, "start the gateway". With no
-  supervisor running (a headless developer checkout, or the service not
-  installed) they start Postgres themselves for the duration and stop it
-  after, as `buddi init` does today.
-- The dashboard's Start button is the supervisor's, not the gateway's: the
-  page shows service state from a tiny status route the supervisor serves,
-  so a stopped gateway can still be started from the browser tab that is
-  open. When the supervisor itself is not running, the page says so and
-  names the command.
+  supervisor over that socket: "stop the gateway, keep the database", do the
+  work, "start the gateway". With no supervisor running (a headless developer
+  checkout, or the service not installed) they start Postgres themselves for
+  the duration and stop it after, as `buddi init` does today.
+- The Start, Stop and Restart switches live in the dashboard, in Settings →
+  System, and act through the supervisor rather than the gateway — so a
+  restart leaves the database up. They are there only while the gateway is up
+  to serve them: a stop or a restart closes the page it was pressed on, and
+  the page says so before it asks. When the gateway is down, `buddi` in a
+  terminal starts it again. A checkout with no supervisor shows no section at
+  all.
 - An interrupted upgrade is recoverable by construction: the backup is taken
   first, migrations run in one transaction each, and the supervisor records
   the step it was on in a state file; the next start reads it, finishes or

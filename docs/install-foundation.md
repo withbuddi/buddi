@@ -32,12 +32,19 @@ published to npm. The full contract remains [install.md](install.md).
   phase field is not a new rollback or recovery engine. Newer known schema
   migrations refuse older code.
   Interrupted `initdb` directories are preserved, never treated as complete.
-- Both dashboard and service-control page require five-minute login tickets.
-  Replay rejection is **per server process**, not durable across restarts: a
-  previously spent, unexpired ticket may work again after its server restarts.
-  The control page keeps working with the gateway stopped. Browser writes need
-  its session, exact Origin and CSRF token. CLI controls use a distinct derived
-  bearer credential. Neither is a general host-command endpoint.
+- The supervisor's control surface is a Unix domain socket, `supervisor.sock`
+  in the data directory, mode 0600 inside a 0700 directory. It serves four
+  routes — `GET /status` and `POST /start|/stop|/restart` — with JSON in and
+  out and **no credential**: only a process running as the owning user can open
+  the socket, and that user could read the vault or signal the supervisor
+  anyway. It is not a general host-command endpoint. Its two clients are the
+  `buddi` CLI and the dashboard: `GET /api/service` and
+  `POST /api/service/start|stop|restart` forward to it behind the dashboard's
+  usual session, Origin and CSRF gate. There is no second web surface and no
+  second login ticket.
+- The dashboard requires a five-minute login ticket. Replay rejection is **per
+  server process**, not durable across restarts: a previously spent, unexpired
+  ticket may work again after its server restarts.
 - Dashboard readiness requires an installation-secret challenge proof, not just
   an HTTP status. Failure to bind the required dashboard terminates the gateway.
 - Every managed startup resynchronizes the application role password from the
@@ -50,9 +57,10 @@ published to npm. The full contract remains [install.md](install.md).
 - The existing dashboard starts without a model key or Telegram token. Full
   welcome/onboarding screens are the next slice, not implemented here.
 
-Run `buddi` again to print full fresh dashboard and service-control URLs.
+Run `buddi` again to print a fresh dashboard URL.
 `buddi service status|start|stop|restart` controls **the gateway** in a packaged
-installation; stopping it leaves Postgres and the control page available.
+installation; stopping it leaves Postgres running. The same switches are in the
+dashboard's Settings → System, for as long as the gateway is up to serve them.
 `buddi doctor` reports this supervisor's state and log directory.
 
 Developer checkout commands retain their existing behavior. No-argument startup
@@ -63,8 +71,11 @@ is provided by the release launcher, not by changing the checkout CLI parser.
 The runtime of a packaged install is the workspace package `packages/install`
 (`@buddi/install`): `src/environment.ts` (data directory, private files,
 installation state, startup lock), `src/supervisor.ts` (process supervision and
-the service-control page) and `src/launcher.ts`, the `buddi` binary the tarball
-installs (`packages/install/dist/launcher.js`). `scripts/release/build.mjs` and
+the control socket) and `src/launcher.ts`, the `buddi` binary the tarball
+installs (`packages/install/dist/launcher.js`). The dashboard's side of the
+socket is `packages/gateway/src/web/service.ts`, one `node:http` client used by
+the `/api/service` routes in `server.ts`; the page itself is the Service section
+of `packages/web/src/views/Settings.tsx`. `scripts/release/build.mjs` and
 `scripts/release/smoke.mjs` are release *tooling*, not runtime, and stay there.
 
 The managed cluster itself is **not** install-specific and lives in
@@ -127,8 +138,15 @@ on Node 22 before publishing a release.
   path. No automatic conversion or deletion of a cluster occurs.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
-- Plugin npm installation, the full wizard, Backup UI, cross-platform service
-  managers, and supervisor controls embedded in Settings remain separate work.
+- **A stopped gateway is started from a terminal, not from a browser tab.** The
+  Settings switches are served by the gateway itself, so a stop or a restart
+  takes the page down with it: the request is *accepted* and then performed,
+  the reply never reports the outcome, and if the page does not come back,
+  `buddi` is what brings it back. The supervisor's Windows named-pipe
+  equivalent is not implemented; Windows managed startup still raises its
+  existing "not implemented" error.
+- Plugin npm installation, the full wizard, Backup UI and cross-platform
+  service managers remain separate work.
 - The file-vault key is stored at `vault-key` beside its ciphertext with owner-only
   permissions: the data directory is its trust boundary. macOS normally uses a
   separate Keychain namespace derived from the data directory instead.
@@ -153,7 +171,9 @@ reboot, and choose a distribution that includes the backup tools.
 - The service test verifies a non-superuser application role and a fixture row
   surviving gateway crashes, supervisor death, password rotation, and restart
   with the migration phase marker set. Auth tests reject missing credentials,
-  in-process ticket replay and writes without CSRF. Intentional gateway stops
+  in-process ticket replay and writes without CSRF. The control socket is checked
+  for mode 0600, and the dashboard's service view is checked against the pids
+  `buddi service status` reports. Intentional gateway stops
   leave Postgres running. Detached mode verifies that failure of the managed
   database terminates its supervisor and gateway, and that a leftover postmaster
   is stopped and replaced rather than adopted. A conflicting dashboard listener cannot

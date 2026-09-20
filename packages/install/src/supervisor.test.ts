@@ -1,11 +1,78 @@
-import { describe, expect, test } from 'vitest';
-import { controlToken, restartDelay } from './supervisor.js';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { request, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { controlSocket, listenOnSocket, restartDelay, supervisorSocket, type SupervisorStatus } from './supervisor.js';
+
+const servers: Server[] = [];
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))));
+});
+
+const STATUS: SupervisorStatus = {
+  phase: 'ready', supervisorPid: 1, installRoot: '/install', nodePath: '/node',
+  database: 'running', databasePid: 2, gateway: 'running', gatewayPid: 3,
+};
+
+/** The only client shape there is: a request on the socket, never on a port. */
+function call(socket: string, route: string, method = 'GET', headers: Record<string, string> = { host: 'localhost' }): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath: socket, path: route, method, headers }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text === '' ? null : JSON.parse(text) }));
+    });
+    req.once('error', reject);
+    req.end();
+  });
+}
+
+async function serve(action = vi.fn(async (_name: string) => {})): Promise<{ socket: string; action: typeof action }> {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+  const socket = supervisorSocket(data);
+  const server = controlSocket({ status: () => STATUS, action });
+  servers.push(server);
+  await listenOnSocket(server, socket);
+  return { socket, action };
+}
 
 describe('the supervisor', () => {
-  test('supervisor uses a distinct credential domain', () => {
-    expect(controlToken('dashboard-token')).not.toBe('dashboard-token');
-    expect(controlToken('dashboard-token')).not.toBe(controlToken('another-install'));
-    expect(controlToken('dashboard-token')).toBe(controlToken('dashboard-token'));
+  test('serves status and the three actions on an owner-only socket', async () => {
+    const { socket, action } = await serve();
+    expect(path.basename(socket)).toBe('supervisor.sock');
+    // The filesystem is the whole credential, so the mode is the whole check.
+    expect(((await stat(socket)).mode & 0o777).toString(8)).toBe('600');
+    expect(await call(socket, '/status')).toEqual({ status: 200, body: STATUS });
+    for (const name of ['start', 'stop', 'restart']) {
+      expect(await call(socket, `/${name}`, 'POST')).toEqual({ status: 200, body: STATUS });
+    }
+    expect(action.mock.calls.map(([name]) => name)).toEqual(['start', 'stop', 'restart']);
+  });
+
+  test('exposes nothing else: no page, no redirect, no other method', async () => {
+    const { socket, action } = await serve();
+    for (const [route, method] of [['/', 'GET'], ['/dashboard', 'GET'], ['/status', 'POST'], ['/start', 'GET'], ['/../etc', 'GET']] as const) {
+      expect((await call(socket, route, method)).status).toBe(404);
+    }
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test('refuses a request claiming some other host', async () => {
+    const { socket, action } = await serve();
+    expect((await call(socket, '/start', 'POST', { host: 'attacker.example' })).status).toBe(403);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  test('replaces the socket a killed supervisor left behind', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+    const socket = supervisorSocket(data);
+    await writeFile(socket, 'stale');
+    const server = controlSocket({ status: () => STATUS, action: async () => {} });
+    servers.push(server);
+    await listenOnSocket(server, socket);
+    expect((await call(socket, '/status')).status).toBe(200);
   });
 
   test('gateway restart backoff is exponential and bounded', () => {

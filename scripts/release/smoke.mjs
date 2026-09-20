@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, unlink, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -78,20 +78,42 @@ try {
     assert.throws(() => process.kill(conflicting.gatewayPid, 0), /ESRCH/, 'required dashboard bind failure terminates the gateway');
     await cli(['service', 'stop']);
   } finally { await new Promise(resolve => impostor.close(resolve)); }
-  const service = new URL(start.match(/Service controls: (.+)/)[1]);
-  const controlUnauth = await fetch(new URL('/status', service)); assert.equal(controlUnauth.status, 401);
-  const controlLogin = await fetch(service, { redirect: 'manual' });
-  const controlCookie = controlLogin.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
-  const denied = await fetch(new URL('/start', service), { method: 'POST', headers: { cookie: controlCookie, origin: service.origin } });
-  assert.equal(denied.status, 403, 'browser writes require CSRF');
-  const page = await fetch(new URL('/', service), { headers: { cookie: controlCookie } });
-  const html = await page.text();
-  const csrf = html.match(/'x-buddi-csrf':'([^']+)'/)[1];
-  assert.notEqual(html.match(/<script nonce="([^"]+)"/)[1], csrf, 'CSP nonce is independent of CSRF');
-  const started = await fetch(new URL('/start', service), { method: 'POST', headers: { cookie: controlCookie, origin: service.origin, 'x-buddi-csrf': csrf } });
-  assert.equal(started.status, 200);
-  const restarted = await started.json();
-  assert.equal(restarted.databasePid, status.databasePid); assert.notEqual(restarted.gatewayPid, status.gatewayPid);
+  // The supervisor is controlled over an owner-only socket, and the dashboard
+  // is its second client: the same switches, behind the session and CSRF gate.
+  const socket = path.join(data, 'supervisor.sock');
+  assert.equal(((await stat(socket)).mode & 0o777).toString(8), '600', 'the control socket is owner-only');
+  // The gateway was left stopped above; this also mints a fresh dashboard link,
+  // because a restarted gateway keeps no session from the one before it.
+  const resumed = await cli(startArgs);
+  const live = new URL(resumed.match(/Dashboard: (.+)/)[1]);
+  assert.equal((await fetch(new URL('/api/service', live))).status, 401, 'the service view needs a session');
+  const liveLogin = await fetch(live, { redirect: 'manual' }); assert.equal(liveLogin.status, 302);
+  const liveCookie = liveLogin.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+  const cliStatus = JSON.parse(await cli(['service', 'status']));
+  const viewed = await fetch(new URL('/api/service', live), { headers: { cookie: liveCookie } });
+  assert.equal(viewed.status, 200);
+  const view = await viewed.json();
+  assert.equal(view.supervised, true);
+  assert.equal(view.status.gatewayPid, cliStatus.gatewayPid);
+  assert.equal(view.status.databasePid, cliStatus.databasePid);
+  const csrf = decodeURIComponent(liveCookie.match(/buddi_csrf=([^;]+)/)[1]);
+  const origin = live.origin;
+  const refused = await fetch(new URL('/api/service/restart', live), { method: 'POST', headers: { cookie: liveCookie, origin } });
+  assert.equal(refused.status, 403, 'dashboard writes require CSRF');
+  // A restart ends the gateway that accepted it, so it is accepted and then
+  // performed; the CLI is what can still see the outcome.
+  const started = await fetch(new URL('/api/service/restart', live), { method: 'POST', headers: { cookie: liveCookie, origin, 'x-buddi-csrf': csrf } });
+  assert.equal(started.status, 202);
+  assert.deepEqual(await started.json(), { supervised: true, pending: 'restart' });
+  let restarted;
+  for (let i = 0; i < 100; i++) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    restarted = JSON.parse(await cli(['service', 'status']));
+    if (restarted.gateway === 'running' && restarted.gatewayPid !== cliStatus.gatewayPid) break;
+  }
+  assert.equal(restarted.gateway, 'running');
+  assert.notEqual(restarted.gatewayPid, cliStatus.gatewayPid, 'the dashboard restart replaced the gateway');
+  assert.equal(restarted.databasePid, status.databasePid, 'the database is untouched by a gateway restart');
   // Crash recovery is distinct from an intentional stop.
   process.kill(restarted.gatewayPid, 'SIGKILL');
   let recovered;
@@ -169,7 +191,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {
