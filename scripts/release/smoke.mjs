@@ -89,6 +89,22 @@ try {
   const roster = await (await fetch(new URL('/api/agents', dashboard), { headers: { cookie } })).json();
   assert.ok(roster.agents.some(agent => agent.id === 'smoke'), 'the new agent is in /api/agents');
   assert.match(await readFile(path.join(data, 'agents/smoke/agent.md'), 'utf8'), /language: mirror/);
+  /*
+   * Is Ollama there? The *gateway* answers, because the dashboard bundle
+   * reaches no host but its own. Nothing here asserts which answer: a
+   * machine running Ollama and one that never heard of it are both fine, and
+   * what matters is that the route answers rather than hanging or throwing.
+   */
+  const ollama = await fetch(new URL('/api/onboarding/ollama', dashboard), { headers: { cookie } });
+  assert.equal(ollama.status, 200);
+  const ollamaBody = await ollama.json();
+  assert.equal(typeof ollamaBody.running, 'boolean', 'the Ollama probe says whether it is running');
+  assert.ok(Array.isArray(ollamaBody.models), 'the Ollama probe lists models');
+  // Telegram, from the dashboard: behind the same CSRF gate as every write,
+  // and refusing a pasted string that is not a bot token.
+  assert.equal((await fetch(new URL('/api/telegram/token', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'the Telegram token requires CSRF');
+  const notAToken = await fetch(new URL('/api/telegram/token', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ token: 'nope' }) });
+  assert.equal(notAToken.status, 400);
   // "Done" has to mean done: with no model account this is refused, and the
   // skip below is the explicit way past it.
   const tooSoon = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
@@ -234,7 +250,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe and the Telegram token gate, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {
