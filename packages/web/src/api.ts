@@ -311,6 +311,31 @@ export interface OnboardingView {
   needs: { owner: boolean; model: boolean; agent: boolean };
 }
 
+/** What the gateway found when it asked Ollama, here, a second ago. */
+export interface OllamaProbe {
+  running: boolean;
+  models: string[];
+  /** Where to get it. It travels as data so this bundle names no outside host. */
+  downloadUrl: string;
+}
+
+/** Telegram, as this installation stands: a token, a surface, a phone. */
+export interface TelegramStatus {
+  configured: boolean;
+  running: boolean;
+  paired: boolean;
+}
+export interface SavedTelegramToken extends TelegramStatus {
+  /** The token is kept, but this buddi has to be started again to use it. */
+  restartNeeded: boolean;
+  botUsername: string | null;
+}
+export interface PairingOffer {
+  code: string;
+  link: string;
+  expiresAt: string;
+}
+
 /** What writing the first agent answers with: the row, as /api/agents shapes it. */
 export interface CreatedAgent {
   agent: AgentRow | null;
@@ -701,8 +726,19 @@ export const api = {
   onboardingStep: (step: string) => post<OnboardingView>('/onboarding/step', { step }),
   completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
   skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
-  createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string }) =>
+  createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string; accountId?: string }) =>
     post<CreatedAgent>('/onboarding/agent', body),
+  /**
+   * Is Ollama running on the machine buddi runs on?
+   *
+   * Asked of the gateway, never of `localhost:11434` from here: this page
+   * reaches no host but its own, and the answer is about that machine anyway.
+   */
+  ollama: () => get<OllamaProbe>('/onboarding/ollama'),
+  /* ---- Telegram, from the first-run thread ---- */
+  telegram: () => get<TelegramStatus>('/telegram'),
+  saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
+  telegramPairing: () => post<PairingOffer>('/telegram/pairing'),
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
