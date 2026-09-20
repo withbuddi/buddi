@@ -25,6 +25,8 @@ vi.mock('../api', async (load) => {
       completeOnboarding: vi.fn(),
       skipOnboarding: vi.fn(),
       createFirstAgent: vi.fn(),
+      updateFirstAgent: vi.fn(),
+      assignProviderAccount: vi.fn(),
       owner: vi.fn(),
       setOwner: vi.fn(),
       providerAccounts: vi.fn(),
@@ -51,6 +53,7 @@ vi.mock('../api', async (load) => {
 const view = (over: Partial<OnboardingView> = {}): OnboardingView => ({
   state: 'pending',
   stepsDone: [],
+  details: {},
   needs: { owner: true, model: true, agent: true },
   ...over,
 });
@@ -96,7 +99,7 @@ function quiet(): void {
   vi.mocked(api.onboarding).mockResolvedValue(view());
   vi.mocked(api.owner).mockResolvedValue(owner());
   vi.mocked(api.providerAccounts).mockResolvedValue(accounts());
-  vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download' });
+  vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1' });
   vi.mocked(api.onboardingStep).mockResolvedValue(view());
   vi.mocked(chatApi.agents).mockResolvedValue({ agents: [], defaultAgentId: '' });
   for (const call of [api.overview, api.conversations, chatApi.groups]) {
@@ -184,7 +187,7 @@ describe('the questions', () => {
 
   it('says Ollama is there when the machine says so, and offers it', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
-    vi.mocked(api.ollama).mockResolvedValue({ running: true, models: ['qwen3:4b'], downloadUrl: 'ollama.com/download' });
+    vi.mocked(api.ollama).mockResolvedValue({ running: true, models: ['qwen3:4b'], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1' });
     render(meet());
     expect(await screen.findByText(SCRIPT.brain.ollama.found)).toBeInTheDocument();
   });
@@ -204,6 +207,7 @@ describe('the questions', () => {
   });
 
   it('offers a name, a face and a purpose for the assistant once there is a brain', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ details: { accountId: 'a0' } }));
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
     render(meet());
@@ -215,6 +219,7 @@ describe('the questions', () => {
   });
 
   it('binds the assistant to the account that was just tested', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ details: { accountId: 'tested' } }));
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{ id: 'tested' }]));
     vi.mocked(api.createFirstAgent).mockResolvedValue({ agent: null, id: 'ada', handle: 'ada', file: '', live: true, accountId: 'tested' });
@@ -227,10 +232,10 @@ describe('the questions', () => {
 
 describe('the switch', () => {
   /** Everything answered: the thread is at the handover. */
-  function ready(): void {
-    vi.mocked(api.onboarding).mockResolvedValue(view({ state: 'in-progress', needs: { owner: false, model: false, agent: false } }));
+  function ready(details: { conversationId?: string; accountId?: string } = { accountId: 'a0' }): void {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ state: 'in-progress', details, needs: { owner: false, model: false, agent: false } }));
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
-    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}], { bindings: [{ agentId: 'ada', accountId: 'a0', model: 'qwen3:4b' }] }));
     vi.mocked(chatApi.agents).mockResolvedValue({
       agents: [{ id: 'ada', handle: 'ada', name: 'Ada', description: '', available: true, roles: [], provider: 'anthropic', model: 'qwen3:4b' }],
       defaultAgentId: 'ada',
@@ -239,23 +244,41 @@ describe('the switch', () => {
     vi.mocked(chatApi.send).mockResolvedValue({ conversationId: 'c1', runId: 'r1' });
   }
 
-  it('has the assistant speak first, without showing the turn that asked it to', async () => {
+  it('has the assistant speak first, on a turn the owner never sees sent as its own kind', async () => {
     ready();
     vi.mocked(chatApi.conversation).mockResolvedValue({
       id: 'c1',
       agentId: 'ada',
       messages: [
-        { id: 'm0', role: 'user', at: '', blocks: [{ type: 'text', text: 'Introduce yourself by name, say one thing you can do today, and ask one question.' }] },
         { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: "I'm Ada. I can remember things for you. What are you working on?" }] },
       ],
     } as never);
     render(meet());
     expect(await screen.findByText(/I'm Ada\./)).toBeInTheDocument();
-    expect(screen.queryByText(/Introduce yourself by name/)).not.toBeInTheDocument();
+    // The instruction is marked as first run's, which is what keeps it out of
+    // the transcript, the history and Activity — the server does the hiding.
+    await waitFor(() => expect(chatApi.send).toHaveBeenCalled());
+    expect(vi.mocked(chatApi.send).mock.calls[0]![1]).toMatchObject({ conversationId: 'c1', opening: true });
+    // And the conversation is on the record before the turn goes out, so a
+    // reload rejoins it instead of opening a second one.
+    expect(api.onboardingStep).toHaveBeenCalledWith('hello', { conversationId: 'c1' });
     await waitFor(() => expect(api.completeOnboarding).toHaveBeenCalled());
-    // And the two things it offers afterwards.
     expect(screen.getByText(SCRIPT.offers.phone)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.offers.notNow)).toBeInTheDocument();
+  });
+
+  it('rejoins the conversation the record already names instead of opening another', async () => {
+    ready({ accountId: 'a0', conversationId: 'c-earlier' });
+    vi.mocked(chatApi.conversation).mockResolvedValue({
+      id: 'c-earlier',
+      agentId: 'ada',
+      messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: 'Still me, Ada.' }] }],
+    } as never);
+    render(meet());
+    expect(await screen.findByText('Still me, Ada.')).toBeInTheDocument();
+    expect(chatApi.startConversation).not.toHaveBeenCalled();
+    expect(chatApi.send).not.toHaveBeenCalled();
+    expect(chatApi.conversation).toHaveBeenCalledWith('c-earlier');
   });
 
   it('says so, and offers the brains again, when nothing ever answers', async () => {
@@ -271,6 +294,54 @@ describe('the switch', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('change', () => {
+  /** Answered through the assistant, so both answers carry a change link. */
+  function met(): void {
+    vi.mocked(api.onboarding).mockResolvedValue(
+      view({ state: 'in-progress', details: { accountId: 'a0', conversationId: 'c1' }, needs: { owner: false, model: false, agent: false } }),
+    );
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}], { bindings: [{ agentId: 'ada', accountId: 'a0', model: 'qwen3:4b' }] }));
+    vi.mocked(chatApi.agents).mockResolvedValue({
+      agents: [{ id: 'ada', handle: 'ada', name: 'Ada', description: 'Whatever I ask.', available: true, roles: [], provider: 'openai-compatible', model: 'qwen3:4b', avatar: { kind: 'emoji', value: '📚' } }],
+      defaultAgentId: 'ada',
+    });
+    vi.mocked(chatApi.conversation).mockResolvedValue({ id: 'c1', agentId: 'ada', messages: [] } as never);
+  }
+
+  it('changes the assistant in place rather than trying to write a second one', async () => {
+    met();
+    vi.mocked(api.updateFirstAgent).mockResolvedValue({ agent: null, id: 'ada', handle: 'ada', file: '', live: true, accountId: null });
+    render(meet());
+    // The assistant's own bubble is the last answered one; its change link
+    // reopens the question with what the installation actually holds.
+    const changes = await screen.findAllByRole('button', { name: SCRIPT.change });
+    fireEvent.click(changes[changes.length - 1]!);
+    expect(await screen.findByDisplayValue('Ada')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Whatever I ask.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
+    await waitFor(() => expect(api.updateFirstAgent).toHaveBeenCalled());
+    expect(api.createFirstAgent).not.toHaveBeenCalled();
+  });
+
+  it('moves the assistant onto the new brain when the brain changes', async () => {
+    met();
+    vi.mocked(api.probeModels).mockRejectedValue(new Error('no list'));
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'second' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    render(meet());
+    const changes = await screen.findAllByRole('button', { name: SCRIPT.change });
+    // Name, clock, brain, assistant — the brain's is the third.
+    fireEvent.click(changes[2]!);
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
+    fireEvent.change(screen.getByPlaceholderText(SCRIPT.brain.key.placeholder), { target: { value: 'sk-ant-new' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
+    await waitFor(() => expect(api.assignProviderAccount).toHaveBeenCalledWith('ada', 'second', 'claude-sonnet-5'));
+    // And buddi names the model the assistant was actually moved onto.
+    expect(await screen.findByText(SCRIPT.brain.works('claude-sonnet-5'))).toBeInTheDocument();
   });
 });
 

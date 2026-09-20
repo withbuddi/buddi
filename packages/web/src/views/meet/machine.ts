@@ -64,22 +64,43 @@ export function usableAccounts(view: ProviderAccountsView | undefined): Provider
 }
 
 /**
+ * Which account is the assistant's brain.
+ *
+ * In order: what the assistant is actually bound to, then what this first run
+ * recorded choosing. Never "the first usable one" — an installation may hold
+ * several, and guessing would name a model in buddi's confirmation that the
+ * assistant does not think with.
+ */
+export function brainFrom(facts: MeetFacts): BrainAnswer | undefined {
+  const usable = usableAccounts(facts.accounts);
+  const bound = facts.assistant
+    ? (facts.accounts?.bindings ?? []).find((binding) => binding.agentId === facts.assistant!.id)
+    : undefined;
+  const chosen = bound?.accountId ?? facts.onboarding?.details?.accountId;
+  if (!chosen) return undefined;
+  const account = usable.find((row) => row.id === chosen);
+  if (!account) return undefined;
+  // The bound model is the one the assistant answers on; the account's default
+  // is what a brain chosen but not yet bound will use.
+  return { accountId: account.id, label: account.label, model: bound?.model ?? account.defaultModel };
+}
+
+/**
  * The answers as the server has them.
  *
  * Not as the page remembers them: a reload, a second tab and a restart all
  * replay from here, and anything this cannot see was never really answered.
  */
 export function answersFrom(facts: MeetFacts): MeetAnswers {
-  const account = usableAccounts(facts.accounts)[0];
+  const brain = brainFrom(facts);
+  const assistant = facts.onboarding && !facts.onboarding.needs.agent ? facts.assistant : undefined;
   return {
     ...(facts.owner?.preferredName ? { name: facts.owner.preferredName } : {}),
     ...(facts.owner?.timezone ? { clock: facts.owner.timezone } : {}),
-    ...(account ? { brain: { accountId: account.id, label: account.label, model: account.defaultModel } } : {}),
+    ...(brain ? { brain } : {}),
     // An agent of the owner's own is what the record calls answered; the
     // roster is where its name and face come from.
-    ...(facts.onboarding && !facts.onboarding.needs.agent && facts.assistant
-      ? { assistant: facts.assistant }
-      : {}),
+    ...(assistant ? { assistant } : {}),
   };
 }
 
