@@ -159,7 +159,8 @@ describe('the questions', () => {
     render(meet());
     expect(await screen.findByText(SCRIPT.opening[0]!)).toBeInTheDocument();
     expect(await screen.findByText(SCRIPT.name.ask)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(SCRIPT.name.placeholder)).toHaveFocus();
+    // The caret lands after the frame is painted, so this waits for it.
+    await waitFor(() => expect(screen.getByPlaceholderText(SCRIPT.name.placeholder)).toHaveFocus());
   });
 
   it('saves the name and asks about the clock next, with the answer above it', async () => {
@@ -307,11 +308,13 @@ describe('the questions', () => {
     // The key card: one field, and it is the only thing on the screen to type
     // into, so asking for a click first would be asking for nothing.
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
-    expect(await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder)).toHaveFocus();
+    const key = await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder);
+    await waitFor(() => expect(key).toHaveFocus());
     // And the address card, whose first field is the address.
     fireEvent.click(screen.getByRole('button', { name: '←' }));
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
-    expect(await screen.findByLabelText(SCRIPT.brain.service.address)).toHaveFocus();
+    const address = await screen.findByLabelText(SCRIPT.brain.service.address);
+    await waitFor(() => expect(address).toHaveFocus());
   });
 
   it('keeps a refused key in the thread with the field still open', async () => {
@@ -543,7 +546,8 @@ describe('the way out', () => {
     render(meet(vi.fn()));
     // The chips are the open question, so they are where the composer was.
     fireEvent.click(await screen.findByText(SCRIPT.offers.phone));
-    expect(await screen.findByLabelText(SCRIPT.telegram.field)).toHaveFocus();
+    const token = await screen.findByLabelText(SCRIPT.telegram.field);
+    await waitFor(() => expect(token).toHaveFocus());
     // And the composer has stepped aside rather than sitting under a stray form.
     expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
