@@ -7,12 +7,11 @@
  * survives an approval pause and a restart, and a call is reserved on that
  * row before it is dispatched.
  */
-import type { Pool } from 'pg';
-
 /** A stored content block, as the runtime defines it; opaque here. */
 type ContentBlock = Record<string, unknown> & { type: string };
 
-type Queryable = Pick<Pool, 'query'>;
+/** Anything that runs SQL — a pool, a client, a test double. */
+type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 
 export interface GroupRow {
   id: string;

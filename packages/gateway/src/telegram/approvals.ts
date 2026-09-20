@@ -38,6 +38,7 @@ import {
   type ToolContext,
   type ToolRegistry,
   type PermissionScope,
+  conversationGroup,
 } from '@buddi/core';
 import {
   MAX_CALLBACK_DATA_BYTES,
@@ -315,6 +316,10 @@ export class TelegramApprovals {
     if (action.tool === 'host.exec' && !action.jobId && outcome.ok &&
         (outcome.result as { state?: string })?.state === 'completed') {
       await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state, result: outcome.result });
+    } else if (!action.jobId && action.conversationId && await conversationGroup(pool, action.conversationId).catch(() => null)) {
+      // A group's member was waiting on this. The room resumes on its own
+      // path whatever the tool was; the surface only hands the decision on.
+      await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state, ...(outcome.ok ? { result: outcome.result } : {}) });
     }
   }
 

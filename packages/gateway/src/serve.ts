@@ -364,9 +364,16 @@ export async function main(): Promise<void> {
     const gate = async (): Promise<string | null> => ((await isPaused(pool)) ? PAUSED_TEXT : null);
 
     const inlineMission = createInlineMissionRunner(missionDeps);
+    /** Bound once the dashboard is up; a group decided in Telegram resumes there. */
+    let dashboardChat: import('./web/chat.js').WebChat | undefined;
     const telegram = await startTelegram({
       ...missionDeps,
       gate,
+      resumeGroup: async (action, resume) => {
+        if (!dashboardChat) return false;
+        dashboardChat.resumeHost({ agentId: action.agentId, conversationId: action.conversationId }, resume);
+        return true;
+      },
       // The queue this process runs. An approval decided in a chat wakes the
       // suspended run through exactly this, and through nothing else.
       jobs: { resumeJob },
@@ -670,6 +677,7 @@ export async function main(): Promise<void> {
           },
           log: (line) => console.error(line),
         });
+        dashboardChat = dashboard.chat;
         console.log(
           `  dashboard: ${dashboard.url} (token in the ${source}${created ? ', created now' : ''}) — \`buddi dashboard\` opens it`,
         );

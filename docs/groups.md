@@ -245,4 +245,11 @@ Deliberate deviations, to be closed later:
 - **A rejection the provider confirmed is counted on retry.** The adapters
   retry a 429 themselves; each dispatch reserves, and only the final refusal
   releases. Never fewer reservations than dispatches.
+- **Groups are a dashboard surface.** Telegram and the terminal know nothing
+  of them: no group can be created, addressed or read there. The one place
+  the surfaces meet is an approval: a member's pending action can be decided
+  from Telegram like any other, and that decision is handed to the
+  dashboard's group path, which resumes the request; Telegram says so and
+  never runs the member as an ordinary turn. With no dashboard running, the
+  request stays suspended until there is one.
 - **Missions cannot target a group yet.**
