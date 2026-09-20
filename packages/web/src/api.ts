@@ -473,6 +473,7 @@ export interface LibraryEntry {
   agentId: string | null;
   deleted: boolean;
   contexts: number;
+  context: { agentId: string | null; groupName: string | null } | null;
 }
 export interface LibraryContext {
   conversationId: string;

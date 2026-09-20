@@ -43,4 +43,13 @@ describe('the library', () => {
     expect(params).toContain('pdf');
     expect(sql).toContain('(a.created_at, a.id) <');
   });
+
+  it('issues the next cursor from the timestamp as the database wrote it, not a rounded one', async () => {
+    const exact = '2026-09-20 10:00:00.123456+00';
+    const row = (id: string) => ({ id, filename: 'a', mime: 'text/plain', size_bytes: 1, created_at: new Date('2026-09-20T10:00:00.123Z'), created_at_exact: exact, created_by: 'owner', deleted_at: null, origin: 'uploaded', family: 'text', contexts: 0, use_agent: null, context_agent: null, context_group: null });
+    const pool = { query: async () => ({ rows: [row('0f6eda1f-2ac5-4a79-b9f1-548d216a797a'), row('1f6eda1f-2ac5-4a79-b9f1-548d216a797a')] }) };
+    const page = await listLibrary(pool, { limit: 1, knownAgentIds: [] });
+    expect(page.next).not.toBeNull();
+    expect(decodeCursor(page.next!, filterKey({}))?.createdAt).toBe(exact);
+  });
 });

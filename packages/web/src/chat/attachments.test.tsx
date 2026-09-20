@@ -1,7 +1,7 @@
 /**
  * Files in the thread: drawn as tiles, opened on the canvas.
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageList } from './MessageList';
@@ -40,14 +40,16 @@ describe('files in the thread', () => {
     expect(tab).toMatchObject({ id: 'artifact:a-img', title: 'braids.png', renderer: 'artifact', source: 'artifact', substantial: false });
   });
 
-  it('shows an image large on the canvas, and a document as a mark with a download', () => {
+  it('shows an image large on the canvas, and a document through the same preview Files uses, with a download', () => {
     const { unmount } = render(<ArtifactView attachment={sent.blocks[1] as never} />);
-    expect((document.querySelector('.wb-artifact-picture img') as HTMLImageElement).getAttribute('src')).toBe('/api/artifacts/a-img/preview');
+    expect((document.querySelector('.file-preview-image img') as HTMLImageElement).getAttribute('src')).toBe('/api/artifacts/a-img/preview');
     expect((screen.getByText('Download') as HTMLAnchorElement).getAttribute('href')).toBe('/api/artifacts/a-img/download');
     unmount();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('a,b\n1,2', { status: 200, headers: { 'X-Preview-Truncated': '0' } })));
     render(<ArtifactView attachment={sent.blocks[2] as never} />);
-    expect(document.querySelector('.wb-artifact-picture')).toBeNull();
+    expect(document.querySelector('.file-preview-image')).toBeNull();
     expect(screen.getByText('Spreadsheet')).toBeDefined();
+    return waitFor(() => expect(document.querySelector('.file-preview-table')).not.toBeNull()).finally(() => vi.unstubAllGlobals());
   });
 
   it('says the agent is working where its reply will land, until something arrives', () => {

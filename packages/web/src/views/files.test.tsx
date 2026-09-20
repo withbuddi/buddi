@@ -42,8 +42,8 @@ describe('the table parser', () => {
 describe('the library page', () => {
   it('lists files newest first with origin and kind, and opens one by its route', async () => {
     const entries = [
-      { id: 'f1', filename: 'report.pdf', mime: 'application/pdf', family: 'pdf', sizeBytes: 2048, createdAt: '2026-09-20T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 2 },
-      { id: 'f2', filename: 'photo.png', mime: 'image/png', family: 'image', sizeBytes: 100, createdAt: '2026-09-19T10:00:00Z', origin: 'uploaded', agentId: null, deleted: false, contexts: 1 },
+      { id: 'f1', filename: 'report.pdf', mime: 'application/pdf', family: 'pdf', sizeBytes: 2048, createdAt: '2026-09-20T10:00:00Z', origin: 'produced', agentId: 'ledger', deleted: false, contexts: 2, context: { agentId: 'ledger', groupName: null } },
+      { id: 'f2', filename: 'photo.png', mime: 'image/png', family: 'image', sizeBytes: 100, createdAt: '2026-09-19T10:00:00Z', origin: 'uploaded', agentId: null, deleted: false, contexts: 1, context: null },
     ];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
