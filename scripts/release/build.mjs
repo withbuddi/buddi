@@ -5,11 +5,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { BINARY_VERSION } from './postgres.mjs';
+import { BINARY_VERSION } from '../../packages/install/dist/postgres.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+/** The one binary, relative to the package root. */
+const LAUNCHER = 'packages/install/dist/launcher.js';
 const stage = await mkdtemp(path.join(os.tmpdir(), 'buddi-release-'));
-const directories = ['core', 'runtime', 'gateway', 'cli', 'tools/artifacts', 'tools/browser', 'tools/host', 'tools/email', 'tools/finance', 'tools/memory', 'tools/web'];
+const directories = ['core', 'runtime', 'gateway', 'cli', 'install', 'tools/artifacts', 'tools/browser', 'tools/host', 'tools/email', 'tools/finance', 'tools/memory', 'tools/web'];
 const packages = [];
 for (const dir of directories) {
   const source = path.join(root, 'packages', dir);
@@ -29,18 +31,17 @@ for (const { dir, source, pkg } of packages) {
 }
 await cp(path.join(root, 'packages/web/dist'), path.join(stage, 'packages/web/dist'), { recursive: true });
 for (const asset of ['examples/agents', 'examples/skills']) await cp(path.join(root, asset), path.join(stage, asset), { recursive: true });
-await mkdir(path.join(stage, 'bin')); await mkdir(path.join(stage, 'install'));
-await cp(path.join(root, 'scripts/release/launcher.mjs'), path.join(stage, 'bin/buddi.mjs'));
-await chmod(path.join(stage, 'bin/buddi.mjs'), 0o755);
-for (const file of ['environment.mjs', 'postgres.mjs', 'supervisor.mjs']) await cp(path.join(root, 'scripts/release', file), path.join(stage, 'install', file));
+// The launcher, the supervisor and the managed cluster ship as one built
+// package (@buddi/install), not as loose scripts copied out of this checkout.
+await chmod(path.join(stage, LAUNCHER), 0o755);
 const product = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const dependencies = Object.fromEntries(packages.map(({ dir, pkg }) => [pkg.name, `file:packages/${dir}`]));
 // Direct imports by the bootstrap and existing CLI. Internal packages remain separate modules.
 Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
 const manifest = {
   name: 'buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
-  engines: { node: '>=22' }, bin: { buddi: 'bin/buddi.mjs' },
-  files: ['bin', 'install', 'packages', 'examples'], dependencies,
+  engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
+  files: ['packages', 'examples'], dependencies,
   bundledDependencies: Object.keys(dependencies),
   optionalDependencies: Object.fromEntries(['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'windows-x64'].map(platform => [`@embedded-postgres/${platform}`, BINARY_VERSION])),
 };

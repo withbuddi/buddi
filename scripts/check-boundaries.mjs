@@ -151,6 +151,12 @@ const HTTP_EXEMPT = [
   /^packages\/runtime\/src\/transport\.ts$/,
   // Browser code. See above.
   /^packages\/web\//,
+  // The packaged installer's two client-side surfaces. `launcher.ts` is a
+  // one-shot CLI process that asks its own loopback supervisor for status and
+  // exits — there is no long-lived pool to wedge, and it must work before any
+  // gateway module is imported. The `fetch` calls in `supervisor.ts` are inside
+  // the service-control page's inline <script>: browser code, as in packages/web.
+  /^packages\/install\/src\/(launcher|supervisor)\.ts$/,
   // Tests may stand up servers, inject pooling agents, and prove the bug. The
   // rule is about what the *service* does at runtime.
   /\.test\.(ts|tsx|mts|js|mjs)$/,

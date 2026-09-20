@@ -1,30 +1,79 @@
+/**
+ * The packaged installation's environment: data directory, private files,
+ * persisted installation state and the startup lock.
+ *
+ * Nothing here may import a `@buddi/*` package, not even lazily from a
+ * function that runs later: `environment()` rewrites `process.env` and the
+ * path constants in those packages are evaluated at *import* time, so the
+ * first Buddi import has to happen after it. Everything this module needs is
+ * Node's own standard library plus `dotenv`.
+ */
 import { mkdir, readFile, writeFile, rename, open, stat, unlink } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { existsSync, constants } from 'node:fs';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { createRequire } from 'node:module';
+import type { AddressInfo } from 'node:net';
 
-/** Native utilities need OS context, not provider, vault or database credentials. */
-export function nativeEnvironment(env = process.env) {
-  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP']
-    .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
+/** What a packaged installation persists in `installation.json`. */
+export interface InstallationState {
+  version: number;
+  database: 'managed' | 'external';
+  webPort: number;
+  controlPort: number;
+  dbPort: number;
+  phase?: string;
 }
 
-export async function dashboardReady(port, token, request = fetch) {
+/** The install root, its data directory, the mutated environment and the state. */
+export interface InstallContext {
+  root: string;
+  data: string;
+  env: NodeJS.ProcessEnv;
+  state?: InstallationState;
+}
+
+/** A context after `initialize()`, which always leaves the state written. */
+export type ReadyContext = InstallContext & { state: InstallationState };
+
+/** An `execFile`-shaped failure: `launchctl` is read through its exit code. */
+type ProcessFailure = { code?: unknown; stderr?: string };
+
+function failure(error: unknown): ProcessFailure {
+  return (error ?? {}) as ProcessFailure;
+}
+
+function errorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
+/** Native utilities need OS context, not provider, vault or database credentials. */
+export function nativeEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP']
+    .filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
+}
+
+/** The one HTTP seam this module has; tests pass their own. */
+export type ReadyRequest = (url: string, init?: RequestInit) => Promise<Response>;
+
+export async function dashboardReady(port: number, token: string, request: ReadyRequest = fetch): Promise<boolean> {
   const challenge = randomBytes(32).toString('hex');
   const response = await request(`http://127.0.0.1:${port}/_buddi/ready?challenge=${challenge}`, { signal: AbortSignal.timeout(1000), redirect: 'error' });
   if (response.status !== 200) return false;
-  const body = await response.json();
+  const body = await response.json() as { proof?: string };
   return body.proof === createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
 }
 
-export async function reloadLaunchAgent(exec, domain, label, plist) {
+/** `launchctl`, as the caller runs it. Only its rejection is inspected. */
+export type LaunchctlExec = (command: string, args: string[]) => Promise<unknown>;
+
+export async function reloadLaunchAgent(exec: LaunchctlExec, domain: string, label: string, plist: string): Promise<void> {
   let unloaded = false;
   try { await exec('launchctl', ['bootout', `${domain}/${label}`]); unloaded = true; }
   catch (error) {
-    if (error.code !== 3 || !/No such process|Could not find service/i.test(error.stderr ?? '')) throw error;
+    if (failure(error).code !== 3 || !/No such process|Could not find service/i.test(failure(error).stderr ?? '')) throw error;
   }
   // bootout returns while launchd may still be removing a running job.
   if (unloaded) {
@@ -32,7 +81,7 @@ export async function reloadLaunchAgent(exec, domain, label, plist) {
     for (;;) {
       try { await exec('launchctl', ['print', `${domain}/${label}`]); }
       catch (error) {
-        if (error.code === 113 && /Could not find service/i.test(error.stderr ?? '')) break;
+        if (failure(error).code === 113 && /Could not find service/i.test(failure(error).stderr ?? '')) break;
         throw error;
       }
       if (Date.now() >= deadline) throw new Error('LaunchAgent did not unload within 20 seconds; inspect its log before retrying.');
@@ -43,8 +92,8 @@ export async function reloadLaunchAgent(exec, domain, label, plist) {
 }
 
 /** Open without following a symlink, then validate the actual file descriptor. */
-export async function readPrivateFile(file) {
-  let fd;
+export async function readPrivateFile(file: string): Promise<string | undefined> {
+  let fd: FileHandle | undefined;
   try {
     fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await fd.stat();
@@ -53,38 +102,38 @@ export async function readPrivateFile(file) {
     }
     return await fd.readFile('utf8');
   } catch (error) {
-    if (error.code === 'ENOENT') return undefined;
-    if (error.code === 'ELOOP') throw new Error(`Unsafe private file ${file}: symbolic links are not allowed.`);
+    if (errorCode(error) === 'ENOENT') return undefined;
+    if (errorCode(error) === 'ELOOP') throw new Error(`Unsafe private file ${file}: symbolic links are not allowed.`);
     throw error;
   } finally { await fd?.close(); }
 }
 
-export function defaultDataDir(platform = process.platform, env = process.env, home = os.homedir()) {
+export function defaultDataDir(platform: NodeJS.Platform | string = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
   if (env.BUDDI_DATA_DIR) return path.resolve(env.BUDDI_DATA_DIR);
   if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'buddi');
   if (platform === 'win32') return path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'buddi');
   return path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'buddi');
 }
 
-export async function atomicJson(file, value) {
+export async function atomicJson(file: string, value: unknown): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
   await rename(tmp, file);
 }
 
-export async function freePort(preferred = 0) {
+export async function freePort(preferred = 0): Promise<number> {
   const server = net.createServer();
   try {
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(preferred, '127.0.0.1', resolve); });
-    return server.address().port;
+    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(preferred, '127.0.0.1', () => resolve()); });
+    return (server.address() as AddressInfo).port;
   } catch (error) {
-    if (preferred && error.code === 'EADDRINUSE') return freePort();
+    if (preferred && errorCode(error) === 'EADDRINUSE') return freePort();
     throw error;
   } finally { if (server.listening) await new Promise(resolve => server.close(resolve)); }
 }
 
 /** Called before importing any Buddi package: path constants are evaluated on import. */
-export async function environment(root, env = process.env) {
+export async function environment(root: string, env: NodeJS.ProcessEnv = process.env): Promise<InstallContext> {
   const data = defaultDataDir(process.platform, env);
   env.BUDDI_INSTALL_ROOT = root;
   env.BUDDI_DATA_DIR = data;
@@ -94,10 +143,9 @@ export async function environment(root, env = process.env) {
   env.BUDDI_HOME = data;
   env.BUDDI_WEB_ASSETS = path.join(root, 'packages/web/dist');
   env.BUDDI_WEB_REQUIRE_AUTH = '1';
-  const require = createRequire(path.join(root, 'package.json'));
-  const { parse, populate } = require('dotenv');
+  const { parse, populate } = (await import('dotenv')).default;
   const settings = await readPrivateFile(env.BUDDI_ENV_FILE);
-  if (settings !== undefined) populate(env, parse(settings));
+  if (settings !== undefined) populate(env as Record<string, string>, parse(settings));
   // A separate keychain namespace prevents a test or second install sharing credentials.
   env.BUDDI_VAULT_SERVICE = `buddi.install.${createHash('sha256').update(data).digest('hex').slice(0, 20)}`;
   env.BUDDI_VAULT_FILE = path.join(data, 'vault.json');
@@ -107,9 +155,9 @@ export async function environment(root, env = process.env) {
     if (key !== undefined) env.BUDDI_VAULT_KEY = key.trim();
   }
   const stateFile = path.join(data, 'installation.json');
-  let state;
+  let state: InstallationState | undefined;
   if (existsSync(stateFile)) {
-    state = JSON.parse(await readFile(stateFile, 'utf8'));
+    state = JSON.parse(await readFile(stateFile, 'utf8')) as InstallationState;
     if (state.version !== 1 || !['managed', 'external'].includes(state.database) ||
         ![state.webPort, state.controlPort, state.dbPort].every(p => Number.isInteger(p) && p > 0 && p <= 65535)) {
       throw new Error('Invalid installation.json; preserve the data directory and restore its configuration.');
@@ -120,11 +168,11 @@ export async function environment(root, env = process.env) {
   // The packaged foundation never expands the network bind through ambient settings.
   env.BUDDI_WEB_HOST = '127.0.0.1';
   delete env.BUDDI_WEB_PUBLIC_ORIGIN;
-  return { root, data, env, state, require };
+  return { root, data, env, state };
 }
 
 /** The supervisor holds this lock throughout its lifetime, including initialization. */
-export async function acquireLock(data) {
+export async function acquireLock(data: string): Promise<() => Promise<void>> {
   await mkdir(data, { recursive: true, mode: 0o700 });
   const file = path.join(data, 'supervisor.lock');
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -138,17 +186,17 @@ export async function acquireLock(data) {
         }
       };
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (errorCode(error) !== 'EEXIST') throw error;
       // Serialize stale-lock recovery too. Otherwise two starters could move
       // each other's newly acquired lock after both observed the old pid.
-      let recovery;
+      let recovery: FileHandle;
       try { recovery = await open(`${file}.recovery`, 'wx', 0o600); }
       catch { throw new Error('Supervisor lock recovery is in progress. If interrupted, inspect supervisor.lock.recovery before retrying.'); }
       try {
         const pid = Number(await readFile(file, 'utf8').catch(() => ''));
         let stale = false;
         if (Number.isInteger(pid) && pid > 0) {
-          try { process.kill(pid, 0); } catch (e) { stale = e.code === 'ESRCH'; }
+          try { process.kill(pid, 0); } catch (e) { stale = errorCode(e) === 'ESRCH'; }
         } else if (existsSync(file)) {
           stale = Date.now() - (await stat(file)).mtimeMs > 30_000;
         }
@@ -162,11 +210,12 @@ export async function acquireLock(data) {
   throw new Error('Could not acquire the installation lock.');
 }
 
-export async function initialize(ctx) {
+export async function initialize(ctx: InstallContext): Promise<void> {
   for (const name of ['logs', 'agents', 'skills', 'artifacts', 'backups']) {
     await mkdir(path.join(ctx.data, name), { recursive: true, mode: 0o700 });
   }
-  if (!existsSync(ctx.env.BUDDI_ENV_FILE)) await writeFile(ctx.env.BUDDI_ENV_FILE, '# Buddi settings. Credentials belong in the vault.\n', { flag: 'wx', mode: 0o600 });
+  const envFile = ctx.env.BUDDI_ENV_FILE ?? path.join(ctx.data, '.env');
+  if (!existsSync(envFile)) await writeFile(envFile, '# Buddi settings. Credentials belong in the vault.\n', { flag: 'wx', mode: 0o600 });
   if ((ctx.env.BUDDI_VAULT || (process.platform === 'darwin' ? 'keychain' : 'file')) === 'file' && !ctx.env.BUDDI_VAULT_KEY) {
     const key = randomBytes(32).toString('base64url');
     await writeFile(path.join(ctx.data, 'vault-key'), key, { flag: 'wx', mode: 0o600 });

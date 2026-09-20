@@ -57,13 +57,29 @@ installation; stopping it leaves Postgres and the control page available.
 Developer checkout commands retain their existing behavior. No-argument startup
 is provided by the release launcher, not by changing the checkout CLI parser.
 
+## Where the code lives
+
+The runtime of a packaged install is the workspace package `packages/install`
+(`@buddi/install`): `src/environment.ts` (data directory, private files,
+installation state, startup lock), `src/postgres.ts` (the managed cluster),
+`src/supervisor.ts` (process supervision and the service-control page) and
+`src/launcher.ts`, the `buddi` binary the tarball installs
+(`packages/install/dist/launcher.js`). `scripts/release/build.mjs` and
+`scripts/release/smoke.mjs` are release *tooling*, not runtime, and stay there.
+
+`environment()` rewrites the environment before any `@buddi/*` package is
+imported, because those packages compute their path constants at import time.
+That is why it imports none of them and why the launcher, the supervisor and
+the cluster reach for `@buddi/core`, `@buddi/gateway` and `@buddi/cli` through
+dynamic imports.
+
 ## Build and verify
 
 From a built checkout:
 
 ```sh
 pnpm -r build
-node --test scripts/release/foundation.test.mjs
+pnpm --filter @buddi/install test
 node scripts/release/build.mjs
 node scripts/release/smoke.mjs /absolute/path/printed/by/build/buddi-0.1.0.tgz
 ```
