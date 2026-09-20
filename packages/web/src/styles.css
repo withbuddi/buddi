@@ -1274,6 +1274,36 @@ button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-of
 }
 a.wb-composer-model:hover { border-color: var(--line); background: var(--surface-sunken); color: var(--text); }
 .wb-composer-model-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); flex: 0 0 auto; }
+
+/* Thinking, beside the model it belongs to: the same pill, with its own lamp.
+   Off is a hollow dot — the control says which way it is set at a glance, and
+   the state it is in is the state of the agent file. */
+.wb-composer-think {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  background: none;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wb-composer-think:hover:not(:disabled) { border-color: var(--line); background: var(--surface-sunken); color: var(--text); }
+.wb-composer-think:disabled { opacity: 0.5; cursor: default; }
+.wb-composer-think:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wb-composer-think-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  background: none;
+}
+.wb-composer-think[aria-pressed='true'] { color: var(--text); }
+.wb-composer-think[aria-pressed='true'] .wb-composer-think-dot { background: var(--accent); border-color: var(--accent); }
 .wb-hint[data-tone='critical'] { color: var(--critical); white-space: normal; overflow: visible; text-overflow: clip; }
 
 /* ---- a file on the canvas ---- */
