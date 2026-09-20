@@ -34,7 +34,11 @@ published to npm. The full contract remains [install.md](install.md).
   detects supervisor death. A postmaster left on the cluster by a killed
   supervisor is stopped and started again as the new supervisor's own child; it
   is never adopted, so a managed database is always a spawned child with an exit
-  listener. An authenticated liveness probe also monitors it; database failure
+  listener. A `postmaster.pid` is only believed when something outside it agrees
+  — the port it records answers for this cluster, or the OS says that pid is a
+  postgres — because after a reboot or a killed container the pid in it is
+  likely a live stranger. A file with nothing behind it is reported and removed,
+  not signalled. An authenticated liveness probe also monitors it; database failure
   shuts down the gateway and supervisor. External servers are not supervised.
 - Startup records a phase before migrations. Restarting uses the **existing
   idempotent migration runner** to apply missing transactional migrations; the
