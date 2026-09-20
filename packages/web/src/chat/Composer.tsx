@@ -76,11 +76,22 @@ export const Composer = forwardRef<ComposerHandle, {
   model?: string | null;
   /** Where the model is changed. The pill is a link when this is given. */
   setupHref?: string | null;
+  /**
+   * Whether this agent reasons before answering. `null` is the model's own
+   * default, which is on — so the switch shows what will happen, not what the
+   * file happens to say.
+   */
+  thinking?: 'on' | 'off' | null;
+  /**
+   * Switch it. Given only when there is one agent to switch: the setting
+   * belongs to an agent file, and a room has several.
+   */
+  onThinking?: (next: 'on' | 'off') => void;
   /** A file in the tray was clicked. It is stored already, so it can be looked at. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
   /** In a room: who can be addressed with `@`. Typing `@` offers them. */
   mentions?: Array<{ handle: string; name: string }>;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, onOpenFile, mentions }, ref) {
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [focused, setFocused] = useState(false);
@@ -353,6 +364,35 @@ export const Composer = forwardRef<ComposerHandle, {
             )
           ) : null}
 
+          {/*
+            Thinking, switched where the owner talks rather than three clicks
+            away on a settings page. It writes the agent file through the same
+            endpoint the Agents page uses, so the two can never disagree.
+
+            A run already under way was started with the old setting, and
+            changing the file mid-flight would say something that is not true
+            of the answer being written — so it waits, and says why.
+          */}
+          {onThinking ? (
+            <button
+              type="button"
+              className="wb-composer-think"
+              aria-pressed={thinkingOn(thinking)}
+              disabled={disabled || running}
+              title={
+                running
+                  ? `Wait for ${agentName} to finish — this run started with thinking ${thinkingOn(thinking) ? 'on' : 'off'}`
+                  : thinkingOn(thinking)
+                    ? 'Reasoning before the answer is on. Click to turn it off — answers come back faster.'
+                    : 'Reasoning before the answer is off. Click to turn it on.'
+              }
+              onClick={() => onThinking(thinkingOn(thinking) ? 'off' : 'on')}
+            >
+              <span className="wb-composer-think-dot" aria-hidden="true" />
+              Thinking
+            </button>
+          ) : null}
+
           {/* The hint waits its turn: it appears only once the placeholder is
               gone, so the two never occupy the same line. A failed upload
               takes the line over. What the agent is doing is said in the
@@ -387,6 +427,11 @@ export const Composer = forwardRef<ComposerHandle, {
     </div>
   );
 });
+
+/** Absent means the model's own default, and every model here thinks by default. */
+function thinkingOn(thinking: 'on' | 'off' | null | undefined): boolean {
+  return (thinking ?? 'on') === 'on';
+}
 
 function asBlock(uploaded: UploadedAttachment): AttachmentBlock {
   return { type: 'attachment', artifactId: uploaded.artifactId, filename: uploaded.filename, mime: uploaded.mime, kind: uploaded.kind, sizeBytes: uploaded.sizeBytes };

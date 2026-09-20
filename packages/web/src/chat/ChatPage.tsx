@@ -138,6 +138,17 @@ export function ChatPage({
   const [loadingProfile, setLoadingProfile] = useState(false);
   /** A line the panel put in the composer's mouth. Never sent for the owner. */
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
+  /*
+   * Thinking, as this page has it since the owner switched it.
+   *
+   * The roster is fetched by the shell and is the truth; this is the answer
+   * between the click and the next fetch of it, so the switch moves under the
+   * finger rather than a second later. It is dropped when the agent changes —
+   * one agent's setting is not another's — and on a refusal, so the control
+   * never shows a state the file does not have.
+   */
+  const [thinkingNow, setThinkingNow] = useState<'on' | 'off' | null>(null);
+  const [switchedFor, setSwitchedFor] = useState<string | null>(null);
   // Another page may leave a sentence for this agent (an alert to ask about).
   // It is read once, for the agent it was written for, and then forgotten.
   useEffect(() => {
@@ -459,6 +470,26 @@ export function ChatPage({
    * coordinator, and one member without an account is not the room being shut.
    */
   const blocked = !group && agent && !agent.available ? cannotRunSentence(agent) : null;
+
+  const thinking = agent && switchedFor === agent.id ? thinkingNow : (agent?.thinking ?? null);
+  /**
+   * Switch thinking from the composer.
+   *
+   * The very call the Agents page makes (`api.setAgentEngine`), because it is
+   * the same decision written to the same key of the same file: two writers
+   * with two implementations is how the two surfaces end up disagreeing about
+   * what the agent does.
+   */
+  const switchThinking = (next: 'on' | 'off'): void => {
+    if (!agent) return;
+    const id = agent.id;
+    setSwitchedFor(id);
+    setThinkingNow(next);
+    api.setAgentEngine(id, { thinking: next }).catch((err: unknown) => {
+      setSwitchedFor(null);
+      setError(err instanceof ApiError ? err.message : String(err));
+    });
+  };
 
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
@@ -952,6 +983,8 @@ export function ChatPage({
             draft={draft}
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup') : null)}
+            thinking={thinking}
+            {...(!group && agent ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />

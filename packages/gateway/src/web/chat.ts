@@ -157,6 +157,12 @@ export interface ChatAgentView {
    */
   intro?: string;
   starters?: string[];
+  /**
+   * Reasoning before the answer: `on`, `off`, or null for the model's own
+   * default. Sent with the roster because it is switched where the owner
+   * talks, beside the model name, and the Agents page writes the same key.
+   */
+  thinking: 'on' | 'off' | null;
   /** The face to draw, if the file names one. An image is fetched from this origin only. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
@@ -238,6 +244,7 @@ export function readChatAgents(catalog: AgentCatalog): {
       provider: summary.providerKind,
       model: full?.provider.model ?? full?.model ?? '',
       anchor: anchorOf(summary.roles),
+      thinking: full?.thinking ?? null,
       ...(summary.intro === undefined ? {} : { intro: summary.intro }),
       ...(summary.starters === undefined || summary.starters.length === 0
         ? {}
