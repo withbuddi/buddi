@@ -792,6 +792,34 @@ describe('with named model accounts', () => {
     expect(refusalOf(a, 'platform.create_agent', { ...baseCreate, account: 'Anthropic API', model: 'gpt-5' })).toContain('Anthropic API');
   });
 
+  it('puts a new agent where the default agent runs when nobody said which account', async () => {
+    // The owner's own assistant, and the brain they chose for it a minute ago.
+    writePrivate(a, 'concierge', REMY);
+    bindings.set('concierge', { accountId: 'acc-local', model: 'qwen3:14b' });
+    const { envelope, preview } = described<CreateAgentEnvelope>(a, 'platform.create_agent', baseCreate);
+    expect(envelope.account).toEqual({ id: 'acc-local', label: 'Local endpoint', kind: 'openai-compatible', model: 'qwen3:14b' });
+    expect(preview).toContain('"Local endpoint" account');
+    const result = (await a.tool('platform.create_agent').execute(baseCreate, a.ctx)) as { message: string };
+    expect(assigned).toContainEqual(['bookkeeper', 'acc-local', 'qwen3:14b']);
+    expect(result.message).toContain('Runs on "Local endpoint"');
+  });
+
+  it('falls back to the only usable account, and never to a provider nobody chose', () => {
+    const one: PlatformAccounts = {
+      list: () => [
+        { id: 'acc-ollama', label: 'Ollama Cloud', kind: 'openai-compatible', enabled: true, configured: true, defaultModel: 'gpt-oss:120b', assignedAgents: [] },
+        { id: 'acc-off', label: 'Old key', kind: 'openai', enabled: false, configured: true, defaultModel: 'gpt-5', assignedAgents: [] },
+      ],
+      bindingOf: () => undefined,
+      assign: async () => {},
+    };
+    const solo = harness('agent-father', one);
+    const { envelope } = described<CreateAgentEnvelope>(solo, 'platform.create_agent', baseCreate);
+    expect(envelope.account).toEqual({ id: 'acc-ollama', label: 'Ollama Cloud', kind: 'openai-compatible', model: 'gpt-oss:120b' });
+    expect(envelope.provider).toBeNull();
+    expect(envelope.content).not.toContain('provider:');
+  });
+
   it('creates on the named account, keeps the model out of the file, and assigns after writing', async () => {
     const { envelope, preview } = described<CreateAgentEnvelope>(a, 'platform.create_agent', { ...baseCreate, account: 'local endpoint' });
     expect(envelope.account).toEqual({ id: 'acc-local', label: 'Local endpoint', kind: 'openai-compatible', model: 'qwen3:8b' });
