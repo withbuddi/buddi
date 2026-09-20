@@ -13,8 +13,13 @@
  */
 import { randomInt } from 'node:crypto';
 
-/** Where the generated passphrase is kept, for the owner who did not write it down. */
-export const BACKUP_PASSPHRASE_KEY = 'backup.passphrase';
+/**
+ * Where the generated passphrase is kept, for the owner who did not write it
+ * down. Environment-variable shaped because `assertSecretName` refuses
+ * anything else: every vault implementation validates the name before it
+ * reaches the keychain, so a dotted key could never have been stored at all.
+ */
+export const BACKUP_PASSPHRASE_KEY = 'BACKUP_PASSPHRASE';
 
 /** How many words `generatePassphrase` joins. */
 export const PASSPHRASE_WORDS = 6;

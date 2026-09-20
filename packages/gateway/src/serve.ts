@@ -30,6 +30,7 @@ import {
   getActiveSchedule,
   getMission,
   getOccurrence,
+  inRecovery,
   isPaused,
   listMissions,
   nextAfter,
@@ -340,6 +341,35 @@ export async function main(): Promise<void> {
   }
   const { pool, now } = wiring;
 
+  /*
+   * Recovery: this installation was restored from a backup and the owner has
+   * not been through the checklist yet.
+   *
+   * Read **once**, here, and then used to decide which loops are started at
+   * all. It is deliberately not re-read on a timer: a flag the loops consulted
+   * every tick would mean every loop carrying a "should I be running" branch
+   * for ever, and half-started state in between. So leaving recovery is
+   * finished by restarting the gateway — through the supervisor, which is what
+   * `POST /api/recovery/leave` asks for once it has cleared the row. In a
+   * developer checkout there is no supervisor to do that, and the loops start
+   * in-process the next time `buddi serve` is started.
+   */
+  const recovering = await inRecovery(pool);
+
+  /** The three shapes a loop has, when it is not running at all. */
+  const idleLoop = { tick: async () => 'skipped' as const, busy: false, stop: () => {} };
+  const idleScheduler = (): ReturnType<typeof runScheduler> => ({
+    tick: async () => ({ materialized: 0, executed: 0 }),
+    stop: async () => {},
+    done: Promise.resolve(),
+  });
+  const idleWorker = (): ReturnType<typeof runWorker> => ({
+    tick: async () => null,
+    recover: async () => 0,
+    stop: async () => {},
+    done: Promise.resolve(),
+  });
+
   try {
     try { await hostBrowser(process.env).enable(); }
     catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
@@ -405,7 +435,7 @@ export async function main(): Promise<void> {
      * that holds this binding — the approval path, the shutdown — reads it
      * when it runs, so they all see the surface the moment it exists.
      */
-    let telegram = process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
+    let telegram = !recovering && process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
     let starting: Promise<{ botUsername: string | null }> | undefined;
     const startTelegramNow = async (): Promise<{ botUsername: string | null }> => {
       if (telegram) return { botUsername: telegram.botUsername ?? null };
@@ -534,8 +564,9 @@ export async function main(): Promise<void> {
       const released = await releaseStaleClaims(pool, new Date(now().getTime() - STALE_CLAIM_MS));
       if (released > 0) console.error(`scheduler: released ${released} stale claim(s)`);
     };
-    await sweepStaleClaims();
+    if (!recovering) await sweepStaleClaims();
     const sweep = setInterval(() => {
+      if (recovering) return;
       void sweepStaleClaims().catch((err) =>
         console.error(`scheduler: stale-claim sweep failed: ${err instanceof Error ? err.message : String(err)}`),
       );
@@ -565,7 +596,7 @@ export async function main(): Promise<void> {
     // a lease, bounded retries and a failed-job inspection path — so a restart
     // mid-mission resumes instead of losing the work, and a mission that throws
     // does not take the scheduler pass down with it.
-    const worker = runWorker({
+    const worker = recovering ? idleWorker() : runWorker({
       pool,
       worker: `serve:${process.pid}`,
       kinds: JOB_KINDS,
@@ -600,14 +631,14 @@ export async function main(): Promise<void> {
     // Non-overlapping: a tick that lands while the previous poll is still
     // running says so and skips, and a poll still going at 2x the deadline is
     // abandoned so the next one starts clean.
-    const sentinelLoop = startLoop({
+    const sentinelLoop = recovering ? idleLoop : startLoop({
       name: 'sentinels',
       everyMs: SENTINEL_TICK_MS,
       abortAfterMs: SENTINEL_TICK_MS * 2,
       run: sentinelTick,
       log: (line) => console.error(line),
     });
-    const sourceLoop = startLoop({
+    const sourceLoop = recovering ? idleLoop : startLoop({
       name: 'sources',
       everyMs: SOURCE_TICK_MS,
       abortAfterMs: sourceAbortMs,
@@ -615,7 +646,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const reminderLoop = startLoop({
+    const reminderLoop = recovering ? idleLoop : startLoop({
       name: 'reminders',
       everyMs: REMINDER_TICK_MS,
       abortAfterMs: REMINDER_TICK_MS * 2,
@@ -635,7 +666,7 @@ export async function main(): Promise<void> {
       deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
       log: (line) => console.error(line),
     });
-    const deadLetterLoop = startLoop({
+    const deadLetterLoop = recovering ? idleLoop : startLoop({
       name: 'dead-letter',
       everyMs: DEAD_LETTER_TICK_MS,
       abortAfterMs: DEAD_LETTER_TICK_MS * 2,
@@ -646,7 +677,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const scheduler = runScheduler({
+    const scheduler = recovering ? idleScheduler() : runScheduler({
       pool,
       now,
       tickMs: TICK_MS,
@@ -727,6 +758,13 @@ export async function main(): Promise<void> {
     const missions = await describeMissions(pool, now());
 
     console.log('buddi serve — telegram surface + scheduler');
+    if (recovering) {
+      console.log(
+        '  RECOVERY — this buddi was restored from a backup. The scheduler, the queue worker, ' +
+          'the sentinels, the sources, the reminders and Telegram are all off until the checklist ' +
+          'on Settings is done. Chat and the dashboard work as usual.',
+      );
+    }
     console.log(telegram ? `  bot: @${telegram.botUsername ?? '(unknown)'} (id ${telegram.botId})` : '  Telegram: not configured');
     console.log(`  paired owner ids: ${telegram ? describePaired(telegram.paired) : '(none)'}`);
     console.log(`  model: ${wiring.model} (${wiring.credentialKind})`);

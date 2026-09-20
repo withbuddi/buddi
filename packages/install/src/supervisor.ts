@@ -18,6 +18,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
+import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule } from './backup.js';
+import type { BackupControl } from './backup.js';
 import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
 
@@ -46,12 +48,41 @@ export interface SupervisorStatus {
 export interface ControlSocketOptions {
   status: () => SupervisorStatus;
   action: (name: string) => Promise<void>;
+  /** The backup verbs, when this supervisor has an installation to back up. */
+  backup?: BackupControl | undefined;
+  /** The data directory, for the one path clients may name: `<data>/incoming/`. */
+  data?: string | undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': Buffer.byteLength(text) });
   res.end(text);
+}
+
+/** A control-socket body. Small on purpose: nothing here is ever a megabyte. */
+async function readBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += (chunk as Buffer).length;
+    if (bytes > 64_000) return null;
+    chunks.push(chunk as Buffer);
+  }
+  const text = Buffer.concat(chunks).toString('utf8').trim();
+  if (text === '') return {};
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
 /**
@@ -62,10 +93,18 @@ function send(res: ServerResponse, status: number, body: unknown): void {
  * open it already runs as the owning user — the user who could equally read
  * the vault key or signal the supervisor directly. A credential on top of that
  * would guard nothing, and every credential is one more thing to leak. What
- * the socket exposes is still narrow: no arbitrary command, path, SQL or
- * environment input, only start, stop, restart and status.
+ * the socket exposes is still narrow: no arbitrary command, SQL or environment
+ * input, only start, stop, restart, status and the backup verbs.
+ *
+ * The backup verbs are where "no path input" needed one exception, and it is
+ * the narrow one: a client names an *archive* by the name it read from
+ * `GET /backups`, and the name is joined to the backups directory here after
+ * being checked for a separator, a `..` and the shape of a name we write. The
+ * single path a client may send is an upload the gateway itself put under
+ * `<data>/incoming/`, and that is checked to be under that directory, resolved,
+ * before it is passed on.
  */
-export function controlSocket({ status, action }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, data }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -74,14 +113,105 @@ export function controlSocket({ status, action }: ControlSocketOptions): Server 
     // else is a confused browser-shaped request, and rejecting it is one line.
     const host = req.headers.host;
     if (host !== undefined && host !== '' && !/^localhost(:\d+)?$/i.test(host)) return send(res, 403, { error: 'unexpected host' });
-    const route = (req.url ?? '/').split('?')[0];
-    if (req.method === 'GET' && route === '/status') return send(res, 200, status());
-    if (req.method === 'POST' && ['/start', '/stop', '/restart'].includes(route as string)) {
-      await action((route as string).slice(1));
+    const route = (req.url ?? '/').split('?')[0] as string;
+    const method = req.method ?? 'GET';
+    if (method === 'GET' && route === '/status') {
+      const base = status();
+      if (!backup) return send(res, 200, base);
+      return send(res, 200, { ...base, recovery: await recovery(), lastBackupAt: await backup.lastBackupAt() });
+    }
+    if (method === 'POST' && ['/start', '/stop', '/restart'].includes(route)) {
+      await action(route.slice(1));
       return send(res, 200, status());
+    }
+
+    if (route === '/backups' && method === 'GET') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      return send(res, 200, await backup.list());
+    }
+    if (route === '/backup' && method === 'POST') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      const body = await readBody(req);
+      if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+      if (body.encrypt !== undefined && typeof body.encrypt !== 'boolean') {
+        return send(res, 400, { error: '"encrypt" must be true or false.' });
+      }
+      return send(res, 202, { job: backup.create(body.encrypt as boolean | undefined) });
+    }
+    if (route === '/verify' && method === 'POST') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      const body = await readBody(req);
+      if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+      if (!isSafeArchiveName(body.name)) return send(res, 400, { error: 'That is not the name of a backup.' });
+      return send(res, 202, { job: backup.verify(body.name) });
+    }
+    if (route === '/restore' && method === 'POST') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      const body = await readBody(req);
+      if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+      // Exactly one of the two, and the path only under `<data>/incoming/`.
+      const named = body.name !== undefined, given = body.path !== undefined;
+      if (named === given) return send(res, 400, { error: 'Name one backup, by name or by uploaded file.' });
+      if (named && !isSafeArchiveName(body.name)) return send(res, 400, { error: 'That is not the name of a backup.' });
+      if (given && (data === undefined || !isIncomingPath(data, body.path))) {
+        return send(res, 400, { error: 'An uploaded backup has to be one buddi received itself.' });
+      }
+      const outcome = await backup.restore({
+        ...(named ? { name: body.name as string } : {}),
+        ...(given ? { path: body.path as string } : {}),
+        ...(optionalString(body.passphrase) === undefined ? {} : { passphrase: body.passphrase as string }),
+        ...(optionalString(body.confirm) === undefined ? {} : { confirm: body.confirm as string }),
+      });
+      if ('status' in outcome) return send(res, outcome.status, { error: outcome.error });
+      return send(res, 202, { job: outcome });
+    }
+    const jobRoute = /^\/jobs\/([0-9a-f-]{36})$/i.exec(route);
+    if (jobRoute && method === 'GET') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      const job = backup.job(jobRoute[1] as string);
+      return job ? send(res, 200, job) : send(res, 404, { error: 'no such job' });
+    }
+    if (route === '/schedule') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      if (method === 'GET') return send(res, 200, await backup.schedule());
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+        const parsed = parseSchedule(body);
+        if ('error' in parsed) return send(res, 400, { error: parsed.error });
+        const saved = await backup.setSchedule(parsed.schedule);
+        if ('error' in saved) return send(res, 400, { error: saved.error });
+        return send(res, 200, saved.schedule);
+      }
+    }
+    if (route === '/passphrase') {
+      if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      if (method === 'GET') return send(res, 200, { passphrase: await backup.passphrase() });
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+        if (typeof body.passphrase !== 'string' || normalizePassphraseText(body.passphrase) === '') {
+          return send(res, 400, { error: 'A passphrase cannot be empty.' });
+        }
+        await backup.setPassphrase(body.passphrase);
+        return send(res, 200, { passphrase: await backup.passphrase() });
+      }
     }
     send(res, 404, { error: 'no such endpoint' });
   }
+
+  async function recovery(): Promise<boolean> {
+    return backup?.inRecovery ? await backup.inRecovery() : false;
+  }
+}
+
+/**
+ * The same normalization `@buddi/core` does, repeated in four characters'
+ * worth of regex rather than imported: nothing in this module may take a value
+ * import from a `@buddi/*` package (see the note at the top of the file).
+ */
+function normalizePassphraseText(input: string): string {
+  return input.trim().replace(/\s+/g, ' ');
 }
 
 /**
@@ -111,6 +241,7 @@ export async function listenOnSocket(server: Server, socket: string): Promise<vo
 export async function supervise(ctx: InstallContext): Promise<void> {
   const release = await acquireLock(ctx.data);
   let database: ManagedDatabase | undefined, server: Server | undefined, child: ChildProcess | undefined, retry: NodeJS.Timeout | undefined, log: WriteStream | undefined;
+  let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
   let desired = true, closing = false, chain: Promise<void> = Promise.resolve();
   let failures = 0;
   const stopGateway = async () => {
@@ -165,10 +296,24 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         if (desired && !closing && database!.alive) retry = setTimeout(start, restartDelay(failures++));
       });
     };
+    // Backups run here rather than in the gateway: the supervisor is the
+    // process that owns the database and can stop the gateway, which is what a
+    // restore needs. The minute tick is the whole schedule — see backup.ts.
+    backup = createBackupService({
+      ctx: ready, core, gateway,
+      stopGateway: async () => { await stopGateway(); },
+      startGateway: () => start(),
+      log: line => console.error(line),
+    });
+    scheduleTick = setInterval(() => {
+      void backup!.tick().catch(err => console.error(`backup: the schedule tick failed: ${err instanceof Error ? err.message : String(err)}`));
+    }, 60_000);
+    if (typeof scheduleTick.unref === 'function') scheduleTick.unref();
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null }),
       action: name => { chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
+      backup, data: ready.data,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
     start();
@@ -176,6 +321,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     await shutdown;
   } finally {
     closing = true;
+    clearInterval(scheduleTick);
     await chain.catch(() => {});
     await stopGateway();
     if (server?.listening) await new Promise(resolve => server!.close(resolve));

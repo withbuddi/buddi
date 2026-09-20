@@ -85,5 +85,5 @@ describe('normalizePassphrase', () => {
 });
 
 it('names the vault key the rest of the system looks for', () => {
-  expect(BACKUP_PASSPHRASE_KEY).toBe('backup.passphrase');
+  expect(BACKUP_PASSPHRASE_KEY).toBe('BACKUP_PASSPHRASE');
 });
