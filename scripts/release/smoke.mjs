@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, unlink, stat, copyFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, unlink, stat, copyFile, cp, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 
 const exec = promisify(execFile);
@@ -42,7 +43,14 @@ const freeLocalPort = () => new Promise((resolve, reject) => {
   });
 });
 const webPort = await freeLocalPort();
-Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file', BUDDI_WEB_PORT: String(webPort) });
+/*
+ * The one thing a plugin fixture needs from outside: a file to write when its
+ * code first runs. It is set here, before the first supervisor starts, because
+ * the gateway inherits the supervisor's environment and the plugin section
+ * below asserts on a gateway that was started long before it.
+ */
+const markerFile = path.join(testRoot, 'plugin-marker.log');
+Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file', BUDDI_WEB_PORT: String(webPort), BUDDI_FIXTURE_MARKER: markerFile });
 let pid;
 /* The second installation the backup is restored into. Stopped like the first. */
 const restored = path.join(testRoot, 'restored data');
@@ -623,10 +631,403 @@ try {
   }
   pidB = undefined;
 
+
+  /* ================================================================ *
+   * Plugins: a package nobody published, from a tarball to a tool an
+   * agent holds.
+   *
+   * The whole two-approval design exists for one property, and the
+   * fixture is built to make that property visible: its top-level code
+   * appends a line to BUDDI_FIXTURE_MARKER. Staging must leave that file
+   * absent — nothing was imported — and approving must create it. There
+   * is no way to fake either side of that, because importing a module is
+   * what runs it.
+   *
+   * Everything here goes through the dashboard API and the supervisor's
+   * control socket, the two doors an owner actually has, and one CLI run
+   * for the path a terminal takes. No registry is asked anything: the
+   * fixtures are packed with `npm pack` from this checkout into the
+   * smoke's own temp directory, and the packages they stage declare no
+   * dependency that is not a `file:` path inside the tarball.
+   * ================================================================ */
+  const fixtureSource = fileURLToPath(new URL('../../packages/gateway/src/plugins/fixtures/', import.meta.url));
+  const workshop = path.join(testRoot, 'plugin-fixtures');
+  await mkdir(workshop, { recursive: true });
+
+  /** Pack a directory the way npm publishes one. Local: nothing is fetched. */
+  const packFixture = async dir => {
+    const packed = await exec('npm', ['pack', '--ignore-scripts', '--json'], { cwd: dir, env, timeout: 120_000 });
+    return path.join(dir, JSON.parse(packed.stdout)[0].filename);
+  };
+
+  /**
+   * The marker fixture, renamed, as a tarball.
+   *
+   * Two edits to the checked-in fixture, both so that staging it reaches
+   * no registry. Its `zod` dependency is dropped and zod is resolved
+   * through the `@buddi/core` peer symlink the stage writes instead, so
+   * `stagePlugin` skips `npm install` entirely; and the plugin, schema
+   * and tool names are rewritten, so the copy the CLI installs is a
+   * different plugin from the one the API installs.
+   */
+  const buildMarkerFixture = async (name, schema, markerEnv) => {
+    const dir = path.join(workshop, name);
+    await rm(dir, { recursive: true, force: true });
+    await cp(path.join(fixtureSource, 'marker-plugin'), dir, { recursive: true });
+    const renamed = text => text.split('fixture-marker').join(name).split('fixture_marker').join(schema);
+    const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'));
+    delete pkg.dependencies;
+    pkg.name = `buddi-plugin-${name}`;
+    // The name a package declares for its plugin is what approval checks the
+    // exported manifest against, so the copy renames both halves.
+    if (pkg.buddi?.name !== undefined) pkg.buddi.name = name;
+    await writeFile(path.join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+    await writeFile(path.join(dir, 'index.js'), renamed(await readFile(path.join(dir, 'index.js'), 'utf8')).replace(
+      "import { z } from 'zod';",
+      "import { createRequire } from 'node:module';\n"
+        + "const fromCore = createRequire(import.meta.resolve('@buddi/core'));\n"
+        + "const { z } = fromCore('zod');",
+    ).replace(
+      // The checked-in fixture reads its own migrations directory out of a URL
+      // with `.pathname`, which percent-encodes the space in this smoke's data
+      // directory and resolves to a path that is not there. The shipped weather
+      // example does it the right way; the fixture is corrected here so that the
+      // scenario tests migrations rather than that mistake.
+      "new URL('./migrations', import.meta.url).pathname",
+      "fileURLToPath(new URL('./migrations', import.meta.url))",
+    ).replace(
+      // One fixture per marker file: `plugins info` and `doctor` import every
+      // installed plugin, so a shared variable would have one fixture writing
+      // the file another one's assertions are about.
+      /BUDDI_FIXTURE_MARKER/g,
+      markerEnv,
+    ).replace(
+      "import { appendFileSync } from 'node:fs';",
+      "import { appendFileSync } from 'node:fs';\nimport { fileURLToPath } from 'node:url';",
+    ));
+    for (const file of ['buddi.md', 'migrations/001_init.sql']) {
+      await writeFile(path.join(dir, file), renamed(await readFile(path.join(dir, file), 'utf8')));
+    }
+    return packFixture(dir);
+  };
+
+  const markerTarball = await buildMarkerFixture('fixture-marker', 'fixture_marker', 'BUDDI_FIXTURE_MARKER');
+  const cliTarball = await buildMarkerFixture('fixture-cli', 'fixture_cli', 'BUDDI_FIXTURE_MARKER_CLI');
+  const throwingDir = path.join(workshop, 'fixture-throws');
+  await cp(path.join(fixtureSource, 'throwing-plugin'), throwingDir, { recursive: true });
+  const throwingTarball = await packFixture(throwingDir);
+
+  /*
+   * A plugin whose dependency wants to run code when it is installed.
+   * The dependency is a `file:` path inside the package, so npm resolves
+   * it without a registry, and its `postinstall` writes a file that must
+   * never appear: staging installs with --ignore-scripts, before any
+   * approval exists.
+   */
+  const scriptsDir = path.join(workshop, 'fixture-scripts');
+  const postinstallProof = path.join(workshop, 'postinstall-ran');
+  await mkdir(path.join(scriptsDir, 'vendor/noisy-dep'), { recursive: true });
+  await writeFile(path.join(scriptsDir, 'package.json'), `${JSON.stringify({
+    name: 'buddi-plugin-fixture-scripts', version: '1.0.0', type: 'module', main: 'index.js',
+    buddi: { manifest: 'manifest' }, dependencies: { 'noisy-dep': 'file:./vendor/noisy-dep' },
+  }, null, 2)}\n`);
+  await writeFile(path.join(scriptsDir, 'index.js'), 'export const manifest = { name: "fixture-scripts" };\n');
+  await writeFile(path.join(scriptsDir, 'vendor/noisy-dep/package.json'), `${JSON.stringify({
+    name: 'noisy-dep', version: '1.0.0',
+    scripts: { postinstall: `node -e "require('fs').writeFileSync('${postinstallProof}', 'ran')"` },
+  }, null, 2)}\n`);
+  await writeFile(path.join(scriptsDir, 'vendor/noisy-dep/index.js'), 'module.exports = {};\n');
+  const scriptsTarball = await packFixture(scriptsDir);
+
+  /** Poll a staging job on the dashboard. Its phases are the engine's. */
+  const stageJob = async (session, id, seconds = 300) => {
+    for (let i = 0; i < seconds * 4; i++) {
+      const reply = await (await session.get(`/api/plugins/jobs/${id}`)).json();
+      if (['done', 'failed'].includes(reply.phase)) return reply;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error(`staging job ${id} never finished`);
+  };
+  /** Stage a tarball the way the page does, and return the card it draws. */
+  const stage = async (session, tarball) => {
+    const accepted = await session.send('/api/plugins/stage', { spec: tarball });
+    assert.equal(accepted.status, 202, await accepted.clone().text());
+    const finished = await stageJob(session, (await accepted.json()).job.id);
+    assert.equal(finished.phase, 'done', finished.error ?? '');
+    const view = await (await session.get('/api/plugins')).json();
+    const card = view.staged.find(entry => entry.id === finished.stagedId);
+    assert.ok(card, 'the staged package is on the list the page reads');
+    return { card, view };
+  };
+  /** Approve, carrying back exactly what the card showed. */
+  const approve = (session, card, extra = {}) => session.send(`/api/plugins/staged/${card.id}/approve`, {
+    integrity: card.integrity,
+    // The fix pass may add a second hash the approval re-verifies; whatever
+    // the card carries is what goes back, which is the whole point of it.
+    ...(card.stagedHash === undefined ? {} : { stagedHash: card.stagedHash }),
+    ...extra,
+  });
+  /** Restart the gateway through the supervisor, and wait for the new one. */
+  const restartGateway = async () => {
+    const before = JSON.parse(await cli(['service', 'status'])).gatewayPid;
+    const asked = await socketCall(socketA, '/restart', 'POST');
+    assert.equal(asked.status, 202, 'the supervisor accepts a restart on its control socket');
+    let after;
+    for (let i = 0; i < 300; i++) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      after = JSON.parse(await cli(['service', 'status']));
+      if (after.gateway === 'running' && after.gatewayPid !== before) break;
+    }
+    assert.equal(after.gateway, 'running', 'the gateway came back after the restart');
+    assert.notEqual(after.gatewayPid, before, 'the restart replaced the gateway process');
+    return after;
+  };
+  /* The CLI, run against this installation and never the owner's: every
+   * path it reads is under the smoke's own data directory. */
+  const cliMarker = path.join(testRoot, 'plugin-marker-cli.log');
+  const buddiCli = path.join(testRoot, 'node_modules/buddi/packages/cli/dist/main.js');
+  const cliEnv = {
+    ...env,
+    BUDDI_AGENTS_DIR: path.join(data, 'agents'),
+    BUDDI_SKILLS_DIR: path.join(data, 'skills'),
+    BUDDI_HOME: data,
+    BUDDI_ENV_FILE: path.join(data, '.env'),
+    BUDDI_VAULT_FILE: path.join(data, 'vault.json'),
+    BUDDI_VAULT_KEY: (await readFile(path.join(data, 'vault-key'), 'utf8')).trim(),
+    BUDDI_FIXTURE_MARKER_CLI: cliMarker,
+    DATABASE_URL: `postgres://buddi:${encodeURIComponent(connection.password)}@127.0.0.1:${connection.port}/buddi`,
+  };
+  /** Run the packaged CLI. A non-zero exit is an answer here, not a throw. */
+  const buddi = async args => {
+    try {
+      const done = await exec(process.execPath, [buddiCli, ...args], { env: cliEnv, cwd: testRoot, timeout: 300_000 });
+      return { code: 0, out: `${done.stdout}${done.stderr}` };
+    } catch (error) {
+      return { code: error.code ?? 1, out: `${error.stdout ?? ''}${error.stderr ?? ''}` };
+    }
+  };
+  const doctorRow = async name => {
+    const report = await buddi(['doctor']);
+    const row = report.out.split('\n').find(line => new RegExp(`^\\s+(ok|warn|FAIL)\\s+${name}\\s`).test(line));
+    assert.ok(row, `buddi doctor has a ${name} row:\n${report.out}`);
+    return row.trim();
+  };
+
+  /* 1. Staged, and nothing of it has run. */
+  let p = await signIn(cli);
+  const beforeStaging = await (await p.get('/api/plugins')).json();
+  assert.equal(beforeStaging.installed.length, 0, 'a fresh installation has no plugin of its own');
+  assert.match(beforeStaging.trust, /not sandboxed/, 'the page is given the trust sentence to show');
+  assert.equal(beforeStaging.checkout, false, 'a packaged installation is not a checkout');
+  const { card } = await stage(p, markerTarball);
+  assert.equal(await readFile(markerFile, 'utf8').catch(error => error.code), 'ENOENT',
+    'staging imported nothing: the fixture\'s top-level code has not run');
+  assert.equal(card.name, 'buddi-plugin-fixture-marker');
+  assert.match(card.integrity, /^sha512-[A-Za-z0-9+/=]+$/, 'the card shows the hash of the tarball it holds');
+  assert.equal(card.claims.schema, 'fixture_marker', 'the card shows the schema the package claims in its buddi.md');
+  assert.deepEqual(card.claims.hosts, ['example.invalid'], 'and the hosts it claims');
+  assert.equal(card.claims.missing, false);
+  assert.deepEqual(card.dependencies.withScripts, [], 'nothing in its tree wants to run code at install');
+  assert.equal(card.state, 'staged');
+  assert.equal(card.dir, undefined, 'no staging path goes on the wire');
+  assert.equal(card.packageDir, undefined);
+
+  /* 2. An approval is for the thing that was read about, or it is nothing. */
+  const wrongHash = await approve(p, { ...card, integrity: 'sha512-AAAAnotthehashyouwereshown' });
+  assert.equal(wrongHash.status, 409, await wrongHash.clone().text());
+  assert.match((await wrongHash.json()).error, /integrity/i);
+  assert.equal(await readFile(markerFile, 'utf8').catch(error => error.code), 'ENOENT',
+    'a refused approval imports nothing either');
+
+  /* 3. The right one: the first moment this plugin's code has ever run. */
+  const approved = await approve(p, card);
+  const approvedBody = await approved.json();
+  assert.equal(approved.status, 200, JSON.stringify(approvedBody));
+  assert.ok(approvedBody.installed, `approval 1 installed it: ${JSON.stringify(approvedBody.plan?.drift ?? approvedBody)}`);
+  assert.equal(approvedBody.installed.name, 'fixture-marker');
+  assert.equal(approvedBody.restartNeeded, true, 'its tools belong to the next process, and the API says so');
+  assert.deepEqual(approvedBody.migrations, ['001_init.sql'], 'approval applied its migrations into its own schema');
+  /*
+   * The marker exists now and did not before, which is the whole property.
+   * There are two lines in it rather than one: `place` re-reads the manifest
+   * from where the package now lives, so an install imports the entry twice —
+   * once to plan it and once after the move. Both are after the approval.
+   */
+  const markerLines = (await readFile(markerFile, 'utf8')).trim().split('\n');
+  assert.ok(markerLines.length >= 1, 'approving is what imported it');
+  for (const line of markerLines) assert.match(line, /^imported /);
+  const afterApproval = await (await p.get('/api/plugins')).json();
+  assert.equal(afterApproval.restartNeeded, true);
+  const installedCard = afterApproval.installed.find(entry => entry.name === 'fixture-marker');
+  assert.equal(installedCard.source.kind, 'tarball');
+  assert.equal(installedCard.integrity, card.integrity, 'the record kept the hash that was approved');
+  assert.equal(installedCard.loaded, false, 'this process never imported it into its registry');
+
+  /* 4. A dependency that wants to run code says so before anything is approved. */
+  const scripts = await stage(p, scriptsTarball);
+  assert.deepEqual(scripts.card.dependencies.withScripts, ['noisy-dep (postinstall)'],
+    'the card names the dependency that wants to run code at install');
+  assert.ok(scripts.card.dependencies.count >= 1);
+  assert.equal(await readFile(postinstallProof, 'utf8').catch(error => error.code), 'ENOENT',
+    'it was installed with --ignore-scripts, so it has not run');
+  const rejected = await p.send(`/api/plugins/staged/${scripts.card.id}/reject`, {});
+  assert.equal(rejected.status, 200);
+  assert.equal((await (await p.get('/api/plugins')).json()).staged.some(entry => entry.id === scripts.card.id), false,
+    'a rejected stage and everything it fetched are gone');
+
+  /* 5. Restart, and the tool exists. */
+  await restartGateway();
+  p = await signIn(cli);
+  const loadedView = await (await p.get('/api/plugins')).json();
+  const loadedCard = loadedView.installed.find(entry => entry.name === 'fixture-marker');
+  assert.equal(loadedCard.loaded, true, 'the restarted gateway adopted it');
+  assert.equal(loadedCard.error, undefined);
+  assert.equal(loadedCard.contribution.tools, 1, 'it brought one tool');
+  assert.equal(loadedView.restartNeeded, false, 'nothing is waiting for a restart any more');
+  const migrated = await ask(connection, `select filename from core.migrations where schema = 'fixture_marker' order by filename`);
+  assert.deepEqual(migrated.map(row => row.filename), ['001_init.sql'], 'its migration is recorded in the ledger');
+  const itsTables = await ask(connection, `select table_name from information_schema.tables where table_schema = 'fixture_marker'`);
+  assert.deepEqual(itsTables.map(row => row.table_name), ['notes'], 'and its table exists');
+  const info = await buddi(['plugins', 'info', 'fixture-marker']);
+  assert.equal(info.code, 0, info.out);
+  assert.match(info.out, /fixture-marker\.echo/, '`plugins info` names the tool it brought');
+  assert.match(info.out, /tarball/, 'and where it came from');
+  assert.match(info.out, /notes: 0 rows/, 'and what it has stored in its own schema');
+  assert.match(await doctorRow('plugins'), /^ok\b.*fixture-marker/, 'doctor is clean with it installed');
+
+  /*
+   * The tool an agent holds. A grant naming a tool this installation does
+   * not have is a catalog load error, so an agent that still loads with
+   * `fixture-marker.echo` in its file is the proof that the plugin's tool
+   * is registered in the running process.
+   */
+  const agentFile = path.join(data, 'agents/concierge/agent.md');
+  const agentBefore = await readFile(agentFile, 'utf8');
+  await writeFile(agentFile, agentBefore.replace('tools: [', 'tools: [fixture-marker.echo, '));
+  await restartGateway();
+  p = await signIn(cli);
+  const granted = (await (await p.get('/api/agents')).json()).agents.find(agent => agent.handle === 'smoke');
+  assert.ok(granted, 'the agent still loads with a plugin tool in its grant');
+  assert.ok(granted.tools.includes('fixture-marker.echo'), 'and the plugin\'s tool is one of its tools');
+
+  /* 6. Changed on disk since it was approved. */
+  const installedDir = path.join(data, 'plugins/fixture-marker');
+  const pluginEntry = path.join(installedDir, 'index.js');
+  const approvedEntry = await readFile(pluginEntry, 'utf8');
+  await writeFile(path.join(installedDir, 'buddi.md'),
+    `${await readFile(path.join(installedDir, 'buddi.md'), 'utf8')}\nEdited after it was approved.\n`);
+  assert.match(await doctorRow('plugins'), /^warn\b.*fixture-marker changed on disk since it was approved/,
+    'doctor names the plugin whose files are not the ones that were approved');
+
+  /* 7. A plugin whose entry throws.
+   *
+   * Approving one is refused, because approval 1 *is* the first import:
+   * there is no way to install a package that cannot be read. What the
+   * load report is for is the other case — an installed plugin that stops
+   * importing — so the marker plugin is broken on disk and the gateway
+   * restarted on top of it.
+   */
+  const throwing = await stage(p, throwingTarball);
+  const refusedThrow = await approve(p, throwing.card);
+  const refusedBody = await refusedThrow.json();
+  assert.equal(refusedThrow.status, 409, JSON.stringify(refusedBody));
+  assert.match(refusedBody.error, /this fixture throws on import, on purpose/,
+    'the refusal quotes what the package did when it was imported');
+  assert.equal((await (await p.get('/api/plugins')).json()).installed.some(entry => entry.name === 'fixture-throws'),
+    false, 'nothing was installed');
+  await p.send(`/api/plugins/staged/${throwing.card.id}/reject`, {});
+  // The agent's grant goes back first: a grant naming a tool that is about
+  // to disappear is a separate failure, and this step is about the plugin.
+  await writeFile(agentFile, agentBefore);
+  await writeFile(pluginEntry, 'throw new Error("this installed plugin stopped importing");\n');
+  await restartGateway();
+  p = await signIn(cli);
+  const brokenView = await (await p.get('/api/plugins')).json();
+  const brokenCard = brokenView.installed.find(entry => entry.name === 'fixture-marker');
+  assert.equal(brokenCard.loaded, false, 'a plugin that throws at import is reported, not hidden');
+  assert.match(brokenCard.error, /stopped importing/, 'with the error it threw');
+  assert.equal((await (await p.get('/api/agents')).json()).agents.some(agent => agent.handle === 'smoke'), true,
+    'the gateway is up and answering with one plugin broken');
+  assert.match(await doctorRow('plugins'), /^FAIL\b.*fixture-marker/, 'doctor fails the row for a plugin that did not load');
+  await writeFile(pluginEntry, approvedEntry);
+
+  /* 8. Uninstall keeps the data; purge is the other, separate verb. */
+  const removed = await p.send('/api/plugins/fixture-marker/uninstall', {});
+  assert.equal(removed.status, 200, await removed.clone().text());
+  assert.equal((await (await p.get('/api/plugins')).json()).installed.some(entry => entry.name === 'fixture-marker'),
+    false, 'the record no longer names it');
+  const gone = await buddi(['plugins', 'info', 'fixture-marker']);
+  assert.equal(gone.code, 1);
+  assert.match(gone.out, /no plugin called "fixture-marker"/, '`plugins info` says it is not installed here');
+  assert.deepEqual(
+    (await ask(connection, `select schema_name from information_schema.schemata where schema_name = 'fixture_marker'`))
+      .map(row => row.schema_name),
+    ['fixture_marker'],
+    'its schema and everything in it survived the uninstall',
+  );
+  // Installed again, so the purge has something to destroy.
+  const restaged = await stage(p, markerTarball);
+  const reinstalled = await approve(p, restaged.card);
+  assert.equal(reinstalled.status, 200, await reinstalled.clone().text());
+  const unconfirmed = await p.send('/api/plugins/fixture-marker/uninstall', { purge: true, confirm: 'fixture_marker' });
+  assert.equal(unconfirmed.status, 409, 'a purge that does not type the name back is refused');
+  const purged = await p.send('/api/plugins/fixture-marker/uninstall', { purge: true, confirm: 'fixture-marker' });
+  assert.equal(purged.status, 200, await purged.clone().text());
+  assert.equal((await purged.json()).purged, true);
+  assert.deepEqual(
+    await ask(connection, `select schema_name from information_schema.schemata where schema_name = 'fixture_marker'`),
+    [], 'purge dropped its schema',
+  );
+
+  /* 9. The same two steps from a terminal.
+   *
+   * `install` without `--yes` is a summary: it stages, prints the trust
+   * sentence the page shows, and imports nothing. `--yes` is the terminal's
+   * approval, and an approval carries the hash that was read: without
+   * `--integrity` there is nothing binding the yes to the package that was
+   * staged, so it is refused for a source that was fetched.
+   */
+  const staged = await buddi(['plugins', 'install', cliTarball]);
+  assert.equal(staged.code, 0, staged.out);
+  // Both read it from the engine's one constant; only the terminal hard-wraps
+  // it, so the comparison is on the words rather than on where the lines break.
+  const collapsed = text => text.replace(/\s+/g, ' ');
+  assert.ok(collapsed(staged.out).includes(collapsed(beforeStaging.trust)),
+    'the CLI prints the same trust sentence as the page');
+  assert.match(staged.out, /NOTHING OF THIS PLUGIN HAS RUN/);
+  assert.equal(await readFile(cliMarker, 'utf8').catch(error => error.code), 'ENOENT',
+    '`plugins install` without --yes imported nothing');
+  const cliIntegrity = /integrity (sha512-\S+)/.exec(staged.out)[1];
+  const stagedId = /buddi plugins approve (\S+)/.exec(staged.out)[1];
+  const blindYes = await buddi(['plugins', 'install', cliTarball, '--yes']);
+  assert.match(blindYes.out, /--yes did not install it/, `--yes alone approved a fetched package:\n${blindYes.out}`);
+  assert.match(blindYes.out, /--integrity/, 'and it says what the yes is missing');
+  assert.equal(await readFile(cliMarker, 'utf8').catch(error => error.code), 'ENOENT',
+    'a refused --yes imported nothing');
+  const wrongYes = await buddi(['plugins', 'approve', stagedId, '--integrity', 'sha512-notthehashyouwereshown']);
+  assert.equal(wrongYes.code, 1, wrongYes.out);
+  assert.match(wrongYes.out, /integrity/i, 'a hash that is not the staged one is refused in the terminal too');
+  assert.equal(await readFile(cliMarker, 'utf8').catch(error => error.code), 'ENOENT');
+  const cliApproved = await buddi(['plugins', 'approve', stagedId, '--integrity', cliIntegrity]);
+  assert.equal(cliApproved.code, 0, cliApproved.out);
+  assert.match(cliApproved.out, /installed fixture-cli/);
+  assert.match((await readFile(cliMarker, 'utf8')).trim(), /^imported /, 'approving from the terminal imported it');
+  const unconfirmedPurge = await buddi(['plugins', 'uninstall', 'fixture-cli', '--yes', '--purge']);
+  assert.equal(unconfirmedPurge.code, 1, `a terminal purge without the name typed back:\n${unconfirmedPurge.out}`);
+  const cliRemoved = await buddi(['plugins', 'uninstall', 'fixture-cli', '--yes', '--purge', '--confirm', 'fixture-cli']);
+  assert.equal(cliRemoved.code, 0, cliRemoved.out);
+  assert.deepEqual(
+    await ask(connection, `select schema_name from information_schema.schemata where schema_name = 'fixture_cli'`),
+    [], 'the terminal path drops the schema too when asked to purge',
+  );
+
   console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done'
     + ', encrypted backup and verify with no external binary, a flipped byte caught by the envelope, a wrong passphrase refused in plain words by verify and by restore, the passphrase replaced and verify passing again'
     + ', a second installation restored from the upload before its first question — agents, conversation, artifact bytes, memory, setting and account checklist all back, phases in order'
     + ', recovery holding the queue and Telegram down, a failed file step rolled back with the pre-restore snapshot kept and the rows unchanged, and leaving recovery letting the queue claim again'
+    + ', a plugin staged from a tarball with nothing of it imported, an approval refused for a hash that was not the one shown, approved and only then imported, a dependency\'s install script named and never run'
+    + ', its tool registered after a restart and held by an agent, its migration applied to its own schema, doctor clean and then naming it changed on disk, a package that throws at import refused and an installed one that stops importing reported with the gateway still answering'
+    + ', uninstall keeping the schema and purge dropping it, and the same two steps from the terminal'
     + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
