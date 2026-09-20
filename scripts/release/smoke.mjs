@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { dashboardReady, reloadLaunchAgent } from './environment.mjs';
+import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 
 const exec = promisify(execFile);
 const archive = process.argv[2];
@@ -30,7 +30,7 @@ try {
   // The launchd fixture must also select the isolated file vault after login.
   await writeFile(path.join(data, '.env'), 'BUDDI_VAULT=file\n', { mode: 0o600 });
   await exec('npm', ['install', '--prefix', testRoot, '--ignore-scripts', '--no-audit', '--no-fund', archive], { env, timeout: 120_000 });
-  const entry = path.join(testRoot, 'node_modules/buddi/bin/buddi.mjs');
+  const entry = path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js');
   const cli = async args => (await exec(process.execPath, [entry, ...args], { env, cwd: testRoot, timeout: 150_000 })).stdout;
   const start = await cli(startArgs);
   const status = JSON.parse(await cli(['service', 'status'])); pid = status.supervisorPid;
