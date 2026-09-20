@@ -72,6 +72,10 @@ try {
   const firstRun = await onboarding();
   assert.equal(firstRun.state, 'pending');
   assert.equal(firstRun.needs.model, true, 'a fresh install has no model account');
+  // And no ghost of one: the legacy accounts are named after environment
+  // variables, and a packaged install has none of them set.
+  const accountsView = await (await fetch(new URL('/api/provider-accounts', dashboard), { headers: { cookie } })).json();
+  assert.deepEqual(accountsView.accounts, [], 'a fresh install starts with zero model accounts');
   assert.equal((await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'first-run writes require CSRF');
   const stepped = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'welcome' }) });
   assert.equal(stepped.status, 200);
