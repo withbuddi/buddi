@@ -159,7 +159,7 @@ describe('the questions', () => {
     render(meet());
     expect(await screen.findByText(SCRIPT.opening[0]!)).toBeInTheDocument();
     expect(await screen.findByText(SCRIPT.name.ask)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(SCRIPT.name.placeholder)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(SCRIPT.name.placeholder)).toHaveFocus();
   });
 
   it('saves the name and asks about the clock next, with the answer above it', async () => {
@@ -299,6 +299,19 @@ describe('the questions', () => {
     await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
     expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();
     expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'gemma4:12b' });
+  });
+
+  it('puts the cursor in the field it just opened', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    render(meet());
+    // The key card: one field, and it is the only thing on the screen to type
+    // into, so asking for a click first would be asking for nothing.
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
+    expect(await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder)).toHaveFocus();
+    // And the address card, whose first field is the address.
+    fireEvent.click(screen.getByRole('button', { name: '←' }));
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+    expect(await screen.findByLabelText(SCRIPT.brain.service.address)).toHaveFocus();
   });
 
   it('keeps a refused key in the thread with the field still open', async () => {
@@ -522,13 +535,15 @@ describe('the way out', () => {
 
   it('answers the phone offer where every other question was answered', async () => {
     spoken();
+    // The token field takes the cursor the moment the card opens.
+
     vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
     vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
     vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: false });
     render(meet(vi.fn()));
     // The chips are the open question, so they are where the composer was.
     fireEvent.click(await screen.findByText(SCRIPT.offers.phone));
-    expect(await screen.findByLabelText(SCRIPT.telegram.field)).toBeInTheDocument();
+    expect(await screen.findByLabelText(SCRIPT.telegram.field)).toHaveFocus();
     // And the composer has stepped aside rather than sitting under a stray form.
     expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
