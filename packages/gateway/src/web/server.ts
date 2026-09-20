@@ -36,7 +36,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
@@ -268,7 +268,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   // The binding is the credential: loopback is open, anything else keeps the
   // ticket-and-session gate. The override is a test seam, nothing more.
-  const openAccess = deps.openAccess ?? isLoopback(deps.config.host);
+  const openAccess = deps.openAccess ?? (deps.env?.BUDDI_WEB_REQUIRE_AUTH !== '1' && isLoopback(deps.config.host));
 
   /**
    * The pair a browser holds: the HttpOnly session and the readable CSRF value
@@ -324,6 +324,14 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     // No CORS, and therefore no preflight.
     if (method === 'OPTIONS') return sendEmpty(res, 405);
+
+    // A port answering 401 is not evidence that this installation is ready.
+    // Domain-separated challenge proof never sends the install secret to that port.
+    if (method === 'GET' && url.pathname === '/_buddi/ready' && deps.env?.BUDDI_WEB_REQUIRE_AUTH === '1') {
+      const challenge = url.searchParams.get('challenge') ?? '';
+      if (!/^[a-f0-9]{64}$/.test(challenge)) return sendEmpty(res, 400);
+      return sendJson(res, 200, { proof: createHmac('sha256', deps.token).update(`buddi-ready-v1:${challenge}`).digest('hex') });
+    }
 
     // A remote socket or proxy metadata can only earn remote access. It
     // decides how long a session minted now lives, and it must keep matching

@@ -54,7 +54,7 @@ export const OWNER_ID = 'owner';
 
 /** Load `.env` from the repo root. Idempotent; never overrides a real env var. */
 export function loadEnv(): void {
-  loadDotenv({ path: path.join(REPO_ROOT, '.env') });
+  loadDotenv({ path: process.env.BUDDI_ENV_FILE ?? path.join(REPO_ROOT, '.env') });
 }
 
 /**
