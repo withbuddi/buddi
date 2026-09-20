@@ -53,8 +53,13 @@ from `packages/*/dist` with its runtime dependencies), not a restructuring.
 (§7).
 
 Requirements on the machine: Node 22 or newer. Nothing else. No Docker, no
-git, no pnpm, no build step. `postinstall` runs nothing; provisioning happens
-on first run so a failed install leaves no half-state.
+git, no pnpm, no build step. `buddi` itself has no install script. The one
+exception is the Postgres binary package, whose upstream needs an install
+script to rebuild the symlinks inside its binaries directory; that script is
+permitted, it is the only one, and first run checks the binaries are runnable
+and repairs the links itself if the script did not run (an `--ignore-scripts`
+install still works). Provisioning of the cluster happens on first run, so a
+failed install leaves no half-state.
 
 Versioning: the package version is the product version. `buddi upgrade`
 becomes `npm install -g buddi@latest` followed by the existing
@@ -161,13 +166,34 @@ at step 3, since steps 1 and 2 are what `init` already asked in the terminal.
 
 The service manager already writes a launchd agent on macOS and a systemd
 user unit on Linux. Windows gains a Task Scheduler entry at logon (no
-service host, no admin). Each unit runs `buddi serve`, which now starts the
-bundled Postgres first.
+service host, no admin).
 
-The dashboard shows service state on Settings and offers start, stop, restart
-and "open at login" as switches. `buddi service` remains the CLI face of the
-same manager. Logs are files in the data directory and are shown in the
-dashboard's Activity page on request.
+The unit runs a small supervisor, `buddi supervise`, not the gateway
+directly. The supervisor owns the bundled Postgres and the gateway as two
+children: it starts Postgres, waits for it to answer, then starts the
+gateway; it restarts the gateway when it exits; and it keeps Postgres up
+while the gateway is down. Maintenance therefore never needs the gateway:
+
+- `buddi upgrade`, `buddi backup restore` and `buddi db migrate` talk to the
+  supervisor over a loopback control socket in the data directory: "stop the
+  gateway, keep the database", do the work, "start the gateway". With no
+  supervisor running (a headless developer checkout, or the service not
+  installed) they start Postgres themselves for the duration and stop it
+  after, as `buddi init` does today.
+- The dashboard's Start button is the supervisor's, not the gateway's: the
+  page shows service state from a tiny status route the supervisor serves,
+  so a stopped gateway can still be started from the browser tab that is
+  open. When the supervisor itself is not running, the page says so and
+  names the command.
+- An interrupted upgrade is recoverable by construction: the backup is taken
+  first, migrations run in one transaction each, and the supervisor records
+  the step it was on in a state file; the next start reads it, finishes or
+  rolls back, and reports in doctor. The gateway refuses to start against a
+  schema newer than its own code and says which version it needs.
+
+`buddi service` remains the CLI face of the same manager and gains
+`buddi service status --json` for the page. Logs are files in the data
+directory, one per child, shown in the dashboard's Activity page on request.
 
 A menu-bar or tray presence is out of scope; it belongs to the deferred app
 shell.
@@ -188,26 +214,48 @@ owner, a plugin is an npm package:
   `buddi` field in `package.json` naming the manifest export and the minimum
   core version. Unscoped names, scoped names and private registries all work;
   the name is whatever npm resolves.
-- **Install.** `buddi plugins install <name>[@version]` and the same action
-  in Settings → Plugins. The gateway runs `npm install --prefix <data>/plugins
-  <name>` (npm is present because buddi came from it), loads the manifest,
-  and runs the existing install plan: refuse a name or schema collision,
-  refuse a manifest that fails validation, show the summary of what the
-  plugin contributes and every host it intends to reach, and only then
-  register it, apply its migrations into its own schema and record the
-  install with its provenance (package, version, integrity hash). The plan
-  exists (`packages/gateway/src/plugins/install.ts`); the npm source is the
-  piece it was written to wait for.
+- **Install, in two halves with approval between them.** Importing a
+  plugin's entry point executes its code; the existing loader says so. So
+  nothing of the plugin runs before the owner has approved it:
+  1. *Stage.* `npm pack` the package into a staging directory under
+     `<data>/plugins/staging`, and install its dependencies there with
+     `--ignore-scripts`. Nothing is imported. Read only static metadata:
+     `package.json` (name, version, the `buddi` field, dependencies,
+     whether any dependency declares lifecycle scripts, the peer range on
+     `@buddi/core`), the registry's integrity hash and publisher, and the
+     `buddi.md` the package ships, which is where a plugin states in prose
+     what it does, which schema it owns and which hosts it reaches. A
+     manifest cannot be validated at this point, and the page says the
+     summary is the package's claim.
+  2. *Approve.* The owner sees name, version, publisher, integrity hash,
+     dependency count and any with install scripts, the claimed schema and
+     hosts, and this sentence: **a plugin runs inside buddi's process with
+     everything buddi can do; it is not sandboxed, and a plugin that wants to
+     can bypass tool approvals and the network allowlist. Install only what
+     you would run as yourself.** Approval is `gated` and recorded with the
+     integrity hash.
+  3. *Load and plan.* Only now is the entry point imported. The existing
+     plan runs: the manifest is validated, a name or schema collision is
+     refused, the claims in `buddi.md` are compared with the manifest's
+     contributions and hosts and any difference is shown and needs a second
+     approval. Then it is registered, its migrations are applied into its
+     own schema, and the install is recorded with its provenance.
+  The plan exists (`packages/gateway/src/plugins/install.ts`); staging and
+  the npm source are the pieces it was written to wait for. A package the
+  owner rejects is deleted from staging.
 - **Loading.** Installed plugins are loaded at gateway start from
   `<data>/plugins`, after the built-ins, through the same manifest loader.
   A plugin that fails to load is reported in doctor and on the Plugins page
   and is skipped; it never stops the gateway.
-- **Trust.** Installing is `gated`: the owner approves the summary. A plugin
-  runs in the gateway's process with the gateway's rights, as built-ins do;
-  the safety properties remain the registry, the approval machinery and the
-  network allowlist, not isolation. The Plugins page says so in one line.
-  There is no marketplace and no curation; a plugin comes from a name the
-  owner typed.
+- **Trust, stated plainly.** The registry, the approval machinery and the
+  network allowlist protect the owner from what the *model* does through a
+  well-behaved plugin. They do not protect against the plugin's own code,
+  which runs with the process's full privileges and can reach the database,
+  the vault and the network directly. Isolation is not on this roadmap;
+  the honest control is the approval above, the recorded hash, and doctor
+  reporting when what is on disk no longer matches what was approved. There
+  is no marketplace and no curation; a plugin comes from a name the owner
+  typed, and the Plugins page repeats the sentence from step 2.
 - **Update and remove.** `buddi plugins update <name>` reinstalls at the
   newer version and re-runs the plan (migrations forward only). Uninstall
   keeps the schema; `--purge` drops it, as today.
@@ -235,11 +283,25 @@ encryption, and a copy off the machine.
 
 ### 8.1 With the bundled cluster
 
-`create` and `restore` use the bundled `pg_dump` and `psql`, so a backup never
-depends on tools the owner did not install. The manifest gains the Postgres
-major version. Restoring into a newer cluster is a load, which the format
-already is; `pg_upgrade` is never needed. The upgrade command takes a backup
-before it migrates, as today.
+`create` and `restore` use the bundled `pg_dump` and `pg_restore` (the dump
+is custom format and restore is `pg_restore --single-transaction`, so a
+failed restore leaves the target as it was), and never a tool the owner did
+not install. The bundled binaries package must ship both, plus `psql` for
+doctor. The manifest gains the Postgres major version. Restoring into a newer
+cluster is a load, which the format already is; `pg_upgrade` is never needed.
+The upgrade command takes a backup before it migrates, as today.
+
+What an archive holds, so that a fresh machine comes back whole:
+
+- the database dump;
+- the artifact files;
+- the private agents and skills directories, as today;
+- `.env` with every secret value removed;
+- the plugin record: for each installed plugin, its name, version, integrity
+  hash and *source* — a registry name, a tarball path, or a directory — so
+  restore can reinstall what it can and name what it cannot (a tarball that
+  was on the old machine's disk is the owner's to supply again);
+- the manifest described in §8.3.
 
 ### 8.2 In the dashboard
 
@@ -248,29 +310,57 @@ archives with age, size and whether each verified, "Back up now", and
 "Restore…". Restore in the dashboard has the same guard as the CLI: the
 archive is verified first, the page shows what it holds and when it was taken,
 and overwriting a live installation asks for the database name typed back. It
-then stops the gateway's own work, restores, and restarts; the browser waits
-on the health route and reloads. The vault is not in any archive, so the page
-ends by listing the secrets that need pasting again, by name, with a link to
-each.
+asks the supervisor (§6) to stop the gateway and keep the database, restores,
+and starts the gateway; the browser waits on the health route and reloads.
+
+**A restored installation starts in recovery mode.** The dump carries pending
+jobs, missions, approvals in flight, granted permissions and paired surfaces,
+none of which should act on a machine they were not granted on. Recovery mode
+is a flag in `core` set by restore and cleared only by the owner:
+
+- the scheduler does not tick, sources do not poll, the queue does not claim,
+  Telegram does not connect, and no mission runs; chat works;
+- the Backup page shows a checklist: secrets to paste again, by name, each a
+  link; plugins to reinstall or supply, from the plugin record; approvals and
+  jobs that were pending, with "drop" as the default; standing permission
+  grants, listed, with "keep" as a choice the owner makes per grant;
+- "Leave recovery mode" is one gated action at the end of the checklist. Until
+  it is taken, doctor and the Home page say the installation is in recovery.
+
+**Files after the database.** The database is restored first, then the
+artifact files and private directories. If any file step fails, restore rolls
+the database back to the snapshot it took of the *target* before starting
+(a `pg_dump` of the live database into `backups/pre-restore-<time>`), so a
+half-restore cannot exist; the pre-restore snapshot is kept and named in the
+report. `--force` skips nothing here either.
 
 ### 8.3 Encryption
 
 An archive that leaves the machine is encrypted; one that stays may be. The
-scheme is symmetric, streaming, and standard (the `age` format, so an archive
-can be opened without buddi with the passphrase and any age implementation):
+scheme is `age` passphrase encryption, exactly as the age specification
+defines it (scrypt recipient stanza), with no buddi-specific key derivation
+in front of it, so `age -d` with the passphrase opens any archive without
+buddi:
 
-- At setup, buddi generates a backup key, stores it in the vault, and shows
-  the owner a recovery passphrase once, to write down. The passphrase derives
-  the key; the key encrypts the archive. Restore on a fresh machine asks for
-  the passphrase; restore on the same machine reads the key from the vault.
-- The manifest stays outside the encryption, so `list` can show what an
-  archive holds without unlocking it; it holds names, sizes, hashes, counts
-  and versions, never data.
+- At setup, buddi generates the passphrase (six words from a fixed list),
+  shows it once for the owner to write down, and stores it in the vault so
+  scheduled backups and same-machine restores never ask for it. A fresh
+  machine asks for it once. The owner may replace it with their own; the page
+  measures nothing and warns nothing, because the generated one is the
+  recommended path.
+- The whole tar is encrypted, manifest included. Filenames, agent names,
+  hosts and row counts are private too. Beside the encrypted archive sits a
+  minimal outer envelope, `<name>.json`: format version, creation time,
+  buddi version, byte size and a hash of the ciphertext. That is all `list`
+  shows without the passphrase, and it is treated as untrusted: after
+  decryption the inner manifest is authoritative and the envelope is checked
+  against it; a mismatch fails verification.
 - "Encrypt local backups" is a switch, off by default for the local
   directory and forced on for every remote target. There is no way to send
   an unencrypted archive off the machine.
-- Losing the passphrase loses remote backups. The Backup page says so where
-  the passphrase is shown, and once more when a remote target is enabled.
+- Losing the passphrase loses encrypted backups. The Backup page says so
+  where the passphrase is shown, and once more when a remote target is
+  enabled.
 
 ### 8.4 A copy off the machine
 
@@ -384,26 +474,38 @@ runs first-run headless, and asserts the gateway answers.
    passphrase, and the first agent answers after the key is pasted once.
 9. The same through Dropbox or Google Drive sign-in, with no desktop client
    installed; the archive on the provider is unreadable without the
-   passphrase, and `tar` plus an age implementation can open it without
-   buddi.
+   passphrase, and `age -d` plus `tar` open it without buddi.
+10. A restored installation runs no mission, poll, queue claim or Telegram
+    connection until the owner leaves recovery mode; a restore whose file
+    step fails leaves the target database exactly as it was.
+11. Installing a plugin whose package has an install script, or whose entry
+    point throws on import, executes nothing before the owner has approved
+    the staged summary; rejecting it leaves nothing on disk.
+12. With the gateway stopped, the dashboard tab can start it; `buddi upgrade`
+    interrupted after the backup and before the restart is completed or
+    rolled back on the next start, and doctor says which.
 
 ---
 
 ## 12. Order of work
 
-1. Bundled Postgres under the gateway's control, `buddi` first run, data
-   directory layout. This removes Docker from the owner path and is the
-   only part with real risk.
-2. The published package: bundling, `bin`, CI that installs it clean.
+1. The published package: bundling, `bin`, CI that installs it clean.
+2. Bundled Postgres under the supervisor, `buddi` first run, data directory
+   layout, the maintenance path for upgrade and restore.
 3. The wizard, reusing the settings pages; `init` ends in it.
-4. Plugins from npm: the loader for `<data>/plugins`, the install action in
-   Settings, provenance and doctor checks. `@buddi/core` published.
-5. Linux and Windows: vault backends, Task Scheduler unit, the three-platform
+4. Encrypted backup to a folder, restore in the wizard with recovery mode,
+   the Backup page. Prove a fresh machine comes back whole before anything
+   widens.
+5. Plugins from npm: staging, approval before import, the loader for
+   `<data>/plugins`, provenance and doctor checks. `@buddi/core` published.
+6. Linux and Windows: vault backends, Task Scheduler unit, the three-platform
    CI job.
-6. Version check and the upgrade action in the dashboard.
-7. Backup in the dashboard, encryption, the folder target, restore in the
-   wizard. The provider APIs (Drive, Dropbox) come after the folder target
+7. Version check and the upgrade action in the dashboard.
+8. The provider APIs for backup (Drive, Dropbox), after the folder target
    has been used for real.
+
+Three parts carry real risk and get the same care: the managed cluster,
+plugin code executing in the process, and restore.
 
 The app shell, if it comes, wraps the result of steps 1 to 3 and adds
 signing, auto-update and a tray. It is not on this list.
