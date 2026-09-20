@@ -405,7 +405,7 @@ export function installationBackupOptions(
   const pluginsFile = core.pluginsFilePath({ ownerRoot: search.ownerRoot, env });
   try {
     for (const p of core.readPluginsFile(pluginsFile).plugins) {
-      plugins.push({ name: p.name, version: p.version, schema: p.schema, source: p.source.path });
+      plugins.push({ name: p.name, version: p.version, schema: p.schema, source: core.describeSource(p.source) });
     }
   } catch {
     // An unreadable record is `buddi plugins`' problem, not a reason to refuse

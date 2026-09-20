@@ -11,6 +11,7 @@ import {
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
   createVault,
+  describeSource,
   pluginsFilePath,
   readPluginsFile,
   timezoneFromEnv,
@@ -48,7 +49,7 @@ export function pluginRecords(env: NodeJS.ProcessEnv): PluginRecord[] {
       name: p.name,
       version: p.version,
       schema: p.schema,
-      source: p.source.path,
+      source: describeSource(p.source),
     }));
   } catch {
     // An unreadable record is `buddi plugins`' problem to report, not a reason

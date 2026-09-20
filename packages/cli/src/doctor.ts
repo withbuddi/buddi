@@ -507,9 +507,22 @@ export interface PluginFacts {
   /** The record file the names came from — printed whether or not it has any. */
   record: string;
   /** Every installed plugin whose entry point imported and validated. */
-  loaded: ReadonlyArray<{ name: string; version: string }>;
+  loaded: ReadonlyArray<{ name: string; version: string; source?: string }>;
   /** Every one that is in the record and did not, and the sentence saying why. */
   problems: ReadonlyArray<{ name: string; message: string }>;
+  /**
+   * Plugins whose files no longer hash to what was approved.
+   *
+   * A warning, not a failure: the plugin still loads and still works, and the
+   * owner may have rebuilt it themselves. What it is not is what they agreed
+   * to, and a plugin runs with everything buddi can do — so it is named.
+   */
+  changed?: ReadonlyArray<{ name: string; message: string }>;
+}
+
+/** `finance@1.2.3 (npm …)`, or just the version when nothing recorded a source. */
+function named(plugin: { name: string; version: string; source?: string }): string {
+  return `${plugin.name}@${plugin.version}${plugin.source === undefined ? '' : ` (${plugin.source})`}`;
 }
 
 /**
@@ -524,6 +537,7 @@ export interface PluginFacts {
  */
 export function checkPlugins(facts: PluginFacts): ProbeResult {
   const total = facts.loaded.length + facts.problems.length;
+  const changed = facts.changed ?? [];
   if (total === 0) {
     return {
       status: 'ok',
@@ -531,25 +545,25 @@ export function checkPlugins(facts: PluginFacts): ProbeResult {
     };
   }
   const installed = `${total} installed`;
+  const working = facts.loaded.map(named).join(', ');
+  if (facts.problems.length === 0 && changed.length === 0) {
+    return { status: 'ok', detail: `${installed}, all loaded: ${working}` };
+  }
   if (facts.problems.length === 0) {
     return {
-      status: 'ok',
-      detail: `${installed}, all loaded: ${facts.loaded
-        .map((p) => `${p.name}@${p.version}`)
-        .join(', ')}`,
+      status: 'warn',
+      detail:
+        `${installed}, all loaded: ${working}. ` +
+        `${changed.map((c) => c.message).join(' ')}`,
     };
   }
-  const broken = facts.problems
-    .map((p) => `${p.name} (${p.message})`)
-    .join('; ');
-  const working =
-    facts.loaded.length === 0
-      ? ''
-      : `; loaded: ${facts.loaded.map((p) => `${p.name}@${p.version}`).join(', ')}`;
+  const broken = facts.problems.map((p) => `${p.name} (${p.message})`).join('; ');
   return {
     status: 'fail',
     detail:
-      `${installed}, ${facts.problems.length} did not load — ${broken}${working}. ` +
+      `${installed}, ${facts.problems.length} did not load — ${broken}` +
+      `${facts.loaded.length === 0 ? '' : `; loaded: ${working}`}` +
+      `${changed.length === 0 ? '' : `. ${changed.map((c) => c.message).join(' ')}`}. ` +
       'Its tools are absent from every agent: `buddi plugins list`, then rebuild it or ' +
       '`buddi plugins uninstall <name>`',
   };

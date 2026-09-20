@@ -47,6 +47,7 @@ import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
+import { sweepStages } from './plugins/stage.js';
 
 export { REPO_ROOT };
 
@@ -205,6 +206,14 @@ export async function createWiringAsync(
   // the adopted result. A plugin that fails to load is reported by
   // `buddi plugins list`, never thrown here — see `plugins/load.ts`.
   const plugins = await loadPluginsOnce(env);
+  // Stages nobody decided on are unapproved third-party code sitting in the
+  // data directory. A day is long enough to come back to an approval screen.
+  try {
+    const swept = sweepStages(env);
+    if (swept.length > 0) console.error(`swept ${swept.length} abandoned plugin stage(s)`);
+  } catch {
+    // Housekeeping never stops a start.
+  }
   for (const problem of plugins.problems) {
     console.error(
       `plugin ${problem.name} is installed but did not load: ${problem.message} ` +

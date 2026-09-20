@@ -117,6 +117,30 @@ checks the rows, the sequences and the rollback:
 pnpm --filter @buddi/core test -- src/backup
 ```
 
+Installing a plugin from npm lives in `packages/gateway/src/plugins`, and it is
+split at the one line that matters: `stage.ts` fetches, unpacks and reads a
+package **without importing it**, and `approve.ts` is the two approvals, the
+first of which is the first time that package's code runs in the process.
+`spec.ts` decides what the owner typed (a directory, a `.tgz`, an npm spec),
+`npm.ts` is the only place that shells out to npm and is an interface first so
+that no test needs a registry, `claims.ts` compares the package's own `buddi.md`
+with the manifest it turned out to have, `hash.ts` is what `buddi doctor`
+recomputes to say a plugin's files are no longer the ones that were approved,
+and `paths.ts` puts everything under `<data>/plugins` — beside the artifacts and
+the logs, in the directory a backup already covers. The record itself stays in
+core (`packages/core/src/plugins`), now at version 2 with provenance; a version
+1 file still reads, as directory sources with none. Core imports no plugin, and
+`scripts/check-boundaries.mjs` still says so.
+
+Staged dependencies are installed with `--ignore-scripts`, always: a
+`postinstall` is arbitrary code and at that point no approval exists. The
+packages in the tree that *wanted* to run one are named on the approval screen.
+The staged `node_modules/@buddi/core` is replaced by a symlink to the core the
+gateway is running, because a plugin with its own copy would register tools into
+a registry nobody reads. `@buddi/core` is therefore published
+(`publishConfig.access: public`, `files: [dist, migrations]`) and declared as a
+peer dependency by every plugin package.
+
 The release tarball declares exactly one `bin`, `@buddi/install`'s `buddi`
 launcher; `build.mjs` strips `bin` from every other staged workspace package so
 nothing else claims `node_modules/.bin/buddi`.
@@ -222,6 +246,15 @@ not to run one.
   review before publication; passing these tests is not production certification.
 - Postgres major upgrades fail closed and require a future explicit migration
   path. No automatic conversion or deletion of a cluster occurs.
+- **Installing a plugin from a registry needs `npm` on the machine.** The npm
+  beside the running node is preferred and PATH is the fallback; its absence is
+  a plain error, never a hand-rolled tarball fetcher. A directory or a `.tgz`
+  source needs no npm at all.
+- **The recorded `installedHash` is an accounting control, not a sandbox.** It
+  covers the plugin's own files, excluding `node_modules`, so it detects a
+  plugin edited after it was approved and not a tampered dependency. It is not a
+  signature and there is no marketplace and no curation: a plugin comes from a
+  name the owner typed, and it runs with everything buddi can do.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
 - **A required-auth dashboard refuses a link opened from outside the browser's

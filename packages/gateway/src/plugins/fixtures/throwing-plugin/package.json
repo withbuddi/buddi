@@ -1,0 +1,9 @@
+{
+  "name": "buddi-plugin-fixture-throws",
+  "version": "1.0.0",
+  "description": "A fixture plugin whose entry point throws when it is imported.",
+  "type": "module",
+  "main": "index.js",
+  "keywords": ["buddi-plugin"],
+  "peerDependencies": { "@buddi/core": "*" }
+}

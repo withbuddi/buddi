@@ -283,3 +283,36 @@ export function resetAdoptedPlugins(): void {
 export function resolvePluginDirectory(dir: string, cwd = process.cwd()): string {
   return path.resolve(cwd, dir);
 }
+
+/** One installed plugin that did not load, as the API and doctor report it. */
+export interface PluginLoadFailure {
+  name: string;
+  /** From the record, since the manifest is exactly what could not be read. */
+  version: string;
+  error: string;
+}
+
+/**
+ * What failed to load, for the API and the doctor.
+ *
+ * Reads what was adopted at start rather than importing anything: by the time
+ * anybody asks, the imports have happened, and re-importing a plugin whose
+ * top-level code throws to answer a page request would run it again. A process
+ * that never adopted (a unit test, a one-shot command) gets an empty list,
+ * which is the honest answer for a process that never read the record.
+ */
+export function pluginLoadReport(env: NodeJS.ProcessEnv = process.env): PluginLoadFailure[] {
+  const plugins = adoptedPlugins(env);
+  if (plugins === undefined) return [];
+  const versions = new Map<string, string>();
+  try {
+    for (const record of readPluginsFile(plugins.file).plugins) versions.set(record.name, record.version);
+  } catch {
+    // The record itself is one of the problems below; it is reported there.
+  }
+  return plugins.problems.map((problem) => ({
+    name: problem.name,
+    version: versions.get(problem.name) ?? '?',
+    error: problem.message,
+  }));
+}

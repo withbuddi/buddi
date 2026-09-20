@@ -14,6 +14,7 @@ import {
   countJobsByState,
   createPool,
   createVault,
+  describeSource,
   vaultState,
   isPaused,
   passwordInDatabaseUrl,
@@ -34,6 +35,7 @@ import {
   loadGatewayCatalog,
   adoptedPlugins,
   loadInstalledPlugins,
+  verifyInstalledHash,
   TelegramApi,
   telegramFetchOn,
   webConfig,
@@ -573,10 +575,22 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       // Falling back to a fresh read keeps the probe usable from a process
       // that never called `loadPluginsOnce` — a test, or a future caller.
       const plugins = adoptedPlugins(env) ?? (await loadInstalledPlugins(env));
+      // Against what was approved, not just against what loads: a plugin runs
+      // with everything buddi can do, and the recorded hash is the only thing
+      // that can say afterwards that its files are not the ones agreed to.
+      const changed = plugins.loaded
+        .map((p) => verifyInstalledHash(p.record, { env }))
+        .filter((v) => !v.matches)
+        .map((v) => ({ name: v.name, message: v.message }));
       return checkPlugins({
         record: plugins.file,
-        loaded: plugins.loaded.map((p) => ({ name: p.record.name, version: p.manifest.version })),
+        loaded: plugins.loaded.map((p) => ({
+          name: p.record.name,
+          version: p.manifest.version,
+          source: describeSource(p.record.source),
+        })),
         problems: plugins.problems.map((p) => ({ name: p.name, message: p.message })),
+        changed,
       });
     },
 

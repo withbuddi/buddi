@@ -480,6 +480,31 @@ describe('the plugins row', () => {
     expect(row.detail).toContain('buddi plugins list');
   });
 
+  it('names where each one came from, when the record says', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [{ name: 'weather', version: '0.2.0', source: 'npm buddi-plugin-weather@0.2.0' }],
+      problems: [],
+    });
+    expect(row.detail).toContain('weather@0.2.0 (npm buddi-plugin-weather@0.2.0)');
+  });
+
+  /**
+   * The row the recorded hash exists for. The plugin still loads and still
+   * works; what it is not is what the owner approved, and a plugin runs with
+   * everything buddi can do. A warning, named, never a silent pass.
+   */
+  it('warns when a plugin no longer hashes to what was approved', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [{ name: 'weather', version: '0.2.0' }],
+      problems: [],
+      changed: [{ name: 'weather', message: 'weather changed on disk since it was approved.' }],
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('weather changed on disk since it was approved');
+  });
+
   it('is never critical: a broken plugin does not make the installation broken', async () => {
     const checks = await collectChecks(
       fakeProbes({
