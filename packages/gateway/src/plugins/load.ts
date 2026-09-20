@@ -31,6 +31,7 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import {
   contributionOf,
+  isPluginSchemaName,
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
@@ -114,7 +115,20 @@ export interface PluginProblem {
   /** The record's entry path, so the owner can look at it. */
   entry: string;
   message: string;
+  /**
+   * The record itself, when there is one.
+   *
+   * Doctor checks the approved hash of a plugin that did *not* load as well as
+   * one that did: a plugin whose files were replaced is exactly the plugin
+   * most likely to stop importing, and "it did not load" and "it is not what
+   * you approved" are two different sentences an owner should get together.
+   * Absent for the one problem that is not a plugin: the record file itself.
+   */
+  record?: InstalledPlugin;
 }
+
+/** The name the record file's own problems are reported under. */
+export const RECORD_ITSELF = '(the record itself)';
 
 /** One plugin that loaded: its record and the manifest it produced. */
 export interface LoadedPlugin {
@@ -155,6 +169,19 @@ export function manifestProblem(
   }
   if (m.schema === 'core') {
     return `plugin "${m.name}" claims the "core" schema, which belongs to buddi itself`;
+  }
+  /*
+   * The schema name reaches `create schema`, `set search_path` and, on a
+   * purge, `drop schema`. It is quoted everywhere it does, and it also has to
+   * be a plain identifier: a manifest is a string somebody else wrote, and the
+   * place to refuse one that is not a schema name is before it is recorded as
+   * owning tables.
+   */
+  if (!isPluginSchemaName(m.schema)) {
+    return (
+      `plugin "${m.name}" declares the schema ${JSON.stringify(m.schema)}, which is not a Postgres ` +
+      'identifier: lowercase letters, digits and underscores, not starting with a digit'
+    );
   }
   const reserved = builtInToolNames(env);
   const taken = (m.tools as PluginManifest['tools']).map((t) => t?.name).filter((n) => reserved.has(n));
@@ -212,7 +239,7 @@ export async function loadInstalledPlugins(
       file,
       loaded,
       problems: [
-        { name: '(the record itself)', entry: file, message: err instanceof Error ? err.message : String(err) },
+        { name: RECORD_ITSELF, entry: file, message: err instanceof Error ? err.message : String(err) },
       ],
     };
   }
@@ -220,7 +247,7 @@ export async function loadInstalledPlugins(
   for (const record of contents.plugins) {
     const result = await loadManifest(record.entry, { name: record.name }, env);
     if (!result.ok) {
-      problems.push({ name: record.name, entry: record.entry, message: result.message });
+      problems.push({ name: record.name, entry: record.entry, message: result.message, record });
       continue;
     }
     const owner = schemas.get(result.manifest.schema);
@@ -229,6 +256,7 @@ export async function loadInstalledPlugins(
         name: record.name,
         entry: record.entry,
         message: `it claims the "${result.manifest.schema}" schema, which "${owner}" already owns here`,
+        record,
       });
       continue;
     }

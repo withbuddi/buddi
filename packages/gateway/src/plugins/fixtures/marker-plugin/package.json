@@ -8,6 +8,7 @@
     "buddi-plugin"
   ],
   "buddi": {
+    "name": "fixture-marker",
     "manifest": "manifest",
     "core": "^0.1.0"
   },

@@ -266,7 +266,13 @@ function Staged({
     setFailed(null);
     api
       .approveStaged(staged.id, {
-        ...(staged.integrity ? { integrity: staged.integrity } : {}),
+        /*
+         * Always sent, empty string included. A directory source has no
+         * integrity at all, and dropping the field for it — which is what a
+         * falsy check did — made the server answer "send back the integrity
+         * you were shown" to a card that was showing none.
+         */
+        integrity: staged.integrity ?? '',
         ...(acknowledgeDrift ? { acknowledgeDrift: true } : {}),
       })
       .then((answer) => {
@@ -301,7 +307,24 @@ function Staged({
             items={[
               { label: 'From', value: sourceWords(staged.source) },
               { label: 'Published by', value: staged.publisher ?? 'nobody npm will name' },
-              { label: 'Integrity', value: <span className="mono">{staged.integrity ?? 'none — this came off a disk'}</span> },
+              {
+                label: 'Integrity',
+                value: (
+                  <span className="mono">
+                    {staged.integrity === undefined || staged.integrity === ''
+                      ? 'none — this came off a disk'
+                      : staged.integrity}
+                  </span>
+                ),
+              },
+              ...(staged.stagedHash
+                ? [
+                    {
+                      label: 'Files on disk',
+                      value: <span className="mono">{staged.stagedHash}</span>,
+                    },
+                  ]
+                : []),
               {
                 label: 'Dependencies',
                 value:

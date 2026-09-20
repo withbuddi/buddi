@@ -48,6 +48,7 @@ import { bindPlatformTools } from './agents/platform.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
 import { sweepStages } from './plugins/stage.js';
+import { sweepPluginDirs } from './plugins/paths.js';
 
 export { REPO_ROOT };
 
@@ -211,6 +212,24 @@ export async function createWiringAsync(
   try {
     const swept = sweepStages(env);
     if (swept.length > 0) console.error(`swept ${swept.length} abandoned plugin stage(s)`);
+    /*
+     * And what a half-finished install left: the `<name>.previous-…` an upgrade
+     * moves aside, and a package directory no record mentions, which is what a
+     * crash between the rename and the record write leaves behind. Skipped
+     * entirely when the record itself could not be read — with no list of what
+     * is installed, everything would look like an orphan.
+     */
+    const readable = plugins.problems.every((problem) => problem.record !== undefined);
+    if (readable) {
+      const known = [
+        ...plugins.loaded.map((p) => p.record.name),
+        ...plugins.problems.map((p) => p.name),
+      ];
+      const dirs = sweepPluginDirs(env, { known });
+      for (const dir of dirs) {
+        console.error(`removed ${dir} from the plugins directory: no record names it`);
+      }
+    }
   } catch {
     // Housekeeping never stops a start.
   }

@@ -8,51 +8,33 @@
  * that moving a file is a change, in sorted order so that two identical trees
  * on two machines agree.
  *
- * `node_modules` is excluded deliberately. It is not part of what was approved
- * — npm writes it, its layout differs between npm versions, and including it
- * would make the hash change for reasons that have nothing to do with the
- * plugin's own code. The trade is stated plainly in `docs/plugins.md`: this
- * detects a tampered plugin, not a tampered dependency.
+ * `node_modules` is **included**, and that is a change from the first version
+ * of this file. The excuse for leaving it out was that npm writes it and its
+ * layout varies; the consequence was that the hash covered the plugin's own
+ * code and not the code that actually runs, which is the plugin plus every
+ * dependency npm put beside it. Those bytes were fetched once, at staging, and
+ * an update is the only thing that is supposed to change them — so the hash
+ * covers them, and a dependency rewritten in place is now a doctor warning
+ * rather than a blind spot.
+ *
+ * Two things are still outside it: `node_modules/@buddi/core`, which is the
+ * symlink staging writes to the *running installation's* core and therefore
+ * not part of the package at all, and `.git`. Everything else is hashed, and a
+ * symlink among the package's own files is refused rather than skipped: a hash
+ * that silently ignores what it cannot read proves nothing.
  */
-import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import path from 'node:path';
 import type { InstalledPlugin } from '@buddi/core';
 import { packageDirOf } from './paths.js';
-
-const EXCLUDED = new Set(['node_modules', '.git']);
+import { treeHash, walkTree } from './tree.js';
 
 /** Every file in the package, relative and posix-separated, sorted. */
 export function packageFiles(dir: string): string[] {
-  const found: string[] = [];
-  const walk = (current: string, prefix: string): void => {
-    let entries;
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (EXCLUDED.has(entry.name)) continue;
-      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-      if (entry.isDirectory()) walk(path.join(current, entry.name), relative);
-      else if (entry.isFile()) found.push(relative);
-    }
-  };
-  walk(dir, '');
-  return found.sort();
+  return walkTree(dir, { includeModules: true, linksAllowedUnder: 'node_modules' }).map((e) => e.relative);
 }
 
-/** `sha256-<hex>` over the package's files. Stable across machines. */
+/** `sha256-<hex>` over the package's files, dependencies included. */
 export function installedHashOf(dir: string): string {
-  const hash = createHash('sha256');
-  for (const relative of packageFiles(dir)) {
-    hash.update(relative);
-    hash.update('\0');
-    hash.update(readFileSync(path.join(dir, relative)));
-    hash.update('\0');
-  }
-  return `sha256-${hash.digest('hex')}`;
+  return treeHash(dir, { includeModules: true, linksAllowedUnder: 'node_modules' });
 }
 
 export interface HashVerification {
@@ -88,17 +70,22 @@ export function verifyInstalledHash(
   }
   const dir = opts.packageDir ?? packageDirOf(plugin, opts.env ?? process.env);
   let actual: string | undefined;
+  let refused: string | undefined;
   try {
-    if (statSync(dir).isDirectory()) actual = installedHashOf(dir);
-  } catch {
-    actual = undefined;
+    actual = installedHashOf(dir);
+  } catch (err) {
+    // A tree that cannot be hashed — it is gone, or something in it is a link
+    // now — is exactly the thing this check exists to say out loud.
+    refused = err instanceof Error ? err.message : String(err);
   }
   if (actual === undefined) {
     return {
       name: plugin.name,
       expected,
       matches: false,
-      message: `${plugin.name}: its package directory (${dir}) is not on disk any more, so what was approved cannot be checked`,
+      message:
+        `${plugin.name}: its files (${dir}) could not be checked against what you approved: ` +
+        `${refused ?? 'the directory is not on disk any more'}`,
     };
   }
   if (actual === expected) return { name: plugin.name, expected, actual, matches: true, message: '' };

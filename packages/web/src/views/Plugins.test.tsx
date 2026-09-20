@@ -42,6 +42,7 @@ const STAGED: StagedPluginView = {
   source: { kind: 'registry', name: 'weather', version: '2.1.0' },
   publisher: 'someone',
   integrity: 'sha512-AAAA',
+  stagedHash: 'sha256-beef',
   dependencies: { count: 4, withScripts: ['node-gyp-thing'] },
   claims: { schema: 'weather', hosts: ['api.example.test'], text: 'It tells you the weather.', missing: false },
   scripts: [],
@@ -85,6 +86,38 @@ describe('the plugins section', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Install' }));
     await waitFor(() => expect(api.approveStaged).toHaveBeenCalledWith('stage-1', { integrity: 'sha512-AAAA' }));
+  });
+
+  /**
+   * A directory source has no integrity at all, and the card says so.
+   *
+   * The empty string still has to be sent: the route asks for the hash it
+   * showed, and a page that dropped the field because it was falsy got a 400
+   * telling it to send back a hash that never existed. That is the developer
+   * path, so it was the one path nobody clicked.
+   */
+  it('approves a directory source, whose integrity is nothing at all', async () => {
+    const directory: StagedPluginView = {
+      ...STAGED,
+      integrity: '',
+      stagedHash: '',
+      source: { kind: 'directory', path: '/home/o/code/weather' },
+    };
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [directory] }));
+    vi.mocked(api.approveStaged).mockResolvedValue({ installed: { name: 'weather', version: '2.1.0' }, restartNeeded: true });
+    render(<Plugins />);
+
+    expect(await screen.findByText('none — this came off a disk')).toBeInTheDocument();
+    expect(screen.getByText(/a directory on this machine/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await waitFor(() => expect(api.approveStaged).toHaveBeenCalledWith('stage-1', { integrity: '' }));
+  });
+
+  it('shows the hash of the files on disk beside the tarball\'s', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED] }));
+    render(<Plugins />);
+    expect(await screen.findByText('sha256-beef')).toBeInTheDocument();
   });
 
   it('only acknowledges the drift from the second card, which lists it', async () => {

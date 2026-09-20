@@ -28,6 +28,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -35,16 +36,18 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { PluginSource } from '@buddi/core';
-import { InstallRefusal } from './install.js';
+import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
 import { npmSpecText, parsePluginSpec, type PluginSpec } from './spec.js';
 import { stagingRoot } from './paths.js';
+import { assertRegularTree, treeHash, TreeRefusal } from './tree.js';
 
 const run = promisify(execFile);
 
@@ -65,7 +68,12 @@ export const STAGED_FILE = 'staged.json';
 export interface StagedDependencies {
   /** Packages in the installed tree, the plugin itself excluded. */
   count: number;
-  /** Those that declare `preinstall`, `install` or `postinstall`. */
+  /**
+   * Those that want to run code when they are installed: a declared
+   * `preinstall`/`install`/`postinstall`, or a `binding.gyp`, which is npm's
+   * implicit "build native code with node-gyp" and runs a compiler without any
+   * script being written down anywhere.
+   */
   withScripts: string[];
 }
 
@@ -88,6 +96,20 @@ export interface StagedPlugin {
   publisher?: string;
   /** `sha512-…`, as npm reports it. Empty for a directory source. */
   integrity: string;
+  /**
+   * `sha256-…` over the bytes that will run: the extracted package, its
+   * dependencies, and the targets of the links npm wrote among them.
+   *
+   * The integrity hash above is the tarball's, which says what was fetched;
+   * this one says what is on disk now, after unpacking and after `npm
+   * install`. Approval re-computes it immediately before the first import, so
+   * a stage that changed while it waited cannot be approved by a decision made
+   * about what it used to be. Empty for a directory source, whose files are
+   * the developer's own and change every time they build.
+   */
+  stagedHash: string;
+  /** The name its manifest must answer to: `buddi.name`, or the package name. */
+  declaredName: string;
   /** The `buddi` field of package.json, if any. */
   buddi?: { manifest?: string; core?: string };
   /** The peer range it wants on `@buddi/core`. */
@@ -218,7 +240,15 @@ export function integrityOfFile(file: string): string {
 export async function extractTarball(tgz: string, into: string): Promise<void> {
   mkdirSync(into, { recursive: true });
   try {
-    await run('tar', ['-xzf', tgz, '-C', into], { timeout: 120_000 });
+    /*
+     * `--no-same-owner --no-same-permissions`: the archive is a stranger's and
+     * its mode and ownership bits are its author's opinion, not something this
+     * installation should adopt. Extracted as this user, with this user's
+     * umask, every time.
+     */
+    await run('tar', ['-xzf', tgz, '-C', into, '--no-same-owner', '--no-same-permissions'], {
+      timeout: 120_000,
+    });
   } catch (err) {
     throw new StageRefusal(
       'bad-tarball',
@@ -232,6 +262,23 @@ export async function extractTarball(tgz: string, into: string): Promise<void> {
       'bad-tarball',
       `${tgz} is not an npm package tarball: it has no package/package.json (found ${roots.join(', ') || 'nothing'})`,
     );
+  }
+  /*
+   * Before anything walks, links or deletes inside this directory: it is
+   * files and directories, or it is refused. A member called
+   * `node_modules/@buddi` pointing somewhere else would turn the peer link
+   * that comes next into a write outside the stage.
+   */
+  try {
+    assertRegularTree(path.join(into, 'package'));
+  } catch (err) {
+    if (err instanceof TreeRefusal) {
+      throw new StageRefusal(
+        'unsafe-tarball',
+        `${tgz} was not unpacked: ${err.message} Nothing of it is kept.`,
+      );
+    }
+    throw err;
   }
 }
 
@@ -273,7 +320,13 @@ export function scanDependencies(packageDir: string): StagedDependencies {
     try {
       const pkg = JSON.parse(readFileSync(file, 'utf8')) as { scripts?: Record<string, string> };
       const scripts = lifecycleScripts(pkg);
-      if (scripts.length > 0) withScripts.push(`${name} (${scripts.join(', ')})`);
+      // A `binding.gyp` is npm's implicit install script: no `postinstall` is
+      // written anywhere and node-gyp compiles C++ as this user all the same.
+      // Saying "none of which declares an install script" about a package with
+      // one would be true and misleading, which is worse than wrong.
+      const wants = [...scripts];
+      if (existsSync(path.join(dir, 'binding.gyp'))) wants.push('binding.gyp: wants to build native code');
+      if (wants.length > 0) withScripts.push(`${name} (${wants.join(', ')})`);
     } catch {
       // An unreadable package.json in the tree is not the owner's problem here.
     }
@@ -317,6 +370,15 @@ export function linkCore(packageDir: string, coreDir?: string): string | undefin
   rmSync(link, { recursive: true, force: true });
   symlinkSync(resolved, link, 'junction');
   return resolved;
+}
+
+/** `lstat`, or nothing. Never follows what it is asked about. */
+function lstatOrUndefined(file: string): Stats | undefined {
+  try {
+    return lstatSync(file);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The core package directory this gateway is running, or nothing in a bundle. */
@@ -390,6 +452,7 @@ export async function stagePlugin(
     let source: PluginSource;
     let integrity = '';
     let publisher: string | undefined;
+    let registryPackument: { name: string; version: string } | undefined;
 
     if (parsed.kind === 'directory') {
       // The developer path: their own build, in place, nothing copied and
@@ -420,9 +483,24 @@ export async function stagePlugin(
         ...(parsed.registry === undefined ? {} : { registry: parsed.registry }),
       });
       const packed = integrityOfFile(tgz);
+      /*
+       * The registry said one hash and the file on disk is another: refuse,
+       * and do not pick a winner. npm checks integrity on download, so this
+       * should be impossible — which is exactly why a disagreement means
+       * something about this fetch is not what it appears to be, and the owner
+       * is about to be shown a hash that describes neither.
+       */
+      if (integrity !== '' && packed !== integrity) {
+        throw new StageRefusal(
+          'integrity-mismatch',
+          `the registry says ${packument.name}@${packument.version} is ${integrity}, and the tarball ` +
+            `that arrived is ${packed}. Nothing was unpacked and nothing is kept.`,
+        );
+      }
       if (integrity === '') integrity = packed;
       await extractTarball(tgz, dir);
       packageDir = path.join(dir, 'package');
+      registryPackument = { name: packument.name, version: packument.version };
       source = {
         kind: 'registry',
         name: packument.name,
@@ -435,6 +513,28 @@ export async function stagePlugin(
     if (typeof pkg.name !== 'string' || typeof pkg.version !== 'string') {
       throw new StageRefusal('bad-package', `${packageDir}/package.json names no name and version`);
     }
+    /*
+     * What the registry answered about, and what arrived, are the same package.
+     * Without this the card can say one name and version while the tarball
+     * holds another, and every later check — the record, the directory it is
+     * moved into — follows the tarball.
+     */
+    if (registryPackument !== undefined) {
+      if (pkg.name !== registryPackument.name || pkg.version !== registryPackument.version) {
+        throw new StageRefusal(
+          'not-what-was-asked-for',
+          `npm resolved ${registryPackument.name}@${registryPackument.version}, and the tarball that ` +
+            `arrived calls itself ${String(pkg.name)}@${String(pkg.version)}. Nothing of it is kept.`,
+        );
+      }
+    }
+    // The name its manifest has to answer to. A published package is usually
+    // `buddi-plugin-weather` while its manifest is `weather`, so the package
+    // may say which name is its own; if it does not, the two must match.
+    const declaredName =
+      typeof pkg.buddi?.name === 'string' && pkg.buddi.name.trim() !== ''
+        ? (pkg.buddi.name as string).trim()
+        : (pkg.name as string);
 
     if (parsed.kind !== 'directory' && opts.skipDependencies !== true) {
       phase('installing-dependencies');
@@ -447,6 +547,21 @@ export async function stagePlugin(
     if (parsed.kind !== 'directory') linkCore(packageDir);
 
     phase('reading');
+    /*
+     * The hash of what will run, taken once the tree is final: the package, the
+     * dependencies npm wrote beside it, and the targets of the links among
+     * them. A directory source has none — it is a developer's own build and
+     * changes every time they rebuild it.
+     */
+    let stagedHash = '';
+    if (parsed.kind !== 'directory') {
+      try {
+        stagedHash = treeHash(packageDir, { includeModules: true, linksAllowedUnder: 'node_modules' });
+      } catch (err) {
+        if (err instanceof TreeRefusal) throw new StageRefusal('unsafe-tree', err.message);
+        throw err;
+      }
+    }
     const staged: StagedPlugin = {
       id,
       dir,
@@ -457,6 +572,8 @@ export async function stagePlugin(
       version: pkg.version as string,
       ...(publisher === undefined ? {} : { publisher }),
       integrity,
+      stagedHash,
+      declaredName,
       ...(pkg.buddi === undefined ? {} : { buddi: { manifest: pkg.buddi.manifest, core: pkg.buddi.core } }),
       ...(typeof pkg.peerDependencies?.['@buddi/core'] === 'string'
         ? { coreRange: pkg.peerDependencies['@buddi/core'] as string }

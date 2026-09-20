@@ -138,6 +138,8 @@ export function parsePluginsFile(text: string, file = PLUGINS_FILE): PluginsFile
       // A v1 entry has none, and that is the truthful answer for it: nothing
       // was fetched, so nothing was hashed and nobody published it.
       ...(provenance === undefined ? {} : { provenance }),
+      // An entry still marked as being placed is one an install did not finish.
+      ...(entry.placing === true ? { placing: true as const } : {}),
     };
   });
   const seen = new Set<string>();

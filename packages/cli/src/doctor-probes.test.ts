@@ -121,11 +121,12 @@ describe('the plugins probe', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'buddi-doctor-plugins-'));
     mkdirSync(path.join(root, 'agents'), { recursive: true });
     const file = path.join(root, 'plugins.json');
-    writeFileSync(file, JSON.stringify({ version: 1, plugins }));
+    writeFileSync(file, JSON.stringify({ version: 2, plugins }));
     return {
       BUDDI_AGENTS_DIR: path.join(root, 'agents'),
       BUDDI_SKILLS_DIR: path.join(root, 'skills'),
       BUDDI_PLUGINS_FILE: file,
+      BUDDI_DATA_DIR: path.join(root, 'data'),
       BUDDI_VAULT: 'none',
     };
   }
@@ -157,5 +158,33 @@ describe('the plugins probe', () => {
     expect(row.detail).toContain('1 installed, 1 did not load');
     expect(row.detail).toContain('weather');
     expect(row.detail).toContain('buddi plugins list');
+  });
+
+  /**
+   * A plugin that did not load is checked against its approved hash as well.
+   *
+   * It is the plugin most likely to have been replaced — that is often *why*
+   * it stopped importing — and "it did not load" and "it is not what you
+   * approved" are two different sentences an owner should be given together.
+   */
+  it('checks the approved hash of a plugin that did not load, not only the ones that did', async () => {
+    const env = withRecord([
+      {
+        name: 'weather',
+        version: '0.1.0',
+        entry: '/nowhere/weather/dist/index.js',
+        schema: 'weather',
+        installedAt: new Date().toISOString(),
+        source: { kind: 'registry', name: 'buddi-plugin-weather', version: '0.1.0' },
+        provenance: { installedHash: `sha256-${'0'.repeat(64)}`, approvedAt: new Date().toISOString() },
+      },
+    ]);
+    const probes = createProbes(env, { vault: undefined, http: recordHttp().http });
+    const row = await probes.plugins!();
+    await probes.close();
+    expect(row.status).toBe('fail');
+    expect(row.detail).toContain('1 did not load');
+    // The hash sentence is there too, about the same plugin.
+    expect(row.detail).toContain('could not be checked against what you approved');
   });
 });

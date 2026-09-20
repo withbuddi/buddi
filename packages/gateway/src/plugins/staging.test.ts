@@ -15,8 +15,10 @@
  */
 import { execFileSync } from 'node:child_process';
 import {
+  copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -30,14 +32,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, resetAdoptedPlugins } from './load.js';
+import { isPluginSchemaName } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { InstallRefusal } from './install.js';
 import { driftBetween, parseBuddiMd } from './claims.js';
 import { installedHashOf, verifyInstalledHash } from './hash.js';
-import { installedPackageDir } from './paths.js';
+import { installedPackageDir, pluginDirKey, pluginsRoot, sweepPluginDirs } from './paths.js';
+import { assertRegularTree, treeHash } from './tree.js';
+import { entryPointOf } from './install.js';
+import { manifestProblem } from './load.js';
 import { uninstallPlugin } from './uninstall.js';
 import { parsePluginSpec, splitNpmSpec } from './spec.js';
-import { isNewerVersion, updatePlugin } from './update.js';
+import { isNewerVersion, parseSemver, updatePlugin } from './update.js';
 import {
   integrityOfFile,
   lifecycleScripts,
@@ -59,6 +65,8 @@ const ZOD_DIR = path.dirname(require_.resolve('zod/package.json'));
 let root: string;
 let env: NodeJS.ProcessEnv;
 let marker: string;
+/** Temporary directories outside `root`, removed with it. */
+const temporary: string[] = [];
 
 beforeEach(() => {
   resetAdoptedPlugins();
@@ -84,6 +92,7 @@ afterEach(() => {
   resetAdoptedPlugins();
   delete process.env.BUDDI_FIXTURE_MARKER;
   rmSync(root, { recursive: true, force: true });
+  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 /** Pack a fixture directory the way npm would: everything under `package/`. */
@@ -101,6 +110,7 @@ function packFixture(source: string, into: string, edit?: (dir: string) => void)
 interface FakeNpmOptions {
   fixture?: string;
   version?: string;
+  /** Overrides what the registry *claims*, which is how a mismatch is staged. */
   integrity?: string;
   publisher?: string;
   edit?: (packageDir: string) => void;
@@ -108,27 +118,49 @@ interface FakeNpmOptions {
   installs?: string[];
 }
 
-/** An npm that answers from disk. No registry, no network, no child npm. */
+/**
+ * An npm that answers from disk. No registry, no network, no child npm.
+ *
+ * The tarball is packed once and then handed out, so what `view` reports as the
+ * integrity really is the hash of the bytes `pack` produces — staging compares
+ * the two and refuses when they disagree, and a fake that could not agree with
+ * itself would make that refusal untestable.
+ */
 function fakeNpm(opts: FakeNpmOptions = {}): NpmRunner {
   const fixture = opts.fixture ?? MARKER_FIXTURE;
   const version = opts.version ?? '1.0.0';
   const name = JSON.parse(readFileSync(path.join(fixture, 'package.json'), 'utf8')).name as string;
+  let packed: string | undefined;
+  const tarball = (): string => {
+    if (packed === undefined) {
+      const dir = mkdtempSync(path.join(tmpdir(), 'buddi-fake-npm-'));
+      temporary.push(dir);
+      packed = packFixture(fixture, dir, (pkgDir) => {
+        const pkg = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+        pkg.version = version;
+        writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(pkg, null, 2));
+        opts.edit?.(pkgDir);
+      });
+    }
+    return packed;
+  };
   return {
     async view(): Promise<any> {
       return {
         name,
         version,
-        dist: { integrity: opts.integrity ?? `sha512-${'a'.repeat(86)}==`, tarball: `https://registry.invalid/${name}` },
+        dist: {
+          integrity: opts.integrity ?? integrityOfFile(tarball()),
+          tarball: `https://registry.invalid/${name}`,
+        },
         _npmUser: { name: opts.publisher ?? 'a-publisher' },
       };
     },
     async pack(_spec, destination): Promise<string> {
-      return packFixture(fixture, destination, (dir) => {
-        const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
-        pkg.version = version;
-        writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
-        opts.edit?.(dir);
-      });
+      mkdirSync(destination, { recursive: true });
+      const into = path.join(destination, 'fixture.tgz');
+      copyFileSync(tarball(), into);
+      return into;
     },
     async install(dir): Promise<void> {
       opts.installs?.push(dir);
@@ -205,9 +237,18 @@ describe('staging', () => {
     mkdirSync(quiet, { recursive: true });
     writeFileSync(path.join(quiet, 'package.json'), JSON.stringify({ name: 'quiet', version: '1.0.0' }));
 
+    // No script written down anywhere, and node-gyp compiles C++ as this user.
+    const gyp = path.join(packageDir, 'node_modules', 'native-ish');
+    mkdirSync(gyp, { recursive: true });
+    writeFileSync(path.join(gyp, 'package.json'), JSON.stringify({ name: 'native-ish', version: '1.0.0' }));
+    writeFileSync(path.join(gyp, 'binding.gyp'), '{ "targets": [] }');
+
     const scanned = scanDependencies(packageDir);
-    expect(scanned.count).toBe(2);
-    expect(scanned.withScripts).toEqual(['sharp-ish (install)']);
+    expect(scanned.count).toBe(3);
+    expect(scanned.withScripts).toEqual([
+      'native-ish (binding.gyp: wants to build native code)',
+      'sharp-ish (install)',
+    ]);
     expect(lifecycleScripts({ scripts: { postinstall: 'x', test: 'y' } })).toEqual(['postinstall']);
   });
 
@@ -439,5 +480,290 @@ describe('what doctor and the API read afterwards', () => {
   it('hashes a tarball in the same SRI form npm publishes', () => {
     const tgz = packFixture(MARKER_FIXTURE, path.join(root, 'packed'));
     expect(integrityOfFile(tgz)).toMatch(/^sha512-[A-Za-z0-9+/]+={0,2}$/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * What a tarball is allowed to contain
+ * ------------------------------------------------------------------ */
+
+/** Build a tarball by hand, with whatever `tar` this platform ships. */
+function tarballOf(build: (dir: string) => void, opts: { members?: string[]; absolute?: boolean } = {}): string {
+  const staging = mkdtempSync(path.join(tmpdir(), 'buddi-evil-'));
+  temporary.push(staging);
+  mkdirSync(path.join(staging, 'package'), { recursive: true });
+  build(path.join(staging, 'package'));
+  const tgz = path.join(staging, 'evil.tgz');
+  execFileSync('tar', [
+    ...(opts.absolute === true ? ['-czPf'] : ['-czf']),
+    tgz,
+    '-C',
+    staging,
+    ...(opts.members ?? ['package']),
+  ]);
+  return tgz;
+}
+
+describe('a tarball is files and directories, or it is refused', () => {
+  it('refuses a package with a symlink in it, and keeps nothing', async () => {
+    const outside = path.join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    const tgz = tarballOf((dir) => {
+      writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ name: 'buddi-plugin-sneaky', version: '1.0.0', main: 'index.js' }),
+      );
+      writeFileSync(path.join(dir, 'index.js'), 'export const manifest = {};\n');
+      // The shape that matters: the directory the core peer link is written
+      // into, pointed somewhere else entirely.
+      mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
+      symlinkSync(outside, path.join(dir, 'node_modules', '@buddi'), 'junction');
+    });
+
+    await expect(stagePlugin(tgz, { env, npm: fakeNpm() })).rejects.toThrow(/symbolic link/);
+    // Nothing was written through it, and nothing of the package is kept.
+    expect(existsSync(path.join(outside, 'core'))).toBe(false);
+    expect(listStaged(env)).toEqual([]);
+  });
+
+  it('never writes outside the staging directory, whatever the members are called', async () => {
+    const escapee = path.join(root, 'escaped.txt');
+    const tgz = tarballOf(
+      (dir) => {
+        writeFileSync(
+          path.join(dir, 'package.json'),
+          JSON.stringify({ name: 'buddi-plugin-traversal', version: '1.0.0', main: 'index.js' }),
+        );
+        writeFileSync(path.join(dir, 'index.js'), 'export const manifest = {};\n');
+        // A member whose path climbs out of the directory it is extracted into.
+        writeFileSync(path.join(dir, '..', 'escaped.txt'), 'written by a tarball');
+      },
+      { members: ['package', 'package/../escaped.txt'], absolute: true },
+    );
+
+    await stagePlugin(tgz, { env, npm: fakeNpm(), skipDependencies: true }).catch(() => undefined);
+    // Whether tar dropped the member or the walk refused the stage, the one
+    // thing that must be true is that nothing landed outside the stage.
+    expect(existsSync(escapee)).toBe(false);
+  });
+
+  it('refuses a device or a fifo among the files', () => {
+    const dir = path.join(root, 'fifo-pkg');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'package.json'), '{}');
+    execFileSync('mkfifo', [path.join(dir, 'pipe')]);
+    expect(() => assertRegularTree(dir)).toThrow(/neither a file nor a directory/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The hash of what actually runs
+ * ------------------------------------------------------------------ */
+
+describe('the staged tree is hashed, and the hash is what approval re-checks', () => {
+  it('covers the dependencies, not only the package\'s own files', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    expect(staged.stagedHash).toMatch(/^sha256-[0-9a-f]{64}$/);
+
+    const before = staged.stagedHash;
+    const added = path.join(staged.packageDir, 'node_modules', 'extra');
+    mkdirSync(added, { recursive: true });
+    writeFileSync(path.join(added, 'package.json'), '{"name":"extra","version":"1.0.0"}');
+    expect(treeHash(staged.packageDir, { includeModules: true, linksAllowedUnder: 'node_modules' })).not.toBe(before);
+  });
+
+  it('refuses a stage whose files changed while it waited, and imports nothing', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    writeFileSync(path.join(staged.packageDir, 'index.js'), 'export const manifest = { name: "other" };\n');
+
+    await expect(approveStaged(staged.id, { integrity: staged.integrity, env })).rejects.toThrow(
+      /not the ones that were read/,
+    );
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(path.join(root, 'plugins.json'))).toBe(false);
+  });
+
+  it('refuses a tarball whose bytes are not what the registry published', async () => {
+    const npm = fakeNpm({ integrity: `sha512-${'z'.repeat(86)}==` });
+    await expect(stagePlugin('buddi-plugin-fixture-marker', { env, npm })).rejects.toThrow(
+      /the registry says .* and the tarball that arrived is/,
+    );
+    expect(listStaged(env)).toEqual([]);
+  });
+
+  it('refuses a tarball that is not the version npm resolved', async () => {
+    const npm = fakeNpm({
+      edit: (dir) => {
+        const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+        pkg.version = '9.9.9';
+        writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
+      },
+    });
+    await expect(stagePlugin('buddi-plugin-fixture-marker', { env, npm })).rejects.toThrow(
+      /calls itself buddi-plugin-fixture-marker@9\.9\.9/,
+    );
+  });
+
+  it('refuses a plugin that rewrites its own files while it is being imported', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    // The fixture appends to whatever `BUDDI_FIXTURE_MARKER` names, at import.
+    // Pointed at its own directory, it is a package that changes as it is read.
+    process.env.BUDDI_FIXTURE_MARKER = path.join(staged.packageDir, 'self-written.txt');
+
+    await expect(approveStaged(staged.id, { integrity: staged.integrity, env })).rejects.toThrow(
+      /changed its own files while it was being imported/,
+    );
+    // Removed, and no record left claiming it is installed.
+    expect(existsSync(installedPackageDir('fixture-marker', env))).toBe(false);
+    const record = existsSync(path.join(root, 'plugins.json'))
+      ? JSON.parse(readFileSync(path.join(root, 'plugins.json'), 'utf8')).plugins
+      : [];
+    expect(record).toEqual([]);
+  });
+
+  it('records the hash taken before the import, and doctor checks the same tree', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    if (outcome.kind !== 'installed') throw new Error('expected an install');
+    expect(outcome.record.provenance?.installedHash).toBe(staged.stagedHash);
+    expect(verifyInstalledHash(outcome.record, { env }).matches).toBe(true);
+
+    // A dependency rewritten in place is now visible, which is what including
+    // node_modules in the hash bought.
+    const dir = installedPackageDir('fixture-marker', env);
+    mkdirSync(path.join(dir, 'node_modules', 'extra'), { recursive: true });
+    writeFileSync(path.join(dir, 'node_modules', 'extra', 'index.js'), 'whatever');
+    expect(verifyInstalledHash(outcome.record, { env }).matches).toBe(false);
+  });
+
+  it('reports a package that grew a symlink rather than hashing around it', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    if (outcome.kind !== 'installed') throw new Error('expected an install');
+    const dir = installedPackageDir('fixture-marker', env);
+    symlinkSync(path.join(root, 'agents'), path.join(dir, 'elsewhere'), 'junction');
+    expect(lstatSync(path.join(dir, 'elsewhere')).isSymbolicLink()).toBe(true);
+
+    const verified = verifyInstalledHash(outcome.record, { env });
+    expect(verified.matches).toBe(false);
+    expect(verified.message).toMatch(/could not be checked|symbolic link/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Names, paths and identity
+ * ------------------------------------------------------------------ */
+
+describe('what a package may be called, and where it may be put', () => {
+  it('folds a scoped name into one safe directory, and refuses the rest', () => {
+    expect(pluginDirKey('weather')).toBe('weather');
+    expect(pluginDirKey('@you/weather')).toBe('@you+weather');
+    expect(() => pluginDirKey('staging')).toThrow(/staged packages wait in/);
+    expect(() => pluginDirKey('../../etc/cron.d')).toThrow(/not a usable plugin name/);
+    expect(() => pluginDirKey('Weather')).toThrow(/not a usable plugin name/);
+    expect(() => installedPackageDir('../escape', env)).toThrow(/not a usable plugin name/);
+    expect(installedPackageDir('@you/weather', env).endsWith(path.join('plugins', '@you+weather'))).toBe(true);
+  });
+
+  it('refuses a manifest that calls itself something other than the package', async () => {
+    const npm = fakeNpm({
+      edit: (dir) => {
+        const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+        pkg.buddi.name = 'something-else';
+        writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2));
+      },
+    });
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm });
+    expect(staged.declaredName).toBe('something-else');
+    await expect(approveStaged(staged.id, { integrity: staged.integrity, env })).rejects.toThrow(
+      /manifest it exports calls itself "fixture-marker"/,
+    );
+    expect(existsSync(installedPackageDir('fixture-marker', env))).toBe(false);
+  });
+
+  it('refuses an entry point that resolves outside the package', () => {
+    const dir = path.join(root, 'escaping');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(root, 'elsewhere.js'), 'export const manifest = {};\n');
+    writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'escaping', version: '1.0.0', main: '../elsewhere.js' }),
+    );
+    expect(() => entryPointOf(dir)).toThrow(/outside the package directory/);
+  });
+
+  it('refuses a schema name that is not an identifier, before anything records it', () => {
+    expect(isPluginSchemaName('fixture_marker')).toBe(true);
+    expect(isPluginSchemaName('public; drop schema core')).toBe(false);
+    expect(
+      manifestProblem({ name: 'x', version: '1.0.0', schema: 'we-ird', tools: [] }, undefined, env),
+    ).toMatch(/not a Postgres identifier/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Finishing, or not finishing, an install
+ * ------------------------------------------------------------------ */
+
+describe('an install that does not finish', () => {
+  it('sweeps a moved-aside version and a directory no record names', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    await approveStaged(staged.id, { integrity: staged.integrity, env });
+    const root_ = pluginsRoot(env);
+    mkdirSync(path.join(root_, 'ghost'), { recursive: true });
+    mkdirSync(path.join(root_, 'fixture-marker.previous-1700000000000'), { recursive: true });
+
+    const swept = sweepPluginDirs(env, { known: ['fixture-marker'] }).sort();
+
+    expect(swept).toEqual(['fixture-marker.previous-1700000000000', 'ghost']);
+    expect(existsSync(installedPackageDir('fixture-marker', env))).toBe(true);
+    // The staging directory is never an orphan, whatever else is swept.
+    expect(existsSync(path.join(root_, 'staging'))).toBe(true);
+  });
+
+  it('serialises two approvals of the same stage: one installs, the other refuses', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const both = await Promise.allSettled([
+      approveStaged(staged.id, { integrity: staged.integrity, env }),
+      approveStaged(staged.id, { integrity: staged.integrity, env }),
+    ]);
+    expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const record = JSON.parse(readFileSync(path.join(root, 'plugins.json'), 'utf8')).plugins;
+    expect(record).toHaveLength(1);
+    expect(record[0].placing).toBeUndefined();
+  });
+
+  it('refuses a purge with no name typed back, whether or not one was sent', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    await approveStaged(staged.id, { integrity: staged.integrity, env });
+
+    await expect(uninstallPlugin('fixture-marker', { env, purge: true })).rejects.toThrow(
+      /Type the plugin's name/,
+    );
+    await expect(
+      uninstallPlugin('fixture-marker', { env, purge: true, confirm: 'fixture-marke' }),
+    ).rejects.toThrow(/Type the plugin's name/);
+    // Still installed: the refusal happened before anything was removed.
+    expect(existsSync(installedPackageDir('fixture-marker', env))).toBe(true);
+  });
+});
+
+describe('which version is newer', () => {
+  it('follows semver, including its prerelease rules', () => {
+    expect(isNewerVersion('1.10.0', '1.2.0')).toBe(true);
+    expect(isNewerVersion('1.2.0', '1.10.0')).toBe(false);
+    expect(isNewerVersion('2.0.0', '2.0.0-rc.1')).toBe(true);
+    expect(isNewerVersion('2.0.0-rc.2', '2.0.0-rc.1')).toBe(true);
+    expect(isNewerVersion('2.0.0-rc.10', '2.0.0-rc.2')).toBe(true);
+    expect(isNewerVersion('2.0.0-alpha', '2.0.0-alpha.1')).toBe(false);
+    expect(isNewerVersion('2.0.0-alpha.beta', '2.0.0-alpha.1')).toBe(true);
+    expect(isNewerVersion('1.0.0+build.2', '1.0.0+build.1')).toBe(false);
+  });
+
+  it('refuses to compare what is not a version rather than guessing', () => {
+    expect(() => isNewerVersion('latest', '1.0.0')).toThrow(/not a version this can compare/);
+    expect(() => isNewerVersion('1.0', '1.0.0')).toThrow(/not a version this can compare/);
+    expect(() => isNewerVersion('1.0.0', '')).toThrow(/not a version this can compare/);
+    expect(parseSemver('1.2.3-rc.1')).toEqual({ major: 1, minor: 2, patch: 3, prerelease: ['rc', 1] });
   });
 });
