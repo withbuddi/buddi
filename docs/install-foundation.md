@@ -9,6 +9,15 @@ published to npm. The full contract remains [install.md](install.md).
   helper and dashboard into one npm tarball with bundled runtime dependencies.
   No private configuration, source checkout, developer dependencies or data are
   copied. Per-platform Postgres binaries are pinned optional dependencies.
+- **Platform plugins only.** The staged package list is core, runtime, gateway,
+  cli, install and the platform tools (artifacts, browser, host, email, memory,
+  web). `tools/finance` is not staged: money is one owner's domain, not
+  something every installation should claim a `finance.*` family for, and it is
+  installed like any other plugin. The gateway therefore resolves that manifest
+  optionally (`packages/gateway/src/plugins/optional-finance.ts`): a checkout
+  registers it exactly as before, a packaged install has no such module and no
+  such family, and an agent file granting `finance.*` is refused by the loader
+  with the same sentence it uses for any other missing plugin.
 - The packaged `buddi` launcher initializes a platform data directory, an
   installation-specific vault and a private SCRAM-authenticated Postgres cluster.
   The application database role is not a superuser; the administrator credential
@@ -282,15 +291,20 @@ one screen, and the wizard renders without the rail.
   `composeAgentFile` and `createAgentDirAtomic`, so an agent made here is the
   same artifact `platform.create_agent` makes: the generic template, no roles,
   no plugin tools, `language: mirror`, `default: true` for the first private
-  agent, and the tool grant named once in the gateway. It writes the *first*
-  agent only — a second one is the maker agent's job, where a grant is proposed
+  agent, and the tool grant named once in the gateway. It is written under the
+  shipped Concierge's id, so the catalog's replacement rule makes it *the*
+  assistant rather than a second agent standing next to an example: the owner's
+  handle, name, face and words, and no Concierge on the roster afterwards. It
+  writes the *first* agent only — a second one is the maker agent's job, where a grant is proposed
   and approved — and creations are serialised in-process, so two requests racing
   cannot both claim `default`. The examples tree is guarded by resolving the
   nearest existing ancestor of both paths through `realpath` before comparing,
   so a private agents directory symlinked into `examples/` is refused rather
   than written to. Where exactly one usable
   model account exists it is assigned to the new agent, because the next screen
-  is the owner talking to it. The write is behind the ordinary session, Origin
+  is the owner talking to it; the wizard may also name the account it just
+  tested (`accountId`), and an account the installation cannot run on is
+  refused before anything is written. The write is behind the ordinary session, Origin
   and CSRF gate — the owner acting on their own installation — and not behind an
   approval.
 - **`buddi init` ends there.** The checkout CLI opens the dashboard at
@@ -300,7 +314,25 @@ one screen, and the wizard renders without the rail.
 - **The release smoke covers it** as far as it can without a model call: what
   the fresh install still needs, CSRF refusal, a recorded step, the first agent
   written, reloaded and listed by `/api/agents`, and the record skipped and read
-  back.
+  back. It also asserts the three rules below: zero accounts, one assistant
+  where the example was, and no Agent Father on the roster yet.
+- **No ghost accounts.** The accounts named after `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are seeded by the one-shot
+  legacy migration only where the variable is set and non-empty. A fresh
+  install has zero accounts until the owner adds one; a checkout that exports
+  them is migrated as before.
+- **Examples do not pretend.** Agent Father is held back from the roster —
+  `/api/agents`, the rail and Home — until the owner has an agent of their own
+  that can actually run (`EXAMPLES_HELD_BACK` in
+  `packages/gateway/src/agents/catalog.ts`). It is held back, not removed:
+  `get`, `byHandle` and `resolve` still answer, so `/new` and a handle typed by
+  hand keep working, and the wizard still refuses a handle it holds.
+- **No brain, no composer.** An agent whose account is missing, disabled or
+  unconfigured is greyed wherever it is listed, with the server's own one-line
+  reason; its page and its card link to Settings → Model accounts; its composer
+  is replaced by that sentence and that link; and `POST
+  /api/chat/:agent/messages` refuses the turn with 409 and the same words
+  before a row is written. This holds in a developer's checkout too.
 
 Deferred here, and named in install.md: Ollama detection, restore from the
 dashboard, and the plugins and backup cards of the extras step.

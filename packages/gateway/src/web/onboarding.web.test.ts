@@ -321,3 +321,93 @@ it('keeps a finished record finished when the other ending arrives late', async 
   expect(late.status).toBe(200);
   expect((await json(late)).state).toBe('done');
 });
+
+/**
+ * The shipped Concierge is not a colleague, it is the assistant waiting to be
+ * given a name. So the first agent is written *as* it: same id, the owner's
+ * handle, name, face and words, and one assistant on the roster afterwards.
+ */
+it('rewrites the shipped Concierge into the owner’s assistant instead of standing one next to it', async () => {
+  const dir = agentsDir();
+  const shipped = {
+    id: 'concierge',
+    handle: 'buddi',
+    name: 'Concierge',
+    description: 'The agent buddi ships with.',
+    source: 'example' as const,
+  };
+  const service = accounts([
+    { id: 'one', enabled: true, configured: true },
+    { id: 'two', enabled: true, configured: true },
+  ]);
+  const created = await createFirstAgent(
+    {
+      pool: fakePool() as never,
+      catalog: {
+        list: () => [shipped],
+        get: (id: string) => (id === 'concierge' ? shipped : undefined),
+        byHandle: (handle: string) => (handle === 'buddi' ? shipped : undefined),
+      } as unknown as AgentCatalog,
+      providerAccounts: service,
+      agentsDir: dir,
+      examplesDir: path.join(dir, '..', 'examples'),
+      reload: () => {},
+    },
+    { name: 'Ada', handle: 'ada', description: 'Whatever I ask.', avatar: '📚', accountId: 'two' },
+  );
+  // The id is the example's — that is what makes this a rename rather than a
+  // second agent — and the handle is the owner's.
+  expect(created.id).toBe('concierge');
+  expect(created.handle).toBe('ada');
+  const file = readFileSync(path.join(dir, 'concierge', 'agent.md'), 'utf8');
+  expect(file).toContain('id: concierge');
+  expect(file).toContain('handle: ada');
+  expect(file).toContain('name: Ada');
+  expect(file).toContain('avatar: 📚');
+  expect(file).toContain('default: true');
+  expect(file).not.toContain('Concierge');
+  // Bound to the account the wizard named, not to whichever one came first.
+  expect(created.assigned).toBe('two');
+  expect(service.assign).toHaveBeenCalledWith('concierge', { accountId: 'two', model: 'claude-sonnet-4-5' });
+});
+
+it('lets the owner keep the shipped handle, and refuses one another agent holds', async () => {
+  const dir = agentsDir();
+  const shipped = { id: 'concierge', handle: 'buddi', name: 'Concierge', description: 'Ships with buddi.', source: 'example' as const };
+  const father = { id: 'agent-father', handle: 'father', name: 'Agent Father', description: 'Makes agents.', source: 'example' as const };
+  const deps = {
+    pool: fakePool() as never,
+    // `list()` holds Agent Father back on a fresh install; `byHandle` still
+    // answers for it, which is what stops the owner claiming @father.
+    catalog: {
+      list: () => [shipped],
+      get: (id: string) => [shipped, father].find((a) => a.id === id),
+      byHandle: (handle: string) => [shipped, father].find((a) => a.handle === handle),
+    } as unknown as AgentCatalog,
+    agentsDir: dir,
+    examplesDir: path.join(dir, '..', 'examples'),
+    reload: () => {},
+  };
+  await expect(
+    createFirstAgent(deps, { name: 'Father', handle: 'father', description: 'Not this one.' }),
+  ).rejects.toThrow(/already Agent Father/);
+  // The handle the example itself holds is free: the file replaces it.
+  const kept = await createFirstAgent(deps, { name: 'Buddi', handle: 'buddi', description: 'Keeping the name it came with.' });
+  expect(kept).toMatchObject({ id: 'concierge', handle: 'buddi' });
+});
+
+it('refuses an account the installation cannot run on, and writes nothing', async () => {
+  const dir = agentsDir();
+  const deps = {
+    pool: fakePool() as never,
+    catalog: { list: () => [], get: () => undefined, byHandle: () => undefined } as unknown as AgentCatalog,
+    providerAccounts: accounts([{ id: 'one', enabled: true, configured: false }]),
+    agentsDir: dir,
+    examplesDir: path.join(dir, '..', 'examples'),
+    reload: () => {},
+  };
+  await expect(
+    createFirstAgent(deps, { name: 'Ada', handle: 'ada', description: 'x', accountId: 'one' }),
+  ).rejects.toThrow(/not one this installation can run on/);
+  expect(existsSync(path.join(dir, 'ada'))).toBe(false);
+});

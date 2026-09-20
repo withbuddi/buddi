@@ -31,7 +31,6 @@
     "@buddi/tool-browser": "workspace:*",
     "@buddi/tool-host": "workspace:*",
     "@buddi/tool-email": "workspace:*",
-    "@buddi/tool-finance": "workspace:*",
     "@buddi/tool-memory": "workspace:*",
     "@buddi/tool-web": "workspace:*",
     "dotenv": "^16.4.7",
@@ -39,6 +38,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@buddi/tool-finance": "workspace:*",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "typescript": "^5.6.3",

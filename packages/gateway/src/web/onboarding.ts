@@ -155,9 +155,38 @@ export interface FirstAgentInput {
   handle: string;
   description: string;
   avatar?: string;
+  /**
+   * The account the wizard just tested, bound to the new agent.
+   *
+   * Explicit because the wizard knows which one it made the owner add, and
+   * "the only usable account" stops being an answer the moment there are two.
+   * Omitted — a caller that has no opinion — falls back to that rule.
+   */
+  accountId?: string;
 }
 
-function checkHandle(value: string, catalog: AgentCatalog): string {
+/**
+ * The example the owner's first agent takes the place of.
+ *
+ * The catalog's rule is that a private agent with the same id as an example
+ * replaces it wholesale (docs/ARCHITECTURE.md, "Drop-in tools and skills"), so
+ * writing the first agent under this id *is* the rename: there is one
+ * assistant afterwards, the owner's, and Concierge is no longer listed beside
+ * it pretending to be a colleague. The handle, name, face and description are
+ * the owner's; only the id is inherited.
+ */
+export const SHIPPED_ASSISTANT_ID = 'concierge';
+
+/** The id the first agent is written under: the example's, or the handle. */
+export function firstAgentId(catalog: AgentCatalog, handle: string): string {
+  const shipped = typeof catalog?.get === 'function' ? catalog.get(SHIPPED_ASSISTANT_ID) : undefined;
+  // Only an *example* is replaced. An installation that has its own
+  // `concierge` already is not one the wizard is writing a first agent for,
+  // and the refusal below has already said so.
+  return shipped && shipped.source === 'example' ? SHIPPED_ASSISTANT_ID : handle;
+}
+
+function checkHandle(value: string, catalog: AgentCatalog, replacing: string): string {
   const handle = value.trim().replace(/^@/, '').toLowerCase();
   if (handle.length < HANDLE_MIN || handle.length > HANDLE_MAX) {
     throw new OnboardingRefusal(400, `A handle is ${HANDLE_MIN} to ${HANDLE_MAX} characters.`);
@@ -169,9 +198,20 @@ function checkHandle(value: string, catalog: AgentCatalog): string {
     );
   }
   const list = typeof catalog?.list === 'function' ? catalog.list() : [];
-  const taken = list.find(
-    (agent) => agent.handle.toLowerCase() === handle || agent.id.toLowerCase() === handle,
-  );
+  const held = typeof catalog?.byHandle === 'function' ? catalog.byHandle(handle) : undefined;
+  const byId = typeof catalog?.get === 'function' ? catalog.get(handle) : undefined;
+  // `list()` is the roster, and the roster holds back the examples this
+  // installation has not grown into yet (`EXAMPLES_HELD_BACK`). A handle that
+  // one of those holds is still taken — it comes back the moment the owner has
+  // an assistant — so the lookups that answer for a held-back agent are asked
+  // too.
+  const taken = [
+    ...list.filter((agent) => agent.handle.toLowerCase() === handle || agent.id.toLowerCase() === handle),
+    ...(held ? [held] : []),
+    ...(byId ? [byId] : []),
+    // The agent being replaced is not a collision with itself: the whole point
+    // is that this file takes its place.
+  ].find((agent) => agent.id !== replacing);
   if (taken) {
     throw new OnboardingRefusal(409, `@${handle} is already ${taken.name}. Pick another one.`);
   }
@@ -287,8 +327,14 @@ async function writeFirstAgent(
   if (avatar !== '' && /[A-Za-z0-9./\\]/.test(avatar)) {
     throw new OnboardingRefusal(400, 'A face is an emoji.');
   }
-  const handle = checkHandle(input.handle, deps.catalog);
-  const id = handle;
+  // The id is the shipped example's, so that writing this file *replaces*
+  // Concierge instead of standing a second agent next to it. The handle is the
+  // owner's, and the handle is what they will type.
+  const id = firstAgentId(deps.catalog, input.handle.trim().replace(/^@/, '').toLowerCase());
+  const handle = checkHandle(input.handle, deps.catalog, id);
+  // Both refusals that depend on state outside this file happen here, before
+  // the directory is moved into place.
+  const account = chooseAccount(deps, input.accountId);
 
   const dir = path.join(deps.agentsDir, id);
   const file = path.join(dir, AGENT_FILE);
@@ -333,18 +379,26 @@ async function writeFirstAgent(
     live = false;
   }
 
-  return { id, handle, file, live, assigned: await assignOnlyAccount(deps, id) };
+  return { id, handle, file, live, assigned: await assignAccount(deps, id, account) };
 }
 
 /**
- * Give the new agent the account the owner just added.
+ * Give the new agent a brain: the account the wizard just tested.
  *
  * An agent with no account cannot answer, and the step after this one is the
- * owner saying hello to it. With exactly one usable account there is nothing
- * to choose, so choosing is not a question worth asking; with two, the wizard
- * leaves it to the Agents page rather than picking for them.
+ * owner saying hello to it. The wizard names the account it made them add;
+ * when it names none, exactly one usable account is still not a question worth
+ * asking, and with two the wizard leaves it to the Agents page rather than
+ * picking for them.
+ *
+ * A named account that is not usable is not silently swapped for another one:
+ * binding an agent to a credential the owner did not choose is how an
+ * installation ends up answering from somewhere they did not expect.
  */
-async function assignOnlyAccount(deps: OnboardingDeps, agentId: string): Promise<string | null> {
+function chooseAccount(
+  deps: OnboardingDeps,
+  chosen: string | undefined,
+): { id: string; defaultModel: string } | null {
   const accounts = deps.providerAccounts;
   if (!accounts) return null;
   const view = accounts.view() as {
@@ -353,9 +407,23 @@ async function assignOnlyAccount(deps: OnboardingDeps, agentId: string): Promise
   const usable = (view.accounts ?? []).filter(
     (account) => account.enabled === true && account.configured === true && account.removalPending !== true,
   );
-  if (usable.length !== 1) return null;
-  const only = usable[0]!;
-  if (!only.defaultModel) return null;
+  const named = chosen === undefined ? undefined : usable.find((account) => account.id === chosen);
+  // Refused *before* anything is written: a 409 that leaves an agent file on
+  // disk is a wizard the owner cannot retry.
+  if (chosen !== undefined && !named) {
+    throw new OnboardingRefusal(409, 'That model account is not one this installation can run on. Pick another one.');
+  }
+  const only = named ?? (usable.length === 1 ? usable[0]! : undefined);
+  return only?.defaultModel ? { id: only.id, defaultModel: only.defaultModel } : null;
+}
+
+async function assignAccount(
+  deps: OnboardingDeps,
+  agentId: string,
+  only: { id: string; defaultModel: string } | null,
+): Promise<string | null> {
+  const accounts = deps.providerAccounts;
+  if (!accounts || !only) return null;
   try {
     await accounts.assign(agentId, { accountId: only.id, model: only.defaultModel });
     return only.id;
