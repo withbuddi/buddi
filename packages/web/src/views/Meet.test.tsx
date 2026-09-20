@@ -102,7 +102,7 @@ function quiet(): void {
   vi.mocked(api.onboarding).mockResolvedValue(view());
   vi.mocked(api.owner).mockResolvedValue(owner());
   vi.mocked(api.providerAccounts).mockResolvedValue(accounts());
-  vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1' });
+  vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' });
   vi.mocked(api.onboardingStep).mockResolvedValue(view());
   vi.mocked(chatApi.agents).mockResolvedValue({ agents: [], defaultAgentId: '' });
   for (const call of [api.overview, api.conversations, chatApi.groups]) {
@@ -192,9 +192,26 @@ describe('the questions', () => {
 
   it('says Ollama is there when the machine says so, and offers it', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
-    vi.mocked(api.ollama).mockResolvedValue({ running: true, models: ['qwen3:4b'], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1' });
+    vi.mocked(api.ollama).mockResolvedValue({ running: true, models: ['qwen3:4b'], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' });
     render(meet());
     expect(await screen.findByText(SCRIPT.brain.ollama.found)).toBeInTheDocument();
+  });
+
+  it('opens the other-service card with the address the server offered', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+    // The page names no address of its own: this is the one the gateway sent.
+    expect(await screen.findByDisplayValue('ollama-cloud/v1')).toBeInTheDocument();
+  });
+
+  it('falls back to the placeholder when the server offers no address', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: '', cloudBaseUrl: '' });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+    const field = await screen.findByPlaceholderText(SCRIPT.brain.service.addressPlaceholder);
+    expect(field).toHaveValue('');
   });
 
   it('keeps a refused key in the thread with the field still open', async () => {

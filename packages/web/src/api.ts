@@ -324,6 +324,8 @@ export interface OllamaProbe {
   downloadUrl: string;
   /** Where an account for it points — also data, for the same reason. */
   baseUrl: string;
+  /** Where Ollama's hosted service answers, for the card that offers it. */
+  cloudBaseUrl: string;
 }
 
 /** Telegram, as this installation stands: a token, a surface, a phone. */

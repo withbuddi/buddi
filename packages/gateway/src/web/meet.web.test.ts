@@ -15,7 +15,7 @@ import path from 'node:path';
 import { ToolRegistry, type ToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
-import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
 import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
@@ -97,7 +97,13 @@ it('reports the models Ollama has pulled when it answers here', async () => {
   });
   // The address travels with the answer: the page names no host, not even
   // this one, so an account for Ollama is built from what the server says.
-  expect(probe).toEqual({ running: true, models: ['llama3.2:3b', 'qwen3:4b'], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${OLLAMA_BASE_URL}/v1` });
+  expect(probe).toEqual({
+    running: true,
+    models: ['llama3.2:3b', 'qwen3:4b'],
+    downloadUrl: OLLAMA_DOWNLOAD_URL,
+    baseUrl: `${OLLAMA_BASE_URL}/v1`,
+    cloudBaseUrl: OLLAMA_CLOUD_BASE_URL,
+  });
 });
 
 it('says it is not running rather than failing, whatever the local machine does', async () => {
@@ -105,7 +111,15 @@ it('says it is not running rather than failing, whatever the local machine does'
     async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:11434'); },
     async () => ({ ok: false, status: 500, statusText: '', headers: { get: () => null }, text: async () => '', json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) }),
   ]) {
-    expect(await probeOllama({ transport: transport as never })).toEqual({ running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${OLLAMA_BASE_URL}/v1` });
+    expect(await probeOllama({ transport: transport as never })).toEqual({
+      running: false,
+      models: [],
+      downloadUrl: OLLAMA_DOWNLOAD_URL,
+      baseUrl: `${OLLAMA_BASE_URL}/v1`,
+      // Offered whether or not anything is running here: the card that takes
+      // an address is the one for the service that is not.
+      cloudBaseUrl: OLLAMA_CLOUD_BASE_URL,
+    });
   }
 });
 
@@ -130,6 +144,9 @@ it('answers the probe over the API, and never asks the page to do it', async () 
   expect(Array.isArray(body.models)).toBe(true);
   expect(body.downloadUrl).toBe(OLLAMA_DOWNLOAD_URL);
   expect(body.baseUrl).toBe(`${OLLAMA_BASE_URL}/v1`);
+  // The address the "another service" card opens with. The page carries no
+  // host of its own, so this is where it comes from.
+  expect(body.cloudBaseUrl).toBe(OLLAMA_CLOUD_BASE_URL);
 });
 
 /* ------------------------------------------------------------------ *
