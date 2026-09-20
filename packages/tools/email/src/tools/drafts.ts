@@ -122,6 +122,7 @@ const draftReplyInput = z.object({
 
 export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown> = {
   name: 'email.draft_reply',
+  producesArtifacts: true,
   description:
     'Write a reply to a message and save it as a draft. The subject and the threading come from the original, and so does the recipient: by default the reply goes to the sender alone. Use `audience` to reply to everyone the message went to instead. The result names everyone else who was on the original, and says so even when you chose the narrow shape — read it, because a narrow draft of a message other people were on leaves the owner a decision, and the result tells you what to do with it. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
   tier: 'auto',
@@ -261,6 +262,7 @@ const draftNewInput = z.object({
 
 export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = {
   name: 'email.draft_new',
+  producesArtifacts: true,
   description:
     'Write a new message and save it as a draft. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
   tier: 'auto',

@@ -37,6 +37,7 @@
  * page on another origin gets no preflight and no permission.
  */
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
@@ -50,7 +51,7 @@ import { getAction, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, discardUnreferencedUpload, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -200,6 +201,22 @@ export interface WebServer {
 const WEB_CHATS = new WeakMap<Server, WebChat>();
 
 /** The chat surface this server is running, if any. */
+/** The most of a text file a preview shows; the download has the whole. */
+const PREVIEW_TEXT_BYTES = 100_000;
+
+/**
+ * How an artifact may be previewed inline, or null for download only. Text
+ * is an allowlist of genuinely textual formats, never a binary container
+ * however it is named; HTML and SVG count as text and are served as
+ * text/plain, so they are read and never rendered.
+ */
+function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | 'text' | null {
+  if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime)) return 'image';
+  if (mime === 'application/pdf') return 'pdf';
+  if (textPreviewable(mime, filename)) return 'text';
+  return null;
+}
+
 /** A group as the page draws it. */
 function groupView(group: GroupRow): { id: string; name: string; coordinator: string; members: string[]; contextCapChars: number; createdAt: string } {
   return { id: group.id, name: group.name, coordinator: group.coordinator, members: group.members, contextCapChars: group.contextCapChars, createdAt: group.createdAt.toISOString() };
@@ -407,18 +424,76 @@ export function createWebApp(deps: WebServerDeps): Server {
     const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
 
     if (method === 'GET' || method === 'HEAD') {
+      /*
+       * The library: what the store holds, for a person (docs/files.md). Read
+       * only, owner only, never an agent tool. Origin is what the row says.
+       */
+      if (path === '/api/artifacts') {
+        const origin = q.get('origin');
+        const family = q.get('family');
+        if (origin && !['uploaded', 'produced', 'unknown'].includes(origin)) return sendJson(res, 400, { error: '`origin` must be uploaded, produced or unknown' });
+        if (family && !(FILE_FAMILIES as readonly string[]).includes(family)) return sendJson(res, 400, { error: `\`family\` must be one of ${FILE_FAMILIES.join(', ')}` });
+        const limitRaw = q.get('limit');
+        const limit = limitRaw === null ? undefined : Number(limitRaw);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > LIBRARY_PAGE_MAX)) return sendJson(res, 400, { error: `\`limit\` must be 1 to ${LIBRARY_PAGE_MAX}` });
+        const cursor = q.get('cursor');
+        const filters = { ...(q.get('q') ? { q: q.get('q')!.slice(0, 200) } : {}), ...(origin ? { origin: origin as FileOrigin } : {}), ...(family ? { family: family as FileFamily } : {}) };
+        // A cursor is bound to the filters it was issued under; with others it would skip rows.
+        if (cursor && !decodeCursor(cursor, filterKey(filters))) return sendJson(res, 400, { error: '`cursor` is not one this listing issued for these filters' });
+        const page = await listLibrary(deps.pool, {
+          ...filters,
+          ...(limit !== undefined ? { limit } : {}),
+          ...(cursor ? { cursor } : {}),
+          knownAgentIds: deps.catalog.list().map((a) => a.id),
+        });
+        return sendJson(res, 200, page);
+      }
+      const libraryOne = /^\/api\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (libraryOne) {
+        const offsetRaw = q.get('contexts');
+        const offset = offsetRaw === null ? 0 : Number(offsetRaw);
+        if (!Number.isInteger(offset) || offset < 0) return sendJson(res, 400, { error: '`contexts` must be a non-negative integer' });
+        const found = await getLibraryEntry(deps.pool, libraryOne[1]!, deps.catalog.list().map((a) => a.id), offset);
+        if (!found) return sendJson(res, 404, { error: 'no such file' });
+        // The bytes may be gone while the row remains: say so, keep the metadata.
+        const artifact = await getArtifact(deps.pool, found.entry.id);
+        const available = artifact ? await artifactBytesExist(deps.env ?? process.env, artifact).catch(() => false) : false;
+        return sendJson(res, 200, { ...found, available });
+      }
+
       const download = /^\/api\/artifacts\/([0-9a-f-]{36})\/(download|preview)$/.exec(path);
       if (download) {
         const artifact = await getArtifact(deps.pool, download[1]!);
         if (!artifact) return sendEmpty(res, 404);
         const preview = download[2] === 'preview';
-        // Only passive raster formats can be displayed inline on our origin.
-        // SVG/HTML and all other outputs remain attachment-only downloads.
-        if (preview && !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(artifact.mime)) return sendEmpty(res, 415);
-        const bytes = await readArtifactBytes(deps.env ?? process.env, artifact);
-        res.setHeader('Content-Type', preview ? artifact.mime : 'application/octet-stream');
+        /*
+         * What may be shown inline on our origin, and how:
+         *  - passive raster images, as themselves;
+         *  - PDFs, for the browser's own viewer, which the browser isolates —
+         *    the sandbox directive here withholds scripts and plugins from any
+         *    document content all the same;
+         *  - text families, always as text/plain, so nothing in them is ever
+         *    parsed as markup, and bounded to what a preview shows.
+         * Everything else stays a download.
+         */
+        const kind = preview ? previewKind(artifact.mime, artifact.filename) : null;
+        if (preview && kind === null) return sendEmpty(res, 415);
+        // A text preview reads only its prefix from disk, on a character
+        // boundary, and says whether the file went on; nothing else is loaded.
+        let bytes: Buffer;
+        let truncated = false;
+        if (kind === 'text') {
+          const prefix = await readArtifactPrefix(deps.env ?? process.env, artifact, PREVIEW_TEXT_BYTES);
+          const decoder = new StringDecoder('utf8');
+          bytes = Buffer.from(decoder.write(prefix.bytes), 'utf8');
+          truncated = prefix.truncated;
+        } else {
+          bytes = await readArtifactBytes(deps.env ?? process.env, artifact);
+        }
+        res.setHeader('Content-Type', kind === 'text' ? 'text/plain; charset=utf-8' : preview ? artifact.mime : 'application/octet-stream');
         res.setHeader('Content-Disposition', `${preview ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(artifact.filename ?? 'download').replace(/'/g, '%27')}`);
-        if (preview) res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        if (preview) res.setHeader('Content-Security-Policy', kind === 'pdf' ? "default-src 'none'; sandbox allow-same-origin" : "default-src 'none'; sandbox");
+        if (kind === 'text') res.setHeader('X-Preview-Truncated', truncated ? '1' : '0');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'no-store');
         res.end(method === 'HEAD' ? undefined : bytes);

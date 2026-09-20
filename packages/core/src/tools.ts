@@ -141,6 +141,12 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   tier: Tier;
   /** Opt-in only: owner may remember approval for this tool/agent/version. */
   reusableApproval?: boolean;
+  /**
+   * This tool saves files and names them in its output as `artifacts: [{ id }]`.
+   * Only a tool that says so here has its outputs recorded as produced; a
+   * tool that merely lists or returns files never does.
+   */
+  producesArtifacts?: boolean;
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   /**

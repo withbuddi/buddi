@@ -20,6 +20,7 @@ import {
   ACTIVITY_ROUTE,
   AGENTS_ROUTE,
   CHAT_ROUTE,
+  FILES_ROUTE,
   HOME_ROUTE,
   PLACES,
   SETTINGS_ROUTE,
@@ -32,6 +33,7 @@ import {
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { GroupSheet } from './shell/GroupSheet';
+import { Files } from './views/Files';
 import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
@@ -316,6 +318,8 @@ function Place({ place, ...props }: PlaceProps & { place: string }): JSX.Element
       return <Activity {...props} />;
     case SETTINGS_ROUTE:
       return <Settings {...props} />;
+    case FILES_ROUTE:
+      return <Files {...props} />;
     default:
       return <Home {...props} />;
   }
