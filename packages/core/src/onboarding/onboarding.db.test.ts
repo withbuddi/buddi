@@ -124,6 +124,29 @@ suite('onboarding (postgres)', () => {
     expect(rows[0]?.payload?.reason).toBe('not now');
   });
 
+  it('keeps done and skipped terminal, in both directions', async () => {
+    await beginOnboarding(pool, 'web');
+    const done = await completeOnboarding(pool, 'web');
+    expect(done.state).toBe('done');
+    // A skip arriving afterwards — a second tab, the other surface — reads the
+    // record rather than rewriting its ending.
+    const afterSkip = await skipOnboarding(pool, 'too late');
+    expect(afterSkip.state).toBe('done');
+    expect(afterSkip.completedAt?.getTime()).toBe(done.completedAt?.getTime());
+    const { rows } = await pool.query(
+      `select payload from core.events where kind = 'onboarding.skipped'`,
+    );
+    expect(rows.some((row) => row.payload?.reason === 'too late')).toBe(false);
+  });
+
+  it('keeps skipped terminal against a later completion', async () => {
+    const skipped = await skipOnboarding(pool, 'not now');
+    expect(skipped.state).toBe('skipped');
+    const completed = await completeOnboarding(pool, 'web');
+    expect(completed.state).toBe('skipped');
+    expect(completed.completedAt?.getTime()).toBe(skipped.completedAt?.getTime());
+  });
+
   it('skips from cold, with no interview ever started', async () => {
     const skipped = await skipOnboarding(pool);
     expect(skipped.state).toBe('skipped');

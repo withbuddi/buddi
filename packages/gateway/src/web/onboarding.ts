@@ -16,7 +16,7 @@
  * standing as saving their name or adding a model account.
  */
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import {
   AGENT_FILE,
   HANDLE,
@@ -29,7 +29,6 @@ import {
   type Onboarding,
   type Queryable,
 } from '@buddi/core';
-import { insideExamples } from '../agents/owner-tools.js';
 import { composeAgentFile, createAgentDirAtomic } from '../agents/platform-files.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
@@ -206,6 +205,47 @@ export function firstAgentPersona(input: { name: string; description: string }):
 }
 
 /**
+ * A path with every existing ancestor resolved through its symlinks.
+ *
+ * `path.relative` on the strings alone answers about spellings, not about
+ * directories: a private agents directory that is a symlink into the examples
+ * tree, or a `..` that a link undoes, would both read as safely outside. The
+ * target itself does not exist yet — that is the point of creating it — so the
+ * nearest existing ancestor is resolved and the rest re-joined onto it.
+ */
+function resolveThrough(target: string): string {
+  const tail: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...[...tail].reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Is `child` the same directory as `parent`, or inside it? */
+function within(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * One creation at a time in this process.
+ *
+ * Two requests arriving together would both read a catalog with no private
+ * agent in it and both write one claiming `default: true`. The refusal below is
+ * the rule; this is what makes the rule hold when the check and the write are
+ * not one statement. It is per process, which is the whole surface: the agents
+ * directory belongs to one installation and one gateway writes it.
+ */
+let creating: Promise<unknown> = Promise.resolve();
+
+/**
  * Write the owner's first agent.
  *
  * The same writer `platform.create_agent` uses — the file is composed by
@@ -213,10 +253,28 @@ export function firstAgentPersona(input: { name: string; description: string }):
  * one way an agent gets onto disk, and an agent made here is indistinguishable
  * from one the maker agent made.
  */
-export async function createFirstAgent(
+export function createFirstAgent(
   deps: OnboardingDeps,
   input: FirstAgentInput,
 ): Promise<{ id: string; handle: string; file: string; live: boolean; assigned: string | null }> {
+  const run = creating.then(
+    () => writeFirstAgent(deps, input),
+    () => writeFirstAgent(deps, input),
+  );
+  creating = run.catch(() => undefined);
+  return run;
+}
+
+async function writeFirstAgent(
+  deps: OnboardingDeps,
+  input: FirstAgentInput,
+): Promise<{ id: string; handle: string; file: string; live: boolean; assigned: string | null }> {
+  // This route writes the *first* agent and nothing else. Once the owner has
+  // one, adding another is the maker agent's job, where a grant is proposed and
+  // approved rather than assumed.
+  if (hasPrivateAgent(deps.catalog)) {
+    throw new OnboardingRefusal(409, 'You already have an agent of your own. Add another one from the Agents page.');
+  }
   const name = input.name.trim();
   if (name === '' || name.length > 60) {
     throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
@@ -234,8 +292,9 @@ export async function createFirstAgent(
 
   const dir = path.join(deps.agentsDir, id);
   const file = path.join(dir, AGENT_FILE);
-  if (insideExamples(file, deps.examplesDir)) {
-    throw new OnboardingRefusal(409, 'That directory belongs to the shipped examples.');
+  const examples = resolveThrough(deps.examplesDir);
+  if (within(resolveThrough(deps.agentsDir), examples) || within(resolveThrough(dir), examples)) {
+    throw new OnboardingRefusal(409, 'That directory belongs to the shipped examples, which this never writes into.');
   }
   if (existsSync(dir)) {
     throw new OnboardingRefusal(409, `${dir} already exists on disk. Pick another handle.`);
@@ -246,9 +305,10 @@ export async function createFirstAgent(
     handle,
     name,
     description,
-    // The first private agent becomes the default, so the dashboard and every
-    // surface open on it rather than on a shipped example.
-    ...(hasPrivateAgent(deps.catalog) ? {} : { default: true }),
+    // There is no private agent yet — the refusal above is what guarantees it —
+    // so this one is the default, and the dashboard and every other surface
+    // open on it rather than on a shipped example.
+    default: true,
     tools: [...FIRST_AGENT_TOOLS],
     language: 'mirror',
     ...(avatar === '' ? {} : { avatar }),

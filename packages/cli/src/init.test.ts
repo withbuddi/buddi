@@ -561,6 +561,15 @@ describe('offerFirstRun', () => {
     );
   });
 
+  it('says nothing to start when the dashboard wizard was opened on the same first run', async () => {
+    expect(
+      await offerFirstRun(always(true), { key: 'first-run', action: 'ask' } as never, true),
+    ).toBe(false);
+    expect(
+      await offerFirstRun(always(true), { key: 'first-run', action: 'run' } as never, true),
+    ).toBe(false);
+  });
+
   it('offers the conversation here when there is no other surface', async () => {
     expect(await offerFirstRun(always(true), { key: 'first-run', action: 'ask' } as never)).toBe(
       true,
