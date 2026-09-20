@@ -46,7 +46,19 @@ const inventory: ViewDescriptor = {
 };
 
 /** Three figures: a reading is a thing the canvas lays out, not a sentence. */
-const reading = { celsius: 11, humidity: 62, readAt: '2026-09-14' };
+/* A reading with enough separate values to be worth laying out: the rule
+ * about what earns a tab is about quantity of readable value, and a panel
+ * of three pairs is a sentence. */
+const reading = {
+  celsius: 11,
+  humidity: 62,
+  windKph: 18,
+  gustKph: 31,
+  pressureHpa: 1004,
+  rainMm: 2.4,
+  cloudPercent: 80,
+  readAt: '2026-09-14',
+};
 
 const forecastOutput = {
   place: 'Reykjavík',
