@@ -7,6 +7,7 @@
  */
 import type { DocumentProps } from '../types';
 import { fmtValue } from '../format';
+import { Markdown } from '../../chat/markdown';
 
 export function DocumentView({ props }: { props: DocumentProps }): JSX.Element {
   return (
@@ -31,7 +32,7 @@ export function DocumentView({ props }: { props: DocumentProps }): JSX.Element {
           <a href={props.src}>Open the PDF</a>
         </object>
       ) : props.text ? (
-        <div className="wb-doc">{props.text}</div>
+        <div className="wb-doc"><Markdown text={props.text} /></div>
       ) : (
         <p className="wb-empty">This document came back with no body.</p>
       )}
