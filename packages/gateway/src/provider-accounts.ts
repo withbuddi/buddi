@@ -36,6 +36,23 @@ const legacy = [
   { id: 'legacy-openai-api', name: 'OPENAI_API_KEY', label: 'OpenAI — existing API key', kind: 'openai', auth: 'api-key' },
 ] as const;
 
+export type LegacyAccount = (typeof legacy)[number];
+
+/**
+ * The legacy accounts this environment actually has a credential for.
+ *
+ * A packaged install has none of these variables, and an account named after a
+ * variable nobody set is a ghost: it shows up in Settings and in the wizard,
+ * it can never be made to work, and the first thing a new owner sees is a
+ * model account that is a lie. So the one-shot migration seeds an account only
+ * where the variable is set and non-empty — a checkout that exports them is
+ * migrated exactly as before, and a fresh install starts with zero accounts
+ * until the owner adds one.
+ */
+export function legacyAccountsToSeed(env: NodeJS.ProcessEnv): readonly LegacyAccount[] {
+  return legacy.filter((item) => (env[item.name] ?? '').trim() !== '');
+}
+
 export class ProviderAccountError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
@@ -78,7 +95,8 @@ export class ProviderAccounts {
       const done = await client.query("select name from core.provider_account_migrations where name='legacy-v1'");
       if (!done.rows.length) {
         const removed = await client.query('select name from core.provider_credential_state where removed=true');
-        for (const item of legacy) {
+        const seeding = legacyAccountsToSeed(this.deps.env);
+        for (const item of seeding) {
           const ref = providerFromEnv(this.deps.env, undefined, item.kind);
           await client.query(`insert into core.provider_accounts
             (id,label,kind,auth,base_url,default_model,secret_ref,legacy_env,enabled)
@@ -88,7 +106,7 @@ export class ProviderAccounts {
         }
         for (const summary of this.deps.catalog().list()) {
           const agent = this.deps.catalog().get(summary.id)!;
-          const account = legacy.find(l => l.name === agent.provider.credential.env);
+          const account = seeding.find(l => l.name === agent.provider.credential.env);
           if (account) await client.query(`insert into core.agent_provider_accounts (agent_id,account_id,model)
             values ($1,$2,$3) on conflict (agent_id) do nothing`, [agent.id, account.id, agent.model]);
         }
