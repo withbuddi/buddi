@@ -56,6 +56,7 @@ import {
   openQuestion,
   askQuestion,
   answerQuestion,
+  APPROVAL_RESUME_SPEAKER,
   OPENING_TURN_SPEAKER,
   ToolRegistry,
   type AgentAvailability,
@@ -304,6 +305,13 @@ export type ChatBlock =
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
+  /**
+   * A gated action, decided and come back. The turn that carries it is a user
+   * turn on the wire — the tool_use it answers was closed before the run
+   * suspended — so it is named here for what it is, and no page has to decide
+   * whether "tool result (deferred) for action …" is something the owner said.
+   */
+  | { type: 'approval_result'; actionId: string; name: string; state: string; output: unknown }
   | { type: 'unknown'; raw: unknown };
 
 export interface ChatMessageView {
@@ -486,12 +494,50 @@ export async function readChatTranscript(
       id: m.id,
       role: m.role,
       at: m.at,
-      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
-        .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
+      blocks: m.speaker === APPROVAL_RESUME_SPEAKER
+        ? approvalResultBlocks(m.raw, approvals)
+        : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
+            .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
     ...(await runsOf(pool, conversationId)),
   };
+}
+
+/** `tool result (deferred) for action <id>: <state>` — what the runtime writes. */
+const RESUMED_APPROVAL = /^tool result \(deferred\) for action ([0-9a-f-]{36}): (\w+)/;
+
+/**
+ * The resumed turn, as what it is: one decided action, named and expandable.
+ *
+ * The text is the runtime's own wording (`approvalOutcomeText`), and the state
+ * it quotes is a copy of a row this reader already holds — so the action is
+ * looked up and the row wins, the same way a pending gate's chip does.
+ */
+function approvalResultBlocks(
+  raw: Array<Record<string, any>>,
+  approvals: Map<string, TranscriptApproval>,
+): ChatBlock[] {
+  const text = raw.find((block) => block.type === 'text')?.text;
+  const match = typeof text === 'string' ? RESUMED_APPROVAL.exec(text) : null;
+  if (!match) return raw.map((block) => toChatBlock(block, new Map(), new Map(), approvals));
+  const action = approvals.get(match[1] as string);
+  const state = action?.state ?? (match[2] as string);
+  return [{
+    type: 'approval_result',
+    actionId: match[1] as string,
+    name: action?.tool ?? '',
+    state,
+    output: state === 'succeeded'
+      ? (action?.outcome as { result?: unknown } | null)?.result ?? resultOf(text as string)
+      : action?.outcome ?? resultOf(text as string),
+  }];
+}
+
+/** What the runtime wrote after `result:`, when the action row says nothing. */
+function resultOf(text: string): unknown {
+  const body = text.slice(text.indexOf('\n') + 1);
+  return body.startsWith('result: ') ? maybeJson(body.slice('result: '.length)) : body.trim() || null;
 }
 
 /**

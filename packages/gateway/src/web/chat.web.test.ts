@@ -8,8 +8,8 @@
  * database and lives in `chat.web.db.test.ts`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentCatalog, CatalogAgent } from '@buddi/core';
-import { WebChat, unavailableMessage } from './chat.js';
+import { APPROVAL_RESUME_SPEAKER, type AgentCatalog, type CatalogAgent } from '@buddi/core';
+import { WebChat, readChatTranscript, unavailableMessage } from './chat.js';
 
 const problem = 'Provider account “Work API” is disabled.';
 
@@ -65,5 +65,65 @@ describe('sending to an agent whose account cannot run', () => {
   it('still refuses an agent that is not installed at all, with a 404', async () => {
     const sent = await service(false).send({ agentId: 'nobody', text: 'Hello?' } as never);
     expect(sent).toMatchObject({ ok: false, status: 404 });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * A decided approval is not the owner speaking
+ * ------------------------------------------------------------------ */
+
+/**
+ * The run resumes with the action's outcome as a user turn — the API requires
+ * it, because the tool_use it answers was closed when the run suspended. What
+ * must never happen is the dashboard drawing "tool result (deferred) for
+ * action …: succeeded" as a sentence the owner typed.
+ */
+describe('the turn that carries a decided approval', () => {
+  const actionId = '3f0d2f2e-1a5f-4a1e-9d3c-2b6d1f0a7c11';
+  const conversationId = '11111111-1111-1111-1111-111111111111';
+
+  function pool(speaker: string | null): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) {
+          return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        }
+        if (/from core\.messages/.test(sql)) {
+          return {
+            rows: [{
+              id: 'm1',
+              role: 'user',
+              created_at: new Date(),
+              speaker,
+              content: [{
+                type: 'text',
+                text: `tool result (deferred) for action ${actionId}: succeeded\nresult: {"ok":true}`,
+              }],
+            }],
+          };
+        }
+        if (/from core\.actions/.test(sql)) {
+          return { rows: [{ id: actionId, tool: 'platform.create_agent', state: 'succeeded', outcome: { result: { id: 'ledger' } } }] };
+        }
+        return { rows: [] };
+      }),
+    } as never;
+  }
+
+  it('comes back as the action it is, with the result the row holds', async () => {
+    const transcript = await readChatTranscript(pool(APPROVAL_RESUME_SPEAKER), conversationId);
+    expect(transcript!.messages[0]!.blocks).toEqual([{
+      type: 'approval_result',
+      actionId,
+      name: 'platform.create_agent',
+      state: 'succeeded',
+      output: { id: 'ledger' },
+    }]);
+    expect(transcript!.messages[0]!.speaker).toBe(APPROVAL_RESUME_SPEAKER);
+  });
+
+  it('leaves every other turn exactly as it was', async () => {
+    const transcript = await readChatTranscript(pool(null), conversationId);
+    expect(transcript!.messages[0]!.blocks[0]!.type).toBe('text');
   });
 });
