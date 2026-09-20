@@ -60,7 +60,7 @@ export interface JobControl {
 export async function resumeJobForAction(
   pool: Queryable,
   jobs: JobControl | undefined,
-  action: { id: string; jobId: string | null },
+  action: { id: string; jobId: string | null; tool?: string },
   outcome: { state: ApprovalState; result?: unknown; error?: string },
 ): Promise<'resumed' | 'no-job' | 'no-queue'> {
   if (action.jobId === null) return 'no-job';
@@ -69,6 +69,7 @@ export async function resumeJobForAction(
     payloadPatch: {
       approval: {
         actionId: action.id,
+        ...(action.tool ? { tool: action.tool } : {}),
         state: outcome.state,
         ...(outcome.result === undefined ? {} : { result: outcome.result }),
         ...(outcome.error === undefined ? {} : { error: outcome.error }),

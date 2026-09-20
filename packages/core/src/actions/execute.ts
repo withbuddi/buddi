@@ -37,6 +37,8 @@ import {
 
 /** What the Executor needs of a registered tool. `ToolRegistry` satisfies it. */
 export interface ExecutableTool {
+  /** The tool saves files and names them in its output; see ToolDefinition. */
+  producesArtifacts?: boolean;
   reusableApproval?: boolean;
   name: string;
   /** The plugin version, part of the approved hash. */

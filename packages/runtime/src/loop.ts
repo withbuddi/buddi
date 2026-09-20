@@ -180,6 +180,8 @@ export interface NativeSearchEvent extends NativeSearchRecord {
 /** How a decided action comes back into the run that proposed it. */
 export interface ApprovalResume {
   actionId: string;
+  /** The tool the action ran, so a file it saved on approval is recorded as produced. */
+  tool?: string;
   /** The approval's state now: 'succeeded', 'failed', 'rejected', 'unknown'… */
   state: string;
   /** What the effect returned, when it ran. */
@@ -284,6 +286,18 @@ export async function loadMessages(
   }));
 }
 
+/** The artifact ids a tool output names as files it saved, and nothing else. */
+export function producedArtifactIds(output: unknown): string[] {
+  if (!output || typeof output !== 'object') return [];
+  const isId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  const out = output as { artifacts?: unknown; artifactId?: unknown };
+  const list = Array.isArray(out.artifacts) ? out.artifacts : [];
+  const ids: unknown[] = list.map((item) => (item && typeof item === 'object' ? ((item as { id?: unknown }).id ?? (item as { artifactId?: unknown }).artifactId) : undefined));
+  // A tool that saves one file names it as `artifactId` at the top.
+  ids.push(out.artifactId);
+  return [...new Set(ids.filter(isId))];
+}
+
 /** jsonb comes back parsed from `pg`; tolerate a string for other drivers. */
 function normalizeContent(raw: unknown): ContentBlock[] {
   const value = typeof raw === 'string' ? safeParse(raw) : raw;
@@ -298,27 +312,65 @@ function safeParse(text: string): unknown {
   }
 }
 
+/** One use of an artifact, written with the message that references it. */
+interface ArtifactUse {
+  artifactId: string;
+  kind: 'uploaded' | 'produced';
+  agentId: string | null;
+}
+
 async function persistMessage(
   pool: Queryable,
   conversationId: string,
   role: 'user' | 'assistant',
   content: ContentBlock[],
   speaker?: string,
+  uses: readonly ArtifactUse[] = [],
 ): Promise<void> {
-  // The column is written only when a room needs it, so a single-agent
-  // conversation's rows keep the shape they always had.
-  if (speaker === undefined) {
+  if (uses.length === 0) {
+    // The column is written only when a room needs it, so a single-agent
+    // conversation's rows keep the shape they always had.
+    if (speaker === undefined) {
+      await pool.query(
+        `insert into core.messages (conversation_id, role, content)
+         values ($1, $2, $3::jsonb)`,
+        [conversationId, role, JSON.stringify(content)],
+      );
+      return;
+    }
     await pool.query(
-      `insert into core.messages (conversation_id, role, content)
-       values ($1, $2, $3::jsonb)`,
-      [conversationId, role, JSON.stringify(content)],
+      `insert into core.messages (conversation_id, role, content, speaker)
+       values ($1, $2, $3::jsonb, $4)`,
+      [conversationId, role, JSON.stringify(content), speaker],
     );
     return;
   }
+  // The message and the library's record of every file it carries, in one
+  // statement: either both land or neither does. An upload already part of
+  // another conversation is recorded as reused here, decided in the same
+  // statement from the store's row and from the library's own history — an
+  // eager upload carries no conversation of its own; its uses do.
   await pool.query(
-    `insert into core.messages (conversation_id, role, content, speaker)
-     values ($1, $2, $3::jsonb, $4)`,
-    [conversationId, role, JSON.stringify(content), speaker],
+    `with turn as (
+       insert into core.messages (conversation_id, role, content, speaker)
+       values ($1, $2, $3::jsonb, $4)
+       returning conversation_id
+     ), wanted as (
+       select (u->>'artifactId')::uuid as artifact_id, u->>'kind' as kind, nullif(u->>'agentId', '') as agent_id
+         from jsonb_array_elements($5::jsonb) as u
+     )
+     insert into core.artifact_uses (artifact_id, conversation_id, kind, agent_id)
+     select w.artifact_id, t.conversation_id,
+            case when w.kind = 'uploaded' and (
+                   (a.conversation_id is not null and a.conversation_id <> t.conversation_id)
+                   or exists (select 1 from core.artifact_uses p where p.artifact_id = w.artifact_id and p.conversation_id <> t.conversation_id)
+                 ) then 'reused' else w.kind end,
+            w.agent_id
+       from turn t
+       cross join wanted w
+       join core.artifacts a on a.id = w.artifact_id
+     on conflict (artifact_id, conversation_id, kind, coalesce(agent_id, '')) do nothing`,
+    [conversationId, role, JSON.stringify(content), speaker ?? null, JSON.stringify(uses)],
   );
 }
 
@@ -590,7 +642,19 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     enforceCaps: true,
   });
   // What is persisted is the reference, never the base64.
-  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker);
+  // The library learns of the use in the same statement that writes the
+  // reference: a file the owner sent here, or one first saved elsewhere and
+  // sent again. One statement, so the two can never disagree.
+  // A run resumed on an approved action carries that action's result in this
+  // turn; when the tool saves files, they are recorded as produced here, the
+  // same as an immediate result would have been.
+  const resumedProduced: ArtifactUse[] = resume?.state === 'succeeded' && resume.tool && registry.lookup(resume.tool)?.producesArtifacts
+    ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: agent.id }))
+    : [];
+  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker, [
+    ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
+    ...resumedProduced,
+  ]);
   // Degrade what the provider cannot carry into a placeholder the model can
   // read and talk about. Only what is *sent* changes: the persisted turn above
   // still holds the artifact reference, so the same history sent to a provider
@@ -712,6 +776,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
 
     const results: ContentBlock[] = [];
     const images: ContentBlock[] = [];
+    /** Files the tools of this turn saved, recorded with the results they came in. */
+    const produced: ArtifactUse[] = [];
     let skipReason: string | undefined;
     for (const call of toolUses) {
       if (ctx.signal?.aborted || waitingForOwner || skipReason || pendingActionId) {
@@ -737,6 +803,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
             message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {
         if (registry.waitsForOwner(call.name)) waitingForOwner = true;
+        // A tool that declares it saves files, and names them in its output,
+        // has each one recorded as produced here by this agent — with the
+        // result row, in one statement. A tool that merely returns files does not.
+        if (registry.lookup(call.name)?.producesArtifacts) {
+          for (const id of producedArtifactIds(outcome.output)) produced.push({ artifactId: id, kind: 'produced', agentId: agent.id });
+        }
         // The tool finished, but it left the run waiting on a decision the
         // owner has to make elsewhere: nothing more is dispatched this turn,
         // and the run ends resumable on that action.
@@ -806,7 +878,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     }
 
     messages.push({ role: 'user', content: results });
-    await persistMessage(pool, conversationId, 'user', results, opts.transcript?.speaker);
+    await persistMessage(pool, conversationId, 'user', results, opts.transcript?.speaker, produced);
     // Ephemeral observations: only the latest picture is sent, never base64 in
     // durable transcripts or stale screenshots repeated on every later turn.
     for (const message of messages) message.content = message.content.filter((b) => !ephemeralImages.has(b));

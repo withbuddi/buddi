@@ -44,12 +44,12 @@ describe('the shell', () => {
     vi.unstubAllGlobals();
   });
 
-  it('has five places on the rail, and sends every old hash to one of them', async () => {
+  it('has six places on the rail, and sends every old hash to one of them', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
     await act(async () => {
       render(<App />);
     });
-    expect(PLACES).toHaveLength(5);
+    expect(PLACES).toHaveLength(6);
     for (const place of PLACES) expect(screen.getByRole('link', { name: new RegExp(`^${place.label}`) })).toBeDefined();
     expect(screen.getByLabelText(/theme/i)).toBeDefined();
     for (const old of ['#/overview', '#/events', '#/jobs', '#/conversations', '#/missions', '#/approvals', '#/offers', '#/reminders', '#/providers', '#/browser', '#/sentinels']) {
