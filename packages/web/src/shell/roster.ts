@@ -158,3 +158,21 @@ export function monogram(name: string | undefined): string {
   if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
   return (words[0]![0]! + words[1]![0]!).toUpperCase();
 }
+
+/**
+ * Why an agent cannot answer, and where the owner fixes it.
+ *
+ * One sentence, the server's own words — the page never decides what is
+ * missing, exactly as it never decides who is waiting. Everywhere this agent
+ * appears greyed says the same thing: the rail's tooltip, its card on the
+ * Agents page, its tile on Home, and the composer, which is replaced by it.
+ */
+export function cannotRunSentence(agent: { name?: string; unavailableReason?: string }): string {
+  const reason = agent.unavailableReason?.trim();
+  return reason && reason !== ''
+    ? `${agent.name ?? 'This agent'} cannot run: ${reason}`
+    : `${agent.name ?? 'This agent'} cannot run: it has no model account yet.`;
+}
+
+/** Where that is fixed. The one place an account is added or enabled. */
+export const MODEL_ACCOUNTS_LABEL = 'Settings → Model accounts';

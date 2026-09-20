@@ -314,14 +314,25 @@ one screen, and the wizard renders without the rail.
 - **The release smoke covers it** as far as it can without a model call: what
   the fresh install still needs, CSRF refusal, a recorded step, the first agent
   written, reloaded and listed by `/api/agents`, and the record skipped and read
-  back.
-
+  back. It also asserts the three rules below: zero accounts, one assistant
+  where the example was, and no Agent Father on the roster yet.
+- **No ghost accounts.** The accounts named after `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are seeded by the one-shot
+  legacy migration only where the variable is set and non-empty. A fresh
+  install has zero accounts until the owner adds one; a checkout that exports
+  them is migrated as before.
 - **Examples do not pretend.** Agent Father is held back from the roster —
   `/api/agents`, the rail and Home — until the owner has an agent of their own
   that can actually run (`EXAMPLES_HELD_BACK` in
   `packages/gateway/src/agents/catalog.ts`). It is held back, not removed:
   `get`, `byHandle` and `resolve` still answer, so `/new` and a handle typed by
   hand keep working, and the wizard still refuses a handle it holds.
+- **No brain, no composer.** An agent whose account is missing, disabled or
+  unconfigured is greyed wherever it is listed, with the server's own one-line
+  reason; its page and its card link to Settings → Model accounts; its composer
+  is replaced by that sentence and that link; and `POST
+  /api/chat/:agent/messages` refuses the turn with 409 and the same words
+  before a row is written. This holds in a developer's checkout too.
 
 Deferred here, and named in install.md: Ollama detection, restore from the
 dashboard, and the plugins and backup cards of the extras step.

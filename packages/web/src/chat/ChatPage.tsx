@@ -23,15 +23,15 @@ import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserPanel } from '../views/Browser';
 import { HostControls } from '../views/HostControls';
-import { ErrorBanner } from '../ui';
+import { ErrorBanner, Notice } from '../ui';
 import { conversationBrowser } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
-import { agentRoute } from '../routes';
+import { agentRoute, settingsRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar } from '../ui';
-import type { AgentAttention, AgentGroups } from '../shell/roster';
+import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
@@ -448,6 +448,14 @@ export function ChatPage({
     setActiveTab(artifactTabId(file.artifactId));
     if (narrow) onOpenCanvas?.();
   };
+
+  /**
+   * The sentence that replaces the composer, or null when there is one.
+   *
+   * A group is never blocked here: its members are checked per turn by the
+   * coordinator, and one member without an account is not the room being shut.
+   */
+  const blocked = !group && agent && !agent.available ? cannotRunSentence(agent) : null;
 
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
@@ -872,7 +880,21 @@ export function ChatPage({
           </div>
         ) : null}
 
-        {conversation?.question ? (
+        {blocked ? (
+          /*
+           * No brain, no composer. An agent whose account is missing, disabled
+           * or unconfigured cannot answer, and a composer that takes the
+           * owner's words and loses them is worse than one that is not there.
+           * The server refuses the same turn with the same reason, so this is
+           * the door rather than the only lock.
+           */
+          <div className="wb-composer-blocked" data-testid="composer-blocked">
+            <Notice tone="warning" role="status">
+              {blocked}{' '}
+              <a href={settingsRoute('accounts')}>{MODEL_ACCOUNTS_LABEL}</a>
+            </Notice>
+          </div>
+        ) : conversation?.question ? (
           <QuestionPicker
             key={conversation.question.id}
             question={conversation.question}
