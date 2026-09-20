@@ -143,6 +143,7 @@ To meet the packaged install the way a stranger on a clean Linux machine would,
 from the browser of the machine you are already sitting at:
 
 ```sh
+pnpm release:trial             # everything below in one go: build, image, fresh volume, serve
 pnpm release:docker            # build the tarball, then an image containing only it
 scripts/release/docker/run.sh  # start it and print the dashboard link
 ```

@@ -2,6 +2,7 @@
 # Try the packaged install and the first-run wizard on a clean Linux system,
 # from the browser of whatever machine is running Docker.
 #
+#   pnpm release:trial             # build, image, fresh volume and serve, in one command
 #   pnpm release:docker            # build the tarball and the image
 #   scripts/release/docker/run.sh  # start it and print the dashboard link
 #
