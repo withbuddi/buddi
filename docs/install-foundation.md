@@ -22,21 +22,29 @@ published to npm. The full contract remains [install.md](install.md).
 - The supervisor owns the gateway and database independently, serializes gateway
   controls, restarts a crashed gateway with bounded exponential backoff, and holds
   a per-install lock. Gateway IPC
-  detects supervisor death. A subsequent supervisor can authenticate and adopt
-  the exact managed cluster left by a killed supervisor. Authenticated liveness
-  probes monitor both spawned and adopted managed databases; database failure
+  detects supervisor death. A postmaster left on the cluster by a killed
+  supervisor is stopped and started again as the new supervisor's own child; it
+  is never adopted, so a managed database is always a spawned child with an exit
+  listener. An authenticated liveness probe also monitors it; database failure
   shuts down the gateway and supervisor. External servers are not supervised.
 - Startup records a phase before migrations. Restarting uses the **existing
   idempotent migration runner** to apply missing transactional migrations; the
   phase field is not a new rollback or recovery engine. Newer known schema
   migrations refuse older code.
   Interrupted `initdb` directories are preserved, never treated as complete.
-- Both dashboard and service-control page require five-minute login tickets.
-  Replay rejection is **per server process**, not durable across restarts: a
-  previously spent, unexpired ticket may work again after its server restarts.
-  The control page keeps working with the gateway stopped. Browser writes need
-  its session, exact Origin and CSRF token. CLI controls use a distinct derived
-  bearer credential. Neither is a general host-command endpoint.
+- The supervisor's control surface is a Unix domain socket, `supervisor.sock`
+  in the data directory, mode 0600 inside a 0700 directory. It serves four
+  routes — `GET /status` and `POST /start|/stop|/restart` — with JSON in and
+  out and **no credential**: only a process running as the owning user can open
+  the socket, and that user could read the vault or signal the supervisor
+  anyway. It is not a general host-command endpoint. Its two clients are the
+  `buddi` CLI and the dashboard: `GET /api/service` and
+  `POST /api/service/start|stop|restart` forward to it behind the dashboard's
+  usual session, Origin and CSRF gate. There is no second web surface and no
+  second login ticket.
+- The dashboard requires a five-minute login ticket. Replay rejection is **per
+  server process**, not durable across restarts: a previously spent, unexpired
+  ticket may work again after its server restarts.
 - Dashboard readiness requires an installation-secret challenge proof, not just
   an HTTP status. Failure to bind the required dashboard terminates the gateway.
 - Every managed startup resynchronizes the application role password from the
@@ -49,13 +57,44 @@ published to npm. The full contract remains [install.md](install.md).
 - The existing dashboard starts without a model key or Telegram token. Full
   welcome/onboarding screens are the next slice, not implemented here.
 
-Run `buddi` again to print full fresh dashboard and service-control URLs.
+Run `buddi` again to print a fresh dashboard URL.
 `buddi service status|start|stop|restart` controls **the gateway** in a packaged
-installation; stopping it leaves Postgres and the control page available.
+installation; stopping it leaves Postgres running. The same switches are in the
+dashboard's Settings → System, for as long as the gateway is up to serve them.
 `buddi doctor` reports this supervisor's state and log directory.
 
 Developer checkout commands retain their existing behavior. No-argument startup
 is provided by the release launcher, not by changing the checkout CLI parser.
+
+## Where the code lives
+
+The runtime of a packaged install is the workspace package `packages/install`
+(`@buddi/install`): `src/environment.ts` (data directory, private files,
+installation state, startup lock), `src/supervisor.ts` (process supervision and
+the control socket) and `src/launcher.ts`, the `buddi` binary the tarball
+installs (`packages/install/dist/launcher.js`). The dashboard's side of the
+socket is `packages/gateway/src/web/service.ts`, one `node:http` client used by
+the `/api/service` routes in `server.ts`; the page itself is the Service section
+of `packages/web/src/views/Settings.tsx`. `scripts/release/build.mjs` and
+`scripts/release/smoke.mjs` are release *tooling*, not runtime, and stay there.
+
+The managed cluster itself is **not** install-specific and lives in
+`packages/core/src/postgres` (`binaries.ts`, `cluster.ts`): the per-platform
+binaries, `initdb`, the authenticated start, the liveness probe. Core gains no
+dependency on `@embedded-postgres/*` — the binary package is resolved by name
+from a root the caller supplies. `packages/install/src/postgres.ts` is only the
+adapter that chooses between that cluster and an external `DATABASE_URL`, so
+the checkout CLI can later share the same manager.
+
+The release tarball declares exactly one `bin`, `@buddi/install`'s `buddi`
+launcher; `build.mjs` strips `bin` from every other staged workspace package so
+nothing else claims `node_modules/.bin/buddi`.
+
+`environment()` rewrites the environment before any `@buddi/*` package is
+imported, because those packages compute their path constants at import time.
+That is why it imports none of them and why the launcher, the supervisor and
+the cluster reach for `@buddi/core`, `@buddi/gateway` and `@buddi/cli` through
+dynamic imports.
 
 ## Build and verify
 
@@ -63,7 +102,7 @@ From a built checkout:
 
 ```sh
 pnpm -r build
-node --test scripts/release/foundation.test.mjs
+pnpm --filter @buddi/install test
 node scripts/release/build.mjs
 node scripts/release/smoke.mjs /absolute/path/printed/by/build/buddi-0.1.0.tgz
 ```
@@ -73,10 +112,13 @@ path. It runs npm only inside staging, with install scripts disabled. The smoke
 test installs that tarball into another temporary directory, disables installation
 scripts, uses a private file vault, runs a real Postgres and dashboard, tests auth,
 repeat startup, gateway stop/start/crash, supervisor death and migration restart,
-password rotation, adopted database death, and dashboard port conflicts, checks
+password rotation, database death under its own supervisor, and dashboard port
+conflicts, checks
 that application data survives, then stops its own supervisor. By default
 it does not install a LaunchAgent, touch an existing database/keychain, open a
-browser, or make model calls. The optional `--service` flag tests the actual macOS
+browser, or make model calls. After supervisor death it asserts that the
+database is running again with a *different* pid (restarted, not adopted) and
+that the fixture row survived. The optional `--service` flag tests the actual macOS
 LaunchAgent path using a uniquely named test service, then unloads and removes
 that test unit. It also replaces a loaded job and verifies its new arguments.
 Fixture data is retained for inspection. Tests should also run
@@ -96,8 +138,15 @@ on Node 22 before publishing a release.
   path. No automatic conversion or deletion of a cluster occurs.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
-- Plugin npm installation, the full wizard, Backup UI, cross-platform service
-  managers, and supervisor controls embedded in Settings remain separate work.
+- **A stopped gateway is started from a terminal, not from a browser tab.** The
+  Settings switches are served by the gateway itself, so a stop or a restart
+  takes the page down with it: the request is *accepted* and then performed,
+  the reply never reports the outcome, and if the page does not come back,
+  `buddi` is what brings it back. The supervisor's Windows named-pipe
+  equivalent is not implemented; Windows managed startup still raises its
+  existing "not implemented" error.
+- Plugin npm installation, the full wizard, Backup UI and cross-platform
+  service managers remain separate work.
 - The file-vault key is stored at `vault-key` beside its ciphertext with owner-only
   permissions: the data directory is its trust boundary. macOS normally uses a
   separate Keychain namespace derived from the data directory instead.
@@ -122,9 +171,12 @@ reboot, and choose a distribution that includes the backup tools.
 - The service test verifies a non-superuser application role and a fixture row
   surviving gateway crashes, supervisor death, password rotation, and restart
   with the migration phase marker set. Auth tests reject missing credentials,
-  in-process ticket replay and writes without CSRF. Intentional gateway stops
-  leave Postgres running. Detached mode verifies failure of an adopted database
-  terminates its supervisor and gateway. A conflicting dashboard listener cannot
+  in-process ticket replay and writes without CSRF. The control socket is checked
+  for mode 0600, and the dashboard's service view is checked against the pids
+  `buddi service status` reports. Intentional gateway stops
+  leave Postgres running. Detached mode verifies that failure of the managed
+  database terminates its supervisor and gateway, and that a leftover postmaster
+  is stopped and replaced rather than adopted. A conflicting dashboard listener cannot
   pass readiness, and the gateway exits when its required bind fails.
 - Test LaunchAgents are unloaded and removed; fixture directories are retained.
   The live Buddi installation was not restarted or reconfigured.

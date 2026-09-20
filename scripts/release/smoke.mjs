@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, unlink, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { dashboardReady, reloadLaunchAgent } from './environment.mjs';
+import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 
 const exec = promisify(execFile);
 const archive = process.argv[2];
@@ -30,7 +30,7 @@ try {
   // The launchd fixture must also select the isolated file vault after login.
   await writeFile(path.join(data, '.env'), 'BUDDI_VAULT=file\n', { mode: 0o600 });
   await exec('npm', ['install', '--prefix', testRoot, '--ignore-scripts', '--no-audit', '--no-fund', archive], { env, timeout: 120_000 });
-  const entry = path.join(testRoot, 'node_modules/buddi/bin/buddi.mjs');
+  const entry = path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js');
   const cli = async args => (await exec(process.execPath, [entry, ...args], { env, cwd: testRoot, timeout: 150_000 })).stdout;
   const start = await cli(startArgs);
   const status = JSON.parse(await cli(['service', 'status'])); pid = status.supervisorPid;
@@ -78,20 +78,42 @@ try {
     assert.throws(() => process.kill(conflicting.gatewayPid, 0), /ESRCH/, 'required dashboard bind failure terminates the gateway');
     await cli(['service', 'stop']);
   } finally { await new Promise(resolve => impostor.close(resolve)); }
-  const service = new URL(start.match(/Service controls: (.+)/)[1]);
-  const controlUnauth = await fetch(new URL('/status', service)); assert.equal(controlUnauth.status, 401);
-  const controlLogin = await fetch(service, { redirect: 'manual' });
-  const controlCookie = controlLogin.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
-  const denied = await fetch(new URL('/start', service), { method: 'POST', headers: { cookie: controlCookie, origin: service.origin } });
-  assert.equal(denied.status, 403, 'browser writes require CSRF');
-  const page = await fetch(new URL('/', service), { headers: { cookie: controlCookie } });
-  const html = await page.text();
-  const csrf = html.match(/'x-buddi-csrf':'([^']+)'/)[1];
-  assert.notEqual(html.match(/<script nonce="([^"]+)"/)[1], csrf, 'CSP nonce is independent of CSRF');
-  const started = await fetch(new URL('/start', service), { method: 'POST', headers: { cookie: controlCookie, origin: service.origin, 'x-buddi-csrf': csrf } });
-  assert.equal(started.status, 200);
-  const restarted = await started.json();
-  assert.equal(restarted.databasePid, status.databasePid); assert.notEqual(restarted.gatewayPid, status.gatewayPid);
+  // The supervisor is controlled over an owner-only socket, and the dashboard
+  // is its second client: the same switches, behind the session and CSRF gate.
+  const socket = path.join(data, 'supervisor.sock');
+  assert.equal(((await stat(socket)).mode & 0o777).toString(8), '600', 'the control socket is owner-only');
+  // The gateway was left stopped above; this also mints a fresh dashboard link,
+  // because a restarted gateway keeps no session from the one before it.
+  const resumed = await cli(startArgs);
+  const live = new URL(resumed.match(/Dashboard: (.+)/)[1]);
+  assert.equal((await fetch(new URL('/api/service', live))).status, 401, 'the service view needs a session');
+  const liveLogin = await fetch(live, { redirect: 'manual' }); assert.equal(liveLogin.status, 302);
+  const liveCookie = liveLogin.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+  const cliStatus = JSON.parse(await cli(['service', 'status']));
+  const viewed = await fetch(new URL('/api/service', live), { headers: { cookie: liveCookie } });
+  assert.equal(viewed.status, 200);
+  const view = await viewed.json();
+  assert.equal(view.supervised, true);
+  assert.equal(view.status.gatewayPid, cliStatus.gatewayPid);
+  assert.equal(view.status.databasePid, cliStatus.databasePid);
+  const csrf = decodeURIComponent(liveCookie.match(/buddi_csrf=([^;]+)/)[1]);
+  const origin = live.origin;
+  const refused = await fetch(new URL('/api/service/restart', live), { method: 'POST', headers: { cookie: liveCookie, origin } });
+  assert.equal(refused.status, 403, 'dashboard writes require CSRF');
+  // A restart ends the gateway that accepted it, so it is accepted and then
+  // performed; the CLI is what can still see the outcome.
+  const started = await fetch(new URL('/api/service/restart', live), { method: 'POST', headers: { cookie: liveCookie, origin, 'x-buddi-csrf': csrf } });
+  assert.equal(started.status, 202);
+  assert.deepEqual(await started.json(), { supervised: true, pending: 'restart' });
+  let restarted;
+  for (let i = 0; i < 100; i++) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    restarted = JSON.parse(await cli(['service', 'status']));
+    if (restarted.gateway === 'running' && restarted.gatewayPid !== cliStatus.gatewayPid) break;
+  }
+  assert.equal(restarted.gateway, 'running');
+  assert.notEqual(restarted.gatewayPid, cliStatus.gatewayPid, 'the dashboard restart replaced the gateway');
+  assert.equal(restarted.databasePid, status.databasePid, 'the database is untouched by a gateway restart');
   // Crash recovery is distinct from an intentional stop.
   process.kill(restarted.gatewayPid, 'SIGKILL');
   let recovered;
@@ -101,26 +123,30 @@ try {
     if (recovered.gateway === 'running' && recovered.gatewayPid !== restarted.gatewayPid) break;
   }
   assert.equal(recovered.gateway, 'running'); assert.notEqual(recovered.gatewayPid, restarted.gatewayPid);
-  // The supervisor itself dies: the IPC gateway stops, but the same authenticated
-  // cluster can be adopted without initdb, duplicated gateways, or data loss.
+  // The supervisor itself dies: the IPC gateway stops. The next supervisor stops
+  // the postmaster left behind on its cluster and starts its own in its place —
+  // never adopting it — without initdb, duplicated gateways, or data loss.
   process.kill(pid, 'SIGKILL');
   await new Promise(resolve => setTimeout(resolve, 2500));
   await cli(startArgs);
-  const adopted = JSON.parse(await cli(['service', 'status'])); pid = adopted.supervisorPid;
-  assert.notEqual(adopted.supervisorPid, recovered.supervisorPid);
-  // launchd can reap the complete job's process group after supervisor death.
-  // Detached mode must adopt; under launchd a clean cluster restart is valid too.
-  if (!serviceTest) assert.equal(adopted.databasePid, recovered.databasePid);
-  assert.equal(adopted.database, 'running');
+  const successor = JSON.parse(await cli(['service', 'status'])); pid = successor.supervisorPid;
+  assert.notEqual(successor.supervisorPid, recovered.supervisorPid);
+  assert.equal(recovered.database, 'running'); assert.equal(successor.database, 'running');
+  assert.notEqual(successor.databasePid, recovered.databasePid, 'a leftover postmaster is restarted, not adopted');
+  const survived = new Client(connection);
+  await survived.connect();
+  try { assert.deepEqual((await survived.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
+  finally { await survived.end(); }
   if (!serviceTest) {
-    // This server has no child exit listener in its new supervisor: exercise the probe.
-    process.kill(adopted.databasePid, 'SIGINT');
+    // The database child dies under its own supervisor: gateway and supervisor
+    // follow it down, and the launcher starts the installation again cleanly.
+    process.kill(successor.databasePid, 'SIGINT');
     for (let i = 0; i < 150; i++) {
       try { process.kill(pid, 0); } catch { break; }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    assert.throws(() => process.kill(pid, 0), /ESRCH/, 'adopted database failure stops supervisor');
-    assert.throws(() => process.kill(adopted.gatewayPid, 0), /ESRCH/, 'adopted database failure stops gateway');
+    assert.throws(() => process.kill(pid, 0), /ESRCH/, 'database failure stops supervisor');
+    assert.throws(() => process.kill(successor.gatewayPid, 0), /ESRCH/, 'database failure stops gateway');
     await cli(startArgs);
     pid = JSON.parse(await cli(['service', 'status'])).supervisorPid;
   } else {
@@ -165,7 +191,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart' + (serviceTest ? ', LaunchAgent lifecycle.' : ', adopted database death.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {

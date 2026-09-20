@@ -116,6 +116,7 @@ import {
   type Session,
   type SessionScope,
 } from './sessions.js';
+import { supervisorCall } from './service.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
@@ -637,6 +638,22 @@ export function createWebApp(deps: WebServerDeps): Server {
           });
         case '/api/groups':
           return sendJson(res, 200, { groups: (await listGroups(deps.pool)).map(groupView) });
+        /*
+         * The supervisor, when there is one. A developer checkout has no
+         * socket and therefore no service section on the Settings page: the
+         * gateway is whatever started it, and it has nothing to report.
+         */
+        case '/api/service': {
+          const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
+          if (!socket) return sendJson(res, 200, { supervised: false });
+          try {
+            const reply = await supervisorCall(socket, '/status', 'GET');
+            if (reply.status !== 200) return sendJson(res, 502, { error: 'The supervisor refused to report its status.' });
+            return sendJson(res, 200, { supervised: true, status: reply.body });
+          } catch {
+            return sendJson(res, 503, { error: 'The supervisor is not answering on its control socket. Run buddi in a terminal.' });
+          }
+        }
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1010,6 +1027,44 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendJson(res, error instanceof ProviderSettingsError ? error.status : 500,
           { error: error instanceof ProviderSettingsError ? error.message : 'Provider settings could not be applied. Check vault access and database availability, then retry.' });
       }
+    }
+
+    /*
+     * Start, stop or restart the gateway through the supervisor.
+     *
+     * Behind the same session, Origin and CSRF gate as every other write, and
+     * nothing more: the socket is owner-only already.
+     *
+     * `start` is answered with the supervisor's new status, because the
+     * gateway answering is the one that stays up. `stop` and `restart` are
+     * not: the supervisor's very next act is to kill this process, and
+     * `serve`'s shutdown destroys open connections, so a reply composed after
+     * the action would never reach the browser. They are therefore accepted
+     * first and performed once the reply is on the wire. The page warns that
+     * it is about to close itself, and `buddi` from a terminal is the way back
+     * from a gateway that is down — a stopped gateway cannot serve its own
+     * Start button.
+     */
+    const serviceAction = /^\/api\/service\/(start|stop|restart)$/.exec(path);
+    if (serviceAction) {
+      const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
+      if (!socket) return sendJson(res, 404, { error: 'This gateway is not run by a supervisor; there is nothing to control.' });
+      const action = serviceAction[1]!;
+      if (action === 'start') {
+        try {
+          const reply = await supervisorCall(socket, '/start', 'POST');
+          if (reply.status !== 200) return sendJson(res, 502, { error: 'The supervisor refused that action.' });
+          return sendJson(res, 200, { supervised: true, status: reply.body });
+        } catch {
+          return sendJson(res, 503, { error: 'The supervisor is not answering on its control socket. Run buddi in a terminal.' });
+        }
+      }
+      res.once('finish', () => {
+        void supervisorCall(socket, `/${action}`, 'POST').catch((err: unknown) => {
+          log(`web: supervisor ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      });
+      return sendJson(res, 202, { supervised: true, pending: action });
     }
 
     /* Groups: create one, send to one, stop its current request. */
