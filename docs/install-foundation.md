@@ -138,6 +138,12 @@ on Node 22 before publishing a release.
   path. No automatic conversion or deletion of a cluster occurs.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
+- **A required-auth dashboard refuses a link opened from outside the browser's
+  own site.** The session cookie is `SameSite=Strict`, so a top-level navigation
+  started elsewhere (a terminal's opener, a chat message) does not carry it: the
+  document request answers 401, and repeated attempts count against that
+  address's rate limit. The ticket in the URL the launcher prints is what gets
+  in; an already-authenticated tab is unaffected.
 - **A stopped gateway is started from a terminal, not from a browser tab.** The
   Settings switches are served by the gateway itself, so a stop or a restart
   takes the page down with it: the request is *accepted* and then performed,
@@ -197,19 +203,42 @@ one screen, and the wizard renders without the rail.
   that, not anything the page believes, is what opens each Next button.
 - **One first run, two surfaces.** Completing or skipping here closes the same
   state machine the Telegram interview claims, so an owner who set up on the
-  dashboard is never interviewed again and the nudge arc never starts: both
-  speak only while the state is `pending`.
+  dashboard is never interviewed again: it speaks only while the state is
+  `pending`. The two-week nudge arc is shut for a record whose surface is `web`
+  whatever its state — the arc exists to carry someone who met buddi in a chat,
+  and the dashboard is the thing it would be pointing at. `done` and `skipped`
+  are terminal in `core.onboarding`: each transitions only from `pending` or
+  `in-progress`, so a late skip cannot unfinish a completion or the reverse.
+  `buddi init` therefore stops offering its own interview once it has opened the
+  wizard; two offers are not two chances, because whichever one is answered
+  claims the record.
 - **The redirect is conservative.** The dashboard replaces the location with
-  `#/welcome` only when the record is `pending` or `in-progress` *and* there is
-  no enabled, credentialed provider account. A finished record, a skipped one,
+  `#/welcome` only when the record is `pending` *and* there is no enabled,
+  credentialed provider account. `in-progress` is deliberately excluded: it
+  belongs to an interview another surface claimed, which a redirect would talk
+  over. The wizard still resumes an in-progress record when it is opened by
+  link. A finished record, a skipped one,
   or any installation that already has an account is left where it is — which
   is what keeps a developer's live dashboard out of it. Settings → System has
   "Run setup again" for everyone else.
+- **Finishing means finished.** `POST /api/onboarding/complete` answers 409 while
+  the installation still needs a model account or an agent, and the Done screen
+  says which and links back to that step; `/skip` is the one way past it, and it
+  records that the owner declined. Skip and Finish leave the wizard only when
+  the server has recorded the ending — a failed write keeps the owner on the
+  screen with the reason, rather than dropping them on a dashboard that will
+  send them straight back.
 - **The agent step writes a file, not a tool call.** It reuses
   `composeAgentFile` and `createAgentDirAtomic`, so an agent made here is the
   same artifact `platform.create_agent` makes: the generic template, no roles,
   no plugin tools, `language: mirror`, `default: true` for the first private
-  agent, and the tool grant named once in the gateway. Where exactly one usable
+  agent, and the tool grant named once in the gateway. It writes the *first*
+  agent only — a second one is the maker agent's job, where a grant is proposed
+  and approved — and creations are serialised in-process, so two requests racing
+  cannot both claim `default`. The examples tree is guarded by resolving the
+  nearest existing ancestor of both paths through `realpath` before comparing,
+  so a private agents directory symlinked into `examples/` is refused rather
+  than written to. Where exactly one usable
   model account exists it is assigned to the new agent, because the next screen
   is the owner talking to it. The write is behind the ordinary session, Origin
   and CSRF gate — the owner acting on their own installation — and not behind an

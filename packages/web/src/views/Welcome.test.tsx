@@ -69,8 +69,11 @@ describe('the redirect rule', () => {
     expect(window.location.hash).not.toContain('welcome');
   });
 
-  it('leaves a finished or skipped record alone even with no model account', async () => {
-    for (const state of ['done', 'skipped'] as const) {
+  it('leaves a finished, skipped or already-claimed record alone even with no model account', async () => {
+    // `in-progress` belongs to whichever surface claimed the first run — a
+    // Telegram or CLI interview may be mid-sentence — so the shell does not
+    // redirect into it. The wizard's own link still resumes it.
+    for (const state of ['done', 'skipped', 'in-progress'] as const) {
       vi.clearAllMocks();
       window.location.hash = '';
       quiet();
@@ -121,6 +124,35 @@ describe('the step gate', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Set up later' }));
     await waitFor(() => expect(nav).toHaveBeenCalledWith('#/'));
     expect(api.skipOnboarding).toHaveBeenCalled();
+  });
+
+  it('stays put and says why when the server refuses to record the ending', async () => {
+    const { ApiError } = await vi.importActual<typeof import('../api')>('../api');
+    vi.mocked(api.onboarding).mockResolvedValue(view());
+    vi.mocked(api.skipOnboarding).mockRejectedValue(new ApiError(503, 'The database is not answering.'));
+    render(<Welcome step="welcome" navigate={nav} timezone="UTC" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up later' }));
+    expect(await screen.findByText('The database is not answering.')).toBeInTheDocument();
+    expect(nav).not.toHaveBeenCalledWith('#/');
+  });
+
+  it('will not call setup finished while something is still missing', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ state: 'in-progress', needs: { owner: false, model: false, agent: true } }));
+    render(<Welcome step="done" navigate={nav} timezone="UTC" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Finish' })).toBeDisabled());
+    expect(await screen.findByRole('status')).toHaveTextContent(/an agent of your own/);
+    fireEvent.click(screen.getByRole('link', { name: 'an agent of your own' }));
+    expect(nav).toHaveBeenCalledWith('#/welcome?step=agent');
+    expect(api.completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it('finishes once nothing is outstanding', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ state: 'in-progress', needs: { owner: false, model: false, agent: false } }));
+    vi.mocked(api.completeOnboarding).mockResolvedValue(view({ state: 'done' }));
+    render(<Welcome step="done" navigate={nav} timezone="UTC" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Finish' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+    await waitFor(() => expect(nav).toHaveBeenCalledWith('#/'));
   });
 });
 

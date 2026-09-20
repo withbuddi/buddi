@@ -101,6 +101,8 @@ export function Welcome({ step, navigate, timezone }: WelcomeProps): JSX.Element
   const { data: view, error, reload } = useAsync(() => api.onboarding(), [], 4_000);
   const [created, setCreated] = useState<CreatedAgent | null>(null);
   const [leaving, setLeaving] = useState(false);
+  /** A refused Skip or Finish. Shown here; the owner stays where they are. */
+  const [problem, setProblem] = useState<string | null>(null);
   const current: WizardStepId | null = isWizardStep(step) ? step : null;
 
   // No step in the hash: resume where the record says, replacing rather than
@@ -115,20 +117,26 @@ export function Welcome({ step, navigate, timezone }: WelcomeProps): JSX.Element
     if (current && current !== 'done') void api.onboardingStep(current).then(reload).catch(() => {});
     navigate(welcomeRoute(next));
   };
-  const later = (): void => {
+  /*
+   * Leaving happens only when the server agrees it happened.
+   *
+   * Navigating home in a `finally` would send the owner to a dashboard that
+   * still thinks first run is pending, and the next reload would drop them back
+   * into the wizard with no idea why. A failure stays here and says so.
+   */
+  const leave = (record: () => Promise<unknown>): void => {
     setLeaving(true);
-    void api
-      .skipOnboarding()
-      .catch(() => {})
-      .finally(() => navigate(HOME_ROUTE));
+    setProblem(null);
+    record()
+      .then(() => navigate(HOME_ROUTE))
+      .catch((err: unknown) => setProblem(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setLeaving(false));
   };
-  const finish = (): void => {
-    setLeaving(true);
-    void api
-      .completeOnboarding()
-      .catch(() => {})
-      .finally(() => navigate(HOME_ROUTE));
-  };
+  const later = (): void => leave(() => api.skipOnboarding());
+  const finish = (): void => leave(() => api.completeOnboarding());
+
+  /** Nothing is outstanding, so "done" would be true if the owner said it. */
+  const settled = view ? !view.needs.model && !view.needs.agent : false;
 
   const ready = view
     ? current === 'you'
@@ -157,7 +165,7 @@ export function Welcome({ step, navigate, timezone }: WelcomeProps): JSX.Element
           ))}
         </ol>
 
-        <ErrorBanner message={error} />
+        <ErrorBanner message={error ?? problem} />
 
         <div className="welcome-body">
           {current === 'welcome' ? <WelcomeStep /> : null}
@@ -168,7 +176,7 @@ export function Welcome({ step, navigate, timezone }: WelcomeProps): JSX.Element
           ) : null}
           {current === 'hello' ? <HelloStep timezone={timezone} created={created} /> : null}
           {current === 'extras' ? <ExtrasStep /> : null}
-          {current === 'done' ? <DoneStep /> : null}
+          {current === 'done' ? <DoneStep view={view} navigate={navigate} /> : null}
         </div>
 
         <footer className="welcome-foot">
@@ -184,7 +192,7 @@ export function Welcome({ step, navigate, timezone }: WelcomeProps): JSX.Element
               Set up later
             </button>
             {current === 'done' ? (
-              <Button variant="accent" disabled={leaving} onClick={finish}>
+              <Button variant="accent" disabled={leaving || !settled} onClick={finish}>
                 Finish
               </Button>
             ) : (
@@ -455,11 +463,41 @@ function ExtrasStep(): JSX.Element {
   );
 }
 
-function DoneStep(): JSX.Element {
+function DoneStep({
+  view,
+  navigate,
+}: {
+  view: OnboardingView | undefined;
+  navigate: (next: string, replace?: boolean) => void;
+}): JSX.Element {
   const { data } = useAsync(() => api.session(), []);
+  const missing: Array<{ step: WizardStepId; what: string }> = [
+    ...(view?.needs.model ? [{ step: 'model' as const, what: 'a model account' }] : []),
+    ...(view?.needs.agent ? [{ step: 'agent' as const, what: 'an agent of your own' }] : []),
+  ];
   return (
     <Stack gap="lg">
       <Header title="That is all of it" lede="Your installation is set up. Here is where things are." />
+      {missing.length > 0 ? (
+        <Notice tone="warning" role="status">
+          Not quite: this installation still needs{' '}
+          {missing.map((item, at) => (
+            <span key={item.step}>
+              {at > 0 ? ' and ' : ''}
+              <a
+                href={welcomeRoute(item.step)}
+                onClick={(event) => {
+                  event.preventDefault();
+                  navigate(welcomeRoute(item.step));
+                }}
+              >
+                {item.what}
+              </a>
+            </span>
+          ))}
+          . Add it and Finish opens — or set up later, which leaves it for another day.
+        </Notice>
+      ) : null}
       <Section title="Opening buddi again">
         <p className="ui-card-meta">
           The dashboard is bound to{' '}
