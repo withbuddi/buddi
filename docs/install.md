@@ -91,6 +91,13 @@ gateway and stops it after. `buddi doctor` reports its state. A stopped or
 missing cluster is a doctor finding with a repair action, never a crash at
 the moment an agent needs the database.
 
+The cluster manager itself lives in `@buddi/core` (`packages/core/src/postgres`),
+so the checkout CLI and the packaged launcher run one implementation: the
+binaries, `initdb`, the authenticated start and the liveness probe. The
+postmaster is always this process's own child. A server left on the cluster by
+a supervisor that was killed is stopped (`pg_ctl stop -m fast`) and started
+again, never adopted, so there is exactly one lifecycle to reason about.
+
 An owner with their own Postgres sets `DATABASE_URL` in the data directory's
 `.env`, exactly as today, and no cluster is provisioned. Docker is no longer
 mentioned anywhere in the install path; `docker compose` remains for the

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { BINARY_VERSION } from '../../packages/install/dist/postgres.js';
+import { BINARY_VERSION } from '../../packages/core/dist/postgres/index.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** The one binary, relative to the package root. */
@@ -27,7 +27,13 @@ for (const { dir, source, pkg } of packages) {
   }
   const dependencies = Object.fromEntries(Object.entries(pkg.dependencies || {}).map(([name, version]) => [name,
     byName.has(name) ? `file:${path.relative(dest, path.join(stage, 'packages', byName.get(name)))}` : version]));
-  await writeFile(path.join(dest, 'package.json'), JSON.stringify({ ...pkg, private: true, scripts: {}, devDependencies: {}, dependencies }, null, 2));
+  const staged = { ...pkg, private: true, scripts: {}, devDependencies: {}, dependencies };
+  // A packaged install has exactly one entry point: the @buddi/install launcher.
+  // @buddi/cli declares `bin.buddi` too, so without this the winner of
+  // node_modules/.bin/buddi would depend on npm's ordering. Only the bin link
+  // is dropped; the modules themselves still ship.
+  if (pkg.name !== '@buddi/install') delete staged.bin;
+  await writeFile(path.join(dest, 'package.json'), JSON.stringify(staged, null, 2));
 }
 await cp(path.join(root, 'packages/web/dist'), path.join(stage, 'packages/web/dist'), { recursive: true });
 for (const asset of ['examples/agents', 'examples/skills']) await cp(path.join(root, asset), path.join(stage, asset), { recursive: true });

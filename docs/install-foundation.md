@@ -22,9 +22,10 @@ published to npm. The full contract remains [install.md](install.md).
 - The supervisor owns the gateway and database independently, serializes gateway
   controls, restarts a crashed gateway with bounded exponential backoff, and holds
   a per-install lock. Gateway IPC
-  detects supervisor death. A subsequent supervisor can authenticate and adopt
-  the exact managed cluster left by a killed supervisor. Authenticated liveness
-  probes monitor both spawned and adopted managed databases; database failure
+  detects supervisor death. A postmaster left on the cluster by a killed
+  supervisor is stopped and started again as the new supervisor's own child; it
+  is never adopted, so a managed database is always a spawned child with an exit
+  listener. An authenticated liveness probe also monitors it; database failure
   shuts down the gateway and supervisor. External servers are not supervised.
 - Startup records a phase before migrations. Restarting uses the **existing
   idempotent migration runner** to apply missing transactional migrations; the
@@ -61,11 +62,22 @@ is provided by the release launcher, not by changing the checkout CLI parser.
 
 The runtime of a packaged install is the workspace package `packages/install`
 (`@buddi/install`): `src/environment.ts` (data directory, private files,
-installation state, startup lock), `src/postgres.ts` (the managed cluster),
-`src/supervisor.ts` (process supervision and the service-control page) and
-`src/launcher.ts`, the `buddi` binary the tarball installs
-(`packages/install/dist/launcher.js`). `scripts/release/build.mjs` and
+installation state, startup lock), `src/supervisor.ts` (process supervision and
+the service-control page) and `src/launcher.ts`, the `buddi` binary the tarball
+installs (`packages/install/dist/launcher.js`). `scripts/release/build.mjs` and
 `scripts/release/smoke.mjs` are release *tooling*, not runtime, and stay there.
+
+The managed cluster itself is **not** install-specific and lives in
+`packages/core/src/postgres` (`binaries.ts`, `cluster.ts`): the per-platform
+binaries, `initdb`, the authenticated start, the liveness probe. Core gains no
+dependency on `@embedded-postgres/*` — the binary package is resolved by name
+from a root the caller supplies. `packages/install/src/postgres.ts` is only the
+adapter that chooses between that cluster and an external `DATABASE_URL`, so
+the checkout CLI can later share the same manager.
+
+The release tarball declares exactly one `bin`, `@buddi/install`'s `buddi`
+launcher; `build.mjs` strips `bin` from every other staged workspace package so
+nothing else claims `node_modules/.bin/buddi`.
 
 `environment()` rewrites the environment before any `@buddi/*` package is
 imported, because those packages compute their path constants at import time.
@@ -89,10 +101,13 @@ path. It runs npm only inside staging, with install scripts disabled. The smoke
 test installs that tarball into another temporary directory, disables installation
 scripts, uses a private file vault, runs a real Postgres and dashboard, tests auth,
 repeat startup, gateway stop/start/crash, supervisor death and migration restart,
-password rotation, adopted database death, and dashboard port conflicts, checks
+password rotation, database death under its own supervisor, and dashboard port
+conflicts, checks
 that application data survives, then stops its own supervisor. By default
 it does not install a LaunchAgent, touch an existing database/keychain, open a
-browser, or make model calls. The optional `--service` flag tests the actual macOS
+browser, or make model calls. After supervisor death it asserts that the
+database is running again with a *different* pid (restarted, not adopted) and
+that the fixture row survived. The optional `--service` flag tests the actual macOS
 LaunchAgent path using a uniquely named test service, then unloads and removes
 that test unit. It also replaces a loaded job and verifies its new arguments.
 Fixture data is retained for inspection. Tests should also run
@@ -139,8 +154,9 @@ reboot, and choose a distribution that includes the backup tools.
   surviving gateway crashes, supervisor death, password rotation, and restart
   with the migration phase marker set. Auth tests reject missing credentials,
   in-process ticket replay and writes without CSRF. Intentional gateway stops
-  leave Postgres running. Detached mode verifies failure of an adopted database
-  terminates its supervisor and gateway. A conflicting dashboard listener cannot
+  leave Postgres running. Detached mode verifies that failure of the managed
+  database terminates its supervisor and gateway, and that a leftover postmaster
+  is stopped and replaced rather than adopted. A conflicting dashboard listener cannot
   pass readiness, and the gateway exits when its required bind fails.
 - Test LaunchAgents are unloaded and removed; fixture directories are retained.
   The live Buddi installation was not restarted or reconfigured.
