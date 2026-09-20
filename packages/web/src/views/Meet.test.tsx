@@ -214,6 +214,93 @@ describe('the questions', () => {
     expect(field).toHaveValue('');
   });
 
+  it('asks which model when the service offers several and names no default', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.probeModels).mockResolvedValue({
+      models: [
+        { id: 'gemma4:31b', name: 'gemma4:31b', isDefault: false },
+        { id: 'nemotron:70b', name: 'nemotron:70b', isDefault: false },
+      ],
+      truncated: false,
+    });
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'cloud' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+    fireEvent.change(await screen.findByLabelText(SCRIPT.brain.service.address), { target: { value: 'a-service/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.service.submit }));
+    // `models[0]` would have been arbitrary, so buddi asks instead.
+    expect(await screen.findByText(SCRIPT.brain.model.ask)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(SCRIPT.brain.model.label), { target: { value: 'nemotron:70b' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.model.submit }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'nemotron:70b' });
+    // And the confirmation names the one they chose.
+    expect(await screen.findByText(SCRIPT.brain.works('nemotron:70b'))).toBeInTheDocument();
+  });
+
+  it('does not ask when the service names its own default', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.probeModels).mockResolvedValue({
+      models: [
+        { id: 'gemma4:31b', name: 'gemma4:31b', isDefault: false },
+        { id: 'nemotron:70b', name: 'nemotron:70b', isDefault: true },
+      ],
+      truncated: false,
+    });
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'cloud' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+    fireEvent.change(await screen.findByLabelText(SCRIPT.brain.service.address), { target: { value: 'a-service/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.service.submit }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'nemotron:70b' });
+  });
+
+  it('asks Ollama the same question, and skips it when one model is pulled', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'local' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    vi.mocked(api.ollama).mockResolvedValue({
+      running: true,
+      models: ['gemma4:12b', 'qwen3:8b'],
+      downloadUrl: 'ollama.com/download',
+      baseUrl: 'ollama-on-this-machine/v1',
+      cloudBaseUrl: 'ollama-cloud/v1',
+    });
+    const page = render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.ollama.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.ollama.connect }));
+    expect(await screen.findByText(SCRIPT.brain.model.ask)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(SCRIPT.brain.model.label), { target: { value: 'qwen3:8b' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.model.submit }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'qwen3:8b' });
+    page.unmount();
+
+    // One model pulled is not a choice.
+    vi.clearAllMocks();
+    quiet();
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'local' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    vi.mocked(api.ollama).mockResolvedValue({
+      running: true,
+      models: ['gemma4:12b'],
+      downloadUrl: 'ollama.com/download',
+      baseUrl: 'ollama-on-this-machine/v1',
+      cloudBaseUrl: 'ollama-cloud/v1',
+    });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.ollama.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.ollama.connect }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'gemma4:12b' });
+  });
+
   it('keeps a refused key in the thread with the field still open', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.probeModels).mockRejectedValue(new Error('no'));

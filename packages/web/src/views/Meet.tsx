@@ -639,6 +639,12 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ollama, setOllama] = useState<OllamaProbe | null>(null);
+  /** The models the owner is choosing between, and what to do with the answer. */
+  const [choice, setChoice] = useState<{
+    models: string[];
+    make: (model: string) => Parameters<typeof api.saveProviderAccount>[0];
+    label: string;
+  } | null>(null);
   const claudeOffered = accounts?.anthropicOAuthEnabled === true;
 
   // The Ollama card has to know before it is opened whether Ollama is there:
@@ -711,6 +717,39 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     }
   };
 
+  /*
+   * One more question, and only when it is a real one.
+   *
+   * A service with thirty models has no "the" model, and picking `models[0]`
+   * for the owner meant buddi confidently naming something arbitrary. So when
+   * there are several and none of them is the service's own default, the
+   * thread asks — once, with the list — and the answer becomes the account's
+   * default and the model the confirmation names. One model, or a flagged
+   * default, is not a question and is not asked.
+   */
+  const offer = (models: string[], make: (model: string) => Parameters<typeof api.saveProviderAccount>[0], label: string): void => {
+    if (models.length <= 1) {
+      void adopt(make(models[0] ?? ''), label);
+      return;
+    }
+    setChoice({ models, make, label });
+  };
+
+  if (choice) {
+    return (
+      <>
+        <Buddi>
+          <Said>{SCRIPT.brain.model.ask}</Said>
+        </Buddi>
+        <ModelChoice
+          busy={busy}
+          models={choice.models}
+          onUse={(model) => void adopt(choice.make(model), choice.label)}
+        />
+      </>
+    );
+  }
+
   if (card === 'key') return <KeyCard busy={busy} problem={problem} onBack={() => setCard(null)} onUse={adopt} />;
   if (card === 'service') {
     return (
@@ -719,12 +758,12 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         problem={problem}
         address={ollama?.cloudBaseUrl ?? ''}
         onBack={() => setCard(null)}
-        onUse={adopt}
+        onOffer={offer}
       />
     );
   }
   if (card === 'ollama') {
-    return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onUse={adopt} />;
+    return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onOffer={offer} />;
   }
   if (card === 'claude') {
     return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} onConnected={bind} {...props} />;
@@ -843,6 +882,42 @@ function CloudMark(): JSX.Element {
 
 type Adopt = (body: Parameters<typeof api.saveProviderAccount>[0], label: string) => Promise<void>;
 
+/** Hand the models over, with what to do once one of them is chosen. */
+type Offer = (
+  models: string[],
+  make: (model: string) => Parameters<typeof api.saveProviderAccount>[0],
+  label: string,
+) => void;
+
+/** The one question a service with many models is worth: which of them. */
+function ModelChoice({
+  busy,
+  models,
+  onUse,
+}: {
+  busy: boolean;
+  models: string[];
+  onUse: (model: string) => void;
+}): JSX.Element {
+  const [chosen, setChosen] = useState(models[0] ?? '');
+  return (
+    <Ask>
+      <Field label={SCRIPT.brain.model.label} grow>
+        <select value={chosen} onChange={(event) => setChosen(event.target.value)}>
+          {models.map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Button variant="accent" disabled={busy || chosen === ''} onClick={() => onUse(chosen)}>
+        {SCRIPT.brain.model.submit}
+      </Button>
+    </Ask>
+  );
+}
+
 /** A pasted key, and which AI it belongs to. */
 function KeyCard({
   busy,
@@ -867,7 +942,10 @@ function KeyCard({
       let defaultModel = kind === 'anthropic' ? 'claude-sonnet-5' : 'gpt-5';
       try {
         const probed = await api.probeModels({ kind, auth: 'api-key', secret: value });
-        defaultModel = probed.models.find((model) => model.isDefault)?.id ?? probed.models[0]?.id ?? defaultModel;
+        // Only a model the provider itself flags as the default displaces the
+        // sensible one. The first of a long list is not an answer, and these
+        // two providers have a well-known model worth starting on.
+        defaultModel = probed.models.find((model) => model.isDefault)?.id ?? defaultModel;
       } catch {
         // A key that cannot list models may still answer; the test below is
         // the verdict that counts.
@@ -927,19 +1005,22 @@ function OllamaCard({
   problem,
   probe,
   onBack,
-  onUse,
+  onOffer,
 }: {
   busy: boolean;
   problem: string | null;
   probe: OllamaProbe | null;
   onBack: () => void;
-  onUse: Adopt;
+  onOffer: Offer;
 }): JSX.Element {
-  const model = probe?.models[0] ?? '';
+  const models = probe?.models ?? [];
   const use = (): void => {
     if (!probe) return;
-    void onUse(
-      {
+    // Several models pulled and no "the" one: the owner is asked which. One,
+    // and there is nothing worth asking.
+    onOffer(
+      models,
+      (model) => ({
         label: SCRIPT.brain.cards.ollama.title,
         kind: 'openai-compatible',
         auth: 'none',
@@ -948,7 +1029,7 @@ function OllamaCard({
         baseUrl: probe.baseUrl,
         defaultModel: model,
         enabled: true,
-      },
+      }),
       SCRIPT.brain.cards.ollama.title,
     );
   };
@@ -971,7 +1052,7 @@ function OllamaCard({
           ←
         </button>
         {probe?.running ? (
-          <Button variant="accent" disabled={busy || model === ''} onClick={use}>
+          <Button variant="accent" disabled={busy || models.length === 0} onClick={use}>
             {SCRIPT.brain.ollama.connect}
           </Button>
         ) : probe ? (
@@ -990,7 +1071,7 @@ function ServiceCard({
   problem,
   address: offered,
   onBack,
-  onUse,
+  onOffer,
 }: {
   busy: boolean;
   problem: string | null;
@@ -1002,37 +1083,40 @@ function ServiceCard({
    */
   address: string;
   onBack: () => void;
-  onUse: Adopt;
+  onOffer: Offer;
 }): JSX.Element {
   const [address, setAddress] = useState(offered);
   const [secret, setSecret] = useState('');
   const submit = (): void => {
     if (address.trim() === '' || busy) return;
     void (async () => {
-      let defaultModel = '';
+      const auth = secret.trim() ? ('api-key' as const) : ('none' as const);
+      const make = (defaultModel: string): Parameters<typeof api.saveProviderAccount>[0] => ({
+        label: SCRIPT.brain.cards.service.title,
+        kind: 'openai-compatible',
+        auth,
+        baseUrl: address.trim(),
+        defaultModel,
+        enabled: true,
+        ...(secret.trim() ? { secret: secret.trim() } : {}),
+      });
+      let models: string[] = [];
+      let flagged: string | undefined;
       try {
         const probed = await api.probeModels({
           kind: 'openai-compatible',
-          auth: secret.trim() ? 'api-key' : 'none',
+          auth,
           baseUrl: address.trim(),
           ...(secret.trim() ? { secret: secret.trim() } : {}),
         });
-        defaultModel = probed.models.find((model) => model.isDefault)?.id ?? probed.models[0]?.id ?? '';
+        models = probed.models.map((model) => model.id);
+        flagged = probed.models.find((model) => model.isDefault)?.id;
       } catch {
         /* Said below by the save or the test, in its own words. */
       }
-      await onUse(
-        {
-          label: SCRIPT.brain.cards.service.title,
-          kind: 'openai-compatible',
-          auth: secret.trim() ? 'api-key' : 'none',
-          baseUrl: address.trim(),
-          defaultModel,
-          enabled: true,
-          ...(secret.trim() ? { secret: secret.trim() } : {}),
-        },
-        SCRIPT.brain.cards.service.title,
-      );
+      // A service that names its own default has answered the question; one
+      // that offers thirty has not, and buddi asks rather than guessing.
+      onOffer(flagged ? [flagged] : models, make, SCRIPT.brain.cards.service.title);
     })();
   };
   return (
