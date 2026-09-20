@@ -23,7 +23,6 @@ export interface InstallationState {
   version: number;
   database: 'managed' | 'external';
   webPort: number;
-  controlPort: number;
   dbPort: number;
   phase?: string;
 }
@@ -173,8 +172,10 @@ export async function environment(root: string, env: NodeJS.ProcessEnv = process
   let state: InstallationState | undefined;
   if (existsSync(stateFile)) {
     state = JSON.parse(await readFile(stateFile, 'utf8')) as InstallationState;
+    // An installation written before the control socket still carries a
+    // `controlPort`. It is ignored, not an error.
     if (state.version !== 1 || !['managed', 'external'].includes(state.database) ||
-        ![state.webPort, state.controlPort, state.dbPort].every(p => Number.isInteger(p) && p > 0 && p <= 65535)) {
+        ![state.webPort, state.dbPort].every(p => Number.isInteger(p) && p > 0 && p <= 65535)) {
       throw new Error('Invalid installation.json; preserve the data directory and restore its configuration.');
     }
     env.BUDDI_WEB_PORT = String(state.webPort);
@@ -238,11 +239,9 @@ export async function initialize(ctx: InstallContext): Promise<void> {
   }
   if (!ctx.state) {
     const webPort = await freePort(Number(ctx.env.BUDDI_WEB_PORT) || 4317);
-    let controlPort = await freePort();
-    while (controlPort === webPort) controlPort = await freePort();
     let dbPort = await freePort();
-    while ([webPort, controlPort].includes(dbPort)) dbPort = await freePort();
-    ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, controlPort, dbPort, phase: 'provisioning' };
+    while (dbPort === webPort) dbPort = await freePort();
+    ctx.state = { version: 1, database: ctx.env.DATABASE_URL ? 'external' : 'managed', webPort, dbPort, phase: 'provisioning' };
     await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
   }
   ctx.env.BUDDI_WEB_PORT = String(ctx.state.webPort);

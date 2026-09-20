@@ -10,13 +10,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
+import { request } from 'node:http';
 import { open, mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { environment, dashboardReady, reloadLaunchAgent, nativeEnvironment } from './environment.js';
 import type { InstallContext } from './environment.js';
-import { supervise, controlToken } from './supervisor.js';
+import { supervise, supervisorSocket } from './supervisor.js';
 import type { SupervisorStatus } from './supervisor.js';
 
 const entry = fileURLToPath(import.meta.url);
@@ -25,15 +26,28 @@ const root = path.resolve(path.dirname(entry), '../../..');
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
 
+/**
+ * Ask this installation's supervisor. The socket in the data directory is the
+ * whole credential, and `fetch` cannot address a Unix socket, so this is
+ * `node:http`'s client: one request, no agent, nothing pooled.
+ */
 async function control(ctx: InstallContext, action = 'status'): Promise<SupervisorStatus> {
   if (!ctx.state) throw new Error('Not initialized. Run buddi first.');
-  const gateway = await import('@buddi/gateway');
-  const { token } = await gateway.ensureWebToken({ env: ctx.env, readOnly: true });
-  const response = await fetch(`http://127.0.0.1:${ctx.state.controlPort}/${action}`, {
-    method: action === 'status' ? 'GET' : 'POST', headers: { Authorization: `Bearer ${controlToken(token)}` }, signal: AbortSignal.timeout(25_000),
+  return await new Promise<SupervisorStatus>((resolve, reject) => {
+    const req = request({ socketPath: supervisorSocket(ctx.data), path: `/${action}`, method: action === 'status' ? 'GET' : 'POST', headers: { host: 'localhost' }, timeout: 25_000 }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) return reject(new Error(`Supervisor refused the request (${res.statusCode}).`));
+        try { resolve(JSON.parse(text) as SupervisorStatus); }
+        catch { reject(new Error('The supervisor answered with something that is not its status.')); }
+      });
+    });
+    req.once('timeout', () => req.destroy(new Error('The supervisor did not answer within 25 seconds.')));
+    req.once('error', reject);
+    req.end();
   });
-  if (!response.ok) throw new Error(`Supervisor refused the request (${response.status}).`);
-  return await response.json() as SupervisorStatus;
 }
 
 async function launchService(ctx: InstallContext, temporary: boolean): Promise<void> {
@@ -108,7 +122,6 @@ async function run(): Promise<void> {
     const gateway = await import('@buddi/gateway');
     const { token } = await gateway.ensureWebToken({ env: ctx.env, readOnly: true });
     const url = gateway.webUrl({ host: '127.0.0.1', port: ctx.state!.webPort }, gateway.mintTicket(token));
-    const serviceUrl = `http://127.0.0.1:${ctx.state!.controlPort}/?t=${encodeURIComponent(gateway.mintTicket(controlToken(token)))}`;
     // A process pid is not dashboard readiness. Wait for its authenticated HTTP surface.
     const deadline = Date.now() + 30_000;
     for (;;) {
@@ -119,8 +132,7 @@ async function run(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     console.log(`Dashboard: ${url}`);
-    console.log(`Service controls: ${serviceUrl}`);
-    console.log('Links expire in five minutes; reuse is rejected within the current server lifetime (not across restarts). Run buddi again for fresh links.');
+    console.log('The link expires in five minutes; reuse is rejected within the current server lifetime (not across restarts). Run buddi again for a fresh link.');
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }

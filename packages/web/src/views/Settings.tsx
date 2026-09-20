@@ -4,11 +4,12 @@
  * itself. Nothing here is a page an owner visits daily, which is why it is
  * behind the gear and not on the rail's first screen.
  */
+import { useState } from 'react';
 import type { PlaceProps } from '../App';
 import { api } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { SETTINGS_SECTIONS, settingsRoute } from '../routes';
-import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Stack, Tab, Tabs, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
 import { Watchers } from './Watchers';
@@ -77,6 +78,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
           <Notice tone="warning">{accounts.data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         ) : null}
       </Panel>
+      <Service />
       <Panel title="Mail and sources">
         {!data ? (
           <Empty>Loading…</Empty>
@@ -97,6 +99,94 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         )}
       </Panel>
     </Stack>
+  );
+}
+
+/**
+ * The supervisor's switches, when there is a supervisor.
+ *
+ * A packaged installation runs the gateway as a supervised child, so the
+ * database can stay up while the gateway restarts. A developer checkout has no
+ * supervisor and this section is simply absent — there is nothing here to
+ * control and no command to recommend.
+ *
+ * Stop and restart end the process serving this page, which is why both ask
+ * once before they act and say what will happen.
+ */
+export function Service(): JSX.Element | null {
+  const view = useAsync(() => api.service(), [], 10_000);
+  const [pending, setPending] = useState<'stop' | 'restart' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const status = view.data?.supervised ? view.data.status : undefined;
+  if (!status) return null;
+  const act = (action: 'stop' | 'restart'): void => {
+    setBusy(true);
+    setFailed(null);
+    void api
+      .serviceAction(action)
+      .then(() => { setPending(null); })
+      .catch((error: Error) => { setFailed(error.message); })
+      .finally(() => { setBusy(false); view.reload(); });
+  };
+  return (
+    <Panel title="Service">
+      <Stack divided>
+        <Section>
+          <KV
+            items={[
+              { label: 'Database', value: <ProcessState state={status.database} pid={status.databasePid} /> },
+              { label: 'Gateway', value: <ProcessState state={status.gateway} pid={status.gatewayPid} /> },
+              { label: 'Supervisor', value: <span className="mono">pid {status.supervisorPid}</span> },
+            ]}
+          />
+        </Section>
+        <Section>
+          <Stack gap="sm">
+            <ErrorBanner message={failed} />
+            {pending ? (
+              <Notice tone="warning" role="alert">
+                {pending === 'stop'
+                  ? 'Stopping the gateway closes this dashboard. The database keeps running; run buddi in a terminal to bring the dashboard back.'
+                  : 'Restarting the gateway closes this dashboard for a few seconds. If it does not come back on its own, run buddi in a terminal.'}
+              </Notice>
+            ) : (
+              <p className="ui-card-meta">Stopping the gateway ends this dashboard until buddi is run again.</p>
+            )}
+            <Toolbar align="end">
+              {pending ? (
+                <>
+                  <Button variant="ghost" disabled={busy} onClick={() => { setPending(null); setFailed(null); }}>
+                    Cancel
+                  </Button>
+                  <Button variant={pending === 'stop' ? 'danger' : 'accent'} disabled={busy} onClick={() => { act(pending); }}>
+                    {pending === 'stop' ? 'Stop it' : 'Restart it'}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="ghost" onClick={() => { setPending('stop'); }}>
+                    Stop gateway
+                  </Button>
+                  <Button variant="accent" onClick={() => { setPending('restart'); }}>
+                    Restart gateway
+                  </Button>
+                </>
+              )}
+            </Toolbar>
+          </Stack>
+        </Section>
+      </Stack>
+    </Panel>
+  );
+}
+
+function ProcessState({ state, pid }: { state: string; pid: number | null }): JSX.Element {
+  return (
+    <span>
+      <Pill tone={state === 'running' ? 'good' : state === 'stopped' ? 'warning' : state === 'failed' ? 'critical' : 'muted'}>{state}</Pill>{' '}
+      {pid === null ? <span className="ui-card-meta">no process</span> : <span className="mono">pid {pid}</span>}
+    </span>
   );
 }
 
