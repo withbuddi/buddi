@@ -8,7 +8,7 @@ import { useState } from 'react';
 import type { PlaceProps } from '../App';
 import { api } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_SECTIONS, settingsRoute } from '../routes';
+import { SETTINGS_SECTIONS, WELCOME_ROUTE, settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -77,6 +77,13 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         {accounts.data && (accounts.data.vault.locked || accounts.data.vault.kind === 'none') ? (
           <Notice tone="warning">{accounts.data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         ) : null}
+      </Panel>
+      <Panel title="First run">
+        <p className="ui-card-meta">
+          The setup screens — you, a model account, an agent — are always there.{' '}
+          <a href={WELCOME_ROUTE}>Run setup again</a>. Nothing is undone by opening them; each screen saves
+          what you change and leaves the rest alone.
+        </p>
       </Panel>
       <Service />
       <Panel title="Mail and sources">

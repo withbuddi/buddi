@@ -5,6 +5,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, describe, expect, it } from 'vitest';
 import { groupChatRoute, parseChatRoute, parseGroupChatRoute } from '../routes';
+import { GroupSheet } from '../shell/GroupSheet';
 import { MessageList } from './MessageList';
 import type { ChatAgent, ChatMessage } from './types';
 
@@ -20,6 +21,31 @@ describe('the group route', () => {
     expect(parseGroupChatRoute('#/chat/g/g-1/c-2')).toEqual({ groupId: 'g-1', conversationId: 'c-2' });
     expect(parseChatRoute('#/chat/g/g-1')).toBeNull();
     expect(parseChatRoute('#/chat/ledger')).toEqual({ agentId: 'ledger' });
+  });
+});
+
+/*
+ * The rail stops offering a group until there is somebody to group. A link
+ * does not go through the rail, so the sheet refuses for itself.
+ */
+describe('the group sheet with nobody to group', () => {
+  const maker = { ...agent('father', 'Agent Father'), roles: ['maker'] };
+
+  it('says what is missing in one sentence, and offers no form', () => {
+    render(<GroupSheet agents={[agent('ada', 'Ada'), maker]} onClose={() => {}} onCreated={() => {}} />);
+    expect(screen.getByText('A group needs two agents. Make another one with Agent Father first.')).toBeDefined();
+    // Nothing to fill in wrongly: no name, no members, no create button.
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Create group/ })).toBeNull();
+  });
+
+  it('draws the form once two agents could be in a room', () => {
+    render(<GroupSheet agents={[agent('ada', 'Ada'), agent('ledger', 'Ledger'), maker]} onClose={() => {}} onCreated={() => {}} />);
+    expect(screen.getByRole('button', { name: /Create group/ })).toBeDefined();
+    expect(screen.queryByText(/A group needs two agents/)).toBeNull();
+    // The maker is a settings door, so it is not offered as a member either.
+    expect(screen.queryByText('Agent Father')).toBeNull();
   });
 });
 

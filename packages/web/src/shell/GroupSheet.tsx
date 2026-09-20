@@ -5,10 +5,34 @@
 import { useState } from 'react';
 import { ApiError, chatApi } from '../api';
 import type { ChatAgent, GroupView } from '../chat/types';
+import { canGroup, groupableAgents, makerName } from './roster';
 import { Button, Field, Notice, Sheet, Stack, Toolbar } from '../ui';
 import { AgentAvatar } from '../ui';
 
 export function GroupSheet({ agents, onClose, onCreated }: {
+  agents: ChatAgent[];
+  onClose: () => void;
+  onCreated: (group: GroupView) => void;
+}): JSX.Element {
+  /*
+   * Reached by a link, with nobody to group.
+   *
+   * The rail stops offering this until there are two agents who could be in a
+   * room together, but a bookmarked route does not go through the rail. One
+   * sentence saying what is missing and where it is fixed — and no form,
+   * because a form that can only be filled in wrongly is worse than no form.
+   */
+  if (!canGroup(agents)) {
+    return (
+      <Sheet title="A new group" onClose={onClose}>
+        <Notice>A group needs two agents. Make another one with {makerName(agents)} first.</Notice>
+      </Sheet>
+    );
+  }
+  return <GroupForm agents={groupableAgents(agents)} onClose={onClose} onCreated={onCreated} />;
+}
+
+function GroupForm({ agents, onClose, onCreated }: {
   agents: ChatAgent[];
   onClose: () => void;
   onCreated: (group: GroupView) => void;

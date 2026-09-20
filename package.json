@@ -8,6 +8,8 @@
     "build": "pnpm -r build",
     "release:pack": "node scripts/release/build.mjs",
     "release:test": "pnpm --filter @buddi/install test",
+    "release:trial": "pnpm -r build && pnpm release:docker && scripts/release/docker/run.sh --reset",
+    "release:docker": "set -e; out=$(node scripts/release/build.mjs); tgz=${out##*Release: }; ctx=$(mktemp -d); cp \"$tgz\" \"$ctx/buddi.tgz\"; cp scripts/release/docker/Dockerfile \"$ctx/Dockerfile\"; docker build -t buddi-trial \"$ctx\"; rm -rf \"$ctx\"; echo \"Image buddi-trial built from $tgz\"",
     "release:smoke": "node scripts/release/smoke.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "node scripts/check-boundaries.mjs && pnpm -r build && pnpm -r typecheck && pnpm -r test && pnpm check:generic",

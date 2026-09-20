@@ -24,11 +24,13 @@ import {
   HOME_ROUTE,
   PLACES,
   SETTINGS_ROUTE,
+  WELCOME_ROUTE,
   chatRoute,
   groupChatRoute,
   legacyRedirect,
   parseChatRoute,
   parseGroupChatRoute,
+  parseWelcomeRoute,
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
@@ -42,6 +44,7 @@ import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
+import { Meet } from './views/Meet';
 
 export { PLACES };
 
@@ -148,6 +151,42 @@ export function App(): JSX.Element {
     return () => window.clearInterval(timer);
   }, [hash]);
 
+  /*
+   * First run, once per load.
+   *
+   * The wizard is offered only to an installation whose first run is still
+   * `pending` *and* which has no model account. Both halves matter: a done or
+   * skipped record never sees it again, a working install whose record predates
+   * the wizard never sees it — which is what keeps a developer's live dashboard
+   * out of a setup screen it passed long ago — and an `in-progress` record
+   * belongs to an interview some other surface already claimed, which must not
+   * be interrupted by a redirect. A web record that is in progress resumes
+   * through the link, not through this. Replaced, not pushed, so Back does not
+   * bounce.
+   */
+  const [firstRunChecked, setFirstRunChecked] = useState(false);
+  useEffect(() => {
+    if (firstRunChecked) return undefined;
+    let cancelled = false;
+    api
+      .onboarding()
+      .then((view) => {
+        if (cancelled) return;
+        setFirstRunChecked(true);
+        if (view.state === 'pending' && view.needs.model && !parseWelcomeRoute(window.location.hash)) {
+          navigate(WELCOME_ROUTE, true);
+        }
+      })
+      .catch(() => {
+        // No server, or an installation whose database has not migrated that
+        // table. Either way the shell is what the owner gets.
+        if (!cancelled) setFirstRunChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [firstRunChecked, navigate]);
+
   // The old hashes, sent where their content went. Replaced, not pushed, so
   // Back does not bounce between the two.
   useEffect(() => {
@@ -230,6 +269,7 @@ export function App(): JSX.Element {
     return () => window.clearInterval(handle);
   }, []);
 
+  const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);
   const onChat = place === CHAT_ROUTE;
   const groupSheet = newGroup ? (
@@ -239,6 +279,19 @@ export function App(): JSX.Element {
       onCreated={(group) => { setGroups((current) => [...current, group]); setNewGroup(false); navigate(groupChatRoute(group.id)); }}
     />
   ) : null;
+
+  // First run takes the whole window: no rail, no place, nothing to navigate
+  // away to until the owner has met their assistant or set it aside.
+  if (welcome) {
+    return (
+      <Tooltip.Provider delayDuration={400}>
+        <Toast.Provider swipeDirection="right">
+          <Meet navigate={navigate} timezone={timezone} />
+          <Toast.Viewport className="ui-toasts" />
+        </Toast.Provider>
+      </Tooltip.Provider>
+    );
+  }
 
   return (
     <Tooltip.Provider delayDuration={400}>
@@ -272,6 +325,7 @@ export function App(): JSX.Element {
               timezone={timezone}
               agents={ordered}
               agentId={selectedGroup ? selectedGroup.coordinator : selectedAgentId}
+              defaultAgentId={defaultAgentId}
               group={selectedGroup}
               requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
               onConversationOpened={conversationOpened}

@@ -23,13 +23,14 @@
 import { OWNER_ID, ensureOwner, type Queryable } from '../owner.js';
 import type {
   Onboarding,
+  OnboardingDetails,
   OnboardingStart,
   OwnerProfile,
   OwnerProfilePatch,
 } from './types.js';
 
 /** Every column, in one place, so the row mapper and the SQL cannot drift. */
-const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done,
+const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done, details,
                  nudges_sent, last_nudge_at, unanswered, quiet_until, updated_at`;
 
 function date(value: unknown): Date | null {
@@ -52,6 +53,21 @@ function steps(value: unknown): string[] {
   return raw.filter((item): item is string => typeof item === 'string');
 }
 
+/**
+ * `details` as an object, whatever the driver handed back. A column holding
+ * something that is not an object is data we did not write, and it degrades to
+ * "nothing recorded" rather than throwing.
+ */
+function details(value: unknown): OnboardingDetails {
+  const raw = typeof value === 'string' ? safeParse(value) : value;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: OnboardingDetails = {};
+  const row = raw as Record<string, unknown>;
+  if (typeof row.conversationId === 'string') out.conversationId = row.conversationId;
+  if (typeof row.accountId === 'string') out.accountId = row.accountId;
+  return out;
+}
+
 function safeParse(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -68,6 +84,7 @@ function toOnboarding(row: any): Onboarding {
     completedAt: date(row.completed_at),
     surface: row.surface === null || row.surface === undefined ? null : String(row.surface),
     stepsDone: steps(row.steps_done),
+    details: details(row.details),
     nudgesSent: Number(row.nudges_sent ?? 0),
     lastNudgeAt: date(row.last_nudge_at),
     unanswered: Number(row.unanswered ?? 0),
@@ -85,6 +102,7 @@ export function pendingOnboarding(ownerId: string = OWNER_ID): Onboarding {
     completedAt: null,
     surface: null,
     stepsDone: [],
+    details: {},
     nudgesSent: 0,
     lastNudgeAt: null,
     unanswered: 0,
@@ -158,9 +176,41 @@ export async function markStepDone(pool: Queryable, step: string): Promise<Onboa
 }
 
 /**
+ * Record what the steps cannot say: the handover conversation, the account.
+ *
+ * A merge, not a replacement — two surfaces recording two different facts
+ * about the same first run must not erase each other — and an empty patch is a
+ * read. Nothing here is state the runtime branches on; it is what a reload
+ * needs to rejoin a conversation it already started.
+ */
+export async function setOnboardingDetails(
+  pool: Queryable,
+  patch: OnboardingDetails,
+): Promise<Onboarding> {
+  const entries = Object.entries(patch).filter(([, value]) => typeof value === 'string' && value !== '');
+  if (entries.length === 0) return getOnboarding(pool);
+  const merge = JSON.stringify(Object.fromEntries(entries));
+  const { rows } = await pool.query(
+    `insert into core.onboarding (owner_id, details, updated_at)
+     values ($1, $2::jsonb, now())
+     on conflict (owner_id) do update
+       set details = core.onboarding.details || excluded.details,
+           updated_at = now()
+     returning ${COLUMNS}`,
+    [OWNER_ID, merge],
+  );
+  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+}
+
+/**
  * The conversation finished. Idempotent, and the *first* surface to finish it
  * keeps the credit — a second call from the other surface changes nothing, so
  * whichever one the owner actually answered on is the one recorded.
+ *
+ * `done` and `skipped` are both terminal, and the `where` is what makes them
+ * so: the update fires only from `pending` or `in-progress`, so a later call
+ * from the other surface reads the record rather than overwriting it. Without
+ * it, "I skipped this" and "I finished this" would take turns being true.
  */
 export async function completeOnboarding(
   pool: Queryable,
@@ -174,15 +224,17 @@ export async function completeOnboarding(
            completed_at = coalesce(core.onboarding.completed_at, now()),
            surface = coalesce(core.onboarding.surface, excluded.surface),
            updated_at = now()
+     where core.onboarding.state in ('pending', 'in-progress')
      returning ${COLUMNS}`,
     [OWNER_ID, surface],
   );
-  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+  return rows[0] ? toOnboarding(rows[0]) : getOnboarding(pool);
 }
 
 /**
  * The owner said no. A first-class outcome, not a failure: `skipped` closes the
- * machine exactly as `done` does, and nothing ever asks again.
+ * machine exactly as `done` does, and nothing ever asks again — and, like
+ * `done`, it is terminal: a skip after a completion changes nothing.
  *
  * The reason is kept in the event log rather than in the row — it is one
  * sentence of history, not state anything reads — and a database with no event
@@ -196,9 +248,13 @@ export async function skipOnboarding(pool: Queryable, reason?: string): Promise<
        set state = 'skipped',
            completed_at = coalesce(core.onboarding.completed_at, now()),
            updated_at = now()
+     where core.onboarding.state in ('pending', 'in-progress')
      returning ${COLUMNS}`,
     [OWNER_ID],
   );
+  // Nothing was skipped if nothing changed: a record that was already finished
+  // keeps its own history rather than acquiring a second ending.
+  if (!rows[0]) return getOnboarding(pool);
   const note = (reason ?? '').trim();
   if (note !== '') {
     await pool
@@ -208,7 +264,7 @@ export async function skipOnboarding(pool: Queryable, reason?: string): Promise<
       ])
       .catch(() => undefined);
   }
-  return rows[0] ? toOnboarding(rows[0]) : pendingOnboarding();
+  return toOnboarding(rows[0]);
 }
 
 /**

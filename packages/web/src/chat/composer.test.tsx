@@ -199,3 +199,70 @@ describe('the composer', () => {
     expect(onStop).toHaveBeenCalled();
   });
 });
+
+/**
+ * Thinking, switched where the owner talks.
+ *
+ * The same setting the Agents page writes, through the same endpoint — so the
+ * two surfaces cannot disagree — shown beside the model name because that is
+ * the other half of "what this agent is about to do".
+ */
+describe('the thinking switch', () => {
+  const draw = (props: Partial<{ thinking: 'on' | 'off' | null; running: boolean; onThinking: (next: 'on' | 'off') => void }>) =>
+    render(
+      <Composer
+        disabled={false}
+        running={props.running ?? false}
+        onSend={() => {}}
+        onStop={() => {}}
+        agentName="Ada"
+        model="a-model"
+        thinking={props.thinking ?? null}
+        onThinking={props.onThinking ?? (() => {})}
+      />,
+    );
+
+  it('shows what the agent file says, and treats no answer as on', () => {
+    draw({ thinking: 'off' });
+    expect(screen.getByRole('button', { name: 'Thinking' }).getAttribute('aria-pressed')).toBe('false');
+    cleanup();
+
+    draw({ thinking: 'on' });
+    expect(screen.getByRole('button', { name: 'Thinking' }).getAttribute('aria-pressed')).toBe('true');
+    cleanup();
+
+    // Absent in the file is the model's own default, and that is on. The
+    // control says what will happen, not what the file happens to hold.
+    draw({ thinking: null });
+    expect(screen.getByRole('button', { name: 'Thinking' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('asks for the other state when clicked', () => {
+    const onThinking = vi.fn();
+    draw({ thinking: 'on', onThinking });
+    screen.getByRole('button', { name: 'Thinking' }).click();
+    expect(onThinking).toHaveBeenCalledWith('off');
+    cleanup();
+
+    onThinking.mockClear();
+    draw({ thinking: 'off', onThinking });
+    screen.getByRole('button', { name: 'Thinking' }).click();
+    expect(onThinking).toHaveBeenCalledWith('on');
+  });
+
+  it('is disabled while the run is in flight, and says why', () => {
+    const onThinking = vi.fn();
+    draw({ thinking: 'on', running: true, onThinking });
+    const toggle = screen.getByRole('button', { name: 'Thinking' });
+    expect((toggle as HTMLButtonElement).disabled).toBe(true);
+    expect(toggle.getAttribute('title')).toContain('Wait for Ada to finish');
+    toggle.click();
+    expect(onThinking).not.toHaveBeenCalled();
+  });
+
+  it('is absent when there is nobody to switch it for — a room has several', () => {
+    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Money" model={null} />);
+    expect(screen.queryByRole('button', { name: 'Thinking' })).toBeNull();
+  });
+});
+

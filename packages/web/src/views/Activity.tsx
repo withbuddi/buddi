@@ -244,10 +244,17 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
             <Stack>
               {transcript.messages.map((message) => (
                 <article className="transcript-msg" key={message.id}>
-                  <header className="transcript-who">{message.role}, {fmtTime(message.createdAt, timezone)}</header>
+                  <header className="transcript-who">
+                    {/* The turn a resumed run opens with is a decided action
+                        coming back, not the owner typing. */}
+                    {message.speaker === APPROVAL_RESUME_SPEAKER ? 'approved action, result' : message.role}
+                    , {fmtTime(message.createdAt, timezone)}
+                  </header>
                   <div className="transcript-body">
                     {message.blocks.length === 0 ? <span className="muted">(empty)</span> : null}
-                    {message.blocks.map((block, i) => <Block key={i} block={block} />)}
+                    {message.speaker === APPROVAL_RESUME_SPEAKER
+                      ? message.blocks.map((block, i) => <ApprovedAction key={i} block={block} />)
+                      : message.blocks.map((block, i) => <Block key={i} block={block} />)}
                   </div>
                 </article>
               ))}
@@ -255,6 +262,24 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
           </Section>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * The turn a resumed run opens with, as what it is.
+ *
+ * The runtime delivers a decided action's outcome as a user turn — the
+ * tool_use it answers was closed before the run suspended — so Activity, which
+ * reads as a record of what the owner did, draws it as the tool result it is.
+ */
+const APPROVAL_RESUME_SPEAKER = 'approval:resume';
+
+function ApprovedAction({ block }: { block: TranscriptBlock }): JSX.Element {
+  return (
+    <div className="transcript-tool">
+      <div className="transcript-tool-name mono">← approved action</div>
+      <Code>{block.type === 'text' ? (block.text ?? '') : json(block)}</Code>
     </div>
   );
 }

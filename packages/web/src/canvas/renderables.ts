@@ -34,7 +34,7 @@
  * canvas uses to decide where to look.
  */
 import { applyDescriptor } from './resolve';
-import { inferShape } from './infer';
+import { inferShape, isSubstantialResult } from './infer';
 import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
@@ -128,7 +128,9 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
       const descriptor = byTool.get(tool);
       if (descriptor) {
         const { renderer, props } = applyDescriptor(descriptor, block.output);
-        if (!earnsTab(renderer, props)) continue;
+        // A declared view is the plugin author's judgement that this result is
+        // worth looking at. It keeps its tab even when it came back empty —
+        // "no rows this month" is an answer, drawn the way its author meant.
         collected.push({
           id: block.toolUseId,
           tool,
@@ -197,22 +199,24 @@ function fromCanvasShow(id: string, input: unknown, at: string | null): Renderab
 /**
  * Does this result earn a tab at all?
  *
- * The canvas sits beside the answer, not inside it, so a tab is worth having
- * only when it holds something the answer cannot hold: rows, points, bars,
- * figures, a document, a decision. Three kinds of result fail that test and
- * are dropped:
+ * One rule, decided from the result itself and never from the name of the
+ * tool that produced it. A tab is earned when the result is *substantial*:
  *
- *  - one whose whole content is a string — an agent's prose, quoted back;
- *  - a receipt for a write, `{ok: true, recorded: 1}`, which states that
- *    something happened rather than showing what it was;
- *  - an empty result, and a shape nothing can draw.
+ *  - its plugin declared a view for it, or
+ *  - it carries an artifact or a document, or
+ *  - its shape is rows, a list of a few, or enough separate values to be worth
+ *    laying out — the thresholds are in `infer.ts`.
  *
- * Each of those is already in the conversation, in words, a moment earlier.
+ * Everything else is quiet: an acknowledgement (`{ok: true, recorded: 1}`), a
+ * record of three or four fields, an answer that is entirely prose, an empty
+ * result. The conversation said all of it a moment earlier, and the tool row
+ * in the transcript still expands to the whole thing on demand.
  *
- * Three kinds always earn one, whatever their shape: a failure — a tab is the
- * only place a reason can be read in full, and hiding one would be hiding bad
- * news; a decision waiting on the owner; and anything the agent explicitly
- * asked to be shown.
+ * Two kinds earn a tab whatever their shape: a failure — a tab is the only
+ * place a reason can be read in full, and hiding one would be hiding bad news
+ * — and a decision waiting on the owner. Neither is substantial: they keep a
+ * tab without taking the screen. Anything the agent explicitly asked to be
+ * shown bypasses this entirely.
  */
 export function earnsTab(renderer: RendererName, props: unknown): boolean {
   const record = (props ?? {}) as Record<string, unknown>;
@@ -227,9 +231,10 @@ export function earnsTab(renderer: RendererName, props: unknown): boolean {
 /**
  * Is there anything in here worth taking the screen for?
  *
- * Shape only: rows, points, bars, pairs, a document body. An empty table and a
- * chart with no points are both honest results and both worth *keeping* — they
- * are simply not worth interrupting for.
+ * Shape only: rows, points, bars, pairs, a document body, a file, or enough
+ * values that a panel reads better than a paragraph. An empty table and a
+ * chart with no points are both honest results drawn by a declared view: they
+ * are worth *keeping*, and simply not worth interrupting for.
  */
 export function hasSubstance(renderer: RendererName, props: unknown): boolean {
   const record = (props ?? {}) as Record<string, unknown>;
@@ -250,41 +255,17 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
     }
     default: {
       if (commandResult(record['value'])) return true;
+      // A failure draws its reason, not a view: it keeps its tab and stays put.
+      if (record['failed'] === true) return false;
       // The fallback has to read the value, because its whole job is to work
-      // out what the value is.
-      const shape = inferShape(record['value'], { failed: record['failed'] === true });
-      if (shape.kind === 'table') return shape.rows.length > 0;
-      // A descriptor is a plugin author's judgement and is trusted at one row.
-      // An inferred list or record is a *guess*, so it has to carry a few
-      // values before it is allowed to interrupt what is already on screen.
-      if (shape.kind === 'list') return shape.items.length >= MIN_ITEMS;
-      // One object of facts is a view when it is a set of *figures* — money,
-      // counts, dates, laid out to be read across. An acknowledgement
-      // (`{ok: true, recorded: 1}`), and an answer whose fields are prose and
-      // the names of who said it, are sentences: the chat has them already.
-      if (shape.kind === 'record') return figures(shape.pairs) >= MIN_FIGURES;
-      return false;
+      // out what the value is. The thresholds live in `infer.ts`.
+      return isSubstantialResult(record['value']);
     }
   }
 }
 
 function count(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
-}
-
-/** Items an inferred list needs before it is a list rather than an aside. */
-const MIN_ITEMS = 3;
-
-/** Figures one object needs before it is a view rather than a receipt. */
-const MIN_FIGURES = 3;
-
-/**
- * How many of these pairs are figures — an amount, a count, a date. A string
- * is a word, and words are what the answer is made of; a number laid out
- * beside other numbers is the thing a paragraph is bad at.
- */
-function figures(pairs: Array<{ type: string }>): number {
-  return pairs.filter((pair) => pair.type === 'number' || pair.type === 'currency' || pair.type === 'date').length;
 }
 
 /**

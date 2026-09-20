@@ -396,11 +396,21 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     /* 10b. The background service. */
     if (willRun(plan, 'service')) await ensureService(confirm);
 
-    /* 10c. The dashboard. */
+    /*
+     * 10c. The dashboard, on the wizard's model screen.
+     *
+     * `init` has already asked who the owner is and what zone they are in, so
+     * the first two screens of the wizard are behind them; the model account is
+     * the next thing and the first one that has no terminal answer here. The
+     * wizard resumes from the record either way — the step is an opening
+     * position, not a claim about what is done.
+     */
+    let wizardOpened = false;
     if (willRun(plan, 'dashboard')) {
       if (await confirm('\nOpen the local dashboard now?', true)) {
-        const open = opts.openDashboard ?? (() => runDashboard('open'));
+        const open = opts.openDashboard ?? (() => runDashboard('open', { hash: WIZARD_MODEL_STEP }));
         await open();
+        wizardOpened = true;
       }
     }
 
@@ -409,9 +419,14 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
      *      asking things, and the last thing it does is get out of the way so
      *      the agent can ask the two or three things it actually needs — in its
      *      own words, in a chat, rather than as three more prompts here.
+     *
+     *      Unless the browser is already open on that same first run. Two
+     *      surfaces both offering it is not two chances: whichever one the
+     *      owner answers *claims* the record, so a terminal interview started
+     *      here would close the wizard's own screens out from under them.
      */
     plan = planInit(await facts());
-    const interview = await offerFirstRun(confirm, stepOf(plan, 'first-run'));
+    const interview = await offerFirstRun(confirm, stepOf(plan, 'first-run'), wizardOpened);
 
     console.log();
     for (const line of nextSteps(planInit(await facts()))) console.log(line);
@@ -427,6 +442,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     rl?.close();
   }
 }
+
+/** The wizard's third screen: a model account, which is where `init` stops. */
+export const WIZARD_MODEL_STEP = '#/welcome?step=model';
 
 /** This process's own entry point — what `buddi chat` is, from inside init. */
 const CLI_ENTRY = path.join(REPO_ROOT, 'packages', 'cli', 'dist', 'main.js');
@@ -451,8 +469,9 @@ export async function onboardingIsPending(databaseUrl: string | undefined): Prom
 }
 
 /**
- * The wizard's last step: point the owner at the conversation, or offer to have
- * it here. Returns whether `buddi chat` should be started on the way out.
+ * The last step: point the owner at the conversation, or offer to have it here.
+ * Returns whether `buddi chat` should be started on the way out — never when
+ * the dashboard's own wizard has just been opened on the same first run.
  *
  * With a paired device there is nothing to offer — the agent opens the
  * conversation itself the moment the owner opens the chat — so this is one
@@ -461,9 +480,19 @@ export async function onboardingIsPending(databaseUrl: string | undefined): Prom
 export async function offerFirstRun(
   confirm: (question: string, byDefault?: boolean) => Promise<boolean>,
   step: PlannedStep,
+  /** The dashboard was opened on the wizard, which owns the first run now. */
+  wizardOpened = false,
 ): Promise<boolean> {
   if (step.action === 'done' || step.action === 'skipped') return false;
   console.log(bold('\nMeet your agent'));
+  if (wizardOpened) {
+    console.log(
+      '  The dashboard is open on the setup screens — carry on there. Whichever\n' +
+        '  surface answers first claims this conversation, so there is nothing to\n' +
+        '  start here.',
+    );
+    return false;
+  }
   if (step.action === 'run') {
     console.log(
       '  Open your paired Telegram chat and say hello — the agent introduces itself\n' +

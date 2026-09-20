@@ -20,6 +20,15 @@ export interface ChatAgent {
    * anchors the front desk and the maker without learning either one's name.
    */
   anchor?: 'top' | 'bottom' | null;
+  /**
+   * The agent's own opening, from its file: one sentence about what it does,
+   * and up to three example requests. A starter may carry `{{default}}`,
+   * which the page resolves to the default agent's name.
+   */
+  intro?: string;
+  starters?: string[];
+  /** Reasoning before the answer: on, off, or null for the model's default. */
+  thinking?: 'on' | 'off' | null;
   /** The face to draw, when the agent file names one. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
@@ -36,14 +45,20 @@ export type ChatBlock =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
-  | { type: 'thinking'; text: string };
+  | { type: 'thinking'; text: string }
+  /** A gated action the owner decided, come back into the thread as its result. */
+  | { type: 'approval_result'; actionId: string; name: string; state: string; output: unknown };
 
 export interface ChatMessage {
   id: string;
   role: string;
   at: string;
   blocks: ChatBlock[];
-  /** Who spoke, in a group: 'owner', an agent id, or 'room'. */
+  /**
+   * Who spoke, in a group: 'owner', an agent id, or 'room' — and
+   * 'approval:resume' on the turn that carries a decided action's result,
+   * which is nobody speaking at all.
+   */
   speaker?: string;
 }
 
@@ -109,6 +124,27 @@ export interface ChatConversation {
   offers?: ChatOffer[];
   /** A durable input request. It supplies information and never grants permission. */
   question?: ChatQuestion | null;
+  /**
+   * Every run this conversation has had, open ones included: a run with no
+   * `finishedAt` is still going. What the server already sends
+   * (`packages/gateway/src/web/chat.ts`), written down here because first run
+   * reads it to tell "slow" from "never".
+   */
+  runs?: ChatRun[];
+}
+
+/** One run of the agent in this conversation. */
+export interface ChatRun {
+  runId: string | null;
+  surface: string | null;
+  startedAt: string | null;
+  /** Null while the run is alive. */
+  finishedAt: string | null;
+  turns: number | null;
+  stopped: string | null;
+  usage: { input: number; output: number };
+  actionId: string | null;
+  resumed: boolean;
 }
 
 export interface ConversationListItem {

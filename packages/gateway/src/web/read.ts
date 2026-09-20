@@ -22,6 +22,7 @@ import {
   countJobsByState,
   isPaused,
   nextAfter,
+  OPENING_TURN_SPEAKER,
   pendingDigestItems,
   toActionRecord,
   type AgentCatalog,
@@ -214,8 +215,9 @@ async function openingByConversation(
     `select distinct on (conversation_id) conversation_id, content
        from core.messages
       where conversation_id = any($1::uuid[]) and role = 'user'
+        and speaker is distinct from $2
       order by conversation_id, created_at asc, id asc`,
-    [ids],
+    [ids, OPENING_TURN_SPEAKER],
   );
   for (const row of rows) {
     const text = textOfContent(row.content);
@@ -244,6 +246,12 @@ export interface TranscriptMessage {
   role: string;
   createdAt: string;
   blocks: TranscriptBlock[];
+  /**
+   * Who spoke, when it was not simply the owner or the agent: a room member,
+   * or `approval:resume` for the turn that carries a decided action's result.
+   * Activity draws that one as the tool result it is.
+   */
+  speaker?: string;
 }
 
 export interface TranscriptRun {
@@ -276,11 +284,14 @@ export async function readConversation(
   const conversation = head[0];
   if (!conversation) return null;
 
+  // The turn first run sent on the owner's behalf is left out here for the
+  // same reason the chat leaves it out: it is an instruction to a new
+  // assistant, and Activity reads as a record of what the owner did.
   const { rows: messages } = await pool.query(
-    `select id, role, content, created_at from core.messages
-      where conversation_id = $1::uuid
+    `select id, role, content, created_at, speaker from core.messages
+      where conversation_id = $1::uuid and speaker is distinct from $2
       order by created_at asc, id asc`,
-    [conversationId],
+    [conversationId, OPENING_TURN_SPEAKER],
   );
   const { rows: events } = await pool.query(
     `select kind, payload, created_at from core.events
@@ -335,6 +346,7 @@ export async function readConversation(
       role: m.role,
       createdAt: new Date(m.created_at).toISOString(),
       blocks: toBlocks(m.content),
+      ...(typeof m.speaker === 'string' && m.speaker !== '' ? { speaker: m.speaker } : {}),
     })),
     runs,
     usage,

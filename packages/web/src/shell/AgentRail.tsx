@@ -33,7 +33,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import React, { useState } from 'react';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
-import { badgeOf, monogram, waitingText, type AgentAttention, type AgentGroups } from './roster';
+import { badgeOf, canGroup, monogram, waitingText, type AgentAttention, type AgentGroups } from './roster';
 import type { GroupView } from '../chat/types';
 
 export interface AgentRailProps {
@@ -117,7 +117,17 @@ export function AgentRail({
       */}
       <div className="wb-agent-scroll">
         {agents.middle.map(face)}
-        {onSelectGroup ? (
+        {/*
+          Groups appear when there is somebody to group.
+
+          On a fresh installation the rail holds one assistant and the agent
+          that makes agents — and the second of those is a settings door, not a
+          colleague. A "Groups" heading with a + button there offers a room the
+          owner cannot fill, and the sheet behind it would refuse them. So the
+          whole section waits until two agents who could actually be in a room
+          together exist.
+        */}
+        {onSelectGroup && canGroup(everyone) ? (
           <div className="wb-groups" data-testid="group-rail">
             <span className="wb-agent-sep" aria-hidden="true" />
             <div className="wb-groups-head">
