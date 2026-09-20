@@ -793,6 +793,12 @@ export interface StagedPluginView {
   source: PluginSource;
   publisher?: string;
   integrity?: string;
+  /**
+   * The hash of the unpacked tree — the package, its dependencies, and the
+   * links npm wrote among them. The integrity above says what was fetched;
+   * this says what is on disk, and approving re-checks it.
+   */
+  stagedHash?: string;
   dependencies: { count: number; withScripts: string[] };
   /** The package's own words about itself, from its buddi.md. Never checked. */
   claims: { schema?: string; hosts: string[]; text: string; missing: boolean };

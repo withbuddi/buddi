@@ -25,7 +25,12 @@ import {
   removeInstalledPlugin,
   upsertInstalledPlugin,
 } from './record.js';
-import { describeSource, PLUGINS_FILE_VERSION, type InstalledPlugin } from './types.js';
+import {
+  describeSource,
+  isPluginSchemaName,
+  PLUGINS_FILE_VERSION,
+  type InstalledPlugin,
+} from './types.js';
 
 function tool(name: string, tier: 'auto' | 'gated', description: string): ToolDefinition<any, any> {
   return {
@@ -209,6 +214,47 @@ describe('the install record', () => {
     expect(pluginsFilePath({ ownerRoot: '/home/me/.buddi', env: { BUDDI_PLUGINS_FILE: '/tmp/p.json' } })).toBe(
       '/tmp/p.json',
     );
+  });
+});
+
+/**
+ * An install that did not finish leaves a record saying so.
+ *
+ * The record is written before the files are moved, so the state a crash
+ * leaves is "this was being placed" rather than a package directory nothing
+ * accounts for. The flag has to survive a read, or the sweep at start cannot
+ * tell the two apart.
+ */
+describe('a half-finished install', () => {
+  it('keeps the placing flag through a round trip, and only when it is set', () => {
+    const entry = {
+      name: 'weather',
+      version: '1.0.0',
+      entry: '/p/weather/index.js',
+      installedAt: '2026-01-01T00:00:00.000Z',
+      schema: 'weather',
+      source: { kind: 'registry', name: 'buddi-plugin-weather', version: '1.0.0' },
+    };
+    const placed = parsePluginsFile(JSON.stringify({ version: 2, plugins: [{ ...entry, placing: true }] }));
+    expect(placed.plugins[0]?.placing).toBe(true);
+    const finished = parsePluginsFile(JSON.stringify({ version: 2, plugins: [entry] }));
+    expect(finished.plugins[0]?.placing).toBeUndefined();
+  });
+});
+
+/**
+ * A schema name reaches `create schema`, `set search_path` and `drop schema`.
+ * It is quoted everywhere it does, and it is also checked to be an identifier:
+ * a manifest is a string somebody else wrote.
+ */
+describe('what a plugin may call its schema', () => {
+  it('takes a plain identifier and nothing else', () => {
+    expect(isPluginSchemaName('weather')).toBe(true);
+    expect(isPluginSchemaName('_private_2')).toBe(true);
+    expect(isPluginSchemaName('2fast')).toBe(false);
+    expect(isPluginSchemaName('Weather')).toBe(false);
+    expect(isPluginSchemaName('public"; drop schema core cascade --')).toBe(false);
+    expect(isPluginSchemaName('')).toBe(false);
   });
 });
 

@@ -31,6 +31,7 @@ import {
 import { agentSearchPath, AGENTS_DIR, installedManifests } from '../agents/catalog.js';
 import * as engine from '../plugins/index.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
+import { RECORD_ITSELF } from '../plugins/load.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 
 /** A refusal in the shape the router sends. Same contract as `backups.ts`. */
@@ -114,6 +115,8 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     source: staged.source,
     ...(staged.publisher === undefined ? {} : { publisher: staged.publisher }),
     integrity: staged.integrity,
+    /** The hash of the unpacked tree, which is what approval re-checks. */
+    stagedHash: staged.stagedHash,
     dependencies: staged.dependencies,
     claims: {
       ...(staged.claims.schema === undefined ? {} : { schema: staged.claims.schema }),
@@ -239,14 +242,28 @@ function unlocksOf(
   });
 }
 
-/** The record, or an empty list when there is no record file yet. */
-function installedRecord(env: NodeJS.ProcessEnv): InstalledPlugin[] {
+/**
+ * The record, or the reason there is none.
+ *
+ * A record that cannot be parsed is not "nothing installed": everything the
+ * owner installed is still on disk and still in their agents' grants, and a
+ * page that drew an empty list would be saying the opposite of what happened.
+ * So the sentence comes back with it and the page shows that instead.
+ */
+function installedRecord(env: NodeJS.ProcessEnv): {
+  plugins: InstalledPlugin[];
+  unavailable?: string;
+} {
   try {
     const file = pluginsFilePath({ ownerRoot: agentSearchPath(env).ownerRoot, env });
-    return readPluginsFile(file).plugins;
-  } catch {
-    // An unreadable record is `buddi plugins`' problem; the page still draws.
-    return [];
+    return { plugins: readPluginsFile(file).plugins };
+  } catch (err) {
+    return {
+      plugins: [],
+      unavailable:
+        `The record of what is installed could not be read, so this list is not what is installed: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 }
 
@@ -279,7 +296,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
     // A load report that cannot be produced is not a reason to hide the list.
   }
 
-  const record = installedRecord(env);
+  const { plugins: record, unavailable: recordProblem } = installedRecord(env);
   const installed = record.map((entry) => {
     const manifest = manifests.get(entry.name);
     const error = failures.get(entry.name);
@@ -306,10 +323,16 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
 
   /*
    * A restart is needed exactly when the record names something this process
-   * has not imported: approving writes the record, and the registry was built
-   * at start.
+   * has not imported *and could*: approving writes the record, and the
+   * registry was built at start. A plugin that failed to load is excluded —
+   * restarting will not make it load, and a banner that never goes away is a
+   * banner nobody reads.
    */
-  const restartNeeded = record.some((entry) => !manifests.has(entry.name));
+  const restartNeeded = record.some((entry) => !manifests.has(entry.name) && !failures.has(entry.name));
+
+  // A record-level problem is reported as itself, not as a plugin that failed.
+  const reportProblem = failures.get(RECORD_ITSELF);
+  const unavailable = recordProblem ?? (reportProblem === undefined ? undefined : reportProblem);
 
   return {
     status: 200,
@@ -319,6 +342,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       staged,
       restartNeeded,
       checkout: isCheckout(env),
+      ...(unavailable === undefined ? {} : { unavailable }),
     },
   };
 }

@@ -1248,10 +1248,34 @@ Importing a module executes it, so an install splits at exactly that line.
 publisher; `npm pack` to fetch it; extract; `npm install --ignore-scripts
 --omit=dev` for its dependencies; symlink core. Then read *static metadata only*
 — `package.json`, the integrity hash and publisher, your `buddi.md`, and which
-packages in the installed tree declare `preinstall`/`install`/`postinstall`.
+packages in the installed tree declare `preinstall`/`install`/`postinstall` or
+ship a `binding.gyp` (node-gyp is an install script nobody wrote down).
 Nothing is imported, nothing is registered, no schema exists. The staged package
 sits in `<data>/plugins/staging/<id>/`, and a stage nobody decides on is deleted
 after a day.
+
+Four things are checked before any of that is shown, and each one refuses
+rather than warns:
+
+- **the tarball is the one the registry named.** The sha512 of what `npm pack`
+  wrote is compared with the `dist.integrity` of the packument, and the
+  extracted `package.json` has to carry the same name and version npm resolved.
+- **it is files and directories.** The extracted tree is walked with `lstat`,
+  and a symlink, a device, a fifo or anything whose real path is outside the
+  staging directory is refused and the whole stage deleted. This is not
+  hypothetical tidiness: a member called `node_modules/@buddi` pointing
+  somewhere else turns the `@buddi/core` peer link that comes next into a write
+  outside the stage. `tar` is also run with `--no-same-owner
+  --no-same-permissions`, because an archive's mode bits are its author's
+  opinion.
+- **the tree is hashed.** `stagedHash` is sha256 over the extracted package
+  *and* its `node_modules` — every path, every byte, and the target of every
+  link npm wrote among the dependencies — with `node_modules/@buddi/core`
+  excluded, since that is the link to the running installation's core and not
+  part of your package. It is shown beside the integrity hash.
+- **the entry point is inside the package.** `main` (or the `.` export) is
+  resolved with its links followed and has to land under the package's own real
+  path.
 
 **Approve 1.** The owner is shown all of it and this sentence:
 
@@ -1260,15 +1284,30 @@ after a day.
 > network allowlist. Install only what you would run as yourself.
 
 They approve by passing back the integrity hash they were shown; a mismatch
-refuses and still imports nothing. Only then is the entry point imported for the
-first time, the plan below runs, and your `buddi.md` is compared with your
-manifest.
+refuses and still imports nothing. `--yes` does not stand in for this: for a
+registry or a tarball source, `buddi plugins install <spec> --yes` without
+`--integrity <hash>` prints the card and the `approve` command and installs
+nothing, because a yes typed before the fetch cannot be a yes to a particular
+package. A directory source has no hash and keeps the plain `--yes`.
+
+Immediately before the first import the staged tree is hashed again and has to
+equal `stagedHash`; a stage that changed while it waited is refused. Only then
+is the entry point imported for the first time, the plan below runs, and your
+`buddi.md` is compared with your manifest.
 
 **Approve 2**, and only when that comparison found a difference. Then the
-package moves to `<data>/plugins/<name>/`, its migrations are applied into its
-own schema, and the record is written with its provenance: the source, the
-integrity hash, the publisher, the hash of the files as installed, and when it
-was approved.
+record is written first, marked `placing`, and only then does the package move
+to `<data>/plugins/<name>/` — so a machine that dies in between leaves a record
+that says what was happening rather than a directory nothing accounts for, and
+the sweep at the next start can tell an orphan from an install. After the move
+the tree is hashed once more and must still equal the pre-import hash: a plugin
+that rewrote its own files while it was being imported is refused and removed.
+Then its migrations are applied into its own schema, and the record is
+finalised with its provenance: the source, the integrity hash, the publisher,
+the hash of the files as installed, and when it was approved.
+
+Approvals are serialised per plugin name, so two of them for the same name
+cannot both rename into the same directory.
 
 The tools are registered by the next process start. The CLI and the API both
 say so; the API returns `restartNeeded: true`.
@@ -1277,15 +1316,29 @@ say so; the API returns `restartNeeded: true`.
 
 `plugins.json` is version 2. A v1 file still reads — every entry in one is a
 directory source with no provenance, which is exactly what it was. A registry
-entry carries `installedHash`: sha256 over the package's files, path and content
-both, sorted, **excluding `node_modules`**. `buddi doctor` recomputes it and
+entry carries `installedHash`: sha256 over the package's files and its
+`node_modules`, path and content both, sorted, with `node_modules/@buddi/core`
+(the link to the running installation) and `.git` excluded. It is the hash that
+was taken before the plugin was ever imported. `buddi doctor` recomputes it —
+for every plugin in the record, including the ones that did not load — and
 warns, naming the plugin, when it no longer matches.
 
+Including `node_modules` is deliberate and it has a consequence worth stating:
+the hash covers the bytes that actually run, dependencies and all, so a
+dependency rewritten in place is now visible. It is not a reproducibility claim
+about `npm install`. Installing the same version twice on two machines can
+produce two different trees and therefore two different hashes; what is
+recorded is *what was staged here*, and an update is the only thing that is
+supposed to change those files afterwards. A symlink among the package's own
+files is refused rather than skipped, because a hash that ignores what it
+cannot read proves nothing; links inside `node_modules` are hashed by their
+target.
+
 Be clear about what that buys. It detects a plugin whose files changed after the
-owner approved them. It does not detect a tampered dependency, it is not a
-signature, and it protects nobody from what the plugin does while running. A
-plugin is trusted code; the honest controls are the sentence above, the recorded
-hash, and doctor saying when what is on disk is no longer what was agreed to.
+owner approved them. It is not a signature, and it protects nobody from what the
+plugin does while running. A plugin is trusted code; the honest controls are the
+sentence above, the recorded hash, and doctor saying when what is on disk is no
+longer what was agreed to.
 
 ### What the owner sees before they say yes
 
@@ -1307,6 +1360,28 @@ That summary is produced by importing your entry point — there is no way to
 describe a module without loading it — which is why it comes *after* the first
 approval and never before it. What the staged screen shows beforehand is your
 own claim, labelled as one.
+
+### The name, and where the files go
+
+A published package is usually called `buddi-plugin-weather` while its manifest
+is `weather`, so the rule is written down rather than guessed:
+
+> The manifest's `name` must equal the package's `name`, or the `buddi.name`
+> the package declares in its `package.json`.
+
+An install refuses when it does neither. Otherwise a package called
+`buddi-plugin-weather` could carry a manifest called `finance`, take that name
+in the record, take that schema, and be granted to an agent under a name the
+owner never installed. A directory source is exempt: the owner typed a path to
+a build on their own disk, and the identity of that build is the path.
+
+The name also decides a directory: `<data>/plugins/<name>`, with a scoped name
+folded to one segment (`@you/weather` → `@you+weather`). It is validated against
+npm's charset first, `staging` is reserved, and the resolved directory is
+checked to be inside the plugins root before anything is renamed or removed. A
+schema name is validated too, against `^[a-z_][a-z0-9_]*$`, before it is ever
+recorded — it reaches `create schema`, `set search_path` and, on a purge, `drop
+schema`, where it is also quoted.
 
 ### What a plugin may not be called
 
@@ -1330,14 +1405,16 @@ behind by one plugin.
 ```bash
 buddi plugins update weather                 # stages the newer version
 buddi plugins update weather --version 2.1.0
-buddi plugins update weather --yes           # ...and approves it
+buddi plugins update weather --yes --integrity <hash>   # ...and approves it
 ```
 
 An update is a stage plus the same two approvals, because a new version is
 somebody else's code exactly as the first one was. It is **newer only**:
 migrations in this system run forward and nothing knows how to undo one, so a
 downgrade is refused with both versions named rather than silently left
-half-migrated.
+half-migrated. The comparison is semver's own, prerelease rules included, and a
+version it cannot parse is refused rather than guessed at — "not newer" is the
+answer that stops an update, so guessing is how a downgrade gets through.
 
 Installing the same plugin again does the same thing. The record is replaced;
 the migrations run forward; **no agent file is written**. Per proposed agent you get one line
@@ -1352,11 +1429,14 @@ an upgrade, and it should be decided deliberately.
 ```bash
 buddi plugins uninstall weather              # shows what it would do
 buddi plugins uninstall weather --yes        # removes the code, KEEPS the data
-buddi plugins uninstall weather --yes --purge   # ...and drops the schema
+buddi plugins uninstall weather --yes --purge --confirm weather   # ...and drops the schema
 ```
 
 The default keeps the data, and the command prints the schema, its tables and
 its row counts so the owner knows exactly what is being kept and where.
+`--purge` also requires the plugin's own name typed back (`--confirm <name>`, or
+the same field on the dashboard); the engine requires it too, so a caller that
+forgets is refused rather than obeyed.
 Reinstalling finds it again. For the finance plugin the alternative would be
 every account, transaction and card ledger the owner has, destroyed by a verb
 that sounds like "remove the code" — so destroying is a separate flag that

@@ -19,7 +19,7 @@
  * created and nothing is scheduled until the owner agrees — and the owner is
  * told this in the CLI's own words.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   contributionOf,
@@ -32,6 +32,7 @@ import {
   type PluginManifest,
 } from '@buddi/core';
 import { agentSearchPath, AGENTS_DIR, builtInManifests } from '../agents/catalog.js';
+import { InstallRefusal } from './refusals.js';
 import { driftFor, type Drift } from './provenance.js';
 import { loadManifest, manifestProblem, perRunManifests, recordFile } from './load.js';
 
@@ -53,15 +54,8 @@ export function builtInSchemas(env: NodeJS.ProcessEnv = process.env): ReadonlySe
   return schemas;
 }
 
-export class InstallRefusal extends Error {
-  override readonly name = 'InstallRefusal';
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+
+export { InstallRefusal };
 
 function refuse(code: string, message: string): never {
   throw new InstallRefusal(code, message);
@@ -102,6 +96,28 @@ export function entryPointOf(directory: string): string {
       'not-built',
       `${packageFile} points at ${relative}, which is not on disk. The plugin is not built — run its ` +
         'own build (`pnpm build`) in that directory and try again.',
+    );
+  }
+  /*
+   * The entry is resolved, links and all, and has to land inside the package.
+   * `main: "../../../etc/something.js"` is the obvious form; a `dist` that is
+   * really a link somewhere else is the quiet one. Either way what gets
+   * imported is decided by this package's own directory, not by a string in
+   * its package.json.
+   */
+  let realEntry: string;
+  let realDir: string;
+  try {
+    realEntry = realpathSync(entry);
+    realDir = realpathSync(directory);
+  } catch (err) {
+    refuse('no-entry', `${entry} could not be resolved: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (realEntry !== realDir && !realEntry.startsWith(`${realDir}${path.sep}`)) {
+    refuse(
+      'entry-escapes',
+      `${packageFile} points at ${relative}, which resolves to ${realEntry} — outside the package ` +
+        'directory. A plugin imports its own files and nothing else.',
     );
   }
   return entry;

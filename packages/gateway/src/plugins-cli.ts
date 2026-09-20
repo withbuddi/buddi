@@ -68,15 +68,20 @@ export const USAGE = `buddi plugins — what this installation has installed
   buddi plugins list                      what is installed, its version, and whether it is healthy
   buddi plugins info <name>               what it is, what it brought, and what it proposes
   buddi plugins install <spec>            STAGE it and read what it claims (imports nothing)
-  buddi plugins install <spec> --yes      approve it: import it, plan it, install it
-  buddi plugins update <name> [--version] stage the next version; --yes approves it
+  buddi plugins install <spec> --yes --integrity <hash>
+                                          approve it: import it, plan it, install it.
+                                          The hash is the one the staged card printed; a
+                                          package that came from a registry or a .tgz is
+                                          never approved without it, not even with --yes.
+  buddi plugins update <name> [--version] stage the next version; --yes --integrity approves it
   buddi plugins staged                    what is staged and waiting for you
   buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
   buddi plugins reject <id>               delete a stage and everything it fetched
   buddi plugins uninstall <name>          what removing it would do (removes nothing)
   buddi plugins uninstall <name> --yes    remove it; its database schema is KEPT
       --detach-agents                     also take its tools out of agents that were granted them
-      --purge                             ALSO DROP its schema and everything in it. Irreversible.
+      --purge --confirm <name>            ALSO DROP its schema and everything in it. Irreversible,
+                                          and the plugin's own name has to be typed back.
 
 A <spec> is a directory that exists, a .tgz on disk, or an npm package:
 \`finance\`, \`@you/buddi-plugin-finance@1.2.3\`. Installing one runs its code inside buddi.`;
@@ -90,11 +95,13 @@ export interface ParsedPluginsArgs {
   acknowledgeDrift: boolean;
   /** Passed back at approval. Absent means "the hash this run just showed me". */
   integrity?: string;
+  /** The plugin's own name, typed back, for `--purge`. */
+  confirm?: string;
   version?: string;
   registry?: string;
 }
 
-const VALUE_FLAGS = ['--integrity', '--version', '--registry'] as const;
+const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm'] as const;
 const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
@@ -126,6 +133,7 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     purge: flags.has('--purge'),
     acknowledgeDrift: flags.has('--acknowledge-drift'),
     ...(values.has('--integrity') ? { integrity: values.get('--integrity') as string } : {}),
+    ...(values.has('--confirm') ? { confirm: values.get('--confirm') as string } : {}),
     ...(values.has('--version') ? { version: values.get('--version') as string } : {}),
     ...(values.has('--registry') ? { registry: values.get('--registry') as string } : {}),
   };
@@ -345,6 +353,11 @@ function renderStaged(staged: StagedPlugin): string[] {
   lines.push(`  from      ${describeSource(staged.source)}`);
   lines.push(`  published by ${staged.publisher ?? '(nobody: nothing was fetched from a registry)'}`);
   lines.push(`  integrity ${staged.integrity === '' ? '(none: a directory on this disk)' : staged.integrity}`);
+  if (staged.stagedHash !== undefined && staged.stagedHash !== '') {
+    // The tarball's hash says what was fetched; this one says what is unpacked
+    // on disk, dependencies included, and it is what approving re-checks.
+    lines.push(`  files     ${staged.stagedHash}`);
+  }
   lines.push(
     `  depends on ${staged.dependencies.count} package${staged.dependencies.count === 1 ? '' : 's'}` +
       `${staged.dependencies.withScripts.length === 0 ? ', none of which declares an install script' : ':'}`,
@@ -445,6 +458,33 @@ async function approveAndReport(
   return 0;
 }
 
+/**
+ * `--yes` is not the second approval for a package that came from elsewhere.
+ *
+ * Approval 1 is the owner saying yes to *a specific hash*, and a `--yes` typed
+ * before the fetch happened cannot be that: at the moment it was typed there
+ * was no hash to agree to, and whatever npm answers with afterwards would be
+ * approved sight unseen. So for a registry or a tarball source `--yes` alone
+ * prints the card and the command that approves it, and exits having installed
+ * nothing. A directory source is exempt: the owner typed a path to their own
+ * build and there is no hash and no publisher in the first place.
+ */
+export function needsIntegrityFirst(staged: StagedPlugin, args: ParsedPluginsArgs): boolean {
+  return args.yes && staged.source.kind !== 'directory' && args.integrity === undefined;
+}
+
+/** What to print when `--yes` arrived without the hash it has to carry. */
+function askForIntegrity(staged: StagedPlugin): number {
+  console.log('');
+  console.log('NOTHING OF THIS PLUGIN HAS RUN, and --yes did not install it. Approving is agreeing to a');
+  console.log('specific package: the hash above is what was fetched, and it is passed back so that the');
+  console.log('yes cannot land on something else. Read the card, then:');
+  console.log('');
+  console.log(`  buddi plugins approve ${staged.id} --integrity ${staged.integrity}`);
+  console.log(`  buddi plugins reject ${staged.id}      (and it is deleted, with everything it fetched)`);
+  return 0;
+}
+
 async function commandInstall(
   spec: string,
   args: ParsedPluginsArgs,
@@ -466,10 +506,14 @@ async function commandInstall(
     console.log('not been imported, no tool is registered, no schema exists and no agent was created.');
     console.log('Approving is what imports it for the first time.');
     console.log('');
-    console.log(`  buddi plugins install ${spec} --yes`);
-    console.log(`  buddi plugins approve ${staged.id}     (same thing, later)`);
+    console.log(
+      staged.source.kind === 'directory'
+        ? `  buddi plugins approve ${staged.id}`
+        : `  buddi plugins approve ${staged.id} --integrity ${staged.integrity}`,
+    );
     return 0;
   }
+  if (needsIntegrityFirst(staged, args)) return askForIntegrity(staged);
   return approveAndReport(staged, args, pool, env);
 }
 
@@ -494,9 +538,14 @@ async function commandUpdate(
     console.log('Nothing has been imported. A new version is somebody else\'s code exactly as the first');
     console.log('one was, so it is approved the same way.');
     console.log('');
-    console.log(`  buddi plugins approve ${staged.id}`);
+    console.log(
+      staged.source.kind === 'directory'
+        ? `  buddi plugins approve ${staged.id}`
+        : `  buddi plugins approve ${staged.id} --integrity ${staged.integrity}`,
+    );
     return 0;
   }
+  if (needsIntegrityFirst(staged, args)) return askForIntegrity(staged);
   return approveAndReport(staged, args, pool, env);
 }
 
@@ -579,6 +628,17 @@ async function commandUninstall(
     console.log('');
     console.log(`Nothing has been removed. Re-run with --yes${args.purge ? ' (and --purge, which destroys the data)' : ''}.`);
     return 0;
+  }
+  if (args.purge && args.confirm !== plan.record.name) {
+    // The same rule the engine and the dashboard enforce, in the place the
+    // owner is typing: a flag is easy to repeat from a shell history, and the
+    // name is what says this one was meant.
+    console.error('');
+    console.error(
+      `--purge drops the schema "${plan.record.schema}" and everything in it. Type the plugin's name ` +
+        `back to confirm it: buddi plugins uninstall ${plan.record.name} --yes --purge --confirm ${plan.record.name}`,
+    );
+    return 1;
   }
   const outcome = await applyUninstall(plan, {
     env,

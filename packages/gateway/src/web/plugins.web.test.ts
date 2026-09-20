@@ -35,6 +35,8 @@ const STAGED: StagedPlugin = {
   source: { kind: 'registry', name: 'weather', version: '2.1.0' },
   publisher: 'someone',
   integrity: 'sha512-AAAA',
+  stagedHash: 'sha256-beef',
+  declaredName: 'weather',
   scripts: [],
   dependencies: { count: 4, withScripts: ['node-gyp-thing'] },
   claims: { schema: 'weather', hosts: ['api.example.test'], text: 'It tells you the weather.', missing: false },
@@ -115,6 +117,11 @@ it('shows the trust sentence and what is staged', async () => {
   expect(body.trust).toBe(TRUST);
   expect(body.staged).toHaveLength(1);
   expect(body.staged[0].integrity).toBe('sha512-AAAA');
+  // What the approval re-checks travels with the card that is approved.
+  expect(body.staged[0].stagedHash).toBe('sha256-beef');
+  // And nothing that is a path on this disk does.
+  expect(body.staged[0].dir).toBeUndefined();
+  expect(body.staged[0].packageDir).toBeUndefined();
   expect(body.staged[0].dependencies.withScripts).toEqual(['node-gyp-thing']);
   // A checkout has no supervisor, so the page offers a command, not a button.
   expect(body.checkout).toBe(true);
@@ -212,4 +219,58 @@ it('will not drop a plugin\'s data unless its own name is typed back', async () 
   });
   expect(purged.status).toBe(200);
   expect(uninstallPlugin).toHaveBeenLastCalledWith('weather', expect.objectContaining({ purge: true }));
+});
+
+/**
+ * A record nobody can read is not "nothing installed".
+ *
+ * Everything the owner installed is still on disk and still granted to their
+ * agents; a page drawing an empty list would be stating the opposite. The
+ * sentence comes back as `unavailable` and the page shows that instead.
+ */
+it('says the record could not be read rather than drawing an empty list', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-plugins-'));
+  const file = path.join(dir, 'plugins.json');
+  await writeFile(file, '{ this is not json', 'utf8');
+  const { origin, headers } = await dashboard(fakeEngine(), { BUDDI_PLUGINS_FILE: file });
+  const view = await fetch(`${origin}/api/plugins`, { headers });
+  expect(view.status).toBe(200);
+  const body = (await view.json()) as any;
+  expect(body.unavailable).toMatch(/could not be read/);
+  expect(body.installed).toEqual([]);
+});
+
+/**
+ * A restart loads what is installed and not imported yet. A plugin that threw
+ * on import is not that: restarting it will throw again, and a banner that
+ * never goes away is a banner nobody reads.
+ */
+it('does not ask for a restart for a plugin that will not load', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-plugins-'));
+  const file = path.join(dir, 'plugins.json');
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 2,
+      plugins: [
+        {
+          name: 'weather',
+          version: '2.1.0',
+          entry: '/p/weather/index.js',
+          schema: 'weather',
+          installedAt: '2026-01-01T00:00:00.000Z',
+          source: { kind: 'registry', name: 'weather', version: '2.1.0' },
+        },
+      ],
+    }),
+    'utf8',
+  );
+  const engine = fakeEngine({
+    pluginLoadReport: vi.fn(() => [{ name: 'weather', version: '2.1.0', error: 'importing it threw: nope' }]),
+  });
+  const { origin, headers } = await dashboard(engine, { BUDDI_PLUGINS_FILE: file });
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  expect(body.restartNeeded).toBe(false);
+  expect(body.installed[0].loaded).toBe(false);
+  expect(body.installed[0].error).toMatch(/importing it threw/);
 });

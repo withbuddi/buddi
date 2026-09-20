@@ -14,39 +14,92 @@
  * version of that limitation.
  */
 import { readPluginsFile, type InstalledPlugin } from '@buddi/core';
-import { InstallRefusal } from './install.js';
+import { InstallRefusal } from './refusals.js';
 import { recordFile } from './load.js';
 import { rejectStaged, stagePlugin, type StageOptions, type StagedPlugin } from './stage.js';
 
-/** Split `1.2.3-rc.1` into numbers and a prerelease tail. */
-function parts(version: string): { numbers: number[]; pre: string } {
-  const [core = '', ...rest] = version.trim().replace(/^v/, '').split('-');
+/** A version, taken apart the way semver 2.0.0 says to. */
+export interface Semver {
+  major: number;
+  minor: number;
+  patch: number;
+  /** The dot-separated identifiers after `-`, empty for a release. */
+  prerelease: Array<string | number>;
+}
+
+const SEMVER =
+  /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
+/**
+ * Parse a version, or refuse it.
+ *
+ * The version string decides whether an update is allowed to happen, so
+ * something that is not a version is not a comparison this can do: `latest`,
+ * `2`, `1.0.0.0` and an empty string all used to parse into numbers here (via
+ * `parseInt` and a `|| 0`) and compare as if they meant something. Build
+ * metadata is parsed and then ignored, which is what the specification says to
+ * do with it.
+ */
+export function parseSemver(version: string): Semver | undefined {
+  const match = SEMVER.exec(version.trim());
+  if (!match) return undefined;
+  const prerelease = (match[4] ?? '')
+    .split('.')
+    .filter((id) => id !== '')
+    .map((id) => (/^\d+$/.test(id) ? Number.parseInt(id, 10) : id));
   return {
-    numbers: core.split('.').map((n) => Number.parseInt(n, 10) || 0),
-    pre: rest.join('-'),
+    major: Number.parseInt(match[1] as string, 10),
+    minor: Number.parseInt(match[2] as string, 10),
+    patch: Number.parseInt(match[3] as string, 10),
+    prerelease,
   };
+}
+
+/** -1, 0 or 1, by semver's own precedence rules. Build metadata is ignored. */
+export function compareSemver(a: Semver, b: Semver): number {
+  for (const key of ['major', 'minor', 'patch'] as const) {
+    if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
+  }
+  // A release outranks any prerelease of the same numbers.
+  if (a.prerelease.length === 0 && b.prerelease.length > 0) return 1;
+  if (a.prerelease.length > 0 && b.prerelease.length === 0) return -1;
+  const length = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let i = 0; i < length; i += 1) {
+    const left = a.prerelease[i];
+    const right = b.prerelease[i];
+    // A shorter set of identifiers is lower, when everything before was equal.
+    if (left === undefined) return -1;
+    if (right === undefined) return 1;
+    const leftNumeric = typeof left === 'number';
+    const rightNumeric = typeof right === 'number';
+    // Numeric identifiers always compare lower than alphanumeric ones.
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    if (left === right) continue;
+    return left < right ? -1 : 1;
+  }
+  return 0;
 }
 
 /**
  * Is `candidate` a later version than `current`?
  *
- * Enough semver for the one question an update asks. A release beats a
- * prerelease of the same numbers, and two prereleases compare as text, which
- * is right for `rc.1` and `rc.2` and good enough for everything else.
+ * Refuses anything that is not a semver rather than guessing: a version this
+ * cannot read is a version it cannot say is newer, and "not newer" is the
+ * answer that stops an update, so guessing here is how a downgrade gets
+ * through.
  */
 export function isNewerVersion(candidate: string, current: string): boolean {
-  const a = parts(candidate);
-  const b = parts(current);
-  const length = Math.max(a.numbers.length, b.numbers.length);
-  for (let i = 0; i < length; i += 1) {
-    const left = a.numbers[i] ?? 0;
-    const right = b.numbers[i] ?? 0;
-    if (left !== right) return left > right;
+  const a = parseSemver(candidate);
+  const b = parseSemver(current);
+  if (a === undefined || b === undefined) {
+    throw new InstallRefusal(
+      'bad-version',
+      `"${a === undefined ? candidate : current}" is not a version this can compare (major.minor.patch, ` +
+        'optionally with a -prerelease). An update is allowed only when the new version is provably ' +
+        'newer than the installed one, and this comparison cannot be made.',
+    );
   }
-  if (a.pre === b.pre) return false;
-  if (a.pre === '') return true;
-  if (b.pre === '') return false;
-  return a.pre > b.pre;
+  return compareSemver(a, b) > 0;
 }
 
 export interface UpdateOptions extends StageOptions {
@@ -82,7 +135,17 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
     previous,
   });
 
-  if (opts.allowDowngrade !== true && !isNewerVersion(staged.version, record.version)) {
+  let newer = true;
+  if (opts.allowDowngrade !== true) {
+    try {
+      newer = isNewerVersion(staged.version, record.version);
+    } catch (err) {
+      // A version nobody can compare is still unapproved code on disk.
+      rejectStaged(staged.id, env);
+      throw err;
+    }
+  }
+  if (!newer) {
     // The stage holds unapproved third-party code; it goes, exactly as a
     // rejection would remove it.
     rejectStaged(staged.id, env);

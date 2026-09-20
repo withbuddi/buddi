@@ -36,6 +36,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import {
   cancelJob,
   decideApproval,
+  isPluginSchemaName,
   listJobs,
   listMissions,
   listPendingActions,
@@ -315,6 +316,15 @@ export async function applyUninstall(
     if (!opts.pool) {
       throw new UninstallRefusal('no-database', 'dropping a schema needs the database, and it is not reachable');
     }
+    // Quoted, and the name was checked against `^[a-z_][a-z0-9_]*$` before it
+    // was ever recorded; both, because this statement destroys data.
+    if (!isPluginSchemaName(plan.record.schema)) {
+      throw new UninstallRefusal(
+        'bad-schema',
+        `the record says ${plan.record.name} owns the schema "${plan.record.schema}", which is not a ` +
+          'schema name. Nothing was dropped; fix the record first.',
+      );
+    }
     await opts.pool.query(`drop schema if exists "${plan.record.schema}" cascade`);
     await opts.pool.query('delete from core.migrations where schema = $1', [plan.record.schema]);
     purged = true;
@@ -349,10 +359,19 @@ export async function uninstallPlugin(
     ...(opts.pool === undefined ? {} : { pool: opts.pool }),
     ...(opts.env === undefined ? {} : { env: opts.env }),
   });
-  if (opts.purge === true && opts.confirm !== undefined && opts.confirm !== plan.record.name) {
+  /*
+   * The confirmation is required, not merely checked when it happens to be
+   * there. An absent `confirm` used to mean "no confirmation was asked for",
+   * which made the guard optional for every caller that forgot it — and the
+   * thing being guarded is every row the plugin ever stored.
+   */
+  if (opts.purge === true && opts.confirm !== plan.record.name) {
     throw new UninstallRefusal(
       'not-confirmed',
-      `dropping ${plan.record.name}'s schema destroys every row in it. Type the plugin's name to confirm.`,
+      `dropping ${plan.record.name}'s schema destroys every row in it. Type the plugin's name to ` +
+        `confirm: the name has to be sent back, and ${
+          opts.confirm === undefined ? 'nothing was' : `"${opts.confirm}" was`
+        }.`,
     );
   }
   const outcome = await applyUninstall(plan, opts);

@@ -75,6 +75,33 @@ export interface InstalledPlugin {
   schema: string;
   /** How it got here and what was approved. Absent for a directory source. */
   provenance?: PluginProvenance;
+  /**
+   * Written *before* the package files are moved into place, and cleared once
+   * they are.
+   *
+   * An install renames a directory and writes a record, and a machine that
+   * dies between the two leaves one of them done. Recording the intent first
+   * means the leftover is always a record that says "I was placing this",
+   * never a directory nothing knows about: the sweep at start can tell the two
+   * apart, and `buddi plugins list` can say what happened instead of showing
+   * a plugin that loads from nowhere.
+   */
+  placing?: boolean;
+}
+
+/** A Postgres schema name a plugin may claim: a plain lowercase identifier. */
+export const PLUGIN_SCHEMA = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * Is this a schema name that can be quoted into SQL and mean what it says?
+ *
+ * A manifest is a string somebody else wrote and it reaches `create schema`,
+ * `drop schema` and `set search_path`. Core's migrator already refuses
+ * anything else; this is the same rule, available early enough to refuse the
+ * plugin rather than fail halfway through installing it.
+ */
+export function isPluginSchemaName(schema: string): boolean {
+  return PLUGIN_SCHEMA.test(schema) && schema.length <= 63;
 }
 
 /** The whole record file. Versioned so a future format can be recognised. */

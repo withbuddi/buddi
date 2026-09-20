@@ -578,8 +578,16 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       // Against what was approved, not just against what loads: a plugin runs
       // with everything buddi can do, and the recorded hash is the only thing
       // that can say afterwards that its files are not the ones agreed to.
-      const changed = plugins.loaded
-        .map((p) => verifyInstalledHash(p.record, { env }))
+      // Every plugin with a record, not only the ones that loaded: a plugin
+      // whose files were replaced is exactly the one most likely to stop
+      // importing, and "it did not load" and "it is not what you approved" are
+      // two different sentences that belong together.
+      const records = [
+        ...plugins.loaded.map((p) => p.record),
+        ...plugins.problems.flatMap((p) => (p.record === undefined ? [] : [p.record])),
+      ];
+      const changed = records
+        .map((record) => verifyInstalledHash(record, { env }))
         .filter((v) => !v.matches)
         .map((v) => ({ name: v.name, message: v.message }));
       return checkPlugins({

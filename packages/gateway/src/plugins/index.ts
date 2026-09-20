@@ -11,6 +11,8 @@
  * Everything the gateway's web routes and the CLI need is re-exported here, so
  * neither has to know which file a function lives in.
  */
+export * from './refusals.js';
+export * from './tree.js';
 export * from './spec.js';
 export * from './npm.js';
 export * from './claims.js';
