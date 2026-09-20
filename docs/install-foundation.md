@@ -178,11 +178,15 @@ for real means stopping the local installation first.
 
 Data lives in the named volume `buddi-trial` between runs, so the container is
 disposable and the installation is not. `--reset` removes that volume, which is
-what makes the next start a true first run. A supervisor pid left in the volume
-was written in a previous container's pid namespace, where it meant something;
-`run.sh` removes the lock and socket on start, because nothing in a container it
-has just created is supervising anything. Ctrl-C stops the container and keeps
-the volume.
+what makes the next start a true first run. Ctrl-C asks the supervisor to stop
+and waits for it before removing the container, so Postgres shuts down the way
+it would anywhere else; the volume survives. Pids left in the volume were
+written in a previous container's pid namespace, where they meant something, so
+`run.sh` removes the supervisor lock, the control socket and
+`postgres/postmaster.pid` on start — nothing in a container it has just created
+is supervising anything — which still matters for a container that was killed
+outright. The log follower shows only what this run writes; earlier runs' lines
+are in `logs/supervisor.log` in the volume.
 
 This image is a trial harness, not a distribution: it exists to try an install,
 not to run one.

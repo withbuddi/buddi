@@ -58,18 +58,30 @@ docker run -d --name "$CONTAINER" \
   -v "$VOLUME:$DATA" \
   -e BUDDI_VAULT=file \
   "$IMAGE" >/dev/null
+# Removing the container kills the supervisor where it stands, and a Postgres
+# killed that way leaves its pid file behind. Ask it to stop first and give it
+# the time it needs: the installation in the volume is meant to survive this.
 cleanup() {
   [ -n "${follower:-}" ] && kill "$follower" 2>/dev/null
+  if docker exec "$CONTAINER" sh -c 'kill -TERM $(cat "$1/supervisor.lock")' sh "$DATA" >/dev/null 2>&1; then
+    echo "Stopping the installation..."
+    for _ in $(seq 40); do
+      docker exec "$CONTAINER" test -e "$DATA/supervisor.lock" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+  fi
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup INT TERM EXIT
 
-# A supervisor pid left in the volume was written in a previous container's pid
-# namespace, where it meant something; in this one the same small number is some
-# unrelated live process, so the lock's own staleness test would believe the
-# installation is still supervised. Nothing in a container created one line ago
-# is supervising anything, so the leftovers go.
-docker exec "$CONTAINER" sh -c 'rm -f "$1/supervisor.lock" "$1/supervisor.sock"' sh "$DATA"
+# Pids left in the volume were written in a previous container's pid namespace,
+# where they meant something; in this one the same small numbers are unrelated
+# live processes, so a staleness test that asks the OS about them believes the
+# installation is still running. Nothing in a container created one line ago is
+# supervising anything or serving this cluster, so the leftovers go. The cluster
+# itself can also clear its own pid file now (see inspectCluster); this stays
+# for the container that was killed outright rather than shut down.
+docker exec "$CONTAINER" sh -c 'rm -f "$1/supervisor.lock" "$1/supervisor.sock" "$1/postgres/postmaster.pid"' sh "$DATA"
 
 echo "Starting the packaged install inside the container. First run provisions Postgres; give it a minute."
 # Linux has no service manager in this slice: the launcher says so, and
@@ -118,11 +130,14 @@ if [ "$HOST_PORT" != "$INTERNAL" ]; then
   echo "be refused with 403 until both sides are $INTERNAL."
 fi
 echo
-echo "Supervisor log follows. Ctrl-C stops the container; the data volume survives."
+echo "Supervisor log from here on. Ctrl-C stops the installation and the container;"
+echo "the data volume survives. Earlier runs' lines are in $DATA/logs/supervisor.log."
 echo
+# -n 0: only what is written from now on. The log is in the volume, so replaying
+# it would show a previous run's failures as though they were this one's.
 # In the background and waited on, not in the foreground: a shell blocked in a
 # foreground child runs no trap until that child returns, and Ctrl-C has to
 # take the container down even when the signal reaches only this script.
-docker exec "$CONTAINER" tail -n +1 -f "$DATA/logs/supervisor.log" &
+docker exec "$CONTAINER" tail -n 0 -f "$DATA/logs/supervisor.log" &
 follower=$!
 wait "$follower" || true
