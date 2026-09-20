@@ -24,11 +24,13 @@ import {
   HOME_ROUTE,
   PLACES,
   SETTINGS_ROUTE,
+  WELCOME_ROUTE,
   chatRoute,
   groupChatRoute,
   legacyRedirect,
   parseChatRoute,
   parseGroupChatRoute,
+  parseWelcomeRoute,
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
@@ -42,6 +44,7 @@ import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
+import { Welcome } from './views/Welcome';
 
 export { PLACES };
 
@@ -148,6 +151,39 @@ export function App(): JSX.Element {
     return () => window.clearInterval(timer);
   }, [hash]);
 
+  /*
+   * First run, once per load.
+   *
+   * The wizard is offered only to an installation that has not finished it
+   * *and* has no model account: a record that is done or skipped never sees it
+   * again, and neither does a working install whose record predates the
+   * wizard — which is what keeps a developer's live dashboard out of a setup
+   * screen it passed long ago. Replaced, not pushed, so Back does not bounce.
+   */
+  const [firstRunChecked, setFirstRunChecked] = useState(false);
+  useEffect(() => {
+    if (firstRunChecked) return undefined;
+    let cancelled = false;
+    api
+      .onboarding()
+      .then((view) => {
+        if (cancelled) return;
+        setFirstRunChecked(true);
+        const unfinished = view.state === 'pending' || view.state === 'in-progress';
+        if (unfinished && view.needs.model && !parseWelcomeRoute(window.location.hash)) {
+          navigate(WELCOME_ROUTE, true);
+        }
+      })
+      .catch(() => {
+        // No server, or an installation whose database has not migrated that
+        // table. Either way the shell is what the owner gets.
+        if (!cancelled) setFirstRunChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [firstRunChecked, navigate]);
+
   // The old hashes, sent where their content went. Replaced, not pushed, so
   // Back does not bounce between the two.
   useEffect(() => {
@@ -230,6 +266,7 @@ export function App(): JSX.Element {
     return () => window.clearInterval(handle);
   }, []);
 
+  const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);
   const onChat = place === CHAT_ROUTE;
   const groupSheet = newGroup ? (
@@ -239,6 +276,19 @@ export function App(): JSX.Element {
       onCreated={(group) => { setGroups((current) => [...current, group]); setNewGroup(false); navigate(groupChatRoute(group.id)); }}
     />
   ) : null;
+
+  // The wizard takes the whole window: no rail, no place, nothing to navigate
+  // away to until it is finished or set aside.
+  if (welcome) {
+    return (
+      <Tooltip.Provider delayDuration={400}>
+        <Toast.Provider swipeDirection="right">
+          <Welcome step={welcome.step} navigate={navigate} timezone={timezone} />
+          <Toast.Viewport className="ui-toasts" />
+        </Toast.Provider>
+      </Tooltip.Provider>
+    );
+  }
 
   return (
     <Tooltip.Provider delayDuration={400}>
