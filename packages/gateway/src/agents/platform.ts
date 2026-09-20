@@ -674,7 +674,8 @@ const createInput = z
       .optional()
       .describe(
         'The named model account it runs on, by the name the owner gave it (platform.list_accounts). ' +
-          'Required where the owner has accounts; ask which one rather than guessing.',
+          'Leave it out and the new agent runs where the default agent runs — the brain the owner ' +
+          'already chose. Name one only when the owner asked for a different one; never guess.',
       ),
     model: z.string().min(1).optional().describe("Pin a model the account serves. Leave it out for the account's default."),
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
@@ -740,7 +741,16 @@ function buildCreateEnvelope(
     );
   }
 
-  const account = checkAccount(binding.accounts, input, { required: true });
+  // Where a new agent runs, when nobody said: where the default agent runs.
+  // Asking "which account?" for the second agent on an installation with one
+  // is a question with one answer, and guessing a provider instead of reading
+  // the one the owner already chose is how a new agent arrives on a company
+  // they never signed up with.
+  const inherited =
+    input.account === undefined && input.provider === undefined && input.model === undefined
+      ? inheritedAccount(binding)
+      : null;
+  const account = inherited ?? checkAccount(binding.accounts, input, { required: true });
   if (account === null) checkProviderModel(input.provider, input.model);
   const tools = checkTools(input.tools, registry, id);
   const roles = checkRoles(input.roles);
@@ -1025,6 +1035,31 @@ function buildUpdateEnvelope(
     defaultFrom,
     content,
   };
+}
+
+/**
+ * The account a new agent inherits: the default agent's, or the only usable
+ * one, or nothing — never a provider this code picked.
+ *
+ * The default agent is the one the owner met and gave a brain to, so a
+ * colleague made beside it thinks with the same one until they say otherwise.
+ * A binding the accounts service no longer serves (a removed or disabled
+ * account, a model that account cannot run) is not inherited: it would be a
+ * new agent born unable to answer.
+ */
+function inheritedAccount(binding: ResolvedBinding): AccountChoice | null {
+  const accounts = binding.accounts;
+  if (!accounts) return null;
+  const usable = accounts.list().filter((row) => row.enabled && row.configured);
+  if (usable.length === 0) return null;
+  const holder = defaultHolder(binding);
+  const bound = holder ? accounts.bindingOf(holder.id) : undefined;
+  const row = bound ? usable.find((candidate) => candidate.id === bound.accountId) : undefined;
+  if (row && bound && !accountModelProblem(row.kind as never, bound.model)) {
+    return { id: row.id, label: row.label, kind: row.kind, model: bound.model };
+  }
+  const only = usable.length === 1 ? usable[0]! : undefined;
+  return only ? { id: only.id, label: only.label, kind: only.kind, model: only.defaultModel } : null;
 }
 
 /** Whose file this is, as the catalog knows it — never as the id reads. */

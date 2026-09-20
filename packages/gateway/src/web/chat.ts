@@ -243,7 +243,7 @@ export function readChatAgents(catalog: AgentCatalog): {
         : { unavailableReason: summary.unavailableReason }),
       roles: [...summary.roles],
       provider: summary.providerKind,
-      model: full?.provider.model ?? full?.model ?? '',
+      model: modelOf(full),
       anchor: anchorOf(summary.roles),
       thinking: full?.thinking ?? null,
       ...(summary.intro === undefined ? {} : { intro: summary.intro }),
@@ -255,6 +255,24 @@ export function readChatAgents(catalog: AgentCatalog): {
     };
   });
   return { agents, defaultAgentId: catalog.defaultAgent().id };
+}
+
+/**
+ * The model this agent actually runs on, or nothing.
+ *
+ * Where the installation has named accounts, an agent with none pinned falls
+ * back to `providerFromEnv` — which answers with Anthropic's default model
+ * whatever the owner has. That is how a fresh installation whose only account
+ * was Ollama Cloud showed `claude-sonnet-5` under an agent it could not run at
+ * all. The empty `accountId` is the accounts service saying "no binding";
+ * `undefined` is an installation with no accounts, where the file's own pin is
+ * the truth. So the first reports nothing, and the composer draws no pill
+ * beside the sentence that already says an account is missing.
+ */
+function modelOf(agent: CatalogAgent | undefined): string {
+  if (!agent) return '';
+  if (agent.provider.accountId === '') return '';
+  return agent.provider.model || agent.model || '';
 }
 
 /** Which end this agent's roles pin it to, or null for the middle. */
