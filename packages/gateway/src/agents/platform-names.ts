@@ -20,6 +20,8 @@
 
 /** The tools that change the installation. Grantable only by hand. */
 export const PLATFORM_WRITE_TOOLS: readonly string[] = [
+  'platform.create_group',
+  'platform.archive_group',
   'platform.create_agent',
   'platform.update_agent',
   'platform.write_skill',

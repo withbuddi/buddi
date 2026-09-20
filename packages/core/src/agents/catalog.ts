@@ -332,6 +332,7 @@ export function generatedSection(
         '- The owner\'s other agents, and how to name them:',
         ...wiring.colleagues.map((c) => `  - @${c.handle} — ${c.name}: ${c.description}`),
         '- Always name another agent by its handle, never by its id.',
+        '- The owner can put several agents in a group: one named conversation on the dashboard, with a coordinator that brings members in. Refer to a group by its name. Only an agent holding platform.create_group can make one; membership grants no tool.',
       );
     }
   }
