@@ -8,6 +8,8 @@ export * from './transport.js';
 export * from './attachments.js';
 export * from './loop.js';
 export * from './delegate.js';
+export * from './projection.js';
+export * from './groups.js';
 // Experimental native adapter. Only opt-in account wiring selects this backend.
 export * from './codex-app-server.js';
 export * from './codex-rpc.js';
