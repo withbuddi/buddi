@@ -158,6 +158,12 @@ export interface CompletionRequest {
    * exactly as it would have been without.
    */
   onDelta?: (delta: CompletionDelta) => void;
+  /**
+   * Called before every dispatch of this request, retries included, so a
+   * caller keeping a ledger can reserve one call per attempt. A rejection it
+   * throws ends the request without a dispatch.
+   */
+  onDispatch?: () => Promise<void>;
 }
 
 export interface CompletionDelta {
@@ -756,6 +762,8 @@ export function createAnthropicProvider(
         // has reached the caller a retry would say it twice, so from then on
         // a failure is final.
         const assembly = req.onDelta ? new AnthropicStreamAssembly(req.onDelta) : null;
+        // Every attempt is a dispatch; a caller counting calls is told of each.
+        await req.onDispatch?.();
         try {
           res = await doFetch(url, {
             method: 'POST', headers: headers(), body: payload,

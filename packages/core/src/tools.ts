@@ -14,6 +14,17 @@ import type { SystemContext } from './system-context.js';
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
 
+/** A group run's room, as the orchestration establishes it. */
+export interface GroupContext {
+  id: string;
+  name: string;
+  coordinator: string;
+  /** Member agent ids, in roster order. */
+  members: readonly string[];
+  /** The owner request this run spends against. */
+  requestId: string;
+}
+
 export interface ToolContext {
   /** Fresh owner timezone and host facts, supplied by the composition root. */
   systemContext?: () => Promise<SystemContext>;
@@ -43,6 +54,14 @@ export interface ToolContext {
    */
   conversationId?: string;
   agentId?: string;
+  /**
+   * The group this run speaks in, when it is a group run. Set by the group
+   * orchestration from the group row — trusted context, never something a
+   * model supplies — and read by the tools that scope to a room: memory
+   * writes land in the group's scope, and a member request is checked
+   * against `members`.
+   */
+  group?: GroupContext;
   /**
    * How many delegations deep this run is: absent or 0 for a run the owner
    * started, 1 inside a run another agent delegated. The delegation tool reads

@@ -79,8 +79,16 @@ export async function buildPreamble(
   agentId: string,
   opts: BuildPreambleOptions = {},
 ): Promise<string> {
+  return buildPreambleForScopes(db, scopesFor(agentId), opts);
+}
+
+/** The same block for an explicit set of scopes — a group run reads shared plus the room's. */
+export async function buildPreambleForScopes(
+  db: Queryable,
+  scopes: readonly string[],
+  opts: BuildPreambleOptions = {},
+): Promise<string> {
   const now = (opts.now ?? (() => new Date()))();
-  const scopes = scopesFor(agentId);
   const [preferences, notes] = await Promise.all([
     currentPreferences(db, scopes),
     selectNotes(db, { scopes, now, limit: opts.noteLimit ?? PREAMBLE_NOTE_LIMIT }),
