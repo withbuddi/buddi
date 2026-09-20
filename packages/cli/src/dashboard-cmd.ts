@@ -45,6 +45,13 @@ export interface DashboardOptions {
   /** Injected in tests. Where `--install-app` writes its `Applications` folder. */
   home?: string;
   out?: (line: string) => void;
+  /**
+   * A route to land on, as a hash (`#/welcome?step=model`). The fragment never
+   * reaches the server — the ticket exchange redirects to a path with no
+   * fragment of its own, so the browser keeps this one — and it is the only
+   * way a command can say *which screen* of the dashboard it means.
+   */
+  hash?: string;
 }
 
 function defaultLaunch(platform: NodeJS.Platform, url: string): void {
@@ -98,7 +105,7 @@ export async function runDashboard(
    * here — it is the escape hatch for scripting against a non-loopback bind.
    */
   if (isLoopback(config.host) && env.BUDDI_WEB_REQUIRE_AUTH !== '1' && action !== 'token') {
-    const url = webUrl(config);
+    const url = `${webUrl(config)}${opts.hash ?? ''}`;
     out(`buddi dashboard — ${url}`);
     out('  open on this machine: bookmark it, nothing here expires');
     if (!config.enabled) {
@@ -118,7 +125,7 @@ export async function runDashboard(
     return 0;
   }
 
-  const url = webUrl(config, ticket);
+  const url = `${webUrl(config, ticket)}${opts.hash ?? ''}`;
   out(`buddi dashboard — ${url}`);
   out(
     `  token: in the ${source}${created ? ' (created just now)' : ''}; this link is one-time and expires in 5 minutes`,

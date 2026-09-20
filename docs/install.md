@@ -1,7 +1,9 @@
 # Install: one command, then the dashboard
 
-Status: proposed spec, 2026-09-20. An experimental [packaged-install foundation](install-foundation.md)
-is implemented separately; the complete install, wizard, plugins and backup contract is not built.
+Status: proposed spec, 2026-09-20. An experimental [packaged-install
+foundation](install-foundation.md) is implemented separately, and the first-run
+wizard of §5 is now built on top of it (screens 1–7, minus the deferrals named
+there). Plugins from npm and the backup contract are not built.
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
@@ -135,9 +137,20 @@ directory is the trust boundary) is stated in the security page of the wizard.
 
 ## 5. The first-run wizard
 
-A route, `#/welcome`, shown until onboarding is complete and reachable from
-Settings afterwards. Each step is one screen with one job, saved as it is
-completed, resumable after a reload or a restart. Steps in order:
+**Built**, except where a step below says otherwise. The route is `#/welcome`,
+with `?step=<id>` naming one screen. The dashboard sends the owner there —
+replacing the entry, not pushing it — when `core.onboarding` is still `pending`
+or `in-progress` *and* the installation has no usable model account; a record
+that is `done` or `skipped`, and any installation that already has an account,
+never sees it. Settings → System has "Run setup again" regardless. The wizard's
+own server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
+`/complete`, `/skip` and `/agent`, all behind the dashboard's ordinary session,
+Origin and CSRF gate.
+
+Each step is one screen with one job, saved as it is completed, and resumable
+after a reload or a restart: the page resumes at the first screen whose
+question is still unanswered, or at the one after the last it recorded. Steps
+in order:
 
 1. **Welcome and security.** What buddi is, that it runs on this machine only,
    what is stored where, and that the dashboard listens on loopback. One
@@ -145,24 +158,32 @@ completed, resumable after a reload or a restart. Steps in order:
 2. **You.** Name, how the agents address you, timezone. The existing "You"
    settings page, reused.
 3. **A model.** Pick a provider: Anthropic, OpenAI, or an OpenAI-compatible
-   endpoint. Ollama is detected when it answers on its default port and
-   offered as the local choice with a note on which models fit. The key is
-   pasted once and lands in the vault; the wizard checks it with one cheap
-   call and shows the answer. The provider-accounts work already covers the
-   storage and the choice of model.
-4. **Your first agent.** A name, a handle, a face, and a short description
-   of what it is for. Created from the generic template, no roles, no
-   plugins. The owner talks to it on the next screen.
-5. **Say hello.** The chat, with the new agent, inside the wizard. The
-   first answer arriving is the moment the install is real.
-6. **Optional extras**, each one a card that can be skipped: Telegram
-   (the existing pairing flow, with the token pasted here rather than in a
-   terminal), plugins (§7), a daily backup and a copy off the machine (§8).
+   endpoint. The key is pasted once and lands in the vault. The
+   provider-accounts page is the screen, embedded, so the storage and the
+   choice of model are the ones already built. *Deferred: Ollama detection —
+   the wizard says nothing about it.*
+4. **Your first agent.** A name, a handle (suggested from the name, editable),
+   an optional emoji face, and a short description of what it is for. Written
+   by the same writer `platform.create_agent` uses, from the generic template:
+   no roles, no plugin tools, `language: mirror`, and `default: true` when it
+   is the first private agent. It is given the model account added on the
+   previous screen when there is exactly one to give, so the next screen can
+   actually answer.
+5. **Say hello.** The chat itself, with the new agent, mounted inside the
+   wizard frame. The first answer arriving is the moment the install is real;
+   sending a message is not required to move on.
+6. **Optional extras**, each one a card that can be skipped. Built: Telegram,
+   as the `buddi telegram pair` command with a Skip. *Deferred: pairing
+   without a terminal, the plugins card (§7) and the backup card (§8).*
 7. **Done.** Where things are, how to open buddi again, how to upgrade.
 
-The wizard uses the same API the settings pages use. There is no wizard-only
-endpoint that writes anything; every step is an existing settings action or
-becomes one. `core.onboarding` already records steps done; the wizard reads
+The welcome screen offers the CLI restore command for an owner who has a backup
+from another machine; *restoring from the dashboard (§8.5) is deferred*.
+
+The wizard uses the same API the settings pages use. The one exception is the agent step, which has an endpoint
+of its own because the alternative — an approval-gated tool call — is the wrong
+shape for the owner acting directly from their own dashboard; it reuses the
+same writer, the same file format and the same validation. `core.onboarding` already records steps done; the wizard reads
 and writes that record so the CLI and the dashboard agree on progress.
 
 Developer install (`git clone`, `buddi init`) ends by opening the same route
