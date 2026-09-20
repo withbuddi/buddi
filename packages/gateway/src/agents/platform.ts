@@ -473,6 +473,16 @@ export interface UpdateAgentEnvelope {
   delegatesAfter: string[];
   /** A new account assignment, applied after the file is written. Null when unchanged. */
   account: AccountChoice | null;
+  /** The handle after the change: the same one, unless the owner asked for another. */
+  handleAfter: string;
+  /** True when this agent becomes the one a chat with no agent named lands on. */
+  becomesDefault: boolean;
+  /**
+   * The agent that loses the default claim, and the file that says so after the
+   * same approval. One action moves the claim, because an installation with two
+   * defaults does not load and an installation with none has nowhere to land.
+   */
+  defaultFrom: { id: string; file: string; content: string } | null;
   /** The complete resulting file, byte for byte. */
   content: string;
 }
@@ -572,6 +582,12 @@ export function renderUpdatePreview(envelope: UpdateAgentEnvelope, specs: readon
           'What else changes:',
           ...envelope.changes.map((c) => `  ${c.key}: ${c.from} → ${c.to}`),
         ]),
+    ...(envelope.becomesDefault
+      ? [
+          `It BECOMES THE DEFAULT AGENT: every chat that names no agent lands on it from now on` +
+            `${envelope.defaultFrom ? `, and ${envelope.defaultFrom.id} stops being the default` : ''}.`,
+        ]
+      : []),
     ...(envelope.personaChanged ? ['Its persona is rewritten (the new text is below).'] : []),
     ...(envelope.delegatesBefore.join(',') === envelope.delegatesAfter.join(',')
       ? []
@@ -580,6 +596,7 @@ export function renderUpdatePreview(envelope: UpdateAgentEnvelope, specs: readon
             `${envelope.delegatesAfter.join(', ') || 'nobody'}`,
         ]),
     `File:  ${envelope.file}`,
+    ...(envelope.defaultFrom ? [`Also written: ${envelope.defaultFrom.file} (it loses "default: true")`] : []),
     `Proposed by ${envelope.proposedBy}.`,
     ...(envelope.personaChanged ? ['', ...personaBlock(envelope.content)] : []),
   ].join('\n');
@@ -657,7 +674,8 @@ const createInput = z
       .optional()
       .describe(
         'The named model account it runs on, by the name the owner gave it (platform.list_accounts). ' +
-          'Required where the owner has accounts; ask which one rather than guessing.',
+          'Leave it out and the new agent runs where the default agent runs — the brain the owner ' +
+          'already chose. Name one only when the owner asked for a different one; never guess.',
       ),
     model: z.string().min(1).optional().describe("Pin a model the account serves. Leave it out for the account's default."),
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
@@ -723,7 +741,16 @@ function buildCreateEnvelope(
     );
   }
 
-  const account = checkAccount(binding.accounts, input, { required: true });
+  // Where a new agent runs, when nobody said: where the default agent runs.
+  // Asking "which account?" for the second agent on an installation with one
+  // is a question with one answer, and guessing a provider instead of reading
+  // the one the owner already chose is how a new agent arrives on a company
+  // they never signed up with.
+  const inherited =
+    input.account === undefined && input.provider === undefined && input.model === undefined
+      ? inheritedAccount(binding)
+      : null;
+  const account = inherited ?? checkAccount(binding.accounts, input, { required: true });
   if (account === null) checkProviderModel(input.provider, input.model);
   const tools = checkTools(input.tools, registry, id);
   const roles = checkRoles(input.roles);
@@ -798,6 +825,30 @@ function buildCreateEnvelope(
 const updateInput = z
   .object({
     id: z.string().min(1).describe('Which agent to change, by id.'),
+    name: z
+      .string()
+      .min(1)
+      .max(60)
+      .optional()
+      .describe(
+        'A new display name. THIS IS HOW AN AGENT IS RENAMED: the id, the file and everything the ' +
+          'agent has ever done stay exactly as they are. Never create a second agent and delete the first.',
+      ),
+    handle: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'A new handle — what the owner types to reach it, without the @. Only when the owner wants it ' +
+          'to change: a rename does not move the handle by itself. Ask once, in plain words.',
+      ),
+    default: z
+      .literal(true)
+      .optional()
+      .describe(
+        'Make this the default agent: the one every chat with no agent named lands on. The claim is ' +
+          'taken off whoever holds it in the same approval, so a swap is one decision, not two.',
+      ),
     persona: z.string().min(1).optional().describe('A new persona, replacing the body of the file entirely.'),
     description: z.string().min(1).max(300).optional(),
     tools: z
@@ -817,7 +868,7 @@ const updateInput = z
       .min(1)
       .max(8)
       .optional()
-      .describe('An emoji for its face, e.g. "🧪". Pick one that says what it does; the owner can change it.'),
+      .describe('A new emoji face, e.g. "🧪". This is how an agent\'s face is changed — in place, on the file it already has.'),
     accent: z
       .string()
       .regex(/^#[0-9a-fA-F]{6}$/)
@@ -846,8 +897,32 @@ function buildUpdateEnvelope(
         .join(', ')})`,
     );
   }
-  if (insideExamples(agent.file, binding.examplesDir)) {
+  // Whose file this is, asked of the catalog rather than of the id: the owner's
+  // first agent is written under the shipped example's id on purpose (it is how
+  // it replaces it), and a guard that keyed on the name would refuse to rename
+  // the one agent every installation has.
+  if (isExample(agent, binding)) {
     refuse('examples-tree', examplesRefusal(agent.id, agent.file));
+  }
+
+  const name = input.name === undefined ? undefined : input.name.trim();
+  if (name !== undefined && name === '') refuse('bad-name', 'a name is one to 60 characters');
+  const handle = input.handle === undefined ? undefined : checkHandle(input.handle);
+  if (handle !== undefined && handle !== agent.handle.toLowerCase()) {
+    // Every agent, examples included: the roster holds back the examples this
+    // installation has not grown into yet, and a handle one of them answers to
+    // is still taken the moment it comes back.
+    const taken = [
+      ...binding.catalog.list().filter((other) => other.handle.toLowerCase() === handle),
+      ...(binding.catalog.byHandle(handle) ? [binding.catalog.byHandle(handle)!] : []),
+    ].find((other) => other.id !== agent.id);
+    if (taken) {
+      refuse(
+        'duplicate-handle',
+        `@${handle} is already ${taken.name} (${taken.id}). One handle names exactly one agent, so ask ` +
+          'the owner for another one.',
+      );
+    }
   }
 
   const current = binding.accounts?.bindingOf(agent.id);
@@ -859,8 +934,19 @@ function buildUpdateEnvelope(
   const roles = checkRoles(input.roles);
   const delegates = checkDelegates(input.delegates, binding.catalog, agent.id);
 
+  // The claim moves in one action: this file takes it, and the file that holds
+  // it loses it. Nothing to do when this agent already is the default, and
+  // nothing to *write* when the holder is an example — a private agent
+  // declaring it already wins on the search path.
+  const holder = input.default === true ? defaultHolder(binding) : undefined;
+  const becomesDefault = input.default === true && holder?.id !== agent.id;
+  const losesDefault = becomesDefault && holder !== undefined && !isExample(holder, binding) ? holder : undefined;
+
   const source = readFileSync(agent.file, 'utf8');
   const patch: FrontmatterPatch = {
+    ...(name === undefined ? {} : { name }),
+    ...(handle === undefined ? {} : { handle }),
+    ...(becomesDefault ? { default: true } : {}),
     ...(input.description === undefined ? {} : { description: input.description.trim() }),
     ...(input.tools === undefined ? {} : { tools: input.tools.map((t) => t.trim()) }),
     ...(!onAccounts && input.model !== undefined ? { model: input.model.trim() } : {}),
@@ -888,11 +974,25 @@ function buildUpdateEnvelope(
     refuse('would-not-load', `this change would leave an agent that cannot load: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  let defaultFrom: UpdateAgentEnvelope['defaultFrom'] = null;
+  if (losesDefault) {
+    const holderSource = readFileSync(losesDefault.file, 'utf8');
+    try {
+      defaultFrom = {
+        id: losesDefault.id,
+        file: losesDefault.file,
+        content: patchAgentSource(holderSource, { default: null }, losesDefault.file).text,
+      };
+    } catch (err) {
+      refuse('would-not-load', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const personaChanged = input.persona !== undefined && content !== edited.text;
   const delegatesBefore = readDelegates(agent.id, binding.agentsDir);
   const delegatesAfter = delegates ?? delegatesBefore;
   const accountChanged = account !== null && (account.id !== current?.accountId || account.model !== current?.model);
-  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',') && !accountChanged) {
+  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',') && !accountChanged && defaultFrom === null) {
     refuse('no-change', `nothing in that would change ${agent.id}: the file already says exactly this`);
   }
   const currentLabel = current ? (binding.accounts?.list().find((a) => a.id === current.accountId)?.label ?? current.accountId) : undefined;
@@ -930,8 +1030,54 @@ function buildUpdateEnvelope(
     delegatesBefore,
     delegatesAfter,
     account: accountChanged ? account : null,
+    handleAfter: handle ?? agent.handle,
+    becomesDefault,
+    defaultFrom,
     content,
   };
+}
+
+/**
+ * The account a new agent inherits: the default agent's, or the only usable
+ * one, or nothing — never a provider this code picked.
+ *
+ * The default agent is the one the owner met and gave a brain to, so a
+ * colleague made beside it thinks with the same one until they say otherwise.
+ * A binding the accounts service no longer serves (a removed or disabled
+ * account, a model that account cannot run) is not inherited: it would be a
+ * new agent born unable to answer.
+ */
+function inheritedAccount(binding: ResolvedBinding): AccountChoice | null {
+  const accounts = binding.accounts;
+  if (!accounts) return null;
+  const usable = accounts.list().filter((row) => row.enabled && row.configured);
+  if (usable.length === 0) return null;
+  const holder = defaultHolder(binding);
+  const bound = holder ? accounts.bindingOf(holder.id) : undefined;
+  const row = bound ? usable.find((candidate) => candidate.id === bound.accountId) : undefined;
+  if (row && bound && !accountModelProblem(row.kind as never, bound.model)) {
+    return { id: row.id, label: row.label, kind: row.kind, model: bound.model };
+  }
+  const only = usable.length === 1 ? usable[0]! : undefined;
+  return only ? { id: only.id, label: only.label, kind: only.kind, model: only.defaultModel } : null;
+}
+
+/** Whose file this is, as the catalog knows it — never as the id reads. */
+function isExample(agent: { source?: string; file: string }, binding: ResolvedBinding): boolean {
+  return agent.source === undefined
+    ? insideExamples(agent.file, binding.examplesDir)
+    : agent.source === 'example';
+}
+
+/** The agent every chat with no agent named lands on, if one claims it. */
+function defaultHolder(binding: ResolvedBinding): CatalogAgent | undefined {
+  try {
+    const id = binding.catalog.defaultAgent().id;
+    return binding.catalog.get(id);
+  } catch {
+    // An installation with no default at all: there is nothing to take it from.
+    return undefined;
+  }
 }
 
 function renderValue(value: unknown): string {
@@ -977,7 +1123,7 @@ function buildSkillEnvelope(
     if (input.agentId === undefined) refuse('missing-agent', 'scope "agent" needs an agentId: whose procedure is this?');
     const agent = binding.catalog.get(input.agentId.trim()) ?? binding.catalog.byHandle(input.agentId.trim());
     if (!agent) refuse('unknown-agent', `there is no agent "${input.agentId}" here`);
-    if (insideExamples(agent.file, binding.examplesDir)) refuse('examples-tree', examplesRefusal(agent.id, agent.file));
+    if (isExample(agent, binding)) refuse('examples-tree', examplesRefusal(agent.id, agent.file));
     agentId = agent.id;
   }
 
@@ -1050,7 +1196,7 @@ function buildDeleteEnvelope(
   const { binding } = deps;
   const agent = binding.catalog.get(input.id.trim()) ?? binding.catalog.byHandle(input.id.trim());
   if (!agent) refuse('unknown-agent', `there is no agent "${input.id}" here`);
-  if (insideExamples(agent.file, binding.examplesDir)) {
+  if (isExample(agent, binding)) {
     refuse(
       'examples-tree',
       `"${agent.id}" is a shipped example (${agent.file}); those files belong to the platform and I will ` +
@@ -1060,8 +1206,10 @@ function buildDeleteEnvelope(
   if (agent.isDefault) {
     refuse(
       'is-default',
-      `${agent.id} is the default agent — the one every chat with no agent named lands on. Make another ` +
-        'agent the default first, then remove this one.',
+      `${agent.id} is the default agent — the one every chat with no agent named lands on. Move the claim ` +
+        'first: platform.update_agent on the agent that should have it, with `default: true`, which takes ' +
+        'it off this one in the same approval. Then remove this one. Renaming or refacing an agent is ' +
+        'platform.update_agent too — never a new agent and a delete.',
     );
   }
   const directory = path.dirname(agent.file);
@@ -1653,10 +1801,13 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
   const updateAgent: ToolDefinition<UpdateInput, unknown> = {
     name: 'platform.update_agent',
     description:
-      'Change an agent the owner already has: its persona, its description, its model, or its tool grant. ' +
-      'Anything you do not name is left exactly as it is. Passing `tools` REPLACES the grant, and if that ' +
-      'widens it the owner is shown what was added and what those tools reach. You may propose changes to ' +
-      'your own file, and the owner is told plainly when you do. ' +
+      'Change an agent the owner already has: its name, its handle, its face, its persona, its ' +
+      'description, its model, its tool grant, or which agent is the default. Anything you do not name is ' +
+      'left exactly as it is, and the agent keeps its id, its file and everything it has ever done — a ' +
+      'rename or a new face is THIS tool, never a new agent and a delete. Passing `tools` REPLACES the ' +
+      'grant, and if that widens it the owner is shown what was added and what those tools reach. ' +
+      '`default: true` moves the default claim here and takes it off the agent that holds it, in the same ' +
+      'approval. You may propose changes to your own file, and the owner is told plainly when you do. ' +
       CONDUCT,
     tier: 'gated',
     input: updateInput,
@@ -1679,6 +1830,11 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const dir = path.dirname(envelope.file);
       writeFilesAtomic([
         { path: envelope.file, content: envelope.content },
+        // The claim and its withdrawal are staged together: a catalog that saw
+        // two agents declaring `default: true` would refuse to load at all.
+        ...(envelope.defaultFrom === null
+          ? []
+          : [{ path: envelope.defaultFrom.file, content: envelope.defaultFrom.content }]),
         ...(envelope.delegatesAfter.join(',') === envelope.delegatesBefore.join(',')
           ? []
           : [
@@ -1697,8 +1853,13 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         tools: envelope.toolsAfter,
         added: envelope.added,
         removed: envelope.removed,
+        handle: envelope.handleAfter,
+        ...(envelope.becomesDefault ? { isDefault: true } : {}),
         live: reload.reloaded,
-        message: `@${envelope.handle} updated. ${reload.message}${assigned}`,
+        message:
+          `@${envelope.handleAfter} updated. ` +
+          `${envelope.becomesDefault ? `It is the default agent now${envelope.defaultFrom ? `, and ${envelope.defaultFrom.id} is not` : ''}. ` : ''}` +
+          `${reload.message}${assigned}`,
       };
     },
   };

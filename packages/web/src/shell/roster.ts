@@ -151,6 +151,75 @@ export function useAttention(): Map<string, AgentAttention> {
   return attentionMap(snapshot);
 }
 
+/**
+ * The role the server gives whoever configures the installation.
+ *
+ * Named here as a *role* and never as an agent: the page does not know that
+ * the shipped maker is called Agent Father, and an owner who writes their own
+ * maker gets the same behaviour.
+ */
+export const ROLE_MAKER = 'maker';
+
+/**
+ * Who could be put in a group together.
+ *
+ * A group is two or more colleagues in one conversation. The maker is not one
+ * of them: it is the door to the installation's settings, and a "group" of the
+ * agent that makes agents and the one agent you have is not a team, it is the
+ * only two faces on the rail. An agent that cannot run is not one either — a
+ * room whose member has no account answers nothing.
+ */
+export function groupableAgents(agents: readonly ChatAgent[]): ChatAgent[] {
+  return agents.filter((agent) => agent.available && !agent.roles.includes(ROLE_MAKER));
+}
+
+/** Is there anyone to group? Two is the smallest room. */
+export function canGroup(agents: readonly ChatAgent[]): boolean {
+  return groupableAgents(agents).length >= 2;
+}
+
+/** Whoever makes agents here, by role, for a sentence that sends the owner there. */
+export function makerName(agents: readonly ChatAgent[]): string {
+  return agents.find((agent) => agent.roles.includes(ROLE_MAKER))?.name ?? 'the agent maker';
+}
+
+/**
+ * The stand-in an agent file may write where the owner's own assistant's name
+ * belongs: `Rename {{default}} and change its face`.
+ *
+ * A shipped example cannot know what the owner called their assistant, and a
+ * starter reading "Rename your default agent" is not a sentence anybody types.
+ * So the file writes the token and the page — which has the roster in front of
+ * it — puts the name in. Nothing is resolved on the server: the roster is what
+ * knows which agent is the default here, and it is already on this page.
+ */
+export const DEFAULT_AGENT_TOKEN = '{{default}}';
+
+/** One starter, as the owner reads it. Unknown default: a plain noun phrase. */
+export function resolveStarter(text: string, defaultAgentName: string | null): string {
+  return text.split(DEFAULT_AGENT_TOKEN).join(defaultAgentName ?? 'your assistant');
+}
+
+/** The starters of an agent, resolved and capped, or an empty list. */
+export function startersOf(
+  agent: { starters?: string[] } | null,
+  defaultAgentName: string | null,
+): string[] {
+  return (agent?.starters ?? []).slice(0, 3).map((text) => resolveStarter(text, defaultAgentName));
+}
+
+/**
+ * What an agent says it does, to the owner.
+ *
+ * `intro` is written for them; `description` is written for other agents to
+ * read when they decide whom to hand work to. The second is a decent fallback
+ * and a poor first choice.
+ */
+export function introOf(agent: { intro?: string; description?: string } | null): string {
+  const intro = agent?.intro?.trim();
+  return intro && intro !== '' ? intro : (agent?.description?.trim() ?? '');
+}
+
 /** One or two letters, so an agent is recognisable before it is read. */
 export function monogram(name: string | undefined): string {
   const words = (name ?? '·').trim().split(/\s+/).filter(Boolean);
@@ -158,3 +227,21 @@ export function monogram(name: string | undefined): string {
   if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
   return (words[0]![0]! + words[1]![0]!).toUpperCase();
 }
+
+/**
+ * Why an agent cannot answer, and where the owner fixes it.
+ *
+ * One sentence, the server's own words — the page never decides what is
+ * missing, exactly as it never decides who is waiting. Everywhere this agent
+ * appears greyed says the same thing: the rail's tooltip, its card on the
+ * Agents page, its tile on Home, and the composer, which is replaced by it.
+ */
+export function cannotRunSentence(agent: { name?: string; unavailableReason?: string }): string {
+  const reason = agent.unavailableReason?.trim();
+  return reason && reason !== ''
+    ? `${agent.name ?? 'This agent'} cannot run: ${reason}`
+    : `${agent.name ?? 'This agent'} cannot run: it has no model account yet.`;
+}
+
+/** Where that is fixed. The one place an account is added or enabled. */
+export const MODEL_ACCOUNTS_LABEL = 'Settings → Model accounts';

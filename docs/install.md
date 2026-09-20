@@ -1,7 +1,9 @@
 # Install: one command, then the dashboard
 
-Status: proposed spec, 2026-09-20. An experimental [packaged-install foundation](install-foundation.md)
-is implemented separately; the complete install, wizard, plugins and backup contract is not built.
+Status: proposed spec, 2026-09-20. An experimental [packaged-install
+foundation](install-foundation.md) is implemented separately, and the first-run
+first run of §5 is now built on top of it (the thread of onboarding.md, minus the deferrals named
+there). Plugins from npm and the backup contract are not built.
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
@@ -133,40 +135,60 @@ directory is the trust boundary) is stated in the security page of the wizard.
 
 ---
 
-## 5. The first-run wizard
+## 5. First run: you meet buddi
 
-A route, `#/welcome`, shown until onboarding is complete and reachable from
-Settings afterwards. Each step is one screen with one job, saved as it is
-completed, resumable after a reload or a restart. Steps in order:
+**Built.** The seven screens this section used to describe are gone; the screen
+script is [onboarding.md](onboarding.md), and that document is the contract.
+What is here is only what the rest of this page depends on.
 
-1. **Welcome and security.** What buddi is, that it runs on this machine only,
-   what is stored where, and that the dashboard listens on loopback. One
-   button.
-2. **You.** Name, how the agents address you, timezone. The existing "You"
-   settings page, reused.
-3. **A model.** Pick a provider: Anthropic, OpenAI, or an OpenAI-compatible
-   endpoint. Ollama is detected when it answers on its default port and
-   offered as the local choice with a note on which models fit. The key is
-   pasted once and lands in the vault; the wizard checks it with one cheap
-   call and shows the answer. The provider-accounts work already covers the
-   storage and the choice of model.
-4. **Your first agent.** A name, a handle, a face, and a short description
-   of what it is for. Created from the generic template, no roles, no
-   plugins. The owner talks to it on the next screen.
-5. **Say hello.** The chat, with the new agent, inside the wizard. The
-   first answer arriving is the moment the install is real.
-6. **Optional extras**, each one a card that can be skipped: Telegram
-   (the existing pairing flow, with the token pasted here rather than in a
-   terminal), plugins (§7), a daily backup and a copy off the machine (§8).
-7. **Done.** Where things are, how to open buddi again, how to upgrade.
+The route is unchanged: `#/welcome`, and the dashboard sends the owner there —
+replacing the entry, not pushing it — when `core.onboarding` is still `pending`
+*and* the installation has no usable model account. A record that is `done`,
+`skipped` or `in-progress` (an interview another surface already claimed), and
+any installation that already has an account, never sees it. Settings → System
+has "Run setup again" regardless.
 
-The wizard uses the same API the settings pages use. There is no wizard-only
-endpoint that writes anything; every step is an existing settings action or
-becomes one. `core.onboarding` already records steps done; the wizard reads
-and writes that record so the CLI and the dashboard agree on progress.
+What the owner sees is one thread, not a tour: buddi asks four things in
+message bubbles — a name, a clock, a brain for the assistant, and the assistant
+itself — each answered inline where a reply would go, each answer staying above
+with a "change" link. Then the assistant speaks first, on the model, and the
+screen does not change; only the speaker does. Reload replays the answered
+questions from the record, the profile and the accounts, and asks the first one
+nobody has answered.
 
-Developer install (`git clone`, `buddi init`) ends by opening the same route
-at step 3, since steps 1 and 2 are what `init` already asked in the terminal.
+The server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
+`/complete`, `/skip`, `/agent` and `/agent/update` (the script promises the
+owner can change their assistant's name, face and purpose, and once one exists
+that is an edit of its file rather than a second agent), plus
+`GET /api/onboarding/ollama` (is Ollama
+running on *this* machine — the page never reaches `localhost:11434` itself)
+and `POST /api/telegram/token` and `/api/telegram/pairing`, which is Telegram
+without a terminal: the token BotFather gave the owner goes into the vault, the
+surface starts in the running gateway when the process can start it, and the
+pairing code comes back as a link the thread draws as a QR code. All of them
+are behind the dashboard's ordinary session, Origin and CSRF gate.
+A step carries what its name cannot — the account the owner chose, and the
+conversation the handover opened — and `GET /api/onboarding` answers with both
+under `details`. That is what a reload mid-handover reads: the assistant is
+introduced by one turn, sent on the owner's behalf, claimed against the record
+so it can happen only once, marked as first run's on the message row and left
+out of every transcript the owner reads.
+
+`/complete` refuses while the installation still has no model account or no
+agent — "done" has to mean done — and `/skip` is the explicit bypass that
+always works. `done` and `skipped` are terminal in core, so the two endings
+cannot overwrite each other. Finishing or skipping here also closes the
+Telegram nudge arc, which has nothing to add to an owner who set up in the
+dashboard.
+
+Everything else uses the API the settings pages use: the owner profile, the
+provider accounts (saved, then tested with one small call), and `/onboarding/agent`,
+which has an endpoint of its own because the alternative — an approval-gated
+tool call — is the wrong shape for the owner acting directly from their own
+dashboard. It takes the id of the account the thread just tested, so the
+assistant is bound to the brain the owner chose.
+
+Developer install (`git clone`, `buddi init`) ends by opening the same route.
 
 ---
 

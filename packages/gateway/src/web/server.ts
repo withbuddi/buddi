@@ -44,6 +44,27 @@ import { ProviderAccountError, type ProviderAccounts } from '../provider-account
 import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
+import {
+  OnboardingRefusal,
+  WEB_ONBOARDING_STEPS,
+  WEB_ONBOARDING_SURFACE,
+  claimOpeningTurn,
+  createFirstAgent,
+  probeOllama,
+  readOnboarding,
+  rebindBrain,
+  updateFirstAgent,
+  withFirstRunFacts,
+  type OnboardingDeps,
+} from './onboarding.js';
+import {
+  TelegramWebError,
+  saveTelegramToken,
+  telegramPairing,
+  telegramStatus,
+  type TelegramControl,
+  type TelegramWebDeps,
+} from './telegram.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -52,6 +73,7 @@ import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -155,6 +177,14 @@ export interface WebServerDeps {
   env?: NodeJS.ProcessEnv | undefined;
   providerSettings?: ProviderSettings;
   providerAccounts?: ProviderAccounts;
+  /**
+   * This process's Telegram surface, when it runs one.
+   *
+   * The dashboard can then take a token from the owner and have the phone
+   * working before they put it down. A process without one keeps the token and
+   * says it will be there next time buddi starts.
+   */
+  telegram?: TelegramControl | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   /**
@@ -431,6 +461,21 @@ export function createWebApp(deps: WebServerDeps): Server {
     const path = url.pathname.replace(/\/+$/, '') || '/api';
     const q = url.searchParams;
     const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
+    /** Everything the first-run routes need, resolved per request. */
+    const onboardingDeps = (): OnboardingDeps => ({
+      pool: deps.pool,
+      catalog: deps.catalog,
+      providerAccounts: deps.providerAccounts,
+      agentsDir: agentSearchPath(deps.env ?? process.env).owner.dir,
+      examplesDir: EXAMPLES_AGENTS_DIR,
+      reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+    });
+    /** What the two Telegram routes need. The environment is the live one. */
+    const telegramDeps = (): TelegramWebDeps => ({
+      pool: deps.pool,
+      env: deps.env ?? process.env,
+      ...(deps.telegram ? { telegram: deps.telegram } : {}),
+    });
 
     if (method === 'GET' || method === 'HEAD') {
       /*
@@ -654,6 +699,22 @@ export function createWebApp(deps: WebServerDeps): Server {
             return sendJson(res, 503, { error: 'The supervisor is not answering on its control socket. Run buddi in a terminal.' });
           }
         }
+        /*
+         * First run: where the record stands, and what the wizard still has to
+         * ask for. A read, and only a read — an installation that has never
+         * been asked anything must not acquire a row because a page loaded.
+         */
+        case '/api/onboarding':
+          return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+        /*
+         * Is Ollama running on this machine? Asked from here, never from the
+         * page: the dashboard bundle reaches no host but its own, and the
+         * answer is about the machine buddi runs on rather than the browser's.
+         */
+        case '/api/onboarding/ollama':
+          return sendJson(res, 200, await probeOllama());
+        case '/api/telegram':
+          return sendJson(res, 200, await telegramStatus(telegramDeps()));
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1110,6 +1171,151 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
+     * First run, from the dashboard.
+     *
+     * Four writes against the one record core already owns. `complete` and
+     * `skip` both close the machine, and closing it is what keeps the Telegram
+     * interview and its nudge arc from ever opening for an owner who did this
+     * here instead.
+     */
+    if (path === '/api/onboarding/step') {
+      const step = typeof body.step === 'string' ? body.step.trim() : '';
+      if (!(WEB_ONBOARDING_STEPS as readonly string[]).includes(step)) {
+        return sendJson(res, 400, { error: `\`step\` must be one of ${WEB_ONBOARDING_STEPS.join(', ')}` });
+      }
+      // A step may carry the two facts the step name cannot: which
+      // conversation the handover opened, and which account the owner chose.
+      // Both are provenance a reload reads back, and both are refused as
+      // anything but a string.
+      for (const key of ['conversationId', 'accountId'] as const) {
+        if (body[key] !== undefined && typeof body[key] !== 'string') {
+          return sendJson(res, 400, { error: `\`${key}\` must be a string` });
+        }
+      }
+      // The first step recorded is also what starts the record, with this
+      // surface's name on it. Already in progress, done or skipped: unchanged.
+      await beginOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
+      await markStepDone(deps.pool, step);
+      await setOnboardingDetails(deps.pool, {
+        ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+        ...(typeof body.accountId === 'string' ? { accountId: body.accountId } : {}),
+      });
+      return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+    }
+    if (path === '/api/onboarding/complete' || path === '/api/onboarding/skip') {
+      if (path.endsWith('/skip')) {
+        // The explicit bypass. It records that the owner declined, and it is
+        // allowed from anywhere in the wizard — that is what makes it a skip.
+        await skipOnboarding(deps.pool, 'the owner skipped the dashboard wizard');
+        return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+      }
+      const before = await readOnboarding(onboardingDeps());
+      // "Done" has to mean done. An installation with no model account or no
+      // agent cannot answer anything, and recording it as finished would close
+      // the first run — on both surfaces — over an install that does not work.
+      const missing = [
+        ...(before.needs.model ? ['a model account'] : []),
+        ...(before.needs.agent ? ['an agent of your own'] : []),
+      ];
+      if (missing.length > 0) {
+        return sendJson(res, 409, {
+          error: `Setup is not finished: this installation still needs ${missing.join(' and ')}. Go back and add it, or set up later.`,
+          needs: before.needs,
+        });
+      }
+      await completeOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
+      return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+    }
+    if (path === '/api/onboarding/agent') {
+      try {
+        const created = await createFirstAgent(onboardingDeps(), {
+          name: typeof body.name === 'string' ? body.name : '',
+          handle: typeof body.handle === 'string' ? body.handle : '',
+          description: typeof body.description === 'string' ? body.description : '',
+          ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
+          ...(typeof body.accountId === 'string' && body.accountId.trim() !== ''
+            ? { accountId: body.accountId.trim() }
+            : {}),
+        });
+        const view = readAgents(deps.catalog).find((agent) => agent.id === created.id);
+        return sendJson(res, 200, {
+          agent: view ?? null,
+          id: created.id,
+          handle: created.handle,
+          file: created.file,
+          live: created.live,
+          accountId: created.assigned,
+        });
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
+      }
+    }
+
+    /*
+     * The brain, changed after the assistant exists.
+     *
+     * Its own route because two things have to move together: the assistant
+     * onto the account the thread has just tested, and the shipped maker that
+     * was following it. Doing that from the page would be two calls with a
+     * rule between them, and the rule belongs on this side.
+     */
+    if (path === '/api/onboarding/brain') {
+      if (typeof body.accountId !== 'string' || typeof body.model !== 'string') {
+        return sendJson(res, 400, { error: '`accountId` and `model` must be strings' });
+      }
+      try {
+        return sendJson(res, 200, await rebindBrain(onboardingDeps(), { accountId: body.accountId, model: body.model }));
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'That account could not be given to your assistant.' });
+      }
+    }
+
+    /*
+     * "Change either, or keep them" — after the assistant exists.
+     *
+     * Writing a *first* agent is refused once there is one, and the thread
+     * promises the owner can still change its name, face and purpose. Same
+     * file, same writer, reloaded in place: no second agent appears.
+     */
+    if (path === '/api/onboarding/agent/update') {
+      try {
+        const changed = updateFirstAgent(onboardingDeps(), {
+          ...(typeof body.name === 'string' ? { name: body.name } : {}),
+          ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
+        });
+        const view = readAgents(deps.catalog).find((agent) => agent.id === changed.id);
+        return sendJson(res, 200, { agent: view ?? null, ...changed, accountId: null });
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The assistant could not be changed.' });
+      }
+    }
+
+    /*
+     * Telegram, without a terminal: the token BotFather gave the owner, and
+     * then a pairing code for the phone. Both behind the same session, Origin
+     * and CSRF gate as every other write — this is the owner acting on their
+     * own installation.
+     */
+    if (path === '/api/telegram/token' || path === '/api/telegram/pairing') {
+      try {
+        return sendJson(
+          res,
+          200,
+          path === '/api/telegram/token'
+            ? await saveTelegramToken(telegramDeps(), body.token)
+            : await telegramPairing(telegramDeps()),
+        );
+      } catch (error) {
+        if (error instanceof TelegramWebError) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: 'Telegram could not be set up from here.' });
+      }
+    }
+
+    /*
      * The owner's own profile. What an agent may write through owner.set_profile
      * the owner may write here directly; the same validation, the same row.
      */
@@ -1249,11 +1455,31 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (ids !== undefined && (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string'))) {
         return sendJson(res, 400, { error: '`attachmentIds` must be an array of artifact ids' });
       }
+      /*
+       * The one turn first run sends on the owner's behalf.
+       *
+       * Claimed against the onboarding record before it is queued, so a reload
+       * mid-handover rejoins the conversation it already started instead of
+       * opening a second one and having the assistant introduce itself twice.
+       * It needs a conversation to claim, so it is refused without one.
+       */
+      if (body.opening === true) {
+        if (typeof body.conversationId !== 'string') {
+          return sendJson(res, 400, { error: '`opening` needs the conversation it opens' });
+        }
+        try {
+          await claimOpeningTurn(onboardingDeps(), body.conversationId);
+        } catch (error) {
+          if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+          throw error;
+        }
+      }
       const sent = await chat.send({
         agentId: decodeURIComponent(messages[1] as string),
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
-        text: body.text,
+        text: body.opening === true ? await withFirstRunFacts(onboardingDeps(), body.text) : body.text,
         ...(ids ? { attachmentIds: ids as string[] } : {}),
+        ...(body.opening === true ? { opening: true } : {}),
       });
       if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
       // 202: the turn is *accepted*, not answered. What happens next is on the

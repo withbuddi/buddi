@@ -125,6 +125,13 @@ type WireRequest = {
    * their lowest and refuse `none`.
    */
   reasoning_effort?: string;
+  /**
+   * Ollama's own switch for the same thing, sent beside `reasoning_effort` to
+   * an Ollama endpoint. Its OpenAI-compatible route accepts unknown fields,
+   * and the ones that honour this stop reasoning where `reasoning_effort`
+   * alone is ignored. Nothing else is sent it.
+   */
+  think?: boolean;
   messages: WireMessage[];
   tools?: {
     type: 'function';
@@ -302,16 +309,66 @@ export function mapFinishReason(raw: string | null | undefined): StopReason {
   }
 }
 
+/**
+ * Is this endpoint Ollama — the one on this machine, or the hosted one?
+ *
+ * Asked of the address rather than of a setting, because an OpenAI-compatible
+ * account is whatever the owner pointed it at, and the thing that decides
+ * whether `think` means anything is which program answers.
+ */
+export function isOllama(baseUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host === 'ollama.com' || host.endsWith('.ollama.com')) return true;
+  return (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1') && url.port === '11434';
+}
+
+/**
+ * Reasoning the model wrote into its own answer, taken back out.
+ *
+ * A host that separates thinking returns it in `reasoning`; a great many
+ * local models do not, and open their answer with `<think>…</think>` instead
+ * — including, as of today, every thinking model Ollama serves over its
+ * compatible route, with `reasoning_effort: none` and `think: false` both
+ * sent and both ignored. Left in the text, that reasoning *is* the answer as
+ * far as every surface is concerned: the owner's first message from their new
+ * assistant was four paragraphs of it deciding how to say hello.
+ *
+ * Only a leading block is taken, because that is the convention and because a
+ * `<think>` in the middle of an answer is more likely to be the model quoting
+ * one. An unclosed block is all thought: a stream that has not reached the
+ * closing tag has not started the answer.
+ */
+const THOUGHT = /^\s*<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/i;
+
+/** The longest opening tag, for deciding whether a short head might become one. */
+const OPEN_THOUGHT = '<thinking>';
+
+export function splitThought(content: string): { thought: string; text: string } {
+  const match = THOUGHT.exec(content);
+  if (!match) return { thought: '', text: content };
+  return { thought: match[2] ?? '', text: content.slice(match[0].length).replace(/^\s+/, '') };
+}
+
 export function fromWireChoice(
   json: WireResponse,
   names: Map<string, string>,
 ): { content: ContentBlock[]; stopReason: StopReason } {
   const choice = json.choices?.[0];
   const out: ContentBlock[] = [];
-  const thought = choice?.message?.reasoning ?? choice?.message?.reasoning_content;
+  const reported = choice?.message?.reasoning ?? choice?.message?.reasoning_content;
+  // What the host separated, and what the model left in its own answer.
+  const spoken = typeof choice?.message?.content === 'string' ? choice.message.content : '';
+  const inlined = splitThought(spoken);
+  const thought = typeof reported === 'string' && reported.trim() !== '' ? reported : inlined.thought;
   if (typeof thought === 'string' && thought.trim() !== '') out.push({ type: 'thinking', text: thought });
-  const text = choice?.message?.content;
-  if (typeof text === 'string' && text !== '') out.push({ type: 'text', text });
+  const text = inlined.text;
+  if (text !== '') out.push({ type: 'text', text });
   for (const call of choice?.message?.tool_calls ?? []) {
     const name = call?.function?.name;
     if (typeof name !== 'string' || name === '') continue;
@@ -384,6 +441,9 @@ export function createOpenAiProvider(
     if (tools) wire.tools = tools;
     if (req.thinking === 'off') wire.reasoning_effort = resolved.compatible ? 'none' : 'minimal';
     else if (req.thinking === 'on' && !resolved.compatible) wire.reasoning_effort = 'medium';
+    // Ollama asks for this by its own name. Sent only there, and only when the
+    // answer to "should it think" is no.
+    if (req.thinking === 'off' && isOllama(resolved.baseUrl)) wire.think = false;
     if (req.onDelta) {
       wire.stream = true;
       wire.stream_options = { include_usage: true };
@@ -518,6 +578,9 @@ class OpenAiStreamAssembly {
   readonly #calls = new Map<number, { id?: string; function: { name?: string; arguments: string } }>();
   #content = '';
   #reasoning = '';
+  /** How much of the split content each channel has already been handed. */
+  #saidThought = 0;
+  #saidText = 0;
   #model: string | undefined;
   #finish: string | null = null;
   #usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
@@ -551,7 +614,7 @@ class OpenAiStreamAssembly {
     if (typeof delta.content === 'string' && delta.content !== '') {
       this.#content += delta.content;
       this.spoke = true;
-      this.onDelta({ kind: 'text', text: delta.content });
+      this.#emit();
     }
     const thought = typeof delta.reasoning === 'string' ? delta.reasoning
       : typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
@@ -570,6 +633,30 @@ class OpenAiStreamAssembly {
         if (typeof fn.arguments === 'string') call.function.arguments += fn.arguments;
         this.#calls.set(index, call);
       }
+    }
+  }
+
+  /*
+   * Hand on what has arrived, with the model's own `<think>` block going to
+   * the thinking channel rather than to the answer.
+   *
+   * The split is recomputed over everything received and only the *new* part
+   * of each side is emitted, so a tag that arrives in pieces — and a block
+   * that is still open — can never leak a word into the answer. A content
+   * head that might still turn out to be an opening tag is held back until it
+   * is one or is not.
+   */
+  #emit(): void {
+    const head = this.#content.replace(/^\s+/, '');
+    if (head !== '' && head.length < OPEN_THOUGHT.length && OPEN_THOUGHT.startsWith(head.toLowerCase())) return;
+    const split = splitThought(this.#content);
+    if (split.thought.length > this.#saidThought) {
+      this.onDelta({ kind: 'thinking', text: split.thought.slice(this.#saidThought) });
+      this.#saidThought = split.thought.length;
+    }
+    if (split.text.length > this.#saidText) {
+      this.onDelta({ kind: 'text', text: split.text.slice(this.#saidText) });
+      this.#saidText = split.text.length;
     }
   }
 

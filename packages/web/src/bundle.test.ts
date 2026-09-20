@@ -67,6 +67,31 @@ describe('the page makes no external request', () => {
     }
   });
 
+  /**
+   * The first-run thread is stricter than the rest of the page: it names no
+   * address at all.
+   *
+   * `externalUrls` deliberately allows a loopback literal — the settings pages
+   * offer `http://localhost:11434/v1` as the value of a field the owner is
+   * editing, and that is a default, not a request. First run has no such
+   * field: every address it uses (where Ollama answers, where to download it)
+   * is data the gateway hands over, because the machine those answers are
+   * about is the gateway's and not the browser's. A literal creeping back in
+   * would be a page quietly deciding where the owner's AI lives.
+   */
+  it('lets the first-run thread name no address, not even a local one', () => {
+    const thread = SOURCES.filter(
+      (file) => file.endsWith(`views${path.sep}Meet.tsx`) || file.includes(`${path.sep}meet${path.sep}`),
+    );
+    expect(thread.length, 'the first-run thread moved').toBeGreaterThan(2);
+    for (const file of thread) {
+      const text = readFileSync(file, 'utf8');
+      const relative = path.relative(PACKAGE, file);
+      const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      expect(code.match(/https?:\/\/[^\s"'`)<>\\]+/g) ?? [], `${relative} names an address`).toEqual([]);
+    }
+  });
+
   it('declares only the system font stack, and ships no font file', () => {
     expect(readFileSync(path.join(SRC, 'tokens.css'), 'utf8')).toMatch(/--font-sans:[^;]*-apple-system/);
     expect(walk(SRC, (file) => /\.(woff2?|ttf|otf|eot)$/.test(file))).toEqual([]);

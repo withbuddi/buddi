@@ -168,7 +168,7 @@ export interface Transcript {
   id: string;
   agentId: string;
   createdAt: string;
-  messages: Array<{ id: string; role: string; createdAt: string; blocks: TranscriptBlock[] }>;
+  messages: Array<{ id: string; role: string; createdAt: string; blocks: TranscriptBlock[]; speaker?: string }>;
   runs: Array<{
     startedAt: string | null;
     finishedAt: string | null;
@@ -299,6 +299,62 @@ export interface SentinelFinding {
   deliveredAt: string | null;
   resolvedAt: string | null;
   snoozedAt: string | null;
+}
+
+/**
+ * First run, as the server sees it: where the record stands and what the
+ * wizard still has to ask for (`packages/gateway/src/web/onboarding.ts`).
+ */
+export interface OnboardingView {
+  state: 'pending' | 'in-progress' | 'done' | 'skipped';
+  stepsDone: string[];
+  /**
+   * What the steps cannot say: the conversation the owner met their assistant
+   * in, and the account they chose while meeting it. A reload reads both.
+   */
+  details: { conversationId?: string; accountId?: string };
+  needs: { owner: boolean; model: boolean; agent: boolean };
+}
+
+/** What the gateway found when it asked Ollama, here, a second ago. */
+export interface OllamaProbe {
+  running: boolean;
+  models: string[];
+  /** Where to get it. It travels as data so this bundle names no outside host. */
+  downloadUrl: string;
+  /** Where an account for it points — also data, for the same reason. */
+  baseUrl: string;
+  /** Where Ollama's hosted service answers, for the card that offers it. */
+  cloudBaseUrl: string;
+}
+
+/** Telegram, as this installation stands: a token, a surface, a phone. */
+export interface TelegramStatus {
+  configured: boolean;
+  running: boolean;
+  paired: boolean;
+}
+export interface SavedTelegramToken extends TelegramStatus {
+  /** The token is kept, but this buddi has to be started again to use it. */
+  restartNeeded: boolean;
+  botUsername: string | null;
+}
+export interface PairingOffer {
+  code: string;
+  link: string;
+  expiresAt: string;
+}
+
+/** What writing the first agent answers with: the row, as /api/agents shapes it. */
+export interface CreatedAgent {
+  agent: AgentRow | null;
+  id: string;
+  handle: string;
+  file: string;
+  /** False when the file is written but the running catalog could not reload. */
+  live: boolean;
+  /** The model account it was given, when there was exactly one to give. */
+  accountId: string | null;
 }
 
 export interface AgentRow {
@@ -576,7 +632,7 @@ export const chatApi = {
   startConversation: (agentId: string) =>
     post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
-  send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>
+  send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[]; opening?: boolean }) =>
     post<{
       conversationId: string;
       runId: string;
@@ -674,6 +730,39 @@ export const api = {
     get<{ entries: LibraryEntry[]; next: string | null }>('/artifacts', query),
   libraryEntry: (id: string, contextsOffset = 0) =>
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
+  /* ---- first run ---- */
+  onboarding: () => get<OnboardingView>('/onboarding'),
+  onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string } = {}) =>
+    post<OnboardingView>('/onboarding/step', { step, ...learned }),
+  completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
+  skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
+  createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string; accountId?: string }) =>
+    post<CreatedAgent>('/onboarding/agent', body),
+  /**
+   * Is Ollama running on the machine buddi runs on?
+   *
+   * Asked of the gateway, never of `localhost:11434` from here: this page
+   * reaches no host but its own, and the answer is about that machine anyway.
+   */
+  ollama: () => get<OllamaProbe>('/onboarding/ollama'),
+  /**
+   * Change the assistant after it exists — its name, face or purpose.
+   *
+   * A separate route because writing the *first* agent is refused once there
+   * is one, and "change either, or keep them" has to keep working.
+   */
+  updateFirstAgent: (body: { name?: string; description?: string; avatar?: string }) =>
+    post<CreatedAgent>('/onboarding/agent/update', body),
+  /**
+   * Give the assistant the brain the thread just tested — and move whatever
+   * was following it onto the same account, in one call.
+   */
+  bindBrain: (body: { accountId: string; model: string }) =>
+    post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
+  /* ---- Telegram, from the first-run thread ---- */
+  telegram: () => get<TelegramStatus>('/telegram'),
+  saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
+  telegramPairing: () => post<PairingOffer>('/telegram/pairing'),
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),

@@ -4,8 +4,12 @@
  * A conversation id is a uuid nobody remembers, so the picker shows what the
  * owner actually recognizes: when it was, how long it ran, and the first thing
  * they said in it. Read-only — the session decides which one to continue.
+ *
+ * "The first thing they said" skips the opening turn first run sends on the
+ * owner's behalf: it is an instruction to the assistant, not something the
+ * owner would recognise as theirs.
  */
-import type { Queryable } from '@buddi/core';
+import { OPENING_TURN_SPEAKER, type Queryable } from '@buddi/core';
 
 export interface ConversationLine {
   id: string;
@@ -64,13 +68,14 @@ export async function listRecentConversations(
             (select count(*) from core.messages m where m.conversation_id = c.id) as message_count,
             (select m.content from core.messages m
                where m.conversation_id = c.id and m.role = 'user'
+                 and m.speaker is distinct from $3
                order by m.created_at asc, m.id asc
                limit 1) as first_user
        from core.conversations c
       where c.agent_id = $1 and c.group_id is null
       order by c.created_at desc, c.id desc
       limit $2`,
-    [agentId, Math.max(1, Math.trunc(limit))],
+    [agentId, Math.max(1, Math.trunc(limit)), OPENING_TURN_SPEAKER],
   );
   return rows.map((r) => ({
     id: String(r.id),

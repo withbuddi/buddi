@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -114,6 +114,17 @@ export interface RunAgentOptions {
      */
     bound?: (messages: NeutralMessage[]) => NeutralMessage[];
   };
+  /**
+   * Who the opening turn is from, when it is not simply the owner.
+   *
+   * Written to the turn's `speaker` column and read by nothing in this file:
+   * it is provenance for the surfaces, and the one caller is first run, which
+   * sends the instruction that makes a new assistant introduce itself and does
+   * not want that instruction read back as something the owner said. The
+   * model still sees the turn — it is the prompt — and only the transcript
+   * readers leave it out.
+   */
+  openingSpeaker?: string;
   /**
    * Resuming a run that stopped awaiting an approval.
    *
@@ -651,7 +662,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const resumedProduced: ArtifactUse[] = resume?.state === 'succeeded' && resume.tool && registry.lookup(resume.tool)?.producesArtifacts
     ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: agent.id }))
     : [];
-  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker, [
+  // A resumed run's opening turn is the decided approval coming back, not the
+  // owner speaking: it is stamped as such so no transcript draws it as theirs.
+  const openingSpeaker =
+    opts.transcript?.openingSpeaker ?? opts.openingSpeaker ?? (resume ? APPROVAL_RESUME_SPEAKER : undefined);
+  await persistMessage(pool, conversationId, 'user', userBlocks, openingSpeaker, [
     ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
     ...resumedProduced,
   ]);

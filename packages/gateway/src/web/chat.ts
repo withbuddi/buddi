@@ -56,7 +56,10 @@ import {
   openQuestion,
   askQuestion,
   answerQuestion,
+  APPROVAL_RESUME_SPEAKER,
+  OPENING_TURN_SPEAKER,
   ToolRegistry,
+  type AgentAvailability,
   type AgentCatalog,
   type ArtifactRow,
   type CatalogAgent,
@@ -148,6 +151,19 @@ export interface ChatAgentView {
    * front desk, writes its own, or has none keeps the right rail either way.
    */
   anchor: AgentAnchor | null;
+  /**
+   * The agent's own opening: one sentence about what it does, and up to three
+   * example requests. Both come from the agent file; a surface that has
+   * neither falls back to `description`.
+   */
+  intro?: string;
+  starters?: string[];
+  /**
+   * Reasoning before the answer: `on`, `off`, or null for the model's own
+   * default. Sent with the roster because it is switched where the owner
+   * talks, beside the model name, and the Agents page writes the same key.
+   */
+  thinking: 'on' | 'off' | null;
   /** The face to draw, if the file names one. An image is fetched from this origin only. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
@@ -190,6 +206,20 @@ export const ANCHOR_ROLES: Readonly<Record<string, AgentAnchor>> = {
 };
 
 /**
+ * Why this agent cannot take a turn, in one sentence the page can print.
+ *
+ * The same words the CLI uses when the owner switches to an agent with no
+ * brain (`chat/session.ts`), so a refusal reads the same wherever it lands.
+ * The *reason* is the account service's own (`ProviderAccounts.selection`):
+ * nothing here second-guesses what is missing.
+ */
+export function unavailableMessage(agent: { name: string; availability: AgentAvailability }): string {
+  return agent.availability.ok
+    ? ''
+    : `${agent.name} cannot run here: ${agent.availability.problem.message}`;
+}
+
+/**
  * Every agent the composer may address, with why one of them cannot answer.
  *
  * An unavailable agent is *listed*, not hidden: "@scout needs OPENAI_API_KEY"
@@ -213,13 +243,36 @@ export function readChatAgents(catalog: AgentCatalog): {
         : { unavailableReason: summary.unavailableReason }),
       roles: [...summary.roles],
       provider: summary.providerKind,
-      model: full?.provider.model ?? full?.model ?? '',
+      model: modelOf(full),
       anchor: anchorOf(summary.roles),
+      thinking: full?.thinking ?? null,
+      ...(summary.intro === undefined ? {} : { intro: summary.intro }),
+      ...(summary.starters === undefined || summary.starters.length === 0
+        ? {}
+        : { starters: [...summary.starters] }),
       ...(summary.avatar === undefined ? {} : { avatar: avatarOf(summary.id, summary.avatar) }),
       ...(summary.accent === undefined ? {} : { accent: summary.accent }),
     };
   });
   return { agents, defaultAgentId: catalog.defaultAgent().id };
+}
+
+/**
+ * The model this agent actually runs on, or nothing.
+ *
+ * Where the installation has named accounts, an agent with none pinned falls
+ * back to `providerFromEnv` — which answers with Anthropic's default model
+ * whatever the owner has. That is how a fresh installation whose only account
+ * was Ollama Cloud showed `claude-sonnet-5` under an agent it could not run at
+ * all. The empty `accountId` is the accounts service saying "no binding";
+ * `undefined` is an installation with no accounts, where the file's own pin is
+ * the truth. So the first reports nothing, and the composer draws no pill
+ * beside the sentence that already says an account is missing.
+ */
+function modelOf(agent: CatalogAgent | undefined): string {
+  if (!agent) return '';
+  if (agent.provider.accountId === '') return '';
+  return agent.provider.model || agent.model || '';
 }
 
 /** Which end this agent's roles pin it to, or null for the middle. */
@@ -270,6 +323,13 @@ export type ChatBlock =
   | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
+  /**
+   * A gated action, decided and come back. The turn that carries it is a user
+   * turn on the wire — the tool_use it answers was closed before the run
+   * suspended — so it is named here for what it is, and no page has to decide
+   * whether "tool result (deferred) for action …" is something the owner said.
+   */
+  | { type: 'approval_result'; actionId: string; name: string; state: string; output: unknown }
   | { type: 'unknown'; raw: unknown };
 
 export interface ChatMessageView {
@@ -374,11 +434,20 @@ export async function readChatTranscript(
   const conversation = head[0];
   if (!conversation) return null;
 
+  /*
+   * The turn first run sent on the owner's behalf is not in the transcript.
+   *
+   * It is a real message — the model was given it, and the assistant's first
+   * words are an answer to it — but it was never the owner speaking, and a
+   * thread that opens with an instruction to introduce oneself reads as if the
+   * owner typed it. One `where`, in the reader, so every surface that draws a
+   * conversation leaves it out and the runtime's own history is untouched.
+   */
   const { rows: messages } = await pool.query(
     `select id, role, content, created_at, speaker from core.messages
-      where conversation_id = $1::uuid
+      where conversation_id = $1::uuid and speaker is distinct from $2
       order by created_at asc, id asc`,
-    [conversationId],
+    [conversationId, OPENING_TURN_SPEAKER],
   );
 
   const parsed = messages.map((m) => ({
@@ -443,12 +512,50 @@ export async function readChatTranscript(
       id: m.id,
       role: m.role,
       at: m.at,
-      blocks: m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
-        .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
+      blocks: m.speaker === APPROVAL_RESUME_SPEAKER
+        ? approvalResultBlocks(m.raw, approvals)
+        : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
+            .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
     ...(await runsOf(pool, conversationId)),
   };
+}
+
+/** `tool result (deferred) for action <id>: <state>` — what the runtime writes. */
+const RESUMED_APPROVAL = /^tool result \(deferred\) for action ([0-9a-f-]{36}): (\w+)/;
+
+/**
+ * The resumed turn, as what it is: one decided action, named and expandable.
+ *
+ * The text is the runtime's own wording (`approvalOutcomeText`), and the state
+ * it quotes is a copy of a row this reader already holds — so the action is
+ * looked up and the row wins, the same way a pending gate's chip does.
+ */
+function approvalResultBlocks(
+  raw: Array<Record<string, any>>,
+  approvals: Map<string, TranscriptApproval>,
+): ChatBlock[] {
+  const text = raw.find((block) => block.type === 'text')?.text;
+  const match = typeof text === 'string' ? RESUMED_APPROVAL.exec(text) : null;
+  if (!match) return raw.map((block) => toChatBlock(block, new Map(), new Map(), approvals));
+  const action = approvals.get(match[1] as string);
+  const state = action?.state ?? (match[2] as string);
+  return [{
+    type: 'approval_result',
+    actionId: match[1] as string,
+    name: action?.tool ?? '',
+    state,
+    output: state === 'succeeded'
+      ? (action?.outcome as { result?: unknown } | null)?.result ?? resultOf(text as string)
+      : action?.outcome ?? resultOf(text as string),
+  }];
+}
+
+/** What the runtime wrote after `result:`, when the action row says nothing. */
+function resultOf(text: string): unknown {
+  const body = text.slice(text.indexOf('\n') + 1);
+  return body.startsWith('result: ') ? maybeJson(body.slice('result: '.length)) : body.trim() || null;
 }
 
 /**
@@ -696,6 +803,16 @@ export interface SendRequest {
   conversationId?: string | undefined;
   text: string;
   attachmentIds?: string[] | undefined;
+  /**
+   * The turn is first run's, not the owner's: the instruction that makes a
+   * brand-new assistant introduce itself.
+   *
+   * The model is given it exactly like any other opening turn — it is the
+   * prompt — and every transcript reader leaves it out, because the owner
+   * never said it. The route above this is what decides a caller may set it,
+   * and it may be claimed once per installation.
+   */
+  opening?: boolean | undefined;
 }
 
 export type SendResult =
@@ -755,6 +872,14 @@ export class WebChat {
   async send(request: SendRequest): Promise<SendResult> {
     const agent = this.#resolve(request.agentId);
     if (!agent) return { ok: false, status: 404, error: `no such agent: ${request.agentId}` };
+    // No brain, no turn. An agent whose account is missing, disabled or
+    // unconfigured cannot answer, and accepting the message anyway spends the
+    // owner's typing on a run that fails somewhere they are not looking. The
+    // page says the same sentence above its composer; this is what makes it
+    // true rather than decorative.
+    if (!agent.availability.ok) {
+      return { ok: false, status: 409, error: unavailableMessage(agent) };
+    }
 
     const text = request.text.trim();
     if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };
@@ -845,7 +970,8 @@ export class WebChat {
 
     const runId = randomUUID();
     const target = conversationId;
-    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files }); });
+    const opening = request.opening === true;
+    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening }); });
     return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
@@ -1190,6 +1316,8 @@ export class WebChat {
     resume?: RunAgentOptions['resume'];
     /** Set for a run inside a room: which group, which request, and whose voice. */
     group?: RoomTurn;
+    /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
+    opening?: boolean;
   }): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
@@ -1275,7 +1403,26 @@ export class WebChat {
     const options: RunAgentOptions = {
       // In a room, delegation is the ask tool and nothing else: an agent
       // that could delegate would reach a non-member, off budget, off record.
-      agent: { ...base, tools: [...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools), ...OFFER_TOOLS, ...ASK_TOOLS, ...(room?.askTool ? [GROUP_ASK_TOOL] : [])] },
+      agent: {
+        ...base,
+        /*
+         * The turn that introduces a new assistant is not a turn that asks.
+         *
+         * `conversation.ask` is granted by this surface rather than by any
+         * agent file, and a model handed it on its very first breath uses it:
+         * the owner met their assistant and was shown a form. It is back for
+         * every turn after this one. Reasoning is off for the same reason — a
+         * local model spending a minute thinking before "hello" is the whole
+         * of the owner's first impression.
+         */
+        ...(turn.opening ? { thinking: 'off' as const } : {}),
+        tools: [
+          ...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools),
+          ...OFFER_TOOLS,
+          ...(turn.opening ? [] : ASK_TOOLS),
+          ...(room?.askTool ? [GROUP_ASK_TOOL] : []),
+        ],
+      },
       provider,
       registry,
       ctx: room ? { ...baseCtx, group: room.context } : baseCtx,
@@ -1287,6 +1434,7 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
+      ...(turn.opening ? { openingSpeaker: OPENING_TURN_SPEAKER } : {}),
       systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),

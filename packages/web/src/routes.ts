@@ -13,6 +13,28 @@ export const ACTIVITY_ROUTE = '#/activity';
 export const SETTINGS_ROUTE = '#/settings';
 export const FILES_ROUTE = '#/files';
 
+/**
+ * First run. Not a place on the rail: the wizard takes the whole window, and
+ * the shell is what it hands the owner at the end.
+ */
+export const WELCOME_ROUTE = '#/welcome';
+
+/** `#/welcome?step=model` — a deep link into one screen of the wizard. */
+export function welcomeRoute(step?: string | null): string {
+  return step ? `${WELCOME_ROUTE}?step=${encodeURIComponent(step)}` : WELCOME_ROUTE;
+}
+
+/** The step a welcome hash names, or null when the hash is not the wizard's. */
+export function parseWelcomeRoute(hash: string): { step: string | null } | null {
+  const match = /^#\/welcome(?:\?(.*))?$/.exec(hash);
+  if (!match) return null;
+  try {
+    return { step: new URLSearchParams(match[1] ?? '').get('step') };
+  } catch {
+    return { step: null };
+  }
+}
+
 /** One file in the library, by id. Authenticated dashboard links, never sharing links. */
 export interface FileFilters { q?: string; origin?: string; family?: string }
 export function fileRoute(artifactId?: string | null, filters: FileFilters = {}): string {

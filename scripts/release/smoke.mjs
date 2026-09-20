@@ -8,7 +8,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer } from 'node:net';
+import { readFileSync } from 'node:fs';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
 
 const exec = promisify(execFile);
@@ -22,8 +24,44 @@ const label = `com.buddi.install.${createHash('sha256').update(data).digest('hex
 const launchTarget = `gui/${process.getuid?.()}/${label}`;
 const startArgs = serviceTest ? ['--no-open'] : ['--no-service', '--no-open'];
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(BUDDI_|DATABASE_URL$|TELEGRAM_|ANTHROPIC_|OPENAI_|CLAUDE_|GMAIL_)/.test(name)));
-Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file' });
+/*
+ * A port nobody wanted.
+ *
+ * The launcher prefers 4317, which is the port the owner's own installation
+ * and the Docker trial listen on — so a smoke that takes it makes the machine
+ * unusable for the thing the smoke is testing, and a fixture left behind holds
+ * it until somebody hunts down the pid. The kernel picks a free one instead,
+ * and `freePort` starts from it.
+ */
+const webPort = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.on('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const { port } = probe.address();
+    probe.close(() => resolve(port));
+  });
+});
+Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file', BUDDI_WEB_PORT: String(webPort) });
 let pid;
+
+/**
+ * Stop the fixture even when this script is killed.
+ *
+ * The `finally` below covers a failure; it does not cover ^C, and a supervisor
+ * that outlives the run keeps a port and a Postgres of its own. The pid is
+ * read from the lock file because the variable may not be set yet.
+ */
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    let victim = pid;
+    if (!victim) {
+      try { victim = Number(readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim()); } catch {}
+    }
+    if (victim) { try { process.kill(victim, 'SIGTERM'); } catch {} }
+    console.error(`\n${signal}: stopped the smoke fixture${victim ? ` (pid ${victim})` : ''}; data is at ${testRoot}`);
+    process.exit(130);
+  });
+}
 console.log(`Isolated smoke directory: ${testRoot}`);
 try {
   await mkdir(data, { recursive: true, mode: 0o700 });
@@ -60,13 +98,91 @@ try {
   const assets = await fetch(new URL('/', dashboard), { headers: { cookie } });
   assert.equal(assets.status, 200); assert.match(await assets.text(), /<html/);
   assert.equal((await fetch(dashboard, { redirect: 'manual' })).status, 401, 'ticket cannot be replayed');
+  /*
+   * First run, as the wizard drives it. No model call is made here — the chat
+   * step is the one thing this cannot exercise — so it goes as far as the API
+   * does: what is still needed, a step recorded, the first agent written and
+   * loaded, and the record closed.
+   */
+  const wizardCsrf = decodeURIComponent(cookie.match(/buddi_csrf=([^;]+)/)[1]);
+  const wizardHeaders = { cookie, origin: dashboard.origin, 'x-buddi-csrf': wizardCsrf, 'content-type': 'application/json' };
+  const onboarding = async () => (await fetch(new URL('/api/onboarding', dashboard), { headers: { cookie } })).json();
+  const firstRun = await onboarding();
+  assert.equal(firstRun.state, 'pending');
+  assert.equal(firstRun.needs.model, true, 'a fresh install has no model account');
+  // And no ghost of one: the legacy accounts are named after environment
+  // variables, and a packaged install has none of them set.
+  const accountsView = await (await fetch(new URL('/api/provider-accounts', dashboard), { headers: { cookie } })).json();
+  assert.deepEqual(accountsView.accounts, [], 'a fresh install starts with zero model accounts');
+  assert.equal((await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'first-run writes require CSRF');
+  const stepped = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'welcome' }) });
+  assert.equal(stepped.status, 200);
+  assert.deepEqual((await stepped.json()).stepsDone, ['welcome']);
+  // A step may carry what its name cannot: which conversation the owner met
+  // their assistant in. That is what a reload mid-handover reads back, so the
+  // assistant introduces itself exactly once.
+  const learned = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'hello', conversationId: 'c-smoke' }) });
+  assert.equal(learned.status, 200);
+  assert.equal((await learned.json()).details.conversationId, 'c-smoke');
+  assert.equal((await onboarding()).details.conversationId, 'c-smoke');
+  const madeAgent = await fetch(new URL('/api/onboarding/agent', dashboard), {
+    method: 'POST', headers: wizardHeaders,
+    body: JSON.stringify({ name: 'Smoke', handle: 'smoke', description: 'The agent this release smoke test creates.' }),
+  });
+  const madeText = await madeAgent.text();
+  assert.equal(madeAgent.status, 200, madeText);
+  const madeBody = JSON.parse(madeText);
+  // The first agent *is* the shipped Concierge, renamed: same id, the owner's
+  // handle, and one assistant on the roster rather than two.
+  assert.equal(madeBody.id, 'concierge');
+  assert.equal(madeBody.handle, 'smoke');
+  assert.equal(madeBody.live, true, 'the running catalog reloaded the new agent');
+  assert.equal(madeBody.agent.isDefault, true, 'the first private agent is the default one');
+  assert.equal(madeBody.agent.name, 'Smoke', 'the shipped Concierge is not listed beside it');
+  const roster = await (await fetch(new URL('/api/agents', dashboard), { headers: { cookie } })).json();
+  assert.ok(roster.agents.some(agent => agent.handle === 'smoke'), 'the new agent is in /api/agents');
+  assert.ok(!roster.agents.some(agent => agent.name === 'Concierge'), 'the example it replaced is gone');
+  assert.ok(!roster.agents.some(agent => agent.id === 'agent-father'), 'Agent Father waits for an account and an assistant');
+  const file = await readFile(path.join(data, 'agents/concierge/agent.md'), 'utf8');
+  assert.match(file, /language: mirror/);
+  assert.match(file, /handle: smoke/);
+  /*
+   * Is Ollama there? The *gateway* answers, because the dashboard bundle
+   * reaches no host but its own. Nothing here asserts which answer: a
+   * machine running Ollama and one that never heard of it are both fine, and
+   * what matters is that the route answers rather than hanging or throwing.
+   */
+  const ollama = await fetch(new URL('/api/onboarding/ollama', dashboard), { headers: { cookie } });
+  assert.equal(ollama.status, 200);
+  const ollamaBody = await ollama.json();
+  assert.equal(typeof ollamaBody.running, 'boolean', 'the Ollama probe says whether it is running');
+  assert.ok(Array.isArray(ollamaBody.models), 'the Ollama probe lists models');
+  // Telegram, from the dashboard: behind the same CSRF gate as every write,
+  // and refusing a pasted string that is not a bot token.
+  assert.equal((await fetch(new URL('/api/telegram/token', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'the Telegram token requires CSRF');
+  const notAToken = await fetch(new URL('/api/telegram/token', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ token: 'nope' }) });
+  assert.equal(notAToken.status, 400);
+  // "Done" has to mean done: with no model account this is refused, and the
+  // skip below is the explicit way past it.
+  const tooSoon = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(tooSoon.status, 409);
+  assert.match((await tooSoon.json()).error, /model account/);
+  const skippedRun = await fetch(new URL('/api/onboarding/skip', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(skippedRun.status, 200);
+  assert.equal((await skippedRun.json()).state, 'skipped');
+  // A skipped install with nothing set up does not become "finished" by asking.
+  const lateComplete = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(lateComplete.status, 409, 'a skipped install with no model account is still not finished');
+  const afterSkip = await onboarding();
+  assert.equal(afterSkip.state, 'skipped');
+  assert.equal(afterSkip.needs.agent, false, 'the agent it wrote counts as the owner\'s own');
   const again = await cli(startArgs); assert.match(again, /Dashboard:/);
   const repeated = JSON.parse(await cli(['service', 'status']));
   assert.equal(repeated.supervisorPid, pid); assert.equal(repeated.databasePid, status.databasePid);
   const stopped = JSON.parse(await cli(['service', 'stop']));
   assert.equal(stopped.gateway, 'stopped'); assert.equal(stopped.databasePid, status.databasePid);
   // A different application at the persisted dashboard port must not look ready.
-  const impostor = createServer((_req, res) => { res.writeHead(401); res.end(); });
+  const impostor = createHttpServer((_req, res) => { res.writeHead(401); res.end(); });
   await new Promise((resolve, reject) => { impostor.once('error', reject); impostor.listen(initialState.webPort, '127.0.0.1', resolve); });
   try {
     assert.equal(await dashboardReady(initialState.webPort, await vault.get('BUDDI_WEB_TOKEN')), false);
@@ -191,7 +307,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {

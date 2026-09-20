@@ -11,7 +11,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Canvas, splitTabs } from './Canvas';
 import { inspectToolCall, renderablesFrom } from './renderables';
-import type { Renderable } from './types';
+import type { Renderable, ViewDescriptor } from './types';
 import type { ChatMessage } from '../chat/types';
 
 afterEach(() => {
@@ -69,6 +69,14 @@ describe('what earns a tab', () => {
     expect(tabsFor({ ok: true, recorded: 1 })).toEqual([]);
     expect(tabsFor({ ok: true, id: 'note-19', key: 'winter-plan' })).toEqual([]);
     expect(tabsFor({ ok: true, remindAt: '2026-09-20T08:00:00Z' })).toEqual([]);
+    expect(tabsFor({ ok: true, note: 'Recorded.' })).toEqual([]);
+  });
+
+  it('gives no tab to a record of a few pairs', () => {
+    // The bookkeeping either side of a run: who the owner is, and that the
+    // thread is done. Four pairs each — a sentence, which the chat has said.
+    expect(tabsFor({ name: 'Ada', timezone: 'Europe/Paris', locale: 'fr-FR', onboarded: false })).toEqual([]);
+    expect(tabsFor({ ok: true, stage: 'done', agent: 'keeper', at: '2026-09-14T09:00:00Z' })).toEqual([]);
   });
 
   it('gives no tab to an empty result or to a shape nothing can draw', () => {
@@ -80,14 +88,53 @@ describe('what earns a tab', () => {
   it('gives a tab to rows, to a list, and to a set of figures', () => {
     expect(tabsFor({ items: [{ name: 'Rake', count: 2 }, { name: 'Hoe', count: 1 }] })).toHaveLength(1);
     expect(tabsFor({ varieties: ['Bramley', 'Russet', 'Discovery'] })).toHaveLength(1);
-    expect(tabsFor({ celsius: 11, humidity: 62, readAt: '2026-09-14' })).toHaveLength(1);
+    // Eight readings: past the point where a panel beats a paragraph.
+    expect(
+      tabsFor({
+        celsius: 11,
+        humidity: 62,
+        windKph: 18,
+        gustKph: 31,
+        pressureHpa: 1004,
+        rainMm: 2.4,
+        cloudPercent: 80,
+        readAt: '2026-09-14',
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('gives a tab to a table of any size, however plain its rows', () => {
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      day: `2026-09-${String(index + 1).padStart(2, '0')}`,
+      picked: index * 4,
+    }));
+    const tabs = tabsFor({ picking: rows });
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toMatchObject({ substantial: true, renderer: 'structured' });
+  });
+
+  it('gives a tab to a result the plugin declared a view for', () => {
+    const descriptors: ViewDescriptor[] = [
+      { tool: 'shed.thing', renderer: 'keyvalue', title: 'Shed', map: { pairs: [{ label: 'Ready', value: { path: 'ready' } }] } },
+    ];
+    const tabs = renderablesFrom({ messages: toolPair('t', 'shed.thing', { ready: true }), descriptors });
+    expect(tabs).toMatchObject([{ source: 'descriptor', renderer: 'keyvalue', title: 'Shed', substantial: true }]);
+  });
+
+  it('gives a tab to a result that carries a file', () => {
+    // Two pairs, which would otherwise be quiet — but one of them is a file
+    // the canvas can draw as itself.
+    const tabs = tabsFor({ ok: true, artifactId: 'a-19', mime: 'image/png', filename: 'braids.png' });
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toMatchObject({ substantial: true });
   });
 
   it('never hides a failure, whatever its shape', () => {
-    // The failure a tool reported by failing…
+    // A failure keeps the tab it has always had — a reason is only readable in
+    // full there — and stays unsubstantial, so it never takes the screen.
     const failed = tabsFor({ message: 'no location set' }, false);
     expect(failed).toHaveLength(1);
-    expect(failed[0]).toMatchObject({ tone: 'critical', substantial: false });
+    expect(failed[0]).toMatchObject({ tone: 'critical', substantial: false, renderer: 'structured' });
 
     // …and the one it reported while returning successfully.
     expect(tabsFor({ ok: false, error: 'the shed is locked' })).toHaveLength(1);

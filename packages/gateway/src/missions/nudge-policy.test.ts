@@ -9,6 +9,7 @@ import {
   refusalText,
   ARC_WINDOW_DAYS,
   BACKFILLED_SURFACE,
+  WEB_WIZARD_SURFACE,
   DEFAULT_QUIET_DAYS,
   MAX_NUDGES,
   MAX_UNANSWERED,
@@ -128,6 +129,14 @@ describe('arcWindow', () => {
     );
     expect(window.open).toBe(false);
     expect(window.reason).toContain('predates onboarding');
+  });
+
+  it('is shut for an owner who set up in the dashboard, finished or still going', () => {
+    for (const state of ['in-progress', 'done']) {
+      const window = arcWindow({ state, completedAt: NOW, surface: WEB_WIZARD_SURFACE }, NOW);
+      expect(window.open, state).toBe(false);
+      expect(window.reason).toContain('dashboard');
+    }
   });
 
   it('is shut when the owner skipped the interview', () => {

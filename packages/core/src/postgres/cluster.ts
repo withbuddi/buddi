@@ -8,7 +8,7 @@
  * stopped and started again as our own child — never adopted — so there is
  * exactly one lifecycle: a spawned child plus the probe.
  */
-import { readFile, rename } from 'node:fs/promises';
+import { readFile, rename, unlink } from 'node:fs/promises';
 import { existsSync, createWriteStream } from 'node:fs';
 import { spawn, execFile } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
@@ -29,6 +29,74 @@ export async function stopChild(child: ChildProcess | undefined, signal: NodeJS.
     child.once('exit', () => { clearTimeout(timer); resolve(); });
     child.kill(signal);
   });
+}
+
+/** What a cluster's `postmaster.pid` turns out to describe. */
+export type ClusterOccupancy = 'free' | 'orphan' | 'stale';
+
+/** What answers — if anything — on the port a pid file records. */
+export type PortIdentity = 'ours' | 'other' | 'unreachable' | 'unknown';
+
+/** The three questions the occupancy check asks; the real ones are pg_ctl, the port and /proc. */
+export interface OccupancyChecks {
+  /** `pg_ctl status -D <cluster>`: true when it reports a running server. */
+  status: () => Promise<boolean>;
+  /** Which cluster, if any, is serving that port. */
+  identity: (port: number) => Promise<PortIdentity>;
+  /** The command name behind a pid, where the OS will say (Linux's `/proc`). */
+  command: (pid: number) => Promise<string | undefined>;
+}
+
+/**
+ * Whether a postmaster really owns this cluster.
+ *
+ * `pg_ctl status` believes `postmaster.pid`, and a pid file outlives the
+ * process that wrote it: a container killed outright, or a machine that
+ * rebooted, leaves one behind. Pids start small again afterwards, so the
+ * number in that file is quite likely some live, unrelated process — and
+ * stopping *that* signals a stranger, waits, and reports that the server would
+ * not shut down, which is how a startup ends in "a Postgres server is already
+ * running and could not be stopped" with no Postgres server anywhere.
+ *
+ * So a claimed server is believed only when something outside the file backs
+ * it up: the port the file records answers for this very cluster, or the OS
+ * says that pid is a postgres. Anything else is a leftover file, and deleting
+ * one is safe precisely because nothing is behind it.
+ */
+export async function inspectCluster(cluster: string, checks: OccupancyChecks): Promise<ClusterOccupancy> {
+  if (!await checks.status()) return 'free';
+  // postmaster.pid: the pid on line 1, the port on line 4.
+  const lines = (await readFile(path.join(cluster, 'postmaster.pid'), 'utf8').catch(() => '')).split('\n');
+  const pid = Number(lines[0]);
+  const port = Number(lines[3]);
+  if (Number.isInteger(port) && port > 0 && port <= 65535) {
+    const identity = await checks.identity(port);
+    // `unknown` is a server that answered without saying whose it is. Ambiguity
+    // is not a licence to delete another server's pid file.
+    if (identity === 'ours' || identity === 'unknown') return 'orphan';
+  }
+  if (Number.isInteger(pid) && pid > 0 && (await checks.command(pid)) === 'postgres') return 'orphan';
+  return 'stale';
+}
+
+/** Ask a port which cluster it serves. Only this cluster's own answer is `ours`. */
+async function portIdentity(cluster: string, connection: pg.ClientConfig): Promise<PortIdentity> {
+  const client = new Client(connection);
+  client.on('error', () => {});
+  try {
+    await client.connect();
+    const result = await client.query<{ data_directory: string }>('SHOW data_directory');
+    return path.resolve(result.rows[0]!.data_directory) === cluster ? 'ours' : 'other';
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return ['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code as string) ? 'unreachable' : 'unknown';
+  } finally { await client.end().catch(() => {}); }
+}
+
+/** What the OS calls a pid, on the one platform that will simply tell us. */
+async function processCommand(pid: number): Promise<string | undefined> {
+  if (process.platform !== 'linux') return undefined;
+  return (await readFile(`/proc/${pid}/comm`, 'utf8').catch(() => '')).trim() || undefined;
 }
 
 /** A bounded liveness probe over the database this process started. */
@@ -123,14 +191,25 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
   }
   const major = (await readFile(path.join(cluster, 'PG_VERSION'), 'utf8')).trim();
   if (major !== BINARY_VERSION.split('.')[0]) throw new Error(`Cluster is Postgres ${major}; this release bundles ${BINARY_VERSION}. Explicit backup/restore is required; no automatic major upgrade.`);
-  // A SIGKILL of the supervisor can leave Postgres alive. pg_ctl checks this
-  // exact cluster; a survivor is stopped rather than adopted, so the server we
-  // watch below is always our own child. Below we authenticate and verify
-  // data_directory anyway, against a foreign server on the selected port.
-  let orphaned = true;
-  try { await exec(path.join(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env) }); }
-  catch { orphaned = false; }
-  if (orphaned) {
+  // A SIGKILL of the supervisor can leave Postgres alive. A survivor is
+  // stopped rather than adopted, so the server we watch below is always our
+  // own child — but only a survivor `inspectCluster` could actually find is
+  // treated as one; a pid file with nothing behind it is removed instead.
+  // Below we authenticate and verify data_directory anyway, against a foreign
+  // server on the selected port.
+  const occupancy = await inspectCluster(cluster, {
+    status: async () => {
+      try { await exec(path.join(bin, 'pg_ctl'), ['status', '-D', cluster], { timeout: 5000, env: nativeEnvironment(env) }); return true; }
+      catch { return false; }
+    },
+    identity: recorded => portIdentity(cluster, { host: '127.0.0.1', port: recorded, user: 'buddi_admin', password: adminPassword, database: 'postgres', connectionTimeoutMillis: 1000, query_timeout: 1000 }),
+    command: processCommand,
+  });
+  if (occupancy === 'stale') {
+    diagnostic('A stale postmaster.pid from a previous run was removed.');
+    await unlink(path.join(cluster, 'postmaster.pid')).catch(() => {});
+  }
+  if (occupancy === 'orphan') {
     diagnostic('Stopping an orphaned Postgres server left on this cluster by a previous supervisor.');
     try { await exec(path.join(bin, 'pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-t', '15'], { timeout: 20_000, env: nativeEnvironment(env) }); }
     catch (error) {

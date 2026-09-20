@@ -9,6 +9,15 @@ published to npm. The full contract remains [install.md](install.md).
   helper and dashboard into one npm tarball with bundled runtime dependencies.
   No private configuration, source checkout, developer dependencies or data are
   copied. Per-platform Postgres binaries are pinned optional dependencies.
+- **Platform plugins only.** The staged package list is core, runtime, gateway,
+  cli, install and the platform tools (artifacts, browser, host, email, memory,
+  web). `tools/finance` is not staged: money is one owner's domain, not
+  something every installation should claim a `finance.*` family for, and it is
+  installed like any other plugin. The gateway therefore resolves that manifest
+  optionally (`packages/gateway/src/plugins/optional-finance.ts`): a checkout
+  registers it exactly as before, a packaged install has no such module and no
+  such family, and an agent file granting `finance.*` is refused by the loader
+  with the same sentence it uses for any other missing plugin.
 - The packaged `buddi` launcher initializes a platform data directory, an
   installation-specific vault and a private SCRAM-authenticated Postgres cluster.
   The application database role is not a superuser; the administrator credential
@@ -25,7 +34,11 @@ published to npm. The full contract remains [install.md](install.md).
   detects supervisor death. A postmaster left on the cluster by a killed
   supervisor is stopped and started again as the new supervisor's own child; it
   is never adopted, so a managed database is always a spawned child with an exit
-  listener. An authenticated liveness probe also monitors it; database failure
+  listener. A `postmaster.pid` is only believed when something outside it agrees
+  — the port it records answers for this cluster, or the OS says that pid is a
+  postgres — because after a reboot or a killed container the pid in it is
+  likely a live stranger. A file with nothing behind it is reported and removed,
+  not signalled. An authenticated liveness probe also monitors it; database failure
   shuts down the gateway and supervisor. External servers are not supervised.
 - Startup records a phase before migrations. Restarting uses the **existing
   idempotent migration runner** to apply missing transactional migrations; the
@@ -124,6 +137,61 @@ that test unit. It also replaces a loaded job and verifies its new arguments.
 Fixture data is retained for inspection. Tests should also run
 on Node 22 before publishing a release.
 
+## Try it in Docker
+
+To meet the packaged install the way a stranger on a clean Linux machine would,
+from the browser of the machine you are already sitting at:
+
+```sh
+pnpm release:trial             # everything below in one go: build, image, fresh volume, serve
+pnpm release:docker            # build the tarball, then an image containing only it
+scripts/release/docker/run.sh  # start it and print the dashboard link
+```
+
+`scripts/release/docker/Dockerfile` is `node:22-bookworm-slim` plus the tarball
+installed with `npm install -g --ignore-scripts` — **optional dependencies stay
+on**, which is how `@embedded-postgres/linux-<arch>` arrives, and the build
+fails if the architecture the image will run as did not get its package. There
+is no checkout in the image, no pnpm and no build tools. The one addition is
+`socat`, and the install runs as the unprivileged `node` user in its own home.
+
+`run.sh` starts `buddi --no-service --no-open`: Linux has no background-service
+installation in this slice, so the detached supervisor is what runs, and the
+launcher says as much for the default command. The gateway keeps binding
+127.0.0.1 inside the container — `environment()` forces that and this harness
+does not relax it — so `socat` forwards the container's own address to it, and
+Docker publishes that to `127.0.0.1:4317` on the host. The link printed is the
+launcher's own, ticket and all: readiness is proved at `/_buddi/ready` with the
+installation secret, not by spending the ticket, so the first link is unused.
+It still expires in five minutes; `docker exec buddi-trial buddi --no-service
+--no-open` mints another.
+
+**The port is the same on both sides, and that is not a detail.** The dashboard
+refuses a write whose `Origin` is not its own, so the browser must reach it at
+the port the gateway bound. Inside a fresh container nothing holds 4317, so the
+gateway takes it; `run.sh` asserts that and tells you to `--reset` if a
+persisted `installation.json` chose otherwise. On the host, `run.sh` refuses to
+start when 4317 is already listening — most likely your own Buddi — rather than
+handing you a dashboard whose wizard cannot save. `BUDDI_TRIAL_PORT=4318
+scripts/release/docker/run.sh` is the read-only way around it: login and every
+`GET` work, and writes answer 403 until both sides are 4317. Trying the wizard
+for real means stopping the local installation first.
+
+Data lives in the named volume `buddi-trial` between runs, so the container is
+disposable and the installation is not. `--reset` removes that volume, which is
+what makes the next start a true first run. Ctrl-C asks the supervisor to stop
+and waits for it before removing the container, so Postgres shuts down the way
+it would anywhere else; the volume survives. Pids left in the volume were
+written in a previous container's pid namespace, where they meant something, so
+`run.sh` removes the supervisor lock, the control socket and
+`postgres/postmaster.pid` on start — nothing in a container it has just created
+is supervising anything — which still matters for a container that was killed
+outright. The log follower shows only what this run writes; earlier runs' lines
+are in `logs/supervisor.log` in the volume.
+
+This image is a trial harness, not a distribution: it exists to try an install,
+not to run one.
+
 ## Explicit limitations / next slices
 
 - The chosen `@embedded-postgres` binary package supplies `initdb`, `postgres`
@@ -138,6 +206,12 @@ on Node 22 before publishing a release.
   path. No automatic conversion or deletion of a cluster occurs.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
+- **A required-auth dashboard refuses a link opened from outside the browser's
+  own site.** The session cookie is `SameSite=Strict`, so a top-level navigation
+  started elsewhere (a terminal's opener, a chat message) does not carry it: the
+  document request answers 401, and repeated attempts count against that
+  address's rate limit. The ticket in the URL the launcher prints is what gets
+  in; an already-authenticated tab is unaffected.
 - **A stopped gateway is started from a terminal, not from a browser tab.** The
   Settings switches are served by the gateway itself, so a stop or a restart
   takes the page down with it: the request is *accepted* and then performed,
@@ -182,3 +256,95 @@ reboot, and choose a distribution that includes the backup tools.
   pass readiness, and the gateway exits when its required bind fails.
 - Test LaunchAgents are unloaded and removed; fixture directories are retained.
   The live Buddi installation was not restarted or reconfigured.
+
+## Wizard
+
+The first run of [install.md §5](install.md#5-first-run-you-meet-buddi) is built
+on this foundation, and what the owner sees is the screen script in
+[onboarding.md](onboarding.md): one thread, four questions, then the assistant
+speaking for itself. The dashboard route is `#/welcome` and it renders without
+the rail. Everything below is about the *record*, which the shape of the screen
+does not change.
+
+- **The record is the server's.** `core.onboarding` already holds it, and the
+  thread reads and writes it through `GET /api/onboarding` and `POST
+  /api/onboarding/step|complete|skip|agent`
+  (`packages/gateway/src/web/onboarding.ts`). `GET` also answers what is still
+  missing — a name, a usable model account, an agent of the owner's own — and
+  that, not anything the page believes, is what opens each Next button.
+- **One first run, two surfaces.** Completing or skipping here closes the same
+  state machine the Telegram interview claims, so an owner who set up on the
+  dashboard is never interviewed again: it speaks only while the state is
+  `pending`. The two-week nudge arc is shut for a record whose surface is `web`
+  whatever its state — the arc exists to carry someone who met buddi in a chat,
+  and the dashboard is the thing it would be pointing at. `done` and `skipped`
+  are terminal in `core.onboarding`: each transitions only from `pending` or
+  `in-progress`, so a late skip cannot unfinish a completion or the reverse.
+  `buddi init` therefore stops offering its own interview once it has opened the
+  wizard; two offers are not two chances, because whichever one is answered
+  claims the record.
+- **The redirect is conservative.** The dashboard replaces the location with
+  `#/welcome` only when the record is `pending` *and* there is no enabled,
+  credentialed provider account. `in-progress` is deliberately excluded: it
+  belongs to an interview another surface claimed, which a redirect would talk
+  over. The wizard still resumes an in-progress record when it is opened by
+  link. A finished record, a skipped one,
+  or any installation that already has an account is left where it is — which
+  is what keeps a developer's live dashboard out of it. Settings → System has
+  "Run setup again" for everyone else.
+- **Finishing means finished.** `POST /api/onboarding/complete` answers 409 while
+  the installation still needs a model account or an agent, and the Done screen
+  says which and links back to that step; `/skip` is the one way past it, and it
+  records that the owner declined. Skip and Finish leave the wizard only when
+  the server has recorded the ending — a failed write keeps the owner on the
+  screen with the reason, rather than dropping them on a dashboard that will
+  send them straight back.
+- **The agent step writes a file, not a tool call.** It reuses
+  `composeAgentFile` and `createAgentDirAtomic`, so an agent made here is the
+  same artifact `platform.create_agent` makes: the generic template, no roles,
+  no plugin tools, `language: mirror`, `default: true` for the first private
+  agent, and the tool grant named once in the gateway. It is written under the
+  shipped Concierge's id, so the catalog's replacement rule makes it *the*
+  assistant rather than a second agent standing next to an example: the owner's
+  handle, name, face and words, and no Concierge on the roster afterwards. It
+  writes the *first* agent only — a second one is the maker agent's job, where a grant is proposed
+  and approved — and creations are serialised in-process, so two requests racing
+  cannot both claim `default`. The examples tree is guarded by resolving the
+  nearest existing ancestor of both paths through `realpath` before comparing,
+  so a private agents directory symlinked into `examples/` is refused rather
+  than written to. Where exactly one usable
+  model account exists it is assigned to the new agent, because the next screen
+  is the owner talking to it; the wizard may also name the account it just
+  tested (`accountId`), and an account the installation cannot run on is
+  refused before anything is written. The write is behind the ordinary session, Origin
+  and CSRF gate — the owner acting on their own installation — and not behind an
+  approval.
+- **`buddi init` ends there.** The checkout CLI opens the dashboard at
+  `#/welcome?step=model`, since it has already asked for a name and a zone. The
+  ticket redirect answers with a `Location` carrying no fragment, so the
+  browser keeps the one the CLI put on the URL.
+- **The release smoke covers it** as far as it can without a model call: what
+  the fresh install still needs, CSRF refusal, a recorded step, the first agent
+  written, reloaded and listed by `/api/agents`, and the record skipped and read
+  back. It also asserts the three rules below: zero accounts, one assistant
+  where the example was, and no Agent Father on the roster yet.
+- **No ghost accounts.** The accounts named after `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are seeded by the one-shot
+  legacy migration only where the variable is set and non-empty. A fresh
+  install has zero accounts until the owner adds one; a checkout that exports
+  them is migrated as before.
+- **Examples do not pretend.** Agent Father is held back from the roster —
+  `/api/agents`, the rail and Home — until the owner has an agent of their own
+  that can actually run (`EXAMPLES_HELD_BACK` in
+  `packages/gateway/src/agents/catalog.ts`). It is held back, not removed:
+  `get`, `byHandle` and `resolve` still answer, so `/new` and a handle typed by
+  hand keep working, and the wizard still refuses a handle it holds.
+- **No brain, no composer.** An agent whose account is missing, disabled or
+  unconfigured is greyed wherever it is listed, with the server's own one-line
+  reason; its page and its card link to Settings → Model accounts; its composer
+  is replaced by that sentence and that link; and `POST
+  /api/chat/:agent/messages` refuses the turn with 409 and the same words
+  before a row is written. This holds in a developer's checkout too.
+
+Deferred here, and named in install.md: Ollama detection, restore from the
+dashboard, and the plugins and backup cards of the extras step.
