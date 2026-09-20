@@ -40,7 +40,7 @@ class FakeDb implements Queryable {
       this.conversations.push({ id, agent_id: params[0] });
       return { rows: [{ id }] };
     }
-    if (text.startsWith('insert into core.messages')) {
+    if (text.startsWith('insert into core.messages') || text.startsWith('with turn as ( insert into core.messages')) {
       this.messages.push({
         id: ++this.#seq,
         conversation_id: params[0],

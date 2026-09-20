@@ -16,7 +16,7 @@
  * the file. The bytes are left in place in v1; only the row is tombstoned.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
@@ -313,6 +313,35 @@ export async function listArtifacts(
 }
 
 /** Read the bytes back. Throws with the artifact id when the file is gone. */
+/**
+ * The first `maxBytes` of an artifact, read from disk without loading the
+ * rest: what a preview shows. `truncated` says whether the file went on.
+ */
+export async function readArtifactPrefix(
+  env: EnvLike,
+  row: Pick<ArtifactRow, 'id' | 'storagePath' | 'sizeBytes'>,
+  maxBytes: number,
+): Promise<{ bytes: Buffer; truncated: boolean }> {
+  const absolute = path.join(resolveDataDir(env), row.storagePath);
+  const handle = await open(absolute, 'r').catch((err: unknown) => {
+    throw new Error(`artifact ${row.id}: bytes missing at ${row.storagePath} (${err instanceof Error ? err.message : String(err)})`, { cause: err });
+  });
+  try {
+    const size = (await handle.stat()).size;
+    const length = Math.min(size, maxBytes);
+    const bytes = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const { bytesRead } = await handle.read(bytes, read, length - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return { bytes: bytes.subarray(0, read), truncated: size > maxBytes };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readArtifactBytes(
   env: EnvLike,
   row: Pick<ArtifactRow, 'id' | 'storagePath'>,

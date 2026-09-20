@@ -321,6 +321,7 @@ export class ToolRegistry {
       name: tool.name,
       version,
       ...(tool.reusableApproval ? { reusableApproval: true } : {}),
+      ...(tool.producesArtifacts ? { producesArtifacts: true } : {}),
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
       ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
