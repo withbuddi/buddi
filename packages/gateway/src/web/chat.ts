@@ -57,6 +57,7 @@ import {
   askQuestion,
   answerQuestion,
   ToolRegistry,
+  type AgentAvailability,
   type AgentCatalog,
   type ArtifactRow,
   type CatalogAgent,
@@ -188,6 +189,20 @@ export const ANCHOR_ROLES: Readonly<Record<string, AgentAnchor>> = {
   [ROLE_FRONT_DESK]: 'top',
   [ROLE_MAKER]: 'bottom',
 };
+
+/**
+ * Why this agent cannot take a turn, in one sentence the page can print.
+ *
+ * The same words the CLI uses when the owner switches to an agent with no
+ * brain (`chat/session.ts`), so a refusal reads the same wherever it lands.
+ * The *reason* is the account service's own (`ProviderAccounts.selection`):
+ * nothing here second-guesses what is missing.
+ */
+export function unavailableMessage(agent: { name: string; availability: AgentAvailability }): string {
+  return agent.availability.ok
+    ? ''
+    : `${agent.name} cannot run here: ${agent.availability.problem.message}`;
+}
 
 /**
  * Every agent the composer may address, with why one of them cannot answer.
@@ -755,6 +770,14 @@ export class WebChat {
   async send(request: SendRequest): Promise<SendResult> {
     const agent = this.#resolve(request.agentId);
     if (!agent) return { ok: false, status: 404, error: `no such agent: ${request.agentId}` };
+    // No brain, no turn. An agent whose account is missing, disabled or
+    // unconfigured cannot answer, and accepting the message anyway spends the
+    // owner's typing on a run that fails somewhere they are not looking. The
+    // page says the same sentence above its composer; this is what makes it
+    // true rather than decorative.
+    if (!agent.availability.ok) {
+      return { ok: false, status: 409, error: unavailableMessage(agent) };
+    }
 
     const text = request.text.trim();
     if (text === '') return { ok: false, status: 400, error: '`text` must not be empty' };

@@ -10,9 +10,9 @@ import type { PlaceProps } from '../App';
 import { chatApi } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
-import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute } from '../routes';
-import { waitingText } from '../shell/roster';
-import { Avatar, ButtonLink, Empty, List, ListRow, Panel, Pill, Sheet, Tab, Tabs, useAsync } from '../ui';
+import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
+import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, waitingText } from '../shell/roster';
+import { Avatar, ButtonLink, Empty, List, ListRow, Notice, Panel, Pill, Sheet, Tab, Tabs, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Reminders } from './Reminders';
@@ -67,7 +67,9 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
                   <span className="team-card-handle">@{agent.handle}</span>
                   <span className="team-card-desc">{agent.description}</span>
                   <span className="team-card-foot">
-                    {waiting ? <Pill tone="critical">waiting for you</Pill> : agent.available ? <Pill tone="good">ready</Pill> : <Pill tone="warning">cannot run</Pill>}
+                    {/* The reason, not just the fact: "cannot run" alone sends
+                        the owner hunting for what is missing. */}
+                    {waiting ? <Pill tone="critical">waiting for you</Pill> : agent.available ? <Pill tone="good">ready</Pill> : <Pill tone="warning">{truncate(agent.unavailableReason ?? 'cannot run', 60)}</Pill>}
                     <span className="muted">{agent.model}</span>
                   </span>
                 </a>
@@ -126,6 +128,11 @@ function AgentPage({
           <ButtonLink variant="accent" href={chatRoute(agentId)} onClick={go(chatRoute(agentId))}>Talk to {name}</ButtonLink>
         </div>
       </header>
+      {agent && !agent.available ? (
+        <Notice tone="warning" role="status">
+          {cannotRunSentence(agent)} <a href={settingsRoute('accounts')}>{MODEL_ACCOUNTS_LABEL}</a>
+        </Notice>
+      ) : null}
       <Tabs>
         {AGENT_TABS.map((t) => (
           <Tab key={t.id} href={agentRoute(agentId, t.id)} active={tab === t.id} onClick={go(agentRoute(agentId, t.id))}>
