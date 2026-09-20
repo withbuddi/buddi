@@ -180,6 +180,8 @@ export interface NativeSearchEvent extends NativeSearchRecord {
 /** How a decided action comes back into the run that proposed it. */
 export interface ApprovalResume {
   actionId: string;
+  /** The tool the action ran, so a file it saved on approval is recorded as produced. */
+  tool?: string;
   /** The approval's state now: 'succeeded', 'failed', 'rejected', 'unknown'… */
   state: string;
   /** What the effect returned, when it ran. */
@@ -287,11 +289,13 @@ export async function loadMessages(
 /** The artifact ids a tool output names as files it saved, and nothing else. */
 export function producedArtifactIds(output: unknown): string[] {
   if (!output || typeof output !== 'object') return [];
-  const list = (output as { artifacts?: unknown }).artifacts;
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((item) => (item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined))
-    .filter((id): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+  const isId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  const out = output as { artifacts?: unknown; artifactId?: unknown };
+  const list = Array.isArray(out.artifacts) ? out.artifacts : [];
+  const ids: unknown[] = list.map((item) => (item && typeof item === 'object' ? ((item as { id?: unknown }).id ?? (item as { artifactId?: unknown }).artifactId) : undefined));
+  // A tool that saves one file names it as `artifactId` at the top.
+  ids.push(out.artifactId);
+  return [...new Set(ids.filter(isId))];
 }
 
 /** jsonb comes back parsed from `pg`; tolerate a string for other drivers. */
@@ -342,9 +346,10 @@ async function persistMessage(
     return;
   }
   // The message and the library's record of every file it carries, in one
-  // statement: either both land or neither does. An upload first saved in
+  // statement: either both land or neither does. An upload already part of
   // another conversation is recorded as reused here, decided in the same
-  // statement from the store's own row.
+  // statement from the store's row and from the library's own history — an
+  // eager upload carries no conversation of its own; its uses do.
   await pool.query(
     `with turn as (
        insert into core.messages (conversation_id, role, content, speaker)
@@ -356,7 +361,10 @@ async function persistMessage(
      )
      insert into core.artifact_uses (artifact_id, conversation_id, kind, agent_id)
      select w.artifact_id, t.conversation_id,
-            case when w.kind = 'uploaded' and a.conversation_id is not null and a.conversation_id <> t.conversation_id then 'reused' else w.kind end,
+            case when w.kind = 'uploaded' and (
+                   (a.conversation_id is not null and a.conversation_id <> t.conversation_id)
+                   or exists (select 1 from core.artifact_uses p where p.artifact_id = w.artifact_id and p.conversation_id <> t.conversation_id)
+                 ) then 'reused' else w.kind end,
             w.agent_id
        from turn t
        cross join wanted w
@@ -637,8 +645,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // The library learns of the use in the same statement that writes the
   // reference: a file the owner sent here, or one first saved elsewhere and
   // sent again. One statement, so the two can never disagree.
-  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker,
-    attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })));
+  // A run resumed on an approved action carries that action's result in this
+  // turn; when the tool saves files, they are recorded as produced here, the
+  // same as an immediate result would have been.
+  const resumedProduced: ArtifactUse[] = resume?.state === 'succeeded' && resume.tool && registry.lookup(resume.tool)?.producesArtifacts
+    ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: agent.id }))
+    : [];
+  await persistMessage(pool, conversationId, 'user', userBlocks, opts.transcript?.openingSpeaker, [
+    ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
+    ...resumedProduced,
+  ]);
   // Degrade what the provider cannot carry into a placeholder the model can
   // read and talk about. Only what is *sent* changes: the persisted turn above
   // still holds the artifact reference, so the same history sent to a provider

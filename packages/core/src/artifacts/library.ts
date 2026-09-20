@@ -90,6 +90,8 @@ export interface LibraryEntry {
   deleted: boolean;
   /** How many conversations used it. */
   contexts: number;
+  /** The first conversation it was part of: the agent, or the group, it was with. */
+  context: { agentId: string | null; groupName: string | null } | null;
 }
 
 export interface LibraryContext {
@@ -192,11 +194,12 @@ export async function listLibrary(
   }
   params.push(limit + 1);
   const { rows } = await pool.query(
-    `select a.id, a.filename, a.mime, a.size_bytes, a.created_at, a.created_by, a.deleted_at,
+    `select a.id, a.filename, a.mime, a.size_bytes, a.created_at, a.created_at::text as created_at_exact, a.created_by, a.deleted_at,
             (${origin}) as origin,
             (${FAMILY_EXPR}) as family,
             (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
-            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent
+            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
+            ${CONTEXT_EXPR}
        from core.artifacts a
       where ${where.join(' and ')}
       order by a.created_at desc, a.id desc
@@ -205,9 +208,12 @@ export async function listLibrary(
   );
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
+  // The cursor carries the timestamp as the database wrote it, microseconds
+  // and all: a JavaScript Date keeps milliseconds, and rows within the lost
+  // fraction would fall on the wrong side of the next page's predicate.
   return {
     entries: page.map(toEntry),
-    next: rows.length > limit && last ? encodeCursor(new Date(last.created_at).toISOString(), String(last.id), key) : null,
+    next: rows.length > limit && last ? encodeCursor(String(last.created_at_exact), String(last.id), key) : null,
   };
 }
 
@@ -225,7 +231,8 @@ export async function getLibraryEntry(
             (${originSql('a.created_by', '$2::text[]')}) as origin,
             (${FAMILY_EXPR}) as family,
             (select count(distinct u.conversation_id)::int from core.artifact_uses u where u.artifact_id = a.id) as contexts,
-            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent
+            (select u.agent_id from core.artifact_uses u where u.artifact_id = a.id and u.agent_id is not null order by u.created_at asc limit 1) as use_agent,
+            ${CONTEXT_EXPR}
        from core.artifacts a
       where a.id = $1::uuid and ${membershipSql('$2::text[]')}`,
     [id, knownAgentIds],
@@ -275,6 +282,10 @@ export async function recordArtifactUse(
   );
 }
 
+/** The earliest conversation a file was part of: who it was with. */
+const CONTEXT_EXPR = `(select c.agent_id from core.artifact_uses u join core.conversations c on c.id = u.conversation_id where u.artifact_id = a.id order by u.created_at asc limit 1) as context_agent,
+            (select g.name from core.artifact_uses u join core.conversations c on c.id = u.conversation_id join core.groups g on g.id = c.group_id where u.artifact_id = a.id order by u.created_at asc limit 1) as context_group`;
+
 function toEntry(row: any): LibraryEntry {
   return {
     id: String(row.id),
@@ -287,5 +298,6 @@ function toEntry(row: any): LibraryEntry {
     agentId: row.origin === 'produced' ? String(row.created_by) : (row.use_agent ?? null),
     deleted: row.deleted_at !== null && row.deleted_at !== undefined,
     contexts: Number(row.contexts ?? 0),
+    context: row.context_agent || row.context_group ? { agentId: row.context_agent ?? null, groupName: row.context_group ?? null } : null,
   };
 }

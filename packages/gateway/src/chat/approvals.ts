@@ -160,7 +160,7 @@ export class CliApprovals implements ApprovalPort {
       return {
         text: decidedText(action, 'rejected'),
         ...(action.jobId === null
-          ? { resume: { actionId: action.id, state: 'rejected' } }
+          ? { resume: { actionId: action.id, tool: action.tool, state: 'rejected' } }
           : {}),
       };
     }
@@ -185,6 +185,7 @@ export class CliApprovals implements ApprovalPort {
         ? {
             resume: {
               actionId: action.id,
+              tool: action.tool,
               state,
               ...(outcome.ok ? { result: outcome.result } : { error: outcome.message }),
             },

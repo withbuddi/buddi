@@ -7,15 +7,15 @@
  * opens the file beside it: a preview where one is safe, always a download,
  * and the conversations it was part of, each one a link back.
  *
- * Previews are honest about what they are. An image is the image; a PDF is
- * the browser's own viewer over the preview route; text, code and tables are
- * fetched as plain text and drawn as text — a table is parsed here, quoted
- * fields and all, never evaluated. Anything else says so and offers the
- * download. Nothing here edits, runs an agent, or fetches off this origin.
+ * The preview is the one the canvas uses (chat/ArtifactPreview), so a file
+ * looks the same wherever it is opened. Nothing here edits, runs an agent,
+ * or fetches off this origin.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+export { parseDelimited } from '../chat/ArtifactPreview';
+import { useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type LibraryContext, type LibraryEntry } from '../api';
+import { ArtifactPreview } from '../chat/ArtifactPreview';
 import { FAMILY_LABEL, downloadUrl, formatBytes, previewUrl } from '../chat/attachments';
 import { FamilyMark } from '../chat/FileTile';
 import { fmtRelative, fmtTime } from '../format';
@@ -59,6 +59,8 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
   useEffect(() => {
     const mine = ++generation.current;
     setEntries(null);
+    setNext(null);
+    setLoadingMore(false);
     setError(null);
     api.library({ ...(q ? { q } : {}), ...(origin ? { origin } : {}), ...(family ? { family } : {}) })
       .then((page) => { if (generation.current !== mine) return; setEntries(page.entries); setNext(page.next); })
@@ -128,7 +130,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
                       <span className="files-row-name">{entry.filename ?? 'Untitled file'}</span>
                       <span className="files-row-meta">
                         {FAMILY_LABEL[entry.family]} · {formatBytes(entry.sizeBytes)} · {originLabel(entry, nameOf)}
-                        {entry.contexts > 1 ? ` · ${entry.contexts} conversations` : ''}
+                        {contextLabel(entry, nameOf)}
                       </span>
                     </span>
                     <span className="files-row-when" title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}</span>
@@ -153,6 +155,15 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
       </div>
     </div>
   );
+}
+
+/** Where it was: the group, or the agent, of its first conversation; and how many more. */
+function contextLabel(entry: LibraryEntry, nameOf: (id: string | null) => string): string {
+  // The agent it was with is left out when that is the agent that made it: one name, not two.
+  const where = entry.context?.groupName ? `in ${entry.context.groupName}`
+    : entry.context?.agentId && entry.context.agentId !== entry.agentId ? `with ${nameOf(entry.context.agentId)}` : '';
+  const more = entry.contexts > 1 ? `${entry.contexts} conversations` : '';
+  return [where, more].filter(Boolean).map((part) => ` · ${part}`).join('');
 }
 
 function originLabel(entry: LibraryEntry, nameOf: (id: string | null) => string): string {
@@ -206,7 +217,7 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
         {available ? <a className="ui-btn" data-variant="accent" href={downloadUrl(entry.id)} download={name}>Download</a> : null}
       </header>
       {!available ? <Notice tone="warning">The file's bytes are no longer on this machine. What is known about it stays here; the download will not work.</Notice> : null}
-      <Preview entry={entry} available={available} />
+      <ArtifactPreview artifactId={entry.id} filename={entry.filename} mime={entry.mime} family={entry.family} available={available} />
       <KV items={[
         { label: 'Origin', value: originLabel(entry, nameOf) },
         ...(entry.agentId && entry.origin === 'produced' ? [{ label: 'Made by', value: <span className="files-agent"><AgentAvatar agents={agents} id={entry.agentId} size="sm" />{nameOf(entry.agentId)}</span> }] : []),
@@ -242,110 +253,3 @@ function FileDetail({ id, timezone, agents, navigate, onBack }: {
   );
 }
 
-/* ------------------------------------------------------------------ *
- * Previews
- * ------------------------------------------------------------------ */
-
-const TEXT_PREVIEW_CHARS = 100_000;
-const TABLE_ROWS = 200;
-const TABLE_COLS = 30;
-
-function Preview({ entry, available }: { entry: LibraryEntry; available: boolean }): JSX.Element {
-  const family = entry.family;
-  const [broken, setBroken] = useState(false);
-  if (!available) return <></>;
-  if (family === 'image' && !broken) {
-    return <figure className="files-preview files-preview-image"><img src={previewUrl(entry.id)} alt={entry.filename ?? 'Image'} onError={() => setBroken(true)} /></figure>;
-  }
-  if (family === 'pdf') {
-    return (
-      <div className="files-preview files-preview-pdf">
-        <object data={previewUrl(entry.id)} type="application/pdf" aria-label={entry.filename ?? 'PDF'}>
-          <Notice>Your browser cannot show this PDF here. Download it to open it.</Notice>
-        </object>
-      </div>
-    );
-  }
-  if (family === 'text' || family === 'code' || family === 'table') return <TextPreview entry={entry} />;
-  return <Notice>Preview not supported for this kind of file. Download it to open it.</Notice>;
-}
-
-function TextPreview({ entry }: { entry: LibraryEntry }): JSX.Element {
-  const [state, setState] = useState<{ text: string; truncated: boolean } | 'loading' | 'failed'>('loading');
-  useEffect(() => {
-    let cancelled = false;
-    setState('loading');
-    fetch(previewUrl(entry.id), { credentials: 'same-origin' })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        const text = await res.text();
-        if (cancelled) return;
-        setState({ text: text.slice(0, TEXT_PREVIEW_CHARS), truncated: res.headers.get('X-Preview-Truncated') === '1' || text.length > TEXT_PREVIEW_CHARS });
-      })
-      .catch(() => { if (!cancelled) setState('failed'); });
-    return () => { cancelled = true; };
-  }, [entry.id]);
-  if (state === 'loading') return <div className="files-preview"><Empty>Loading preview…</Empty></div>;
-  if (state === 'failed') return <Notice>The preview could not be loaded. Download the file to open it.</Notice>;
-  const isTable = entry.family === 'table' && (/csv|tab-separated/.test(entry.mime) || /\.(csv|tsv)$/i.test(entry.filename ?? ''));
-  return (
-    <div className="files-preview">
-      {isTable ? <CsvTable text={state.text} delimiter={/tab|\.tsv$/i.test(entry.mime + (entry.filename ?? '')) ? '\t' : ','} /> : <pre className="files-preview-text">{state.text}</pre>}
-      {state.truncated ? <p className="muted">Showing the first {TEXT_PREVIEW_CHARS.toLocaleString()} characters. The download has the whole file.</p> : null}
-    </div>
-  );
-}
-
-/** A CSV parser that respects quotes and embedded newlines. Cells are data, never evaluated. */
-export function parseDelimited(text: string, delimiter: string, maxRows: number, maxCols: number): { rows: string[][]; truncatedRows: boolean; truncatedCols: boolean } {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = '';
-  let quoted = false;
-  let truncatedCols = false;
-  let truncatedRows = false;
-  const endCell = (): void => { if (row.length < maxCols) row.push(cell); else truncatedCols = true; cell = ''; };
-  const endRow = (): void => { endCell(); rows.push(row); row = []; };
-  let i = 0;
-  for (; i < text.length; i += 1) {
-    if (rows.length >= maxRows) {
-      // Rows are only "truncated" when there is more input than a blank tail.
-      truncatedRows = text.slice(i).trim() !== '';
-      break;
-    }
-    const ch = text[i]!;
-    if (quoted) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') { cell += '"'; i += 1; } else quoted = false;
-      } else cell += ch;
-      continue;
-    }
-    if (ch === '"') { quoted = true; continue; }
-    if (ch === delimiter) { endCell(); continue; }
-    if (ch === '\r') continue;
-    if (ch === '\n') { endRow(); continue; }
-    cell += ch;
-  }
-  if (rows.length < maxRows && (cell !== '' || row.length > 0)) endRow();
-  return { rows, truncatedRows, truncatedCols };
-}
-
-function CsvTable({ text, delimiter }: { text: string; delimiter: string }): JSX.Element {
-  const parsed = useMemo(() => parseDelimited(text, delimiter, TABLE_ROWS + 1, TABLE_COLS), [text, delimiter]);
-  const [head, ...body] = parsed.rows;
-  if (!head) return <p className="muted">The file is empty.</p>;
-  // As wide as the widest row kept, capped: a ragged file loses no cells.
-  const width = Math.min(TABLE_COLS, parsed.rows.reduce((w, r) => Math.max(w, r.length), 0));
-  const columns = Array.from({ length: width }, (_, i) => i);
-  return (
-    <div className="ui-table-wrap files-preview-table">
-      <table className="ui-table">
-        <thead><tr>{columns.map((i) => <th key={i}>{head[i] ?? ''}</th>)}</tr></thead>
-        <tbody>{body.slice(0, TABLE_ROWS).map((r, i) => <tr key={i}>{columns.map((j) => <td key={j}>{r[j] ?? ''}</td>)}</tr>)}</tbody>
-      </table>
-      {parsed.truncatedRows || parsed.truncatedCols ? (
-        <p className="muted">Showing the first {TABLE_ROWS} rows{parsed.truncatedCols ? ` and ${TABLE_COLS} columns` : ''}. The download has the whole file.</p>
-      ) : null}
-    </div>
-  );
-}

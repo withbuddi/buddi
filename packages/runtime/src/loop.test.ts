@@ -14,6 +14,7 @@ import {
   isPreamble,
   joinSpoken,
   loadMessages,
+  producedArtifactIds,
   runAgent,
   selectTools,
   type Queryable,
@@ -199,6 +200,17 @@ describe('createConversation / loadMessages', () => {
     const id = await createConversation(db, 'finance');
     expect(id).toBe('conv-1');
     expect(await loadMessages(db, id)).toEqual([]);
+  });
+});
+
+describe('producedArtifactIds', () => {
+  it('reads files a tool names in a list, or the one it names at the top', () => {
+    const a = '0f6eda1f-2ac5-4a79-b9f1-548d216a797a';
+    const b = '1f6eda1f-2ac5-4a79-b9f1-548d216a797a';
+    expect(producedArtifactIds({ artifacts: [{ id: a }, { artifactId: b }, { id: 'nope' }] })).toEqual([a, b]);
+    expect(producedArtifactIds({ artifactId: a, sent: false })).toEqual([a]);
+    expect(producedArtifactIds({ artifacts: [{ id: a }], artifactId: a })).toEqual([a]);
+    expect(producedArtifactIds('text')).toEqual([]);
   });
 });
 
