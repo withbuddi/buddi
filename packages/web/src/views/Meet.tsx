@@ -1562,31 +1562,41 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
         </Buddi>
       ) : null}
 
-      {spoken && offers !== 'gone' ? (
-        <div className="wb-offers" data-testid="meet-offers">
-          {offers === 'open' ? (
-            <>
-              <button type="button" className="ui-btn" onClick={() => setOffers('phone')}>
-                {SCRIPT.offers.phone}
-              </button>
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={() => {
-                  setOffers('gone');
-                  setClosing(true);
-                }}
-              >
-                {SCRIPT.offers.notNow}
-              </button>
-            </>
-          ) : (
-            <TelegramCard onPaired={() => setClosing(true)} />
-          )}
-        </div>
+      {/*
+        An offer is a question, and a question is answered in the dock.
+        The chips, and then the phone's own step, take the composer's place
+        while they are open — the way the name, the clock, the brain and the
+        assistant each did — so there is never a second thing to fill in
+        underneath the thing the owner is filling in.
+      */}
+      {spoken && offers === 'open' ? (
+        <Ask>
+          <button type="button" className="ui-btn" onClick={() => setOffers('phone')}>
+            {SCRIPT.offers.phone}
+          </button>
+          <Button
+            variant="accent"
+            onClick={() => {
+              setOffers('gone');
+              setClosing(true);
+            }}
+          >
+            {SCRIPT.offers.notNow}
+          </Button>
+        </Ask>
       ) : null}
 
-      {assistant ? (
+      {spoken && offers === 'phone' ? (
+        <TelegramCard
+          onPaired={() => setClosing(true)}
+          onDismiss={() => {
+            setOffers('gone');
+            setClosing(true);
+          }}
+        />
+      ) : null}
+
+      {assistant && offers !== 'open' && offers !== 'phone' ? (
         <Dock>
         {closing && carriesOn ? (
           <div className="meet-ask">
@@ -1630,12 +1640,17 @@ function isSpoken(message: ChatMessage): boolean {
  * ------------------------------------------------------------------ */
 
 /**
- * Telegram, in the thread: the token from BotFather, then a square to scan.
+ * Telegram: the token from BotFather in the thread, then a square to scan.
+ *
+ * What buddi says is a bubble and what the owner answers is in the dock —
+ * the same shape as every other question on this screen, and the reason the
+ * composer steps aside while this is open. "Not now" is always there: an
+ * offer the owner took by mistake has to have a way back out of it.
  *
  * The pairing state is polled rather than assumed — the thread says the phone
  * arrived when the phone says hello, and not before.
  */
-function TelegramCard({ onPaired }: { onPaired: () => void }): JSX.Element {
+function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -1719,23 +1734,29 @@ function TelegramCard({ onPaired }: { onPaired: () => void }): JSX.Element {
 
   if (offer) {
     return (
-      <div className="meet-pair">
+      <>
         <Buddi>
           <Said>{stale ? SCRIPT.telegram.expired : SCRIPT.telegram.scan}</Said>
         </Buddi>
-        {stale ? (
-          <Button variant="accent" onClick={again}>
-            {SCRIPT.telegram.newCode}
-          </Button>
-        ) : (
-          <>
-            {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
-            <a className="meet-link" href={offer.link} target="_blank" rel="noreferrer">
-              {offer.link}
-            </a>
-          </>
-        )}
-      </div>
+        <Ask>
+          {stale ? null : (
+            <div className="meet-pair">
+              {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
+              <a className="meet-link" href={offer.link} target="_blank" rel="noreferrer">
+                {offer.link}
+              </a>
+            </div>
+          )}
+          <button type="button" className="meet-quiet" onClick={onDismiss}>
+            {SCRIPT.offers.notNow}
+          </button>
+          {stale ? (
+            <Button variant="accent" onClick={again}>
+              {SCRIPT.telegram.newCode}
+            </Button>
+          ) : null}
+        </Ask>
+      </>
     );
   }
 
@@ -1761,6 +1782,9 @@ function TelegramCard({ onPaired }: { onPaired: () => void }): JSX.Element {
             }}
           />
         </Field>
+        <button type="button" className="meet-quiet" onClick={onDismiss}>
+          {SCRIPT.offers.notNow}
+        </button>
         <Button variant="accent" disabled={saving || token.trim() === ''} onClick={save}>
           {SCRIPT.telegram.submit}
         </Button>

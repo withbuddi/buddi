@@ -520,6 +520,50 @@ describe('the way out', () => {
     expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
   });
 
+  it('answers the phone offer where every other question was answered', async () => {
+    spoken();
+    vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
+    vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: false });
+    render(meet(vi.fn()));
+    // The chips are the open question, so they are where the composer was.
+    fireEvent.click(await screen.findByText(SCRIPT.offers.phone));
+    expect(await screen.findByLabelText(SCRIPT.telegram.field)).toBeInTheDocument();
+    // And the composer has stepped aside rather than sitting under a stray form.
+    expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.submit }));
+    // A saved token puts the square and its link in the same place.
+    expect(await screen.findByText(SCRIPT.telegram.scan)).toBeInTheDocument();
+    expect(await screen.findByText('t.me/b?start=ABC')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
+  });
+
+  it('lets the owner out of the phone card at either step', async () => {
+    for (const step of ['token', 'code'] as const) {
+      vi.clearAllMocks();
+      quiet();
+      spoken();
+      vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
+      vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+      vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: false });
+      const page = render(meet(vi.fn()));
+      fireEvent.click(await screen.findByText(SCRIPT.offers.phone));
+      await screen.findByLabelText(SCRIPT.telegram.field);
+      if (step === 'code') {
+        fireEvent.change(screen.getByLabelText(SCRIPT.telegram.field), { target: { value: '8012345678:AAHfakeTokenForTestsOnly-1234567890' } });
+        fireEvent.click(screen.getByRole('button', { name: SCRIPT.telegram.submit }));
+        await screen.findByText(SCRIPT.telegram.scan);
+      }
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.offers.notNow }));
+      // The composer is back, and the thread ends the way it ends.
+      expect(await screen.findByPlaceholderText(/Message Ada/)).toBeInTheDocument();
+      expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+      expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
+      page.unmount();
+    }
+  });
+
   it('ends it the same way when the phone says hello', async () => {
     spoken();
     vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
