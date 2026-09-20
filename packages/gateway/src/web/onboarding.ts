@@ -691,6 +691,17 @@ export const OLLAMA_BASE_URL = 'http://localhost:11434';
  */
 export const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download';
 
+/**
+ * Where Ollama's own hosted service answers.
+ *
+ * It travels with the probe for the same reason the download link does: the
+ * dashboard bundle names no host, and the card that offers "Ollama Cloud, or
+ * another service" should open with the address already in the field rather
+ * than asking the owner to remember it. Editable, always — the same field
+ * takes any service that speaks the same way.
+ */
+export const OLLAMA_CLOUD_BASE_URL = 'https://ollama.com/v1';
+
 /** How long the probe waits. It is a question about this machine, not the network. */
 export const OLLAMA_TIMEOUT_MS = 1_000;
 
@@ -709,6 +720,8 @@ export interface OllamaProbe {
    * the machine Ollama runs on is this one rather than the browser's.
    */
   baseUrl: string;
+  /** Where the hosted service answers, for the card that offers it. */
+  cloudBaseUrl: string;
 }
 
 /**
@@ -737,7 +750,7 @@ export async function probeOllama(
     const models = (Array.isArray(body?.models) ? body.models : [])
       .map((row) => (typeof row?.name === 'string' ? row.name : typeof row?.model === 'string' ? row.model : ''))
       .filter((name) => name !== '');
-    return { running: true, models, downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1` };
+    return { running: true, models, downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1`, cloudBaseUrl: OLLAMA_CLOUD_BASE_URL };
   } catch {
     // Nothing listening, a refused connection, a second gone by: all of them
     // are "not running", which is what the card says and then polls.
@@ -746,5 +759,5 @@ export async function probeOllama(
 }
 
 function notRunning(base: string): OllamaProbe {
-  return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1` };
+  return { running: false, models: [], downloadUrl: OLLAMA_DOWNLOAD_URL, baseUrl: `${base}/v1`, cloudBaseUrl: OLLAMA_CLOUD_BASE_URL };
 }

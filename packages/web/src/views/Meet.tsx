@@ -712,7 +712,17 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   };
 
   if (card === 'key') return <KeyCard busy={busy} problem={problem} onBack={() => setCard(null)} onUse={adopt} />;
-  if (card === 'service') return <ServiceCard busy={busy} problem={problem} onBack={() => setCard(null)} onUse={adopt} />;
+  if (card === 'service') {
+    return (
+      <ServiceCard
+        busy={busy}
+        problem={problem}
+        address={ollama?.cloudBaseUrl ?? ''}
+        onBack={() => setCard(null)}
+        onUse={adopt}
+      />
+    );
+  }
   if (card === 'ollama') {
     return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onUse={adopt} />;
   }
@@ -978,15 +988,23 @@ function OllamaCard({
 function ServiceCard({
   busy,
   problem,
+  address: offered,
   onBack,
   onUse,
 }: {
   busy: boolean;
   problem: string | null;
+  /**
+   * The address to start from, from the server — Ollama's own hosted service,
+   * which is what most owners opening this card mean. Editable, because the
+   * same field takes any service that answers the same way, and empty when the
+   * server offered none, where the placeholder speaks instead.
+   */
+  address: string;
   onBack: () => void;
   onUse: Adopt;
 }): JSX.Element {
-  const [address, setAddress] = useState('');
+  const [address, setAddress] = useState(offered);
   const [secret, setSecret] = useState('');
   const submit = (): void => {
     if (address.trim() === '' || busy) return;
