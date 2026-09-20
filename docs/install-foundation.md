@@ -142,7 +142,9 @@ on Node 22 before publishing a release.
   Settings switches are served by the gateway itself, so a stop or a restart
   takes the page down with it: the request is *accepted* and then performed,
   the reply never reports the outcome, and if the page does not come back,
-  `buddi` is what brings it back. The supervisor's Windows named-pipe
+  `buddi` is what brings it back. The acceptance is not durable: a gateway
+  that dies in the instant between answering and asking the supervisor loses
+  the action, and the page's next status read shows it did not happen. The supervisor's Windows named-pipe
   equivalent is not implemented; Windows managed startup still raises its
   existing "not implemented" error.
 - Plugin npm installation, the full wizard, Backup UI and cross-platform

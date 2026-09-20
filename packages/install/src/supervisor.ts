@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import type { WriteStream } from 'node:fs';
-import { readdir, chmod, unlink } from 'node:fs/promises';
+import { readdir, chmod, unlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
@@ -92,7 +92,15 @@ export function controlSocket({ status, action }: ControlSocketOptions): Server 
  * can reach the path in that window either way.
  */
 export async function listenOnSocket(server: Server, socket: string): Promise<void> {
-  await unlink(socket).catch(() => {});
+  // Only a socket is replaced: a killed supervisor leaves exactly that. Any
+  // other entry at the path is somebody else's, and refusing beats deleting it.
+  try {
+    const entry = await lstat(socket);
+    if (!entry.isSocket()) throw new Error(`${socket} exists and is not a socket; move it aside before starting buddi.`);
+    await unlink(socket);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(socket, () => resolve());
