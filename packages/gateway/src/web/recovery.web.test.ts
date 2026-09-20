@@ -35,10 +35,13 @@ interface PoolState {
 /** Enough of a pool for the recovery row, the grants and the two counts. */
 function fakePool(state: PoolState) {
   const updates: string[] = [];
-  return {
+  const pool = {
     updates,
     state,
+    /** Set once the server is up, to play a pool that has been ended. */
+    dead: false,
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (pool.dead) throw new Error('Cannot use a pool after calling end on the pool');
       if (/from core\.recovery where id and left_at is null/.test(sql)) {
         return { rows: state.active ? [{ n: 1 }] : [] };
       }
@@ -73,6 +76,7 @@ function fakePool(state: PoolState) {
       return { rows: [] };
     }),
   };
+  return pool;
 }
 
 /** A supervisor that only records what it was asked to do. */
@@ -156,6 +160,25 @@ it('an installation that was never restored answers, rather than 404', async () 
   expect(await (await fetch(`${origin}/api/session`, { headers })).json()).toMatchObject({ recovery: false });
 });
 
+/*
+ * A database that cannot be read is a failure, never an answer.
+ *
+ * The restored gateway used to end its own pool while the dashboard kept
+ * serving; `/api/recovery` then answered `{active: false}` because the read
+ * swallowed the error, and the banner and the whole checklist were invisible
+ * on the one installation they exist for. A 500 is the honest reply.
+ */
+it('a database it cannot read is a 500, not "not in recovery"', async () => {
+  const pool = fakePool(state());
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory' });
+  pool.dead = true;
+
+  const view = await fetch(`${origin}/api/recovery`, { headers });
+  expect(view.status).toBe(500);
+  const session = await fetch(`${origin}/api/session`, { headers });
+  expect(session.status).toBe(500);
+});
+
 it('leaving drops the pending work and every grant the owner did not keep, then restarts', async () => {
   const { socket, seen } = await fakeSupervisor();
   const pool = fakePool(state());
@@ -207,7 +230,10 @@ it('leaving when nothing was restored touches nothing', async () => {
   // installation that finished recovering days ago.
   expect(pool.updates).toEqual([]);
   expect(pool.state.grants.map((g) => g.id)).toEqual(['g1', 'g2']);
-  expect(seen).toContain('POST /restart');
+  // The restart is asked for once the reply is on the wire, never before: it
+  // kills this process, and a SIGTERM in the middle of the work would end the
+  // pool under the request doing it.
+  await vi.waitFor(() => expect(seen).toContain('POST /restart'));
 });
 
 it('a body with no grants in it keeps every grant', async () => {

@@ -1245,17 +1245,20 @@ export function createWebApp(deps: WebServerDeps): Server {
        * live — and a row cleared without that restart is an installation that
        * says it has recovered while every loop it needs is still off.
        *
-       * So the supervisor is asked first and answers the *request*, not the
-       * restart; only then is the row cleared. If it cannot be asked, nothing
-       * is dropped and nothing is cleared, and the owner is told where the
-       * button is. In a checkout there is no supervisor to ask and the loops
-       * start the next time `buddi serve` is started by whoever started this.
+       * So the supervisor is *asked whether it is there* first, and nothing is
+       * dropped or cleared when it is not: the owner is told where the button
+       * is instead. The restart itself is asked for only once the reply is on
+       * the wire, because it kills this process — ordering it before the work
+       * meant the SIGTERM landed in the middle of dropping the pending jobs,
+       * with the pool ending under the request that was clearing the row. In a
+       * checkout there is no supervisor to ask and the loops start the next
+       * time `buddi serve` is started by whoever started this.
        */
       const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
       if (socket) {
         try {
-          const accepted = await supervisorCall(socket, '/restart', 'POST');
-          if (accepted.status >= 300) throw new Error(`the supervisor answered ${accepted.status}`);
+          const reachable = await supervisorCall(socket, '/status', 'GET');
+          if (reachable.status >= 300) throw new Error(`the supervisor answered ${reachable.status}`);
         } catch (err) {
           log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
           return sendJson(res, 502, {
@@ -1269,6 +1272,13 @@ export function createWebApp(deps: WebServerDeps): Server {
         { dropPending: body.dropPending !== false, keepGrants: keep as string[] | undefined },
         now,
       );
+      if (socket) {
+        res.once('finish', () => {
+          void supervisorCall(socket, '/restart', 'POST').catch((err: unknown) => {
+            log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        });
+      }
       return sendJson(res, socket ? 202 : 200, { ...outcome, restarting: socket !== undefined });
     }
 

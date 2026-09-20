@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 import type { OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
 import {
   QUESTIONS,
+  RESTORE_FAILURES,
+  RESTORE_PHASES,
   afterRestore,
   answered,
   answersFrom,
@@ -22,7 +24,7 @@ import {
   suggestedName,
   thread,
 } from './machine';
-import { SUGGESTED_NAMES } from './script';
+import { SCRIPT, SUGGESTED_NAMES } from './script';
 
 const onboarding = (over: Partial<OnboardingView> = {}): OnboardingView => ({
   state: 'pending',
@@ -261,5 +263,29 @@ describe('the assistant buddi offers', () => {
     expect(idFor('Night Desk')).toBe('night-desk');
     expect(idFor('Rémy')).toBe('remy');
     expect(idFor('42')).toBe('assistant');
+  });
+});
+
+/*
+ * The order a restore actually reports.
+ *
+ * `recovery` is written inside the database step's rollback, before the files
+ * are put back, so a restore that cannot be gated rolls back instead of coming
+ * up ungated. A screen that promised the other order would say "bringing back
+ * your files" after it had already said the installation was marked restored.
+ */
+describe('the restore, as it is narrated', () => {
+  it('names the phases in the order the job reports them', () => {
+    expect([...RESTORE_PHASES]).toEqual([
+      'stopping', 'snapshot', 'database', 'recovery', 'files', 'starting', 'done',
+    ]);
+    expect([...RESTORE_FAILURES]).toEqual(['failed', 'rolled-back']);
+  });
+
+  it('has a sentence for each of them, in the same order', () => {
+    const said = Object.keys(SCRIPT.restore.phases);
+    expect(said.filter((phase) => !RESTORE_FAILURES.includes(phase as 'failed')))
+      .toEqual([...RESTORE_PHASES]);
+    for (const failure of RESTORE_FAILURES) expect(said).toContain(failure);
   });
 });

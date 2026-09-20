@@ -142,16 +142,27 @@ export function reopen(answers: MeetAnswers, id: QuestionId): MeetAnswers {
  * The other branch: this buddi is an old one, coming back
  * ------------------------------------------------------------------ */
 
-/** The phases a restore passes through, in the order the job reports them. */
+/**
+ * The phases a restore passes through, in the order the job reports them.
+ *
+ * `recovery` comes before `files`: the recovery row is written through the
+ * engine's `afterDatabase` hook, inside the rollback, so a restore that cannot
+ * be gated rolls back rather than coming up ungated. The job also reports
+ * phases of its own (`verify`, `archive`, `encrypt`) in between, so this is a
+ * subsequence of what arrives, never the whole of it.
+ */
 export const RESTORE_PHASES = [
   'stopping',
   'snapshot',
   'database',
-  'files',
   'recovery',
+  'files',
   'starting',
   'done',
 ] as const;
+
+/** The two ways a restore ends badly. Nothing follows either. */
+export const RESTORE_FAILURES = ['failed', 'rolled-back'] as const;
 
 /**
  * Where a restore in flight is remembered.

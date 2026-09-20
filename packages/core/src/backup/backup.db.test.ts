@@ -44,6 +44,13 @@ const DRILL_SCHEMA = 'drill';
 const DB = `buddi_backup_drill_${process.pid}`;
 /** The second database, for the `--into` drill. Dropped with the first. */
 const INTO_DB = `${DB}_into`;
+/**
+ * The third: a database owned by an ordinary login role, which is what a
+ * packaged installation actually restores as. Dropped with the others.
+ */
+const ROLE_DB = `${DB}_role`;
+const ROLE = `buddi_drill_nosuper_${process.pid}`;
+const ROLE_PASSWORD = 'drill_not_a_secret';
 
 const OLD_MIGRATION = `
 create table accounts (id serial primary key, name text not null, cents bigint not null);
@@ -141,6 +148,8 @@ suite('a backup can actually be restored', () => {
 
   afterAll(async () => {
     if (admin) {
+      await admin.query(`drop database if exists ${ROLE_DB}`).catch(() => {});
+      await admin.query(`drop role if exists ${ROLE}`).catch(() => {});
       await admin.query(`drop database if exists ${INTO_DB}`).catch(() => {});
       await admin.query(`drop database if exists ${DB}`).catch(() => {});
       await admin.end().catch(() => {});
@@ -535,6 +544,64 @@ suite('a backup can actually be restored', () => {
     // Replaced, not merged: the file the archive does not have is gone.
     expect(existsSync(path.join(agentsDir, 'only-here.md'))).toBe(false);
     expect(existsSync(path.join(dataDir, 'restored-plugins.json'))).toBe(true);
+  }, 900_000);
+
+  /**
+   * The packaged installation's own role.
+   *
+   * `session_replication_role` is a superuser parameter. A packaged buddi
+   * connects as an ordinary login role, which Postgres refuses it — and a
+   * refused statement aborts the whole transaction, so without a savepoint
+   * around it every COPY that follows fails with "current transaction is
+   * aborted" and a restore that should have worked ends rolled back. This is
+   * the only place that shape can be reproduced: every other suite here runs
+   * as the superuser the developer's cluster hands out.
+   */
+  it('loads as a role that is refused session_replication_role', async () => {
+    const { rows: who } = await admin.query<{ superuser: boolean }>(
+      `select rolsuper as superuser from pg_roles where rolname = current_user`,
+    );
+    // Without a superuser there is no way to make a second role to test with.
+    if (who[0]?.superuser !== true) return;
+
+    await seed(oldDir);
+    const created = await createBackup(base());
+    const stage = path.join(work, 'stage-nosuper');
+    await rm(stage, { recursive: true, force: true });
+    await extractAll(created.archive, stage);
+
+    await admin.query(`drop database if exists ${ROLE_DB}`);
+    await admin.query(`drop role if exists ${ROLE}`);
+    // Everything the restore needs and nothing more: a login, and ownership of
+    // its own empty database so it may create and drop schemas inside it.
+    await admin.query(`create role ${ROLE} login password '${ROLE_PASSWORD}'`);
+    await admin.query(`create database ${ROLE_DB} owner ${ROLE}`);
+
+    const target = new URL(urlForDatabase(databaseUrl as string, ROLE_DB));
+    target.username = ROLE;
+    target.password = ROLE_PASSWORD;
+
+    const pool = createPool(target.toString());
+    try {
+      const { rows: role } = await pool.query<{ superuser: boolean }>(
+        `select rolsuper as superuser from pg_roles where rolname = current_user`,
+      );
+      expect(role[0]?.superuser).toBe(false);
+
+      const report = await loadDatabase(pool, stage, {
+        pluginMigrations: [{ schema: DRILL_SCHEMA, dir: oldDir, plugin: 'drill' }],
+      });
+      // The parameter was refused — and the rows went in anyway.
+      expect(report.triggersLeftOn).toBe(true);
+      expect(report.notLoaded).toEqual([]);
+      expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      const { rows: inserted } = await pool.query<{ id: number }>(
+        `insert into drill.accounts (name, cents) values ('brokerage', 1) returning id`,
+      );
+      expect(inserted[0]?.id).toBe(4);
+    } finally {
+      await pool.end().catch(() => {});
+    }
   }, 900_000);
 
   describe('what the loader refuses before it drops anything', () => {

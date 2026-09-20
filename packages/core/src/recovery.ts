@@ -147,19 +147,34 @@ export async function enterRecovery(
   return row(rows[0]);
 }
 
-/** The row, or null when this installation was never restored. */
+/**
+ * The row, or null when this installation was never restored.
+ *
+ * A database whose migration has not run yet is also "never restored"; every
+ * other failure is raised, so a caller cannot mistake a database it could not
+ * read for an installation that is not in recovery.
+ */
 export async function readRecovery(pool: Queryable): Promise<RecoveryState | null> {
-  const { rows } = await pool.query(
-    `select restored_at, archive, buddi_version, pending, left_at from core.recovery where id`,
-  );
-  return rows[0] ? row(rows[0]) : null;
+  try {
+    const { rows } = await pool.query(
+      `select restored_at, archive, buddi_version, pending, left_at from core.recovery where id`,
+    );
+    return rows[0] ? row(rows[0]) : null;
+  } catch (err) {
+    if (isMissingRelation(err)) return null;
+    throw err;
+  }
 }
 
 /**
  * Is this installation in recovery right now?
  *
- * Never throws: it is asked at gateway startup, and a database that predates
- * the migration is an installation that is simply not in recovery.
+ * A database that predates the migration is an installation that is simply not
+ * in recovery, so a missing table answers `false`. Nothing else is swallowed:
+ * a pool that has been ended, or a database that cannot be reached, used to
+ * come back here as "not in recovery" — which hid the banner and the whole
+ * checklist on exactly the installation they exist for. That belongs on the
+ * wire as a failure, not as an answer.
  */
 export async function inRecovery(pool: Queryable): Promise<boolean> {
   try {
@@ -167,9 +182,16 @@ export async function inRecovery(pool: Queryable): Promise<boolean> {
       `select 1 as n from core.recovery where id and left_at is null`,
     );
     return rows.length > 0;
-  } catch {
-    return false;
+  } catch (err) {
+    if (isMissingRelation(err)) return false;
+    throw err;
   }
+}
+
+/** `undefined_table` or `invalid_schema_name`: this database has no recovery row yet. */
+function isMissingRelation(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === '42P01' || code === '3F000';
 }
 
 /** Leave recovery. `false` when it was not in recovery to begin with. */

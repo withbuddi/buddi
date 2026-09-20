@@ -199,7 +199,7 @@ function grantView(permission: ToolPermission): RecoveryGrant {
 
 /** The whole checklist. Cheap enough to be a plain GET the page can poll. */
 export async function readRecoveryView(deps: RecoveryDeps, ownerId: string): Promise<RecoveryView> {
-  const state = await readRecovery(deps.pool).catch(() => null);
+  const state = await readRecovery(deps.pool);
   if (!state || !state.active) {
     return {
       active: false,
@@ -262,7 +262,7 @@ export async function leaveRecoveryMode(
   input: LeaveInput,
   now: Date,
 ): Promise<LeaveResult> {
-  const state = await readRecovery(deps.pool).catch(() => null);
+  const state = await readRecovery(deps.pool);
   if (!state || !state.active) {
     return { left: false, droppedJobs: 0, droppedApprovals: 0, droppedGrants: 0 };
   }
