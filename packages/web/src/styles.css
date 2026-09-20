@@ -1010,6 +1010,13 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   padding: 8px 14px 14px;
   background: var(--surface);
 }
+/* What stands where the composer would be when the agent has no brain. Same
+   gutter as the composer, so the thread does not jump when one replaces the
+   other. */
+.wb-composer-blocked {
+  padding: 8px 14px 14px;
+  background: var(--surface);
+}
 /* The box: one rounded field with the controls inside it. It rises a little
    when it has focus, the way the thing you are about to speak into should. */
 .wb-composer-box {

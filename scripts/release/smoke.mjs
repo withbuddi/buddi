@@ -72,6 +72,10 @@ try {
   const firstRun = await onboarding();
   assert.equal(firstRun.state, 'pending');
   assert.equal(firstRun.needs.model, true, 'a fresh install has no model account');
+  // And no ghost of one: the legacy accounts are named after environment
+  // variables, and a packaged install has none of them set.
+  const accountsView = await (await fetch(new URL('/api/provider-accounts', dashboard), { headers: { cookie } })).json();
+  assert.deepEqual(accountsView.accounts, [], 'a fresh install starts with zero model accounts');
   assert.equal((await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'first-run writes require CSRF');
   const stepped = await fetch(new URL('/api/onboarding/step', dashboard), { method: 'POST', headers: wizardHeaders, body: JSON.stringify({ step: 'welcome' }) });
   assert.equal(stepped.status, 200);
@@ -83,12 +87,20 @@ try {
   const madeText = await madeAgent.text();
   assert.equal(madeAgent.status, 200, madeText);
   const madeBody = JSON.parse(madeText);
-  assert.equal(madeBody.id, 'smoke');
+  // The first agent *is* the shipped Concierge, renamed: same id, the owner's
+  // handle, and one assistant on the roster rather than two.
+  assert.equal(madeBody.id, 'concierge');
+  assert.equal(madeBody.handle, 'smoke');
   assert.equal(madeBody.live, true, 'the running catalog reloaded the new agent');
   assert.equal(madeBody.agent.isDefault, true, 'the first private agent is the default one');
+  assert.equal(madeBody.agent.name, 'Smoke', 'the shipped Concierge is not listed beside it');
   const roster = await (await fetch(new URL('/api/agents', dashboard), { headers: { cookie } })).json();
-  assert.ok(roster.agents.some(agent => agent.id === 'smoke'), 'the new agent is in /api/agents');
-  assert.match(await readFile(path.join(data, 'agents/smoke/agent.md'), 'utf8'), /language: mirror/);
+  assert.ok(roster.agents.some(agent => agent.handle === 'smoke'), 'the new agent is in /api/agents');
+  assert.ok(!roster.agents.some(agent => agent.name === 'Concierge'), 'the example it replaced is gone');
+  assert.ok(!roster.agents.some(agent => agent.id === 'agent-father'), 'Agent Father waits for an account and an assistant');
+  const file = await readFile(path.join(data, 'agents/concierge/agent.md'), 'utf8');
+  assert.match(file, /language: mirror/);
+  assert.match(file, /handle: smoke/);
   // "Done" has to mean done: with no model account this is refused, and the
   // skip below is the explicit way past it.
   const tooSoon = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
