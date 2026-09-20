@@ -154,11 +154,15 @@ export function App(): JSX.Element {
   /*
    * First run, once per load.
    *
-   * The wizard is offered only to an installation that has not finished it
-   * *and* has no model account: a record that is done or skipped never sees it
-   * again, and neither does a working install whose record predates the
-   * wizard — which is what keeps a developer's live dashboard out of a setup
-   * screen it passed long ago. Replaced, not pushed, so Back does not bounce.
+   * The wizard is offered only to an installation whose first run is still
+   * `pending` *and* which has no model account. Both halves matter: a done or
+   * skipped record never sees it again, a working install whose record predates
+   * the wizard never sees it — which is what keeps a developer's live dashboard
+   * out of a setup screen it passed long ago — and an `in-progress` record
+   * belongs to an interview some other surface already claimed, which must not
+   * be interrupted by a redirect. A web record that is in progress resumes
+   * through the link, not through this. Replaced, not pushed, so Back does not
+   * bounce.
    */
   const [firstRunChecked, setFirstRunChecked] = useState(false);
   useEffect(() => {
@@ -169,8 +173,7 @@ export function App(): JSX.Element {
       .then((view) => {
         if (cancelled) return;
         setFirstRunChecked(true);
-        const unfinished = view.state === 'pending' || view.state === 'in-progress';
-        if (unfinished && view.needs.model && !parseWelcomeRoute(window.location.hash)) {
+        if (view.state === 'pending' && view.needs.model && !parseWelcomeRoute(window.location.hash)) {
           navigate(WELCOME_ROUTE, true);
         }
       })

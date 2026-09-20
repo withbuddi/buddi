@@ -140,12 +140,17 @@ directory is the trust boundary) is stated in the security page of the wizard.
 **Built**, except where a step below says otherwise. The route is `#/welcome`,
 with `?step=<id>` naming one screen. The dashboard sends the owner there —
 replacing the entry, not pushing it — when `core.onboarding` is still `pending`
-or `in-progress` *and* the installation has no usable model account; a record
-that is `done` or `skipped`, and any installation that already has an account,
-never sees it. Settings → System has "Run setup again" regardless. The wizard's
+*and* the installation has no usable model account; a record that is `done`,
+`skipped` or `in-progress` (an interview another surface already claimed), and
+any installation that already has an account, never sees it. Settings → System has "Run setup again" regardless. The wizard's
 own server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
 `/complete`, `/skip` and `/agent`, all behind the dashboard's ordinary session,
-Origin and CSRF gate.
+Origin and CSRF gate. `/complete` refuses while the installation still has no
+model account or no agent — "done" has to mean done — and `/skip` is the
+explicit bypass that always works. `done` and `skipped` are terminal in core, so
+the two endings cannot overwrite each other. Finishing or skipping here also
+closes the Telegram nudge arc, which has nothing to add to an owner who set up
+in the dashboard.
 
 Each step is one screen with one job, saved as it is completed, and resumable
 after a reload or a restart: the page resumes at the first screen whose

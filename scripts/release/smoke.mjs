@@ -89,9 +89,17 @@ try {
   const roster = await (await fetch(new URL('/api/agents', dashboard), { headers: { cookie } })).json();
   assert.ok(roster.agents.some(agent => agent.id === 'smoke'), 'the new agent is in /api/agents');
   assert.match(await readFile(path.join(data, 'agents/smoke/agent.md'), 'utf8'), /language: mirror/);
+  // "Done" has to mean done: with no model account this is refused, and the
+  // skip below is the explicit way past it.
+  const tooSoon = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(tooSoon.status, 409);
+  assert.match((await tooSoon.json()).error, /model account/);
   const skippedRun = await fetch(new URL('/api/onboarding/skip', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
   assert.equal(skippedRun.status, 200);
   assert.equal((await skippedRun.json()).state, 'skipped');
+  // A skipped install with nothing set up does not become "finished" by asking.
+  const lateComplete = await fetch(new URL('/api/onboarding/complete', dashboard), { method: 'POST', headers: wizardHeaders, body: '{}' });
+  assert.equal(lateComplete.status, 409, 'a skipped install with no model account is still not finished');
   const afterSkip = await onboarding();
   assert.equal(afterSkip.state, 'skipped');
   assert.equal(afterSkip.needs.agent, false, 'the agent it wrote counts as the owner\'s own');
@@ -226,7 +234,7 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
   for (const name of ['supervisor', 'gateway', 'postgres']) {
