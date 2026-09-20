@@ -98,20 +98,26 @@ function Shape({ shape }: { shape: ReturnType<typeof inferShape> }): JSX.Element
         </div>
       );
 
-    case 'table':
+    case 'table': {
+      const records = linkRecords(shape.columns, shape.rows);
       return (
         <div>
           <Stats stats={shape.stats} />
           <Notes notes={shape.notes} />
-          <AutoTable
-            label={shape.label}
-            columns={shape.columns}
-            rows={shape.rows}
-            total={shape.total}
-          />
+          {records ? (
+            <LinkRecords label={shape.label} plan={records} rows={shape.rows} total={shape.total} />
+          ) : (
+            <AutoTable
+              label={shape.label}
+              columns={shape.columns}
+              rows={shape.rows}
+              total={shape.total}
+            />
+          )}
           <Asides asides={shape.asides} />
         </div>
       );
+    }
 
     case 'list':
       return (
@@ -258,6 +264,133 @@ function AutoTable({
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Rows that are links: a search result, a bookmark, a feed item.
+ *
+ * A grid is the wrong shape for them — the URL column eats the width and
+ * the title wraps into a ribbon. Read as records instead: the title is the
+ * link, the host and the short fields are the line under it, the longest
+ * text is the description. Decided from the data, never from a tool's name.
+ * ------------------------------------------------------------------ */
+
+interface RecordPlan {
+  url: string;
+  title: string;
+  description: string | null;
+  meta: string[];
+}
+
+const TITLE_KEYS = /^(title|name|headline|subject|label|heading)$/i;
+const URL_KEYS = /^(url|link|href|uri|permalink)$/i;
+
+export function isHttpUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\/[^\s]+$/i.test(value.trim());
+}
+
+/** The host, without a leading www, for the line under a title. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+/** `host/first-bit-of-path…`: enough to tell two links apart, short enough to sit in a cell. */
+export function shortUrl(url: string, max = 48): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === '/' ? '' : parsed.pathname;
+    const whole = `${parsed.hostname.replace(/^www\./, '')}${path}${parsed.search}`;
+    return whole.length > max ? `${whole.slice(0, max - 1)}…` : whole;
+  } catch {
+    return url.length > max ? `${url.slice(0, max - 1)}…` : url;
+  }
+}
+
+function averageLength(rows: Array<Record<string, unknown>>, key: string): number {
+  const values = rows.map((row) => row[key]).filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+  if (values.length === 0) return 0;
+  return values.reduce((sum, v) => sum + v.length, 0) / values.length;
+}
+
+export function linkRecords(
+  columns: Array<{ key: string; label: string; type: InferredType }>,
+  rows: Array<Record<string, unknown>>,
+): RecordPlan | null {
+  if (rows.length === 0) return null;
+  const textColumns = columns.filter((c) => c.type === 'text');
+  // The link column: named like one, or mostly URLs.
+  const url = textColumns.find((c) => URL_KEYS.test(c.key) && rows.some((r) => isHttpUrl(r[c.key])))
+    ?? textColumns.find((c) => {
+      const present = rows.map((r) => r[c.key]).filter((v) => !isBlank(v));
+      return present.length > 0 && present.filter(isHttpUrl).length / present.length >= 0.6;
+    });
+  if (!url) return null;
+  const others = textColumns.filter((c) => c.key !== url.key);
+  const title = others.find((c) => TITLE_KEYS.test(c.key)) ?? others.find((c) => averageLength(rows, c.key) > 0);
+  if (!title) return null;
+  const rest = others.filter((c) => c.key !== title.key);
+  // The description is the longest text that is not the title; short text is meta.
+  const byLength = [...rest].sort((a, b) => averageLength(rows, b.key) - averageLength(rows, a.key));
+  const description = byLength[0] && averageLength(rows, byLength[0].key) > 40 ? byLength[0] : null;
+  const meta = columns
+    .filter((c) => c.key !== url.key && c.key !== title.key && c.key !== description?.key)
+    .map((c) => c.key);
+  return { url: url.key, title: title.key, description: description?.key ?? null, meta };
+}
+
+function LinkRecords({ label, plan, rows, total }: {
+  label: string | null;
+  plan: RecordPlan;
+  rows: Array<Record<string, unknown>>;
+  total: number;
+}): JSX.Element {
+  const [all, setAll] = useState(false);
+  const limit = total <= ROW_CAP + 5 ? total : ROW_CAP;
+  const shown = all ? rows : rows.slice(0, limit);
+  return (
+    <div>
+      {label ? <h4 className="wb-sub">{label}</h4> : null}
+      <ol className="wb-records">
+        {shown.map((row, index) => {
+          const href = row[plan.url];
+          const link = isHttpUrl(href) ? href.trim() : null;
+          const title = typeof row[plan.title] === 'string' && (row[plan.title] as string).trim() !== '' ? (row[plan.title] as string) : (link ? shortUrl(link) : 'Untitled');
+          const description = plan.description && typeof row[plan.description] === 'string' ? (row[plan.description] as string) : null;
+          const host = link ? hostOf(link) : null;
+          const meta = plan.meta
+            .map((key) => row[key])
+            .filter((v) => !isBlank(v) && (typeof v !== 'object'))
+            .map((v) => String(v))
+            // The host already says where it came from; a source column that repeats it is noise.
+            .filter((v) => host === null || v.replace(/^www\./, '') !== host);
+          return (
+            <li key={index} className="wb-record">
+              {link ? (
+                <a className="wb-record-title" href={link} target="_blank" rel="noopener noreferrer">{title}</a>
+              ) : (
+                <span className="wb-record-title">{title}</span>
+              )}
+              <div className="wb-record-meta">
+                {host ? <span className="wb-record-host" title={link ?? undefined}>{host}</span> : null}
+                {meta.map((m, i) => <span key={i}>{m.length > 60 ? `${m.slice(0, 59)}…` : m}</span>)}
+              </div>
+              {description ? <p className="wb-record-desc">{description.length > 280 ? `${description.slice(0, 279)}…` : description}</p> : null}
+            </li>
+          );
+        })}
+      </ol>
+      {total > shown.length ? (
+        <p className="wb-note wb-note-row">
+          <span>Showing {shown.length} of {total}</span>
+          <button className="ui-btn" onClick={() => setAll(true)}>Show all {total}</button>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function Cell({
   value,
   column,
@@ -266,6 +399,15 @@ function Cell({
   column: { type: InferredType; currency: string | null };
 }): JSX.Element {
   if (isBlank(value)) return <td className="wb-cell-soft">—</td>;
+  // A link is a link: short on the page, whole on hover, and it opens.
+  if (isHttpUrl(value)) {
+    const href = value.trim();
+    return (
+      <td className="wb-cell-link">
+        <a href={href} target="_blank" rel="noopener noreferrer" title={href}>{shortUrl(href)}</a>
+      </td>
+    );
+  }
   // A cell holding an object states its size; the raw JSON holds the object.
   if (value !== null && typeof value === 'object') {
     const size = Array.isArray(value)
