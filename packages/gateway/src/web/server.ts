@@ -44,6 +44,14 @@ import { ProviderAccountError, type ProviderAccounts } from '../provider-account
 import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
+import {
+  OnboardingRefusal,
+  WEB_ONBOARDING_STEPS,
+  WEB_ONBOARDING_SURFACE,
+  createFirstAgent,
+  readOnboarding,
+  type OnboardingDeps,
+} from './onboarding.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -52,6 +60,7 @@ import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, markStepDone, skipOnboarding } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -431,6 +440,15 @@ export function createWebApp(deps: WebServerDeps): Server {
     const path = url.pathname.replace(/\/+$/, '') || '/api';
     const q = url.searchParams;
     const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
+    /** Everything the first-run routes need, resolved per request. */
+    const onboardingDeps = (): OnboardingDeps => ({
+      pool: deps.pool,
+      catalog: deps.catalog,
+      providerAccounts: deps.providerAccounts,
+      agentsDir: agentSearchPath(deps.env ?? process.env).owner.dir,
+      examplesDir: EXAMPLES_AGENTS_DIR,
+      reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+    });
 
     if (method === 'GET' || method === 'HEAD') {
       /*
@@ -654,6 +672,13 @@ export function createWebApp(deps: WebServerDeps): Server {
             return sendJson(res, 503, { error: 'The supervisor is not answering on its control socket. Run buddi in a terminal.' });
           }
         }
+        /*
+         * First run: where the record stands, and what the wizard still has to
+         * ask for. A read, and only a read — an installation that has never
+         * been asked anything must not acquire a row because a page loaded.
+         */
+        case '/api/onboarding':
+          return sendJson(res, 200, await readOnboarding(onboardingDeps()));
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1107,6 +1132,53 @@ export function createWebApp(deps: WebServerDeps): Server {
     const groupArchive = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/archive$/i.exec(path);
     if (groupArchive) {
       return (await archiveGroup(deps.pool, groupArchive[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+    }
+
+    /*
+     * First run, from the dashboard.
+     *
+     * Four writes against the one record core already owns. `complete` and
+     * `skip` both close the machine, and closing it is what keeps the Telegram
+     * interview and its nudge arc from ever opening for an owner who did this
+     * here instead.
+     */
+    if (path === '/api/onboarding/step') {
+      const step = typeof body.step === 'string' ? body.step.trim() : '';
+      if (!(WEB_ONBOARDING_STEPS as readonly string[]).includes(step)) {
+        return sendJson(res, 400, { error: `\`step\` must be one of ${WEB_ONBOARDING_STEPS.join(', ')}` });
+      }
+      // The first step recorded is also what starts the record, with this
+      // surface's name on it. Already in progress, done or skipped: unchanged.
+      await beginOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
+      await markStepDone(deps.pool, step);
+      return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+    }
+    if (path === '/api/onboarding/complete' || path === '/api/onboarding/skip') {
+      if (path.endsWith('/skip')) await skipOnboarding(deps.pool, 'the owner skipped the dashboard wizard');
+      else await completeOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
+      return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+    }
+    if (path === '/api/onboarding/agent') {
+      try {
+        const created = await createFirstAgent(onboardingDeps(), {
+          name: typeof body.name === 'string' ? body.name : '',
+          handle: typeof body.handle === 'string' ? body.handle : '',
+          description: typeof body.description === 'string' ? body.description : '',
+          ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
+        });
+        const view = readAgents(deps.catalog).find((agent) => agent.id === created.id);
+        return sendJson(res, 200, {
+          agent: view ?? null,
+          id: created.id,
+          handle: created.handle,
+          file: created.file,
+          live: created.live,
+          accountId: created.assigned,
+        });
+      } catch (error) {
+        if (error instanceof OnboardingRefusal) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: error instanceof Error ? error.message : 'The agent could not be written.' });
+      }
     }
 
     /*
