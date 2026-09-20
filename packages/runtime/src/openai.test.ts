@@ -411,6 +411,50 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     expect(bodies[1].reasoning_effort).toBeUndefined();
     expect(bodies[2].reasoning_effort).toBeUndefined();
     expect(bodies[3].reasoning_effort).toBe('minimal');
+    // Ollama is also asked in its own words, and only Ollama.
+    expect(bodies[0].think).toBe(false);
+    expect(bodies[1].think).toBeUndefined();
+    expect(bodies[2].think).toBeUndefined();
+    expect(bodies[3].think).toBeUndefined();
+  });
+
+  it('asks the hosted Ollama the same way, and no one else', async () => {
+    const bodies: any[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => { bodies.push(JSON.parse(init.body)); return jsonResponse(200, okBody()); });
+    const hosted = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'https://ollama.com/v1', model: 'glm-5.3-flash' }, { fetch: fetchMock as unknown as typeof fetch });
+    await hosted.complete({ ...request, thinking: 'off' });
+    const elsewhere = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'https://api.together.xyz/v1', model: 'whatever' }, { fetch: fetchMock as unknown as typeof fetch });
+    await elsewhere.complete({ ...request, thinking: 'off' });
+    expect(bodies[0].think).toBe(false);
+    expect(bodies[1].think).toBeUndefined();
+    expect(bodies[1].reasoning_effort).toBe('none');
+  });
+
+  /*
+   * Measured against the Ollama on this machine: `reasoning_effort: 'none'`
+   * and `think: false` are both accepted and both ignored by a thinking model,
+   * which opens its *answer* with `<think>…</think>` instead. Left there, the
+   * reasoning is the answer as far as every surface is concerned.
+   */
+  it('takes the reasoning a model wrote into its own answer back out of it', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      choices: [{ finish_reason: 'stop', message: { content: '<think> They asked for five words. Keep it short. </think>\n\nHello, good to meet you.' } }],
+    })));
+    const provider = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'http://localhost:11434/v1' }, { fetch: fetchMock as unknown as typeof fetch });
+    const res = await provider.complete({ ...request, thinking: 'off' });
+    expect(res.content).toEqual([
+      { type: 'thinking', text: ' They asked for five words. Keep it short. ' },
+      { type: 'text', text: 'Hello, good to meet you.' },
+    ]);
+  });
+
+  it('keeps an unfinished thought out of the answer entirely', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      choices: [{ finish_reason: 'length', message: { content: '<think>Still deciding how to' } }],
+    })));
+    const provider = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'http://localhost:11434/v1' }, { fetch: fetchMock as unknown as typeof fetch });
+    const res = await provider.complete({ ...request, thinking: 'off' });
+    expect(res.content).toEqual([{ type: 'thinking', text: 'Still deciding how to' }]);
   });
 
   it('keeps what the model thought as its own block', async () => {
@@ -418,6 +462,33 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });
     const res = await provider.complete(request);
     expect(res.content).toEqual([{ type: 'thinking', text: '17 times 23…' }, { type: 'text', text: '391' }]);
+  });
+
+  it('streams a written-in thought to the thinking channel, never to the answer', async () => {
+    // The tag arrives in pieces, which is the case that leaks: a chunk
+    // boundary inside `<think>` must not put a word of it in the answer.
+    const chunks = [
+      { model: 'lfm2.5-thinking', choices: [{ delta: { role: 'assistant', content: '<thi' } }] },
+      { choices: [{ delta: { content: 'nk>Five words. ' } }] },
+      { choices: [{ delta: { content: 'Keep it short.</think>' } }] },
+      { choices: [{ delta: { content: '\n\nHello, good to' } }] },
+      { choices: [{ delta: { content: ' meet you.' } }, { finish_reason: 'stop' }] },
+      { choices: [], usage: { prompt_tokens: 4, completion_tokens: 6 } },
+    ];
+    const wire = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      init.onChunk(wire, 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'http://localhost:11434/v1' }, { fetch: fetchMock as unknown as typeof fetch });
+    const deltas: any[] = [];
+    const res = await provider.complete({ ...request, thinking: 'off', onDelta: (d) => deltas.push(d) });
+    expect(deltas.filter((d) => d.kind === 'text').map((d) => d.text).join('')).toBe('Hello, good to meet you.');
+    expect(deltas.filter((d) => d.kind === 'thinking').map((d) => d.text).join('')).toBe('Five words. Keep it short.');
+    expect(res.content).toEqual([
+      { type: 'thinking', text: 'Five words. Keep it short.' },
+      { type: 'text', text: 'Hello, good to meet you.' },
+    ]);
   });
 
   it('streams when asked, hands out each piece, and returns the assembled answer', async () => {
