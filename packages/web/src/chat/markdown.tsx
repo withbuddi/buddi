@@ -158,9 +158,12 @@ function BlockView({ block }: { block: Block }): JSX.Element {
       return <Tag className="wb-md-h" data-level={level}>{inline(block.text)}</Tag>;
     }
     case 'code': return (
-      <div className="wb-md-copyable">
+      <div className="wb-md-code-frame">
+        <div className="wb-md-code-head">
+          <span className="wb-md-code-lang">{block.lang ?? 'text'}</span>
+          <CopyButton text={block.text} what="code" always />
+        </div>
         <pre className="wb-md-code" data-lang={block.lang ?? undefined}><code>{block.text}</code></pre>
-        <CopyButton text={block.text} what="code" />
       </div>
     );
     case 'quote': return (
@@ -186,7 +189,7 @@ function BlockView({ block }: { block: Block }): JSX.Element {
 }
 
 /** A small copy control on the corner of a quote or a code block. */
-function CopyButton({ text, what }: { text: string; what: string }): JSX.Element {
+function CopyButton({ text, what, always = false }: { text: string; what: string; always?: boolean }): JSX.Element {
   const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle');
   const copy = (): void => {
     if (!navigator.clipboard?.writeText) { setState('failed'); return; }
@@ -194,7 +197,7 @@ function CopyButton({ text, what }: { text: string; what: string }): JSX.Element
     window.setTimeout(() => setState('idle'), 1500);
   };
   return (
-    <button type="button" className="wb-md-copy" data-state={state} aria-label={`Copy ${what}`} title={`Copy ${what}`} onClick={copy}>
+    <button type="button" className="wb-md-copy" data-state={state} data-always={always || undefined} aria-label={`Copy ${what}`} title={`Copy ${what}`} onClick={copy}>
       {state === 'done' ? 'Copied' : state === 'failed' ? 'Select to copy' : (
         <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
           <rect x="4.5" y="4.5" width="6.5" height="6.5" rx="1.2" /><path d="M8.5 4.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v4.5a1 1 0 0 0 1 1h1.5" />
