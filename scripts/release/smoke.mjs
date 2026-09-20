@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, unlink, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, unlink, stat, copyFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
@@ -33,7 +33,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/
  * it until somebody hunts down the pid. The kernel picks a free one instead,
  * and `freePort` starts from it.
  */
-const webPort = await new Promise((resolve, reject) => {
+const freeLocalPort = () => new Promise((resolve, reject) => {
   const probe = createServer();
   probe.on('error', reject);
   probe.listen(0, '127.0.0.1', () => {
@@ -41,8 +41,12 @@ const webPort = await new Promise((resolve, reject) => {
     probe.close(() => resolve(port));
   });
 });
+const webPort = await freeLocalPort();
 Object.assign(env, { BUDDI_DATA_DIR: data, BUDDI_VAULT: 'file', BUDDI_WEB_PORT: String(webPort) });
 let pid;
+/* The second installation the backup is restored into. Stopped like the first. */
+const restored = path.join(testRoot, 'restored data');
+let pidB;
 
 /**
  * Stop the fixture even when this script is killed.
@@ -53,12 +57,15 @@ let pid;
  */
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    let victim = pid;
-    if (!victim) {
-      try { victim = Number(readFileSync(path.join(data, 'supervisor.lock'), 'utf8').trim()); } catch {}
+    const victims = [];
+    for (const [held, dir] of [[pid, data], [pidB, restored]]) {
+      let victim = held;
+      if (!victim) {
+        try { victim = Number(readFileSync(path.join(dir, 'supervisor.lock'), 'utf8').trim()); } catch {}
+      }
+      if (victim) { try { process.kill(victim, 'SIGTERM'); victims.push(victim); } catch {} }
     }
-    if (victim) { try { process.kill(victim, 'SIGTERM'); } catch {} }
-    console.error(`\n${signal}: stopped the smoke fixture${victim ? ` (pid ${victim})` : ''}; data is at ${testRoot}`);
+    console.error(`\n${signal}: stopped the smoke fixture${victims.length ? ` (pid ${victims.join(', ')})` : ''}; data is at ${testRoot}`);
     process.exit(130);
   });
 }
@@ -307,12 +314,327 @@ try {
   await preserved.connect();
   try { assert.deepEqual((await preserved.query('SELECT value FROM public.smoke_preservation')).rows, [{ value: 'keep across restarts' }]); }
   finally { await preserved.end(); }
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done' + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
+  /* ================================================================ *
+   * A → B: back one installation up, restore it into another.
+   *
+   * Everything below goes through the dashboard's HTTP API and the
+   * supervisor's control socket, which is what an owner's browser and the
+   * supervisor itself use. Nothing shells out to `age`, `tar`, `pg_dump` or
+   * `psql`, and no model is ever called: the content planted on A is written
+   * the way the owner writes it (the API) or, where a route would need a
+   * model, straight into the database this fixture owns.
+   * ================================================================ */
+
+  /** One JSON call on a supervisor's control socket, the owner-only way in. */
+  const socketCall = (socketPath, route, method = 'GET', payload) => new Promise((resolve, reject) => {
+    const body = payload === undefined ? undefined : Buffer.from(JSON.stringify(payload));
+    const call = httpRequest({
+      socketPath, path: route, method,
+      headers: { host: 'localhost', ...(body ? { 'content-type': 'application/json', 'content-length': body.length } : {}) },
+    }, response => {
+      const chunks = [];
+      response.on('data', chunk => chunks.push(chunk));
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: response.statusCode, body: text === '' ? null : JSON.parse(text) });
+      });
+    });
+    call.on('error', reject);
+    if (body) call.write(body);
+    call.end();
+  });
+
+  /** A fresh dashboard session: the ticket the launcher mints, spent once. */
+  const signIn = async runCli => {
+    const url = new URL((await runCli(startArgs)).match(/Dashboard: (.+)/)[1]);
+    const opened = await fetch(url, { redirect: 'manual' });
+    assert.equal(opened.status, 302, 'the launcher minted a dashboard ticket');
+    const jar = opened.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+    const token = decodeURIComponent(jar.match(/buddi_csrf=([^;]+)/)[1]);
+    const at = route => new URL(route, url);
+    return {
+      origin: url.origin,
+      get: async route => fetch(at(route), { headers: { cookie: jar } }),
+      send: async (route, payload, method = 'POST') => fetch(at(route), {
+        method,
+        headers: { cookie: jar, origin: url.origin, 'x-buddi-csrf': token, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+      upload: async (route, bytes, headers) => fetch(at(route), {
+        method: 'POST',
+        headers: { cookie: jar, origin: url.origin, 'x-buddi-csrf': token, 'content-type': 'application/octet-stream', ...headers },
+        body: bytes,
+      }),
+    };
+  };
+
+  /** Terminal phases, as Task C landed them. */
+  const ENDED = new Set(['done', 'failed', 'rolled-back']);
+  /**
+   * Poll a job to its end on the control socket.
+   *
+   * The socket rather than the dashboard, because a restore stops the gateway:
+   * the job id stays valid across that, but the HTTP route serving it does not.
+   */
+  const awaitJob = async (socketPath, id, seconds = 420) => {
+    for (let i = 0; i < seconds * 4; i++) {
+      const reply = await socketCall(socketPath, `/jobs/${id}`);
+      if (reply.status === 200 && ENDED.has(reply.body.phase)) return reply.body;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error(`job ${id} never finished`);
+  };
+  /** `wanted` appears in `phases`, in this order, with anything in between. */
+  const isSubsequence = (wanted, phases) => {
+    let at = 0;
+    for (const phase of phases) if (phase === wanted[at]) at++;
+    return at === wanted.length;
+  };
+  /** One query against an installation's own database, connection closed after. */
+  const ask = async (settings, sql, values = []) => {
+    const client = new Client(settings);
+    await client.connect();
+    try { return (await client.query(sql, values)).rows; } finally { await client.end(); }
+  };
+  const countRows = async settings => {
+    const [row] = await ask(settings, `select
+      (select count(*) from core.conversations)::int as conversations,
+      (select count(*) from core.messages)::int as messages,
+      (select count(*) from core.artifacts)::int as artifacts,
+      (select count(*) from core.jobs)::int as jobs,
+      (select count(*) from memory.preferences)::int as preferences`);
+    return row;
+  };
+
+  const socketA = path.join(data, 'supervisor.sock');
+  const a = await signIn(cli);
+
+  /* 1. Something worth losing: an account, a profile, a memory, a second
+   * agent, an artifact, a conversation, and one job left on the queue. */
+  const savedAccount = await a.send('/api/provider-accounts/save', {
+    label: 'Smoke model', kind: 'anthropic', auth: 'api-key',
+    defaultModel: 'claude-sonnet-5', enabled: true, secret: 'sk-ant-smoke-never-used',
+  });
+  assert.equal(savedAccount.status, 200, await savedAccount.clone().text());
+  const named = await a.send('/api/owner', { preferredName: 'Smoke Owner' });
+  assert.equal(named.status, 200);
+  const remembered = await a.send('/api/memory/preferences', { key: 'smoke_note', value: 'restores are tested, not hoped for' });
+  assert.equal(remembered.status, 200);
+  await mkdir(path.join(data, 'agents/smoke-two'), { recursive: true });
+  await writeFile(
+    path.join(data, 'agents/smoke-two/agent.md'),
+    '---\nid: smoke-two\nhandle: two\nname: Smoke Two\ndescription: The second agent, written before the backup.\ntools: []\n---\n\nYou are Smoke Two. Today is {{today}}.\n',
+  );
+  const artifactBytes = Buffer.from('the bytes an artifact is made of\n');
+  const artifactSha = createHash('sha256').update(artifactBytes).digest('hex');
+  const artifactRel = `artifacts/2026/09/${artifactSha}.txt`;
+  await mkdir(path.dirname(path.join(data, artifactRel)), { recursive: true });
+  await writeFile(path.join(data, artifactRel), artifactBytes);
+  await ask(connection, `insert into core.artifacts (kind, mime, filename, size_bytes, sha256, storage_path, created_by)
+    values ('document', 'text/plain', 'smoke.txt', $1, $2, $3, 'owner')`, [artifactBytes.length, artifactSha, artifactRel]);
+  const [conversation] = await ask(connection, `insert into core.conversations (agent_id) values ('concierge') returning id`);
+  for (const [role, text] of [['user', 'what did we decide?'], ['assistant', 'to keep a backup that restores']]) {
+    await ask(connection, `insert into core.messages (conversation_id, role, content) values ($1, $2, $3::jsonb)`,
+      [conversation.id, role, JSON.stringify([{ type: 'text', text }])]);
+  }
+  /*
+   * A job left queued, to prove recovery holds it.
+   *
+   * Paused first, because A's own worker would claim it within a second and
+   * the archive would then carry a finished job rather than a waiting one.
+   * The pause travels in the dump and is lifted on B before the wait, so what
+   * is measured there is recovery mode and nothing else. The agent it names
+   * does not exist, so claiming it fails in the catalog and no model is called.
+   */
+  await ask(connection, `insert into core.system_flags (key, value, updated_at) values ('paused', 'true'::jsonb, now())
+    on conflict (key) do update set value = excluded.value, updated_at = now()`);
+  const [planted] = await ask(connection, `insert into core.jobs (kind, payload, state, max_attempts, dedup_key)
+    values ('agent-run', $1::jsonb, 'pending', 1, 'smoke-recovery') returning id`,
+    [JSON.stringify({ agentId: 'no-such-agent-smoke', prompt: 'planted before the backup' })]);
+
+  /* 2. The backup, encrypted with the passphrase this installation keeps. */
+  const passphrase = (await (await a.get('/api/backups/passphrase')).json()).passphrase;
+  assert.match(passphrase, /\S/, 'the installation keeps a backup passphrase');
+  const backupStarted = await a.send('/api/backups', { encrypt: true });
+  assert.equal(backupStarted.status, 202);
+  const backupJob = await awaitJob(socketA, (await backupStarted.json()).job.id);
+  assert.equal(backupJob.phase, 'done', backupJob.error ?? '');
+  const archiveName = backupJob.report.archive;
+  assert.match(archiveName, /^buddi-backup-\d{8}-\d{6}\.tar\.gz\.age$/);
+  const archivePath = path.join(data, 'backups', archiveName);
+  const archiveBytes = await readFile(archivePath);
+  assert.ok((await stat(`${archivePath.slice(0, -4)}.json`)).size > 0, 'the envelope is written beside the ciphertext');
+  const listedOnA = await (await a.get('/api/backups')).json();
+  assert.equal(listedOnA.supervised, true);
+  assert.equal(listedOnA.archives.find(entry => entry.name === archiveName).envelopeOk, true);
+
+  /* 3. Verify, and the two ways it has to fail. No `age` binary anywhere. */
+  const verified = await awaitJob(socketA, (await (await a.send('/api/backups/verify', { name: archiveName })).json()).job.id);
+  assert.equal(verified.phase, 'done', verified.error ?? '');
+  assert.equal(verified.report.ok, true);
+  // One byte flipped in a copy: the envelope says so, and verify refuses it.
+  const damagedName = 'buddi-backup-19990101-000000.tar.gz.age';
+  const damagedPath = path.join(data, 'backups', damagedName);
+  await copyFile(`${archivePath.slice(0, -4)}.json`, `${damagedPath.slice(0, -4)}.json`);
+  const flipped = Buffer.from(archiveBytes);
+  flipped[flipped.length - 1] ^= 0xff;
+  await writeFile(damagedPath, flipped);
+  const damagedEntry = (await (await a.get('/api/backups')).json()).archives.find(entry => entry.name === damagedName);
+  assert.equal(damagedEntry.envelopeOk, false, 'the envelope catches a flipped byte');
+  const damagedJob = await awaitJob(socketA, (await (await a.send('/api/backups/verify', { name: damagedName })).json()).job.id);
+  assert.equal(damagedJob.phase, 'failed', 'a tampered archive does not verify');
+  // A wrong passphrase, through the one route that takes one: `/verify` uses
+  // the stored passphrase, so the passphrase itself is what is replaced.
+  assert.equal((await a.send('/api/backups/passphrase', { passphrase: 'not the words that open this' }, 'PUT')).status, 200);
+  const wrongPhrase = await awaitJob(socketA, (await (await a.send('/api/backups/verify', { name: archiveName })).json()).job.id);
+  assert.equal(wrongPhrase.phase, 'failed');
+  assert.match(wrongPhrase.error, /does not open this backup/, 'the wrong passphrase says so in plain words');
+  assert.equal((await a.send('/api/backups/passphrase', { passphrase }, 'PUT')).status, 200);
+  const rightAgain = await awaitJob(socketA, (await (await a.send('/api/backups/verify', { name: archiveName })).json()).job.id);
+  assert.equal(rightAgain.phase, 'done', 'the right passphrase opens it again');
+  // And through `POST /restore`, where a wrong passphrase must stop before
+  // anything is touched. The confirmation is the database's own name.
+  const databaseName = listedOnA.database;
+  assert.equal((await a.send('/api/backups/restore', { name: archiveName, passphrase })).status, 400, 'a restore over live rows needs the typed confirmation');
+  const refusedRestore = await a.send('/api/backups/restore', { name: archiveName, passphrase: 'six words that are not it', confirm: databaseName });
+  assert.equal(refusedRestore.status, 202);
+  const refusedJob = await awaitJob(socketA, (await refusedRestore.json()).job.id);
+  // Nothing was touched, so there is nothing to put back: this ends `failed`,
+  // and `rolled-back` is reserved for a restore that did undo something.
+  assert.equal(refusedJob.phase, 'failed', refusedJob.error ?? '');
+  assert.match(refusedJob.error, /does not open this backup/);
+  assert.equal(refusedJob.phases.includes('database'), false, 'a wrong passphrase never reaches the database');
+
+  /* 4. Installation B: the same tarball, a clean data directory, its own
+   * ports, and the archive restored before a single question is answered. */
+  await mkdir(restored, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(restored, '.env'), 'BUDDI_VAULT=file\n', { mode: 0o600 });
+  const envB = { ...env, BUDDI_DATA_DIR: restored, BUDDI_WEB_PORT: String(await freeLocalPort()) };
+  const cliB = async args => (await exec(process.execPath, [entry, ...args], { env: envB, cwd: testRoot, timeout: 300_000 })).stdout;
+  await cliB(['--no-service', '--no-open']);
+  pidB = JSON.parse(await cliB(['service', 'status'])).supervisorPid;
+  const socketB = path.join(restored, 'supervisor.sock');
+  let b = await signIn(cliB);
+  const freshB = await (await b.get('/api/onboarding')).json();
+  assert.equal(freshB.state, 'pending', 'B has never been set up');
+  assert.equal(freshB.needs.model, true);
+  const uploaded = await b.upload('/api/onboarding/restore', archiveBytes, {
+    'x-filename': archiveName,
+    'x-backup-passphrase': passphrase,
+  });
+  assert.equal(uploaded.status, 202, await uploaded.clone().text());
+  const restoreJob = await awaitJob(socketB, (await uploaded.json()).job.id);
+  assert.equal(restoreJob.phase, 'done', restoreJob.error ?? '');
+  assert.ok(
+    // `recovery` sits between `database` and `files`: Task C writes the row
+    // through the engine's `afterDatabase` hook, so a restore that cannot be
+    // gated rolls back instead of coming up ungated.
+    isSubsequence(['stopping', 'snapshot', 'database', 'recovery', 'files', 'starting', 'done'], restoreJob.phases),
+    `the restore ran its phases in order: ${restoreJob.phases.join(' → ')}`,
+  );
+
+  /* 5. What came back. */
+  const stateB = JSON.parse(await readFile(path.join(restored, 'installation.json'), 'utf8'));
+  const vaultB = core.createVault({ env: { BUDDI_VAULT: 'file', BUDDI_VAULT_FILE: path.join(restored, 'vault.json'), BUDDI_VAULT_KEY: (await readFile(path.join(restored, 'vault-key'), 'utf8')).trim() } });
+  const connectionB = { host: '127.0.0.1', port: stateB.dbPort, user: 'buddi', password: await vaultB.get('BUDDI_DB_PASSWORD'), database: 'buddi' };
+  b = await signIn(cliB);
+  const rosterB = await (await b.get('/api/agents')).json();
+  assert.ok(rosterB.agents.some(agent => agent.handle === 'smoke'), 'the first agent came back');
+  assert.ok(rosterB.agents.some(agent => agent.handle === 'two'), 'the second agent came back');
+  const messagesB = await ask(connectionB, `select role from core.messages where conversation_id = $1 order by created_at`, [conversation.id]);
+  assert.deepEqual(messagesB.map(row => row.role), ['user', 'assistant'], 'the conversation and both messages came back');
+  assert.deepEqual(await readFile(path.join(restored, artifactRel)), artifactBytes, 'the artifact bytes came back');
+  const memoryB = await (await b.get('/api/memory')).json();
+  assert.ok(memoryB.preferences.some(entry => entry.key === 'smoke_note'), 'the memory row came back');
+  assert.equal((await (await b.get('/api/owner')).json()).preferredName, 'Smoke Owner', 'the setting came back');
+  const recovery = await (await b.get('/api/recovery')).json();
+  assert.equal(recovery.active, true, 'B woke up in recovery');
+  assert.match(recovery.archive, /\.tar\.gz\.age$/);
+  assert.ok(recovery.checklist.secrets.some(secret => secret.kind === 'account'), 'the model account is listed as a secret to paste again');
+  assert.ok(recovery.checklist.pending.jobs >= 1, 'the queued job is counted as pending work');
+  assert.equal((await (await b.get('/api/onboarding')).json()).needs.model, true, 'a restored account with no credential still needs a model');
+  assert.equal((await (await b.get('/api/telegram')).json()).running, false, 'Telegram is not started in recovery');
+  assert.equal((await (await b.get('/api/service')).json()).status.recovery, true, 'the supervisor reports recovery');
+  /*
+   * Nothing runs on its own. The pause the archive carried is lifted first, so
+   * the only thing holding the planted job is recovery mode, and the wait is
+   * several times the worker's one-second poll.
+   */
+  await ask(connectionB, `update core.system_flags set value = 'false'::jsonb where key = 'paused'`);
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  const held = await ask(connectionB, `select state, attempts from core.jobs where id = $1`, [planted.id]);
+  assert.equal(held[0].state, 'pending', 'the queue claims nothing while recovery is active');
+  assert.equal(held[0].attempts, 0);
+
+  /* 6. A restore that fails where the engine can see it.
+   *
+   * The artifacts *directory* on B is replaced by a plain file. The engine
+   * swaps that directory whole — "replaced, not merged" — so a collision
+   * inside it is no failure at all; a non-directory where the directory has to
+   * go is the one the files step refuses outright, and it refuses it after the
+   * private directories have already been swapped, so the rollback has real
+   * work to undo. The pre-restore snapshot carries no file at that path, so
+   * putting everything back is clean and the job can end in a true
+   * `rolled-back`.
+   */
+  const before = await countRows(connectionB);
+  const databaseB = (await socketCall(socketB, '/backups')).body.database;
+  const collision = path.join(restored, 'artifacts');
+  const parked = path.join(restored, 'artifacts-parked');
+  await rm(parked, { recursive: true, force: true });
+  await rename(collision, parked);
+  await writeFile(collision, 'not a directory\n');
+  const attempted = await b.upload('/api/backups/restore', archiveBytes, {
+    'x-filename': archiveName,
+    'x-backup-passphrase': passphrase,
+    'x-backup-confirm': databaseB,
+  });
+  assert.equal(attempted.status, 202, await attempted.clone().text());
+  const failedRestore = await awaitJob(socketB, (await attempted.json()).job.id);
+  assert.equal(failedRestore.phase, 'rolled-back', `a failed file step rolls back: ${failedRestore.error ?? ''}`);
+  assert.ok(isSubsequence(['snapshot', 'database', 'files'], failedRestore.phases), failedRestore.phases.join(' → '));
+  // Put the directory back before anything else looks for it.
+  await rm(collision, { recursive: true, force: true });
+  await rename(parked, collision);
+  const snapshots = (await socketCall(socketB, '/backups')).body.archives.filter(entry => entry.name.startsWith('pre-restore-'));
+  assert.ok(snapshots.length >= 1, 'the pre-restore snapshot is kept and listed');
+  assert.deepEqual(await countRows(connectionB), before, 'the database is exactly what it was before the failed restore');
+
+  /* 7. Leaving recovery starts the loops again, and the job waiting since
+   * before the backup is finally claimed. */
+  b = await signIn(cliB);
+  const left = await b.send('/api/recovery/leave', { dropPending: false, keepGrants: [] });
+  assert.equal(left.status, 202);
+  const leftBody = await left.json();
+  assert.equal(leftBody.restarting, true, 'under a supervisor, leaving recovery restarts the gateway');
+  assert.equal(leftBody.droppedJobs, 0, 'dropPending: false keeps the pending work');
+  let claimed;
+  for (let i = 0; i < 120; i++) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    claimed = (await ask(connectionB, `select state, attempts from core.jobs where id = $1`, [planted.id]))[0];
+    if (claimed.state !== 'pending' || claimed.attempts > 0) break;
+  }
+  assert.ok(claimed.state !== 'pending' || claimed.attempts > 0, 'the queue claims the job once recovery is over');
+  assert.equal((await (await (await signIn(cliB)).get('/api/recovery')).json()).active, false, 'recovery is over');
+  process.kill(pidB, 'SIGTERM');
+  for (let i = 0; i < 100; i++) {
+    try { process.kill(pidB, 0); } catch { break; }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  pidB = undefined;
+
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done'
+    + ', encrypted backup and verify with no external binary, a flipped byte caught by the envelope, a wrong passphrase refused in plain words by verify and by restore, the passphrase replaced and verify passing again'
+    + ', a second installation restored from the upload before its first question — agents, conversation, artifact bytes, memory, setting and account checklist all back, phases in order'
+    + ', recovery holding the queue and Telegram down, a failed file step rolled back with the pre-restore snapshot kept and the rows unchanged, and leaving recovery letting the queue claim again'
+    + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
-  for (const name of ['supervisor', 'gateway', 'postgres']) {
-    const text = await readFile(path.join(data, 'logs', `${name}.log`), 'utf8').catch(() => '');
-    if (text) console.error(`${name}: ${text.slice(-5000)}`);
+  for (const [label, dir] of [['A', data], ['B', restored]]) {
+    for (const name of ['supervisor', 'gateway', 'postgres']) {
+      const text = await readFile(path.join(dir, 'logs', `${name}.log`), 'utf8').catch(() => '');
+      if (text) console.error(`${label} ${name}: ${text.slice(-5000)}`);
+    }
   }
   throw error;
 } finally {
@@ -321,14 +643,18 @@ try {
     // Only the LaunchAgent created for this exact random test directory.
     await unlink(path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`)).catch(() => {});
   }
-  if (!pid) {
-    const lock = await readFile(path.join(data, 'supervisor.lock'), 'utf8').catch(() => '');
-    if (/^\d+$/.test(lock)) pid = Number(lock);
-  }
-  if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} }
-  if (pid) for (let i = 0; i < 200; i++) {
-    try { process.kill(pid, 0); } catch { break; }
-    await new Promise(resolve => setTimeout(resolve, 100));
+  for (const dir of [data, restored]) {
+    let victim = dir === data ? pid : pidB;
+    if (!victim) {
+      const lock = await readFile(path.join(dir, 'supervisor.lock'), 'utf8').catch(() => '');
+      if (/^\d+$/.test(lock)) victim = Number(lock);
+    }
+    if (!victim) continue;
+    try { process.kill(victim, 'SIGTERM'); } catch {}
+    for (let i = 0; i < 200; i++) {
+      try { process.kill(victim, 0); } catch { break; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
   console.log(`Test data retained for inspection: ${testRoot}`);
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Mission } from '@buddi/core';
 import { UNATTENDED_JOB_KINDS } from '@buddi/core';
-import { formatMissionLine, JOB_KINDS, STALE_CLAIM_MS, TICK_MS } from './serve.js';
+import { formatMissionLine, idleLoops, JOB_KINDS, STALE_CLAIM_MS, TICK_MS } from './serve.js';
 
 const mission: Mission = {
   id: 'friday-recap',
@@ -56,5 +56,42 @@ describe('serve cadence', () => {
    */
   it('classifies every kind this process runs as unattended work', () => {
     expect([...JOB_KINDS].sort()).toEqual([...UNATTENDED_JOB_KINDS].sort());
+  });
+});
+
+/**
+ * Recovery mode's stand-ins.
+ *
+ * `main` waits on `done` and ends the pool afterwards, so a stand-in that
+ * resolves `done` on its own ends the database under a dashboard that is still
+ * serving — which is how a restored installation came up answering 500 on the
+ * very checklist recovery exists for.
+ */
+describe('the loops recovery mode starts instead', () => {
+  /** Did it finish within a beat? A timer, because "never" has no other proof. */
+  const settled = (done: Promise<void>): Promise<boolean> =>
+    Promise.race([
+      done.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20)),
+    ]);
+
+  it('keeps the process alive until it is stopped', async () => {
+    const idle = idleLoops();
+    expect(await settled(idle.scheduler.done)).toBe(false);
+    expect(await settled(idle.worker.done)).toBe(false);
+
+    // What shutdown does, and the only thing that ends the wait.
+    await idle.scheduler.stop();
+    expect(await settled(idle.worker.done)).toBe(true);
+    await expect(Promise.all([idle.scheduler.done, idle.worker.done])).resolves.toBeDefined();
+  });
+
+  it('does no work while it stands in', async () => {
+    const idle = idleLoops();
+    expect(await idle.scheduler.tick()).toEqual({ materialized: 0, executed: 0 });
+    expect(await idle.worker.tick()).toBeNull();
+    expect(await idle.worker.recover()).toBe(0);
+    expect(await idle.loop.tick()).toBe('skipped');
+    await idle.worker.stop();
   });
 });

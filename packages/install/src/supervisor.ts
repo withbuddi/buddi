@@ -125,18 +125,25 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
       // starting the gateway around a database it is replacing.
       if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
       const name = route.slice(1);
-      if (name === 'start') {
+      /*
+       * `start` and `stop` are answered when they are done, with the status
+       * that is true afterwards. Neither kills the caller: the CLI's
+       * `buddi service stop` is a separate process, and the dashboard has
+       * already put its own reply on the wire before it asks.
+       */
+      if (name === 'start' || name === 'stop') {
         await action(name);
         return send(res, 200, status());
       }
       /*
-       * `stop` and `restart` kill the caller.
+       * `restart` is the one that kills the caller.
        *
-       * The only client is the gateway's own dashboard, and a reply composed
-       * after the child is gone would be written to a socket nobody is
-       * reading. So the request is acknowledged first and performed after —
-       * which is also what lets the dashboard treat the acknowledgement as
-       * "the supervisor has this now" before it finishes leaving recovery.
+       * When it comes from the dashboard the gateway composing the reply is
+       * the child being replaced, and a reply written after that is written to
+       * a socket nobody is reading. So the request is acknowledged first and
+       * performed after — which is also what lets the dashboard treat the
+       * acknowledgement as "the supervisor has this now" before it finishes
+       * leaving recovery.
        */
       const running = action(name);
       running.catch(() => {});
@@ -269,6 +276,9 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   let failures = 0;
   const stopGateway = async () => {
     desired = false; clearTimeout(retry);
+    // The log is the only account of why a gateway went away: without this
+    // line a stop and a crash look the same in logs/gateway.log.
+    if (child) console.error(`supervisor: stopping the gateway (pid ${child.pid}).`);
     await stopChild(child); child = undefined;
   };
   let resolveShutdown!: () => void;
@@ -312,6 +322,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       if (closing || !database!.alive || (child && child.exitCode === null && child.signalCode === null)) return;
       const started = Date.now();
       child = spawn(process.execPath, [LAUNCHER, '__gateway'], { env: ready.env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+      console.error(`supervisor: gateway started (pid ${child.pid}).`);
       child.stdout!.pipe(log!, { end: false }); child.stderr!.pipe(log!, { end: false });
       child.once('error', () => console.error('Gateway could not start; check the installed Node executable.'));
       child.once('close', () => {
@@ -340,7 +351,7 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
         gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null }),
-      action: name => { chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
+      action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
       backup, data: ready.data,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));

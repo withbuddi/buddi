@@ -461,13 +461,14 @@ describe('a restore, as the service runs it', () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  test('stop and restart are acknowledged before they are carried out', async () => {
+  test('restart is acknowledged before it is carried out; stop is answered after', async () => {
     const { socket } = await serve();
+    // `buddi service stop` reads this reply, so it is composed once the child
+    // is gone and the status in it is the one that is true.
     expect((await call(socket, '/start', 'POST', {})).status).toBe(200);
-    for (const route of ['/stop', '/restart']) {
-      // The caller is the process about to be killed, so the reply goes first.
-      expect((await call(socket, route, 'POST', {})).status, route).toBe(202);
-    }
+    expect((await call(socket, '/stop', 'POST', {})).status).toBe(200);
+    // The caller of a restart is the process about to be replaced.
+    expect((await call(socket, '/restart', 'POST', {})).status).toBe(202);
   });
 });
 

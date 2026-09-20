@@ -171,6 +171,45 @@ function missionJobPayload(payload: unknown): MissionJobPayload | null {
   };
 }
 
+/** The three shapes a loop has when it is not running at all: see `idleLoops`. */
+export interface IdleLoops {
+  loop: { tick: () => Promise<'skipped'>; busy: boolean; stop: () => void };
+  scheduler: ReturnType<typeof runScheduler>;
+  worker: ReturnType<typeof runWorker>;
+}
+
+/**
+ * The stand-ins recovery mode starts instead of the real loops.
+ *
+ * `done` is what `main` waits on, and ending that wait ends the pool. Stand-ins
+ * whose `done` was already resolved made `main` fall straight through to
+ * `pool.end()` while the dashboard server kept the process alive: the restored
+ * installation then answered 500 on every route that reads the database —
+ * including the recovery checklist, on the one installation it exists for. So
+ * these settle on the same signal the real loops do, `stop()`, which is called
+ * from shutdown and nowhere else.
+ */
+export function idleLoops(): IdleLoops {
+  let stop = (): void => {};
+  const done = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  return {
+    loop: { tick: async () => 'skipped' as const, busy: false, stop: () => stop() },
+    scheduler: {
+      tick: async () => ({ materialized: 0, executed: 0 }),
+      stop: async () => stop(),
+      done,
+    },
+    worker: {
+      tick: async () => null,
+      recover: async () => 0,
+      stop: async () => stop(),
+      done,
+    },
+  };
+}
+
 export interface MissionLine {
   mission: Mission;
   cron?: string;
@@ -368,19 +407,7 @@ export async function main(): Promise<void> {
    * is having, and a turn is exactly what recovery leaves working.
    */
 
-  /** The three shapes a loop has, when it is not running at all. */
-  const idleLoop = { tick: async () => 'skipped' as const, busy: false, stop: () => {} };
-  const idleScheduler = (): ReturnType<typeof runScheduler> => ({
-    tick: async () => ({ materialized: 0, executed: 0 }),
-    stop: async () => {},
-    done: Promise.resolve(),
-  });
-  const idleWorker = (): ReturnType<typeof runWorker> => ({
-    tick: async () => null,
-    recover: async () => 0,
-    stop: async () => {},
-    done: Promise.resolve(),
-  });
+  const idle = idleLoops();
 
   try {
     try { await hostBrowser(process.env).enable(); }
@@ -630,7 +657,7 @@ export async function main(): Promise<void> {
     // a lease, bounded retries and a failed-job inspection path — so a restart
     // mid-mission resumes instead of losing the work, and a mission that throws
     // does not take the scheduler pass down with it.
-    const worker = recovering ? idleWorker() : runWorker({
+    const worker = recovering ? idle.worker : runWorker({
       pool,
       worker: `serve:${process.pid}`,
       kinds: JOB_KINDS,
@@ -665,14 +692,14 @@ export async function main(): Promise<void> {
     // Non-overlapping: a tick that lands while the previous poll is still
     // running says so and skips, and a poll still going at 2x the deadline is
     // abandoned so the next one starts clean.
-    const sentinelLoop = recovering ? idleLoop : startLoop({
+    const sentinelLoop = recovering ? idle.loop : startLoop({
       name: 'sentinels',
       everyMs: SENTINEL_TICK_MS,
       abortAfterMs: SENTINEL_TICK_MS * 2,
       run: sentinelTick,
       log: (line) => console.error(line),
     });
-    const sourceLoop = recovering ? idleLoop : startLoop({
+    const sourceLoop = recovering ? idle.loop : startLoop({
       name: 'sources',
       everyMs: SOURCE_TICK_MS,
       abortAfterMs: sourceAbortMs,
@@ -680,7 +707,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const reminderLoop = recovering ? idleLoop : startLoop({
+    const reminderLoop = recovering ? idle.loop : startLoop({
       name: 'reminders',
       everyMs: REMINDER_TICK_MS,
       abortAfterMs: REMINDER_TICK_MS * 2,
@@ -700,7 +727,7 @@ export async function main(): Promise<void> {
       deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
       log: (line) => console.error(line),
     });
-    const deadLetterLoop = recovering ? idleLoop : startLoop({
+    const deadLetterLoop = recovering ? idle.loop : startLoop({
       name: 'dead-letter',
       everyMs: DEAD_LETTER_TICK_MS,
       abortAfterMs: DEAD_LETTER_TICK_MS * 2,
@@ -711,7 +738,7 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
-    const scheduler = recovering ? idleScheduler() : runScheduler({
+    const scheduler = recovering ? idle.scheduler : runScheduler({
       pool,
       now,
       tickMs: TICK_MS,
@@ -840,6 +867,15 @@ export async function main(): Promise<void> {
     console.log(`  last cursor: ${telegram?.cursor ?? '(none)'}`);
 
     let stopping = false;
+    /**
+     * The dashboard's own close, kept so the pool outlives it.
+     *
+     * `close()` stops new connections but lets the ones already open finish,
+     * and a request finishing needs the pool that the `finally` below is about
+     * to end. Awaited after the loops, so a request in flight when the signal
+     * arrives is answered rather than told the pool has been ended.
+     */
+    let closingDashboard: Promise<void> | undefined;
     const shutdown = (signal: string): void => {
       hostService(process.env).stop(wiring.ctx.ownerId);
       if (stopping) return;
@@ -850,7 +886,8 @@ export async function main(): Promise<void> {
       sourceLoop.stop();
       reminderLoop.stop();
       deadLetterLoop.stop();
-      void dashboard?.close();
+      closingDashboard = dashboard?.close();
+      closingDashboard?.catch(() => {});
       void hostBrowser(process.env).shutdown();
       void Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
     };
@@ -858,6 +895,7 @@ export async function main(): Promise<void> {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     await Promise.all([telegram?.done, scheduler.done, worker.done]);
+    await closingDashboard?.catch(() => {});
     console.log('buddi serve stopped cleanly');
   } finally {
     await hostBrowser(process.env).shutdown();

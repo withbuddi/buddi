@@ -287,12 +287,22 @@ export async function loadDatabase(
   let triggersLeftOn = false;
   try {
     await client.query('begin');
+    // Replica mode is what makes the order of the COPYs irrelevant and the
+    // load atomic. A role without the privilege is not a reason to refuse the
+    // restore: the tables are copied in dependency order anyway.
+    //
+    // The savepoint is what makes that fallback real. A packaged installation
+    // runs as an ordinary role, which Postgres refuses this parameter — and a
+    // refused statement aborts the *whole* transaction, so without a savepoint
+    // to roll back to, every COPY below would fail with "current transaction is
+    // aborted" and the restore would end rolled back.
+    await client.query(`savepoint replica_mode`);
     try {
-      // Replica mode is what makes the order of the COPYs irrelevant and the
-      // load atomic. A role without the privilege is not a reason to refuse the
-      // restore: the tables are copied in dependency order anyway.
       await client.query(`set local session_replication_role = replica`);
+      await client.query(`release savepoint replica_mode`);
     } catch {
+      await client.query(`rollback to savepoint replica_mode`);
+      await client.query(`release savepoint replica_mode`);
       triggersLeftOn = true;
     }
 
