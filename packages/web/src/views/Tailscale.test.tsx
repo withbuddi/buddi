@@ -32,7 +32,19 @@ describe('the Tailscale panel', () => {
     expect(await screen.findByText('Tailscale is running on this machine as owner@example.com.')).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toHaveValue('owner@example.com');
     expect(screen.getByText(/Anyone signed in to Tailscale as this login/)).toBeInTheDocument();
-    expect(screen.getByText(VIEW.serveCommand)).toBeInTheDocument();
+    // The command is on a line of its own, with the button that copies it.
+    const command = screen.getByText(VIEW.serveCommand);
+    expect(command).toBeInTheDocument();
+    expect(command.closest('.tailscale-command')).toContainElement(screen.getByRole('button', { name: 'Copy' }));
+  });
+
+  it('copies the command from beside it, not from the footer', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    vi.mocked(api.tailscale).mockResolvedValue(VIEW);
+    render(<Tailscale />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(VIEW.serveCommand));
   });
 
   it('says so when there is no daemon here', async () => {
@@ -54,8 +66,24 @@ describe('the Tailscale panel', () => {
     vi.mocked(api.tailscale).mockResolvedValue({ ...VIEW, enabled: true, login: 'owner@example.com', proxied: true });
     render(<Tailscale />);
     expect(await screen.findByText('Change this from the computer buddi runs on.')).toBeInTheDocument();
+    // Greyed controls are hard to read, so the state is said in words above them.
+    expect(screen.getByText('On, for owner@example.com')).toBeInTheDocument();
     expect(screen.getByRole('checkbox')).toBeDisabled();
     expect(screen.getByRole('textbox')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('says Off through the proxy when it is off', async () => {
+    vi.mocked(api.tailscale).mockResolvedValue({ ...VIEW, enabled: false, login: 'owner@example.com', proxied: true });
+    render(<Tailscale />);
+    expect(await screen.findByText('Off')).toBeInTheDocument();
+    expect(screen.queryByText(/^On, for/)).not.toBeInTheDocument();
+  });
+
+  it('says nothing about the state when the controls are usable', async () => {
+    vi.mocked(api.tailscale).mockResolvedValue({ ...VIEW, enabled: true, login: 'owner@example.com' });
+    render(<Tailscale />);
+    await screen.findByRole('textbox');
+    expect(screen.queryByText('On, for owner@example.com')).not.toBeInTheDocument();
   });
 });
