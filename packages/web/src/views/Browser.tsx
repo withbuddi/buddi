@@ -377,11 +377,36 @@ function AppPicker({ chosen, onClose, onPick }: { chosen: string[]; onClose: () 
 }
 
 /** Shared by the full page and the conversation's trusted canvas tab. */
-export function BrowserPanel({ data, error, reload, compact = false }: {
+export function BrowserPanel({ data, error, reload, compact = false, refresh, screenshotSrc, onScreenshotError, onScreenshotLoad, controls = true }: {
   data: BrowserStatus | undefined;
   error: string | null;
   reload: () => void;
   compact?: boolean;
+  /**
+   * A picture to show instead of asking the route for one. The canvas hands
+   * over the last frame it kept when a session ends: the route has nothing
+   * left to serve by then, and an empty frame is a worse record of what the
+   * agent did than the one it actually left.
+   */
+  screenshotSrc?: string;
+  /** The picture did not arrive, so whoever is polling can slow down. */
+  onScreenshotError?: () => void;
+  /** It did, so they can stop counting failures. */
+  onScreenshotLoad?: () => void;
+  /**
+   * Whether the owner's controls are shown. They are not, once the session
+   * has ended: Stop is installation-wide, and offering it on a panel of
+   * history would stop a session this tab is not even showing.
+   */
+  controls?: boolean;
+  /**
+   * A counter the canvas advances while a session is alive. It goes on the
+   * screenshot's URL, so a new value is a new request for the last
+   * observation — which is how the preview keeps up with an agent that is
+   * working right now. Left out, the picture changes only when the
+   * observation does.
+   */
+  refresh?: number;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -419,13 +444,15 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
         <p className="ui-page-lede">{computer ? 'Your apps, operated through macOS accessibility, screenshots and input. No browser debugging connection.' : yours ? 'Your own Chrome, signed in as you, working in background tabs grouped as “buddi”. You keep browsing.' : 'A real browser window, driven by your assistant. You stay in control.'}</p>
       )}
       <ErrorBanner message={error ?? failure} />
-      <Toolbar>
-        <Button variant="danger" disabled={!canControl || data?.state === 'stopped'} onClick={() => void control('stop')}>{computer ? 'Stop computer control' : 'Stop all browsers'}</Button>
-        <Button disabled={!canControl || !data?.session || data?.state === 'paused'} onClick={() => void control('takeover')}>Take over</Button>
-        <Button disabled={!canControl || data?.busy || !['stopped', 'paused'].includes(data?.state ?? '')} onClick={() => void control('resume')}>Resume access</Button>
-        <Button disabled={!canControl || !data?.session} onClick={() => void control('release')}>{computer ? 'Release control' : 'Close & release'}</Button>
-      </Toolbar>
-      {compact ? <Details summary="About these controls"><p className="muted">{help}</p></Details> : <p className="muted">{help}</p>}
+      {controls ? (
+        <Toolbar>
+          <Button variant="danger" disabled={!canControl || data?.state === 'stopped'} onClick={() => void control('stop')}>{computer ? 'Stop computer control' : 'Stop all browsers'}</Button>
+          <Button disabled={!canControl || !data?.session || data?.state === 'paused'} onClick={() => void control('takeover')}>Take over</Button>
+          <Button disabled={!canControl || data?.busy || !['stopped', 'paused'].includes(data?.state ?? '')} onClick={() => void control('resume')}>Resume access</Button>
+          <Button disabled={!canControl || !data?.session} onClick={() => void control('release')}>{computer ? 'Release control' : 'Close & release'}</Button>
+        </Toolbar>
+      ) : null}
+      {!controls ? null : compact ? <Details summary="About these controls"><p className="muted">{help}</p></Details> : <p className="muted">{help}</p>}
       {data?.message ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
       {data?.session ? (
         <div className="browser-task">
@@ -440,7 +467,13 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
         <div className="browser-address"><span aria-hidden="true">◉</span><span>{data?.page?.url ?? (computer ? 'Waiting for an application' : 'Waiting for a website')}</span></div>
         {data?.hasScreenshot && data.page ? (
           <figure>
-            <img key={data.page.id} src={`/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}`} alt={`Last browser observation: ${data.page.title || data.page.url}`} />
+            <img
+              key={screenshotSrc ?? data.page.id}
+              src={screenshotSrc ?? `/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}${refresh ? `&t=${refresh}` : ''}`}
+              alt={`Last browser observation: ${data.page.title || data.page.url}`}
+              {...(onScreenshotError ? { onError: onScreenshotError } : {})}
+              {...(onScreenshotLoad ? { onLoad: onScreenshotLoad } : {})}
+            />
             <figcaption>Last observation · {new Date(data.page.capturedAt).toLocaleTimeString()} · {data.page.title || 'Untitled page'}</figcaption>
           </figure>
         ) : (

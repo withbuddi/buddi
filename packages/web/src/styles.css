@@ -2710,3 +2710,38 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
 }
+
+/* The screen an agent is driving: the live preview and its controls (the
+   browser panel's own), then every step taken on it. The newest step is the
+   one the owner is watching, so it is the one marked; a step clicked in the
+   chat is marked the same way while they read it. */
+.wb-browser { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.wb-browser-empty { margin: 0; }
+.wb-browser-steps { border-top: 1px solid var(--line); padding-top: var(--space-3); min-width: 0; }
+.wb-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.wb-browser-step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.wb-browser-step + .wb-browser-step { border-top: 1px solid var(--line); }
+.wb-browser-step[data-newest='true'],
+.wb-browser-step[data-focused='true'] { background: var(--surface-raised); }
+.wb-browser-index { color: var(--text-muted); font-size: var(--text-sm); }
+.wb-browser-what { display: flex; flex-direction: column; gap: var(--space-0); flex: 1; min-width: 0; }
+.wb-browser-target { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.wb-browser-error { color: var(--critical); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.wb-browser-outcome { font-size: var(--text-sm); color: var(--text-muted); }
+.wb-browser-outcome[data-state='ok'] { color: var(--good); }
+.wb-browser-outcome[data-state='failed'] { color: var(--critical); }

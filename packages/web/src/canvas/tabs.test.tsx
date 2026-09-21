@@ -235,20 +235,42 @@ describe('the strip holds what fits and names the rest', () => {
 describe('the split itself', () => {
   it('dismisses result tabs by button or Delete, but does not hide approvals or live controls', () => {
     const onClose = vi.fn();
-    render(<Canvas renderables={[fake(0), fake(1, { source: 'approval' }), fake(2, { source: 'browser', renderer: 'browser' })]}
+    render(<Canvas renderables={[
+      fake(0),
+      fake(1, { source: 'approval' }),
+      // Live: the session is stopped with its own controls, not by closing a tab.
+      fake(2, { source: 'browser', renderer: 'browser', pinned: true }),
+      // Over: ordinary history, and history can be put away.
+      fake(3, { source: 'browser', renderer: 'browser' }),
+    ]}
       activeId="r0" onActivate={vi.fn()} onClose={onClose} timezone="UTC" maxTabs={5} />);
     fireEvent.click(screen.getByRole('button', { name: 'Close Thing 0 tab' }));
     expect(onClose).toHaveBeenCalledWith('r0');
     expect(screen.queryByRole('button', { name: 'Close Thing 1 tab' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close Thing 2 tab' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Thing 3 tab' }));
+    expect(onClose).toHaveBeenCalledWith('r3');
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Thing 0' }), { key: 'Delete' });
-    expect(onClose).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Thing 2' }), { key: 'Delete' });
+    expect(onClose).toHaveBeenCalledTimes(3);
   });
   it('shows a pinned pair even when the room is one', () => {
     const items = [fake(0, { source: 'approval' }), fake(1), fake(2)];
     const { shown, hidden } = splitTabs(items, 'r2', 1);
     expect(shown.map((item) => item.id)).toEqual(['r0', 'r2']);
     expect(hidden.map((item) => item.id)).toEqual(['r1']);
+  });
+
+  /*
+   * A screen an agent is driving right now holds the strip: the page marks it
+   * pinned while the session lives and clears the mark when it ends, and a
+   * long run cannot push it behind the menu in between.
+   */
+  it('holds a pinned panel on the strip, and lets go once it is history', () => {
+    const live = [fake(0, { source: 'browser', pinned: true }), fake(1), fake(2), fake(3)];
+    expect(splitTabs(live, 'r3', 2).shown.map((item) => item.id)).toEqual(['r0', 'r3']);
+    const ended = live.map((item) => (item.id === 'r0' ? { ...item, pinned: false } : item));
+    expect(splitTabs(ended, 'r3', 2).shown.map((item) => item.id)).toEqual(['r2', 'r3']);
   });
 
   it('keeps the strip in the order the conversation made things', () => {

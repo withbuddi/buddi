@@ -132,13 +132,13 @@ export function Canvas({
             {shown.map((item) => (
               <div key={item.id} className="wb-tab-item">
               <Tabs.Trigger value={item.id} className="wb-tab" data-tone={item.tone}
-                onKeyDown={event => { if (event.key === 'Delete' && onClose && item.source !== 'approval' && item.source !== 'browser') { event.preventDefault(); onClose(item.id); } }}>
+                onKeyDown={event => { if (event.key === 'Delete' && onClose && closeable(item)) { event.preventDefault(); onClose(item.id); } }}>
                 {item.tone === 'warning' || item.tone === 'critical' ? (
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
                 ) : null}
                 <span className="wb-tab-text">{item.title}</span>
               </Tabs.Trigger>
-              {onClose && item.source !== 'approval' && item.source !== 'browser' ? <button className="wb-tab-close" aria-label={`Close ${item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
+              {onClose && closeable(item) ? <button className="wb-tab-close" aria-label={`Close ${item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
               </div>
             ))}
           </Tabs.List>
@@ -182,6 +182,20 @@ export function Canvas({
       </Tabs.Root>
     </div>
   );
+}
+
+/**
+ * May the owner dismiss this tab?
+ *
+ * Not a decision waiting on them, and not live platform state — a session
+ * being driven cannot be closed from a tab strip; it is stopped with the
+ * panel's own controls. Once that session is over its tab is ordinary
+ * history, and history can be put away.
+ */
+function closeable(item: Renderable): boolean {
+  if (item.source === 'approval') return false;
+  if (item.source === 'browser') return item.pinned !== true;
+  return true;
 }
 
 /**
@@ -230,6 +244,10 @@ function useTabsThatFit(forced?: number): [(node: HTMLDivElement | null) => void
  * exceed the room; they still both show, because the alternative is hiding
  * one of them.
  *
+ * A third claim is the same kind of thing: platform state the page has marked
+ * as *happening now* — the screen an agent is driving — which holds the strip
+ * until it stops being live.
+ *
  * A failure is not pinned — it would crowd out the work — but it is never
  * silent either: the menu carries its red dot, so the strip says a failure is
  * back there before it is opened.
@@ -241,7 +259,7 @@ export function splitTabs(
 ): { shown: Renderable[]; hidden: Renderable[] } {
   const pinned = new Set(
     renderables
-      .filter((item) => item.id === activeId || item.source === 'approval')
+      .filter((item) => item.id === activeId || item.source === 'approval' || item.pinned === true)
       .map((item) => item.id),
   );
 
