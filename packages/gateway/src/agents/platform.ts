@@ -139,6 +139,12 @@ export interface PlatformBinding {
    * `provider`/`model` is what runs.
    */
   accounts?: () => PlatformAccounts | undefined;
+  /**
+   * Record which agent is the default for this installation. Absent in a
+   * process with no database (a unit test, a fixture), where `default: true`
+   * is refused rather than silently doing nothing.
+   */
+  setDefaultAgent?: (agentId: string) => Promise<void>;
 }
 
 /** One named account, as the platform tools see it. */
@@ -158,9 +164,11 @@ export interface PlatformAccounts {
   assign(agentId: string, accountId: string, model: string): Promise<unknown>;
 }
 
-interface ResolvedBinding extends Required<Omit<PlatformBinding, 'reload' | 'catalog' | 'accounts'>> {
+interface ResolvedBinding
+  extends Required<Omit<PlatformBinding, 'reload' | 'catalog' | 'accounts' | 'setDefaultAgent'>> {
   catalog: ReloadableAgentCatalog;
   accounts: PlatformAccounts | undefined;
+  setDefaultAgent: ((agentId: string) => Promise<void>) | undefined;
   reload: () => void;
   /** Where a deleted agent goes: `<private>/.trash`. */
   trashRoot: string;
@@ -198,6 +206,7 @@ function resolved(registry: ToolRegistry, env: NodeJS.ProcessEnv = process.env):
     catalog: binding.catalog,
     reload: binding.reload,
     accounts: binding.accounts?.(),
+    setDefaultAgent: binding.setDefaultAgent,
     agentsDir,
     skillsDir: binding.skillsDir ?? search.owner.skillsDir,
     examplesDir: binding.examplesDir ?? EXAMPLES_AGENTS_DIR,
@@ -478,11 +487,11 @@ export interface UpdateAgentEnvelope {
   /** True when this agent becomes the one a chat with no agent named lands on. */
   becomesDefault: boolean;
   /**
-   * The agent that loses the default claim, and the file that says so after the
-   * same approval. One action moves the claim, because an installation with two
-   * defaults does not load and an installation with none has nowhere to land.
+   * The agent that holds the default right now, if any. Named in the preview
+   * so the owner sees what they are moving away from — nothing is written to
+   * its file: the default is an installation record, not a flag in a persona.
    */
-  defaultFrom: { id: string; file: string; content: string } | null;
+  defaultFrom: { id: string; name: string } | null;
   /** The complete resulting file, byte for byte. */
   content: string;
 }
@@ -584,8 +593,9 @@ export function renderUpdatePreview(envelope: UpdateAgentEnvelope, specs: readon
         ]),
     ...(envelope.becomesDefault
       ? [
-          `It BECOMES THE DEFAULT AGENT: every chat that names no agent lands on it from now on` +
-            `${envelope.defaultFrom ? `, and ${envelope.defaultFrom.id} stops being the default` : ''}.`,
+          'It BECOMES THE DEFAULT AGENT: every chat that names no agent lands on it from now on' +
+            `${envelope.defaultFrom ? `, and ${envelope.defaultFrom.name} (${envelope.defaultFrom.id}) stops being the default` : ''}. ` +
+            'This is recorded for the installation; no other agent file is touched.',
         ]
       : []),
     ...(envelope.personaChanged ? ['Its persona is rewritten (the new text is below).'] : []),
@@ -596,7 +606,6 @@ export function renderUpdatePreview(envelope: UpdateAgentEnvelope, specs: readon
             `${envelope.delegatesAfter.join(', ') || 'nobody'}`,
         ]),
     `File:  ${envelope.file}`,
-    ...(envelope.defaultFrom ? [`Also written: ${envelope.defaultFrom.file} (it loses "default: true")`] : []),
     `Proposed by ${envelope.proposedBy}.`,
     ...(envelope.personaChanged ? ['', ...personaBlock(envelope.content)] : []),
   ].join('\n');
@@ -934,19 +943,26 @@ function buildUpdateEnvelope(
   const roles = checkRoles(input.roles);
   const delegates = checkDelegates(input.delegates, binding.catalog, agent.id);
 
-  // The claim moves in one action: this file takes it, and the file that holds
-  // it loses it. Nothing to do when this agent already is the default, and
-  // nothing to *write* when the holder is an example — a private agent
-  // declaring it already wins on the search path.
+  /*
+   * The default moves as a *record*, in one write, and no agent file changes.
+   * Whoever holds it simply stops being named by the installation — there is
+   * no second file to patch, which is what used to make this the one action
+   * that could half-succeed.
+   */
   const holder = input.default === true ? defaultHolder(binding) : undefined;
   const becomesDefault = input.default === true && holder?.id !== agent.id;
-  const losesDefault = becomesDefault && holder !== undefined && !isExample(holder, binding) ? holder : undefined;
+  if (becomesDefault && binding.setDefaultAgent === undefined) {
+    refuse(
+      'no-record',
+      'this process cannot record which agent is the default (no installation database is bound), ' +
+        'so the default cannot be moved from here',
+    );
+  }
 
   const source = readFileSync(agent.file, 'utf8');
   const patch: FrontmatterPatch = {
     ...(name === undefined ? {} : { name }),
     ...(handle === undefined ? {} : { handle }),
-    ...(becomesDefault ? { default: true } : {}),
     ...(input.description === undefined ? {} : { description: input.description.trim() }),
     ...(input.tools === undefined ? {} : { tools: input.tools.map((t) => t.trim()) }),
     ...(!onAccounts && input.model !== undefined ? { model: input.model.trim() } : {}),
@@ -974,25 +990,14 @@ function buildUpdateEnvelope(
     refuse('would-not-load', `this change would leave an agent that cannot load: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  let defaultFrom: UpdateAgentEnvelope['defaultFrom'] = null;
-  if (losesDefault) {
-    const holderSource = readFileSync(losesDefault.file, 'utf8');
-    try {
-      defaultFrom = {
-        id: losesDefault.id,
-        file: losesDefault.file,
-        content: patchAgentSource(holderSource, { default: null }, losesDefault.file).text,
-      };
-    } catch (err) {
-      refuse('would-not-load', err instanceof Error ? err.message : String(err));
-    }
-  }
+  const defaultFrom: UpdateAgentEnvelope['defaultFrom'] =
+    becomesDefault && holder !== undefined ? { id: holder.id, name: holder.name } : null;
 
   const personaChanged = input.persona !== undefined && content !== edited.text;
   const delegatesBefore = readDelegates(agent.id, binding.agentsDir);
   const delegatesAfter = delegates ?? delegatesBefore;
   const accountChanged = account !== null && (account.id !== current?.accountId || account.model !== current?.model);
-  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',') && !accountChanged && defaultFrom === null) {
+  if (content === source && delegatesAfter.join(',') === delegatesBefore.join(',') && !accountChanged && !becomesDefault) {
     refuse('no-change', `nothing in that would change ${agent.id}: the file already says exactly this`);
   }
   const currentLabel = current ? (binding.accounts?.list().find((a) => a.id === current.accountId)?.label ?? current.accountId) : undefined;
@@ -1442,6 +1447,74 @@ function buildAcceptSkillEnvelope(
 }
 
 /* ------------------------------------------------------------------ *
+ * The owner, editing directly
+ * ------------------------------------------------------------------ */
+
+/** The fields the owner may edit from the dashboard, validated by the tool's own schema. */
+export const ownerEditableInput = updateInput;
+export type OwnerAgentEdit = UpdateInput;
+
+export interface OwnerEditResult {
+  id: string;
+  handle: string;
+  file: string;
+  tools: string[];
+  changed: string[];
+  personaChanged: boolean;
+  live: boolean;
+  message: string;
+}
+
+/**
+ * Change an agent from the dashboard, with the tool's validation and none of
+ * its approval.
+ *
+ * The same `buildUpdateEnvelope` `platform.update_agent` runs, so a handle
+ * collision, a tool the registry does not have, and a change that would leave
+ * a file the loader refuses are all refused here in exactly the same words. An
+ * approval envelope is what a *model* proposing a change needs; the owner
+ * clicking Save in their own dashboard already is the approval, so the
+ * envelope is built, checked, and written.
+ *
+ * `default` is not editable here: it is not a field of the file. The Agents
+ * page records the default through its own route.
+ */
+export async function updateAgentFromOwner(
+  registry: ToolRegistry,
+  input: OwnerAgentEdit,
+): Promise<OwnerEditResult> {
+  const binding = resolved(registry);
+  if (input.default !== undefined) {
+    refuse('not-a-field', 'which agent is the default is an installation record, not a field of the file');
+  }
+  const envelope = buildUpdateEnvelope(input, { binding, registry, proposedBy: 'owner' });
+  const dir = path.dirname(envelope.file);
+  writeFilesAtomic([
+    { path: envelope.file, content: envelope.content },
+    ...(envelope.delegatesAfter.join(',') === envelope.delegatesBefore.join(',')
+      ? []
+      : [
+          {
+            path: path.join(dir, DELEGATES_FILE),
+            content: `${JSON.stringify(envelope.delegatesAfter, null, 2)}\n`,
+          },
+        ]),
+  ]);
+  const reload = reloadResult(binding);
+  const assigned = await assignAccount(binding, envelope.id, envelope.account);
+  return {
+    id: envelope.id,
+    handle: envelope.handleAfter,
+    file: envelope.file,
+    tools: envelope.toolsAfter,
+    changed: envelope.changes.map((c) => c.key),
+    personaChanged: envelope.personaChanged,
+    live: reload.reloaded,
+    message: `@${envelope.handleAfter} updated.${assigned}`,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Live reload
  * ------------------------------------------------------------------ */
 
@@ -1806,8 +1879,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'left exactly as it is, and the agent keeps its id, its file and everything it has ever done — a ' +
       'rename or a new face is THIS tool, never a new agent and a delete. Passing `tools` REPLACES the ' +
       'grant, and if that widens it the owner is shown what was added and what those tools reach. ' +
-      '`default: true` moves the default claim here and takes it off the agent that holds it, in the same ' +
-      'approval. You may propose changes to your own file, and the owner is told plainly when you do. ' +
+      '`default: true` records this agent as the installation\'s default, which takes it off whoever ' +
+      'held it — one record, and no agent file is rewritten for it. You may propose changes to your own file, and the owner is told plainly when you do. ' +
       CONDUCT,
     tier: 'gated',
     input: updateInput,
@@ -1830,11 +1903,6 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const dir = path.dirname(envelope.file);
       writeFilesAtomic([
         { path: envelope.file, content: envelope.content },
-        // The claim and its withdrawal are staged together: a catalog that saw
-        // two agents declaring `default: true` would refuse to load at all.
-        ...(envelope.defaultFrom === null
-          ? []
-          : [{ path: envelope.defaultFrom.file, content: envelope.defaultFrom.content }]),
         ...(envelope.delegatesAfter.join(',') === envelope.delegatesBefore.join(',')
           ? []
           : [
@@ -1844,6 +1912,9 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
               },
             ]),
       ]);
+      // The record before the reload: the catalog is rebuilt against the
+      // choice that is now on the installation, not the one it replaced.
+      if (envelope.becomesDefault) await binding.setDefaultAgent?.(envelope.id);
       const reload = reloadResult(binding);
       const assigned = await assignAccount(binding, envelope.id, envelope.account);
       return {

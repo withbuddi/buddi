@@ -34,6 +34,7 @@ import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createSystemManifest } from '../system-context.js';
+import { recordedDefaultAgent } from './default-agent.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
 import { createPlatformManifest } from './platform.js';
@@ -292,6 +293,7 @@ export function withHeldBackExamples(catalog: AgentCatalog): AgentCatalog {
   };
   return {
     ...catalog,
+    get defaultProblem() { return catalog.defaultProblem; },
     get: (id) => catalog.get(id),
     byHandle: (handle) => catalog.byHandle(handle),
     agentsWithRole: (role) => catalog.agentsWithRole(role),
@@ -363,7 +365,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt() });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(), ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -380,6 +382,8 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     providerSelection: opts.providerSelection,
     pluginForFamily,
     delegatesFor: delegatesForPrompt(),
+    // The owner's recorded choice, which core prefers over any file flag.
+    ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }),
   });
   assertNoDelegationToWriters(catalog);
   return withHeldBackExamples(catalog);
@@ -437,6 +441,7 @@ export function reloadableCatalog(
     agentsWithRole: (role) => inner.agentsWithRole(role),
     agentForRole: (role) => inner.agentForRole(role),
     defaultAgent: () => inner.defaultAgent(),
+    get defaultProblem() { return inner.defaultProblem; },
     resolve: (idOrHandle) => inner.resolve(idOrHandle),
     reload() {
       // Assigned only after `load()` returned: a throw leaves `inner` alone,

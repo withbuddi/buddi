@@ -78,9 +78,13 @@ import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } f
 import {
   engineChangeFromBody,
   readAgentEngines,
+  readDefaultAgent,
   readEngineOptions,
   setAgentEngineFromWeb,
+  setDefaultAgentFromWeb,
 } from './agents.js';
+import { writeDefaultAgentRecord } from '../agents/default-agent.js';
+import { ownerEditableInput, updateAgentFromOwner, PlatformRefusal } from '../agents/platform.js';
 import { readAgentProfile } from './profile.js';
 import { AVATAR_IMAGE } from './chat.js';
 import path_ from 'node:path';
@@ -955,6 +959,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             engines: readAgentEngines(deps.catalog, deps.env ?? process.env),
             providers: readEngineOptions(deps.env ?? process.env),
             providerAccounts: deps.providerAccounts?.view(),
+            // Which agent a chat that names nobody lands on, and whether the
+            // files disagree about it. An installation fact, not a file flag.
+            default: readDefaultAgent(deps.catalog),
           });
         case '/api/groups':
           return sendJson(res, 200, { groups: (await listGroups(deps.pool)).map(groupView) });
@@ -1943,6 +1950,56 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       const updated = await updateNote(deps.pool, { id, ...change });
       return updated ? sendJson(res, 200, updated) : sendEmpty(res, 404);
+    }
+
+    /*
+     * Which agent is the default, recorded for the installation.
+     *
+     * Not `/api/agents/:id/...`: the default is a property of the installation
+     * and the body names whom it moves to, so one route records it however
+     * many agents there are.
+     */
+    if (path === '/api/agents/default') {
+      return finish(
+        res,
+        await setDefaultAgentFromWeb(
+          {
+            catalog: deps.catalog,
+            record: (agentId) => writeDefaultAgentRecord(deps.pool, agentId),
+          },
+          body.agentId,
+        ),
+      );
+    }
+
+    /*
+     * The front matter the runtime reads, edited in place.
+     *
+     * The same validation `platform.update_agent` runs — it *is* that code —
+     * so a handle two agents would answer to, a tool this installation does
+     * not have, and an edit that would leave a file the loader refuses come
+     * back with the loader's own sentence. What the owner clicks Save on is
+     * the approval; there is no second one.
+     */
+    const agentFile = /^\/api\/agents\/([^/]+)\/file$/.exec(path);
+    if (agentFile) {
+      const parsed = ownerEditableInput.safeParse({
+        ...body,
+        id: decodeURIComponent(agentFile[1] as string),
+      });
+      if (!parsed.success) {
+        return sendJson(res, 400, {
+          error: parsed.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '),
+        });
+      }
+      try {
+        return sendJson(res, 200, await updateAgentFromOwner(deps.registry, parsed.data));
+      } catch (err) {
+        if (err instanceof PlatformRefusal) {
+          return sendJson(res, 400, { error: err.message, detail: { code: err.code } });
+        }
+        return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     const delegatesRoute = /^\/api\/agents\/([^/]+)\/delegates$/.exec(path);

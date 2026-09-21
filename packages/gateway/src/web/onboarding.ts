@@ -37,6 +37,7 @@ import {
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { composeAgentFile, createAgentDirAtomic, replaceBody, writeFilesAtomic } from '../agents/platform-files.js';
 import { FIRST_AGENT_OPENING, defaultThinkingFor } from '../agents/opening.js';
+import { writeDefaultAgentRecord } from '../agents/default-agent.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 
 /** The surface recorded against everything the wizard writes. */
@@ -373,10 +374,6 @@ async function writeFirstAgent(
     handle,
     name,
     description,
-    // There is no private agent yet — the refusal above is what guarantees it —
-    // so this one is the default, and the dashboard and every other surface
-    // open on it rather than on a shipped example.
-    default: true,
     tools: [...FIRST_AGENT_TOOLS],
     language: 'mirror',
     ...(avatar === '' ? {} : { avatar }),
@@ -409,6 +406,23 @@ async function writeFirstAgent(
   }
 
   const assigned = await assignAccount(deps, id, account);
+  /*
+   * And it is the default agent. Recorded for the installation rather than
+   * written into the file: which agent a chat with no agent named lands on is
+   * a fact about this machine, and the owner changes it from the Agents page
+   * without anybody rewriting a persona.
+   *
+   * After the account, because the record names an agent this installation can
+   * actually *run* — an assistant with no brain yet would be ignored and the
+   * wizard's own agent would not be the one the dashboard opened on.
+   */
+  try {
+    await writeDefaultAgentRecord(deps.pool, id);
+    deps.reload();
+  } catch {
+    // The agent exists either way; the Agents page shows the picker and says
+    // that nobody is claiming the default yet.
+  }
   // The shipped maker is listed the moment the owner has an assistant, so it
   // is given the same brain now rather than appearing unable to answer.
   if (assigned && account) await bindFollowers(deps, { accountId: account.id, model: account.defaultModel });

@@ -22,6 +22,8 @@ import type { Pool } from 'pg';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
+import { setRecordedDefaultAgent } from '../agents/default-agent.js';
+import { bindPlatformTools } from '../agents/platform.js';
 import { setAgentEngineFromWeb } from './agents.js';
 import { mintTicket } from './token.js';
 import { createWebApp } from './server.js';
@@ -215,5 +217,191 @@ describe('the engine endpoint', () => {
     expect(body.engines[0]).toMatchObject({ handle: 'demo', provider: 'anthropic', available: true });
     expect(body.providers.map((p) => p.kind)).toEqual(['anthropic', 'openai']);
     expect(body.providers.find((p) => p.kind === 'openai')?.usable).toBe(false);
+  });
+});
+
+/*
+ * The default agent, and the front matter — the two writes the Agents page
+ * makes that are *not* the engine. Both need a bound platform registry (the
+ * editor runs `platform.update_agent`'s validation) and a pool the record can
+ * be written to, so they get a server of their own.
+ */
+describe('the default agent and the front-matter editor', () => {
+  const AGENTS: Record<string, string> = {
+    demo: AGENT,
+    scout: [
+      '---',
+      'id: scout',
+      'handle: scout',
+      'name: Scout',
+      'description: Looks things up.',
+      'tools: []',
+      '---',
+      '',
+      "Scout's persona.",
+      '',
+    ].join('\n'),
+  };
+
+  let dir: string;
+  let catalog: ReturnType<typeof reloadableCatalog>;
+  let server: ReturnType<typeof createWebApp>;
+  let base: string;
+  let written: Array<[string, unknown[]]>;
+
+  const env = { ANTHROPIC_API_KEY: 'sk-test' } as NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    setRecordedDefaultAgent(undefined);
+    dir = mkdtempSync(path.join(tmpdir(), 'buddi-web-default-'));
+    for (const [id, source] of Object.entries(AGENTS)) {
+      mkdirSync(path.join(dir, 'agents', id), { recursive: true });
+      writeFileSync(path.join(dir, 'agents', id, 'agent.md'), source);
+    }
+    const registry = createToolRegistry({});
+    catalog = reloadableCatalog(() =>
+      loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry }),
+    );
+    bindPlatformTools(registry, {
+      catalog,
+      reload: () => catalog.reload(),
+      agentsDir: path.join(dir, 'agents'),
+      skillsDir: path.join(dir, 'skills'),
+      examplesDir: path.join(dir, 'examples'),
+      setDefaultAgent: async () => {},
+    });
+    written = [];
+    const pool = {
+      query: async (sql: string, params: unknown[] = []) => {
+        written.push([sql, params]);
+        return { rows: [] };
+      },
+    };
+    server = createWebApp({
+      pool: pool as unknown as Pool,
+      registry,
+      catalog,
+      ctx: { ownerId: 'owner' } as unknown as ToolContext,
+      timezone: 'Europe/Paris',
+      now: () => new Date('2026-09-14T09:00:00Z'),
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      openAccess: true,
+      token: TOKEN,
+      env,
+      log: () => {},
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    setRecordedDefaultAgent(undefined);
+    await new Promise<void>((resolve) => {
+      server.closeAllConnections?.();
+      server.close(() => resolve());
+    });
+  });
+
+  /** The session and CSRF pair every write here carries, as the shell does. */
+  const signIn = async (): Promise<{ cookie: string; csrf: string }> => {
+    const res = await fetch(`${base}/?t=${encodeURIComponent(mintTicket(TOKEN))}`, { redirect: 'manual' });
+    const jar = new Map<string, string>();
+    for (const raw of res.headers.getSetCookie()) {
+      const [pair] = raw.split(';');
+      const [name, value] = (pair as string).split('=');
+      jar.set(name as string, value as string);
+    }
+    return {
+      cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
+      csrf: jar.get('buddi_csrf') as string,
+    };
+  };
+
+  const post = async (path_: string, body: unknown): Promise<Response> => {
+    const { cookie, csrf } = await signIn();
+    return fetch(`${base}${path_}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base, cookie, 'x-buddi-csrf': csrf },
+      body: JSON.stringify(body),
+      redirect: 'manual',
+    });
+  };
+
+  it('serves the picker payload: who answers now, and who may be chosen', async () => {
+    const res = await fetch(`${base}/api/agents`);
+    const body = (await res.json()) as {
+      default: {
+        defaultAgentId: string;
+        problem?: { code: string };
+        choices: Array<{ id: string; handle: string; name: string; available: boolean }>;
+      };
+    };
+    expect(body.default.defaultAgentId).toBe('demo');
+    expect(body.default.choices).toEqual([
+      { id: 'demo', handle: 'demo', name: 'Demo', available: true },
+      { id: 'scout', handle: 'scout', name: 'Scout', available: true },
+    ]);
+    // One file claims it and the record agrees with nobody yet: no complaint.
+    expect(body.default.problem).toBeUndefined();
+  });
+
+  it('records the chosen default and reports it back', async () => {
+    const res = await post('/api/agents/default', { agentId: 'scout' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { defaultAgentId: string; note: string };
+    expect(body.defaultAgentId).toBe('scout');
+    expect(body.note).toContain('Scout');
+    expect(written.some(([sql]) => /core\.web_settings/.test(sql))).toBe(true);
+    // And it is what the page reads on its next load, with no restart.
+    const again = (await (await fetch(`${base}/api/agents`)).json()) as { default: { defaultAgentId: string } };
+    expect(again.default.defaultAgentId).toBe('scout');
+  });
+
+  it('refuses a default that is not an agent here', async () => {
+    expect((await post('/api/agents/default', { agentId: 'nobody' })).status).toBe(404);
+    expect((await post('/api/agents/default', {})).status).toBe(400);
+  });
+
+  it('reports the files disagreeing, and lets the picker settle it', async () => {
+    writeFileSync(
+      path.join(dir, 'agents', 'scout', 'agent.md'),
+      AGENTS.scout!.replace('tools: []', 'tools: []\ndefault: true'),
+    );
+    catalog.reload();
+    const body = (await (await fetch(`${base}/api/agents`)).json()) as {
+      default: { problem?: { code: string; agents: string[] } };
+    };
+    expect(body.default.problem).toMatchObject({ code: 'multiple-defaults', agents: ['demo', 'scout'] });
+  });
+
+  it('edits the front matter the runtime reads', async () => {
+    const res = await post('/api/agents/scout/file', {
+      name: 'Scout II',
+      description: 'Looks harder.',
+      roles: ['overview'],
+    });
+    expect(res.status).toBe(200);
+    const file = readFileSync(path.join(dir, 'agents', 'scout', 'agent.md'), 'utf8');
+    expect(file).toContain('name: Scout II');
+    expect(file).toContain('roles: [overview]');
+    // The persona is untouched by a front-matter edit.
+    expect(file).toContain("Scout's persona.");
+    expect(catalog.get('scout')?.name).toBe('Scout II');
+  });
+
+  it('refuses a handle another agent already answers to', async () => {
+    const res = await post('/api/agents/scout/file', { handle: 'demo' });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; detail: { code: string } };
+    expect(body.detail.code).toBe('duplicate-handle');
+    expect(body.error).toContain('@demo is already Demo');
+    // Nothing was written: a refused edit leaves the file exactly as it was.
+    expect(readFileSync(path.join(dir, 'agents', 'scout', 'agent.md'), 'utf8')).toBe(AGENTS.scout);
+  });
+
+  it('refuses `default` as a field of the file', async () => {
+    const res = await post('/api/agents/scout/file', { default: true });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('installation record');
   });
 });

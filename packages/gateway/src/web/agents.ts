@@ -31,6 +31,7 @@ import {
   PROVIDER_KINDS,
   type AgentCatalog,
   type AgentHoldBack,
+  type DefaultAgentProblem,
   type CatalogAgent,
   type EnginePatch,
   type ProviderKind,
@@ -262,4 +263,81 @@ export function setAgentEngineFromWeb(
       body: { error: err instanceof Error ? err.message : String(err) },
     };
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The default agent
+ * ------------------------------------------------------------------ */
+
+/** What the Agents page needs to draw the picker and, when files disagree, the notice. */
+export interface DefaultAgentView {
+  /** The agent every chat with no agent named lands on, as resolved right now. */
+  defaultAgentId: string | null;
+  /** Set when the agent *files* disagree about it. The picker's choice wins. */
+  problem?: DefaultAgentProblem;
+  /** The agents that may be chosen, with whether each one can actually run. */
+  choices: Array<{ id: string; handle: string; name: string; available: boolean }>;
+}
+
+export function readDefaultAgent(catalog: AgentCatalog): DefaultAgentView {
+  let defaultAgentId: string | null = null;
+  try {
+    defaultAgentId = catalog.defaultAgent().id;
+  } catch {
+    // An installation with no agents at all. The page says so on its own.
+  }
+  return {
+    defaultAgentId,
+    ...(catalog.defaultProblem === undefined ? {} : { problem: catalog.defaultProblem }),
+    choices: catalog.list().map((a) => ({
+      id: a.id,
+      handle: a.handle,
+      name: a.name,
+      available: a.available,
+    })),
+  };
+}
+
+/**
+ * Record which agent is the default, from the dashboard.
+ *
+ * A record rather than a file edit, so the dashboard and Telegram agree on the
+ * next message without a restart, and so that moving it can never leave two
+ * files claiming it. An agent that cannot run is refused: recording a default
+ * the installation would then ignore is a setting that silently does nothing.
+ */
+export async function setDefaultAgentFromWeb(
+  deps: { catalog: AgentCatalog; record: (agentId: string) => Promise<void> },
+  agentId: unknown,
+): Promise<EngineWriteResult<DefaultAgentView & { note: string }>> {
+  if (typeof agentId !== 'string' || agentId.trim() === '') {
+    return { ok: false, status: 400, body: { error: '`agentId` names the agent to make the default' } };
+  }
+  const agent = deps.catalog.get(agentId.trim()) ?? deps.catalog.byHandle(agentId.trim());
+  if (!agent) return { ok: false, status: 404, body: { error: `no such agent: ${agentId}` } };
+  if (!agent.availability.ok) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error:
+          `${agent.name} cannot run here right now, so it would not be used as the default: ` +
+          `${agent.availability.problem.message}`,
+      },
+    };
+  }
+  try {
+    await deps.record(agent.id);
+  } catch (err) {
+    return { ok: false, status: 500, body: { error: err instanceof Error ? err.message : String(err) } };
+  }
+  (deps.catalog as AgentCatalog & { reload?: () => void }).reload?.();
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      ...readDefaultAgent(deps.catalog),
+      note: `${agent.name} is the default agent. New chats that name nobody land on it.`,
+    },
+  };
 }
