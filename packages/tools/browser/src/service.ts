@@ -1,9 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import type { ToolContext } from '@buddi/core';
+import type { SurfaceProfile, ToolContext } from '@buddi/core';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
+
+/**
+ * "The owner stopped the browser", said where the owner can undo it.
+ *
+ * The *fact* is one sentence; the way back differs by surface, and the surface
+ * is already on the tool context (`ctx.surface`), so the plugin says it rather
+ * than leaving a relay to guess. On Telegram the way back is a command in the
+ * same chat; everywhere else it is the dashboard's own Settings page, which is
+ * where the Stop button lives.
+ */
+export function browserStoppedMessage(surface?: SurfaceProfile): string {
+  return surface?.id === 'telegram'
+    ? 'The owner stopped the browser. Only the owner can enable it again — send /browser resume here.'
+    : 'The owner stopped the browser. Only the owner can enable it again in the dashboard, on the Settings page.';
+}
 
 /** The three ways an agent can get a screen. */
 export type BrowserMode = 'computer' | 'playwright' | 'extension';
@@ -156,7 +171,7 @@ export class BrowserService {
       throw new Error('A current authenticated owner request is required.');
     }
     if (!this.#enabled) throw new Error('Browser driving is available through buddi serve (dashboard or Telegram), not a separate CLI process.');
-    if (this.#state === 'stopped') throw new Error('The owner stopped the browser. Only the owner can enable it again in the dashboard.');
+    if (this.#state === 'stopped') throw new Error(browserStoppedMessage(ctx.surface));
     if (this.#busy) throw new Error('Browser is busy; overlapping actions are refused.');
     if (this.#session && (this.#session.ownerId !== ctx.ownerId || this.#session.agentId !== ctx.agentId || this.#session.conversationId !== ctx.conversationId)) {
       throw new Error('Another agent/conversation owns the browser. Ask the owner to release it from the dashboard.');

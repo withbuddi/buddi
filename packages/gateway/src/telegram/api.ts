@@ -44,6 +44,7 @@
  *    that truly dies is dropped and retried within seconds rather than hanging
  *    the surface until the provider's five-minute default expires.
  */
+import { randomUUID } from 'node:crypto';
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 
 /** Telegram rejects messages over 4096 characters; we split well below it. */
@@ -163,7 +164,18 @@ export interface TelegramUpdate {
  */
 export interface InlineKeyboardButton {
   text: string;
-  callback_data: string;
+  /**
+   * Exactly one of the two, and almost always this one: a tap comes back as a
+   * callback query bound to a row this process wrote.
+   */
+  callback_data?: string;
+  /**
+   * A link button instead. It reaches this process not at all — Telegram
+   * simply opens the URL. buddi sends one for exactly one thing: "Take over",
+   * whose URL is a conversation's Browser tab on the dashboard, where the
+   * dashboard's own authentication still applies.
+   */
+  url?: string;
 }
 
 /** Rows of buttons, as Telegram's `reply_markup` wants them. */
@@ -173,6 +185,9 @@ export interface InlineKeyboardMarkup {
 
 /** Telegram's hard limit on `callback_data`, in bytes. */
 export const MAX_CALLBACK_DATA_BYTES = 64;
+
+/** Telegram's own cap on a photo caption. Longer is rejected, so it is cut. */
+export const MAX_CAPTION_CHARS = 1024;
 
 /** One entry of the bot's command menu. `command` carries no leading slash. */
 export interface TelegramBotCommand {
@@ -375,6 +390,52 @@ export class TelegramApi {
       if (firstId === undefined) firstId = id;
     }
     return firstId;
+  }
+
+  /**
+   * Send a picture with a caption, and optionally a button under it.
+   *
+   * The one call that uploads bytes, so the one call that is not JSON:
+   * `sendPhoto` takes multipart/form-data, assembled here by hand rather than
+   * through `FormData` so the body stays a `Buffer` and every existing
+   * `FetchLike` fake keeps working. The caption is plain text for the same
+   * reason `sendMessage` is — no `parse_mode` is ever sent — and Telegram caps
+   * it at 1024 characters, so it is cut here rather than rejected there.
+   */
+  async sendPhoto(
+    chatId: string | number,
+    photo: Buffer,
+    opts: { caption?: string; filename?: string; contentType?: string; replyMarkup?: InlineKeyboardMarkup } = {},
+  ): Promise<number | undefined> {
+    const boundary = `buddi${randomUUID().replace(/-/g, '')}`;
+    const parts: Buffer[] = [];
+    const field = (name: string, value: string): void => {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+    };
+    field('chat_id', String(chatId));
+    if (opts.caption) field('caption', opts.caption.slice(0, MAX_CAPTION_CHARS));
+    if (opts.replyMarkup) field('reply_markup', JSON.stringify(opts.replyMarkup));
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${opts.filename ?? 'screenshot.jpg'}"\r\n` +
+      `Content-Type: ${opts.contentType ?? 'image/jpeg'}\r\n\r\n`,
+    ));
+    parts.push(photo);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body: Buffer.concat(parts),
+    });
+    const raw = await res.text();
+    let parsed: any;
+    try { parsed = raw === '' ? {} : JSON.parse(raw); }
+    catch { throw new TelegramApiError('sendPhoto', res.status, `unparseable response: ${raw.slice(0, 200)}`); }
+    if (!res.ok || parsed?.ok !== true) {
+      throw new TelegramApiError('sendPhoto', res.status, String(parsed?.description ?? 'unknown error'));
+    }
+    const id = parsed.result?.message_id;
+    return typeof id === 'number' ? id : undefined;
   }
 
   /**

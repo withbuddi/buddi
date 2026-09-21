@@ -362,6 +362,7 @@ export function App(): JSX.Element {
               group={selectedGroup}
               onEditGroup={selectedGroup ? () => setEditingGroupId(selectedGroup.id) : undefined}
               requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
+              requestedTab={chatLocation?.tab}
               onConversationOpened={conversationOpened}
               onSelectAgent={selectAgent}
               attention={attention}

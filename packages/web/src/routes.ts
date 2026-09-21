@@ -59,16 +59,27 @@ export function parseFileRoute(hash: string): { artifactId?: string; filters: Fi
 }
 
 /** Stable owner-only links; the server's normal dashboard authentication applies. */
-export function chatRoute(agentId: string, conversationId?: string | null): string {
-  return `#/chat/${encodeURIComponent(agentId)}${conversationId ? `/${encodeURIComponent(conversationId)}` : ''}`;
+export function chatRoute(agentId: string, conversationId?: string | null, tab?: 'browser'): string {
+  return `#/chat/${encodeURIComponent(agentId)}${conversationId ? `/${encodeURIComponent(conversationId)}` : ''}${tab ? `?tab=${tab}` : ''}`;
 }
 
-export function parseChatRoute(hash: string): { agentId: string; conversationId?: string } | null {
+/**
+ * `?tab=browser` is a landing instruction, not a piece of state: it says which
+ * panel of the conversation the owner meant when they followed the link (the
+ * Take over button on Telegram), and the page honours it once and then leaves
+ * the canvas alone.
+ */
+export function parseChatRoute(hash: string): { agentId: string; conversationId?: string; tab?: string } | null {
   if (parseGroupChatRoute(hash)) return null;
-  const match = /^#\/chat\/([^/]+)(?:\/([^/]+))?$/.exec(hash);
+  const match = /^#\/chat\/([^/?]+)(?:\/([^/?]+))?(?:\?(.*))?$/.exec(hash);
   if (!match) return null;
   try {
-    return { agentId: decodeURIComponent(match[1]!), ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}) };
+    const tab = new URLSearchParams(match[3] ?? '').get('tab');
+    return {
+      agentId: decodeURIComponent(match[1]!),
+      ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}),
+      ...(tab ? { tab } : {}),
+    };
   } catch { return null; }
 }
 
@@ -78,7 +89,7 @@ export function groupChatRoute(groupId: string, conversationId?: string | null):
 }
 
 export function parseGroupChatRoute(hash: string): { groupId: string; conversationId?: string } | null {
-  const match = /^#\/chat\/g\/([^/]+)(?:\/([^/]+))?$/.exec(hash);
+  const match = /^#\/chat\/g\/([^/?]+)(?:\/([^/?]+))?(?:\?.*)?$/.exec(hash);
   if (!match) return null;
   try {
     return { groupId: decodeURIComponent(match[1]!), ...(match[2] ? { conversationId: decodeURIComponent(match[2]) } : {}) };
