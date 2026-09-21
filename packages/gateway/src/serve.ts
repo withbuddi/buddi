@@ -108,6 +108,37 @@ export const SENTINEL_TICK_MS = 30_000;
 export const SOURCE_TICK_MS = 30_000;
 
 /**
+ * The part of the catalog the resolver reads: the roster, by role. Structural
+ * so a test can hand it two agents instead of a loaded directory — an
+ * `AgentCatalog` is one of these.
+ */
+export interface RoleRoster {
+  agentsWithRole(role: string): readonly { id: string; availability: { ok: boolean } }[];
+}
+
+/**
+ * `SentinelContext.agentForRole`, over the installation's live roster.
+ *
+ * A sentinel addresses a finding by role — "whoever does credit" — and this is
+ * where that becomes an id. Two rules:
+ *
+ *  - **Roster order decides.** The first agent claiming the role wins, exactly
+ *    as `AgentCatalog.agentForRole` decides it for every other surface.
+ *  - **Only a runnable agent may be named.** An agent held back for a missing
+ *    plugin, or bound to a provider this machine has no credential for, would
+ *    take the finding and say nothing; passing it over leaves `agentId` unset
+ *    and the wake mission's agent speaks instead.
+ *
+ * `undefined` is an answer: nobody holds the role, and the finding goes out
+ * unaddressed rather than addressed to a ghost.
+ */
+export function sentinelAgentForRole(
+  catalog: RoleRoster,
+): (role: string) => string | undefined {
+  return (role) => catalog.agentsWithRole(role).find((agent) => agent.availability.ok)?.id;
+}
+
+/**
  * The reminder loop. A minute is the resolution a one-off nudge deserves: the
  * owner asked to be told "on the 3rd", not "at 09:00:00 on the 3rd", and a
  * cheaper clock would mean a reminder set for 09:00 arriving at 09:29.
@@ -570,7 +601,16 @@ export async function main(): Promise<void> {
     // claimed by the very next scheduler pass, seconds later.
     const sentinels = collectSentinels(wiring.registry.manifests());
     const sentinelTick = async (): Promise<void> => {
-      const outcomes = await runSentinels(pool, wiring.registry.manifests(), now(), wiring.timezone);
+      const outcomes = await runSentinels(
+        pool,
+        wiring.registry.manifests(),
+        now(),
+        wiring.timezone,
+        // The catalog is a façade, so this reads the roster as it stands on
+        // this tick: an agent given the role at lunchtime speaks this
+        // afternoon, with no restart.
+        sentinelAgentForRole(wiring.catalog),
+      );
       for (const outcome of outcomes) {
         if (!outcome.ran) continue;
         if (outcome.error) {
