@@ -25,10 +25,13 @@ step in, and receive a coherent result, not several disconnected answers.
 
 ## The model
 
-**Fixed membership, chosen coordinator.** A group has a name, a member list,
-and one coordinator picked by the owner at creation (Concierge by default). The
-first version has no dynamic membership, no voting, no autonomous debates and
-no workflow builder.
+**Owner-set membership, chosen coordinator.** A group has a name, a member list,
+and one coordinator picked by the owner at creation (Concierge by default). All
+three can be changed afterwards, by the owner from the room's menu or by the
+maker through `platform.update_group`, under the same rules creation applies;
+what a removed member already said stays in the transcript. What the first
+version still has none of is membership the *agents* change by themselves, and
+no voting, no autonomous debates and no workflow builder.
 
 **One room, real speakers.** The group has one stored transcript. Every turn
 records who spoke: the owner, or a member by agent id. That speaker is trusted
@@ -201,7 +204,7 @@ The existing chat and Canvas carry it:
 6. Missions with a group target.
 
 Postponed on purpose: parallel member runs, voting, autonomous debates,
-dynamic membership, workflow builders.
+membership the agents change without the owner, workflow builders.
 
 ## What the first version does
 
@@ -221,7 +224,9 @@ rejects the pending approval; the group memory scope with private memory never r
 every write in a room landing in the room; rollover on a character cap with a
 one-call maintenance summary made through the same accounting and the same
 bound, and the new thread reading the summary just written; the roster entry, creation sheet, `@`
-completion, attribution and the activity line; routes under `/api/groups`.
+completion, attribution and the activity line; routes under `/api/groups`, including `PATCH /api/groups/:id` for the
+name, the coordinator and the membership and `DELETE /api/groups/:id`, which
+archives the room and keeps everything said in it.
 
 Deliberate deviations, to be closed later:
 

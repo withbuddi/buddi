@@ -58,6 +58,8 @@ export interface ChatPageProps {
   defaultAgentId?: string | null;
   /** Set when the page is a group's room rather than one agent's thread. */
   group?: GroupView | null;
+  /** Open the group's sheet, where its members are changed. Shell-owned. */
+  onEditGroup?: () => void;
   onSelectAgent: (agentId: string) => void;
   /** Who is waiting on the owner — drawn on the narrow strip's faces. */
   attention: Map<string, AgentAttention>;
@@ -82,6 +84,7 @@ export function ChatPage({
   agentId,
   defaultAgentId = null,
   group = null,
+  onEditGroup,
   onSelectAgent,
   attention,
   agentsInHeader,
@@ -1008,6 +1011,9 @@ export function ChatPage({
               disabled={!agentId}
               items={group ? [
                 ...members.map((m) => ({ label: m.name, hint: m.id === group.coordinator ? 'Coordinator · open page' : 'Member · open page', href: agentRoute(m.id) })),
+                // The room is not fixed at creation: this is where it is
+                // changed, under the members it is about.
+                ...(onEditGroup ? [{ label: 'Members…', hint: 'Name, coordinator, who is in the room', testId: 'group-members', onSelect: onEditGroup }] : []),
               ] : [
                 { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
                 ...(agent ? [

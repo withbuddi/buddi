@@ -61,12 +61,18 @@ import {
   type ProviderKind,
   type SuggestedAgent,
   type SuggestedSkill,
+  type ToolContext,
   type ToolDefinition,
   type ToolRegistry,
   type ToolSpec,
   listGroups as coreListGroups,
   createGroup as coreCreateGroup,
+  updateGroup as coreUpdateGroup,
   archiveGroup as coreArchiveGroup,
+  planGroupChange,
+  GroupRefusal,
+  type GroupCandidate,
+  type GroupRow,
   type CatalogAgent,
 } from '@buddi/core';
 import { z } from 'zod';
@@ -1575,6 +1581,42 @@ function accountOf(accounts: PlatformAccounts, agentId: string): { account: stri
   return { account: accounts.list().find((a) => a.id === binding.accountId)?.label ?? binding.accountId, model: binding.model };
 }
 
+/** What an approved change to a group is, hashed before it is made. */
+export interface GroupUpdateEnvelope {
+  tool: 'platform.update_group';
+  id: string;
+  before: { name: string; coordinator: string; members: string[] };
+  after: { name: string; coordinator: string; members: string[] };
+}
+
+/**
+ * The sentence the owner approves: the exact change, in their own words.
+ *
+ * "Add Garage to Test room; make Concierge the coordinator" — not a diff, not
+ * the arguments as JSON. An owner reading this at seven in the morning has to
+ * be able to tell what the room will look like afterwards without opening it.
+ */
+export function renderGroupUpdate(
+  envelope: GroupUpdateEnvelope,
+  nameOf: (agentId: string) => string = (id) => id,
+): string {
+  const { before, after } = envelope;
+  const room = before.name;
+  const list = (ids: string[]): string => {
+    const names = ids.map(nameOf);
+    return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  };
+  const added = after.members.filter((id) => !before.members.includes(id));
+  const removed = before.members.filter((id) => !after.members.includes(id));
+  const parts: string[] = [];
+  if (after.name !== before.name) parts.push(`rename "${before.name}" to "${after.name}"`);
+  if (added.length > 0) parts.push(`add ${list(added)} to ${room}`);
+  if (removed.length > 0) parts.push(`remove ${list(removed)} from ${room}`);
+  if (after.coordinator !== before.coordinator) parts.push(`make ${nameOf(after.coordinator)} the coordinator`);
+  const sentence = parts.length === 0 ? `leave ${room} exactly as it is` : parts.join('; ');
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
 export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
   /* ---- groups: a team of agents in one conversation (docs/groups.md) ---- */
 
@@ -1642,6 +1684,111 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     },
   };
 
+  const updateGroupInput = z.object({
+    group: z.string().min(1).describe('The group to change, by name or id.'),
+    name: z.string().min(1).max(80).optional().describe('A new name for the group. The group keeps its id and its whole conversation.'),
+    coordinator: z.string().min(1).optional().describe('The agent that answers for the group, by handle or id. It has to be one of the members.'),
+    members: z.array(z.string().min(1)).max(12).optional().describe('The WHOLE membership after the change, coordinator included, by handle or id. Anyone left out leaves the room; what they already said stays in the transcript.'),
+  }).strict();
+
+  type UpdateGroupInput = z.infer<typeof updateGroupInput>;
+
+  /** Who this installation may put in a room, as core's rule wants them. */
+  const groupRoster = (binding: ResolvedBinding): GroupCandidate[] =>
+    binding.catalog.list().map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      roles: agent.roles,
+      available: agent.available && agent.heldBack === undefined,
+    }));
+
+  /** The group the owner named, by name or id, or a refusal saying so. */
+  const findGroup = async (ref: string, db: ToolContext['db']): Promise<GroupRow> => {
+    const groups = await coreListGroups(db);
+    const wanted = ref.trim().toLowerCase();
+    const group = groups.find((g) => g.id === ref.trim() || g.name.trim().toLowerCase() === wanted);
+    if (!group) throw new PlatformRefusal('unknown-group', `No group is called "${ref}". Use platform.list_groups.`);
+    return group;
+  };
+
+  /**
+   * The change, resolved: which group, and exactly what it becomes.
+   *
+   * Read-only, so `describe` may run it before any approval exists, and run
+   * again in `execute` — the envelope carries the state it was planned
+   * against, so a group somebody changed in between no longer matches the
+   * approved preview and the call is refused rather than replayed.
+   */
+  const planGroupUpdate = async (
+    input: UpdateGroupInput,
+    db: ToolContext['db'],
+  ): Promise<{ group: GroupRow; envelope: GroupUpdateEnvelope; names: (id: string) => string }> => {
+    const binding = resolved(registry);
+    const group = await findGroup(input.group, db);
+    const find = (ref: string): CatalogAgent => {
+      const cleaned = ref.trim().replace(/^@/, '');
+      const agent = binding.catalog.get(cleaned) ?? binding.catalog.byHandle(cleaned);
+      if (!agent) throw new PlatformRefusal('unknown-agent', `No installed agent is "${ref}". Use platform.list_agents.`);
+      return agent;
+    };
+    const change = {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.coordinator === undefined ? {} : { coordinator: find(input.coordinator).id }),
+      ...(input.members === undefined ? {} : { members: input.members.map((ref) => find(ref).id) }),
+    };
+    let after;
+    try {
+      after = planGroupChange(group, change, groupRoster(binding));
+    } catch (error) {
+      if (error instanceof GroupRefusal) throw new PlatformRefusal(error.code, error.message);
+      throw error;
+    }
+    const names = (id: string): string => binding.catalog.get(id)?.name ?? id;
+    return {
+      group,
+      names,
+      envelope: {
+        tool: 'platform.update_group',
+        id: group.id,
+        before: { name: group.name, coordinator: group.coordinator, members: [...group.members].sort() },
+        after: { name: after.name, coordinator: after.coordinator, members: [...after.members].sort() },
+      },
+    };
+  };
+
+  const updateGroupTool: ToolDefinition<UpdateGroupInput, unknown> = {
+    name: 'platform.update_group',
+    description:
+      'Change a group the owner already has: its name, which member coordinates it, or who is in it. ' +
+      'Anything you do not name is left exactly as it is, and the group keeps its id and its whole ' +
+      'conversation — a rename is THIS tool, never a new group and an archive. `members` REPLACES the ' +
+      'membership, so pass everyone who should be in the room, the coordinator included; a member taken ' +
+      'out keeps every turn it already spoke there. The coordinator has to be one of the members, a room ' +
+      'needs somebody besides it, and membership still grants nothing. ' +
+      CONDUCT,
+    tier: 'gated',
+    input: updateGroupInput,
+    async describe(input, ctx) {
+      const planned = await planGroupUpdate(input, ctx.db);
+      return { envelope: planned.envelope, preview: renderGroupUpdate(planned.envelope, planned.names) };
+    },
+    async execute(input, ctx) {
+      const planned = await planGroupUpdate(input, ctx.db);
+      assertApprovedEffect(ctx, planned.envelope);
+      const binding = resolved(registry);
+      const after = planned.envelope.after;
+      const group = await coreUpdateGroup(ctx.db, planned.group.id, after, groupRoster(binding));
+      if (!group) throw new PlatformRefusal('unknown-group', `The group "${planned.group.name}" is no longer there.`);
+      return {
+        id: group.id,
+        name: group.name,
+        coordinator: binding.catalog.get(group.coordinator)?.handle ?? group.coordinator,
+        members: group.members.map((id) => binding.catalog.get(id)?.handle ?? id),
+        message: `${renderGroupUpdate(planned.envelope, planned.names)}. The owner sees it under Chat, in Groups.`,
+      };
+    },
+  };
+
   const archiveInput = z.object({
     group: z.string().min(1).describe('The group to archive, by name or id.'),
   }).strict();
@@ -1653,11 +1800,16 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'Only when the owner asks for it, naming the group.',
     tier: 'gated',
     input: archiveInput,
+    async describe(input, ctx) {
+      const group = await findGroup(input.group, ctx.db);
+      return {
+        envelope: { tool: 'platform.archive_group', id: group.id, name: group.name },
+        preview: `Archive ${group.name}: it leaves the dashboard's roster and takes no new requests. Everything said in it stays readable.`,
+      };
+    },
     async execute(input, ctx) {
-      const groups = await coreListGroups(ctx.db);
-      const wanted = input.group.trim().toLowerCase();
-      const group = groups.find((g) => g.id === input.group.trim() || g.name.trim().toLowerCase() === wanted);
-      if (!group) throw new PlatformRefusal('unknown-group', `No group is called "${input.group}". Use platform.list_groups.`);
+      const group = await findGroup(input.group, ctx.db);
+      assertApprovedEffect(ctx, { tool: 'platform.archive_group', id: group.id, name: group.name });
       const gone = await coreArchiveGroup(ctx.db, group.id, ctx.now());
       return { id: group.id, name: group.name, archived: gone };
     },
@@ -2170,6 +2322,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     tools: [
       listGroups,
       createGroup,
+      updateGroupTool,
       archiveGroupTool,
       listAccounts,
       listAgents,
