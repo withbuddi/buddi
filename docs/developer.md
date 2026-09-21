@@ -139,13 +139,14 @@ gets a preview, two ways, both ending when the process stops:
 
 - **Through buddi.** `https://<dashboard origin>/preview/<process>/…` is a
   reverse proxy from the gateway to that port, behind the dashboard's own
-  sign-in (a session, or Tailscale). `developer.preview` (auto) returns the
-  link and, gated, a **signed** variant with an expiry for sharing with a
-  device that has no session, the way vonzio's preview links work; the
-  signature covers the process id and the expiry, and the link is revoked
-  when the process stops. Websockets are proxied for hot reload. Apps that
-  assume they live at the root of a host may break under a path prefix;
-  the tool says so when the first response references absolute assets.
+  sign-in (a session, or Tailscale), nothing more: a device that is signed
+  in to the dashboard sees the app, anyone else gets the dashboard's 401.
+  `developer.preview` (auto) returns the link. Websockets are proxied for
+  hot reload. Apps that assume they live at the root of a host may break
+  under a path prefix; the tool says so when the first response references
+  absolute assets. Sharing a preview with someone who has no access is not
+  in scope; if it is ever wanted it is a signed, expiring variant of the
+  same link, a small addition.
 - **A Tailscale route per port**, for those apps: when Tailscale is running
   and the owner allowed it on Settings → Developer, buddi adds
   `tailscale serve --https=<port> http://127.0.0.1:<port>` when the process
