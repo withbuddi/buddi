@@ -143,6 +143,18 @@ export function sendArchive<T>(
   });
 }
 
+/**
+ * Changing part of something that already exists: what the body leaves out is
+ * left exactly as it was. A group's name without restating its membership.
+ */
+export function patch<T>(path: string, body: unknown = {}): Promise<T> {
+  return request<T>(`/api${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', [CSRF_HEADER]: csrfToken() },
+    body: JSON.stringify(body ?? {}),
+  });
+}
+
 /** Replacing a whole setting the server keeps one of: the schedule, the passphrase. */
 export function put<T>(path: string, body: unknown = {}): Promise<T> {
   return request<T>(`/api${path}`, {
@@ -1024,7 +1036,10 @@ export const chatApi = {
   groups: () => get<{ groups: GroupView[] }>('/groups'),
   group: (id: string) => get<GroupView & { latestConversationId: string | null; openRequest: { id: string; state: string; awaitingAgentId: string | null; budgetReserved: number; budgetTotal: number } | null }>(`/groups/${encodeURIComponent(id)}`),
   createGroup: (body: { name: string; coordinator: string; members: string[] }) => post<GroupView>('/groups', body),
-  archiveGroup: (id: string) => post<null>(`/groups/${encodeURIComponent(id)}/archive`),
+  updateGroup: (id: string, body: { name?: string; coordinator?: string; members?: string[] }) =>
+    patch<GroupView>(`/groups/${encodeURIComponent(id)}`, body),
+  // Archived, never deleted: the room leaves the rail and keeps its transcript.
+  archiveGroup: (id: string) => del<null>(`/groups/${encodeURIComponent(id)}`),
   groupConversations: (id: string) => get<{ conversations: ConversationListItem[] }>(`/groups/${encodeURIComponent(id)}/conversations`),
   startGroupConversation: (id: string) => post<{ conversationId: string }>(`/groups/${encodeURIComponent(id)}/conversations`),
   sendToGroup: (id: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>

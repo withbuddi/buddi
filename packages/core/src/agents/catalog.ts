@@ -570,7 +570,7 @@ export function generatedSection(
         ...capped(wiring.colleagues, (c) => `  - @${c.handle} — ${c.name}: ${c.description}${unavailableMark(c)}`),
         '- When naming an agent to the owner, use its handle; pass ids only to ' +
           `${DELEGATE_TOOL_NAME}.`,
-        '- The owner can put several agents in a group: one named conversation on the dashboard, with a coordinator that brings members in. Refer to a group by its name. Only an agent holding platform.create_group can make one; membership grants no tool.',
+        '- The owner can put several agents in a group: one named conversation on the dashboard, with a coordinator that brings members in. Refer to a group by its name. Only an agent holding platform.create_group can make one, and platform.update_group is how a group\'s name, coordinator and members are changed afterwards — a group is not fixed at creation. Membership grants no tool.',
       );
     }
     /*

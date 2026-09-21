@@ -1,15 +1,17 @@
 /**
  * Groups on the page: the route, and a room's turns drawn under their speakers.
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chatApi } from '../api';
 import { groupChatRoute, parseChatRoute, parseGroupChatRoute } from '../routes';
 import { GroupSheet } from '../shell/GroupSheet';
 import { MessageList } from './MessageList';
 import type { ChatAgent, ChatMessage } from './types';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const agent = (id: string, name: string): ChatAgent => ({ id, handle: id, name, description: '', available: true, roles: [], provider: 'openai', model: 'm' });
 const speakers = [agent('concierge', 'Concierge'), agent('ledger', 'Ledger')];
@@ -78,5 +80,65 @@ describe('a room in the thread', () => {
   it('names who is working from the run, not from the page title', () => {
     render(<Tooltip.Provider><MessageList messages={messages} live={[]} now={0} onOpen={() => {}} speakers={speakers} working workingAs="Ledger" agentName="Money" emptyHint="" /></Tooltip.Provider>);
     expect(screen.getByRole('status').textContent).toContain('Ledger is working');
+  });
+});
+
+/*
+ * A group is not fixed at creation. The same sheet changes the one you have:
+ * what it sends, and what it makes you read before it archives a room.
+ */
+describe('the group sheet in edit mode', () => {
+  const agents = [agent('concierge', 'Concierge'), agent('ledger', 'Ledger'), agent('garage', 'Garage')];
+  const group = { id: 'g-1', name: 'Test room', coordinator: 'concierge', members: ['concierge', 'ledger'], contextCapChars: 40_000, createdAt: '' };
+
+  it('opens on the group as it is, and saves the whole membership, coordinator included', async () => {
+    const saved = vi.fn();
+    const update = vi.spyOn(chatApi, 'updateGroup').mockResolvedValue({ ...group, members: ['concierge', 'ledger', 'garage'] });
+    render(<GroupSheet agents={agents} group={group} onClose={() => {}} onSaved={saved} />);
+
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'Test room');
+    expect(screen.getByRole('combobox')).toHaveProperty('value', 'concierge');
+    // The current state is what the boxes show: Ledger in, Garage out.
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes.map((b) => b.checked)).toEqual([true, false]);
+
+    await userEvent.click(boxes[1]!);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update).toHaveBeenCalledWith('g-1', { name: 'Test room', coordinator: 'concierge', members: ['concierge', 'ledger', 'garage'] });
+    expect(saved).toHaveBeenCalled();
+  });
+
+  it('archives only after a sentence saying what that does', async () => {
+    const archived = vi.fn();
+    const archive = vi.spyOn(chatApi, 'archiveGroup').mockResolvedValue(null);
+    render(<GroupSheet agents={agents} group={group} onClose={() => {}} onArchived={archived} />);
+
+    await userEvent.click(screen.getByTestId('group-archive'));
+    expect(screen.getByText(/Archive Test room\? It leaves the rail and takes no new requests\./)).toBeDefined();
+    expect(archive).not.toHaveBeenCalled();
+
+    // And it can be backed out of.
+    await userEvent.click(screen.getByRole('button', { name: 'Keep it' }));
+    expect(screen.queryByTestId('group-archive-confirm')).toBeNull();
+    expect(archive).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('group-archive'));
+    await userEvent.click(screen.getByTestId('group-archive-confirm'));
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('g-1'));
+    expect(archived).toHaveBeenCalledWith('g-1');
+  });
+
+  it('keeps a member whose account broke, rather than dropping it on the next save', () => {
+    const broken = { ...agent('scout', 'Scout'), available: false };
+    render(
+      <GroupSheet
+        agents={[...agents, broken]}
+        group={{ ...group, members: ['concierge', 'scout'] }}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+    expect(screen.getAllByText('Scout').length).toBeGreaterThan(0);
   });
 });
