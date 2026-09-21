@@ -172,6 +172,32 @@ it('falls back to what the last supervisor wrote down when the socket has gone',
   });
 });
 
+it('compares the disk record the way the supervisor does, and defaults the switch the same way', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-upgrade-pre-'));
+  // A prerelease is older than the release it leads to, and a file written
+  // before the switch existed is a check that is on, not off.
+  await writeFile(path.join(data, 'upgrade.json'), JSON.stringify({
+    check: { lastAt: '2026-01-02T03:04:05.000Z', latest: '0.2.0-rc.1' },
+    current: '0.2.0',
+    history: [],
+  }), 'utf8');
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });
+  const { origin, headers } = await open(app);
+  const view = await fetch(`${origin}/api/version`, { headers });
+  expect(await view.json()).toMatchObject({ updateAvailable: false, checkEnabled: true });
+});
+
+it('refuses a version that is not one before the supervisor is asked at all', async () => {
+  const { socket, seen } = await fakeSupervisor();
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket });
+  const { origin, headers } = await open(app);
+  for (const bad of ['latest', '^0.1.1', '0.1', 'npm:other@1.0.0', 'https://x.example/a.tgz']) {
+    const refused = await fetch(`${origin}/api/upgrade`, { method: 'POST', headers, body: JSON.stringify({ version: bad }) });
+    expect(refused.status).toBe(400);
+  }
+  expect(seen).toEqual([]);
+});
+
 it('says 503 when there is neither a supervisor answering nor a record on disk', async () => {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-upgrade-empty-'));
   const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: path.join(data, 'gone.sock'), BUDDI_DATA_DIR: data });

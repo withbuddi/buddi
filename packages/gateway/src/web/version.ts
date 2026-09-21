@@ -24,8 +24,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { compareVersions } from '@buddi/core';
 import { supervisorSocket, type RouteReply } from './backups.js';
 import { supervisorCall, type SupervisorReply } from './service.js';
+
+/**
+ * What a version has to look like before this route will pass it on.
+ *
+ * The same shape the supervisor enforces (`VERSION_PATTERN`, upgrade.ts),
+ * repeated here so that a range, a tag, a URL or an npm alias is refused by
+ * the first thing that sees it rather than by the last.
+ */
+const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 /** What a checkout is told instead of an upgrade button. */
 export const CHECKOUT_LINE = 'A checkout upgrades with git pull, then buddi upgrade in a terminal.';
@@ -63,7 +73,10 @@ const require_ = createRequire(import.meta.url);
 
 /** `@buddi/core`'s package.json, which is the workspace's version of record. */
 function corePackage(): { version?: string; dir: string } {
-  const file = require_.resolve('@buddi/core/package.json');
+  let file: string;
+  // Resolution itself can throw, which is not a reason for a page to fail.
+  try { file = require_.resolve('@buddi/core/package.json'); }
+  catch { return { dir: process.cwd() }; }
   try {
     return { ...(JSON.parse(readFileSync(file, 'utf8')) as { version?: string }), dir: path.dirname(file) };
   } catch {
@@ -99,12 +112,16 @@ function describe(workspaceRoot: string): Promise<string | null> {
  * because `git` is missing.
  */
 export async function currentVersion(): Promise<string> {
-  const core = corePackage();
-  const version = core.version ?? '0.0.0';
-  // `<repo>/packages/core` in a checkout; anywhere else the `.git` test fails.
-  const workspaceRoot = path.resolve(core.dir, '..', '..');
-  const described = await describe(workspaceRoot);
-  return described ? `${version} (${described})` : version;
+  try {
+    const core = corePackage();
+    const version = core.version ?? '0.0.0';
+    // `<repo>/packages/core` in a checkout; anywhere else the `.git` test fails.
+    const workspaceRoot = path.resolve(core.dir, '..', '..');
+    const described = await describe(workspaceRoot);
+    return described ? `${version} (${described})` : version;
+  } catch {
+    return '0.0.0';
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -124,7 +141,10 @@ export async function readUpgradeFile(env: NodeJS.ProcessEnv): Promise<UpgradeFi
     const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<UpgradeFile>;
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return {
-      check: { ...(parsed.check ?? {}), enabled: parsed.check?.enabled === true },
+      // `enabled` defaults the way the supervisor defaults it: the daily check
+      // is on unless it was turned off, and a file written before the field
+      // existed must not read as "off" on one side and "on" on the other.
+      check: { ...(parsed.check ?? {}), enabled: parsed.check?.enabled !== false },
       current: typeof parsed.current === 'string' ? parsed.current : '',
       ...(typeof parsed.registry === 'string' ? { registry: parsed.registry } : {}),
       history: Array.isArray(parsed.history) ? parsed.history : [],
@@ -143,7 +163,9 @@ function fromFile(file: UpgradeFile): Record<string, unknown> {
     ...(latest === undefined ? {} : { latest }),
     ...(file.check.lastAt === undefined ? {} : { checkedAt: file.check.lastAt }),
     checkEnabled: file.check.enabled,
-    updateAvailable: latest !== undefined && latest !== file.current,
+    // The same comparison the supervisor makes (`@buddi/core`'s semver), so
+    // that the fallback cannot offer an upgrade the supervisor would not.
+    updateAvailable: latest !== undefined && (compareVersions(latest, file.current) ?? 0) > 0,
     ...(file.check.error === undefined ? {} : { error: file.check.error }),
     history: file.history,
   };
@@ -235,8 +257,8 @@ export async function versionCheckRoute(
 export async function upgradeRoute(deps: VersionDeps, body: Record<string, unknown>): Promise<RouteReply> {
   const socket = supervisorSocket(deps.env);
   if (!socket) return { status: 409, body: { error: CHECKOUT_LINE } };
-  if (body.version !== undefined && typeof body.version !== 'string') {
-    return { status: 400, body: { error: '"version" must be a version string.' } };
+  if (body.version !== undefined && (typeof body.version !== 'string' || !VERSION.test(body.version))) {
+    return { status: 400, body: { error: '"version" must be a version like 1.2.3.' } };
   }
   const reply = await forward(socket, '/upgrade', 'POST', body.version === undefined ? {} : { version: body.version });
   return reply ?? { status: 503, body: { error: NO_SUPERVISOR } };

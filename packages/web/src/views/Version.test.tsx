@@ -129,4 +129,80 @@ describe('the version panel', () => {
     await tick(10_000);
     expect(reload).toHaveBeenCalledTimes(1);
   });
+
+  it('gives up after ten minutes and names the command that can still answer', async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    vi.mocked(api.version).mockResolvedValue(AVAILABLE);
+    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
+    // The gateway goes and never comes back: nothing answers, for ever.
+    vi.mocked(api.upgradeJob).mockRejectedValue(new ApiError(0, 'failed to fetch'));
+    vi.mocked(api.session).mockRejectedValue(new ApiError(0, 'failed to fetch'));
+
+    render(<Version reload={reload} />);
+    const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    await tick(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    await tick(0);
+    await tick(2_000);
+    expect(screen.getByRole('status')).toHaveTextContent('buddi is restarting.');
+
+    await tick(10 * 60_000);
+    expect(reload).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('buddi did not come back. Run buddi doctor in a terminal.');
+  });
+
+  it('reads the verdict off the record on disk when buddi comes back unchanged', async () => {
+    vi.useFakeTimers();
+    const reload = vi.fn();
+    const failed = {
+      from: '0.1.0', to: '0.1.1', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      outcome: 'failed' as const, step: 'migrating', error: 'relation "core.jobs" already exists',
+      backup: 'buddi-backup-20260101-000000.tar.gz',
+    };
+    vi.mocked(api.version)
+      .mockResolvedValueOnce(AVAILABLE)
+      .mockResolvedValue({ ...AVAILABLE, history: [failed] });
+    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
+    vi.mocked(api.upgradeJob).mockRejectedValue(new ApiError(0, 'failed to fetch'));
+    // A gateway answers again, on the version this page started on.
+    vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 8787, version: '0.1.0' });
+
+    render(<Version reload={reload} />);
+    const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    await tick(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    await tick(0);
+    await tick(4_000);
+    expect(reload).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The upgrade to 0.1.1 failed at migrating: relation "core.jobs" already exists. ' +
+      'The backup taken first is buddi-backup-20260101-000000.tar.gz. Run buddi doctor in a terminal; it prints the way back.',
+    );
+  });
+
+  it('hands the button back when an upgrade fails before anything was replaced', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.version).mockResolvedValue(AVAILABLE);
+    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
+    vi.mocked(api.upgradeJob).mockResolvedValue({
+      id: 'job-1', phase: 'failed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+      error: 'npm install buddi@0.1.1 failed: 404 Not Found',
+    });
+
+    render(<Version reload={() => {}} />);
+    const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    await tick(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    await tick(0);
+    expect(screen.getByRole('alert')).toHaveTextContent('buddi is still running on the version it had.');
+    // The job ended, so nothing is polled again and the button works.
+    const asked = vi.mocked(api.upgradeJob).mock.calls.length;
+    await tick(10_000);
+    expect(vi.mocked(api.upgradeJob).mock.calls.length).toBe(asked);
+    expect(screen.getByRole('button', { name: 'Upgrade to 0.1.1' })).toBeEnabled();
+  });
 });

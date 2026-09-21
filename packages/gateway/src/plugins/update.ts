@@ -13,72 +13,15 @@
  * how to undo it. Refusing here, with the two versions named, is the honest
  * version of that limitation.
  */
-import { readPluginsFile, type InstalledPlugin } from '@buddi/core';
+import { compareSemver, parseSemver, readPluginsFile, type InstalledPlugin } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 import { recordFile } from './load.js';
 import { rejectStaged, stagePlugin, type StageOptions, type StagedPlugin } from './stage.js';
 
-/** A version, taken apart the way semver 2.0.0 says to. */
-export interface Semver {
-  major: number;
-  minor: number;
-  patch: number;
-  /** The dot-separated identifiers after `-`, empty for a release. */
-  prerelease: Array<string | number>;
-}
-
-const SEMVER =
-  /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-
-/**
- * Parse a version, or refuse it.
- *
- * The version string decides whether an update is allowed to happen, so
- * something that is not a version is not a comparison this can do: `latest`,
- * `2`, `1.0.0.0` and an empty string all used to parse into numbers here (via
- * `parseInt` and a `|| 0`) and compare as if they meant something. Build
- * metadata is parsed and then ignored, which is what the specification says to
- * do with it.
- */
-export function parseSemver(version: string): Semver | undefined {
-  const match = SEMVER.exec(version.trim());
-  if (!match) return undefined;
-  const prerelease = (match[4] ?? '')
-    .split('.')
-    .filter((id) => id !== '')
-    .map((id) => (/^\d+$/.test(id) ? Number.parseInt(id, 10) : id));
-  return {
-    major: Number.parseInt(match[1] as string, 10),
-    minor: Number.parseInt(match[2] as string, 10),
-    patch: Number.parseInt(match[3] as string, 10),
-    prerelease,
-  };
-}
-
-/** -1, 0 or 1, by semver's own precedence rules. Build metadata is ignored. */
-export function compareSemver(a: Semver, b: Semver): number {
-  for (const key of ['major', 'minor', 'patch'] as const) {
-    if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
-  }
-  // A release outranks any prerelease of the same numbers.
-  if (a.prerelease.length === 0 && b.prerelease.length > 0) return 1;
-  if (a.prerelease.length > 0 && b.prerelease.length === 0) return -1;
-  const length = Math.max(a.prerelease.length, b.prerelease.length);
-  for (let i = 0; i < length; i += 1) {
-    const left = a.prerelease[i];
-    const right = b.prerelease[i];
-    // A shorter set of identifiers is lower, when everything before was equal.
-    if (left === undefined) return -1;
-    if (right === undefined) return 1;
-    const leftNumeric = typeof left === 'number';
-    const rightNumeric = typeof right === 'number';
-    // Numeric identifiers always compare lower than alphanumeric ones.
-    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
-    if (left === right) continue;
-    return left < right ? -1 : 1;
-  }
-  return 0;
-}
+// The comparison itself lives in `@buddi/core` (`semver.ts`): the supervisor's
+// version check and the dashboard's disk fallback ask the same question of the
+// same code. Re-exported here because this is where callers have always found it.
+export { compareSemver, parseSemver, type Semver } from '@buddi/core';
 
 /**
  * Is `candidate` a later version than `current`?
