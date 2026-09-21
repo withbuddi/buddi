@@ -497,6 +497,18 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 
 .wb-chat-notice { color: var(--text-muted); font-size: var(--text-xs); margin: 10px; }
 
+/* What a browser session in the previous conversation learned. A note, not a
+   bubble: nobody said it, so it is set in the muted voice the header uses. */
+.wb-carryover {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  margin: 10px 10px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: pre-wrap;
+}
+
 .wb-messages {
   flex: 1 1 auto;
   min-height: 0;
@@ -2664,11 +2676,11 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
    here restyles them — the panel only lays them out. */
 .wb-delegate { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .wb-delegate-head { display: flex; align-items: center; gap: var(--space-3); }
-.wb-delegate-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wb-delegate-who { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
 .wb-delegate-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
@@ -2686,5 +2698,15 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 
 /* Four refusals in a row are one piece of news. Folded, with the individual
    rows underneath when the owner wants them. */
-.wb-refusals { display: flex; flex-direction: column; gap: 6px; }
-.wb-refusals-list { display: flex; flex-direction: column; gap: 6px; padding-left: var(--space-4); }
+.wb-refusals { display: flex; flex-direction: column; gap: var(--space-2); }
+.wb-refusals-list { display: flex; flex-direction: column; gap: var(--space-2); padding-left: var(--space-4); }
+/* One refused delegation, opened: the row, and underneath it what the
+   installation actually said — the reason is the reason the owner opened it. */
+.wb-refusal { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
+.wb-refusal-why {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}

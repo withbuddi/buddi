@@ -10,6 +10,7 @@
  * owner would recognise as theirs.
  */
 import { OPENING_TURN_SPEAKER, type Queryable } from '@buddi/core';
+import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 
 export interface ConversationLine {
   id: string;
@@ -69,13 +70,14 @@ export async function listRecentConversations(
             (select m.content from core.messages m
                where m.conversation_id = c.id and m.role = 'user'
                  and m.speaker is distinct from $3
+                 and m.speaker is distinct from $4
                order by m.created_at asc, m.id asc
                limit 1) as first_user
        from core.conversations c
       where c.agent_id = $1 and c.group_id is null
       order by c.created_at desc, c.id desc
       limit $2`,
-    [agentId, Math.max(1, Math.trunc(limit)), OPENING_TURN_SPEAKER],
+    [agentId, Math.max(1, Math.trunc(limit)), OPENING_TURN_SPEAKER, CARRIED_OVER_SPEAKER],
   );
   return rows.map((r) => ({
     id: String(r.id),

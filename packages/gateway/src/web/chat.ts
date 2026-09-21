@@ -102,6 +102,7 @@ import {
   type AskSink,
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 import {
   IDLE_TIMEOUT_MS,
   MAX_TRANSCRIPT_CHARS,
@@ -416,6 +417,13 @@ export interface ChatTranscript {
   offers: ChatOfferView[];
   /** The exact structured question currently waiting in this conversation. */
   question: Awaited<ReturnType<typeof openQuestion>>;
+  /**
+   * What a browser session in the previous conversation learned, written into
+   * this one when it was created (`surfaces/browser-handoff.ts`). The model
+   * reads it as a turn; the page prints it as a grey line at the top, because
+   * it is not something the owner said.
+   */
+  carriedOver?: string;
 }
 
 /**
@@ -458,7 +466,15 @@ export async function readChatTranscript(
     [conversationId, OPENING_TURN_SPEAKER],
   );
 
-  const parsed = messages.map((m) => ({
+  const carriedOver = messages
+    .filter((m) => m.speaker === CARRIED_OVER_SPEAKER)
+    .map((m) => rawBlocks(m.content).filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('\n'))
+    .filter((text) => text.trim() !== '')
+    .join('\n\n');
+
+  const parsed = messages
+    .filter((m) => m.speaker !== CARRIED_OVER_SPEAKER)
+    .map((m) => ({
     id: String(m.id),
     role: String(m.role),
     at: new Date(m.created_at).toISOString(),
@@ -515,6 +531,7 @@ export async function readChatTranscript(
       expiresAt: offer.expiresAt,
     })),
     question,
+    ...(carriedOver ? { carriedOver } : {}),
     conversationId: String(conversation.id),
     agentId: String(conversation.agent_id),
     ...(conversation.group_id ? { groupId: String(conversation.group_id) } : {}),
@@ -578,21 +595,37 @@ async function delegationsOf(
   return found;
 }
 
+/** The ids the panel is drawn from — the server's to write, nobody else's. */
+const DELEGATION_IDS = ['conversationId', 'agentId', 'runId'] as const;
+
 /**
  * A delegate call, told where it went.
  *
- * Only `agent.delegate`, only the three ids, and only when the event says so:
- * a refused delegation opened no conversation and keeps the input the model
- * wrote, unchanged.
+ * The three ids are stripped from what the model wrote *first*, and put back
+ * only from the `delegation.started` event. A model can write any JSON it
+ * likes into a tool call, and this reader is what the dashboard draws a live
+ * panel from: without the strip, an agent could name a conversation it was
+ * never given and have the owner's page open it. So the call carries the ids
+ * when the installation says a conversation exists, and carries none when it
+ * does not — a refusal opens no panel.
  */
 function withDelegation(block: ChatBlock, delegations: Map<string, DelegationRef>): ChatBlock {
   if (block.type !== 'tool_use' || block.name !== DELEGATE_TOOL_NAME) return block;
   const ref = delegations.get(block.id);
-  if (!ref) return block;
-  const input = block.input !== null && typeof block.input === 'object' ? block.input : {};
+  const written = block.input !== null && typeof block.input === 'object' && !Array.isArray(block.input)
+    ? { ...(block.input as Record<string, unknown>) }
+    : null;
+  if (written === null) {
+    // Not an object: it can carry no ids of its own, so there is nothing to
+    // strip and nothing to put them on unless the event says otherwise.
+    return ref ? { ...block, input: { conversationId: ref.conversationId, agentId: ref.agentId, runId: ref.runId } } : block;
+  }
+  for (const key of DELEGATION_IDS) delete written[key];
   return {
     ...block,
-    input: { ...(input as Record<string, unknown>), conversationId: ref.conversationId, agentId: ref.agentId, runId: ref.runId },
+    input: ref
+      ? { ...written, conversationId: ref.conversationId, agentId: ref.agentId, runId: ref.runId }
+      : written,
   };
 }
 
@@ -797,7 +830,21 @@ async function runsOf(
       });
       continue;
     }
-    const open = runs.find((r) => r.finishedAt === null);
+    /*
+     * Which run finished. A nested run and its caller both write into the
+     * owner's conversation, so "the first one still open" pairs a colleague's
+     * finish onto the caller's run and shows a thread as over while it is
+     * still going. The event's own `runId` decides; the positional fallback
+     * is only for an event that carries none (older rows, and resumes that
+     * predate the field).
+     */
+    const named = typeof p.runId === 'string' ? p.runId : null;
+    const open = named === null
+      ? runs.find((r) => r.finishedAt === null)
+      : runs.find((r) => r.runId === named && r.finishedAt === null)
+        // A start that was written before the field existed still belongs to
+        // the finish that names it: an open run with no id of its own.
+        ?? runs.find((r) => r.runId === null && r.finishedAt === null);
     const finished = {
       finishedAt: new Date(event.created_at).toISOString(),
       turns: typeof p.turns === 'number' ? p.turns : null,

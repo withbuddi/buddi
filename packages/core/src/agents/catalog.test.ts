@@ -10,6 +10,8 @@ import {
   DEFAULT_MAX_TURNS,
   selectSkills,
   generatedSection,
+  MAX_LISTED_COLLEAGUES,
+  type AgentRosterEntry,
   injectToday,
   loadAgentCatalog,
   resolveToolGrants,
@@ -656,10 +658,48 @@ describe('today injection', () => {
 });
 
 describe('generatedSection', () => {
+  const colleague = (n: number, over: Partial<AgentRosterEntry> = {}): AgentRosterEntry => ({
+    id: `agent-${n}`, handle: `a${n}`, name: `Agent ${n}`, description: `Does ${n} things`, ...over,
+  });
+
   it('states the language rule for each supported value', () => {
     expect(generatedSection([], 'mirror')).toContain('Never switch language on your own.');
     expect(generatedSection([], 'en')).toContain('Always reply in English');
     expect(generatedSection([], 'fr')).toContain('Réponds toujours en français');
+  });
+
+  /*
+   * A handle is what the owner reads; an id is what the tool takes. The old
+   * sentence said "never by its id", which contradicted the delegate list
+   * printed four lines below it.
+   */
+  it('separates what the owner is told from what the tool is passed', () => {
+    const section = generatedSection(['agent.delegate'], 'en', {
+      handle: 'asker', colleagues: [colleague(1)], delegates: [colleague(1)],
+    });
+    expect(section).toContain('When naming an agent to the owner, use its handle; pass ids only to agent.delegate.');
+    expect(section).not.toContain('never by its id');
+  });
+
+  it('names two dozen colleagues and counts the rest', () => {
+    const many = Array.from({ length: MAX_LISTED_COLLEAGUES + 7 }, (_, i) => colleague(i));
+    const section = generatedSection(['agent.delegate'], 'en', {
+      handle: 'asker', colleagues: many, delegates: many,
+    });
+    expect(section).toContain('@a0 — Agent 0');
+    expect(section).not.toContain('@a24 — Agent 24');
+    expect(section.match(/…and 7 more\./g)).toHaveLength(2);
+  });
+
+  it('says which colleagues this installation cannot run', () => {
+    const section = generatedSection(['agent.delegate'], 'en', {
+      handle: 'asker',
+      colleagues: [colleague(1, { available: false }), colleague(2)],
+      delegates: [colleague(1, { available: false })],
+    });
+    expect(section).toContain('@a1 — Agent 1: Does 1 things (not available now)');
+    expect(section).toContain('`agent-1` (@a1) — Agent 1: Does 1 things (not available now)');
+    expect(section).not.toContain('Agent 2: Does 2 things (not available now)');
   });
 });
 

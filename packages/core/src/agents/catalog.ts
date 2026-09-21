@@ -137,6 +137,13 @@ export type AgentAvailability =
 /** One colleague as an agent's prompt sees it. */
 export interface AgentRosterEntry {
   /**
+   * Whether this installation can run the colleague right now. A prompt that
+   * offers a colleague with no brain behind it sends the model to delegate
+   * into a refusal; saying so is cheaper than the round trip. Absent means
+   * "as far as this roster knows, yes".
+   */
+  available?: boolean;
+  /**
    * The catalog id. Handles are how the owner and the agents name each other;
    * the id is what `agent.delegate` takes, so a prompt that lists colleagues
    * to delegate to has to carry both or the model invents one.
@@ -277,7 +284,7 @@ export interface LoadAgentCatalogOptions {
    * It is a *description* of authorization, never the authorization itself;
    * the delegate tool checks the file again at the point of use.
    */
-  delegatesFor?: (agentId: string) => readonly string[];
+  delegatesFor?: (agentId: string, agentsDir: string) => readonly string[];
   /**
    * Directory of shared skills for the single-directory form. Defaults to
    * `skills/` next to the agents directory (so `<repo>/agents` pairs with
@@ -469,6 +476,27 @@ function oneLine(description: string): string {
   return first.length > 160 ? `${first.slice(0, 159)}…` : first;
 }
 
+/**
+ * How many colleagues a generated section names before it stops counting.
+ *
+ * A roster is a list of *people*, and a prompt that spends two hundred lines
+ * naming them has stopped being wiring and started being a directory. The
+ * first two dozen are named; the rest are counted, so the model knows the
+ * list is longer than what it can see rather than believing it is complete.
+ */
+export const MAX_LISTED_COLLEAGUES = 24;
+
+function capped<T>(entries: readonly T[], line: (entry: T) => string): string[] {
+  const shown = entries.slice(0, MAX_LISTED_COLLEAGUES).map(line);
+  const more = entries.length - shown.length;
+  return more > 0 ? [...shown, `  - …and ${more} more.`] : shown;
+}
+
+/** An agent this installation cannot run is offered as what it is. */
+function unavailableMark(entry: AgentRosterEntry): string {
+  return entry.available === false ? ' (not available now)' : '';
+}
+
 export function generatedSection(
   tools: readonly string[],
   language: AgentLanguage,
@@ -493,8 +521,9 @@ export function generatedSection(
     } else {
       lines.push(
         '- The owner\'s other agents, and how to name them:',
-        ...wiring.colleagues.map((c) => `  - @${c.handle} — ${c.name}: ${c.description}`),
-        '- Always name another agent by its handle, never by its id.',
+        ...capped(wiring.colleagues, (c) => `  - @${c.handle} — ${c.name}: ${c.description}${unavailableMark(c)}`),
+        '- When naming an agent to the owner, use its handle; pass ids only to ' +
+          `${DELEGATE_TOOL_NAME}.`,
         '- The owner can put several agents in a group: one named conversation on the dashboard, with a coordinator that brings members in. Refer to a group by its name. Only an agent holding platform.create_group can make one; membership grants no tool.',
       );
     }
@@ -509,7 +538,7 @@ export function generatedSection(
         delegates.length === 0
           ? `- You may not delegate to anyone: ${DELEGATE_TOOL_NAME} will refuse every id. Answer with what you have, or tell the owner who they should ask.`
           : `- Colleagues you may ask with ${DELEGATE_TOOL_NAME}, by the id to pass as \`agent\` (these ids only — never guess one):`,
-        ...delegates.map((d) => `  - \`${d.id}\` (@${d.handle}) — ${d.name}: ${oneLine(d.description)}`),
+        ...capped(delegates, (d) => `  - \`${d.id}\` (@${d.handle}) — ${d.name}: ${oneLine(d.description)}${unavailableMark(d)}`),
       );
     }
   }
@@ -572,6 +601,29 @@ export function selectSkills(
   return chosen;
 }
 
+/**
+ * Can this installation run that colleague, as the *roster* needs to know?
+ *
+ * The roster is built before any agent is, because every agent's prompt names
+ * the others — so this asks the two questions `buildAgent` will ask again (is
+ * a tool family missing, is the provider reachable) without building anything.
+ * It never decides whether an agent loads: a question that throws here is
+ * answered "yes" and thrown properly a moment later, in `buildAgent`, where
+ * the error belongs.
+ */
+function rosterAvailability(frontmatter: AgentFrontmatter, opts: LoadAgentCatalogOptions): boolean {
+  try {
+    const { missingFamilies } = resolveToolGrants(frontmatter.tools, opts.registry, frontmatter.id);
+    if (missingFamilies.length > 0) return false;
+    const selection = opts.providerSelection?.(frontmatter);
+    if (selection?.availability) return selection.availability.ok;
+    const provider = selection?.provider ?? providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
+    return resolveProvider(provider, opts.env).ok;
+  } catch {
+    return true;
+  }
+}
+
 function buildAgent(
   frontmatter: AgentFrontmatter,
   body: string,
@@ -627,7 +679,7 @@ function buildAgent(
    * An id the file names that no agent answers to is dropped rather than
    * printed: the prompt must not promise a colleague that does not exist.
    */
-  const delegates = (opts.delegatesFor?.(frontmatter.id) ?? [])
+  const delegates = [...new Set(opts.delegatesFor?.(frontmatter.id, path.dirname(path.dirname(file))) ?? [])]
     .map((id) => roster.find((entry) => entry.id === id))
     .filter((entry): entry is AgentRosterEntry => entry !== undefined);
   const systemPromptTemplate = [
@@ -832,6 +884,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     handle: frontmatter.handle,
     name: frontmatter.name,
     description: frontmatter.description,
+    available: rosterAvailability(frontmatter, opts),
   }));
 
   const agents = new Map<string, CatalogAgent>();

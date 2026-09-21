@@ -140,6 +140,13 @@ export interface ChatConversation {
   /** A durable input request. It supplies information and never grants permission. */
   question?: ChatQuestion | null;
   /**
+   * What a browser session in the *previous* conversation learned — the task,
+   * the pages it visited and the agent's last words — written into this one
+   * when the rollover created it. Drawn as a grey note above the transcript,
+   * never as a bubble: nobody in this conversation said it.
+   */
+  carriedOver?: string;
+  /**
    * Every run this conversation has had, open ones included: a run with no
    * `finishedAt` is still going. What the server already sends
    * (`packages/gateway/src/web/chat.ts`), written down here because first run

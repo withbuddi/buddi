@@ -339,11 +339,17 @@ export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (fami
  * ask, with their ids, and this is where that list comes from. A malformed or
  * unreadable file yields nothing rather than failing the load: the refusal
  * path reads the same file again at the point of use and is still loud there.
+ *
+ * The file is read from **the agent's own directory**, which core hands in —
+ * the same `dirname(dirname(agent.file))` `assertNoDelegationToWriters` uses.
+ * With a search path, an agent from the owner's half and one from the repo's
+ * examples do not share an `agents/`, and reaching for a single default
+ * directory would print one agent's colleagues in another's prompt, or none.
  */
-function delegatesForPrompt(agentsDir?: string): (agentId: string) => readonly string[] {
-  return (agentId) => {
+function delegatesForPrompt(): (agentId: string, agentsDir: string) => readonly string[] {
+  return (agentId, agentsDir) => {
     try {
-      return agentsDir === undefined ? readDelegates(agentId) : readDelegates(agentId, agentsDir);
+      return readDelegates(agentId, agentsDir);
     } catch {
       return [];
     }
@@ -357,7 +363,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(opts.dir) });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt() });
     assertNoDelegationToWriters(single);
     return single;
   }
