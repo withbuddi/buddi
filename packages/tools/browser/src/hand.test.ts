@@ -33,7 +33,7 @@ describe('the extension driver’s hand', () => {
     const driver = new ExtensionDriver(fake);
     const frames: HandFrame[] = [];
     await driver.hand.start((frame) => frames.push(frame));
-    expect(sent[0]).toMatchObject({ name: 'screencast.start', session: driver.session, args: { maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 } });
+    expect(sent[0]).toMatchObject({ name: 'screencast.start', session: driver.session, args: { maxWidth: 960, maxHeight: 600, quality: 50, everyNthFrame: 1 } });
     expect(sent[0]!.owner).toBeUndefined();
 
     push({ jpeg: Buffer.from('a-picture'), metadata });
@@ -105,14 +105,23 @@ describe('the Playwright driver’s hand', () => {
     await driver.start();
     const frames: HandFrame[] = [];
     await driver.hand.start((frame) => frames.push(frame));
-    expect(cdp.sent[0]).toMatchObject({ method: 'Page.startScreencast', params: { format: 'jpeg', quality: 60 } });
+    expect(cdp.sent[0]).toMatchObject({ method: 'Page.startScreencast', params: { format: 'jpeg', quality: 50, maxWidth: 960, maxHeight: 600 } });
 
     cdp.listeners.get('Page.screencastFrame')!({ data: Buffer.from('jpeg-bytes').toString('base64'), sessionId: 7, metadata: { ...metadata, offsetTop: 12 } });
     expect(frames[0]!.jpeg.toString()).toBe('jpeg-bytes');
     expect(frames[0]!.metadata.offsetTop).toBe(12);
-    // An unacked screencast stops after a frame or two, so this is the wire.
-    await Promise.resolve();
-    expect(cdp.sent.some((call) => call.method === 'Page.screencastFrameAck' && call.params?.sessionId === 7)).toBe(true);
+    // An unacked screencast stops after a frame or two, and Chrome paints
+    // nothing more until it has one — so the ack goes out before the frame is
+    // decoded or relayed, not after.
+    expect(cdp.sent[1]).toMatchObject({ method: 'Page.screencastFrameAck', params: { sessionId: 7 } });
+
+    // A link that cannot carry that picture gets a smaller one, on the same
+    // session, without losing the frame handler.
+    await driver.hand.tune!({ maxWidth: 640, maxHeight: 400, quality: 40 });
+    expect(cdp.sent.at(-2)).toMatchObject({ method: 'Page.stopScreencast' });
+    expect(cdp.sent.at(-1)).toMatchObject({ method: 'Page.startScreencast', params: { quality: 40, maxWidth: 640 } });
+    cdp.listeners.get('Page.screencastFrame')!({ data: Buffer.from('smaller').toString('base64'), sessionId: 8, metadata });
+    expect(frames[1]!.jpeg.toString()).toBe('smaller');
 
     await driver.hand.input({ kind: 'mouse', type: 'mousePressed', x: 30, y: 40, button: 'left', clickCount: 2, modifiers: 0 });
     expect(mouse.move).toHaveBeenCalledWith(30, 40);

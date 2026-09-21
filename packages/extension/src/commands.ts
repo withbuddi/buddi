@@ -666,9 +666,11 @@ export class BrowserCommands implements Executor {
     try {
       await this.#send(tabId, 'Page.startScreencast', {
         format: 'jpeg',
-        quality: 60,
-        maxWidth: side(command.args['maxWidth'], 1280),
-        maxHeight: side(command.args['maxHeight'], 800),
+        // Smaller and cheaper than a screenshot on purpose: this is a picture
+        // for a phone on someone else's network, not evidence for a model.
+        quality: Math.min(90, Math.max(20, Math.trunc(num(command.args['quality']) ?? 50))),
+        maxWidth: side(command.args['maxWidth'], 960),
+        maxHeight: side(command.args['maxHeight'], 600),
         everyNthFrame: Math.min(10, Math.max(1, Math.trunc(num(command.args['everyNthFrame']) ?? 1))),
       });
       // A cancel that landed while the screencast was starting has already
@@ -712,18 +714,23 @@ export class BrowserCommands implements Executor {
   }
 
   /**
-   * One painted frame, at most ten a second.
+   * One painted frame, acked at once and sent at most ten times a second.
    *
-   * Every frame Chrome paints is acked whether or not it is sent, because an
-   * unacked frame stops the stream; what the throttle drops is the bytes on the
-   * socket, not the acknowledgement. A frame that arrives too soon is held
-   * rather than thrown away, so a burst that ends inside the window still
-   * leaves the dashboard looking at the page as it finally settled.
+   * The ack comes first, always, and before the throttle rather than after it.
+   * Chrome paints nothing more until the frame it sent is acknowledged, so a
+   * frame held back for up to a hundred milliseconds and only acked on the way
+   * out stalls the *stream*, not just that frame: the browser sits idle for
+   * the whole window. Acking on arrival costs nothing and keeps Chrome
+   * painting; what the throttle drops is only the bytes on the socket.
+   *
+   * A frame that arrives too soon is held rather than thrown away, so a burst
+   * that ends inside the window still leaves the dashboard looking at the page
+   * as it finally settled.
    */
   #offer(cast: Screencast, frame: ScreencastFrame): void {
+    this.#ack(cast, frame.sessionId);
     const wait = cast.lastSentAt + MIN_FRAME_MS - this.#now();
     if (wait <= 0) { this.#emit(cast, frame); return; }
-    if (cast.pending) this.#ack(cast, cast.pending.sessionId);
     cast.pending = frame;
     if (cast.timer) return;
     cast.timer = setTimeout(() => {
@@ -737,7 +744,6 @@ export class BrowserCommands implements Executor {
   #emit(cast: Screencast, frame: ScreencastFrame): void {
     cast.lastSentAt = this.#now();
     this.#onFrame({ type: 'frame', session: cast.session, data: frame.data, metadata: frame.metadata, sessionId: frame.sessionId });
-    this.#ack(cast, frame.sessionId);
   }
 
   #ack(cast: Screencast, sessionId: string | number): void {

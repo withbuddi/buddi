@@ -60,6 +60,15 @@ export class BrowserService {
   #observation?: Observation;
   #picture?: Buffer;
   #busy = false;
+  /**
+   * The screen this session had is gone.
+   *
+   * Set when a take-over had to close the driver to end the action in flight,
+   * and cleared by resume. Belt to `handReady`'s braces: a hand offered over
+   * nothing is a live view that never paints its first frame, and the owner
+   * has no way to tell that from a slow link.
+   */
+  #handless = false;
   #controller?: AbortController;
   #expiry?: ReturnType<typeof setTimeout>;
   #lastAction?: string;
@@ -116,6 +125,12 @@ export class BrowserService {
     }
     if (!this.#session) return { supported: true, message: 'No agent is driving this screen.' };
     if (this.#state !== 'paused') return { supported: true, message: 'Take over first, then you can drive.' };
+    // Paused is not the same as paintable. A take-over that interrupted an
+    // action closed the screen that action was on, and a hand offered over
+    // nothing is a live view that never draws its first frame.
+    if (this.#handless || this.driver.handReady?.() === false) {
+      return { supported: true, message: this.#message ?? 'There is no screen to drive. Resume and ask the agent to open the page again.' };
+    }
     return { supported: true, hand: this.driver.hand };
   }
 
@@ -270,8 +285,24 @@ export class BrowserService {
     await next;
   }
 
+  /**
+   * Stop the action, keep the screen if the driver can.
+   *
+   * True when there is still something to drive afterwards. A driver with no
+   * `interrupt` — or one whose page really did go — has its screen closed
+   * instead, which is the old behaviour and still the honest answer when there
+   * is nothing left to paint.
+   */
+  async #interrupt(): Promise<boolean> {
+    if (!this.driver.interrupt) { await this.driver.close().catch(() => {}); return false; }
+    try { await this.driver.interrupt(); }
+    catch { await this.driver.close().catch(() => {}); return false; }
+    return this.driver.handReady?.() !== false;
+  }
+
   async #release(state: BrowserStatus['state']): Promise<void> {
     this.#needsObservation = false;
+    this.#handless = false;
     this.#state = state;
     if (this.#session) this.#spent.add(this.#session.requestId);
     this.#controller?.abort(new Error(`Browser ${state}. An in-flight submission may have completed; inspect before retrying.`));
@@ -301,11 +332,22 @@ export class BrowserService {
         this.#state = 'paused';
         this.#message = undefined;
         if (this.#busy) {
+          // The owner presses Take over *because* the agent is working: it
+          // reached a login, an MFA prompt or a consent banner and is still
+          // going round on it. That page is the whole point of the button, so
+          // the action is abandoned and the page is kept. Every branch of
+          // `execute` that would otherwise decide what this failure means is
+          // guarded by `controller.signal.aborted`, so aborting here is also
+          // what stops the interrupted command from overwriting `paused`.
           this.#controller?.abort(new Error('Owner took control during an action. Inspect the site before retrying.'));
-          await this.driver.close();
           this.#picture = undefined;
           this.#observation = undefined;
-          this.#message = this.driver.preservesWindows ? 'Computer input was interrupted. Your apps remain open. Inspect the result, resume, then ask the agent to observe.' : 'The in-flight action was interrupted and the window closed. Resume and ask the agent to navigate again.';
+          this.#needsObservation = !!this.#session;
+          const kept = await this.#interrupt();
+          this.#handless = !kept;
+          this.#message = kept
+            ? 'The in-flight action was interrupted; the page is still open and yours to use. Resume here when ready, then ask the agent to observe.'
+            : this.driver.preservesWindows ? 'Computer input was interrupted. Your apps remain open. Inspect the result, resume, then ask the agent to observe.' : 'The in-flight action was interrupted and the window closed. Resume and ask the agent to navigate again.';
         } else {
           await this.driver.takeover?.();
           this.#message = this.driver.preservesWindows ? 'Computer control is paused. Use the selected app, then resume here and ask the agent to observe.' : 'Use this conversation’s host tab for login or manual work. Resume here when ready, then ask the agent to observe.';
@@ -314,6 +356,7 @@ export class BrowserService {
         if (this.#busy) throw new Error('Wait for the interrupted action to settle before resuming.');
         await this.#persistStop(false);
         this.driver.resume?.();
+        this.#handless = false;
         this.#preconditionFailures = 0;
         this.#observation = undefined;
         this.#picture = undefined;

@@ -378,7 +378,7 @@ describe('the screencast', () => {
   it('starts jpeg frames on the session tab and keeps the debugger attached', async () => {
     const { sent, dispatched, attachments } = await casting();
     expect(sent.find((call) => call.method === 'Page.startScreencast')!.params)
-      .toMatchObject({ format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+      .toMatchObject({ format: 'jpeg', quality: 50, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
     expect(attachments).toHaveLength(1);
     expect(dispatched).not.toContain('detach');
   });
@@ -392,7 +392,7 @@ describe('the screencast', () => {
     expect(sent.filter((call) => call.method === 'Page.screencastFrameAck').map((call) => call.params)).toEqual([{ sessionId: 1 }]);
   });
 
-  it('sends at most ten frames a second and acks the ones it drops, so Chrome keeps painting', async () => {
+  it('sends at most ten frames a second, and acks every frame on arrival so Chrome never waits on the throttle', async () => {
     const { frames, paint, sent, tick } = await casting();
     paint(1);
     tick(10);
@@ -400,9 +400,11 @@ describe('the screencast', () => {
     tick(10);
     paint(3);
     await Promise.resolve();
-    // One went out; the two that came too soon were acked, and the last is held.
+    // One went out; the two that came too soon are already acked, because
+    // Chrome paints nothing more until they are — holding the ack for up to a
+    // hundred milliseconds would stall the stream, not just the frame.
     expect(frames.map((f) => f.data)).toEqual(['frame-1']);
-    expect(sent.filter((call) => call.method === 'Page.screencastFrameAck')).toHaveLength(2);
+    expect(sent.filter((call) => call.method === 'Page.screencastFrameAck')).toHaveLength(3);
     tick(100);
     await vi.advanceTimersByTimeAsync(100);
     // The page settled inside the window, so the owner still sees where it settled.
