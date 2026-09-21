@@ -16,14 +16,32 @@ import { isUnread } from '../mail.js';
 import { loadSettings, purgedBodyNote } from '../retention.js';
 import { MESSAGE_COLUMNS, toMessage } from '../rows.js';
 import {
+  ACCOUNT_ARG,
+  accountScope,
   boundedLimit,
   DEFAULT_LIMIT,
   latestTriage,
   MAX_LIMIT,
-  requireAccount,
   requireMessage,
   UUID,
+  type AccountScope,
 } from './shared.js';
+
+/**
+ * How a listing names the accounts it looked in.
+ *
+ * `account` stays on the result and means what it always meant — the mailbox
+ * this answer is about — but only when the answer *is* about one. Across
+ * several it is null and `accounts` is the list, because a single address
+ * there would be a lie about where the rows came from, and every row carries
+ * its own `account` anyway.
+ */
+function scopeSummary(scope: AccountScope): { account: string | null; accounts: string[] } {
+  return {
+    account: scope.only?.address ?? null,
+    accounts: scope.accounts.map((a) => a.address),
+  };
+}
 
 const LIMIT = z
   .number()
@@ -33,6 +51,7 @@ const LIMIT = z
   .describe(`How many messages to return (default ${DEFAULT_LIMIT}, most ${MAX_LIMIT}).`);
 
 const listRecentInput = z.object({
+  account: ACCOUNT_ARG.optional(),
   limit: LIMIT.optional(),
   unreadOnly: z
     .boolean()
@@ -48,14 +67,14 @@ const listRecentInput = z.object({
 export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown> = {
   name: 'email.list_recent',
   description:
-    'List recent messages in the inbox, newest first: sender, subject, date, a short snippet, whether it is unread, whether it has attachments, and what triage decided about it if anything has. Use it to see what has arrived; use email.read for the full body of one message.',
+    'List recent messages in the inbox, newest first: sender, subject, date, a short snippet, whether it is unread, whether it has attachments, which of the owner\'s mailboxes it arrived in, and what triage decided about it if anything has. Every mailbox is searched unless you name one with `account`. Use it to see what has arrived; use email.read for the full body of one message.',
   tier: 'auto',
   input: listRecentInput,
   async execute(input, ctx) {
-    const account = await requireAccount(ctx.db);
+    const scope = await accountScope(ctx.db, input.account);
     const limit = boundedLimit(input.limit);
-    const params: unknown[] = [account.id];
-    const where = ['account_id = $1'];
+    const params: unknown[] = [scope.ids];
+    const where = ['account_id = any($1::uuid[])'];
     if (input.since) {
       params.push(input.since);
       where.push(`date >= $${params.length}::date`);
@@ -76,6 +95,9 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
       const message = toMessage(row);
       messages.push({
         id: message.id,
+        // Which of the owner's mailboxes this landed in. On its own row,
+        // because two accounts make the same sender a different message.
+        account: scope.byId.get(message.accountId)?.address ?? null,
         from: message.from,
         subject: message.subject,
         date: message.date,
@@ -85,12 +107,13 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
         triage: await latestTriage(ctx.db, message.id),
       });
     }
-    return { account: account.address, count: messages.length, messages };
+    return { ...scopeSummary(scope), count: messages.length, messages };
   },
 };
 
 const readInput = z.object({
   id: UUID.describe('The message id from email.list_recent or email.search.'),
+  account: ACCOUNT_ARG.optional(),
 });
 
 export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
@@ -100,13 +123,24 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   tier: 'auto',
   input: readInput,
   async execute(input, ctx) {
+    const scope = await accountScope(ctx.db, input.account);
     const message = await requireMessage(ctx.db, input.id);
+    // A message already names its own account, so `account` here is a check
+    // rather than a filter: naming a mailbox and being handed a message from
+    // another one is the one answer this tool must never give.
+    const account = scope.byId.get(message.accountId);
+    if (!account) {
+      throw new Error(
+        `email.read: message ${message.id} did not arrive in ${scope.accounts.map((a) => a.address).join(', ')}`,
+      );
+    }
     // A purged body is a fact to state, not a gap to paper over: the tool says
     // the text is gone and why, and hands back everything that is kept.
     const purged = message.bodyPurgedAt !== null;
     const retention = purged ? await loadSettings(ctx.db) : null;
     return {
       id: message.id,
+      account: account.address,
       messageId: message.messageId,
       threadKey: message.threadKey,
       from: message.from,
@@ -137,6 +171,7 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
 };
 
 const searchInput = z.object({
+  account: ACCOUNT_ARG.optional(),
   query: z
     .string()
     .min(2)
@@ -147,27 +182,28 @@ const searchInput = z.object({
 export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
   name: 'email.search',
   description:
-    'Search ingested mail by a piece of text — a sender, a word in the subject, a phrase in the body. Case-insensitive substring match, newest first. Use it to find the earlier message a new one refers to.',
+    'Search ingested mail by a piece of text — a sender, a word in the subject, a phrase in the body. Case-insensitive substring match, newest first, across every mailbox unless you name one with `account`. Use it to find the earlier message a new one refers to.',
   tier: 'auto',
   input: searchInput,
   async execute(input, ctx) {
-    const account = await requireAccount(ctx.db);
+    const scope = await accountScope(ctx.db, input.account);
     const limit = boundedLimit(input.limit);
     // Escape the LIKE metacharacters: a query containing % is a literal search
     // for a percent sign, not a wildcard the model can widen.
     const needle = `%${input.query.replace(/([\\%_])/g, '\\$1')}%`;
     const { rows } = await ctx.db.query(
       `select ${MESSAGE_COLUMNS} from email.messages
-        where account_id = $1
+        where account_id = any($1::uuid[])
           and (subject ilike $2 escape '\\'
                or from_addr ilike $2 escape '\\'
                or body_text ilike $2 escape '\\')
         order by date desc nulls last, uid desc
         limit $3`,
-      [account.id, needle, limit],
+      [scope.ids, needle, limit],
     );
     const messages = rows.map(toMessage).map((m) => ({
       id: m.id,
+      account: scope.byId.get(m.accountId)?.address ?? null,
       from: m.from,
       subject: m.subject,
       date: m.date,
@@ -175,6 +211,6 @@ export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
       unread: isUnread(m.flags),
       hasAttachments: m.hasAttachments,
     }));
-    return { query: input.query, count: messages.length, messages };
+    return { ...scopeSummary(scope), query: input.query, count: messages.length, messages };
   },
 };

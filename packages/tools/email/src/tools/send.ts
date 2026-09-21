@@ -25,12 +25,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { assertApprovedEffect } from '@buddi/core';
-import { currentAccount, resolveAuth, type EnvLike } from '../config.js';
+import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
-import { findMessage, requireDraft, UUID } from './shared.js';
+import { accountOf, findMessage, identityFor, requireDraft, UUID } from './shared.js';
 
 /**
  * The implementation version pinned into the action object.
@@ -108,7 +108,12 @@ function list(addresses: readonly string[]): string {
 /** The human preview. Rendered from the envelope; no model text reaches it. */
 export function renderPreview(envelope: SendEnvelope): string {
   const lines = [
-    `Send mail as ${envelope.from}`,
+    // The identity *and* the mailbox, because with several accounts they are
+    // two facts: an alias says who this is from, the account says which
+    // mailbox authenticates it and which Sent folder will hold it.
+    envelope.from === envelope.accountAddress
+      ? `Send mail as ${envelope.from}`
+      : `Send mail as ${envelope.from} (from the ${envelope.accountAddress} mailbox)`,
     '',
     `To:      ${list(envelope.to)}`,
     `Cc:      ${list(envelope.cc)}`,
@@ -162,16 +167,31 @@ function replyAudienceOf(from: string, draft: DraftRecord): ReplyAudienceSummary
   return { sender: from, beyondSender, widened: beyondSender.length > 0 };
 }
 
+/**
+ * The account a draft leaves from, from the draft's own row.
+ *
+ * Never "the configured account", and never the first one: with several
+ * mailboxes the sending identity is the one thing the owner is approving that
+ * a lookup could silently get wrong, so it is written at draft time and only
+ * read here. A draft whose account was removed since is refused rather than
+ * reassigned.
+ */
+async function sendingAccount(ctx: ToolContext, draft: DraftRecord) {
+  if (!draft.accountId) {
+    throw new Error(
+      `email.send: draft ${draft.id} does not say which mailbox it leaves from; draft the reply again`,
+    );
+  }
+  return accountOf(ctx.db, draft.accountId);
+}
+
 /** Build the envelope from rows. Pure with respect to the world. */
 export async function buildEnvelope(
   ctx: ToolContext,
   draftId: string,
 ): Promise<SendEnvelope> {
   const draft = await requireDraft(ctx.db, draftId);
-  const account = await currentAccount(ctx.db);
-  if (!account) {
-    throw new Error('no mail account is configured on this installation');
-  }
+  const account = await sendingAccount(ctx, draft);
   const original = draft.inReplyTo ? await findMessage(ctx.db, draft.inReplyTo) : null;
   const references = original?.threadKey
     ? original.messageId && original.messageId !== original.threadKey
@@ -186,7 +206,12 @@ export async function buildEnvelope(
     toolVersion: SEND_TOOL_VERSION,
     draftId: draft.id,
     accountAddress: account.address,
-    from: account.address,
+    // docs/email.md §4, identity: the alias the original was addressed to when
+    // it is one of this account's, and the account's own address otherwise.
+    // It is derived from the stored original, never from anything the model
+    // wrote, and it is in the envelope the approval is bound to — so the owner
+    // reads the identity that will be on the wire.
+    from: identityFor(account, original ? [...original.to, ...original.cc] : []),
     to: draft.to,
     cc: draft.cc,
     bcc: draft.bcc,
@@ -281,8 +306,7 @@ export function createSendTool(
 
       // Configuration is resolved *before* the claim, so a missing secret or an
       // unimplemented auth mode never leaves a draft locked to a dead action.
-      const account = await currentAccount(ctx.db);
-      if (!account) throw new Error('email.send: no mail account is configured');
+      const account = await sendingAccount(ctx, draft);
       const auth = resolveAuth(account, opts.env ?? process.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 

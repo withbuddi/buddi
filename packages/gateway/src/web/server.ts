@@ -65,6 +65,13 @@ import {
   type TelegramControl,
   type TelegramWebDeps,
 } from './telegram.js';
+import {
+  EmailWebError,
+  addEmailAccount,
+  listEmailAccounts,
+  removeEmailAccount,
+  type EmailWebDeps,
+} from './email.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -738,6 +745,15 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       return null;
     };
+    /**
+     * What the mail-account routes need: the pool the email schema lives in,
+     * and the live environment — which is where a password just added is kept
+     * for this process, so the next poll finds it without a restart.
+     */
+    const emailDeps = (): EmailWebDeps => ({
+      pool: deps.pool as never,
+      env: deps.env ?? process.env,
+    });
     /** What the two Telegram routes need. The environment is the live one. */
     const telegramDeps = (): TelegramWebDeps => ({
       pool: deps.pool,
@@ -1048,6 +1064,17 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, await probeOllama());
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
+        /*
+         * The mailboxes this installation reads and sends as. Names of vault
+         * entries, never their values: nothing on this route has ever held a
+         * password, and the page has no field that shows one.
+         */
+        case '/api/email/accounts':
+          try {
+            return sendJson(res, 200, await listEmailAccounts(emailDeps()));
+          } catch (error) {
+            return sendJson(res, 503, { error: `Mail accounts are unavailable: ${error instanceof Error ? error.message : String(error)}` });
+          }
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1292,6 +1319,21 @@ export function createWebApp(deps: WebServerDeps): Server {
       const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+      }
+      /*
+       * A mailbox the owner is done with: the row and the vault entry that
+       * opened it, together. A password left in the keychain after the account
+       * it belonged to is gone is a secret nobody is responsible for.
+       */
+      const accountGone = /^\/api\/email\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (accountGone) {
+        try {
+          const removed = await removeEmailAccount(emailDeps(), accountGone[1]!);
+          return removed.removed ? sendJson(res, 200, removed) : sendEmpty(res, 404);
+        } catch (error) {
+          if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
+          return sendJson(res, 500, { error: 'That mailbox could not be removed from here.' });
+        }
       }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
@@ -1968,6 +2010,22 @@ export function createWebApp(deps: WebServerDeps): Server {
       } catch (error) {
         if (error instanceof TelegramWebError) return sendJson(res, error.status, { error: error.message });
         return sendJson(res, 500, { error: 'Telegram could not be set up from here.' });
+      }
+    }
+
+    /*
+     * A mailbox, added from the page: the address, its hosts, and the app
+     * password. The password is tested against IMAP once, kept in the vault
+     * under a name derived from the address, and never written to the database
+     * or to a file. A login the server refuses answers 400 in plain words, and
+     * nothing is kept.
+     */
+    if (path === '/api/email/accounts') {
+      try {
+        return sendJson(res, 200, await addEmailAccount(emailDeps(), body));
+      } catch (error) {
+        if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: 'That mailbox could not be added from here.' });
       }
     }
 

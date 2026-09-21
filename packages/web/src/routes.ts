@@ -131,6 +131,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'you', label: 'You' },
   { id: 'memory', label: 'Memory' },
   { id: 'accounts', label: 'Model accounts' },
+  { id: 'email', label: 'Email' },
   { id: 'computer', label: 'Computer & browser' },
   { id: 'watchers', label: 'Watchers' },
   { id: 'backup', label: 'Backup' },

@@ -391,6 +391,44 @@ export interface OllamaProbe {
   cloudBaseUrl: string;
 }
 
+/**
+ * One mailbox this installation reads and sends as.
+ *
+ * `secretName` is the name of the vault entry holding its password, never the
+ * password: nothing on this route has ever carried one, and the page has no
+ * field that would show it.
+ */
+export interface EmailAccountView {
+  id: string;
+  address: string;
+  displayName: string | null;
+  aliases: string[];
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  secretName: string;
+  enabled: boolean;
+  addedVia: 'env' | 'page';
+  lastSyncAt: string | null;
+}
+
+export interface EmailAccountsView {
+  accounts: EmailAccountView[];
+}
+
+/** What the "Add an account" form sends. The password goes no further. */
+export interface NewEmailAccount {
+  address: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  password: string;
+  displayName?: string | null;
+  aliases?: string[];
+}
+
 /** Telegram, as this installation stands: a token, a surface, a phone. */
 export interface TelegramStatus {
   configured: boolean;
@@ -1143,6 +1181,13 @@ export const api = {
    */
   bindBrain: (body: { accountId: string; model: string }) =>
     post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
+  /* ---- mail accounts ---- */
+  emailAccounts: () => get<EmailAccountsView>('/email/accounts'),
+  addEmailAccount: (body: NewEmailAccount) => post<EmailAccountView>('/email/accounts', body),
+  removeEmailAccount: (id: string) =>
+    del<{ removed: boolean; address: string | null; secretRemoved: boolean }>(
+      `/email/accounts/${encodeURIComponent(id)}`,
+    ),
   /* ---- Telegram, from the first-run thread ---- */
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),

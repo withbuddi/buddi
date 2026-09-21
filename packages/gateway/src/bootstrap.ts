@@ -125,8 +125,17 @@ export async function hydrateSecrets(
   env: NodeJS.ProcessEnv = process.env,
   vault: Vault | undefined = createVault({ env }),
 ): Promise<SecretHydration> {
-  const resolved = await resolveSecrets(WIRED_SECRETS, { vault, env });
-  for (const name of WIRED_SECRETS) {
+  // Mail accounts are plural and their names are not knowable in advance: each
+  // one the owner adds on the settings page files its password under
+  // `EMAIL_<address>`, so what has to be hydrated is *whatever the vault holds*
+  // under that prefix rather than a list written down here. Listing names needs
+  // no key and reveals no value; a vault that will not even list is simply one
+  // with no mail accounts in it, and each account then fails closed with its
+  // own `secret-missing` problem.
+  const accountSecrets = await (vault?.list() ?? Promise.resolve([])).catch(() => [] as string[]);
+  const names = [...WIRED_SECRETS, ...accountSecrets.filter((name) => name.startsWith('EMAIL_'))];
+  const resolved = await resolveSecrets(names, { vault, env });
+  for (const name of names) {
     const value = resolved.env[name];
     if (value === undefined) delete env[name];
     else env[name] = value;
