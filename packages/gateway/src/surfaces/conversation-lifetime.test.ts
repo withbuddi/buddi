@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Queryable } from '@buddi/core';
+import { forgetProjectedSizes } from './context-budget.js';
 import {
   boundaryNote,
   conversationExpiry,
@@ -220,14 +221,15 @@ describe('reading the vitals', () => {
  * ------------------------------------------------------------------ */
 
 describe('the size rule against a projection', () => {
-  it('reads the projected size when there is one, not the stored rows', () => {
-    // 300k characters of stored page trees that reduce to 40k when sent is a
-    // conversation that has outgrown nothing.
-    expect(conversationExpiry(vitals({ chars: 300_000, projectedChars: 40_000 }), NOW)).toBeNull();
-    expect(conversationExpiry(vitals({ chars: 300_000, projectedChars: 300_000 }), NOW)).toBe('size');
+  it('reads the projected tokens when there are any, not the stored rows', () => {
+    // 300k characters of stored page trees that reduce to 10k tokens when sent
+    // is a conversation that has outgrown nothing.
+    const limits = { maxChars: 80_000, maxTokens: 100_000 };
+    expect(conversationExpiry(vitals({ chars: 300_000, projectedTokens: 10_000 }), NOW, limits)).toBeNull();
+    expect(conversationExpiry(vitals({ chars: 300_000, projectedTokens: 120_000 }), NOW, limits)).toBe('size');
   });
 
-  it('falls back to the stored count when nobody has projected it', () => {
+  it('falls back to the stored characters when nobody has projected it', () => {
     expect(conversationExpiry(vitals({ chars: 95_221 }), NOW)).toBe('size');
   });
 });
@@ -240,6 +242,7 @@ function modelPool(over: {
   chars?: number;
   model?: string;
   kind?: string;
+  override?: number | null;
   rows?: Array<{ role: string; content: unknown }>;
 } = {}): Queryable & { lines: string[] } {
   const v = vitals({ chars: over.chars ?? 95_221, messages: 65 });
@@ -253,8 +256,9 @@ function modelPool(over: {
       if (text.startsWith('select b.model as model')) {
         return over.model === undefined
           ? { rows: [] }
-          : { rows: [{ model: over.model, kind: over.kind ?? 'anthropic', override: null }] };
+          : { rows: [{ model: over.model, kind: over.kind ?? 'anthropic', override: over.override ?? null }] };
       }
+      if (text.startsWith('select default_model as model')) return { rows: [] };
       if (text.startsWith('select role, content from core.messages')) return { rows: over.rows ?? [] };
       if (text.startsWith('update core.offers')) return { rows: [] };
       throw new Error(`unexpected sql: ${text}`);
@@ -282,12 +286,45 @@ describe('the size limit a conversation is held to', () => {
     expect(out.boundary?.reason).toBe('size');
   });
 
-  it('keeps the floor when nothing is known about the model', async () => {
+  it('keeps the old behaviour when nothing is known about the model', async () => {
     const out = await conversationForTurn(
       modelPool({ rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(95_000) }] }] }),
       { current: 'old', start, now: NOW },
     );
     expect(out.boundary?.reason).toBe('size');
+  });
+
+  it('honours a small window the owner declared, rather than the legacy floor', async () => {
+    // 8,000 tokens is 4,000 of transcript. A 60k-character conversation is far
+    // past that, even though it is under the constant that used to be a floor.
+    const out = await conversationForTurn(
+      modelPool({ model: 'llama3', kind: 'openai-compatible', override: 8_000, chars: 60_000,
+        rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(60_000) }] }] }),
+      { current: 'old', start, now: NOW },
+    );
+    expect(out.boundary?.reason).toBe('size');
+  });
+
+  it('charges CJK what it costs: the same length in Japanese does not fit', async () => {
+    // 120,000 characters is 33k tokens of English and 120k tokens of Japanese.
+    // Against a 200k-token window — 100k of transcript — one fits and one does
+    // not, and a character count cannot tell them apart.
+    const japanese = '銀行残高'.repeat(30_000);
+    const english = 'a'.repeat(japanese.length);
+    const over = await conversationForTurn(
+      modelPool({ model: 'claude-opus-5', chars: japanese.length,
+        rows: [{ role: 'user', content: [{ type: 'text', text: japanese }] }] }),
+      { current: 'old', start, now: NOW },
+    );
+    expect(over.boundary?.reason).toBe('size');
+
+    forgetProjectedSizes();
+    const under = await conversationForTurn(
+      modelPool({ model: 'claude-opus-5', chars: english.length,
+        rows: [{ role: 'user', content: [{ type: 'text', text: english }] }] }),
+      { current: 'old', start, now: NOW },
+    );
+    expect(under.boundary).toBeUndefined();
   });
 
   it('counts the projection: page trees nobody sends do not end a conversation', async () => {
@@ -305,6 +342,24 @@ describe('the size limit a conversation is held to', () => {
     expect(out.boundary).toBeUndefined();
   });
 
+  it('measures a conversation over the precheck once, not on every turn', async () => {
+    // A browser conversation sits above the character precheck for ever, and
+    // the projection is a read of the whole transcript. It is paid once per
+    // version of it.
+    const tree = 'y'.repeat(20_000);
+    const rows = Array.from({ length: 12 }, (_, i) => [
+      { role: 'assistant', content: [{ type: 'tool_use', id: `c${i}`, name: 'browser.act', input: { action: 'click' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${i}`, content: JSON.stringify({ observation: { id: `o${i}`, url: `https://bank/${i}`, title: `P${i}`, tree } }) }] },
+    ]).flat();
+    forgetProjectedSizes();
+    const pool = modelPool({ model: 'claude-opus-5', chars: 300_000, rows });
+    await conversationForTurn(pool, { current: 'cached-one', start, now: NOW });
+    await conversationForTurn(pool, { current: 'cached-one', start, now: NOW });
+    const reads = (pool.query as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter(([sql]) => String(sql).replace(/\s+/g, ' ').trim().startsWith('select role, content from core.messages'));
+    expect(reads).toHaveLength(1);
+  });
+
   it('says in the log what ended, why, and against what', async () => {
     const lines: string[] = [];
     const out = await conversationForTurn(
@@ -315,8 +370,9 @@ describe('the size limit a conversation is held to', () => {
     const line = lines.find((l) => l.includes('ended'))!;
     expect(line).toContain('size');
     expect(line).toContain('stored chars');
-    expect(line).toContain('projected');
+    expect(line).toContain('projected tokens');
     expect(line).toContain('limit');
+    expect(line).toContain('binding');
     expect(line).toContain('claude-opus-5');
     expect(line.split('\n')).toHaveLength(1);
   });

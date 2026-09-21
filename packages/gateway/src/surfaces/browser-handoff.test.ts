@@ -13,6 +13,8 @@ import {
   carryConversationContext,
   carryOverNote,
   readCarryOver,
+  redactSecrets,
+  safeUrl,
 } from './browser-handoff.js';
 
 const OLD = '11111111-1111-1111-1111-111111111111';
@@ -187,5 +189,81 @@ describe('a conversation that ended because it had grown long', () => {
     // Going to bed is not being cut off mid-task; today's behaviour stands.
     const db = pool(work());
     expect(await carryConversationContext(db.pool, { ...input, reason: 'idle' })).toBeNull();
+  });
+});
+
+/**
+ * The note is replayed into every turn of the new conversation, so whatever
+ * crosses is in that transcript for its whole life. Nothing that looks like a
+ * credential goes with it, and nothing page-controlled is presented as prose.
+ */
+describe('what a carried note refuses to carry', () => {
+  const input = { agentId: 'ada', previousConversationId: OLD, conversationId: NEW, reason: 'size' as const };
+
+  it('redacts secrets out of the owner\'s own words', async () => {
+    const db = pool([
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'Log into the portal with api_key: sk-ant-SENTINELKEY0123456789abcdef' }] },
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'the password: hunter2sentinel is the one' }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'text', text: 'I used Bearer eyJSENTINELtokenvalue0123456789 to reach it.' }] },
+    ]);
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text).not.toContain('SENTINELKEY');
+    expect(text).not.toContain('hunter2sentinel');
+    expect(text).not.toContain('SENTINELtokenvalue');
+    expect(text).toContain('[redacted]');
+  });
+
+  it('cuts the query and fragment off a URL, where the tokens live', async () => {
+    const db = pool([
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'Open the reset link.' }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'tool_use', id: 'call-1', name: 'browser.act', input: { action: 'navigate' } }] },
+      { role: 'user', speaker: null, content: [{ type: 'tool_result', tool_use_id: 'call-1', content: JSON.stringify({ observation: { id: 'o1', url: 'https://user:pw@bank.example/reset?token=SENTINELRESET#SENTINELFRAG', title: 'Reset', tree: 'x' } }) }] },
+    ]);
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text).toContain('https://bank.example/reset');
+    expect(text).not.toContain('SENTINELRESET');
+    expect(text).not.toContain('SENTINELFRAG');
+    expect(text).not.toContain('user:pw');
+  });
+
+  it('says that page titles are the pages\' own words, not anybody\'s', async () => {
+    const db = pool(session());
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text).toContain('untrusted');
+    expect(text).toContain('written by the pages themselves');
+  });
+
+  it('caps every copied message, whatever the owner pasted', async () => {
+    const db = pool([
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: `start ${'q'.repeat(5_000)}` }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'text', text: 'r'.repeat(5_000) }] },
+    ]);
+    const carry = readCarryOver([
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: `start ${'q'.repeat(5_000)}` }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'text', text: 'r'.repeat(5_000) }] },
+    ])!;
+    expect(carry.task.length).toBeLessThanOrEqual(400);
+    expect(carry.lastAgentMessage.length).toBeLessThanOrEqual(400);
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text.length).toBeLessThan(1_500);
+  });
+});
+
+describe('redaction and URL safety, as functions', () => {
+  it('takes out the shapes credentials come in', () => {
+    expect(redactSecrets('key sk-abcdefgh12345678')).toBe('key [redacted]');
+    expect(redactSecrets('Authorization: Bearer abc.def.ghijklmnop')).toContain('[redacted]');
+    expect(redactSecrets('password: swordfish99')).toBe('[redacted]');
+    expect(redactSecrets('a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5')).toBe('[redacted]');
+  });
+
+  it('leaves ordinary sentences alone', () => {
+    const plain = 'Reconcile September against the bank statement, then tell me.';
+    expect(redactSecrets(plain)).toBe(plain);
+  });
+
+  it('keeps a URL down to where it was', () => {
+    expect(safeUrl('https://www.pnc.com/accounts?session=abc#top')).toBe('https://www.pnc.com/accounts');
+    expect(safeUrl('not a url')).toBe('');
   });
 });
