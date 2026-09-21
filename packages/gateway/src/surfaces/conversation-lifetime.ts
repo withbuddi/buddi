@@ -76,13 +76,21 @@
  *    that asked. A surface answering one passes `continuation: true` so the
  *    answer lands where the question was asked; anything else clears it.
  *
- * ## The owner can tell
+ * ## The owner is not told, and does not need to be
  *
- * A boundary nobody can see is indistinguishable from amnesia. Every surface
- * says one line — `boundaryNote` — and says it once, above the answer: what
- * happened, why, and the reassurance that matters ("what I remember about you
- * carries over"). It is one line because this happens a few times a day, and
- * anything longer would become the noise the owner learns to skip.
+ * Every surface used to prepend one parenthesised line — "(New conversation —
+ * we last spoke 6 days ago. What I remember about you carries over.)" — above
+ * the answer. It is gone. Which transcript a reply was composed in is
+ * bookkeeping: memory and the owner profile carry over by construction, so the
+ * line announced a loss that did not happen, a few times a day, above answers
+ * the owner had asked for. What is genuinely worth seeing is the *work* that
+ * crossed, and the carry-over note already does that — drawn on the dashboard
+ * as a grey "Carried over from the previous conversation" line, written into
+ * the transcript for the agent, and written only when there was something to
+ * carry. The dashboard's conversation header says the rest ambiently.
+ *
+ * The mechanics are untouched: the rollover happens, `start(boundary)` is
+ * called, the carry-over is written, and the log still records every boundary.
  */
 import { withdrawOffers, type Queryable } from '@buddi/core';
 import { projectedTranscriptTokens, transcriptBudget } from './context-budget.js';
@@ -145,7 +153,7 @@ export interface LifetimeLimits {
  * An empty conversation never ends: `buddi chat` opens one on start and the
  * dashboard's "new conversation" button makes one before anything is typed.
  * Rolling that over would mean a fresh install whose first message starts its
- * second conversation, and a boundary note for a boundary nobody crossed.
+ * second conversation — a boundary nobody crossed.
  */
 export function conversationExpiry(
   vitals: ConversationVitals,
@@ -192,38 +200,6 @@ export async function readVitals(
   };
 }
 
-/** "14 hours", "9 minutes", "2 days" — the gap, in the coarsest honest unit. */
-export function sinceText(from: Date, now: Date): string {
-  const ms = Math.max(0, now.getTime() - from.getTime());
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 60) return `${Math.max(1, minutes)} minute${minutes === 1 ? '' : 's'}`;
-  const hours = Math.round(ms / 3_600_000);
-  if (hours < 36) return `${hours} hour${hours === 1 ? '' : 's'}`;
-  const days = Math.round(ms / 86_400_000);
-  return `${days} day${days === 1 ? '' : 's'}`;
-}
-
-/**
- * The one line the owner reads when a conversation ends and another begins.
- *
- * Plain text, parenthesised, no markdown: it has to read the same on Telegram
- * (where a `*` is a `*`) as at a terminal. It says what happened and the one
- * thing the owner would otherwise have to guess — that this is a fresh
- * transcript, not a fresh agent.
- */
-export function boundaryNote(
-  reason: LifetimeReason,
-  vitals: ConversationVitals,
-  now: Date,
-): string {
-  const carries = 'What I remember about you carries over.';
-  if (reason === 'idle' && vitals.lastActivityAt) {
-    return `(New conversation — we last spoke ${sinceText(vitals.lastActivityAt, now)} ago. ${carries})`;
-  }
-  if (reason === 'idle') return `(New conversation — it had been a while. ${carries})`;
-  return `(New conversation — the last one had grown long. ${carries})`;
-}
-
 export interface TurnConversationInput {
   /** The conversation this surface would otherwise have continued. */
   current?: string | undefined;
@@ -248,12 +224,14 @@ export interface TurnConversationInput {
 
 export interface TurnConversation {
   conversationId: string;
-  /** Present only when this turn opened a new conversation over an old one. */
+  /**
+   * Present only when this turn opened a new conversation over an old one.
+   * Surfaces act on it — clearing a pending question, handing the new id to
+   * the page — but none of them says anything to the owner about it.
+   */
   boundary?: {
     reason: LifetimeReason;
     previousConversationId: string;
-    /** The line the surface shows the owner, once, above the answer. */
-    note: string;
   };
 }
 
@@ -337,11 +315,7 @@ export async function conversationForTurn(
   );
   return {
     conversationId,
-    boundary: {
-      reason,
-      previousConversationId: current,
-      note: boundaryNote(reason, vitals, input.now),
-    },
+    boundary: { reason, previousConversationId: current },
   };
 }
 

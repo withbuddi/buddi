@@ -983,8 +983,9 @@ export class ChatSession {
    * the ordinary way this happens. `/reset` is unchanged and still does it in
    * one word.
    *
-   * The boundary is said out loud, dim, before the spinner: the owner sees why
-   * the agent is no longer holding yesterday in its head.
+   * The boundary is silent. It used to print one dim line above the answer;
+   * the owner does not need to know a transcript rolled over, since what the
+   * agent remembers about them is not kept in one.
    */
   async #conversationForTurn(
     agent: CatalogAgent,
@@ -1004,9 +1005,10 @@ export class ChatSession {
     });
     if (boundary) {
       // The thread a question was asked in is over; nothing may still claim the
-      // owner's next message on its behalf.
+      // owner's next message on its behalf. Nothing is printed: which
+      // transcript this turn runs in is bookkeeping, and `/status` says which
+      // conversation this is for anyone who wants to know.
       this.#pending.clear(CLI_CHAT_ID);
-      this.#out(dim(boundary.note, this.#style().color));
     }
     return conversationId;
   }
