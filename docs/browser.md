@@ -133,7 +133,20 @@ Setup, in the owner's words:
 2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load
    unpacked**, and pick the folder the settings page prints.
 3. Press **Connect** in the extension popup. It shows a six-digit code, valid
-   for five minutes. Type it into **Pair your browser** on the settings page.
+   for five minutes, with a **Copy** button beside it. If the dashboard is open
+   in that same Chrome it fills the code in for you; otherwise type it into
+   **Pair your browser** on the settings page.
+
+The settings page finds the extension itself. Its manifest pins a public key,
+so its id is the same on every machine, and it accepts one message —
+`{type:'buddi.status'}` — from loopback pages only, which the worker checks
+against `sender.origin` as well. The page sends that message every three
+seconds while **Your browser** is selected, and says either *Extension found,
+version x.y.z* or that it is not installed in this browser, with the
+load-unpacked line. It passes on the code while the extension is showing one,
+says so when the browser is already paired, and, when the extension is aimed at
+a different address than the dashboard is served from, says which and asks for
+it to be changed in the popup. The answer carries no token.
 
 The extension keeps a token in `chrome.storage.local` and reconnects with it
 from then on. Buddi stores only a SHA-256 of that token, in
