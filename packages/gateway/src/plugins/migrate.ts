@@ -50,40 +50,69 @@ export async function migrateInstalled(
 /**
  * The refusal that comes before anything runs.
  *
- * `core.migrations` records a file this build does not ship: the database was
- * migrated by newer code, and this code's idea of those tables is the old one.
+ * `core.migrations` records a file this build does not ship *and* that sorts
+ * after everything this build ships for that schema: the database was migrated
+ * by newer code, and this code's idea of those tables is the old one.
  * Migrations only go forward, so there is nothing to undo — the answer is the
  * matching release, and the only safe thing to do meanwhile is not to start.
+ *
+ * A recorded file this build does not ship which sorts *inside or before* the
+ * shipped range is the other thing entirely: a stray, applied from a branch
+ * that never merged, left behind in the ledger. Nothing newer than this build
+ * produced it, no shipped code knows its tables, and migrations only go
+ * forward, so the schema this build expects is still all here. Refusing on it
+ * would crash-loop a healthy installation, so it is said once and ignored.
+ *
  * Checked for core and for every installed plugin whose directory is readable;
  * one that is not readable is a plugin problem, which `migrateInstalled` says
- * in words rather than a reason to refuse the whole start.
+ * in words rather than a reason to refuse the whole start. A schema this build
+ * does not ship at all — a plugin that was removed — is ignored as before.
  */
 export async function refuseIfSchemaIsNewer(
   pool: Pool,
   env: NodeJS.ProcessEnv = process.env,
+  options: { log?: (line: string) => void } = {},
 ): Promise<void> {
+  const log = options.log ?? ((line: string) => console.error(line));
   const exists = await pool.query<{ table_name: string | null }>(
     "SELECT to_regclass('core.migrations') AS table_name",
   );
   // No record table: nothing has ever been applied here, so nothing can be
   // newer than this build.
   if (!exists.rows[0]?.table_name) return;
-  const shipped = new Map([['core', new Set(await readdir(CORE_MIGRATIONS_DIR))]]);
+  // The same view of a migrations directory that `migrate` itself takes: the
+  // `.sql` files, sorted, so "the newest this build ships" is the last of them.
+  const sqlFiles = (entries: string[]): string[] => entries.filter((f) => f.endsWith('.sql')).sort();
+  const shipped = new Map([['core', sqlFiles(await readdir(CORE_MIGRATIONS_DIR))]]);
   for (const manifest of installedManifests(env)) {
     if (!manifest.migrationsDir) continue;
     const files = await readdir(manifest.migrationsDir).catch(() => null);
-    if (files) shipped.set(manifest.schema, new Set(files));
+    if (files) shipped.set(manifest.schema, sqlFiles(files));
   }
   const applied = await pool.query<{ schema: string; filename: string }>(
     'SELECT schema, filename FROM core.migrations',
   );
-  if (
-    applied.rows.some((row) => shipped.has(row.schema) && !shipped.get(row.schema)!.has(row.filename))
-  ) {
+  const strays: string[] = [];
+  let newer = false;
+  for (const row of applied.rows) {
+    const files = shipped.get(row.schema);
+    // A schema this build does not ship at all says nothing about the release.
+    if (!files) continue;
+    if (files.includes(row.filename)) continue;
+    const newest = files[files.length - 1];
+    // After everything this build ships (or this build ships none at all):
+    // only newer code could have applied it.
+    if (newest === undefined || row.filename > newest) newer = true;
+    else strays.push(`${row.schema}/${row.filename}`);
+  }
+  if (newer) {
     throw new Error(
       'Database schema is newer than this release. Install the matching release; ' +
         'no migration or gateway start was attempted.',
     );
+  }
+  for (const stray of strays.sort()) {
+    log(`migrate: ${stray} is in the ledger but not in this release; leaving it`);
   }
 }
 
@@ -107,7 +136,7 @@ export async function migrateAtStart(
   options: { log?: (line: string) => void } = {},
 ): Promise<MigrateInstalledResult> {
   const log = options.log ?? ((line: string) => console.error(line));
-  await refuseIfSchemaIsNewer(pool, env);
+  await refuseIfSchemaIsNewer(pool, env, { log });
   const result = await migrateInstalled(pool, env);
   for (const applied of result.applied) log(`migrate: applied ${applied.schema}/${applied.filename}`);
   log(
