@@ -80,10 +80,20 @@ export interface HandFrame { jpeg: Buffer; metadata: HandFrameMetadata }
  * is a wire, not a language. `text` carries a single typed character and is
  * the only string here that ever came from a keyboard — nothing on its path
  * may keep it.
+ *
+ * A printable character travels as `char` and only as `char`: a `keyDown` that
+ * also carried it would be typed twice, once by the key and once by the
+ * character, which is how "ame" arrived as "aammee". `keyDown`/`keyUp` are for
+ * named keys and for shortcuts, and insert nothing.
+ *
+ * `text` (the kind) is a paste: what the owner had on *their* clipboard, which
+ * the host has no way to reach, inserted in one piece. It is the one string
+ * here longer than a keystroke, and it is kept no longer than one is.
  */
 export type HandInput =
   | { kind: 'mouse'; type: 'mousePressed' | 'mouseReleased' | 'mouseMoved'; x: number; y: number; button: 'none' | 'left' | 'middle' | 'right'; clickCount: number; modifiers: number }
   | { kind: 'key'; type: 'keyDown' | 'keyUp' | 'char'; key: string; code: string; text?: string; modifiers: number }
+  | { kind: 'text'; text: string }
   | { kind: 'wheel'; x: number; y: number; deltaX: number; deltaY: number };
 
 /**

@@ -505,6 +505,29 @@ describe('the owner’s input', () => {
     expect(sent.at(-1)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'char', key: 'a', code: 'KeyA', modifiers: 0, text: 'a' } });
   });
 
+  it('types "ame" once, not "aammee", and pastes in one insertion', async () => {
+    const { input, sent } = await casting();
+    const before = sent.length;
+    // What the dashboard sends for three keystrokes: one `char` each. A
+    // `keyDown` carrying the character dispatched it a second time, which is
+    // how the page saw "aammee".
+    for (const character of 'ame') await input({ kind: 'key', type: 'char', key: character, code: `Key${character.toUpperCase()}`, text: character });
+    const params = (call: { params?: unknown }) => call.params as Record<string, unknown>;
+    expect(sent.slice(before).map((call) => params(call)['text'])).toEqual(['a', 'm', 'e']);
+    expect(sent.slice(before).every((call) => params(call)['type'] === 'char')).toBe(true);
+
+    // And a printable key of its own carries no text, so it types nothing.
+    await input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' });
+    expect(sent.at(-1)!.params).not.toHaveProperty('text');
+
+    // A paste is one call, with what was on the owner's clipboard — the only
+    // way it reaches this browser, which cannot read a phone's clipboard.
+    await input({ kind: 'text', text: 'hunter2\nsecond line' });
+    expect(sent.at(-1)).toEqual({ method: 'Input.insertText', params: { text: 'hunter2\nsecond line' } });
+    await expect(input({ kind: 'text', text: '' })).rejects.toThrow(/nothing in it/);
+    await expect(input({ kind: 'text', text: 'x'.repeat(4_001) })).rejects.toThrow(/nothing in it/);
+  });
+
   it('keeps coordinates and deltas inside what a viewport can be', async () => {
     const { input, sent } = await casting();
     await input({ kind: 'mouse', type: 'mouseMoved', x: 9e9, y: Number.NaN });

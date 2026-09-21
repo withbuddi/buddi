@@ -349,6 +349,28 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     await driver.hand!.input({ kind: 'key', type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0 });
     await driver.hand!.input({ kind: 'key', type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 0 });
     await vi.waitFor(() => expect(booked).toContain('name=z'), { timeout: 15_000, interval: 200 });
+
+    /*
+     * Typing, and pasting, exactly as the dashboard sends them.
+     *
+     * A word is one `char` per keystroke and nothing else: a `keyDown` that
+     * also carried its character made Chrome insert it twice, and "ame"
+     * reached the page as "aammee". A paste is the other half — the owner's
+     * clipboard is on the owner's phone, so the text travels as one event and
+     * is inserted in one piece.
+     */
+    booked = '';
+    await act({ action: 'navigate', url: `${FIXTURE_URL}/` });
+    page = await driver.observe();
+    await click(centre(page.targets!.find((target) => target.name === 'Your name')!));
+    for (const character of 'ame') {
+      await driver.hand!.input({ kind: 'key', type: 'char', key: character, code: `Key${character.toUpperCase()}`, text: character, modifiers: 0 });
+    }
+    await driver.hand!.input({ kind: 'text', text: 'lie' });
+    await driver.hand!.input({ kind: 'key', type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0 });
+    await driver.hand!.input({ kind: 'key', type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 0 });
+    await vi.waitFor(() => expect(booked).toContain('name='), { timeout: 15_000, interval: 200 });
+    expect(new URLSearchParams(booked).get('name')).toBe('amelie');
     await activate(ownerTabId);
 
     // Give it back: the picture stops, and nothing painted afterwards arrives.

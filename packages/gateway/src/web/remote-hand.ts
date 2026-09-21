@@ -11,10 +11,10 @@
  *
  * **Nothing typed here is kept.** Not in a log line, not in an event row, not
  * in the transcript, not in a field on this object. A key event is validated,
- * forwarded to the driver and forgotten inside one function; the only string
- * on that path that ever came from a keyboard is a single character of `text`,
- * and it never leaves the stack. That is the promise the bar over the picture
- * makes to the owner, and it is kept here or not at all.
+ * forwarded to the driver and forgotten inside one function; the only strings
+ * on that path that ever came from the owner are a single character of `text`
+ * and a paste, and neither ever leaves the stack. That is the promise the bar
+ * over the picture makes to the owner, and it is kept here or not at all.
  *
  * One hand at a time, for one session: a second dashboard tab is told another
  * tab is driving rather than quietly fighting it for the mouse. The socket is
@@ -118,6 +118,19 @@ function printable(value: string): boolean {
   return [...value].length === 1 && value.codePointAt(0)! >= 0x20 && value.codePointAt(0)! !== 0x7f;
 }
 
+/** A paste is as long as a form field, never as long as a file. */
+const MAX_PASTE = 4_000;
+
+/** What may be in one: text, with a newline and a tab as the only controls. */
+function pastable(value: string): boolean {
+  for (const character of value) {
+    const point = character.codePointAt(0)!;
+    if (point === 0x0a || point === 0x09) continue;
+    if (point < 0x20 || point === 0x7f) return false;
+  }
+  return true;
+}
+
 function bounded(value: unknown, limit: number, min = -limit): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= limit ? value : null;
 }
@@ -147,6 +160,17 @@ export function readInput(raw: unknown): HandInput | null {
     return { kind: 'mouse', type: input.type as 'mousePressed' | 'mouseReleased' | 'mouseMoved',
       x, y, button: button as 'none' | 'left' | 'middle' | 'right', clickCount, modifiers };
   }
+  if (input.kind === 'text') {
+    // A paste, which is the one thing here longer than a keystroke: the
+    // owner's clipboard lives on the owner's machine, and this socket is the
+    // only way what is on it reaches the page they are driving. Bounded to
+    // what a person pastes into a form, and stripped of everything that is
+    // not text — a newline and a tab are typing; an escape sequence is not.
+    const pasted = typeof input.text === 'string' ? input.text : '';
+    if (pasted === '' || pasted.length > MAX_PASTE) return null;
+    if (!pastable(pasted)) return null;
+    return { kind: 'text', text: pasted };
+  }
   if (input.kind !== 'key') return null;
   if (typeof input.type !== 'string' || !KEY_TYPES.has(input.type) || modifiers === null) return null;
   const key = typeof input.key === 'string' ? input.key : '';
@@ -156,9 +180,13 @@ export function readInput(raw: unknown): HandInput | null {
   // One character, because that is what a keystroke is. Nothing longer can be
   // pasted through this field into the owner's browser, or through this
   // process on its way there.
+  //
+  // And only a `char` carries one. A `keyDown` that also carried its character
+  // was typed twice by both backends — once as the key and once as the
+  // character — which is how "ame" arrived as "aammee".
   const text = typeof input.text === 'string' ? input.text : undefined;
+  if (input.type !== 'char' && text !== undefined) return null;
   if (input.type === 'char' && (text === undefined || !printable(text))) return null;
-  if (text !== undefined && !printable(text)) return null;
   return { kind: 'key', type: input.type as 'keyDown' | 'keyUp' | 'char', key, code, ...(text !== undefined ? { text } : {}), modifiers };
 }
 
@@ -246,7 +274,7 @@ interface Live {
  * how a click lands somewhere the owner did not click.
  */
 function pipelined(input: HandInput): 'key' | 'move' | 'alone' {
-  if (input.kind === 'key') return 'key';
+  if (input.kind === 'key' || input.kind === 'text') return 'key';
   if (input.kind === 'mouse' && input.type === 'mouseMoved') return 'move';
   return 'alone';
 }
@@ -411,6 +439,8 @@ export class RemoteHandEndpoint {
 
   /** What is down, so what is down can be let go of. Never the typed text. */
   #track(held: Held, input: HandInput): void {
+    // A paste holds nothing down, and nothing about it is worth remembering.
+    if (input.kind === 'text') return;
     if (input.kind === 'wheel') { held.x = input.x; held.y = input.y; return; }
     if (input.kind === 'mouse') {
       held.x = input.x; held.y = input.y;
