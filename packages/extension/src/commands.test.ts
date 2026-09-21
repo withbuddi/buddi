@@ -493,9 +493,13 @@ describe('the owner’s input', () => {
     const { input, sent } = await casting();
     await input({ kind: 'wheel', x: 5, y: 6, deltaX: 0, deltaY: -120 });
     await input({ kind: 'key', type: 'keyDown', key: 'Enter', code: 'Enter' });
+    await input({ kind: 'key', type: 'keyUp', key: 'Enter', code: 'Enter' });
     await input({ kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a' });
-    expect(sent.at(-3)).toEqual({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseWheel', x: 5, y: 6, deltaX: 0, deltaY: -120, modifiers: 0 } });
-    expect(sent.at(-2)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0, windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 } });
+    expect(sent.at(-4)).toEqual({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseWheel', x: 5, y: 6, deltaX: 0, deltaY: -120, modifiers: 0 } });
+    // Enter goes down carrying its carriage return, because that is what makes
+    // Chrome raise the keypress a form listens for; coming back up it does not.
+    expect(sent.at(-3)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0, text: '\r', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 } });
+    expect(sent.at(-2)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 0, windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 } });
     expect(sent.at(-1)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'char', key: 'a', code: 'KeyA', modifiers: 0, text: 'a' } });
   });
 

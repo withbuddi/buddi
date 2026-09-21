@@ -194,3 +194,176 @@ describe('the remote hand socket', () => {
     expect(await hand.next('refused')).toMatchObject({ supported: false, error: 'Take over at the computer for this mode.' });
   });
 });
+
+/*
+ * The endpoint on its own, so the lease, the heartbeat and the drain can be
+ * driven directly: the server's authorize is the real gate, and these are
+ * about what happens to a socket that was already let through.
+ */
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { SessionStore, type Session } from './sessions.js';
+import { RemoteHandEndpoint } from './remote-hand.js';
+
+const bare: Server[] = [];
+afterEach(async () => {
+  await Promise.all(bare.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+});
+
+function lease(): Session {
+  const now = new Date();
+  return { id: 'dashboard-session', csrf: 'csrf-token', scope: 'local', via: 'local', ttlMs: 60_000,
+    createdAt: now, expiresAt: new Date(now.getTime() + 60_000), cookieIssuedAt: now };
+}
+
+/** A hand that records what it is given and can be made slow or angry. */
+function slowHand() {
+  const input: HandInput[] = [];
+  const stopped = vi.fn(async () => {});
+  let delay = 0;
+  let refuse: Error | undefined;
+  let paint: ((frame: HandFrame) => void) | undefined;
+  const hand: BrowserHand = {
+    start: async (onFrame) => { paint = onFrame; },
+    input: async (event) => {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (refuse) throw refuse;
+      input.push(event);
+    },
+    stop: stopped,
+  };
+  return { hand, input, stopped, slow: (ms: number) => { delay = ms; }, angry: (error: Error) => { refuse = error; },
+    paint: (bytes: Buffer) => paint?.({ jpeg: bytes, metadata: { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0 } }) };
+}
+
+async function endpoint(options: { session?: () => Session | null; hand?: BrowserHand; log?: (line: string) => void } & Record<string, number | unknown> = {}) {
+  const { browser } = controller();
+  const { hand } = options;
+  if (hand) browser.hand = () => ({ supported: true, hand });
+  const session = options.session ?? (() => lease());
+  const endpoint = new RemoteHandEndpoint({
+    authorize: async () => session(),
+    browser: () => browser,
+    ...(options.log ? { log: options.log } : {}),
+    ...(typeof options.pingMs === 'number' ? { pingMs: options.pingMs } : {}),
+    ...(typeof options.idleMs === 'number' ? { idleMs: options.idleMs } : {}),
+    ...(typeof options.lifetimeMs === 'number' ? { lifetimeMs: options.lifetimeMs } : {}),
+    ...(typeof options.congestionMs === 'number' ? { congestionMs: options.congestionMs } : {}),
+  });
+  const server = createServer((_req, res) => res.end());
+  bare.push(server);
+  server.on('upgrade', (req, socket, head) => endpoint.upgrade(req, socket as never, head));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/browser/hand`;
+  const tab = drive(url, { Origin: 'http://127.0.0.1' });
+  await tab.open;
+  tab.send({ type: 'hello', csrf: 'csrf-token', sessionId: SESSION });
+  await tab.next('driving');
+  return { endpoint, tab };
+}
+
+describe('a hand that has already been let through', () => {
+  it('dies with its session rather than driving on', async () => {
+    let allowed: Session | null = lease();
+    const hand = slowHand();
+    const { tab } = await endpoint({ hand: hand.hand, session: () => allowed });
+    tab.send({ type: 'input', input: { kind: 'mouse', type: 'mouseMoved', x: 1, y: 1, button: 'none', clickCount: 0, modifiers: 0 } });
+    await vi.waitFor(() => expect(hand.input).toHaveLength(1));
+
+    // The session expired, was destroyed, or the tailnet identity it was
+    // minted for is no longer allowed. The next input is the last thing that
+    // happens, and it does not reach the browser.
+    allowed = null;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    tab.send({ type: 'input', input: { kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a', modifiers: 0 } });
+    expect(await tab.next('ended')).toMatchObject({ error: 'Your session ended. Sign in again.' });
+    expect(hand.input).toHaveLength(1);
+    expect(hand.stopped).toHaveBeenCalled();
+  });
+
+  it('is revoked the moment the session behind it is forgotten', async () => {
+    const hand = slowHand();
+    const { endpoint: live, tab } = await endpoint({ hand: hand.hand });
+    live.revoke((id) => id === 'dashboard-session', 'Tailscale access changed. Sign in again.');
+    expect(await tab.next('ended')).toMatchObject({ error: 'Tailscale access changed. Sign in again.' });
+    expect(hand.stopped).toHaveBeenCalled();
+  });
+
+  it('ends at its absolute lifetime, and when nobody has touched it', async () => {
+    const hand = slowHand();
+    const { tab } = await endpoint({ hand: hand.hand, pingMs: 20, idleMs: 40 });
+    expect(await tab.next('ended')).toMatchObject({ error: 'The take-over went idle.' });
+    expect(hand.stopped).toHaveBeenCalled();
+
+    const second = slowHand();
+    const later = await endpoint({ hand: second.hand, pingMs: 20, lifetimeMs: 40 });
+    expect(await later.tab.next('ended')).toMatchObject({ error: expect.stringContaining('reached its limit') });
+  });
+
+  it('terminates a client that stops answering, and stops the screencast', async () => {
+    const hand = slowHand();
+    const { tab } = await endpoint({ hand: hand.hand, pingMs: 20, idleMs: 60_000 });
+    // A phone that walked out of range: the socket is open, nothing is read,
+    // and no pong will ever come back.
+    (tab.socket as unknown as { _socket: { pause(): void } })._socket.pause();
+    await vi.waitFor(() => expect(hand.stopped).toHaveBeenCalled(), { timeout: 2_000 });
+  });
+
+  it('drops frames a stalled client cannot take, and gives up on it', async () => {
+    const lines: string[] = [];
+    const hand = slowHand();
+    const { tab } = await endpoint({ hand: hand.hand, pingMs: 25, congestionMs: 0, idleMs: 60_000, log: (line) => lines.push(line) });
+    // Nothing is being read off the socket any more, so every frame stays in
+    // this process's memory rather than reaching a viewer.
+    (tab.socket as unknown as { _socket: { pause(): void } })._socket.pause();
+    const big = Buffer.alloc(256 * 1024, 1);
+    for (let i = 0; i < 40; i++) hand.paint(big);
+    await vi.waitFor(() => expect(lines).toContain('browser hand: socket fell too far behind'), { timeout: 2_000 });
+    expect(hand.stopped).toHaveBeenCalled();
+  });
+
+  it('drains what is in flight and lets go of everything still pressed', async () => {
+    const hand = slowHand();
+    const { endpoint: live, tab } = await endpoint({ hand: hand.hand });
+    tab.send({ type: 'input', input: { kind: 'mouse', type: 'mousePressed', x: 30, y: 40, button: 'left', clickCount: 1, modifiers: 0 } });
+    tab.send({ type: 'input', input: { kind: 'key', type: 'keyDown', key: 'Shift', code: 'ShiftLeft', modifiers: 8 } });
+    await vi.waitFor(() => expect(hand.input).toHaveLength(2));
+
+    // A slow input still on its way out when Resume arrives.
+    hand.slow(60);
+    tab.send({ type: 'input', input: { kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a', modifiers: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await live.close(SESSION, 'You gave the screen back.');
+
+    // Nothing was still executing when close returned, the button and the key
+    // were let go of, and the screencast stopped after both.
+    expect(hand.input.map((event) => (event as { type?: string }).type)).toEqual(['mousePressed', 'keyDown', 'char', 'mouseReleased', 'keyUp']);
+    expect(hand.input.at(-2)).toMatchObject({ kind: 'mouse', type: 'mouseReleased', x: 30, y: 40, button: 'left' });
+    expect(hand.input.at(-1)).toMatchObject({ kind: 'key', type: 'keyUp', key: 'Shift' });
+    expect(hand.stopped).toHaveBeenCalled();
+  });
+
+  it('refuses new input once the hand is closing', async () => {
+    const hand = slowHand();
+    hand.slow(40);
+    const { endpoint: live, tab } = await endpoint({ hand: hand.hand });
+    tab.send({ type: 'input', input: { kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a', modifiers: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const closing = live.close(SESSION, 'You gave the screen back.');
+    tab.send({ type: 'input', input: { kind: 'key', type: 'char', key: 'b', code: 'KeyB', text: 'b', modifiers: 0 } });
+    await closing;
+    expect(hand.input.filter((event) => (event as { text?: string }).text === 'b')).toHaveLength(0);
+  });
+
+  it('never writes what the host said about an input into the log', async () => {
+    const lines: string[] = [];
+    const hand = slowHand();
+    // What Playwright does with a key it does not know: it quotes it back.
+    hand.angry(new Error('Unknown key: "hunter2"'));
+    const { tab } = await endpoint({ hand: hand.hand, log: (line) => lines.push(line) });
+    tab.send({ type: 'input', input: { kind: 'key', type: 'char', key: 'h', code: 'KeyH', text: 'h', modifiers: 0 } });
+    expect(await tab.next('ended')).toMatchObject({ error: expect.stringContaining('Take over again') });
+    expect(lines.join('\n')).not.toMatch(/hunter2|Unknown key/);
+    expect(lines).toContain('browser hand: input failed at the host');
+  });
+});

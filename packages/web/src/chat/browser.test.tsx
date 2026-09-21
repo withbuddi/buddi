@@ -143,7 +143,11 @@ describe('conversation browser canvas', () => {
     ] });
     vi.spyOn(api, 'approval').mockResolvedValue({ id: 'a1', state: 'pending', tool: 'browser.act', permissionScopes: ['conversation'], preview: 'Click Pay', envelope: {}, canonicalArgs: {} } as never);
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
-    expect(await screen.findByRole('tab', { name: 'Approval' })).toBeInTheDocument();
+    // Settled, not merely present: the envelope takes the canvas by itself,
+    // and until it has, the selection is still the one the page fell back to.
+    // Clicking through an unsettled canvas would be clicking a tab that is
+    // already selected — a no-op the assertions below would blame on the page.
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
     // The panel says the step has not happened.
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Browser' }), { button: 0 });
     await waitFor(() => expect(screen.getByTestId('browser-view')).toBeInTheDocument());

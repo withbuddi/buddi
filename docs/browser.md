@@ -292,6 +292,26 @@ size the picture is displayed at. When the socket drops the picture freezes
 with *Connection lost* and a **Reconnect** button. `resume`, `release` and
 **Stop** all end the hand and close the socket.
 
+The socket does not outlive what let it in. It holds a lease on the dashboard
+session: that session is checked again at most a second after any input and at
+least every thirty seconds, so an expired session, a signed-out device, a
+tailnet login that is no longer allowed and Tailscale being switched off all
+end the hand — immediately, at the moment the session is forgotten, rather than
+at the socket's next idea. Two hours is the most any single take-over lasts, ten
+minutes of nobody touching it ends it, and a client that stops answering pings
+(every fifteen seconds, two missed) or falls two megabytes behind is given up
+on: frames are dropped rather than queued, and the screencast is stopped rather
+than left running for a phone that walked out of range.
+
+Ending is ordered, because the agent must never start acting into the owner's
+half-finished input. Messages are handled one at a time; **Give it back** marks
+the hand closing, refuses anything new, waits for what is already executing,
+releases whatever is still held down — a mouse button, a Shift — and only then
+stops the screencast and lets `resume` return. In Playwright mode the hand
+holds the exact page it is showing: if that page closes, navigates outside the
+allowed websites, or loses its debugger connection, the hand ends and the owner
+must take over again. It never follows the browser to another tab.
+
 In "Your browser" the frames are Chrome's own `Page.startScreencast` through
 the extension's debugger, acked as they leave and throttled to ten a second,
 and the input is `Input.dispatchMouseEvent`/`dispatchKeyEvent` on the session's
