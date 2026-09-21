@@ -31,7 +31,13 @@ export interface Finding {
   severity: Severity;
   title: string;
   detail: string;
-  /** Which agent should speak about it. Defaults to the wake mission's agent. */
+  /**
+   * Which agent should speak about it: resolved by the plugin — normally with
+   * `ctx.agentForRole` — or the wake mission's agent by default. A plugin that
+   * writes an id of its own down is naming an agent the owner may have deleted
+   * this morning; ask for the role instead and leave this undefined when
+   * nobody holds it.
+   */
   agentId?: string;
   /** Structured evidence handed to that agent verbatim. */
   data?: unknown;
@@ -42,6 +48,21 @@ export interface SentinelContext {
   now: () => Date;
   /** The owner's timezone: a sentinel that needs a *day* renders it in this zone. */
   timezone: string;
+  /**
+   * The id of the agent that answers for a role — the first *runnable* agent
+   * holding it in roster order — or `undefined` when nobody does.
+   *
+   * It is the only supported way for a sentinel to address a finding. Roles
+   * are the owner's word (`roles: [credit]` in an agent's frontmatter) and
+   * survive the agent being renamed, replaced or deleted; an id hard-coded in
+   * a plugin does not. Held-back and unbound agents are left out: an agent
+   * this installation cannot run would take the finding and say nothing.
+   *
+   * `undefined` is an answer, not a failure — leave `Finding.agentId` unset
+   * and the wake mission's agent speaks, which is by construction an agent
+   * that exists.
+   */
+  agentForRole(role: string): string | undefined;
 }
 
 export interface Sentinel {

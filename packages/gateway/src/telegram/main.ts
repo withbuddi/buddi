@@ -417,7 +417,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume, interjections }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -466,6 +466,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           ...(systemSuffix === undefined ? [] : [systemSuffix]),
         ].join('\n\n'),
         memoryPreamble: memoryPreambleFor(pool),
+        // A second message while this run works is not a second run: the loop
+        // takes it between two tool calls, and the reply is still one message.
+        ...(interjections ? { interjections } : {}),
         // The provider's own web search leaves the same audit row `web.search`
         // does; see @buddi/tool-web's native.ts.
         onNativeSearch: nativeSearchRecorder(pool),

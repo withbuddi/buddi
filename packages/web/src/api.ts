@@ -1017,6 +1017,9 @@ export const chatApi = {
     post<{
       conversationId: string;
       runId: string;
+      /** The agent was working: this went into that run, under `pendingId`. */
+      queued?: boolean;
+      pendingId?: string;
     }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
   answerQuestion: (id: string, body: { answer: string; optionId?: string }) =>
     post<{ conversationId: string; runId: string }>(

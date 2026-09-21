@@ -1081,6 +1081,111 @@ describe('TelegramSurface conversation handling', () => {
     expect(final?.body.text).toBe('Status — 2026-09-13\n\nYou have 1 240,50 € left.');
   });
 
+  /*
+   * A second message while the agent is working is not a second run. It joins
+   * the one already going — the runtime takes it between two tool calls — and
+   * the owner gets one reply, to the whole of what they said.
+   */
+  it('takes a second message into the run in flight rather than starting another', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    /** What the run was handed when it asked, after the owner added to it. */
+    const added: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      for (const item of req.interjections?.lease() ?? []) added.push(item.text);
+      return 'Answered once.';
+    });
+    const { surface, sent } = surfaceWith(db, run as any);
+
+    await surface.processUpdates([message(70, OWNER, OWNER, 'how much did I spend?')]);
+    await until(() => run.mock.calls.length > 0, 'the run to start');
+    await surface.processUpdates([message(71, OWNER, OWNER, 'in euros, please')]);
+    // Still one run, and the second message did not queue behind it.
+    expect(run).toHaveBeenCalledTimes(1);
+    (release as unknown as () => void)();
+    await surface.drain();
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(added).toEqual(['in euros, please']);
+    // One reply, to the whole of what was asked.
+    expect(sent.filter((s) => s.method === 'editMessageText' && String(s.body.text).includes('Answered once.'))).toHaveLength(1);
+  });
+
+  /**
+   * The run fell over holding the owner's message. Telegram keeps no durable
+   * copy of it, so if it is not promoted on the way out it is simply gone —
+   * and it is exactly the message somebody sends because the agent is taking
+   * too long.
+   */
+  it('still answers what it was holding when the run throws', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    const texts: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      texts.push(req.text);
+      if (texts.length === 1) {
+        await new Promise<void>((resolve) => { release = resolve; });
+        throw new Error('the provider fell over');
+      }
+      return 'Got it.';
+    });
+    const { surface } = surfaceWith(db, run as any);
+
+    await surface.processUpdates([message(74, OWNER, OWNER, 'draft the email')]);
+    await until(() => release !== null, 'the run to start');
+    await surface.processUpdates([message(75, OWNER, OWNER, 'in euros, please')]);
+    (release as unknown as () => void)();
+    await surface.drain();
+    await surface.drain();
+
+    expect(texts).toEqual(['draft the email', 'in euros, please']);
+  });
+
+  /**
+   * In a group Telegram writes the command with the bot's name in front of
+   * it. The folding decision has to see what `handleText` sees, or `/reset`
+   * goes into the agent's context as a sentence.
+   */
+  it('never folds a command, even with the bot mention in front of it', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    const added: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      for (const item of req.interjections?.lease() ?? []) added.push(item.text);
+      return 'Answered.';
+    });
+    const { surface } = surfaceWith(db, run as any, { botUsername: 'buddi_bot' });
+
+    await surface.processUpdates([message(76, OWNER, OWNER, 'how much did I spend?')]);
+    await until(() => release !== null, 'the run to start');
+    await surface.processUpdates([message(77, OWNER, OWNER, '@buddi_bot /reset')]);
+    (release as unknown as () => void)();
+    await surface.drain();
+
+    expect(added).toEqual([]);
+    // It was handled as the command it is: a fresh conversation for the chat.
+    expect(db.conversations.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * Too late to join: the run had already answered. Nothing is lost — it is
+   * the next turn, exactly as if the owner had typed it a second later.
+   */
+  it('answers a message that arrives after the run has finished as the next turn', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (_req?: any) => 'Done.');
+    const { surface } = surfaceWith(db, run as any);
+    await surface.processUpdates([message(72, OWNER, OWNER, 'first')]);
+    await surface.drain();
+    await surface.processUpdates([message(73, OWNER, OWNER, 'second')]);
+    await surface.drain();
+    expect(run.mock.calls.map((c: any) => c[0].text)).toEqual(['first', 'second']);
+  });
+
   it('maps /status onto the advisor status overview', async () => {
     const db = withOwner(new FakeDb());
     const { surface, run } = surfaceWith(db);

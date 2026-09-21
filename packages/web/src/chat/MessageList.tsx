@@ -19,7 +19,7 @@ import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import { Markdown, MarkdownAgents } from './markdown';
-import { offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage } from '../chat/types';
+import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage } from '../chat/types';
 import { AgentAvatar } from '../ui';
 
 /**
@@ -164,6 +164,10 @@ export function MessageList({
          * the one they did — the sentence is the title, a hover away, so
          * nothing is hidden about what was actually asked.
          */
+        // Typed while the agent was working. The bubble is the owner's, with
+        // one quiet line above it saying when it went in — so a correction
+        // that arrived mid-run does not read as the question that started it.
+        const interjected = message.role === 'user' && addedWhileWorking(speaker);
         const offerLabel = message.role === 'user' ? offerTurnLabel(speaker) : null;
         if (offerLabel) {
           const asked = (message.blocks ?? [])
@@ -190,8 +194,11 @@ export function MessageList({
           );
         }
         return (
-          <div key={message.id} className="wb-msg" data-role={mine ? 'user' : 'assistant'}>
-            {opensTurn && !mine ? (
+          <div key={message.id} className="wb-msg" data-role={mine || interjected ? 'user' : 'assistant'}>
+            {interjected ? (
+              <div className="wb-msg-added" data-testid="added-while-working">added while working</div>
+            ) : null}
+            {opensTurn && !mine && !interjected ? (
               <div className="wb-msg-who">
                 {who && speakers ? <AgentAvatar agents={speakers} id={who.id} size="sm" /> : null}
                 <span>{who ? who.name : (agentName ?? 'Assistant')}</span>

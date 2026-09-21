@@ -84,6 +84,20 @@ export interface ChatMessage {
  */
 export const OFFER_TURN_SPEAKER_PREFIX = 'offer:';
 
+/**
+ * How the server stamps a turn the owner typed while the agent was working.
+ *
+ * It is their turn like any other — it just did not start the run it went
+ * into. The thread says so in three words rather than leaving a question that
+ * arrived halfway through looking like the one that opened the turn.
+ */
+export const OWNER_INTERJECTION_SPEAKER = 'owner:interjection';
+
+/** Was this turn added while the agent was already working? */
+export function addedWhileWorking(speaker: string | null | undefined): boolean {
+  return speaker === OWNER_INTERJECTION_SPEAKER;
+}
+
 /** The chip's label behind such a stamp, or null for an ordinary turn. */
 export function offerTurnLabel(speaker: string | null | undefined): string | null {
   if (typeof speaker !== 'string' || !speaker.startsWith(OFFER_TURN_SPEAKER_PREFIX)) return null;

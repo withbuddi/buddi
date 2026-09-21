@@ -505,8 +505,15 @@ export interface Finding {
   severity: 'urgent' | 'info';
   title: string;
   detail: string;
-  agentId?: string;        // who should speak about it
+  agentId?: string;        // who should speak about it; resolve it by role
   data?: unknown;          // structured evidence, handed over verbatim
+}
+
+export interface SentinelContext {
+  db: Pool;
+  now: () => Date;
+  timezone: string;
+  agentForRole(role: string): string | undefined;   // who answers for a role
 }
 ```
 
@@ -538,6 +545,24 @@ Anchor the key to the date or the row the condition rests on.
   lands in `core.sentinel_runs.last_error`, the tick continues, and the findings
   of the failed run are ignored entirely — a half-list is not evidence that
   anything resolved.
+
+**Address a finding by role, never by id.** `ctx.agentForRole('credit')` returns
+the id of the agent that answers for a role — the first *runnable* agent holding
+it in roster order — or `undefined` when nobody does. Held-back and unbound
+agents are skipped: an agent this installation cannot run would take the finding
+and say nothing.
+
+```ts
+const agentId = ctx.agentForRole('credit') ?? ctx.agentForRole('overview');
+return [{ key, severity: 'urgent', title, detail, ...(agentId ? { agentId } : {}) }];
+```
+
+A role is the owner's word — `roles: [credit]` in an agent's frontmatter — and it
+survives that agent being renamed, replaced or deleted; `agentId: 'credit-coach'`
+written into your plugin does not, and core will faithfully address a ghost. When
+nobody holds the role, leave `agentId` unset: the finding falls to the wake
+mission's agent, which by construction exists. An unaddressed finding reaches the
+owner; a misaddressed one does not.
 
 Two more things that hold in practice:
 
@@ -1919,6 +1944,7 @@ than guess.
 | `db` | `Pool` | yes | The pool. |
 | `now` | `() => Date` | yes | The clock. |
 | `timezone` | `string` | yes | The owner's IANA zone, for a sentinel that needs a *day*. |
+| `agentForRole` | `(role: string) => string \| undefined` | yes | The id of the agent that answers for a role — the first *runnable* agent holding it in roster order, held-back and unbound agents skipped — or `undefined` when nobody does. The only supported way to address a finding. |
 
 #### `Finding`
 
@@ -1928,7 +1954,7 @@ than guess.
 | `severity` | `Severity` | yes | `'urgent'` wakes the owner through the `sentinel-wake` mission, then stays quiet 24 h. `'info'` goes to the weekly digest, then stays quiet 7 days. |
 | `title` | `string` | yes | One line. |
 | `detail` | `string` | yes | The evidence, in prose the owner can act on. |
-| `agentId` | `string` | no | Who should speak about it. Defaults to the wake mission's agent. |
+| `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
 | `data` | `unknown` | no | Structured evidence, handed to that agent verbatim. |
 
 ### Suggestions
