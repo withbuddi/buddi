@@ -42,6 +42,7 @@ import {
   TelegramApi,
   telegramFetchOn,
   TAILSCALE_SETTING_KEY,
+  resolveTailscaleBinary,
   tailscaleSelf,
   toTailscaleSetting,
   webConfig,
@@ -685,8 +686,10 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      * Signing in through Tailscale: is the daemon here, is the setting on and
      * for whom, and is the dashboard actually published on the tailnet?
      *
-     * `tailscale serve status --json` is read only when the binary is on the
-     * PATH; without it the row says it could not check rather than guessing.
+     * `tailscale serve status --json` is read only when a `tailscale` binary
+     * is found — by the same resolution the gateway uses, PATH first and then
+     * the two places a Mac keeps one. Without it the row says it could not
+     * check rather than guessing.
      */
     async tailscale(): Promise<ProbeResult> {
       const config = webConfig(env);
@@ -750,7 +753,9 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
  * what it saw and never guesses at a route it did not read.
  */
 async function serveStatus(gatewayPort: number): Promise<{ checked: boolean; routesGateway?: boolean; error?: string }> {
-  const res = await run('tailscale', ['serve', 'status', '--json'], { timeoutMs: 10_000 });
+  const binary = resolveTailscaleBinary();
+  if (binary === null) return { checked: false, error: 'the tailscale binary was not found' };
+  const res = await run(binary, ['serve', 'status', '--json'], { timeoutMs: 10_000 });
   if (res.code === 127) return { checked: false, error: 'the tailscale binary was not found' };
   if (res.code !== 0) return { checked: false, error: (res.stderr || res.stdout).trim().split('\n')[0] ?? `exit ${res.code}` };
   let parsed: unknown;
