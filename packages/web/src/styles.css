@@ -1970,6 +1970,19 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .browser-panel[data-compact='true'] .browser-empty { min-height: 180px; padding: var(--space-5); }
 .browser-empty p { color: var(--text-muted); font-size: var(--text-md); max-width: 360px; }
 
+/* ---- the remote hand: the owner's own pointer on the host's screen ---- */
+.hand { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.hand-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); }
+.hand-said { font-size: var(--text-sm); }
+.hand-screen { border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); }
+.hand-picture { display: block; width: 100%; height: auto; cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; }
+.hand-picture:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hand[data-phase='lost'] .hand-picture { filter: grayscale(1); cursor: not-allowed; }
+.hand-waiting { padding: var(--space-8); text-align: center; }
+/* Present for a phone's keyboard, never for reading. */
+.hand-typing { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0; overflow: hidden; clip-path: inset(50%); }
+
 /* ---- host execution: one line that opens ---- */
 .host-controls { padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--line); font-size: var(--text-sm); }
 .host-controls > summary { color: var(--text-muted); }
