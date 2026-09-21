@@ -99,6 +99,7 @@ import {
 } from './chat.js';
 import { readAgentAttention, streamAttention } from './attention.js';
 import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
+import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import {
   CSRF_COOKIE,
   CSRF_HEADER,
@@ -250,6 +251,11 @@ export interface WebServerDeps {
    * 503 with a sentence saying so, rather than the server failing to start.
    */
   chat?: Omit<WebChatDeps, 'pool' | 'catalog' | 'registry' | 'ctx' | 'now' | 'timezone' | 'log'>;
+  /**
+   * The browser extension's WebSocket endpoint. One per data dir by default;
+   * a test passes its own so two servers never share a pairing.
+   */
+  extension?: ExtensionEndpoint;
 }
 
 export interface WebServer {
@@ -317,6 +323,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   const limiter = new RateLimiter();
   const assetsDir = deps.assetsDir ?? webAssetsDir();
   const log = deps.log ?? ((line: string) => console.error(line));
+  const extension = deps.extension ?? extensionEndpoint(deps.env ?? process.env, log);
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -390,6 +397,10 @@ export function createWebApp(deps: WebServerDeps): Server {
   });
 
   if (chat) WEB_CHATS.set(server, chat);
+  // "Your browser": the only path this server ever upgrades. Attached here
+  // rather than in `startWebServer` so every caller, tests included, has it.
+  extension.attach(server);
+  server.once('close', () => extension.shutdown());
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -641,6 +652,8 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, { apps: await listInstalledApps() });
         case '/api/host/browser-profiles':
           return sendJson(res, 200, { profiles: await listBrowserProfiles(q.get('app') ?? '') });
+        case '/api/extension':
+          return sendJson(res, 200, await extension.view());
         case '/api/browser':
           return sendJson(res, 200, q.has('conversationId') && q.has('agentId')
             ? browser.status({ agentId: q.get('agentId')!, conversationId: q.get('conversationId')! }) : browser.status());
@@ -1010,6 +1023,12 @@ export function createWebApp(deps: WebServerDeps): Server {
      * message, and a file a surface or an agent made is not the page's to drop.
      */
     if (method === 'DELETE') {
+      // Forget the paired browser. The extension keeps running; it simply
+      // stops being recognised, and its socket is closed as it is forgotten.
+      if (path === '/api/extension/pair') {
+        const forgotten = await extension.unpair();
+        return sendJson(res, forgotten.status, forgotten.body);
+      }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
       const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
@@ -1040,6 +1059,16 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (method !== 'POST') return sendEmpty(res, 405);
+    if (path === '/api/extension/pair') {
+      // A six-digit code is worth guessing at scale, so a wrong one costs the
+      // same budget a failed sign-in does.
+      const pairKey = remoteKey(req);
+      if (limiter.blocked(pairKey, now)) return sendEmpty(res, 429);
+      const body = await readJsonBody(req) as { code?: unknown } | null;
+      const paired = await extension.pair(body?.code);
+      if (paired.status >= 400) limiter.fail(pairKey, now); else limiter.reset(pairKey);
+      return sendJson(res, paired.status, paired.body);
+    }
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
       const body = await readJsonBody(req);
       try {

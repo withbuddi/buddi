@@ -56,6 +56,11 @@ export interface DoctorProbes {
    * interface; a row whose probe is absent is simply not printed.
    */
   webSearch?(): Promise<ProbeResult>;
+  /**
+   * How agents get a screen, and whether "Your browser" has a paired Chrome.
+   * Optional for the same reason `config` is.
+   */
+  browser?(): Promise<ProbeResult>;
   botToken(): Promise<ProbeResult>;
   pairedDevices(): Promise<ProbeResult>;
   /** The durable queue: paused or running, and how the jobs stand. */
@@ -101,6 +106,10 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // A warning, never critical: with no key the agents lose a capability and
   // are told so, which is a degraded assistant rather than a broken one.
   { name: 'web search', critical: false, probe: 'webSearch' },
+  // Never critical: an installation with no browser backend is an installation
+  // whose agents cannot open a website, which is a lost capability, not a
+  // broken buddi.
+  { name: 'browser', critical: false, probe: 'browser' },
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
   { name: 'queue', critical: false, probe: 'queue' },

@@ -1009,6 +1009,9 @@ export const api = {
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
+  extension: () => get<ExtensionState>('/extension'),
+  pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
+  forgetExtension: () => del<ExtensionState>('/extension/pair'),
   session: () => get<{ csrf: string; timezone: string; host: string; port: number; version?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
@@ -1209,9 +1212,21 @@ export interface HostState {
   runs: { actionId: string; agentId: string; conversationId: string; command: string; cwd: string; stdout: string; stderr: string }[];
 }
 
-export interface ControlSettings { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[]; browserProfile?: string }
+export type BrowserMode = 'computer' | 'playwright' | 'extension';
+export interface ControlSettings { mode: BrowserMode; browserApp: string; allowedApps: string[]; browserProfile?: string }
+/** "Your browser": the Chrome extension, as the gateway sees it. */
+export interface ExtensionState {
+  connected: boolean;
+  /** A browser is waiting for the owner to type the code it is showing. */
+  pending: boolean;
+  /** The unpacked folder to point "Load unpacked" at. */
+  path: string;
+  pairedAt?: string;
+  extension?: string;
+  lastSeenAt?: string;
+}
 export interface BrowserStatus {
-  mode?: 'computer' | 'playwright';
+  mode?: BrowserMode;
   settings?: ControlSettings;
   permissions?: { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
