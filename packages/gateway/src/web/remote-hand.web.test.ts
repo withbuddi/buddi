@@ -167,9 +167,50 @@ describe('the remote hand socket', () => {
     }
     await vi.waitFor(() => expect(input).toHaveLength(7));
     expect(input.map((event) => (event as { text?: string }).text).join('')).toBe('hunter2');
-    // Nothing the owner typed is anywhere near a log line.
-    expect(lines.join('\n')).not.toMatch(/hunter/);
+
+    // And the same password pasted, which is the one string here longer than
+    // a keystroke. It reaches the host whole and the log not at all.
+    hand.send({ type: 'input', input: { kind: 'text', text: 'hunter2\nthe whole password' } });
+    await vi.waitFor(() => expect(input).toHaveLength(8));
+    expect(input.at(-1)).toEqual({ kind: 'text', text: 'hunter2\nthe whole password' });
+
+    // Nothing the owner typed or pasted is anywhere near a log line.
+    expect(lines.join('\n')).not.toMatch(/hunter|password/);
     for (const character of 'hunter2') expect(lines.some((line) => line.includes(character) && line.includes('hunter'))).toBe(false);
+  });
+
+  it('types one character per keystroke, and takes a paste only as text', async () => {
+    const { browser, input } = controller();
+    const { url, headers, csrf, origin } = await setup(browser);
+    const hand = drive(url, { Cookie: headers.Cookie, Origin: origin });
+    await hand.open;
+    hand.send({ type: 'hello', csrf, sessionId: SESSION });
+    await hand.next('driving');
+
+    // "ame" as the dashboard now sends it: one `char` per key, no keyDown
+    // carrying the character behind it, so the page inserts each letter once.
+    for (const character of 'ame') {
+      hand.send({ type: 'input', input: { kind: 'key', type: 'char', key: character, code: `Key${character.toUpperCase()}`, text: character, modifiers: 0 } });
+    }
+    await vi.waitFor(() => expect(input).toHaveLength(3));
+    expect(input.map((event) => (event as { text?: string }).text).join('')).toBe('ame');
+    expect(input.every((event) => event.kind === 'key' && event.type === 'char')).toBe(true);
+
+    // A keyDown that carries text is refused outright rather than forwarded to
+    // a backend that would type it a second time.
+    hand.send({ type: 'input', input: { kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', text: 'a', modifiers: 0 } });
+    // A paste of a page, a paste of nothing, and a paste with an escape
+    // sequence in it are all not pastes.
+    hand.send({ type: 'input', input: { kind: 'text', text: 'x'.repeat(4_001) } });
+    hand.send({ type: 'input', input: { kind: 'text', text: '' } });
+    hand.send({ type: 'input', input: { kind: 'text', text: 'one\u0007two' } });
+    await vi.waitFor(() => expect(hand.seen.filter((f) => f.type === 'refused')).toHaveLength(4));
+    expect(input).toHaveLength(3);
+
+    // What a paste is: text, with a newline and a tab as the only controls.
+    hand.send({ type: 'input', input: { kind: 'text', text: 'one\ntwo\tthree' } });
+    await vi.waitFor(() => expect(input).toHaveLength(4));
+    expect(input.at(-1)).toEqual({ kind: 'text', text: 'one\ntwo\tthree' });
   });
 
   it('answers Take over with whether this screen can be driven, and ends the hand on resume', async () => {

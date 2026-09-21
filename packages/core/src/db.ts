@@ -45,6 +45,15 @@ export function createPool(databaseUrl: string): Pool {
 
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 
+/**
+ * The advisory key every migration transaction takes, installation-wide.
+ *
+ * One key for all schemas, not one per schema: the order core and the plugins
+ * migrate in is part of what a start means, and two processes interleaving
+ * schemas would be a state neither of them ever tested.
+ */
+export const MIGRATION_LOCK_KEY = 4_919_233_612_781_213;
+
 function quoteIdent(name: string): string {
   if (!IDENT.test(name)) {
     throw new Error(`invalid schema identifier: ${name}`);
@@ -60,6 +69,12 @@ function quoteIdent(name: string): string {
  * - Each file runs in its own transaction with
  *   `SET LOCAL search_path TO <schema>, public`, then is recorded.
  * - Already-applied files are skipped (tracked by (schema, filename)).
+ * - Every file's transaction takes `MIGRATION_LOCK_KEY` first, so two
+ *   processes migrating at once queue instead of racing: now that a checkout's
+ *   `buddi serve` migrates at start, two `serve`s — or a `serve` and a
+ *   `buddi migrate` — started together is an ordinary thing to do. The waiter
+ *   re-reads `core.migrations` inside the lock, so a file the other process
+ *   applied while it waited is skipped rather than run twice.
  */
 export async function migrate(
   pool: Pool,
@@ -125,6 +140,19 @@ export async function migrate(
     const client = await pool.connect();
     try {
       await client.query('begin');
+      // Held until this transaction ends, whichever way it ends — a process
+      // that dies mid-migration releases it with its connection.
+      await client.query(`select pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`);
+      // Inside the lock the record is authoritative again: another process may
+      // have applied this very file while we waited for it.
+      const { rowCount } = await client.query(
+        `select 1 from core.migrations where schema = $1 and filename = $2`,
+        [schema, filename],
+      );
+      if (rowCount !== null && rowCount > 0) {
+        await client.query('commit');
+        continue;
+      }
       await client.query(`set local search_path to ${qSchema}, public`);
       await client.query(sql);
       await client.query(
