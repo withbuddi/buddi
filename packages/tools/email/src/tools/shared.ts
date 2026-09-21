@@ -1,11 +1,12 @@
 /**
- * Shared reads for the email tools. Every query is scoped to the configured
- * account: there is one owner and one mailbox, and a tool argument can never
- * widen that.
+ * Shared reads for the email tools. Every query is scoped to the accounts the
+ * *owner* configured: a tool argument may narrow that to one of them, and it
+ * can never widen it to a mailbox nobody added.
  */
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { currentAccount } from '../config.js';
+import { findAccount, listAccounts } from '../config.js';
+import { normalizeAddress } from '../mail.js';
 import type { AccountRecord } from '../ports.js';
 import {
   DRAFT_COLUMNS,
@@ -142,14 +143,110 @@ export function boundedLimit(limit: number | undefined): number {
   return Math.min(Math.max(1, Math.trunc(limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
 }
 
-export async function requireAccount(db: Pool): Promise<AccountRecord> {
-  const account = await currentAccount(db);
-  if (!account) {
-    throw new Error(
-      'no mail account is configured on this installation (set GMAIL_USER and restart)',
-    );
+/** The `account` argument every read tool takes. Absent means all of them. */
+export const ACCOUNT_ARG = z
+  .string()
+  .min(1)
+  .describe(
+    'Which mailbox to look in, by its address or the id a result gave you. Leave it out to look in every mailbox this installation has — that is the default, and usually the right one.',
+  );
+
+/**
+ * The accounts one call may see, and how to name them back.
+ *
+ * This is what replaced "the configured account". A tool that says nothing gets
+ * every enabled account; a tool that names one gets that one. Either way the
+ * result is a *list* of ids to scope the SQL with and a map from id to record,
+ * so every row that comes back can say which mailbox it is from — which is the
+ * whole point of plural accounts: a subject line means something different
+ * depending on which of the owner's addresses received it.
+ */
+export interface AccountScope {
+  accounts: AccountRecord[];
+  ids: string[];
+  /** The record for an account id, for labelling rows. */
+  byId: Map<string, AccountRecord>;
+  /** The address of the one account in scope, when exactly one is. */
+  only: AccountRecord | null;
+}
+
+function scopeOf(accounts: AccountRecord[]): AccountScope {
+  return {
+    accounts,
+    ids: accounts.map((a) => a.id),
+    byId: new Map(accounts.map((a) => [a.id, a])),
+    only: accounts.length === 1 ? (accounts[0] as AccountRecord) : null,
+  };
+}
+
+/** Nothing configured is a configuration fact with a fix, said in one line. */
+const NONE_CONFIGURED =
+  'no mail account is configured on this installation — add one under Settings → Email, or set GMAIL_USER and restart';
+
+export async function accountScope(db: Pool, ref?: string | undefined): Promise<AccountScope> {
+  const named = ref?.trim();
+  if (named) {
+    const account = await findAccount(db, named);
+    if (!account) {
+      const known = await listAccounts(db);
+      throw new Error(
+        known.length === 0
+          ? NONE_CONFIGURED
+          : `no mail account here is ${named} (this installation has ${known.map((a) => a.address).join(', ')})`,
+      );
+    }
+    return scopeOf([account]);
   }
+  const accounts = await listAccounts(db);
+  if (accounts.length === 0) throw new Error(NONE_CONFIGURED);
+  return scopeOf(accounts);
+}
+
+/** Exactly one account — for a tool that has to send *from* somewhere. */
+export async function requireOneAccount(db: Pool, ref?: string | undefined): Promise<AccountRecord> {
+  const scope = await accountScope(db, ref);
+  if (scope.only) return scope.only;
+  throw new Error(
+    `this installation has ${scope.accounts.length} mail accounts (${scope.accounts
+      .map((a) => a.address)
+      .join(', ')}); say which one with \`account\``,
+  );
+}
+
+/** The account a stored row belongs to. Never guessed, never defaulted. */
+export async function accountOf(db: Pool, accountId: string): Promise<AccountRecord> {
+  const account = await findAccount(db, accountId, { enabledOnly: false });
+  if (!account) throw new Error(`unknown mail account: ${accountId}`);
   return account;
+}
+
+/** Every address this account answers as: its own, and each of its aliases. */
+export function ownAddresses(account: AccountRecord): string[] {
+  return [account.address, ...account.aliases];
+}
+
+/**
+ * The identity a reply leaves under.
+ *
+ * docs/email.md §4: "a draft's `from` is the alias the original was addressed
+ * to, else the account's address". So: whichever of this account's aliases the
+ * original actually reached, and the account's own address when none of them
+ * did (including when there is no original at all).
+ *
+ * The comparison is on the normalised address and not on `mailboxKey`: that key
+ * exists to answer "is this the owner?" and deliberately collapses plus-tags
+ * onto the base mailbox, which is the right answer there and the wrong one
+ * here — an alias is a distinct identity the owner typed, and
+ * `owner+web@example.test` must be chosen because the original reached *it*,
+ * not because it reaches the same inbox as `owner@example.test`.
+ */
+export function identityFor(
+  account: AccountRecord,
+  addressedTo: readonly string[] = [],
+): string {
+  const reached = new Set(addressedTo.map((address) => normalizeAddress(address)));
+  const alias = account.aliases.find((candidate) => reached.has(normalizeAddress(candidate)));
+  return alias ?? account.address;
 }
 
 export async function findMessage(db: Pool, id: string): Promise<MessageRecord | null> {
