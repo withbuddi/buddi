@@ -36,6 +36,8 @@ import { nativeSearchRecorder } from '@buddi/tool-web';
 import { hostService } from '@buddi/tool-host';
 import { hostBrowser } from '@buddi/tool-browser';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
+import { browserTabUrl, webConfig } from '../web/config.js';
+import { BROWSER_ACT, BrowserPhotos, runBrowserCommand } from './browser-view.js';
 import { ownerRequestContext } from '../surfaces/owner-request.js';
 import {
   ASK_POLICY_SUFFIX,
@@ -91,6 +93,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'reminders', description: 'What the agents put on the clock' },
   { command: 'quiet', description: 'Stop proactive messages for a while' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
+  { command: 'browser', description: 'Where the screen stands; stop, resume or release it' },
   { command: 'host', description: 'Host execution permissions and running commands' },
   { command: 'hoststop', description: 'Interrupt all host commands' },
   { command: 'hostrevoke', description: 'Revoke all host auto-permissions and stop commands' },
@@ -370,6 +373,24 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   // as having happened here.
   bindOwnerTools(deps.registry, { catalog: deps.catalog, surface: SURFACE });
 
+  /*
+   * Sight on the phone: the screenshot the agent just looked at, with a way in.
+   *
+   * The host controller is the same one the dashboard reads and the same one
+   * the agent drives, so the picture is the observation itself rather than a
+   * second capture, and the allow lists it is checked against are the owner's
+   * own. Where the Take over button lands is the dashboard's business
+   * (`browserTabUrl`): the tailnet origin when one is configured, loopback
+   * otherwise — and then the caption says so.
+   */
+  const photos = new BrowserPhotos({
+    api,
+    browser: hostBrowser(env),
+    link: (agentId, conversationId) => browserTabUrl(webConfig(env), agentId, conversationId),
+    allowedHosts: env.BUDDI_BROWSER_HOSTS?.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean) ?? [],
+    log,
+  });
+
   const surface = new TelegramSurface({
     api,
     pool,
@@ -400,6 +421,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       : { recapMissionId: deps.recapMissionId }),
     approvals,
     onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, hostBrowser(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+    browserControl: (command) => runBrowserCommand(hostBrowser(env), command),
     hostControl: async (ownerId, command) => {
       const host = hostService(env);
       const permissions = (await listToolPermissions(pool, ownerId)).filter(p => p.tool === 'host.exec');
@@ -474,7 +496,21 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         onNativeSearch: nativeSearchRecorder(pool),
         onToolCall: (name, input) => {
           log(`⚙ ${name} ${JSON.stringify(input)}`);
+          // Held until the result comes back, so the caption can say what the
+          // step was *for* rather than only naming its verb.
+          if (name === BROWSER_ACT) photos.noteCall(conversationId, input);
           onToolCall?.(name, input);
+        },
+        // Presentation only, and never awaited: the photo is queued on its own
+        // tail, so Telegram can never slow a step down or fail one.
+        onToolResult: (name, outcome) => {
+          if (name !== BROWSER_ACT) return;
+          void photos.step({
+            chatId,
+            agentId: agent.id,
+            conversationId,
+            ...(outcome.error ? { error: outcome.error } : {}),
+          });
         },
       };
       // Multimodal input is the runtime's business: the surface says *which*

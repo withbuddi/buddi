@@ -383,6 +383,47 @@ ephemeral, not base64 saved in the conversation database. Form tool arguments,
 page text, and ordinary conversation/audit records can still contain sensitive
 information. Do not put passwords or MFA codes in chat.
 
+## On Telegram: the same screen, from the phone
+
+A conversation bound to a Telegram chat gets what the dashboard's Browser panel
+shows, in the two forms a phone has.
+
+**A photo per step.** After every `browser.act`, the observation the agent just
+looked at is sent as a photo, captioned with the page title, the action in
+words, `Step n of max`, and the failure reason when the step failed. One photo
+per step: an `observe` of a page already sent is skipped, because the page id
+did not change.
+
+**Nothing is sent that the agent was not allowed to see.** A screenshot is page
+content going to a third party's servers, so it is checked again on the way
+out: a page whose host is not in `BUDDI_BROWSER_HOSTS` is not sent, and in
+computer mode — where the screenshot is a whole application window — the window's
+bundle ID must be in the owner's `allowedApps`. Anything unreadable or missing
+fails closed and the step is reported in words only.
+
+**A "Take over" button** under the photo links to that conversation's Browser
+tab on the dashboard: `https://<host>:<port>/#/chat/<agent>/<conversation>?tab=browser`
+when `BUDDI_WEB_PUBLIC_ORIGIN` is configured (the tailnet address, which a phone
+signed in through Tailscale opens signed in, and where the remote hand is built
+for touch). With no public origin the link is the loopback address and the
+caption says *open this on the computer buddi runs on*.
+
+**The controls**, owner-only like every other Telegram command:
+
+| Command | Same as the dashboard's |
+| --- | --- |
+| `/browser` | the panel's own state: mode, who is driving, whether access is stopped |
+| `/browser stop` | **Stop all browsers** / **Stop computer control** |
+| `/browser resume` | **Resume access** |
+| `/browser release` | **Close & release** / **Release control** |
+
+Take over is deliberately not a command: driving by hand needs a canvas, and
+that is what the button's link is for.
+
+When access is stopped, the refusal the agent reads names the way back on the
+surface it is answering on — `/browser resume` on Telegram, the Settings page
+on the dashboard.
+
 ## Tools and limits
 
 `browser.status` is a read-only availability/status tool. `browser.act` is a

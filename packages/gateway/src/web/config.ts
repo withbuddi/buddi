@@ -99,3 +99,22 @@ export function webAssetsDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = (env.BUDDI_WEB_ASSETS ?? '').trim();
   return explicit !== '' ? explicit : path.join(REPO_ROOT, 'packages', 'web', 'dist');
 }
+
+/**
+ * The deep link to one conversation's Browser tab, and whether it is loopback.
+ *
+ * The public origin when the owner configured one (a tailnet HTTPS name), and
+ * the bound loopback address otherwise. `loopback: true` is the fact a caller
+ * needs to add the line that saves the owner tapping a dead link on a phone —
+ * "open this on the computer buddi runs on" — rather than a sentence decided
+ * here, because each surface writes it its own way.
+ */
+export function browserTabUrl(
+  config: Pick<WebConfig, 'host' | 'port' | 'publicOrigin'>,
+  agentId: string,
+  conversationId: string,
+): { url: string; loopback: boolean } {
+  const origin = config.publicOrigin ?? webUrl(config).replace(/\/$/, '');
+  const route = `#/chat/${encodeURIComponent(agentId)}/${encodeURIComponent(conversationId)}?tab=browser`;
+  return { url: `${origin}/${route}`, loopback: !config.publicOrigin };
+}

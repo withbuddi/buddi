@@ -1,6 +1,6 @@
 # Telegram sees what the dashboard sees
 
-Status: Proposed
+Status: Accepted
 Captured: 2026-09-21
 
 ## Problem / opportunity
@@ -29,9 +29,20 @@ text and no picture, and there is no way in to take over.
 - Where the deep link lands when the dashboard is not on the tailnet:
   the loopback address, with the words "open this on the computer".
 
-## Next decision
+## What was built
 
-Build after the remote hand lands. One day.
+- `packages/gateway/src/telegram/browser-view.ts` — the photo per `browser.act`
+  (throttled by observation id, withheld for a host or app outside the owner's
+  allow lists), the "Take over" button, and the four `/browser` commands.
+- `browserTabUrl` in `packages/gateway/src/web/config.ts` — the public origin
+  when one is configured, loopback with a caption line otherwise.
+- `?tab=browser` on the chat route, honoured once by `ChatPage`.
+- `browserStoppedMessage` in the browser plugin: the refusal names
+  `/browser resume` on Telegram and the Settings page elsewhere, from
+  `ctx.surface`.
+
+Panels other than the browser (tables, charts) keep their text rendering on
+Telegram; a photo of a canvas is still a later step.
 
 ## Related work
 

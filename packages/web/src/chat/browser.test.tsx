@@ -164,6 +164,23 @@ describe('conversation browser canvas', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
   });
 
+  /*
+   * The Take over button on Telegram is a link to this page, and it names the
+   * panel it meant. It has to win even over the one thing that normally takes
+   * the canvas on arrival — an envelope waiting to be decided — because the
+   * owner followed a link that said "Browser".
+   */
+  it('lands on the Browser panel when the link asked for it', async () => {
+    vi.mocked(chatApi.conversation).mockResolvedValue({ conversationId: 'c1', agentId: 'keeper', messages: [
+      { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'g1', name: 'browser.act', input: { action: 'click', target: { name: 'Pay' } } }] },
+      { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'g1', name: 'browser.act', ok: true, output: 'awaiting owner approval', approval: { id: 'a1', state: 'pending' } }] },
+    ] });
+    vi.spyOn(api, 'approval').mockResolvedValue({ id: 'a1', state: 'pending', tool: 'browser.act', permissionScopes: ['conversation'], preview: 'Click Pay', envelope: {}, canonicalArgs: {} } as never);
+    render(<Tooltip.Provider><ChatPage {...props} requestedTab="browser" /></Tooltip.Provider>);
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Browser' })).toHaveAttribute('data-state', 'active'));
+    expect(screen.getByTestId('browser-view')).toBeInTheDocument();
+  });
+
   /* What the owner typed is not put on the canvas by the inspector either. */
   it('never opens a raw browser call, whatever the canvas is showing', async () => {
     vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });

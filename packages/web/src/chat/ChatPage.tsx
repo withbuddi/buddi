@@ -47,6 +47,12 @@ const WIDTH_KEY = 'buddi.chatWidth';
 
 export interface ChatPageProps {
   requestedConversationId?: string | undefined;
+  /**
+   * The panel the link asked to land on — `browser`, from a Take over button
+   * sent to another surface. Honoured once, when that panel exists; after
+   * that the canvas is the owner's again and a poll never re-steals it.
+   */
+  requestedTab?: string | undefined;
   onConversationOpened?: (agentId: string, conversationId: string, replace?: boolean) => void;
   timezone: string;
   /**
@@ -95,6 +101,7 @@ export function ChatPage({
   onCloseCanvas,
   newConversationSignal,
   requestedConversationId,
+  requestedTab,
   onConversationOpened,
 }: ChatPageProps): JSX.Element {
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
@@ -549,6 +556,21 @@ export function ChatPage({
       if (browserTabId && !inlineApproval) setActiveTab(browserTabId);
     }
   }, [browserTabId, inlineApproval]);
+
+  /*
+   * The link said "Browser".
+   *
+   * A Take over button on Telegram is a deep link to this conversation's
+   * Browser tab, and the tab only exists once the status poll has found the
+   * session — so this waits for it rather than selecting nothing. Once.
+   */
+  const honouredTab = useRef<string | null>(null);
+  const requestedBrowserTab = requestedTab === 'browser' ? browserTab?.id ?? null : null;
+  useEffect(() => {
+    if (!requestedBrowserTab || honouredTab.current === requestedBrowserTab) return;
+    honouredTab.current = requestedBrowserTab;
+    setActiveTab(requestedBrowserTab);
+  }, [requestedBrowserTab]);
 
   /*
    * A browser call the owner had open before the panel appeared.
