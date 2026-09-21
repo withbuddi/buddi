@@ -83,6 +83,11 @@ export interface DoctorProbes {
    * for the same reason `config` is.
    */
   recovery?(): Promise<ProbeResult>;
+  /**
+   * Signing in through Tailscale: the daemon, the setting, and whether the
+   * proxy is actually published. Optional for the same reason `config` is.
+   */
+  tailscale?(): Promise<ProbeResult>;
   timezone(): ProbeResult;
 }
 
@@ -117,6 +122,9 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'service', critical: false, probe: 'service' },
   { name: 'backups', critical: false, probe: 'backups' },
   { name: 'recovery', critical: false, probe: 'recovery' },
+  // Never critical: with this off, or its proxy down, buddi is a dashboard on
+  // loopback, which is what it is by default.
+  { name: 'tailscale', critical: false, probe: 'tailscale' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];
 
@@ -374,6 +382,77 @@ export function checkBackups(facts: BackupFacts, staleAfterMs: number): ProbeRes
     return { status: 'warn', detail: summary };
   }
   return { status: 'ok', detail: summary };
+}
+
+/* ------------------------------------------------------------------ *
+ * The tailscale row
+ * ------------------------------------------------------------------ */
+
+/** What the doctor can learn about signing in through Tailscale. */
+export interface TailscaleFacts {
+  /** Is a local `tailscaled` answering, and who is this machine? */
+  daemon: { reachable: boolean; self?: string | null | undefined };
+  /** The stored setting, or null when it has never been set. */
+  setting: { enabled: boolean; login: string } | null;
+  /** `BUDDI_WEB_PUBLIC_ORIGIN`, when one is configured. */
+  publicOrigin?: string | undefined;
+  /** The port the dashboard is bound to, which Serve has to forward to. */
+  gatewayPort: number;
+  /**
+   * What `tailscale serve status --json` said. `checked: false` means the
+   * binary was not found, and the row says it could not check rather than
+   * inventing a verdict.
+   */
+  serve: { checked: boolean; routesGateway?: boolean | undefined; error?: string | undefined };
+}
+
+/**
+ * One line about signing in through Tailscale.
+ *
+ * Off is `ok` and one short sentence: the default is not a problem. On is
+ * where the row earns its place — it names who may sign in, and it warns when
+ * the pieces that make that work are missing, because "enabled" with no daemon
+ * or no published route is a setting that quietly does nothing.
+ */
+export function checkTailscale(facts: TailscaleFacts): ProbeResult {
+  const setting = facts.setting;
+  const daemon = facts.daemon.reachable
+    ? `tailscaled is running${facts.daemon.self ? ` as ${facts.daemon.self}` : ''}`
+    : 'tailscaled is not running here';
+  if (!setting?.enabled) {
+    return { status: 'ok', detail: `off — nothing signs in through Tailscale; ${daemon}` };
+  }
+
+  const parts = [`on for ${setting.login}`, daemon];
+  const problems: string[] = [];
+  if (!facts.daemon.reachable) {
+    problems.push('without a local tailscaled no whois can be made, so nobody can sign in this way');
+  }
+  if (facts.publicOrigin === undefined) {
+    problems.push('BUDDI_WEB_PUBLIC_ORIGIN is not set, so the proxy origin is not an origin this gateway accepts');
+  } else if (!/\.ts\.net$/.test(hostnameOf(facts.publicOrigin))) {
+    problems.push(`the public origin ${facts.publicOrigin} is not a .ts.net origin`);
+  } else {
+    parts.push(`published at ${facts.publicOrigin}`);
+  }
+  if (!facts.serve.checked) {
+    parts.push(`could not check \`tailscale serve status\` (${facts.serve.error ?? 'the tailscale binary was not found'})`);
+  } else if (facts.serve.routesGateway) {
+    parts.push(`serve forwards to 127.0.0.1:${facts.gatewayPort}`);
+  } else {
+    problems.push(`serve forwards nothing to 127.0.0.1:${facts.gatewayPort} — \`tailscale serve --bg --https=<port> http://127.0.0.1:${facts.gatewayPort}\``);
+  }
+  const detail = [...parts, ...problems].join('; ');
+  return problems.length > 0 ? { status: 'warn', detail } : { status: 'ok', detail };
+}
+
+/** The host of an origin, or the origin itself when it does not parse. */
+function hostnameOf(origin: string): string {
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return origin;
+  }
 }
 
 /* ------------------------------------------------------------------ *

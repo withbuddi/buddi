@@ -545,6 +545,14 @@ runs first-run headless, and asserts the gateway answers.
 - Plugin install is approved by the owner with the contributions and hosts
   in front of them, and is recorded with the package integrity hash so
   doctor can say if what is on disk is what was approved.
+- Signing in through Tailscale is off until an owner turns it on in Settings
+  → System and names the login that may sign in. It never trusts the proxy's
+  headers on their own: the connection must arrive on loopback from a Serve
+  running on this machine, the forwarded address must be a tailnet address,
+  and the local `tailscaled` must confirm over its own socket that the address
+  belongs to that login. The session it mints is a remote one — 12 hours,
+  Secure cookies, CSRF and Origin checks — and the setting cannot be changed
+  from a Tailscale session, so a stolen device cannot widen access.
 - The version check and the plugin install are the only outbound calls the
   install path makes, both to the npm registry, both through the shared
   transport, both disclosed on the security screen. A cloud backup target

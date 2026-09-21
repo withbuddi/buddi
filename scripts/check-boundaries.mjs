@@ -161,6 +161,10 @@ const HTTP_EXEMPT = [
   /^packages\/install\/src\/launcher\.ts$/,
   /^packages\/install\/src\/upgrade\.ts$/,
   /^packages\/gateway\/src\/web\/service\.ts$/,
+  // The local Tailscale daemon's API, for the same reason: it lives on a Unix
+  // socket in /var/run, there is no origin and so no pool to wedge, and one
+  // request per whois is all it ever sends.
+  /^packages\/gateway\/src\/web\/tailscale\.ts$/,
   // Tests may stand up servers, inject pooling agents, and prove the bug. The
   // rule is about what the *service* does at runtime.
   /\.test\.(ts|tsx|mts|js|mjs)$/,
