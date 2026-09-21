@@ -85,15 +85,28 @@
  * anything longer would become the noise the owner learns to skip.
  */
 import { withdrawOffers, type Queryable } from '@buddi/core';
+import { projectedTranscriptChars, transcriptBudget } from './context-budget.js';
 
 /** Silence longer than this ends a conversation. Three hours: a new sitting. */
 export const IDLE_TIMEOUT_MS = 3 * 60 * 60_000;
 
 /**
- * The most stored transcript one conversation may carry into a new turn.
+ * The floor under the size limit: the least transcript any conversation may
+ * carry into a new turn, whatever its model.
  *
  * 80,000 characters is roughly 20k tokens of history before a word of the
- * answer is thought about. The runaway that motivated this was at 95k.
+ * answer is thought about. The runaway that motivated this was at 95k — a mail
+ * thread, all text, where 80k is a generous amount of *conversation*.
+ *
+ * It is a floor and no longer a cap. A flat 80k was charged to every model
+ * alike, and against a browser session it is nothing: one observation is a
+ * page tree and a screenshot reference, several thousand characters, so a
+ * dozen steps ended the conversation and the agent lost the task it was in the
+ * middle of — while the 200k- or 1M-token window it was talking to stood idle.
+ * The real limit is now a fraction of the bound model's window
+ * (`surfaces/context-budget.ts`, `@buddi/runtime`'s `contextWindowTokens`),
+ * measured against the *projected* transcript rather than the stored one,
+ * because spent observations are reduced to a line before they are sent.
  */
 export const MAX_TRANSCRIPT_CHARS = 80_000;
 
@@ -108,6 +121,13 @@ export interface ConversationVitals {
   lastActivityAt: Date | null;
   /** Total characters of stored message content. */
   chars: number;
+  /**
+   * What those messages cost the model once spent observations are reduced to
+   * a line each — the number the size rule is really about. Absent when nobody
+   * has asked (the stored count is one cheap aggregate; this one reads every
+   * row), and the stored count stands in for it then.
+   */
+  projectedChars?: number | undefined;
 }
 
 export interface LifetimeLimits {
@@ -134,7 +154,9 @@ export function conversationExpiry(
   const maxChars = limits.maxChars ?? MAX_TRANSCRIPT_CHARS;
   const idle = now.getTime() - vitals.lastActivityAt.getTime();
   if (Number.isFinite(idle) && idle > idleMs) return 'idle';
-  if (vitals.chars > maxChars) return 'size';
+  // What is *sent* is what costs: a transcript of 300k stored characters whose
+  // spent observations reduce to 40k has not outgrown anything.
+  if ((vitals.projectedChars ?? vitals.chars) > maxChars) return 'size';
   return null;
 }
 
@@ -245,17 +267,37 @@ export async function conversationForTurn(
   }
   if (input.continuation === true) return { conversationId: current };
 
+  // The limit is the bound model's, floored at the constant above. A caller
+  // that names one (a test, a surface with its own reason) is obeyed as is.
+  const budget = input.maxChars === undefined
+    ? await transcriptBudget(pool, current).catch(() => null)
+    : null;
+  const maxChars = input.maxChars ?? budget?.maxChars ?? MAX_TRANSCRIPT_CHARS;
+
   let reason: LifetimeReason | null = null;
   let vitals: ConversationVitals = { messages: 0, lastActivityAt: null, chars: 0 };
   try {
     vitals = await readVitals(pool, current);
     reason = conversationExpiry(vitals, input.now, {
       ...(input.idleMs === undefined ? {} : { idleMs: input.idleMs }),
-      ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+      maxChars,
     });
   } catch (err) {
     input.log?.(`conversation lifetime: reading ${current} failed: ${errorText(err)}`);
     return { conversationId: current };
+  }
+  // The stored count said it is over. That count includes page trees nobody
+  // sends any more, so the decision is taken again on what is actually
+  // projected — the cheap aggregate only decided whether to look.
+  if (reason === 'size') {
+    const projected = await projectedTranscriptChars(pool, current).catch(() => null);
+    if (projected !== null) {
+      vitals = { ...vitals, projectedChars: projected };
+      reason = conversationExpiry(vitals, input.now, {
+        ...(input.idleMs === undefined ? {} : { idleMs: input.idleMs }),
+        maxChars,
+      });
+    }
   }
   if (reason === null) return { conversationId: current };
 
@@ -269,9 +311,15 @@ export async function conversationForTurn(
   }
 
   const conversationId = await input.start({ previousConversationId: current, reason });
+  // One line, with the reason and both sizes against the limit that was
+  // applied: a conversation ending is a loss of context, and a loss nobody
+  // can see in the log is a loss nobody can argue with.
   input.log?.(
     `conversation lifetime: ${current} ended (${reason}: ${vitals.messages} messages, ` +
-      `${vitals.chars} chars) — this turn runs in ${conversationId}`,
+      `${vitals.chars} stored chars, ` +
+      `${vitals.projectedChars ?? vitals.chars} projected, limit ${maxChars}` +
+      `${budget?.model ? ` for ${budget.model} (${budget.windowTokens} tokens)` : ''}` +
+      `) — this turn runs in ${conversationId}`,
   );
   return {
     conversationId,

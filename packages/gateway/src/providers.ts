@@ -5,7 +5,18 @@ import { z } from 'zod';
 
 const names = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'] as const;
 const providerSchema = z.enum(['anthropic', 'openai']);
-const configSchema = z.object({ credentialKind: z.enum(['auto', 'api-key', 'subscription-token']), defaultModel: z.string().trim().min(1).max(150) }).strict();
+/**
+ * `contextWindowTokens` is the owner saying what this provider's models can
+ * hold, when they know better than the runtime's table — a locally served
+ * model holds whatever `num_ctx` the host was started with, under the same
+ * name either way. Absent leaves the table in charge, which is the answer for
+ * everyone who never touches it. The bounds match the column's check.
+ */
+const configSchema = z.object({
+  credentialKind: z.enum(['auto', 'api-key', 'subscription-token']),
+  defaultModel: z.string().trim().min(1).max(150),
+  contextWindowTokens: z.number().int().min(8_000).max(2_000_000).nullable().optional(),
+}).strict();
 const credentialSchema = z.object({ value: z.string().trim().min(1).max(16384) }).strict();
 type Queryable = { query(sql: string, params?: any[]): Promise<{ rows: any[] }> };
 export type ProviderTest = { state: 'connected' | 'authentication-error' | 'rate-limited' | 'unavailable'; message: string; checkedAt: string };
@@ -16,6 +27,8 @@ export class ProviderSettings {
   readonly vault: Vault | undefined;
   #tests = new Map<string, ProviderTest>();
   #sources = new Map<string, string>();
+  /** The owner's context-window override per provider, or nothing. */
+  #windows = new Map<string, number>();
   #tail: Promise<unknown> = Promise.resolve();
   #testing = new Set<string>();
   #revision = 0;
@@ -26,7 +39,7 @@ export class ProviderSettings {
   async load(): Promise<void> {
     const env = { ...this.deps.env };
     const sources = new Map(this.#sources);
-    const { rows: configs } = await this.deps.pool.query('select provider, credential_kind, default_model from core.provider_settings');
+    const { rows: configs } = await this.deps.pool.query('select provider, credential_kind, default_model, context_window_tokens from core.provider_settings');
     const { rows: credentials } = await this.deps.pool.query('select name, removed from core.provider_credential_state');
     for (const name of names) {
       if (credentials.some(row => row.name === name && row.removed)) {
@@ -40,7 +53,9 @@ export class ProviderSettings {
         delete env[name]; sources.set(name, 'locked or unavailable');
       }
     }
+    const windows = new Map<string, number>();
     for (const row of configs) {
+      if (typeof row.context_window_tokens === 'number') windows.set(row.provider, row.context_window_tokens);
       if (row.provider === 'anthropic') {
         env.BUDDI_ANTHROPIC_CREDENTIAL_KIND = row.credential_kind;
         env.BUDDI_MODEL = row.default_model;
@@ -50,6 +65,7 @@ export class ProviderSettings {
       if (env[name] === undefined) delete this.deps.env[name]; else this.deps.env[name] = env[name];
     }
     this.#sources = sources;
+    this.#windows = windows;
     this.#revision++;
     this.deps.reload();
   }
@@ -57,6 +73,7 @@ export class ProviderSettings {
     return { vault: { kind: this.vault?.kind ?? 'none', ...vaultState({ env: this.deps.env }) },
       providers: modelCatalogue(this.deps.env).map(p => ({ ...p,
         credentialKind: p.kind === 'anthropic' ? this.deps.env.BUDDI_ANTHROPIC_CREDENTIAL_KIND ?? 'auto' : 'api-key',
+        contextWindowTokens: this.#windows.get(p.kind) ?? null,
         activeCredential: providerFromEnv(this.deps.env, undefined, p.kind).credential.env,
         credentials: names.filter(name => p.kind === 'openai' ? name === 'OPENAI_API_KEY' : name !== 'OPENAI_API_KEY').map(name => ({
           name, configured: !!this.deps.env[name], source: this.#sources.get(name) ?? 'missing',
@@ -71,7 +88,7 @@ export class ProviderSettings {
     if (!kind.success || !config.success || (provider === 'openai' && config.data.credentialKind !== 'api-key')) throw new ProviderSettingsError(400, 'Invalid provider settings.');
     if (modelProblem(kind.data, config.data.defaultModel)) throw new ProviderSettingsError(400, 'Model does not belong to this provider.');
     return this.#serial(async () => {
-      await this.deps.pool.query('insert into core.provider_settings (provider, credential_kind, default_model) values ($1,$2,$3) on conflict (provider) do update set credential_kind=$2, default_model=$3, updated_at=now()', [provider, config.data.credentialKind, config.data.defaultModel]);
+      await this.deps.pool.query('insert into core.provider_settings (provider, credential_kind, default_model, context_window_tokens) values ($1,$2,$3,$4) on conflict (provider) do update set credential_kind=$2, default_model=$3, context_window_tokens=$4, updated_at=now()', [provider, config.data.credentialKind, config.data.defaultModel, config.data.contextWindowTokens ?? null]);
       this.#tests.delete(provider); await this.load(); return this.view();
     });
   }

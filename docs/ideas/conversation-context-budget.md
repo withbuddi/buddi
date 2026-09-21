@@ -1,7 +1,8 @@
 # Conversation context budget follows the model, not a fixed cap
 
-Status: Proposed
+Status: Accepted
 Captured: 2026-09-21
+Built on branch `context-budget` (2026-09-21).
 
 ## Problem / opportunity
 
@@ -64,3 +65,36 @@ line when the projection drops turns, so the loss becomes visible.
 ## Follow-up captured 2026-09-21
 
 A browser session ends the conversation (the rollover rule), and what the agent learned in it is lost unless it wrote it down: the Finance Advisor read a live balance from PNC, recorded only the transaction, and the next chat answered from stale ledger balances. Two fixes: the finance plugin instructs the advisor to record an observed balance with set_balance before answering; buddi writes a short handoff of what was learned into the fresh conversation the rollover starts.
+
+## What was built (branch `context-budget`)
+
+The open questions, answered by the code:
+
+- **Where 80k was enforced.** Not in the projection at all: in
+  `packages/gateway/src/surfaces/conversation-lifetime.ts`, as
+  `MAX_TRANSCRIPT_CHARS`, the *size* axis of the rollover rule. The projection
+  has its own cap, but only groups pass one. So a browser conversation was not
+  losing its oldest turns — it was **ending**, and the agent started again in a
+  fresh transcript. `MAX_TRANSCRIPT_CHARS` is now a floor, and the rationale is
+  written next to it.
+- **Do the adapters know the windows?** No, and no provider serves them over
+  the wire in a usable shape. `packages/runtime/src/context-window.ts` holds
+  the table (Claude 5 and 4.x, GPT-5 and the o-series, common local models by
+  name prefix; unknown → 128k), with an owner override per provider in
+  `core.provider_settings.context_window_tokens` for locally served models
+  whose window is whatever `num_ctx` the host was started with. The limit is
+  60% of the window, at 3.6 characters per token.
+- **Is the cap protecting cost?** Partly — the runaway that motivated it was a
+  mail thread charged 64k tokens a turn — which is why the share is 60% and
+  the override sits with the model choice.
+- **Is it mostly observations?** Yes. `compactObservations` in
+  `packages/runtime/src/projection.ts` reduces every `browser.act` /
+  `browser.status` / `computer` result older than the last two to one line
+  (tool, action, title, URL, ok/failed). The transcript on disk keeps them
+  whole, and the rollover now counts the **projected** size, so the compaction
+  buys real room rather than hiding the cost.
+- **When a conversation does end**, every size rollover carries a note —
+  the task, the last thing asked, the agent's last words, the pages if any —
+  under the hidden speaker the browser handoff already used
+  (`surfaces/browser-handoff.ts`). Idle rollovers are unchanged. The rollover
+  itself logs one line with the reason, both sizes and the limit applied.

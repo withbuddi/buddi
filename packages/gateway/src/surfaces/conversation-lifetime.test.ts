@@ -214,3 +214,110 @@ describe('reading the vitals', () => {
     });
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * The budget follows the model, and is measured on what is sent
+ * ------------------------------------------------------------------ */
+
+describe('the size rule against a projection', () => {
+  it('reads the projected size when there is one, not the stored rows', () => {
+    // 300k characters of stored page trees that reduce to 40k when sent is a
+    // conversation that has outgrown nothing.
+    expect(conversationExpiry(vitals({ chars: 300_000, projectedChars: 40_000 }), NOW)).toBeNull();
+    expect(conversationExpiry(vitals({ chars: 300_000, projectedChars: 300_000 }), NOW)).toBe('size');
+  });
+
+  it('falls back to the stored count when nobody has projected it', () => {
+    expect(conversationExpiry(vitals({ chars: 95_221 }), NOW)).toBe('size');
+  });
+});
+
+/**
+ * A pool that answers the three questions `conversationForTurn` now asks: the
+ * vitals, the model binding, and the stored turns.
+ */
+function modelPool(over: {
+  chars?: number;
+  model?: string;
+  kind?: string;
+  rows?: Array<{ role: string; content: unknown }>;
+} = {}): Queryable & { lines: string[] } {
+  const v = vitals({ chars: over.chars ?? 95_221, messages: 65 });
+  return {
+    lines: [],
+    query: vi.fn(async (sql: string): Promise<{ rows: Row[] }> => {
+      const text = sql.replace(/\s+/g, ' ').trim();
+      if (text.startsWith('select coalesce(count(m.id), 0) as messages')) {
+        return { rows: [{ messages: v.messages, last_at: v.lastActivityAt, chars: v.chars }] };
+      }
+      if (text.startsWith('select b.model as model')) {
+        return over.model === undefined
+          ? { rows: [] }
+          : { rows: [{ model: over.model, kind: over.kind ?? 'anthropic', override: null }] };
+      }
+      if (text.startsWith('select role, content from core.messages')) return { rows: over.rows ?? [] };
+      if (text.startsWith('update core.offers')) return { rows: [] };
+      throw new Error(`unexpected sql: ${text}`);
+    }),
+  } as unknown as Queryable & { lines: string[] };
+}
+
+describe('the size limit a conversation is held to', () => {
+  const start = vi.fn(async () => 'fresh');
+
+  it('is the bound model\'s window, so a big model keeps a long transcript', async () => {
+    // 95k characters ended a conversation when the cap was flat. Against a
+    // 200k-token window it is a fraction of the budget and nothing happens.
+    const out = await conversationForTurn(modelPool({ model: 'claude-opus-5' }), {
+      current: 'old', start, now: NOW,
+    });
+    expect(out.boundary).toBeUndefined();
+  });
+
+  it('still ends one that is over even that', async () => {
+    const out = await conversationForTurn(
+      modelPool({ model: 'claude-opus-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
+      { current: 'old', start, now: NOW },
+    );
+    expect(out.boundary?.reason).toBe('size');
+  });
+
+  it('keeps the floor when nothing is known about the model', async () => {
+    const out = await conversationForTurn(
+      modelPool({ rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(95_000) }] }] }),
+      { current: 'old', start, now: NOW },
+    );
+    expect(out.boundary?.reason).toBe('size');
+  });
+
+  it('counts the projection: page trees nobody sends do not end a conversation', async () => {
+    // Twelve browser steps: 300k stored, a tenth of that once the spent
+    // observations are a line each. Under the old count this rolled over and
+    // the agent lost its task mid-session.
+    const tree = 'y'.repeat(20_000);
+    const rows = Array.from({ length: 12 }, (_, i) => [
+      { role: 'assistant', content: [{ type: 'tool_use', id: `c${i}`, name: 'browser.act', input: { action: 'click' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${i}`, content: JSON.stringify({ observation: { id: `o${i}`, url: `https://bank/${i}`, title: `P${i}`, tree } }) }] },
+    ]).flat();
+    const out = await conversationForTurn(modelPool({ chars: 300_000, rows }), {
+      current: 'old', start, now: NOW,
+    });
+    expect(out.boundary).toBeUndefined();
+  });
+
+  it('says in the log what ended, why, and against what', async () => {
+    const lines: string[] = [];
+    const out = await conversationForTurn(
+      modelPool({ model: 'claude-opus-5', chars: 900_000, rows: [{ role: 'user', content: [{ type: 'text', text: 'z'.repeat(900_000) }] }] }),
+      { current: 'old', start, now: NOW, log: (line) => lines.push(line) },
+    );
+    expect(out.boundary?.reason).toBe('size');
+    const line = lines.find((l) => l.includes('ended'))!;
+    expect(line).toContain('size');
+    expect(line).toContain('stored chars');
+    expect(line).toContain('projected');
+    expect(line).toContain('limit');
+    expect(line).toContain('claude-opus-5');
+    expect(line.split('\n')).toHaveLength(1);
+  });
+});

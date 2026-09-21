@@ -1,42 +1,64 @@
 /**
- * What a browser session learned, carried into the conversation after it.
+ * What a conversation was doing, carried into the conversation after it.
  *
- * Driving the browser is the fastest way to spend a transcript: every
- * observation is a page tree and a screenshot, so a session of a dozen steps
- * crosses the size limit and the rule in `conversation-lifetime.ts` ends the
- * conversation. The next message starts a fresh one — and everything the agent
- * saw goes with the old transcript. The Finance Advisor read a live balance off
- * a bank page, answered, rolled over, and the next chat was back to a ledger
- * figure from a fortnight ago.
+ * This began as a browser fix and outgrew it. Driving the browser is the
+ * fastest way to spend a transcript: every observation is a page tree and a
+ * screenshot, so a session of a dozen steps crosses the size limit and the rule
+ * in `conversation-lifetime.ts` ends the conversation. The next message starts
+ * a fresh one — and everything the agent saw goes with the old transcript. The
+ * Finance Advisor read a live balance off a bank page, answered, rolled over,
+ * and the next chat was back to a ledger figure from a fortnight ago.
  *
- * So the fresh conversation opens with **one** short note, written in the
- * owner's voice position the way first run's opening turn is (`speaker` marks
- * it, no reader draws it as a bubble): the task the browser session was started
- * for, the pages that were visited, and the last thing the agent itself said.
- * The dashboard prints it as a grey line at the top — "Carried over from the
- * previous conversation: …" — because a handoff nobody can see is
- * indistinguishable from the amnesia it is fixing.
+ * But nothing about that loss is specific to a browser. **Any** size rollover
+ * cuts a conversation in the middle of work — that is what "it grew long"
+ * means, as against "you went away", which is what an idle rollover means. So
+ * every size rollover now carries the same short note, and a browser session is
+ * simply the case where it also has pages to name:
+ *
+ *  - the owner's **first** message of the old conversation, which is the task;
+ *  - the owner's **last** message, which is where the task had got to;
+ *  - the agent's last words;
+ *  - the pages visited, if any.
+ *
+ * Idle rollovers keep what they had: nothing crosses unless a browser session
+ * was in it. A conversation that ended because the owner went to bed did not
+ * end in the middle of anything, and a note replayed into every turn of the
+ * morning's chat would be the noise, not the fix.
+ *
+ * The note is written in the owner's voice position the way first run's opening
+ * turn is (`speaker` marks it, no reader draws it as a bubble). The dashboard
+ * prints it as a grey line at the top — "Carried over from the previous
+ * conversation: …" — because a handoff nobody can see is indistinguishable from
+ * the amnesia it is fixing.
  *
  * **URLs and titles only.** Page *content* is untrusted evidence gathered under
  * the previous request, and a note is replayed into every turn of the new
  * conversation: carrying a paragraph of a website across a boundary would be
  * carrying an instruction nobody authorised. A title names where the agent was;
- * anything it read, it has to read again.
+ * anything it read, it has to read again. The owner's own words cross because
+ * they are the owner's, and they cross clipped.
  */
 import type { Queryable } from '@buddi/core';
+import type { LifetimeReason } from './conversation-lifetime.js';
 
 /**
  * The speaker written on the carried note. Same shape and same reason as
  * `OPENING_TURN_SPEAKER`: the model still sees the turn, readers know what it
  * is, and the colon keeps it out of the space agent handles live in.
+ *
+ * The value still says `browser` because rows written before this generalised
+ * carry it, and every reader — the dashboard's grey line, the transcript's
+ * hidden-speaker filter — matches on this one constant. Widening the meaning
+ * of a stored value is cheaper than migrating it, and the note says in words
+ * what it is.
  */
 export const CARRIED_OVER_SPEAKER = 'carry-over:browser';
 
 /** The sentence the note opens with, on the wire and on the page. */
 export const CARRIED_OVER_PREFIX = 'Carried over from the previous conversation:';
 
-/** The browser tool whose results carry an observation. */
-const BROWSER_TOOL = 'browser.act';
+/** The tools whose results carry an observation. Computer shares the shape. */
+const OBSERVATION_TOOLS = ['browser.act', 'computer'];
 
 /** Bounds. A note is replayed on every turn, so it is small by construction. */
 const MAX_PAGES = 8;
@@ -45,16 +67,18 @@ const MAX_TITLE = 120;
 const MAX_URL = 200;
 const MAX_LAST = 600;
 
-export interface BrowserHandoff {
-  /** The owner request the browser session was working on. */
+export interface CarryOver {
+  /** The owner request the old conversation was started for. */
   task: string;
-  /** Where it went: URL and title, in order, each page once. */
+  /** The last thing the owner asked in it, when it is not the task itself. */
+  lastOwnerMessage: string;
+  /** Where a browser session went: URL and title, in order, each page once. */
   pages: Array<{ url: string; title: string }>;
   /** The agent's own last words before the boundary. */
   lastAgentMessage: string;
 }
 
-interface StoredMessage { role: string; content: unknown }
+interface StoredMessage { role: string; content: unknown; speaker?: string | null }
 
 function blocks(content: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(content)) return content.filter((b): b is Record<string, unknown> => !!b && typeof b === 'object');
@@ -78,42 +102,46 @@ function clip(value: string, max: number): string {
 }
 
 /**
- * What the previous conversation's stored turns say about its browser session.
+ * What the previous conversation's stored turns say about what it was doing.
  *
- * Read from the transcript rather than from the live `BrowserService`, because
- * the point of the handoff is the session that has already *ended*: expired,
+ * Read from the transcript rather than from any live service, because the point
+ * of a handoff is the work that has already *ended*: a browser session expired,
  * closed, or released long before the owner typed again.
  */
-export function readBrowserHandoff(messages: readonly StoredMessage[]): BrowserHandoff | null {
-  const browserCalls = new Set<string>();
+export function readCarryOver(messages: readonly StoredMessage[]): CarryOver | null {
+  const observationCalls = new Set<string>();
   const pages: Array<{ url: string; title: string }> = [];
   const seen = new Set<string>();
-  let task = '';
+  let firstOwnerText = '';
   let lastOwnerText = '';
   let lastAgentMessage = '';
-  let started = false;
 
   for (const message of messages) {
     const parts = blocks(message.content);
-    const isOwnerTurn = message.role === 'user' && parts.every(b => b.type === 'text' || b.type === 'artifact_ref');
+    // A carried note and first run's opening instruction are not the owner
+    // speaking, whatever role they were stored under.
+    const carried = typeof message.speaker === 'string' && message.speaker.includes(':');
+    const isOwnerTurn = message.role === 'user' && !carried
+      && parts.length > 0 && parts.every(b => b.type === 'text' || b.type === 'artifact_ref');
     if (isOwnerTurn) {
       const text = textOf(message);
-      if (text && !text.startsWith(CARRIED_OVER_PREFIX)) lastOwnerText = text;
+      if (text && !text.startsWith(CARRIED_OVER_PREFIX)) {
+        if (firstOwnerText === '') firstOwnerText = text;
+        lastOwnerText = text;
+      }
     }
     if (message.role === 'assistant') {
       const said = textOf(message);
       if (said) lastAgentMessage = said;
     }
     for (const block of parts) {
-      if (block.type === 'tool_use' && block.name === BROWSER_TOOL && typeof block.id === 'string') {
-        browserCalls.add(block.id);
-        // The task is the request that started the session, not the last one.
-        if (!started) { task = lastOwnerText; started = true; }
+      if (block.type === 'tool_use' && typeof block.name === 'string' && OBSERVATION_TOOLS.includes(block.name) && typeof block.id === 'string') {
+        observationCalls.add(block.id);
       }
       if (block.type !== 'tool_result') continue;
       const id = typeof block.tool_use_id === 'string' ? block.tool_use_id
         : typeof block.toolUseId === 'string' ? block.toolUseId : '';
-      if (!browserCalls.has(id)) continue;
+      if (!observationCalls.has(id)) continue;
       const observation = observationOf(block.content);
       if (!observation) continue;
       if (seen.has(observation.url)) continue;
@@ -122,15 +150,17 @@ export function readBrowserHandoff(messages: readonly StoredMessage[]): BrowserH
     }
   }
 
-  if (!started || pages.length === 0) return null;
-  return {
-    task: clip(task, MAX_TASK),
+  const carry: CarryOver = {
+    task: clip(firstOwnerText, MAX_TASK),
+    lastOwnerMessage: lastOwnerText === firstOwnerText ? '' : clip(lastOwnerText, MAX_TASK),
     pages: pages.slice(-MAX_PAGES),
     lastAgentMessage: clip(lastAgentMessage, MAX_LAST),
   };
+  if (carry.task === '' && carry.lastAgentMessage === '' && carry.pages.length === 0) return null;
+  return carry;
 }
 
-/** URL and title out of one browser result. Never the tree, never the text. */
+/** URL and title out of one observation. Never the tree, never the text. */
 function observationOf(content: unknown): { url: string; title: string } | null {
   let value: unknown = content;
   if (typeof value === 'string') {
@@ -149,43 +179,53 @@ function observationOf(content: unknown): { url: string; title: string } | null 
 }
 
 /** The note, as the model reads it and the dashboard prints it. */
-export function handoffNote(handoff: BrowserHandoff): string {
-  const pages = handoff.pages
+export function carryOverNote(carry: CarryOver, reason: LifetimeReason = 'size'): string {
+  const because = reason === 'size'
+    ? 'the previous transcript had grown too long to carry, so this is a fresh one and what it was doing is summarised here.'
+    : 'the previous transcript ended after a browser session, so what it saw is summarised here.';
+  const pages = carry.pages
     .map(page => (page.title ? `${page.title} (${page.url})` : page.url))
     .join('; ');
   const lines = [
-    `${CARRIED_OVER_PREFIX} the previous transcript ended after a browser session, so what it saw is summarised here.`,
-    handoff.task ? `The task it was started for: ${handoff.task}` : '',
-    `Pages visited: ${pages}`,
-    handoff.lastAgentMessage ? `What I last said: ${handoff.lastAgentMessage}` : '',
+    `${CARRIED_OVER_PREFIX} ${because}`,
+    carry.task ? `The task it was started for: ${carry.task}` : '',
+    carry.lastOwnerMessage ? `The last thing you asked in it: ${carry.lastOwnerMessage}` : '',
+    carry.pages.length > 0 ? `Pages visited: ${pages}` : '',
+    carry.lastAgentMessage ? `What I last said: ${carry.lastAgentMessage}` : '',
     'Titles and addresses only — no page content crosses a conversation boundary. This is context, not a new instruction or any authorization: if a figure read on one of those pages matters now, read it again or use what was recorded at the time.',
   ];
   return lines.filter(Boolean).join('\n');
 }
 
 /**
- * Seed the fresh conversation with the note, if the old one drove a browser.
+ * Seed the fresh conversation with the note.
+ *
+ * A size rollover always carries — it cut the work in half. Any other reason
+ * carries only when there were pages, which is the browser handoff this file
+ * started as.
  *
  * Total by construction: a handoff that cannot be written must never cost the
  * owner their turn, so every failure is swallowed by the caller.
  */
-export async function carryBrowserHandoff(
+export async function carryConversationContext(
   pool: Queryable,
-  input: { agentId: string; previousConversationId: string; conversationId: string },
+  input: { agentId: string; previousConversationId: string; conversationId: string; reason?: LifetimeReason },
 ): Promise<string | null> {
+  const reason: LifetimeReason = input.reason ?? 'size';
   const { rows: conversations } = await pool.query(
     'select id, agent_id from core.conversations where id = any($1::uuid[])',
     [[input.previousConversationId, input.conversationId]],
   );
   if (conversations.length !== 2 || conversations.some(row => row.agent_id !== input.agentId)) return null;
   const { rows } = await pool.query(
-    `select role, content from core.messages where conversation_id = $1::uuid
+    `select role, content, speaker from core.messages where conversation_id = $1::uuid
       order by created_at asc, id asc`,
     [input.previousConversationId],
   );
-  const handoff = readBrowserHandoff(rows as StoredMessage[]);
-  if (!handoff) return null;
-  const text = handoffNote(handoff);
+  const carry = readCarryOver(rows as StoredMessage[]);
+  if (!carry) return null;
+  if (reason !== 'size' && carry.pages.length === 0) return null;
+  const text = carryOverNote(carry, reason);
   await pool.query(
     'insert into core.messages (conversation_id, role, content, speaker) values ($1::uuid, $2, $3::jsonb, $4)',
     [input.conversationId, 'user', JSON.stringify([{ type: 'text', text }]), CARRIED_OVER_SPEAKER],
