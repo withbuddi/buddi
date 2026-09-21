@@ -91,7 +91,13 @@ export const Composer = forwardRef<ComposerHandle, {
   onOpenFile?: (attachment: AttachmentBlock) => void;
   /** In a room: who can be addressed with `@`. Typing `@` offers them. */
   mentions?: Array<{ handle: string; name: string }>;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions }, ref) {
+  /**
+   * What the owner said in this conversation, newest first. Up walks back
+   * through it, the way a shell does. The page reads it off the transcript it
+   * already holds; the composer never asks for it.
+   */
+  history?: string[];
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [focused, setFocused] = useState(false);
@@ -126,6 +132,45 @@ export const Composer = forwardRef<ComposerHandle, {
       node.setSelectionRange(at, at);
       resize();
     });
+  };
+
+  /*
+   * Walking back through what the owner already said.
+   *
+   * `recalled` is how far back we are, -1 for "not recalling", and `stashed`
+   * is what was in the box when the walk began, so coming forward past the
+   * newest message gives the owner their own half-typed line back rather than
+   * an empty field. The walk only starts from an empty box or from the entry
+   * it put there itself: the moment the owner edits a recalled line it is
+   * theirs, and Up goes back to moving the caret.
+   */
+  const past = history ?? [];
+  const [recalled, setRecalled] = useState(-1);
+  const stashed = useRef('');
+
+  /** Replace what is in the box and leave the caret at the end of it. */
+  const put = (next: string): void => {
+    setText(next);
+    setMentionAt(null);
+    const node = area.current;
+    if (node) {
+      node.value = next;
+      node.setSelectionRange(next.length, next.length);
+    }
+    window.requestAnimationFrame(resize);
+  };
+
+  /** Up only recalls from the first line; otherwise it is a caret key. */
+  const onFirstLine = (node: HTMLTextAreaElement): boolean =>
+    !node.value.slice(0, node.selectionStart ?? node.value.length).includes('\n');
+
+  /** The box holds nothing of the owner's own, so a recall costs them nothing. */
+  const freeToRecall = (): boolean => text === '' || (recalled >= 0 && text === past[recalled]);
+
+  const stopRecalling = (): void => {
+    if (recalled < 0) return;
+    setRecalled(-1);
+    put(stashed.current);
   };
 
   const uploading = attachments.some((attachment) => attachment.state === 'uploading');
@@ -229,6 +274,8 @@ export const Composer = forwardRef<ComposerHandle, {
       .map((attachment) => attachment.uploaded as UploadedAttachment);
     onSend(text.trim(), ready);
     attachments.forEach(release);
+    setRecalled(-1);
+    stashed.current = '';
     setText('');
     setAttachments([]);
     window.requestAnimationFrame(resize);
@@ -241,6 +288,36 @@ export const Composer = forwardRef<ComposerHandle, {
       if (event.key === 'ArrowUp') { event.preventDefault(); setMentionIndex((i) => (i - 1 + offered.length) % offered.length); return; }
       if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); completeMention(offered[mentionIndex]!.handle); return; }
       if (event.key === 'Escape') { event.preventDefault(); setMentionAt(null); return; }
+    }
+    /*
+     * The shell's bargain: Up walks back through what was said, Down comes
+     * forward again, and past the newest the owner gets their draft back.
+     * Every guard here is about giving the arrows back the moment they are
+     * wanted for the caret instead.
+     */
+    if (event.key === 'ArrowUp' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      const node = event.currentTarget;
+      if (past.length > 0 && recalled + 1 < past.length && onFirstLine(node) && freeToRecall()) {
+        event.preventDefault();
+        if (recalled < 0) stashed.current = text;
+        setRecalled(recalled + 1);
+        put(past[recalled + 1]!);
+        return;
+      }
+    }
+    if (event.key === 'ArrowDown' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+      if (recalled >= 0 && text === past[recalled]) {
+        event.preventDefault();
+        if (recalled === 0) { stopRecalling(); return; }
+        setRecalled(recalled - 1);
+        put(past[recalled - 1]!);
+        return;
+      }
+    }
+    if (event.key === 'Escape' && recalled >= 0) {
+      event.preventDefault();
+      stopRecalling();
+      return;
     }
     // Enter sends; Shift+Enter is a newline. The usual bargain.
     if (event.key === 'Enter' && !event.shiftKey) {
