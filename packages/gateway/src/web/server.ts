@@ -321,6 +321,15 @@ export function createWebApp(deps: WebServerDeps): Server {
   const sessions = new SessionStore(deps.sessionTtlMs ?? {});
   const spent = new SpentTickets();
   const limiter = new RateLimiter();
+  /*
+   * Pairing has a budget of its own, and it is spent per session rather than
+   * per address. On loopback every client shares one remote key, so a stale
+   * tab or any other local process failing to sign in would otherwise have
+   * spent the owner's pairing budget before their first attempt. Five tries
+   * in five minutes, never touched by the sign-in limiter above; the pending
+   * pair in `extension.ts` keeps its own five-attempt limit on the code.
+   */
+  const pairLimiter = new RateLimiter(5, 5 * 60_000);
   const assetsDir = deps.assetsDir ?? webAssetsDir();
   const log = deps.log ?? ((line: string) => console.error(line));
   const extension = deps.extension ?? extensionEndpoint(deps.env ?? process.env, log);
@@ -1060,13 +1069,13 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (method !== 'POST') return sendEmpty(res, 405);
     if (path === '/api/extension/pair') {
-      // A six-digit code is worth guessing at scale, so a wrong one costs the
-      // same budget a failed sign-in does.
-      const pairKey = remoteKey(req);
-      if (limiter.blocked(pairKey, now)) return sendEmpty(res, 429);
+      // A six-digit code is worth guessing at scale, so a wrong one costs a
+      // budget — this session's pairing budget, not the shared sign-in one.
+      const pairKey = session.id;
+      if (pairLimiter.blocked(pairKey, now)) return sendEmpty(res, 429);
       const body = await readJsonBody(req) as { code?: unknown } | null;
       const paired = await extension.pair(body?.code);
-      if (paired.status >= 400) limiter.fail(pairKey, now); else limiter.reset(pairKey);
+      if (paired.status >= 400) pairLimiter.fail(pairKey, now); else pairLimiter.reset(pairKey);
       return sendJson(res, paired.status, paired.body);
     }
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
