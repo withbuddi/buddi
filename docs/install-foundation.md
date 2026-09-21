@@ -11,13 +11,36 @@ published to npm. The full contract remains [install.md](install.md).
   copied. Per-platform Postgres binaries are pinned optional dependencies.
 - **Platform plugins only.** The staged package list is core, runtime, gateway,
   cli, install and the platform tools (artifacts, browser, host, email, memory,
-  web). `tools/finance` is not staged: money is one owner's domain, not
-  something every installation should claim a `finance.*` family for, and it is
-  installed like any other plugin. The gateway therefore resolves that manifest
-  optionally (`packages/gateway/src/plugins/optional-finance.ts`): a checkout
-  registers it exactly as before, a packaged install has no such module and no
-  such family, and an agent file granting `finance.*` is refused by the loader
-  with the same sentence it uses for any other missing plugin.
+  web). `finance` is not staged, is not compiled in anywhere, and no longer
+  lives in this tree at all — it is its own repository, `buddi-plugins`:
+  money is one owner's domain, not something every installation should claim a
+  `finance.*` family for, so it is installed like any other plugin. A gateway
+  that has not been given it — packaged or checkout — has no `finance.*`
+  family, and an agent file granting one is refused with the same sentence core
+  uses for any other tool no installed plugin provides — fail-closed, and for
+  the whole catalog, which is what the note below is about.
+
+  **Migrating a checkout whose agents grant `finance.*`.** Finance used to be
+  registered by the composition root wherever the workspace had it, so in a
+  checkout it was simply there. It is not any more, and the package is not in
+  this repository either. Build it in the `buddi-plugins` checkout and, before
+  the next restart, run `buddi plugins install <path>/buddi-plugins/finance` —
+  a directory source, so
+  it stages the package you already have, imports it once for the plan, and
+  records it; nothing is fetched and no hash has to be typed back. The
+  `finance` schema and everything in it are untouched by this: the plugin
+  claims the schema it already owns. `buddi plugins install` builds no agent
+  catalog, so it still works in a checkout that is already in the state below.
+
+  Do it before the restart, because the catalog is fail-closed and it is closed
+  for the whole catalog, not for one agent: a grant naming a tool nobody
+  registered raises `agent "credit-coach" declares tool "finance.*", which
+  matches no registered tool …`, and `loadAgentCatalog` refuses to produce a
+  catalog at all. A gateway in that state does not start, and `buddi doctor`'s
+  model-credential row fails with the same sentence, so "the rest of buddi
+  keeps running" is not what happens — the whole installation waits until
+  either the plugin is installed or the grant is taken off those agent files.
+  Installing it and restarting brings them back unchanged.
 - The packaged `buddi` launcher initializes a platform data directory, an
   installation-specific vault and a private SCRAM-authenticated Postgres cluster.
   The application database role is not a superuser; the administrator credential
@@ -116,6 +139,30 @@ checks the rows, the sequences and the rollback:
 ```sh
 pnpm --filter @buddi/core test -- src/backup
 ```
+
+Installing a plugin from npm lives in `packages/gateway/src/plugins`, and it is
+split at the one line that matters: `stage.ts` fetches, unpacks and reads a
+package **without importing it**, and `approve.ts` is the two approvals, the
+first of which is the first time that package's code runs in the process.
+`spec.ts` decides what the owner typed (a directory, a `.tgz`, an npm spec),
+`npm.ts` is the only place that shells out to npm and is an interface first so
+that no test needs a registry, `claims.ts` compares the package's own `buddi.md`
+with the manifest it turned out to have, `hash.ts` is what `buddi doctor`
+recomputes to say a plugin's files are no longer the ones that were approved,
+and `paths.ts` puts everything under `<data>/plugins` — beside the artifacts and
+the logs, in the directory a backup already covers. The record itself stays in
+core (`packages/core/src/plugins`), now at version 2 with provenance; a version
+1 file still reads, as directory sources with none. Core imports no plugin, and
+`scripts/check-boundaries.mjs` still says so.
+
+Staged dependencies are installed with `--ignore-scripts`, always: a
+`postinstall` is arbitrary code and at that point no approval exists. The
+packages in the tree that *wanted* to run one are named on the approval screen.
+The staged `node_modules/@buddi/core` is replaced by a symlink to the core the
+gateway is running, because a plugin with its own copy would register tools into
+a registry nobody reads. `@buddi/core` is therefore published
+(`publishConfig.access: public`, `files: [dist, migrations]`) and declared as a
+peer dependency by every plugin package.
 
 The release tarball declares exactly one `bin`, `@buddi/install`'s `buddi`
 launcher; `build.mjs` strips `bin` from every other staged workspace package so
@@ -222,6 +269,15 @@ not to run one.
   review before publication; passing these tests is not production certification.
 - Postgres major upgrades fail closed and require a future explicit migration
   path. No automatic conversion or deletion of a cluster occurs.
+- **Installing a plugin from a registry needs `npm` on the machine.** The npm
+  beside the running node is preferred and PATH is the fallback; its absence is
+  a plain error, never a hand-rolled tarball fetcher. A directory or a `.tgz`
+  source needs no npm at all.
+- **The recorded `installedHash` is an accounting control, not a sandbox.** It
+  covers the plugin's own files, excluding `node_modules`, so it detects a
+  plugin edited after it was approved and not a tampered dependency. It is not a
+  signature and there is no marketplace and no curation: a plugin comes from a
+  name the owner typed, and it runs with everything buddi can do.
 - There is no automatic whole-install rollback here. The phase marker and
   idempotent forward migrations do not implement upgrade/restore recovery.
 - **A required-auth dashboard refuses a link opened from outside the browser's

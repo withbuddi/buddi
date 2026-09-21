@@ -31,6 +31,7 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import {
   contributionOf,
+  isPluginSchemaName,
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
@@ -114,7 +115,20 @@ export interface PluginProblem {
   /** The record's entry path, so the owner can look at it. */
   entry: string;
   message: string;
+  /**
+   * The record itself, when there is one.
+   *
+   * Doctor checks the approved hash of a plugin that did *not* load as well as
+   * one that did: a plugin whose files were replaced is exactly the plugin
+   * most likely to stop importing, and "it did not load" and "it is not what
+   * you approved" are two different sentences an owner should get together.
+   * Absent for the one problem that is not a plugin: the record file itself.
+   */
+  record?: InstalledPlugin;
 }
+
+/** The name the record file's own problems are reported under. */
+export const RECORD_ITSELF = '(the record itself)';
 
 /** One plugin that loaded: its record and the manifest it produced. */
 export interface LoadedPlugin {
@@ -155,6 +169,19 @@ export function manifestProblem(
   }
   if (m.schema === 'core') {
     return `plugin "${m.name}" claims the "core" schema, which belongs to buddi itself`;
+  }
+  /*
+   * The schema name reaches `create schema`, `set search_path` and, on a
+   * purge, `drop schema`. It is quoted everywhere it does, and it also has to
+   * be a plain identifier: a manifest is a string somebody else wrote, and the
+   * place to refuse one that is not a schema name is before it is recorded as
+   * owning tables.
+   */
+  if (!isPluginSchemaName(m.schema)) {
+    return (
+      `plugin "${m.name}" declares the schema ${JSON.stringify(m.schema)}, which is not a Postgres ` +
+      'identifier: lowercase letters, digits and underscores, not starting with a digit'
+    );
   }
   const reserved = builtInToolNames(env);
   const taken = (m.tools as PluginManifest['tools']).map((t) => t?.name).filter((n) => reserved.has(n));
@@ -212,7 +239,7 @@ export async function loadInstalledPlugins(
       file,
       loaded,
       problems: [
-        { name: '(the record itself)', entry: file, message: err instanceof Error ? err.message : String(err) },
+        { name: RECORD_ITSELF, entry: file, message: err instanceof Error ? err.message : String(err) },
       ],
     };
   }
@@ -220,7 +247,7 @@ export async function loadInstalledPlugins(
   for (const record of contents.plugins) {
     const result = await loadManifest(record.entry, { name: record.name }, env);
     if (!result.ok) {
-      problems.push({ name: record.name, entry: record.entry, message: result.message });
+      problems.push({ name: record.name, entry: record.entry, message: result.message, record });
       continue;
     }
     const owner = schemas.get(result.manifest.schema);
@@ -229,6 +256,7 @@ export async function loadInstalledPlugins(
         name: record.name,
         entry: record.entry,
         message: `it claims the "${result.manifest.schema}" schema, which "${owner}" already owns here`,
+        record,
       });
       continue;
     }
@@ -274,6 +302,34 @@ export function adoptPlugins(env: NodeJS.ProcessEnv, plugins: LoadedPlugins): vo
   adopted = { env, plugins };
 }
 
+/**
+ * A plugin that will not migrate is a plugin that did not load.
+ *
+ * It is moved out of `loaded` and into `problems`, which is the same place an
+ * entry that threw at import lands: `installedManifests` stops offering it for
+ * the rest of this run, so nothing registers its tools against a schema that
+ * is not there, and `pluginLoadReport` — what the Plugins page and doctor read
+ * — says why. `docs/install.md` §7: one plugin never stops the gateway.
+ */
+export function demoteToLoadFailure(
+  name: string,
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const plugins = adoptedPlugins(env);
+  if (plugins === undefined) return;
+  const failed = plugins.loaded.find((p) => p.record.name === name);
+  if (failed === undefined) return;
+  adoptPlugins(env, {
+    file: plugins.file,
+    loaded: plugins.loaded.filter((p) => p !== failed),
+    problems: [
+      ...plugins.problems,
+      { name, entry: failed.record.entry, message, record: failed.record },
+    ],
+  });
+}
+
 /** Forget what was adopted. Tests only. */
 export function resetAdoptedPlugins(): void {
   adopted = undefined;
@@ -282,4 +338,37 @@ export function resetAdoptedPlugins(): void {
 /** The directory a `directory` source points at, resolved and checked. */
 export function resolvePluginDirectory(dir: string, cwd = process.cwd()): string {
   return path.resolve(cwd, dir);
+}
+
+/** One installed plugin that did not load, as the API and doctor report it. */
+export interface PluginLoadFailure {
+  name: string;
+  /** From the record, since the manifest is exactly what could not be read. */
+  version: string;
+  error: string;
+}
+
+/**
+ * What failed to load, for the API and the doctor.
+ *
+ * Reads what was adopted at start rather than importing anything: by the time
+ * anybody asks, the imports have happened, and re-importing a plugin whose
+ * top-level code throws to answer a page request would run it again. A process
+ * that never adopted (a unit test, a one-shot command) gets an empty list,
+ * which is the honest answer for a process that never read the record.
+ */
+export function pluginLoadReport(env: NodeJS.ProcessEnv = process.env): PluginLoadFailure[] {
+  const plugins = adoptedPlugins(env);
+  if (plugins === undefined) return [];
+  const versions = new Map<string, string>();
+  try {
+    for (const record of readPluginsFile(plugins.file).plugins) versions.set(record.name, record.version);
+  } catch {
+    // The record itself is one of the problems below; it is reported there.
+  }
+  return plugins.problems.map((problem) => ({
+    name: problem.name,
+    version: versions.get(problem.name) ?? '?',
+    error: problem.message,
+  }));
 }

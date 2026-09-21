@@ -56,6 +56,13 @@ export interface DelegateAgent {
   /** How the owner names it: `@credo`. Returned so the caller can quote it. */
   handle: string;
   name: string;
+  /**
+   * Set when a tool family this agent was granted is not installed here. It
+   * holds no tools and may not take a turn, so it may not be delegated to
+   * either: a colleague that cannot do the work must refuse where the asking
+   * agent can read why, not answer emptily.
+   */
+  heldBack?: { message: string };
   definition(now: Date, timezone?: string): AgentDefinition;
 }
 
@@ -196,6 +203,12 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         throw new Error(
           `delegation refused: unknown agent "${input.agent}" ` +
             `(installed: ${catalog.list().map((a) => a.id).join(', ') || 'none'})`,
+        );
+      }
+
+      if (target.heldBack) {
+        throw new Error(
+          `delegation refused: "${target.id}" cannot run here — ${target.heldBack.message}`,
         );
       }
 

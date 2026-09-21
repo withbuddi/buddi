@@ -32,10 +32,11 @@
  *    left pending for ever.
  */
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import {
   cancelJob,
   decideApproval,
+  isPluginSchemaName,
   listJobs,
   listMissions,
   listPendingActions,
@@ -52,6 +53,7 @@ import type { Pool } from 'pg';
 import { agentSearchPath, loadGatewayCatalog } from '../agents/catalog.js';
 import { writeFilesAtomic } from '../agents/platform-files.js';
 import { loadManifest, recordFile } from './load.js';
+import { packageDirOf } from './paths.js';
 
 export class UninstallRefusal extends Error {
   override readonly name = 'UninstallRefusal';
@@ -296,10 +298,32 @@ export async function applyUninstall(
       : `${plan.record.name} was not in ${file}`,
   );
 
+  // The files, for a plugin whose files are ours. A directory source is the
+  // developer's own build and is never deleted from under them: buddi did not
+  // put it there and removing it would destroy work, not an installation.
+  if (plan.record.source.kind !== 'directory') {
+    const packageDir = packageDirOf(plan.record, env);
+    if (existsSync(packageDir)) {
+      rmSync(packageDir, { recursive: true, force: true });
+      notes.push(`its package directory ${packageDir} was removed`);
+    }
+  } else {
+    notes.push(`its source directory ${plan.record.source.path} was left where it is; buddi did not put it there`);
+  }
+
   let purged = false;
   if (opts.purge === true) {
     if (!opts.pool) {
       throw new UninstallRefusal('no-database', 'dropping a schema needs the database, and it is not reachable');
+    }
+    // Quoted, and the name was checked against `^[a-z_][a-z0-9_]*$` before it
+    // was ever recorded; both, because this statement destroys data.
+    if (!isPluginSchemaName(plan.record.schema)) {
+      throw new UninstallRefusal(
+        'bad-schema',
+        `the record says ${plan.record.name} owns the schema "${plan.record.schema}", which is not a ` +
+          'schema name. Nothing was dropped; fix the record first.',
+      );
     }
     await opts.pool.query(`drop schema if exists "${plan.record.schema}" cascade`);
     await opts.pool.query('delete from core.migrations where schema = $1', [plan.record.schema]);
@@ -318,4 +342,38 @@ export async function applyUninstall(
     );
   }
   return { notes, purged };
+}
+
+/**
+ * Plan and apply in one call, for the callers that are not a terminal.
+ *
+ * The CLI keeps the two halves apart because printing the plan and then asking
+ * is the whole of its safety story. The API has already shown the page and
+ * taken a confirmation, so it hands in the decision and gets the outcome.
+ */
+export async function uninstallPlugin(
+  name: string,
+  opts: UninstallOptions & { confirm?: string } = {},
+): Promise<{ plan: UninstallPlan; outcome: UninstallOutcome }> {
+  const plan = await planUninstall(name, {
+    ...(opts.pool === undefined ? {} : { pool: opts.pool }),
+    ...(opts.env === undefined ? {} : { env: opts.env }),
+  });
+  /*
+   * The confirmation is required, not merely checked when it happens to be
+   * there. An absent `confirm` used to mean "no confirmation was asked for",
+   * which made the guard optional for every caller that forgot it — and the
+   * thing being guarded is every row the plugin ever stored.
+   */
+  if (opts.purge === true && opts.confirm !== plan.record.name) {
+    throw new UninstallRefusal(
+      'not-confirmed',
+      `dropping ${plan.record.name}'s schema destroys every row in it. Type the plugin's name to ` +
+        `confirm: the name has to be sent back, and ${
+          opts.confirm === undefined ? 'nothing was' : `"${opts.confirm}" was`
+        }.`,
+    );
+  }
+  const outcome = await applyUninstall(plan, opts);
+  return { plan, outcome };
 }

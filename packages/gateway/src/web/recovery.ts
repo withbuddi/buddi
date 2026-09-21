@@ -25,6 +25,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   createVault,
+  describeSource,
   leaveRecovery,
   listToolPermissions,
   pluginsFilePath,
@@ -178,7 +179,7 @@ function pluginsFromArchive(env: NodeJS.ProcessEnv): RecoveryPlugin[] {
     return file.plugins.map((p) => ({
       name: p.name,
       version: p.version,
-      source: p.source.path,
+      source: describeSource(p.source),
       installed: installed.has(p.name),
     }));
   } catch {

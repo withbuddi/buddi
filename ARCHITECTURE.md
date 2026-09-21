@@ -289,8 +289,8 @@ And around the contract:
 
 ## Plugin lifecycle (install, propose, uninstall)
 
-Five plugins are compiled into this build — `finance`, `email`, `memory`, `artifacts`,
-`web` — alongside the gateway's own tool families, which own no schema (the canvas,
+Six plugins are compiled into this build — `email`, `memory`, `artifacts`, `web`,
+`browser`, `host` — alongside the gateway's own tool families, which own no schema (the canvas,
 reminders and schedules, the owner profile, the `platform.*` family, delegation, and the
 per-run families that close over one run's sink: the mission decision, the pending
 question, the offered actions). Both lists are **derived from the registry, never
@@ -1259,7 +1259,8 @@ backlog lives.
 - ✅ **"Every Friday, check my bank accounts → finance recap + advice"** — the **first
   agent, not the last**. It needs no effect tools: every tool is a read over
   plugin-owned data or pure computation, so it ships before the approval machinery
-  exists. Plugin: `packages/tools/finance`, schema `finance` — `accounts` (balance,
+  exists. Plugin: `finance` in the `buddi-plugins` repository (it used to live in
+  this tree, at `packages/tools/finance`), schema `finance` — `accounts` (balance,
   as-of), `recurring_items` (income|charge, amount, cadence, anchor date, account),
   `transactions` (date, amount, category, account, source manual|csv, dedup hash),
   `preferences` (currency, safety floor). Tools: add/list recurring, set balance,
@@ -1302,8 +1303,10 @@ buddi/
                    and the tool families that own no schema (canvas, reminders,
                    schedule, owner, platform, delegation)
     cli/           the `buddi` command: init, doctor, db, service, backup, plugins
-    tools/         plugins — finance, email (IMAP source + SMTP tool), memory,
-                   artifacts, web. They import core; core never imports them
+    tools/         the platform plugins — email (IMAP source + SMTP tool), memory,
+                   artifacts, web, browser, host. They import core; core never
+                   imports them. Domain plugins (finance is the first) live in
+                   their own repositories and are installed, not compiled in
     web/           dashboard UI (React/Vite) — chat, canvas, agent rail, approvals
   examples/
     agents/        the shipped personas (concierge, agent-father) — replaced wholesale

@@ -2570,6 +2570,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 
 /* A box, its label, and enough room between them to hit either. */
 .recovery-check,
+.plugin-check,
 .backup-check {
   display: flex;
   align-items: flex-start;
@@ -2578,7 +2579,58 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   cursor: pointer;
 }
 .recovery-check input,
+.plugin-check input,
 .backup-check input { margin-top: 2px; }
+
+/* Three ways a plugin gets here, as one control: the chosen one is the only
+   one that looks pressed, and what it asks for replaces what the last one did. */
+.plugin-modes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+.plugin-mode {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.plugin-mode:hover { color: var(--text); }
+.plugin-mode[data-chosen='true'] {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Where a packed plugin lands. Dashed while it is empty, because there is
+   nothing in it yet; coloured the moment it is holding or refusing one. */
+.plugin-drop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+.plugin-drop[data-state='over'] { border-color: var(--accent); background: var(--accent-soft); }
+.plugin-drop[data-state='chosen'] { border-style: solid; border-color: var(--accent); }
+.plugin-drop[data-state='refused'] { border-color: var(--critical); }
+.plugin-drop[data-state='refused'] p { color: var(--critical); }
+
+/* The differences between what a package claims and what its manifest does.
+   A plain list: each line is one disagreement, read before "Install anyway". */
+.plugin-drift { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.plugin-drift li { font-size: var(--text-md); }
 
 /* Six words, read out loud and written down: the one thing here worth seeing. */
 .backup-phrase {

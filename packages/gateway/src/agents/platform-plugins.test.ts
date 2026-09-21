@@ -225,7 +225,7 @@ describe('accepting produces a gated action with a preview about access', () => 
     expect(preview).toContain('This gives @gardener your garden tools (2)');
     expect(preview).toContain('garden.water_log — Every watering recorded for a plant, most recent first.');
     // And what it does NOT reach, which is the half a grant list cannot give.
-    expect(preview).toContain('It reaches nothing else — not finance');
+    expect(preview).toContain('It reaches nothing else — not email');
     expect(preview).toContain('when-a-plant-is-dry');
     expect(preview).toContain('this file is YOURS');
   });

@@ -476,11 +476,13 @@ world-touching capability is a plugin, and a plugin can contribute six things:
   the file that appears is yours;
 - a **view descriptor** — data saying how a result is drawn on the dashboard.
 
-Five ship in this repository:
+Four ship in this repository. The first domain plugin, `finance`, does not: it
+lives in its own repository (`buddi-plugins`) and installs like anything else
+you did not write here — money is one owner's domain, not something every
+installation should claim a `finance.*` family for.
 
 | Plugin | Schema | What it gives an agent |
 | --- | --- | --- |
-| `finance` | `finance` | Accounts, recurring charges, transactions and CSV import, receipts, liabilities, credit utilization and payoff, and a deterministic day-by-day cash-flow projection. Six sentinels (floor breach, minimum due, statement closing, stale balance, unmatched receipts, unprocessed files) and three suggested missions. |
 | `email` | `email` | One Gmail account: an IMAP **source** that triages new mail, and `email.send` as a **gated effect tool**. |
 | `memory` | `memory` | Owner preferences (revisioned) and agent-written notes with provenance and expiry, plus keyword recall. No embeddings. |
 | `web` | `web` | The live web, as evidence that keeps its source. `web.search` returns a list of results each with its own site and URL — never a blob of concatenated pages; `web.read` returns one public page as text and needs no key at all; `web.status` says whether search is configured, so an agent can find out *before* promising you something current. All three are `auto`. Everything fetched is untrusted text and is labelled as such, and nothing inside this machine is reachable — loopback, private and cloud-metadata addresses are refused after DNS and on every redirect. The schema holds an audit of what was fetched, never what came back. |
@@ -1167,5 +1169,7 @@ plugin contract), `runtime` (the agent loop and the provider adapters),
 `gateway` (the surfaces: terminal, Telegram, scheduler, dashboard server),
 `web` (the dashboard UI, React + Vite, built to static files), `cli` (the single
 `buddi` binary, plus `init`, `doctor`, `service`, `upgrade` and `backup`), and
-`tools/{finance,email,memory,web,artifacts}` (the plugins). Core never imports a
-tool: delete `packages/tools/finance` and the system still boots.
+`tools/{email,memory,web,artifacts,browser,host}` (the platform plugins). Core
+never imports a tool: delete any of those directories and the system still
+boots. `finance`, the first domain plugin, has already left — it lives in the
+`buddi-plugins` repository and is installed like any other plugin.

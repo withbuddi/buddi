@@ -152,6 +152,19 @@ import {
   verifyBackupRoute,
   type RouteReply,
 } from './backups.js';
+import {
+  approveRoute,
+  listPlugins,
+  pluginJobRoute,
+  receivePluginUpload,
+  rejectRoute,
+  stageRoute,
+  uninstallRoute,
+  updateRoute,
+  uploadRoute,
+  type PluginsDeps,
+  type PluginsEngine,
+} from './plugins.js';
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
@@ -191,6 +204,11 @@ export interface WebServerDeps {
   env?: NodeJS.ProcessEnv | undefined;
   providerSettings?: ProviderSettings;
   providerAccounts?: ProviderAccounts;
+  /**
+   * The plugin engine. Injected only by tests, which fake every one of its
+   * functions; a running gateway resolves the real one from `../plugins/`.
+   */
+  plugins?: PluginsEngine | undefined;
   /**
    * This process's Telegram surface, when it runs one.
    *
@@ -494,6 +512,13 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       log,
     });
+    /** The same, for the plugin routes, plus the pool migrations and a purge need. */
+    const pluginDeps = (): PluginsDeps => ({
+      env: deps.env ?? process.env,
+      log,
+      pool: deps.pool,
+      ...(deps.plugins ? { engine: deps.plugins } : {}),
+    });
     /**
      * May this installation still be restored over from the first-run screen?
      *
@@ -761,6 +786,13 @@ export function createWebApp(deps: WebServerDeps): Server {
           return reply(res, await scheduleRoute(backupDeps(), 'GET'));
         case '/api/backups/passphrase':
           return reply(res, await passphraseRoute(backupDeps(), 'GET'));
+        /*
+         * Plugins: what is installed, what is staged and waiting to be read,
+         * and the trust sentence the page shows above the install field. A
+         * read, and only a read — nothing is fetched by a page loading.
+         */
+        case '/api/plugins':
+          return reply(res, await listPlugins(pluginDeps()));
         case '/api/onboarding':
           return sendJson(res, 200, await readOnboarding(onboardingDeps()));
         /*
@@ -796,6 +828,9 @@ export function createWebApp(deps: WebServerDeps): Server {
 
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (backupJob) return reply(res, await backupJobRoute(backupDeps(), backupJob[1] as string));
+
+      const pluginJob = /^\/api\/plugins\/jobs\/([0-9a-f-]{36})$/i.exec(path);
+      if (pluginJob) return reply(res, pluginJobRoute(pluginDeps(), pluginJob[1] as string));
 
       const conversation = /^\/api\/conversations\/([^/]+)$/.exec(path);
       if (conversation) {
@@ -1036,6 +1071,19 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
+     * A plugin tarball the owner has on their own machine, handed over the
+     * same way a backup archive is: raw bytes, the filename in a header, and
+     * `readJsonBody`'s 64 KB cap never in the way. What lands on disk is
+     * staged exactly like a `.tgz` path they could have typed, and the upload
+     * is deleted once staging has copied it.
+     */
+    if (path === '/api/plugins/upload') {
+      const received = await receivePluginUpload(pluginDeps(), req, first(req.headers['x-filename']));
+      if ('status' in received) return reply(res, received);
+      return reply(res, uploadRoute(pluginDeps(), received));
+    }
+
+    /*
      * The upload is handled before the JSON body is read, and it is the only
      * other route that is: everything else on this server is a small object, and
      * `readJsonBody` caps at 64 KB for exactly that reason. A 20 MB statement
@@ -1207,6 +1255,30 @@ export function createWebApp(deps: WebServerDeps): Server {
      * run in this process when there is not; `backups.ts` is where that fork
      * lives, so the routes here are the gate and nothing else.
      */
+    /*
+     * Plugins.
+     *
+     * Staging is a job because fetching and installing dependencies takes as
+     * long as it takes; approving is separate and carries back the integrity
+     * the owner was shown, so a click can only ever approve the thing that was
+     * read about. `plugins.ts` holds every one of those decisions.
+     */
+    if (path === '/api/plugins/stage') return reply(res, stageRoute(pluginDeps(), body));
+    const stagedApprove = /^\/api\/plugins\/staged\/([A-Za-z0-9._-]{1,128})\/(approve|reject)$/.exec(path);
+    if (stagedApprove) {
+      const id = stagedApprove[1] as string;
+      return reply(res, stagedApprove[2] === 'approve'
+        ? await approveRoute(pluginDeps(), id, body)
+        : rejectRoute(pluginDeps(), id));
+    }
+    const pluginAction = /^\/api\/plugins\/([^/]+)\/(update|uninstall)$/.exec(path);
+    if (pluginAction) {
+      const name = decodeURIComponent(pluginAction[1] as string);
+      return reply(res, pluginAction[2] === 'update'
+        ? updateRoute(pluginDeps(), name, body)
+        : await uninstallRoute(pluginDeps(), name, body));
+    }
+
     if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
     if (path === '/api/backups/verify') return reply(res, await verifyBackupRoute(backupDeps(), body));
     if (path === '/api/backups/restore') {

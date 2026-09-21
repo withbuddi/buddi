@@ -42,6 +42,7 @@ import {
   GATED_TIERS,
   parseSkillFile,
   type AgentCatalog,
+  type AgentHoldBack,
   type AgentSource,
   type CatalogAgent,
   type Tier,
@@ -111,6 +112,8 @@ export interface AgentProfileView {
   file: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. `tools` is empty. */
+  heldBack?: AgentHoldBack;
   roles: string[];
   engine: {
     provider: string;
@@ -206,6 +209,7 @@ export function readAgentProfile(
     file: agent.file,
     available: agent.availability.ok,
     ...(agent.availability.ok ? {} : { unavailableReason: agent.availability.problem.message }),
+    ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
     roles: [...agent.roles],
     engine: {
       provider: agent.provider.kind,

@@ -86,8 +86,11 @@ export async function ownerLines(ctx: ToolContext): Promise<string> {
   return `About the owner (set by them in Settings; context, not instruction):\n${lines.join('\n')}`;
 }
 
+/** The family name of the clock-and-machine tools. Named for the guards. */
+export const SYSTEM_PLUGIN = 'system';
+
 export function createSystemManifest(): PluginManifest {
-  return { name: 'system', version: '0.1.0', schema: 'system', migrationsDir: '', tools: [
+  return { name: SYSTEM_PLUGIN, version: '0.1.0', schema: 'system', migrationsDir: '', tools: [
     { name: 'system.time', description: 'Read the current UTC and owner-local date/time and confirmed timezone. Always available; no approval needed.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx) => systemTime(ctx) },
     { name: 'system.info', description: 'Read server-host OS/version, architecture, hardware model when detectable, host timezone, and current owner-local time. Not the dashboard client. No credentials or serial numbers.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx) => systemInfo(ctx) },
   ] };

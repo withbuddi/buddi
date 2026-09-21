@@ -84,7 +84,20 @@ export async function migrate(
     entries = await readdir(opts.dir);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return [];
+    // A directory that is not there used to be "nothing to do", which is the
+    // one answer it cannot be: a manifest that names a migrations directory is
+    // a plugin saying it owns tables, and the usual way to get here is a path
+    // built wrongly — `new URL(...).pathname` percent-encodes a space, so an
+    // installation under "owner data" or "Application Support" silently
+    // applied no migrations at all and installed a plugin owning an empty
+    // schema. An empty `migrationsDir` is how a plugin says it owns nothing.
+    if (e.code === 'ENOENT') {
+      throw new Error(
+        `migrate: ${schema}: no migrations directory at ${opts.dir} ` +
+          '(a plugin that owns no tables leaves migrationsDir empty)',
+        { cause: err },
+      );
+    }
     throw err;
   }
   let files = entries.filter((f) => f.endsWith('.sql')).sort();

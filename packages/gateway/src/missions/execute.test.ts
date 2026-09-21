@@ -12,7 +12,7 @@ import {
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
-import { manifest as financeManifest } from '@buddi/tool-finance';
+import { fixturePluginManifest } from '../__fixtures__/plugin-manifest.js';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from '../agents/delegation.js';
 import { createReminderManifest, createScheduleManifest } from './reminders.js';
@@ -192,12 +192,12 @@ const occurrence: Occurrence = {
 function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = {}) {
   const db = new FakeDb();
   const registry = new ToolRegistry();
-  registry.register(financeManifest);
+  registry.register(fixturePluginManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
   registry.register(createReminderManifest());
   registry.register(createScheduleManifest());
-  // The finance advisor's file grants agent.delegate, so the registry a mission
+  // A mission agent's file may grant agent.delegate, so the registry a mission
   // runs against must carry it too. It is unbound here: delegation refuses.
   registry.register(createDelegationManifest(registry));
   const ctx: ToolContext = {
@@ -515,7 +515,7 @@ describe('a sentinel wake', () => {
     payload: {
       finding: {
         key: 'finance.floor-breach:2026-10-02',
-        sentinelId: 'finance.cashflow',
+        sentinelId: 'ledger.cashflow',
         severity: 'urgent',
         title: 'Safety floor breaks in 19 days',
         detail: 'Projected minimum 120 EUR on 2026-10-02, floor is 500 EUR.',
@@ -541,7 +541,7 @@ describe('a sentinel wake', () => {
     const first = db.messages[0]?.content as { type: string; text: string }[];
     expect(first[0]?.text).toContain('Verify the finding.');
     expect(first[0]?.text).toContain('Safety floor breaks in 19 days');
-    expect(first[0]?.text).toContain('finance.cashflow');
+    expect(first[0]?.text).toContain('ledger.cashflow');
     expect(first[0]?.text).toContain('"minimum":120');
   });
 });

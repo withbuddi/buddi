@@ -51,10 +51,30 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     expect(catalog.resolve().id).toBe(flagged[0]?.id);
   });
 
-  it('resolves the advisor’s current configured grant in registry order', () => {
+  it('resolves the advisor’s current configured grant in registry order, or holds it back', () => {
     const advisor = catalog.resolve('finance-advisor');
     const grants = parseAgentFile(readFileSync(advisor.file, 'utf8')).frontmatter.tools;
-    const registered = createToolRegistry()
+    const registry = createToolRegistry();
+    const families = new Set(registry.list().map((t) => t.name.split('.')[0]));
+    const missing = grants
+      .map((grant) => grant.split('.')[0]!)
+      .filter((family) => !families.has(family));
+    if (missing.length > 0) {
+      /*
+       * The advisor grants `finance.*` and the finance plugin is installed
+       * like any other plugin now, so on a checkout that has not installed it
+       * the agent is *held back*: listed, toolless, unrunnable, with the
+       * sentence that names what is missing. What must never happen is the
+       * catalog refusing to load, which is what this whole file asserts by
+       * existing.
+       */
+      expect(advisor.tools).toEqual([]);
+      expect(advisor.heldBack?.reason).toBe('missing-plugin');
+      expect(advisor.heldBack?.families).toEqual([...new Set(missing)]);
+      expect(advisor.available).toBe(false);
+      return;
+    }
+    const registered = registry
       .list()
       .map((t) => t.name)
       .filter((name) => grants.some((grant) => grant.endsWith('.*') ? name.startsWith(grant.slice(0, -1)) : name === grant));
@@ -143,6 +163,14 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     const mine = withoutKey.list().filter((a) => a.source !== 'example');
     expect(mine.length).toBeGreaterThan(0);
     for (const summary of mine) {
+      // An agent held back for a plugin this checkout has not installed is
+      // unavailable for that reason and says so; the credential is not its
+      // problem. It is still *listed*, which is the point.
+      if (summary.heldBack !== undefined) {
+        expect(summary.available, summary.id).toBe(false);
+        expect(summary.unavailableReason, summary.id).toBe(summary.heldBack.message);
+        continue;
+      }
       if (summary.providerKind === 'openai') {
         expect(summary.available, summary.id).toBe(false);
         expect(summary.unavailableReason, summary.id).toContain('OPENAI_API_KEY');
@@ -150,9 +178,16 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
         expect(summary.available, summary.id).toBe(true);
       }
     }
-    // And the installation still names a default agent that can actually run.
+    /*
+     * And the installation still *names* a default agent. Whether it can run
+     * is a separate question with two honest answers: it can, or a plugin it
+     * grants is not installed here and it says so. What it may never be is
+     * missing — every surface falls back to this id.
+     */
     const fallback = withoutKey.defaultAgent();
-    expect(withoutKey.list().find((a) => a.id === fallback.id)?.available).toBe(true);
+    const summary = withoutKey.list().find((a) => a.id === fallback.id);
+    expect(summary).toBeDefined();
+    expect(summary?.available === true || summary?.heldBack !== undefined).toBe(true);
   });
 
   it('resolves every agent by its handle as readily as by its id', () => {

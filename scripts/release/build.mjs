@@ -11,8 +11,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 /** The one binary, relative to the package root. */
 const LAUNCHER = 'packages/install/dist/launcher.js';
 const stage = await mkdtemp(path.join(os.tmpdir(), 'buddi-release-'));
-// Platform plugins only. A domain plugin — finance is the first — is the
-// owner's own, installed with `buddi plugins install`, and never in the tarball.
+// Platform plugins only. A domain plugin — finance is the first — is the owner's
+// own: it lives in its own repository (buddi-plugins), is installed with
+// `buddi plugins install`, and is never in the tarball.
 const directories = ['core', 'runtime', 'gateway', 'cli', 'install', 'tools/artifacts', 'tools/browser', 'tools/host', 'tools/email', 'tools/memory', 'tools/web'];
 const packages = [];
 for (const dir of directories) {

@@ -8,6 +8,7 @@
  */
 import type { ViewDescriptor } from './canvas/types';
 import type {
+  AgentHoldBack,
   AgentsResponse,
   ChatConversation,
   ConversationListItem,
@@ -112,22 +113,33 @@ export function post<T>(path: string, body: unknown = {}): Promise<T> {
  * because a header may hold nothing but Latin-1, and because the server uses
  * only its suffix anyway; it never becomes a path.
  */
-export function sendArchive<T>(
+export function sendFile<T>(
   path: string,
   file: File,
-  fields: { passphrase?: string | undefined; confirm?: string | undefined },
+  fallbackName: string,
+  headers: Record<string, string> = {},
 ): Promise<T> {
-  const name = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'backup.tar.gz';
+  const name = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || fallbackName;
   return request<T>(`/api${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
       [CSRF_HEADER]: csrfToken(),
       'X-Filename': name,
-      ...(fields.passphrase ? { 'X-Backup-Passphrase': fields.passphrase } : {}),
-      ...(fields.confirm ? { 'X-Backup-Confirm': fields.confirm } : {}),
+      ...headers,
     },
     body: file,
+  });
+}
+
+export function sendArchive<T>(
+  path: string,
+  file: File,
+  fields: { passphrase?: string | undefined; confirm?: string | undefined },
+): Promise<T> {
+  return sendFile<T>(path, file, 'backup.tar.gz', {
+    ...(fields.passphrase ? { 'X-Backup-Passphrase': fields.passphrase } : {}),
+    ...(fields.confirm ? { 'X-Backup-Confirm': fields.confirm } : {}),
   });
 }
 
@@ -413,6 +425,8 @@ export interface AgentRow {
   delegates: string[];
   /** A shipped example: read-only until Agent Father makes a private copy. */
   isExample: boolean;
+  /** Set when a granted tool family is not installed here; `tools` is empty. */
+  heldBack?: AgentHoldBack;
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
 }
 
@@ -437,6 +451,8 @@ export interface AgentEngine {
   credentialEnv: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. */
+  heldBack?: AgentHoldBack;
   restartRequired: boolean;
 }
 
@@ -520,6 +536,8 @@ export interface AgentProfile {
   file: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. */
+  heldBack?: AgentHoldBack;
   roles: string[];
   engine: {
     provider: string;
@@ -730,6 +748,137 @@ export interface RecoveryView {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Plugins, from `packages/gateway/src/web/plugins.ts`.
+ * ------------------------------------------------------------------ */
+
+/** Where an installed plugin came from. The same three the record keeps. */
+export type PluginSource =
+  | { kind: 'directory'; path: string }
+  | { kind: 'registry'; name: string; version: string; registry?: string }
+  | { kind: 'tarball'; path: string };
+
+/** Where an agent a plugin proposes stands against the owner's own copy. */
+export interface PluginDrift {
+  state:
+    | 'not-accepted'
+    | 'up-to-date'
+    | 'proposal-changed'
+    | 'owner-edited'
+    | 'owner-edited-and-proposal-changed'
+    | 'gone';
+  message: string;
+}
+
+export interface PluginUnlock {
+  id: string;
+  handle: string;
+  drift: PluginDrift;
+}
+
+export interface InstalledPluginView {
+  name: string;
+  version: string;
+  source: PluginSource;
+  publisher?: string;
+  integrity?: string;
+  installedAt: string;
+  contribution: { tools: number; sentinels: number; views: number; agents: number };
+  unlocks: PluginUnlock[];
+  loaded: boolean;
+  /** Why its entry point did not load. Set only when `loaded` is false. */
+  error?: string;
+}
+
+/**
+ * The plan the *first* approval produces.
+ *
+ * `drift` is the list of differences between what the package's prose claims
+ * and what its manifest actually declares. A non-empty one is the whole reason
+ * a second approval exists.
+ */
+export interface PluginPlan {
+  contribution?: unknown;
+  drift: string[];
+  agents: PluginUnlock[];
+}
+
+/** A package fetched and read, but not yet imported or installed. */
+export interface StagedPluginView {
+  id: string;
+  name: string;
+  version: string;
+  source: PluginSource;
+  publisher?: string;
+  integrity?: string;
+  /**
+   * The hash of the unpacked tree — the package, its dependencies, and the
+   * links npm wrote among them. The integrity above says what was fetched;
+   * this says what is on disk, and approving re-checks it.
+   */
+  stagedHash?: string;
+  /** The name of the file the owner uploaded, when this stage came from one. */
+  uploadedName?: string;
+  dependencies: { count: number; withScripts: string[] };
+  /** The package's own words about itself, from its buddi.md. Never checked. */
+  claims: { schema?: string; hosts: string[]; text: string; missing: boolean };
+  /** Lifecycle scripts the package itself declares. */
+  scripts: string[];
+  /** Set when this stage came from an update: what it would replace. */
+  previous?: { name: string; version: string };
+  plan?: PluginPlan;
+  state: 'staged' | 'approved' | 'planned';
+}
+
+/**
+ * A plugin buddi ships with.
+ *
+ * Read-only on the page: nothing installed it and nothing can remove it. It is
+ * here so the list of tools an agent can reach has one place that names all of
+ * them, rather than only the ones the owner added.
+ */
+export interface BuiltInPluginView {
+  name: string;
+  version: string;
+  contribution: { tools: number; sentinels: number; views: number; agents: number };
+  description?: string;
+}
+
+export interface PluginsView {
+  /** Shown above the install field, verbatim, and never paraphrased. */
+  trust: string;
+  installed: InstalledPluginView[];
+  /** Optional while the gateway that sends it is still landing. */
+  builtIn?: BuiltInPluginView[];
+  staged: StagedPluginView[];
+  restartNeeded: boolean;
+  /** True in a developer checkout, where a restart is a command and not a button. */
+  checkout: boolean;
+  /** Set when this build has no plugin engine at all. */
+  unavailable?: string;
+}
+
+export interface PluginJob {
+  id: string;
+  kind: 'stage' | 'update';
+  phase: 'fetching' | 'installing-dependencies' | 'reading' | 'done' | 'failed';
+  error?: string;
+  stagedId?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface PluginApproval {
+  /** Present when the drift still has to be read; absent once it is installed. */
+  plan?: PluginPlan;
+  /** The record that was written. Present only once it is installed. */
+  installed?: { name: string; version: string };
+  restartNeeded?: boolean;
+  /** Migration filenames applied, and why none were when that is the answer. */
+  migrations?: string[];
+  migrationProblem?: string;
+}
+
 export interface EngineChange {
   provider?: string;
   model?: string;
@@ -937,6 +1086,37 @@ export const api = {
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
+  /* ---- plugins ---- */
+  plugins: () => get<PluginsView>('/plugins'),
+  stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),
+  /**
+   * The same stage, from a .tgz on the owner's own machine.
+   *
+   * Sent as the body it is, like a backup archive: the gateway streams it to
+   * disk and stages it from there, so this answers with the same job as
+   * `stagePlugin` and is followed the same way.
+   */
+  uploadPlugin: (file: File) => sendFile<{ job: PluginJob }>('/plugins/upload', file, 'plugin.tgz'),
+  pluginJob: (id: string) => get<PluginJob>(`/plugins/jobs/${encodeURIComponent(id)}`),
+  /**
+   * Approve a staged package.
+   *
+   * `integrity` is the hash the card showed, sent back so the approval can
+   * only ever mean the package that was read about. `acknowledgeDrift` comes
+   * from the second card and nowhere else: it says the owner read the list of
+   * differences between the package's claim and its manifest.
+   */
+  approveStaged: (id: string, body: { integrity?: string; acknowledgeDrift?: boolean }) =>
+    post<PluginApproval>(`/plugins/staged/${encodeURIComponent(id)}/approve`, body),
+  rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
+  updatePlugin: (name: string, version?: string) =>
+    post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, version ? { version } : {}),
+  /** `purge` drops the plugin's schema, and the server asks for the name back. */
+  uninstallPlugin: (name: string, body: { purge?: boolean; confirm?: string }) =>
+    post<{ name: string; purged: boolean; notes: string[]; restartNeeded: boolean }>(
+      `/plugins/${encodeURIComponent(name)}/uninstall`,
+      body,
+    ),
   recovery: () => get<RecoveryView>('/recovery'),
   leaveRecovery: (body: { dropPending: boolean; keepGrants: string[] }) =>
     post<{ accepted?: boolean }>('/recovery/leave', body),
