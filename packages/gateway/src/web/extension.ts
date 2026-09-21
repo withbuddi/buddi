@@ -149,6 +149,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #cancelling = new Map<string, NodeJS.Timeout>();
   #idle: Array<() => void> = [];
   #record?: ExtensionRecord;
+  /** True once the `paired` frame is on the wire, and not one moment earlier. */
+  #live = false;
   #loaded = false;
   #ping?: NodeJS.Timeout;
   #missed = 0;
@@ -286,7 +288,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#clearChallenge();
     this.#adopt(ws, { ...record, extension: challenge.extension || record.extension, extensionId,
       lastSeenAt: new Date(this.#now()).toISOString() });
-    ws.send(JSON.stringify({ type: 'paired', installation: this.#installation() }));
+    await this.#announce(ws, { type: 'paired', installation: this.#installation() });
     await this.#write(this.#record!);
   }
 
@@ -308,6 +310,24 @@ export class ExtensionEndpoint implements ExtensionBridge {
     waiting.reject(frame.precondition === true ? new BrowserPreconditionError(message) : new Error(message));
   }
 
+  /**
+   * Say "paired", and only count the browser as connected once it is written.
+   *
+   * The extension is not paired until it has read that frame, so a driver that
+   * asked `connected()` in the window between adopting the socket and writing
+   * to it would send a command the extension would rightly refuse. The window
+   * is small and the first command after pairing lands in it, which is the
+   * worst possible moment to tell an owner their browser is not paired.
+   */
+  #announce(ws: WebSocket, frame: Record<string, unknown>): Promise<void> {
+    return new Promise<void>((resolve) => {
+      ws.send(JSON.stringify(frame), () => {
+        if (this.#socket === ws) this.#live = true;
+        resolve();
+      });
+    });
+  }
+
   /** What the extension popup calls this buddi: the port it is listening on. */
   #installation(): string {
     const address = this.#server?.address() as AddressInfo | null;
@@ -321,6 +341,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
       previous.close(1000, 'replaced by a newer connection');
     }
     this.#socket = ws;
+    this.#live = false;
     this.#record = record;
     this.#loaded = true;
     this.#clearPair();
@@ -338,6 +359,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #drop(reason: string): void {
     const socket = this.#socket;
     this.#socket = undefined;
+    this.#live = false;
     clearInterval(this.#ping);
     this.#ping = undefined;
     for (const [id, waiting] of this.#pending) {
@@ -431,7 +453,7 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const now = new Date(this.#now()).toISOString();
     this.#adopt(pending.socket, { tokenHash: hashToken(token), pairedAt: now, extension: pending.extension, extensionId: pending.extensionId, lastSeenAt: now });
     await this.#write(this.#record!);
-    pending.socket.send(JSON.stringify({ type: 'paired', token, installation: this.#installation() }));
+    await this.#announce(pending.socket, { type: 'paired', token, installation: this.#installation() });
     return { status: 200, body: await this.view() as unknown as Record<string, unknown> };
   }
 
@@ -452,11 +474,11 @@ export class ExtensionEndpoint implements ExtensionBridge {
 
   /* ---------------- the bridge ---------------- */
 
-  connected(): boolean { return !!this.#socket && this.#socket.readyState === this.#socket.OPEN; }
+  connected(): boolean { return this.#live && !!this.#socket && this.#socket.readyState === this.#socket.OPEN; }
 
   send(command: ExtensionCommand): Promise<ExtensionResult> {
     const socket = this.#socket;
-    if (!socket || socket.readyState !== socket.OPEN) return Promise.reject(new Error(NOT_CONNECTED));
+    if (!this.connected() || !socket) return Promise.reject(new Error(NOT_CONNECTED));
     const id = randomUUID();
     return new Promise<ExtensionResult>((resolve, reject) => {
       const timer = setTimeout(() => {

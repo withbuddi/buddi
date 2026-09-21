@@ -211,14 +211,18 @@ export class Protocol {
         await this.#challenge(message);
         return;
       case 'paired': {
-        const token = message['token'];
-        if (typeof token === 'string' && token.length > 0) await this.#options.chrome.storage.local.set({ [TOKEN_KEY]: token });
         // Either the owner just typed the code on this socket, or the gateway
-        // signed our nonce and then accepted our token. Both are proof.
+        // signed our nonce and then accepted our token. Both are proof, and
+        // both are complete before the token is written down: storing it is
+        // what makes the *next* connection cheap, not what authorises this one.
+        // The first command arrives on the heels of this frame, and refusing it
+        // while a disk write finishes would be a lie about who we are talking to.
         this.#authenticated = true;
         const installation = message['installation'];
         this.#set({ connection: 'paired', code: null, error: null,
           installation: typeof installation === 'string' ? installation : this.#state.installation });
+        const token = message['token'];
+        if (typeof token === 'string' && token.length > 0) await this.#options.chrome.storage.local.set({ [TOKEN_KEY]: token });
         return;
       }
       case 'rehello':

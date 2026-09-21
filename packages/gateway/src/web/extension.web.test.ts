@@ -121,6 +121,24 @@ describe('the browser extension endpoint', () => {
     await expect(readFile(path.join(dir, 'extension.json'), 'utf8')).rejects.toThrow();
   });
 
+  it('is not connected until the paired frame has left the building', async () => {
+    const { socketUrl, extension } = await setup();
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+
+    // The socket is adopted synchronously inside `pair`, but the browser is not
+    // paired until it has read the frame saying so: a command dispatched in
+    // that window is the one an owner sends right after typing the code.
+    const pairing = extension.pair(code);
+    expect(extension.connected()).toBe(false);
+    await expect(extension.send({ name: 'observe', session: 's1', args: {} })).rejects.toThrow(/not connected/i);
+    expect(await pairing).toMatchObject({ status: 200 });
+    expect(extension.connected()).toBe(true);
+    expect(client.seen.some((frame) => frame['type'] === 'command')).toBe(false);
+  });
+
   it('recognises a stored token and lets the newest connection replace the first', async () => {
     const { socketUrl, origin, extension } = await setup();
     const headers = await session(origin);
