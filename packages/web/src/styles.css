@@ -1813,6 +1813,18 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   border-top: 1px solid var(--line);
 }
 
+/*
+ * A turn the owner took by clicking a chip: their words, so their column and
+ * their tint, but drawn as the chip it was — the label, not the sentence the
+ * agent wrote behind it, which is the element's title.
+ */
+.wb-msg[data-role='user'] .wb-bubble-offer {
+  border-radius: var(--radius-pill);
+  padding: 5px 12px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
 /* ------------------------------------------------------------------ *
  * The properties panel: what an agent is, and what it may do to you.
  *

@@ -197,6 +197,27 @@ export async function takeOffer(pool: Queryable, input: TakeOfferInput): Promise
   };
 }
 
+/**
+ * Give a claimed offer back, when nothing could be started from it.
+ *
+ * The claim is deliberately made *before* the run, so two taps cannot become
+ * two runs. The cost is that a take whose run never started would leave a dead
+ * button: claimed, with nothing behind it. This is the one undo — used by the
+ * surface that claimed the row moments earlier, and only when starting the turn
+ * failed outright, so the chip comes back rather than going grey forever.
+ *
+ * Nothing that has a job on it is released: that offer did start something.
+ */
+export async function releaseOffer(pool: Queryable, id: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `update core.offers set taken_at = null, taken_via = null
+      where id = $1 and taken_at is not null and taken_job_id is null
+      returning id`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
 /** Stamp the run a taken offer started. Bookkeeping; never fails the tap. */
 export async function recordOfferJob(
   pool: Queryable,

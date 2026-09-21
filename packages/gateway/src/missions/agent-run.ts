@@ -23,6 +23,7 @@
 import {
   appendEvent,
   getAction,
+  getOffer,
   SCHEDULED_SURFACE,
   ToolRegistry,
   type ActionRecord,
@@ -176,11 +177,17 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
 
     // Resuming: the conversation is the one that suspended, and the owner's
     // decision is this run's opening turn. Fresh: a new conversation, the
-    // source's prompt.
+    // source's prompt — unless the run came from a tapped offer that was made
+    // *inside* a conversation, in which case it belongs there. An offer taken
+    // from the Offers list or from Telegram used to answer only by
+    // notification, and the thread that offered it showed nothing at all.
     const resuming = payload.approval && payload.awaiting;
+    const offerConversationId = resuming
+      ? null
+      : await conversationOfOffer(deps, payload, log);
     const conversationId = resuming
       ? (payload.awaiting as { conversationId: string }).conversationId
-      : await createConversation(deps.pool, payload.agentId);
+      : (offerConversationId ?? (await createConversation(deps.pool, payload.agentId)));
 
     log(
       resuming
@@ -262,6 +269,12 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
     // not written. A store that fails costs the buttons, never the report.
     const offers = await storeOffers(deps, decision, payload.agentId, conversationId);
 
+    // The thread the offer came from hears the answer in its own words. The
+    // run already happened *in* this conversation, but what the owner is shown
+    // is `mission.report`'s text, and a transcript that carried only the tool
+    // call would make a chip taken from the Offers list look unanswered.
+    if (offerConversationId) await sayInConversation(deps, offerConversationId, payload.agentId, text, log);
+
     let chatId: string | undefined;
     try {
       jobContext.signal?.throwIfAborted();
@@ -307,6 +320,70 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       ...(chatId ? { chatId } : {}),
     } satisfies AgentRunOutcome;
   };
+}
+
+/**
+ * The conversation a tapped offer belongs to, when it has one.
+ *
+ * Read from the offer row rather than taken from the hint: the hint names an
+ * id, and the id is looked up. A row that is gone, carries no conversation, or
+ * whose conversation belongs to a different agent falls back to a fresh
+ * conversation — a run never lands in somebody else's thread.
+ */
+async function conversationOfOffer(
+  deps: AgentRunDeps,
+  payload: AgentRunPayload,
+  log: (line: string) => void,
+): Promise<string | null> {
+  const hint = payload.conversationHint;
+  if (!hint?.startsWith(OFFER_HINT_PREFIX)) return null;
+  const id = hint.slice(OFFER_HINT_PREFIX.length).trim();
+  if (id === '') return null;
+  try {
+    const offer = await getOffer(deps.pool, id);
+    if (!offer?.conversationId) return null;
+    const { rows } = await deps.pool.query(
+      'select agent_id from core.conversations where id = $1::uuid',
+      [offer.conversationId],
+    );
+    if (rows[0]?.agent_id !== payload.agentId) return null;
+    return offer.conversationId;
+  } catch (err) {
+    log(`agent-run: could not read the offer behind ${hint}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Write the report into the conversation, as the agent saying it.
+ *
+ * Never allowed to fail the run: the report was produced and is about to be
+ * delivered, and a transcript row is how it is *also* read where it was asked
+ * for.
+ */
+async function sayInConversation(
+  deps: AgentRunDeps,
+  conversationId: string,
+  agentId: string,
+  text: string,
+  log: (line: string) => void,
+): Promise<void> {
+  try {
+    await deps.pool.query(
+      'insert into core.messages (conversation_id, role, content) values ($1::uuid, $2, $3::jsonb)',
+      [conversationId, 'assistant', JSON.stringify([{ type: 'text', text }])],
+    );
+    // The same event an interactive turn writes, so a page watching this
+    // conversation refreshes instead of waiting for the owner to reload.
+    await appendEvent(
+      deps.pool,
+      'chat.message.appended',
+      { role: 'assistant', runId: null, agentId, source: 'offer' },
+      conversationId,
+    );
+  } catch (err) {
+    log(`agent-run: could not write the report into conversation ${conversationId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**

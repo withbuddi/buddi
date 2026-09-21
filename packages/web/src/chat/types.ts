@@ -77,6 +77,20 @@ export interface ChatMessage {
   speaker?: string;
 }
 
+/**
+ * How the server stamps a turn the owner started by taking an offer:
+ * `offer:<label>`. The message itself carries the prompt the agent wrote — the
+ * words the model was given — and the label is what the owner clicked.
+ */
+export const OFFER_TURN_SPEAKER_PREFIX = 'offer:';
+
+/** The chip's label behind such a stamp, or null for an ordinary turn. */
+export function offerTurnLabel(speaker: string | null | undefined): string | null {
+  if (typeof speaker !== 'string' || !speaker.startsWith(OFFER_TURN_SPEAKER_PREFIX)) return null;
+  const label = speaker.slice(OFFER_TURN_SPEAKER_PREFIX.length).trim();
+  return label === '' ? null : label;
+}
+
 /** A group of agents that share one conversation (docs/groups.md). */
 export interface GroupView {
   id: string;
