@@ -879,12 +879,14 @@ immediately, naming the port and the fix.
 
 ## Upgrading
 
-New code is four things — install, build, migrate, restart — and **migrations
-do not run themselves**. Three of the four ways to get that wrong are silent:
-skip the build and the service keeps running last month's code against this
-month's schema; skip the migration and a tool fails hours later, at the moment
-an agent calls it; skip the restart and everything looks fine until the next
-reboot disagrees.
+New code is four things — install, build, migrate, restart — and **the restart
+is what migrates**. Every start applies core's migrations and every installed
+plugin's before it builds anything on them: a schema newer than the code you
+just installed refuses to start at all, a core migration that will not apply
+stops the start and says so, and an installed third-party plugin whose
+migrations fail is the only one demoted — that plugin does not load, the rest
+of the installation comes up. So the way left to get this wrong is silent and
+singular: skip the build, and the service restarts onto last month's code.
 
 So the order is a command:
 
@@ -903,8 +905,9 @@ to run over them.
 It takes a backup first, because the migration is the only step that cannot be
 repeated away; stops the background service, because old code must not run
 while the schema moves; installs, builds, migrates — `buddi migrate`, which is
-core's migrations *and every installed plugin's* — starts the service again if
-it was running when it arrived, and ends with `buddi doctor`.
+core's migrations *and every installed plugin's*, run ahead of time so a
+failure is reported by the upgrade rather than by the start — starts the
+service again if it was running when it arrived, and ends with `buddi doctor`.
 
 `buddi upgrade --no-backup` if you took one five minutes ago.
 
@@ -960,7 +963,7 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi status` | the same report, under the name you reached for |
 | `buddi upgrade` | after a `git pull`: back up, stop, build, migrate, restart, check |
 | `buddi upgrade --no-backup` | the same, without the archive it takes first |
-| `buddi migrate` | apply core + plugin migrations |
+| `buddi migrate` | apply core + plugin migrations without starting (a start migrates too) |
 
 **Database**
 
