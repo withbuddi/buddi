@@ -23,7 +23,8 @@ async function setup(openAccess = true, supplied?: BrowserController, publicOrig
 }
 
 async function session(origin: string, ticket?: string) {
-  const res = await fetch(`${origin}/api/session${ticket ? `?t=${encodeURIComponent(ticket)}` : ''}`, { redirect: 'manual' });
+  // A ticket is only ever exchanged on the page URL, never on an API call.
+  const res = await fetch(ticket ? `${origin}/?t=${encodeURIComponent(ticket)}` : `${origin}/api/session`, { redirect: 'manual' });
   const pairs = res.headers.getSetCookie().map((line) => line.split(';')[0]!);
   const csrf = pairs.find((p) => p.startsWith('buddi_csrf='))?.slice('buddi_csrf='.length) ?? '';
   return { Cookie: pairs.join('; '), 'X-Buddi-CSRF': csrf, Origin: origin, 'Content-Type': 'application/json' };
@@ -168,6 +169,22 @@ describe('browser dashboard endpoints', () => {
     const headers = await session(origin, mintTicket(TOKEN, new Date()));
     expect((await fetch(`${origin}/api/browser`, { headers })).status).toBe(200);
     expect((await fetch(`${origin}/api/browser/screenshot`, { headers })).status).toBe(404);
+  });
+  /*
+   * The canvas polls the screenshot with a cache-buster on the query. If that
+   * parameter were read as a sign-in ticket, every poll would be a bad ticket:
+   * a 401 and one more failure counted against the owner's own address.
+   */
+  it('does not read a query parameter on an API path as a sign-in ticket', async () => {
+    const { origin } = await setup(false);
+    const headers = await session(origin, mintTicket(TOKEN, new Date()));
+    for (let i = 0; i < 12; i += 1) {
+      const res = await fetch(`${origin}/api/browser/screenshot?t=${i}`, { headers, redirect: 'manual' });
+      expect(res.status).toBe(404);
+      expect(res.headers.getSetCookie()).toHaveLength(0);
+    }
+    // No failure was counted, so the page URL still exchanges a fresh ticket.
+    expect((await fetch(`${origin}/?t=${encodeURIComponent(mintTicket(TOKEN, new Date()))}`, { redirect: 'manual' })).status).toBe(302);
   });
   it('cannot enable a controller that is not hosted here', async () => {
     const { origin, browser } = await setup();
