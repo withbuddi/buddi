@@ -18,7 +18,7 @@
  *      has none, so the CSRF machinery below works unchanged; nothing the owner
  *      does ever shows an authentication step.
  *   3. **The ticket exchange.** Only on a non-loopback binding (or by explicit
- *      ask): a `?t=` on any GET is verified against the installation's token,
+ *      ask): a `?t=` on any page GET is verified against the installation's token,
  *      spent once, and answered with a redirect to a clean URL carrying an
  *      HttpOnly session cookie. The token never appears in a log line, an
  *      error, or the redirect target.
@@ -497,8 +497,12 @@ export function createWebApp(deps: WebServerDeps): Server {
     // for as long as that session is used.
     const scope = requestScope(req);
 
-    // The ticket exchange. Only ever on a GET, and only ever once per ticket.
-    const ticket = url.searchParams.get(TICKET_PARAM);
+    // The ticket exchange. Only ever on a GET, and only ever once per ticket,
+    // and only ever on a page URL: a ticket is handed out as a link somebody
+    // opens, never as a query on an API call. So under /api/ the parameter is
+    // just a parameter, and a poller that happens to use the same name cannot
+    // spend a 401 and a sign-in failure on every request.
+    const ticket = url.pathname.startsWith('/api/') ? null : url.searchParams.get(TICKET_PARAM);
     if (ticket !== null && (method === 'GET' || method === 'HEAD')) {
       const check = verifyTicket(deps.token, ticket, now);
       if (!check.ok || !spent.spend(check.nonce, check.expiresAt, now)) {

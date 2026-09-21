@@ -469,7 +469,7 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
           <figure>
             <img
               key={screenshotSrc ?? data.page.id}
-              src={screenshotSrc ?? `/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}${refresh ? `&t=${refresh}` : ''}`}
+              src={screenshotSrc ?? `/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}${refresh ? `&tick=${refresh}` : ''}`}
               alt={`Last browser observation: ${data.page.title || data.page.url}`}
               {...(onScreenshotError ? { onError: onScreenshotError } : {})}
               {...(onScreenshotLoad ? { onLoad: onScreenshotLoad } : {})}

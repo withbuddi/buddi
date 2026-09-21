@@ -180,9 +180,9 @@ describe('the browser panel', () => {
     const src = (): string => screen.getByAltText(/Last browser observation/).getAttribute('src') ?? '';
     expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1');
     await act(async () => { await vi.advanceTimersByTimeAsync(BROWSER_POLL_MS); });
-    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&t=1');
+    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&tick=1');
     await act(async () => { await vi.advanceTimersByTimeAsync(BROWSER_POLL_MS); });
-    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&t=2');
+    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&tick=2');
 
     /*
      * Ended. The gateway has nothing left: no session, no status, and a
@@ -210,7 +210,7 @@ describe('the browser panel', () => {
     expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1');
     hidden.mockReturnValue(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(BROWSER_POLL_MS); });
-    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&t=1');
+    expect(src()).toBe('/api/browser/screenshot?v=o1&sessionId=s1&tick=1');
 
     // Five refusals in a row and it stops rather than hammering the route.
     for (let attempt = 0; attempt < MAX_SCREENSHOT_FAILURES; attempt += 1) {
