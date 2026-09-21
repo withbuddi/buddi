@@ -13,10 +13,14 @@
  * log. That is what the bar over the picture says, and the gateway keeps the
  * same promise on its side.
  *
- * The picture arrives as a metadata line and then the JPEG bytes, which is how
- * the frame knows how big the page it came from is. Clicks are mapped back
- * through that metadata and the size the picture is *displayed* at, so a phone
- * showing a 1280-wide page in a 380-wide column still clicks the right link.
+ * The picture arrives as one binary message — a short header saying how big
+ * the page it came from is, then the JPEG — and is drawn straight onto a
+ * canvas. One message rather than two because two is two chances to wait on a
+ * slow link, and a canvas rather than an `<img src=blob:>` because a blob URL
+ * per frame is an allocation the browser has to be asked to take back, and at
+ * ten frames a second it was not always asked. Clicks are mapped back through
+ * that header and the size the picture is *displayed* at, so a phone showing a
+ * 1280-wide page in a 380-wide column still clicks the right link.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Notice, Toolbar } from '../ui';
@@ -64,6 +68,39 @@ export function typedCharacter(key: string): boolean {
 
 const BUTTONS = ['left', 'middle', 'right'] as const;
 
+/**
+ * At most one pointer position every this many milliseconds.
+ *
+ * A finger dragging across the picture fires a move per pixel. Thirty a second
+ * is more than the host can paint and far more than anyone can see; the rest
+ * are positions nobody will ever look at, spending a link that has a live
+ * picture to carry. The last one always goes, so the pointer ends where the
+ * finger ended rather than wherever the throttle happened to fall.
+ */
+const MOVE_MS = 33;
+
+/** Has anything a click depends on moved? */
+function sameFrameShape(a: HandFrameMetadata, b: HandFrameMetadata): boolean {
+  return a.deviceWidth === b.deviceWidth && a.deviceHeight === b.deviceHeight
+    && a.pageScaleFactor === b.pageScaleFactor && a.offsetTop === b.offsetTop;
+}
+
+/**
+ * The other half of the gateway's `packFrame`: a version byte, the header's
+ * length, the header as JSON, and the JPEG bytes.
+ */
+export function readFrame(buffer: ArrayBuffer): { metadata: HandFrameMetadata; jpeg: Blob } | null {
+  if (buffer.byteLength < 3) return null;
+  const view = new DataView(buffer);
+  if (view.getUint8(0) !== 1) return null;
+  const length = view.getUint16(1);
+  if (buffer.byteLength < 3 + length) return null;
+  try {
+    const metadata = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 3, length))) as HandFrameMetadata;
+    return { metadata, jpeg: new Blob([new Uint8Array(buffer, 3 + length)], { type: 'image/jpeg' }) };
+  } catch { return null; }
+}
+
 /** Same origin, same session; the protocol follows the page's. */
 export function handUrl(location: { protocol: string; host: string } = window.location): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/browser/hand`;
@@ -96,15 +133,16 @@ type Phase = 'connecting' | 'driving' | 'lost' | 'refused';
 export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandProps): JSX.Element {
   const [phase, setPhase] = useState<Phase>('connecting');
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [frame, setFrame] = useState<string | null>(null);
+  /** Whether any picture has arrived. The picture itself lives on the canvas. */
+  const [painted, setPainted] = useState(false);
   const [metadata, setMetadata] = useState<HandFrameMetadata | null>(null);
   const [typing, setTyping] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const socket = useRef<HandSocket | null>(null);
-  const picture = useRef<HTMLImageElement | null>(null);
+  const picture = useRef<HTMLCanvasElement | null>(null);
   const keyboard = useRef<HTMLInputElement | null>(null);
-  const held = useRef<string | null>(null);
-  const expecting = useRef<HandFrameMetadata | null>(null);
+  /** The last pointer position sent, and the one waiting for the throttle. */
+  const moved = useRef<{ at: number; pending?: Record<string, unknown>; timer?: ReturnType<typeof setTimeout> }>({ at: 0 });
 
   useEffect(() => {
     const open = connect ?? ((url: string) => new WebSocket(url) as unknown as HandSocket);
@@ -117,19 +155,27 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
     ws.onmessage = (event: { data: unknown }) => {
       if (!live) return;
       if (typeof event.data !== 'string') {
-        // The bytes that follow a metadata line: the picture it described.
-        const waiting = expecting.current;
-        expecting.current = null;
-        if (!waiting || typeof URL?.createObjectURL !== 'function') return;
-        const url = URL.createObjectURL(new Blob([event.data as ArrayBuffer], { type: 'image/jpeg' }));
-        if (held.current) URL.revokeObjectURL(held.current);
-        held.current = url;
-        setMetadata(waiting);
-        setFrame(url);
+        const picked = readFrame(event.data as ArrayBuffer);
+        if (!picked) return;
+        // Only when it actually changed: this arrives thirty times a second,
+        // and a page whose size and scroll have not moved does not need the
+        // panel re-rendered for it.
+        setMetadata((current) => (current && sameFrameShape(current, picked.metadata) ? current : picked.metadata));
+        setPainted(true);
+        // Decoded off the main thread and drawn once, with nothing left over:
+        // no object URL to revoke, and a frame that arrives while an older one
+        // is still decoding simply overwrites it on the canvas.
+        if (typeof createImageBitmap !== 'function') return;
+        void createImageBitmap(picked.jpeg).then((bitmap) => {
+          const canvas = picture.current;
+          if (!live || !canvas) { bitmap.close?.(); return; }
+          if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
+          canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+          bitmap.close?.();
+        }).catch(() => { /* a frame that will not decode is a frame not drawn */ });
         return;
       }
-      const message = JSON.parse(event.data) as { type?: string; metadata?: HandFrameMetadata; error?: string };
-      if (message.type === 'frame' && message.metadata) { expecting.current = message.metadata; return; }
+      const message = JSON.parse(event.data) as { type?: string; error?: string };
       if (message.type === 'driving') { setPhase('driving'); setRefusal(null); return; }
       if (message.type === 'refused' || message.type === 'ended') {
         setRefusal(message.error ?? 'The screen cannot be driven from here.');
@@ -145,7 +191,7 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
     };
   }, [sessionId, csrf, attempt, connect]);
 
-  useEffect(() => () => { if (held.current && typeof URL?.revokeObjectURL === 'function') URL.revokeObjectURL(held.current); }, []);
+  useEffect(() => () => { clearTimeout(moved.current.timer); }, []);
 
   /** One event, straight out to the socket. Never stored on the way. */
   const send = useCallback((input: Record<string, unknown>): void => {
@@ -161,20 +207,58 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
     return box ? pagePoint(box, metadata, event.clientX, event.clientY) : null;
   };
 
-  const pointer = (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved') => (event: React.MouseEvent<HTMLImageElement>) => {
+  /**
+   * A pointer position, at most thirty a second and only ever the latest.
+   *
+   * A press or a release is an event and goes at once — and takes the pending
+   * move with it, so the button lands where the finger actually is. A move is
+   * only ever the newest one: any older position is somewhere the pointer has
+   * already left.
+   */
+  const move = (input: Record<string, unknown>): void => {
+    const state = moved.current;
+    const now = Date.now();
+    clearTimeout(state.timer);
+    state.timer = undefined;
+    const wait = state.at + MOVE_MS - now;
+    if (wait <= 0) { state.at = now; state.pending = undefined; send(input); return; }
+    state.pending = input;
+    state.timer = setTimeout(() => {
+      const waiting = moved.current.pending;
+      moved.current.timer = undefined;
+      moved.current.pending = undefined;
+      moved.current.at = Date.now();
+      if (waiting) send(waiting);
+    }, wait);
+  };
+
+  const flushMove = (): void => {
+    const state = moved.current;
+    clearTimeout(state.timer);
+    state.timer = undefined;
+    const waiting = state.pending;
+    state.pending = undefined;
+    if (waiting) { state.at = Date.now(); send(waiting); }
+  };
+
+  const pointer = (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved') => (event: React.MouseEvent<HTMLCanvasElement>) => {
     const at = point(event);
     if (!at) return;
     if (type === 'mousePressed') {
       event.preventDefault();
       picture.current?.focus?.();
     }
-    send({ kind: 'mouse', type, x: at.x, y: at.y, button: BUTTONS[event.button] ?? 'left',
-      clickCount: type === 'mouseMoved' ? 0 : Math.min(3, Math.max(1, event.detail || 1)), modifiers: modifiersOf(event) });
+    const input = { kind: 'mouse', type, x: at.x, y: at.y, button: BUTTONS[event.button] ?? 'left',
+      clickCount: type === 'mouseMoved' ? 0 : Math.min(3, Math.max(1, event.detail || 1)), modifiers: modifiersOf(event) };
+    if (type === 'mouseMoved') { move(input); return; }
+    flushMove();
+    send(input);
   };
 
-  const wheel = (event: React.WheelEvent<HTMLImageElement>): void => {
+  const wheel = (event: React.WheelEvent<HTMLCanvasElement>): void => {
     const at = point(event);
     if (!at) return;
+    flushMove();
     send({ kind: 'wheel', x: at.x, y: at.y, deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
   };
 
@@ -224,13 +308,13 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
       ) : null}
       {phase === 'refused' && refusal ? <Notice tone="warning" role="status">{refusal}</Notice> : null}
       <div className="hand-screen">
-        {frame ? (
-          <img
+        {painted ? (
+          <canvas
             ref={picture}
             className="hand-picture"
-            src={frame}
-            alt="The host browser, live"
-            draggable={false}
+            role="img"
+            aria-label="The host browser, live"
+            data-testid="hand-picture"
             tabIndex={0}
             onMouseDown={pointer('mousePressed')}
             onMouseUp={pointer('mouseReleased')}

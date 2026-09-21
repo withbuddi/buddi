@@ -241,9 +241,10 @@ not. The directory is owner-only, gitignored under the default data directory,
 and outside the artifact store and normal Buddi backups. Protect a custom data
 directory accordingly. No tool exports passwords, cookies or profile files.
 
-- **Take over** pauses input for the selected conversation. When idle, its tabs stay open so you can
-  sign in, handle MFA/CAPTCHA or make a manual choice. During an in-flight action,
-  interruption closes that conversation's tabs to prevent delayed input after takeover.
+- **Take over** pauses input for the selected conversation. Its tabs stay open so you can
+  sign in, handle MFA/CAPTCHA or make a manual choice. An action in flight is interrupted —
+  a pending load is stopped and the agent's evidence is void — but the page it was on is kept,
+  because that page is usually the reason you pressed the button.
   Other conversations can continue in their own tabs. Use the selected tab for
   manual work: new manually-created tabs without an opener are not assigned to an agent.
 - **Resume access** is an owner-only control. Send a new message to the agent
@@ -285,12 +286,34 @@ cookie on the upgrade request, an `Origin` this gateway would accept a write
 from, the CSRF token as the socket's first frame, and a tailnet session
 re-confirmed against the daemon. One hand at a time — a second dashboard tab is
 told *Another tab is driving* rather than fighting it for the mouse — and only
-for the session that holds the take-over. Frames arrive as a small JSON line
-carrying the page metadata followed by the JPEG bytes it describes; the
-dashboard maps clicks back to page coordinates through that metadata and the
-size the picture is displayed at. When the socket drops the picture freezes
-with *Connection lost* and a **Reconnect** button. `resume`, `release` and
-**Stop** all end the hand and close the socket.
+for the session that holds the take-over. A frame is one binary message: a short
+header carrying the page metadata, then the JPEG it describes. The dashboard
+decodes it with `createImageBitmap` and draws it onto a canvas, and maps clicks
+back to page coordinates through that metadata and the size the picture is
+displayed at. When the socket drops the picture freezes with *Connection lost*
+and a **Reconnect** button. `resume`, `release` and **Stop** all end the hand
+and close the socket.
+
+**The picture is paced by the link, not by the host.** A browser paints sixty
+frames a second and a phone two hops away carries a fraction of that, so
+feeding every frame to the socket does not make the picture faster — it makes
+it *older*, by however much backlog has piled up since you pressed Take over.
+So exactly one frame is on the wire at a time and only the newest one waits
+behind it; everything painted in between is dropped, because a picture nobody
+will see is not worth a second of your link. Frames start at 960×600 at JPEG
+quality 50, and drop to 640×400 at 40 when the socket stays more than 256 KB
+behind for a second, growing back once it has been clear for five. What you
+lose is frames you would never have seen; what you gain is that the picture is
+always now.
+
+Your own events are paced too. A finger dragging across the picture fires a
+move per pixel: the dashboard sends at most one position every 33 ms and always
+the latest, and the gateway coalesces again on its side, so the pointer goes
+where your finger is rather than replaying where it has been. A press, a
+release, a wheel or a key is never coalesced, and takes any pending position
+with it so the button lands where you are pointing. Keys and moves are
+forwarded without waiting for the previous one's result — in order, but
+pipelined, so typing is not one host round trip per character.
 
 The socket does not outlive what let it in. It holds a lease on the dashboard
 session: that session is checked again at most a second after any input and at
@@ -312,8 +335,21 @@ holds the exact page it is showing: if that page closes, navigates outside the
 allowed websites, or loses its debugger connection, the hand ends and the owner
 must take over again. It never follows the browser to another tab.
 
+**Take over while the agent is working** is the normal case, not an edge one —
+the agent reached the login and is still going round on it, and that page is
+what you want your hands on. The action in flight is abandoned and the page is
+kept: in Playwright mode a pending load is stopped at once rather than at its
+timeout, the tab, its context and its cookies stay exactly as they were, and
+the live view paints the page the agent was on. In "Your browser" the extension
+is told to stop the command and your tab is left alone. Either way the agent's
+evidence is void and it must observe again after you resume. If the interrupt
+leaves nothing to paint — the tab really did close — the Browser tab says so at
+once instead of offering a live view that never draws its first frame.
+
 In "Your browser" the frames are Chrome's own `Page.startScreencast` through
-the extension's debugger, acked as they leave and throttled to ten a second,
+the extension's debugger, acked the moment they arrive — before the throttle,
+because Chrome paints nothing more until a frame is acknowledged — and
+throttled to ten a second,
 and the input is `Input.dispatchMouseEvent`/`dispatchKeyEvent` on the session's
 tab; input is refused unless a screencast is running. The extension's rule that
 it will not type into a tab you are looking at does not apply to your own hand.
