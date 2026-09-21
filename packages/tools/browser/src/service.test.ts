@@ -134,6 +134,59 @@ describe('host browser authority and lifecycle', () => {
     await service.control('resume');
     await service.execute(observe, ctx);
   });
+  it('keeps the page when the owner takes over mid-action, and offers a hand on it', async () => {
+    const driver = fake();
+    let release = () => {};
+    // An agent part-way through a navigation, as it is when the owner gives up
+    // waiting and presses Take over.
+    driver.perform = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    driver.interrupt = vi.fn(async () => {});
+    driver.handReady = () => true;
+    driver.hand = { start: async () => {}, input: async () => {}, stop: async () => {} };
+    const service = new BrowserService(driver);
+    services.push(service);
+    await service.enable();
+    const ctx = contexts();
+    const working = service.execute(navigate, ctx).catch((error: Error) => error);
+    await vi.waitFor(() => expect(service.status().busy).toBe(true));
+
+    await service.control('takeover');
+    // The action was abandoned; the tab it was in was not.
+    expect(driver.interrupt).toHaveBeenCalled();
+    expect(driver.close).not.toHaveBeenCalled();
+    expect(service.status().state).toBe('paused');
+    expect(service.hand().hand).toBe(driver.hand);
+    expect(service.status().message).toContain('still open');
+
+    // And the interrupted command cannot drag the state back out of paused.
+    release();
+    await working;
+    expect(service.status().state).toBe('paused');
+  });
+
+  it('closes the screen, and says so, when the interrupted driver has none left', async () => {
+    const driver = fake();
+    let release = () => {};
+    driver.perform = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    driver.interrupt = vi.fn(async () => { throw new Error('The browser tab is closed.'); });
+    driver.hand = { start: async () => {}, input: async () => {}, stop: async () => {} };
+    const service = new BrowserService(driver);
+    services.push(service);
+    await service.enable();
+    const ctx = contexts();
+    const working = service.execute(navigate, ctx).catch((error: Error) => error);
+    await vi.waitFor(() => expect(service.status().busy).toBe(true));
+
+    await service.control('takeover');
+    expect(driver.close).toHaveBeenCalled();
+    // No hand over nothing: the owner is told what to do instead of watching a
+    // live view that never draws.
+    expect(service.hand().hand).toBeUndefined();
+    expect(service.hand().message).toContain('window closed');
+    release();
+    await working;
+  });
+
   it('enforces a request budget even when the agent tries close/reopen', async () => {
     const { service, ctx } = await setup({ maxSteps: 1 });
     await service.execute(navigate, ctx);

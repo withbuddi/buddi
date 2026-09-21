@@ -11,6 +11,14 @@ import WebSocket from 'ws';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
 import type { BrowserController, BrowserHand, BrowserStatus, HandFrame, HandInput } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
+import { packFrame } from './remote-hand.js';
+
+/** The dashboard's half of `packFrame`: one message, header then JPEG. */
+function unpack(message: Buffer): { metadata: Record<string, number>; jpeg: Buffer } {
+  const length = message.readUInt16BE(1);
+  return { metadata: JSON.parse(message.subarray(3, 3 + length).toString('utf8')) as Record<string, number>,
+    jpeg: message.subarray(3 + length) };
+}
 
 const TOKEN = 'fixture-remote-hand-token';
 const SESSION = 'browser-session-1';
@@ -66,9 +74,9 @@ function drive(url: string, headers: Record<string, string>) {
   const socket = new WebSocket(url, { headers });
   sockets.push(socket);
   const seen: Array<Record<string, unknown>> = [];
-  const pictures: Buffer[] = [];
+  const pictures: Array<{ metadata: Record<string, number>; jpeg: Buffer }> = [];
   socket.on('message', (data, isBinary) => {
-    if (isBinary) pictures.push(data as Buffer);
+    if (isBinary) pictures.push(unpack(data as Buffer));
     else seen.push(JSON.parse(String(data)) as Record<string, unknown>);
   });
   const closed = new Promise<number>((resolve) => socket.once('close', (code) => resolve(code)));
@@ -109,10 +117,10 @@ describe('the remote hand socket', () => {
     hand.send({ type: 'hello', csrf, sessionId: SESSION });
     expect(await hand.next('driving')).toMatchObject({ sessionId: SESSION });
 
-    // A frame: the metadata line, then the bytes it describes.
+    // A frame: one message, carrying both what it is and what it shows.
     frame({ jpeg: Buffer.from('a-jpeg'), metadata });
-    expect(await hand.next('frame')).toMatchObject({ metadata: { deviceWidth: 1280 } });
-    await vi.waitFor(() => expect(hand.pictures.map((p) => p.toString())).toEqual(['a-jpeg']));
+    await vi.waitFor(() => expect(hand.pictures.map((p) => p.jpeg.toString())).toEqual(['a-jpeg']));
+    expect(hand.pictures[0]!.metadata).toMatchObject({ deviceWidth: 1280 });
 
     hand.send({ type: 'input', input: { kind: 'mouse', type: 'mousePressed', x: 30, y: 40, button: 'left', clickCount: 1, modifiers: 0 } });
     await vi.waitFor(() => expect(input).toHaveLength(1));
@@ -316,10 +324,40 @@ describe('a hand that has already been let through', () => {
     // Nothing is being read off the socket any more, so every frame stays in
     // this process's memory rather than reaching a viewer.
     (tab.socket as unknown as { _socket: { pause(): void } })._socket.pause();
-    const big = Buffer.alloc(256 * 1024, 1);
-    for (let i = 0; i < 40; i++) hand.paint(big);
+    const big = Buffer.alloc(2 * 1024 * 1024, 1);
+    for (let i = 0; i < 40; i++) { hand.paint(big); await new Promise((resolve) => setTimeout(resolve, 5)); }
     await vi.waitFor(() => expect(lines).toContain('browser hand: socket fell too far behind'), { timeout: 2_000 });
     expect(hand.stopped).toHaveBeenCalled();
+  });
+
+  it('coalesces a drag to where the finger is, and never puts a round trip between two keystrokes', async () => {
+    const hand = slowHand();
+    const { tab } = await endpoint({ hand: hand.hand });
+    // The host takes a while over each event, exactly as a host on the other
+    // end of a link does.
+    hand.slow(30);
+    for (let i = 0; i < 20; i++) tab.send({ type: 'input', input: { kind: 'mouse', type: 'mouseMoved', x: 100 + i, y: 200, button: 'none', clickCount: 0, modifiers: 0 } });
+    tab.send({ type: 'input', input: { kind: 'mouse', type: 'mousePressed', x: 119, y: 200, button: 'left', clickCount: 1, modifiers: 0 } });
+    await vi.waitFor(() => expect(hand.input.at(-1)).toMatchObject({ type: 'mousePressed' }), { timeout: 5_000 });
+    const moves = hand.input.filter((event) => event.kind === 'mouse' && event.type === 'mouseMoved');
+    // Every position but the last was somewhere the pointer had already left.
+    expect(moves.length).toBeLessThan(20);
+    expect(moves.at(-1)).toMatchObject({ x: 119, y: 200 });
+    // And the press landed where the drag ended, after it.
+    expect(hand.input.at(-1)).toMatchObject({ x: 119, y: 200 });
+
+    // Four keystrokes, in order, without waiting for each other's result:
+    // one host round trip for the batch rather than four.
+    hand.input.length = 0;
+    const start = Date.now();
+    for (const key of ['a', 'b', 'c', 'd']) tab.send({ type: 'input', input: { kind: 'key', type: 'char', key, code: 'KeyA', text: key, modifiers: 0 } });
+    await vi.waitFor(() => expect(hand.input).toHaveLength(4), { timeout: 5_000 });
+    expect(hand.input.map((event) => (event as { text?: string }).text)).toEqual(['a', 'b', 'c', 'd']);
+    expect(Date.now() - start).toBeLessThan(4 * 30);
+
+    hand.slow(0);
+    tab.send({ type: 'bye' });
+    await tab.next('ended');
   });
 
   it('drains what is in flight and lets go of everything still pressed', async () => {

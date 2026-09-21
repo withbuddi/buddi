@@ -436,6 +436,25 @@ export class ExtensionEndpoint implements ExtensionBridge {
     for (const waiter of this.#idle.splice(0)) waiter();
   }
 
+  /**
+   * Abandon every command still in flight, without dropping the browser.
+   *
+   * Unlike `#drop`, the socket stays: this is the owner taking control during
+   * an action, not the browser going away. Each command is cancelled the
+   * ordinary way — the extension is told to stop and answers when it has — so
+   * `idle()` still says when the browser has finished stopping, and the tab
+   * the command was in is left exactly where it was.
+   */
+  abort(reason = 'The owner took control during this action.'): void {
+    const socket = this.#socket;
+    for (const [id, waiting] of this.#pending) {
+      this.#pending.delete(id);
+      clearTimeout(waiting.timer);
+      if (socket && socket.readyState === socket.OPEN) this.#cancel(socket, id);
+      waiting.reject(new Error(reason));
+    }
+  }
+
   /** Resolves once nothing is still being cancelled. */
   idle(): Promise<void> {
     if (this.#cancelling.size === 0) return Promise.resolve();

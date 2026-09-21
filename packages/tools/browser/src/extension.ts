@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/tool-web';
-import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type Observation } from './types.js';
+import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot'] as const;
@@ -53,6 +53,13 @@ export interface ExtensionBridge {
    * nobody has seen since.
    */
   idle?(): Promise<void>;
+  /**
+   * Tell the browser to abandon everything still in flight, and keep the socket.
+   *
+   * What a take-over during an action needs: the command stops, the tab does
+   * not. `idle()` is what says the browser has finished stopping.
+   */
+  abort?(reason?: string): void;
   /**
    * Screencast frames for one session, which arrive unasked rather than as the
    * answer to a command. Returns the unsubscribe.
@@ -179,6 +186,19 @@ export class ExtensionDriver implements BrowserDriver {
 
   /** The owner keeps using Chrome: takeover only drops this agent's evidence. */
   async takeover(): Promise<void> { this.#invalidate(); }
+  /**
+   * The owner took over mid-action: the command is abandoned, the tab is not.
+   *
+   * Their Chrome is their own — closing the tab an agent happened to be in
+   * would be taking a page away from the person who asked to see it.
+   */
+  async interrupt(): Promise<void> {
+    if (!this.bridge.connected()) throw new BrowserPreconditionError(NOT_CONNECTED);
+    this.#invalidate();
+    this.bridge.abort?.('The owner took control during this action.');
+    this.#settling = undefined;
+    await this.bridge.idle?.().catch(() => undefined);
+  }
   resume(): void { this.#invalidate(); }
 
   /**
@@ -192,13 +212,26 @@ export class ExtensionDriver implements BrowserDriver {
    * watcher and the typist are the same person here.
    */
   readonly supportsHand = true;
+  /** No socket to the owner's Chrome is no screencast out of it. */
+  handReady(): boolean { return this.bridge.connected(); }
   #frames?: () => void;
   readonly hand: BrowserHand = {
-    start: async (onFrame: (frame: HandFrame) => void) => {
+    start: async (onFrame: (frame: HandFrame) => void, quality: HandQuality = HAND_QUALITY) => {
       this.#frames?.();
       this.#frames = this.bridge.frames?.(this.session, onFrame);
       this.#invalidate();
-      await this.#send('screencast.start', { maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+      await this.#send('screencast.start', { ...quality, everyNthFrame: 1 });
+    },
+    /**
+     * A smaller picture, without dropping the subscription.
+     *
+     * `screencast.start` on a session that already has one restarts it, which
+     * is exactly what a re-tune is; the frames keep arriving on the same
+     * listener because that listener belongs to the session, not to the cast.
+     */
+    tune: async (quality: HandQuality) => {
+      if (!this.#frames || !this.bridge.connected()) return;
+      await this.#send('screencast.start', { ...quality, everyNthFrame: 1 }).catch(() => undefined);
     },
     input: async (event: HandInput) => { await this.#send('input', event as unknown as Record<string, unknown>, true); },
     stop: async () => {
