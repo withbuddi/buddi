@@ -10,9 +10,9 @@ import { readChatTranscript } from '../web/chat.js';
 import {
   CARRIED_OVER_PREFIX,
   CARRIED_OVER_SPEAKER,
-  carryBrowserHandoff,
-  handoffNote,
-  readBrowserHandoff,
+  carryConversationContext,
+  carryOverNote,
+  readCarryOver,
 } from './browser-handoff.js';
 
 const OLD = '11111111-1111-1111-1111-111111111111';
@@ -55,10 +55,10 @@ function pool(rows: Array<{ role: string; content: unknown; speaker: string | nu
 }
 
 describe('a browser session that ended with the conversation', () => {
-  const input = { agentId: 'ada', previousConversationId: OLD, conversationId: NEW };
+  const input = { agentId: 'ada', previousConversationId: OLD, conversationId: NEW, reason: 'idle' as const };
 
   it('is read out of the old transcript: the task, the pages, the last answer', () => {
-    const handoff = readBrowserHandoff(session())!;
+    const handoff = readCarryOver(session())!;
     expect(handoff.task).toBe('Check my PNC balance and tell me if rent clears.');
     expect(handoff.pages).toEqual([
       { url: 'https://www.pnc.com/signin', title: 'PNC — Sign in' },
@@ -69,7 +69,7 @@ describe('a browser session that ended with the conversation', () => {
 
   it('carries the note into the fresh conversation, as nobody speaking', async () => {
     const db = pool(session());
-    const text = await carryBrowserHandoff(db.pool, input);
+    const text = await carryConversationContext(db.pool, input);
     expect(text).toContain(CARRIED_OVER_PREFIX);
     const carried = db.stored.filter(m => m.conversation_id === NEW);
     expect(carried).toHaveLength(1);
@@ -78,7 +78,7 @@ describe('a browser session that ended with the conversation', () => {
   });
 
   it('carries URLs and titles, never a word of what the pages said', () => {
-    const note = handoffNote(readBrowserHandoff(session())!);
+    const note = carryOverNote(readCarryOver(session())!, 'idle');
     expect(note).toContain('https://www.pnc.com/accounts');
     expect(note).toContain('Account summary');
     expect(note).not.toContain(PAGE_TEXT);
@@ -87,18 +87,18 @@ describe('a browser session that ended with the conversation', () => {
 
   it('writes nothing when the old conversation never drove a browser', async () => {
     const db = pool([{ role: 'user', speaker: null, content: [{ type: 'text', text: 'Morning' }] }]);
-    expect(await carryBrowserHandoff(db.pool, input)).toBeNull();
+    expect(await carryConversationContext(db.pool, input)).toBeNull();
     expect(db.stored.filter(m => m.conversation_id === NEW)).toHaveLength(0);
   });
 
   it('refuses to carry anything across agents', async () => {
     const db = pool(session());
-    expect(await carryBrowserHandoff(db.pool, { ...input, agentId: 'someone-else' })).toBeNull();
+    expect(await carryConversationContext(db.pool, { ...input, agentId: 'someone-else' })).toBeNull();
   });
 
   it('is in the model context of the fresh conversation, and not in its transcript', async () => {
     const db = pool(session());
-    await carryBrowserHandoff(db.pool, input);
+    await carryConversationContext(db.pool, input);
 
     const history = await loadMessages(db.pool, NEW);
     expect(history).toHaveLength(1);
@@ -109,5 +109,83 @@ describe('a browser session that ended with the conversation', () => {
     expect(transcript!.carriedOver).toContain(CARRIED_OVER_PREFIX);
     expect(transcript!.carriedOver).toContain('https://www.pnc.com/accounts');
     expect(transcript!.carriedOver).not.toContain(PAGE_TEXT);
+  });
+});
+
+/**
+ * A size rollover cuts a conversation in the middle of work — that is what "it
+ * grew long" means — so it carries the same note whether or not a browser was
+ * ever involved.
+ */
+describe('a conversation that ended because it had grown long', () => {
+  const input = { agentId: 'ada', previousConversationId: OLD, conversationId: NEW, reason: 'size' as const };
+
+  /** A long working conversation with no browser in it at all. */
+  function work(): Array<{ role: string; content: unknown; speaker: string | null }> {
+    return [
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'Reconcile September against the bank statement.' }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'text', text: 'Started — 40 of 61 rows matched.' }] },
+      { role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'Skip the Amazon ones for now.' }] },
+      { role: 'assistant', speaker: null, content: [{ type: 'text', text: 'Skipped them; 12 rows left to match.' }] },
+    ];
+  }
+
+  it('carries the task, the last thing asked and the agent\'s last words', () => {
+    const carry = readCarryOver(work())!;
+    expect(carry.task).toBe('Reconcile September against the bank statement.');
+    expect(carry.lastOwnerMessage).toBe('Skip the Amazon ones for now.');
+    expect(carry.lastAgentMessage).toContain('12 rows left');
+    expect(carry.pages).toEqual([]);
+  });
+
+  it('writes that note into the fresh conversation, as nobody speaking', async () => {
+    const db = pool(work());
+    const text = await carryConversationContext(db.pool, input);
+    expect(text).toContain(CARRIED_OVER_PREFIX);
+    expect(text).toContain('had grown too long');
+    expect(text).toContain('Reconcile September');
+    expect(text).toContain('Skip the Amazon ones');
+    expect(text).toContain('12 rows left');
+    expect(text).not.toContain('Pages visited');
+    const carried = db.stored.filter(m => m.conversation_id === NEW);
+    expect(carried).toHaveLength(1);
+    expect(carried[0]!.speaker).toBe(CARRIED_OVER_SPEAKER);
+  });
+
+  it('names the pages too when there were any, and still no page content', async () => {
+    const db = pool(session());
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text).toContain('Account summary');
+    expect(text).toContain('https://www.pnc.com/accounts');
+    expect(text).not.toContain(PAGE_TEXT);
+  });
+
+  it('stays small: it is replayed into every turn of the new conversation', async () => {
+    const db = pool(work().map(m => ({ ...m, content: [{ type: 'text', text: 'w'.repeat(5_000) }] })));
+    const text = (await carryConversationContext(db.pool, input))!;
+    expect(text.length).toBeLessThan(2_000);
+  });
+
+  it('does not repeat the task as "the last thing you asked"', () => {
+    const one = readCarryOver([{ role: 'user', speaker: 'owner', content: [{ type: 'text', text: 'Just this.' }] }])!;
+    expect(one.task).toBe('Just this.');
+    expect(one.lastOwnerMessage).toBe('');
+  });
+
+  it('never reads a carried note back as something the owner said', () => {
+    const carried = { role: 'user', speaker: CARRIED_OVER_SPEAKER, content: [{ type: 'text', text: `${CARRIED_OVER_PREFIX} an older task` }] };
+    const carry = readCarryOver([carried, ...work()])!;
+    expect(carry.task).toBe('Reconcile September against the bank statement.');
+  });
+
+  it('writes nothing when there was nothing in the conversation at all', async () => {
+    const db = pool([]);
+    expect(await carryConversationContext(db.pool, input)).toBeNull();
+  });
+
+  it('an idle rollover of the same conversation still carries nothing', async () => {
+    // Going to bed is not being cut off mid-task; today's behaviour stands.
+    const db = pool(work());
+    expect(await carryConversationContext(db.pool, { ...input, reason: 'idle' })).toBeNull();
   });
 });
