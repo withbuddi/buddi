@@ -230,6 +230,10 @@ function useTabsThatFit(forced?: number): [(node: HTMLDivElement | null) => void
  * exceed the room; they still both show, because the alternative is hiding
  * one of them.
  *
+ * A third claim is the same kind of thing: platform state the page has marked
+ * as *happening now* — the screen an agent is driving — which holds the strip
+ * until it stops being live.
+ *
  * A failure is not pinned — it would crowd out the work — but it is never
  * silent either: the menu carries its red dot, so the strip says a failure is
  * back there before it is opened.
@@ -241,7 +245,7 @@ export function splitTabs(
 ): { shown: Renderable[]; hidden: Renderable[] } {
   const pinned = new Set(
     renderables
-      .filter((item) => item.id === activeId || item.source === 'approval')
+      .filter((item) => item.id === activeId || item.source === 'approval' || item.pinned === true)
       .map((item) => item.id),
   );
 

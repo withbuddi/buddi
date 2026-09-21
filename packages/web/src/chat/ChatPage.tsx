@@ -21,10 +21,10 @@ import { Envelope } from '../canvas/views/Envelope';
 import { inspectToolCall, renderablesFrom } from '../canvas/renderables';
 import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
-import { BrowserPanel } from '../views/Browser';
+import { BrowserView } from '../canvas/views/BrowserView';
 import { HostControls } from '../views/HostControls';
 import { ErrorBanner, Notice } from '../ui';
-import { conversationBrowser } from './browser';
+import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, settingsRoute } from '../routes';
@@ -195,7 +195,7 @@ export function ChatPage({
     setOptimistic([]);
     setError(null);
     setRunning(false);
-    setActiveTab(null); setOpenedFiles([]);
+    setActiveTab(null); setOpenedFiles([]); setFocusedStep(null);
     setHistoryOpen(false);
     // Whoever this is now, it is not who the open panel described.
     setProfile(null);
@@ -377,8 +377,29 @@ export function ChatPage({
   /* ---- the canvas ---- */
 
   const browser = useAsync(() => agentId && conversationId ? api.browser({ agentId, conversationId }) : Promise.resolve(undefined), [agentId, conversationId], 1500);
-  const browserTab = conversationBrowser(browser.error ? undefined : browser.data, agentId, conversationId);
-  const browserTabId = browserTab?.id ?? null;
+  const liveBrowser = conversationBrowser(browser.error ? undefined : browser.data, agentId, conversationId);
+  const browserTabId = liveBrowser?.id ?? null;
+
+  /*
+   * A session that has ended keeps its tab.
+   *
+   * What was on the screen when the agent let go is the last thing the owner
+   * has to check the work against, and the steps that led there are on the
+   * same panel. It simply stops holding the strip: it is history now, so it is
+   * unpinned and says so. Held per conversation, because another thread's
+   * screen has no business on this one's canvas.
+   */
+  const [endedBrowserTab, setEndedBrowserTab] = useState<{ agentId: string; conversationId: string; tab: Renderable } | null>(null);
+  useEffect(() => {
+    if (liveBrowser && agentId && conversationId) setEndedBrowserTab({ agentId, conversationId, tab: endedBrowser(liveBrowser) });
+  }, [browserTabId, agentId, conversationId]);
+  const browserTab = liveBrowser
+    ?? (endedBrowserTab && endedBrowserTab.agentId === agentId && endedBrowserTab.conversationId === conversationId ? endedBrowserTab.tab : null);
+
+  /** Every action this conversation took on that screen, from its own calls. */
+  const steps = useMemo(() => browserSteps(conversation?.messages ?? []), [conversation]);
+  /** A step the owner clicked in the chat, held until they click another. */
+  const [focusedStep, setFocusedStep] = useState<string | null>(null);
 
   /*
    * The canvas contents: everything the transcript produced, and — last, when
@@ -396,6 +417,10 @@ export function ChatPage({
       messages: conversation?.messages ?? [],
       descriptors,
       awaiting,
+      // While the Browser panel is on this canvas it is already drawing every
+      // one of those calls. Without a session there is no panel, and they fall
+      // back to a tab each, exactly as an old conversation has always shown.
+      ...(browserTab ? { folded: BROWSER_TOOLS } : {}),
     });
     const items = fromTranscript.filter(item => item.source === 'approval' || !dismissed.includes(item.id));
     if (activeTab && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
@@ -405,7 +430,7 @@ export function ChatPage({
     if (browserTab) items.push(browserTab);
     for (const file of openedFiles) items.push(artifactRenderable(file));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, activeTab, dismissedTabs, conversationId, openedFiles]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles]);
 
   /*
    * What the owner has said here, newest first, for the composer's Up key.
@@ -654,7 +679,7 @@ export function ChatPage({
     setNotice(null);
     setLive([]);
     setAwaiting(new Map());
-    setActiveTab(null); setOpenedFiles([]);
+    setActiveTab(null); setOpenedFiles([]); setFocusedStep(null);
     previousFocus.current = null;
     if (group) {
       // A room needs its row before the first message: the request goes to a conversation, not to a group.
@@ -769,7 +794,17 @@ export function ChatPage({
       onDecided={onDecided}
       onChangeAgent={changeVia}
       agents={everyone}
-      browserPanel={browserTab ? <BrowserPanel key={browserTab.id} data={browser.data} error={browser.error} reload={browser.reload} compact /> : null}
+      browserPanel={browserTab ? (
+        <BrowserView
+          key={browserTab.id}
+          status={browser.data}
+          error={browser.error}
+          reload={browser.reload}
+          steps={steps}
+          live={liveBrowser !== null}
+          focusedStepId={focusedStep}
+        />
+      ) : null}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}
       emptyHint={conversation ? `Nothing in this conversation has produced a view yet. ${madeHere}` : madeHere}
@@ -938,6 +973,21 @@ export function ChatPage({
           {...(runningAgentId ? { workingAs: everyone.find((a) => a.id === runningAgentId)?.name ?? runningAgentId } : {})}
           onOpenFile={openFile}
           onOpen={(toolUseId) => {
+            /*
+             * A browser call has no tab of its own while the Browser panel is
+             * up. Clicking its row goes to the step it made, on the panel that
+             * shows the screen it made it on — not to a second copy of the
+             * same call.
+             */
+            if (browserTab) {
+              const step = stepFor([...(conversation?.messages ?? []), ...optimistic], toolUseId);
+              if (step) {
+                setFocusedStep(step);
+                setActiveTab(browserTab.id);
+                if (narrow) onOpenCanvas?.();
+                return;
+              }
+            }
             if (conversationId) setDismissedTabs(current => {
               const next = { ...current, [conversationId]: (current[conversationId] ?? []).filter(id => id !== toolUseId) };
               storeDismissedTabs(next); return next;

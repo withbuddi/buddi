@@ -377,11 +377,19 @@ function AppPicker({ chosen, onClose, onPick }: { chosen: string[]; onClose: () 
 }
 
 /** Shared by the full page and the conversation's trusted canvas tab. */
-export function BrowserPanel({ data, error, reload, compact = false }: {
+export function BrowserPanel({ data, error, reload, compact = false, refresh }: {
   data: BrowserStatus | undefined;
   error: string | null;
   reload: () => void;
   compact?: boolean;
+  /**
+   * A counter the canvas advances while a session is alive. It goes on the
+   * screenshot's URL, so a new value is a new request for the last
+   * observation — which is how the preview keeps up with an agent that is
+   * working right now. Left out, the picture changes only when the
+   * observation does.
+   */
+  refresh?: number;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -440,7 +448,7 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
         <div className="browser-address"><span aria-hidden="true">◉</span><span>{data?.page?.url ?? (computer ? 'Waiting for an application' : 'Waiting for a website')}</span></div>
         {data?.hasScreenshot && data.page ? (
           <figure>
-            <img key={data.page.id} src={`/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}`} alt={`Last browser observation: ${data.page.title || data.page.url}`} />
+            <img key={data.page.id} src={`/api/browser/screenshot?v=${encodeURIComponent(data.page.id)}${data.session ? `&sessionId=${encodeURIComponent(data.session.id)}` : ''}${refresh ? `&t=${refresh}` : ''}`} alt={`Last browser observation: ${data.page.title || data.page.url}`} />
             <figcaption>Last observation · {new Date(data.page.capturedAt).toLocaleTimeString()} · {data.page.title || 'Untitled page'}</figcaption>
           </figure>
         ) : (

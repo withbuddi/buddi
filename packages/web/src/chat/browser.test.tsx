@@ -93,15 +93,39 @@ describe('conversation browser canvas', () => {
     });
     expect(screen.queryByAltText('Last browser observation: Fixture')).not.toBeInTheDocument();
   });
-  it('refreshes the screenshot and removes the tab on release', async () => {
+  it('refreshes the screenshot and keeps the last one when the session ends', async () => {
     vi.useFakeTimers();
     await act(async () => { render(<ChatPage {...props} />); });
     vi.mocked(api.browser).mockResolvedValue({ ...status, page: { ...status.page!, id: 'o2', title: 'Next page' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-    expect(screen.getByAltText('Last browser observation: Next page')).toHaveAttribute('src', '/api/browser/screenshot?v=o2&sessionId=s1');
+    expect(screen.getByAltText('Last browser observation: Next page').getAttribute('src')).toContain('/api/browser/screenshot?v=o2&sessionId=s1');
+    // The session ends: the tab stays, with the last screenshot, no longer live.
     vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
     await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
     expect(screen.queryByRole('tab', { name: 'Browser' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Browser (ended)' })).toBeInTheDocument();
+    expect(screen.getByTestId('browser-view')).toHaveAttribute('data-live', 'false');
+  });
+
+  /*
+   * A dozen acts used to be a dozen tabs, and the one panel worth reading was
+   * behind all of them. Now they are one panel's list, and the chat row is the
+   * way back to a particular step.
+   */
+  it('folds every act into the one panel, and a chat row goes to its step', async () => {
+    vi.mocked(chatApi.conversation).mockResolvedValue({ conversationId: 'c1', agentId: 'keeper', messages: [
+      { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'a1', name: 'browser.act', input: { action: 'navigate', url: '/fixture' } }] },
+      { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'a1', name: 'browser.act', ok: true, output: { observation: { id: 'o1' } } }] },
+      { id: 'm3', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'a2', name: 'browser.act', input: { action: 'click', target: { name: 'Download' } } }] },
+      { id: 'm4', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'a2', name: 'browser.act', ok: false, error: 'The page moved on.', output: null }] },
+    ] });
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    expect(await screen.findByRole('tab', { name: 'Browser' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Browser · Act/ })).not.toBeInTheDocument();
+    expect(screen.getByText('The page moved on.')).toHaveClass('wb-browser-error');
+    fireEvent.click(screen.getAllByRole('button', { name: /Browser · Act/ })[0]!);
+    await waitFor(() => expect(screen.getAllByRole('listitem')[0]).toHaveAttribute('data-focused', 'true'));
+    expect(screen.queryByRole('tab', { name: /Browser · Act/ })).not.toBeInTheDocument();
   });
   it('uses the existing canvas sheet on narrow screens', async () => {
     render(<ChatPage {...props} narrow canvasOpen />);

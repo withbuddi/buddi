@@ -155,6 +155,15 @@ describe('the canvas knows no domain', () => {
     // owner's rather than a domain's result.
     "'agent.delegate'",
     "'canvas.clear'",
+    /*
+     * Driving the owner's own screen. The gateway has a status route, owner
+     * controls and a page of its own for it (`/api/browser`, `views/Browser`)
+     * — it is the machine this installation runs on, not a domain's data —
+     * and the canvas tab that folds those calls into one live panel has to
+     * know which calls it covers. Named in `chat/browser.ts` and nowhere else.
+     */
+    "'browser.act'",
+    "'browser.status'",
     "'run.started'",
     "'run.finished'",
     "'tool.called'",

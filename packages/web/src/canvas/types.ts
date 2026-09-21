@@ -201,6 +201,13 @@ export interface Renderable {
   tone?: Tone;
   source: RenderableSource;
   /**
+   * Held on the strip whatever else arrives, and never pushed into the
+   * overflow. The page sets it on platform state that is *happening now* — a
+   * browser session an agent is driving — and clears it the moment that state
+   * becomes history. A tool result can never ask for it.
+   */
+  pinned?: boolean;
+  /**
    * Whether this has something worth looking at — rows, points, figures, a
    * document. A result with nothing to draw still gets a tab; it just does not
    * take the canvas away from what is already on it.
