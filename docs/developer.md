@@ -131,3 +131,29 @@ Workspace record, mode, the file and search tools with the boundary (one
 day); `run`, processes, the gated-command parser, git (one day); summary
 panel, Settings page, docs, reviews (one day). In the buddi-plugins
 repository, since it is a plugin.
+
+## 12. Preview: see the app from anywhere
+
+A process started with `developer.start` that listens on a loopback port
+gets a preview, two ways, both ending when the process stops:
+
+- **Through buddi.** `https://<dashboard origin>/preview/<process>/…` is a
+  reverse proxy from the gateway to that port, behind the dashboard's own
+  sign-in (a session, or Tailscale). `developer.preview` (auto) returns the
+  link and, gated, a **signed** variant with an expiry for sharing with a
+  device that has no session, the way vonzio's preview links work; the
+  signature covers the process id and the expiry, and the link is revoked
+  when the process stops. Websockets are proxied for hot reload. Apps that
+  assume they live at the root of a host may break under a path prefix;
+  the tool says so when the first response references absolute assets.
+- **A Tailscale route per port**, for those apps: when Tailscale is running
+  and the owner allowed it on Settings → Developer, buddi adds
+  `tailscale serve --https=<port> http://127.0.0.1:<port>` when the process
+  starts and removes it when it stops, giving a clean `https://<host>:<port>`
+  guarded by the tailnet alone. Off by default; the sentence on the page
+  says what it exposes.
+
+The canvas gets a **Preview** panel: the buddi-proxied app framed beside
+the process output, "Open in a tab" for apps that refuse framing, and a
+phone-width screenshot taken by the browser plugin on request, so the
+transcript keeps a picture of what shipped.
