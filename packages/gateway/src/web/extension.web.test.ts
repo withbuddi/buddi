@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
@@ -25,7 +25,11 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function setup(options: { pingMs?: number; commandTimeoutMs?: number } = {}) {
+/** What a gateway holding the token signs this socket's nonce with. */
+const proofOf = (token: string, nonce: unknown) =>
+  createHmac('sha256', createHash('sha256').update(token).digest('hex')).update(String(nonce)).digest('hex');
+
+async function setup(options: { pingMs?: number; commandTimeoutMs?: number; cancelGraceMs?: number; authTimeoutMs?: number } = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'buddi-extension-'));
   dirs.push(dir);
   const env = { BUDDI_DATA_DIR: dir, BUDDI_EXTENSION_DIR: path.join(dir, 'extension') };
@@ -62,7 +66,25 @@ function connect(url: string, headers: Record<string, string> = { Origin: ORIGIN
     }
     throw new Error(`no ${type} frame arrived; saw ${JSON.stringify(seen)}`);
   };
-  return { socket, seen, open, next, send: (frame: unknown) => socket.send(JSON.stringify(frame)) };
+  const send = (frame: unknown) => socket.send(JSON.stringify(frame));
+
+  /**
+   * The handshake as the extension does it: a nonce, the gateway's proof, and
+   * only then the token.
+   */
+  const hello = async (token: string | null, version = '0.1.0') => {
+    const nonce = `nonce-${Math.random().toString(36).slice(2)}`;
+    send({ type: 'hello', extension: version, nonce, paired: token !== null });
+    return nonce;
+  };
+  const handshake = async (token: string, version = '0.1.0') => {
+    const nonce = await hello(token, version);
+    const challenge = await next('challenge');
+    if (challenge.proof !== proofOf(token, nonce)) throw new Error('the gateway could not prove it holds the token');
+    send({ type: 'auth', token });
+    return next('paired');
+  };
+  return { socket, seen, open, next, send, hello, handshake };
 }
 
 describe('the browser extension endpoint', () => {
@@ -74,7 +96,7 @@ describe('the browser extension endpoint', () => {
 
     const client = connect(socketUrl);
     await client.open;
-    client.send({ type: 'hello', extension: '0.1.0', token: null });
+    await client.hello(null);
     const pair = await client.next('pair');
     expect(String(pair.code)).toMatch(/^\d{3} \d{3}$/);
     expect(await (await fetch(`${origin}/api/extension`, { headers })).json()).toMatchObject({ pending: true, connected: false });
@@ -104,33 +126,102 @@ describe('the browser extension endpoint', () => {
     const headers = await session(origin);
     const first = connect(socketUrl);
     await first.open;
-    first.send({ type: 'hello', extension: '0.1.0', token: null });
+    await first.hello(null);
     const code = String((await first.next('pair')).code);
     await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
     const token = String((await first.next('paired')).token);
 
     const second = connect(socketUrl);
     await second.open;
-    second.send({ type: 'hello', extension: '0.2.0', token });
-    expect(await second.next('paired')).toMatchObject({ installation: expect.stringContaining('127.0.0.1:') });
+    expect(await second.handshake(token, '0.2.0')).toMatchObject({ installation: expect.stringContaining('127.0.0.1:') });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(first.socket.readyState).toBe(WebSocket.CLOSED);
     expect(extension.connected()).toBe(true);
     expect(await (await fetch(`${origin}/api/extension`, { headers })).json()).toMatchObject({ connected: true, extension: '0.2.0' });
 
-    // A token this buddi never issued is asked to pair again, not admitted.
+    // A browser holding the wrong token never gets past the proof: it cannot
+    // reproduce the signature, and the gateway closes it when it tries anyway.
     const stranger = connect(socketUrl);
     await stranger.open;
-    stranger.send({ type: 'hello', extension: '0.2.0', token: 'not-the-token' });
-    expect(await stranger.next('pair')).toBeTruthy();
+    const nonce = await stranger.hello('not-the-token');
+    const challenge = await stranger.next('challenge');
+    expect(challenge.proof).not.toBe(proofOf('not-the-token', nonce));
+    expect(challenge.proof).toBe(proofOf(token, nonce));
+    stranger.send({ type: 'auth', token: 'not-the-token' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stranger.socket.readyState).toBe(WebSocket.CLOSED);
+    expect(extension.connected()).toBe(true);
   });
 
-  it('pings, carries a command round trip, and fails a silent extension with one sentence', async () => {
-    const { socketUrl, origin, extension } = await setup({ pingMs: 20, commandTimeoutMs: 120 });
+  it('never sends a command to a socket that has not finished the handshake', async () => {
+    const { socketUrl, origin, extension } = await setup({ commandTimeoutMs: 80 });
+    const headers = await session(origin);
+    const first = connect(socketUrl);
+    await first.open;
+    await first.hello(null);
+    const code = String((await first.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    const token = String((await first.next('paired')).token);
+    first.socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Half-way through: the proof is out, the token has not come back.
+    const half = connect(socketUrl);
+    await half.open;
+    await half.hello(token);
+    await half.next('challenge');
+    expect(extension.connected()).toBe(false);
+    await expect(extension.send({ name: 'observe', session: 's1', args: {} })).rejects.toThrow(/not connected/i);
+    expect(half.seen.some((frame) => frame['type'] === 'command')).toBe(false);
+  });
+
+  it('pairs with one extension id and refuses another', async () => {
+    const { socketUrl, origin, dir } = await setup();
+    const headers = await session(origin);
+    const first = connect(socketUrl);
+    await first.open;
+    await first.hello(null);
+    const code = String((await first.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    const token = String((await first.next('paired')).token);
+    expect(JSON.parse(await readFile(path.join(dir, 'extension.json'), 'utf8')).extensionId).toBe('a'.repeat(32));
+
+    const other = connect(socketUrl, { Origin: `chrome-extension://${'b'.repeat(32)}` });
+    await other.open;
+    await other.hello(token);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(other.seen).toEqual([]);
+    expect(other.socket.readyState).toBe(WebSocket.CLOSED);
+  });
+
+  it('spends a pairing code after five wrong tries, and counts them against the rate limiter', async () => {
+    const { socketUrl, origin } = await setup();
     const headers = await session(origin);
     const client = connect(socketUrl);
     await client.open;
-    client.send({ type: 'hello', extension: '0.1.0', token: null });
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    const wrong = code === '000 000' ? '111 111' : '000 000';
+    const attempt = (body: string) => fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body });
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) statuses.push((await attempt(JSON.stringify({ code: wrong }))).status);
+    expect(statuses).toEqual([403, 403, 403, 403, 429]);
+    // The code it was showing is spent, and the browser is told to start over.
+    expect(await client.next('rehello')).toMatchObject({ reason: expect.stringContaining('Too many wrong') });
+    // The spent code is waiting for nobody, and the failures keep counting
+    // against the dashboard's own rate limiter like any other wrong answer.
+    const after: number[] = [];
+    for (let i = 0; i < 6; i++) after.push((await attempt(JSON.stringify({ code }))).status);
+    expect(after[0]).toBe(409);
+    expect(after.at(-1)).toBe(429);
+  });
+
+  it('pings, carries a command round trip, and fails a silent extension with one sentence', async () => {
+    const { socketUrl, origin, extension } = await setup({ pingMs: 20, commandTimeoutMs: 120, cancelGraceMs: 200 });
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
     const code = String((await client.next('pair')).code);
     await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
     await client.next('paired');
@@ -156,8 +247,42 @@ describe('the browser extension endpoint', () => {
     });
     await expect(extension.send({ name: 'click', session: 's1', args: {} })).rejects.toThrow('That element is gone.');
 
-    // Nothing answers `fill`: the caller waits the timeout and is told so.
+    // Nothing answers `fill`: the caller waits the timeout, is told so, and the
+    // browser is told to abandon the command rather than act on it late.
     await expect(extension.send({ name: 'fill', session: 's1', args: {} })).rejects.toThrow(/did not answer within a minute/);
+    const cancel = await client.next('cancel');
+    const abandoned = client.seen.find((frame) => frame['type'] === 'command' && frame['name'] === 'fill');
+    expect(cancel['id']).toBe(abandoned!['id']);
+
+    // The driver is held until the extension says it stopped.
+    let settled = false;
+    const idle = extension.idle().then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    client.send({ type: 'result', id: cancel['id'], ok: false, error: 'cancelled', precondition: true });
+    await idle;
+    expect(settled).toBe(true);
+  });
+
+  it('counts pongs only from the browser it is talking to', async () => {
+    const { socketUrl, origin, extension } = await setup({ pingMs: 30 });
+    const headers = await session(origin);
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    await client.next('paired');
+
+    // Another socket answers every ping enthusiastically; it proves nothing
+    // about the browser that is meant to be answering.
+    const stranger = connect(socketUrl);
+    await stranger.open;
+    const pongs = setInterval(() => stranger.send({ type: 'pong' }), 10);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(extension.connected()).toBe(false);
+    } finally { clearInterval(pongs); }
   });
 
   it('upgrades only the extension socket, only from loopback, only from a chrome-extension origin', async () => {

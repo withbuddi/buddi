@@ -1060,8 +1060,13 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     if (method !== 'POST') return sendEmpty(res, 405);
     if (path === '/api/extension/pair') {
+      // A six-digit code is worth guessing at scale, so a wrong one costs the
+      // same budget a failed sign-in does.
+      const pairKey = remoteKey(req);
+      if (limiter.blocked(pairKey, now)) return sendEmpty(res, 429);
       const body = await readJsonBody(req) as { code?: unknown } | null;
       const paired = await extension.pair(body?.code);
+      if (paired.status >= 400) limiter.fail(pairKey, now); else limiter.reset(pairKey);
       return sendJson(res, paired.status, paired.body);
     }
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {

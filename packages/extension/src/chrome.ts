@@ -9,7 +9,7 @@
  * plain object satisfies it.
  */
 
-export interface TabInfo { id?: number; url?: string; title?: string; status?: string; groupId?: number; windowId?: number }
+export interface TabInfo { id?: number; url?: string; title?: string; status?: string; groupId?: number; windowId?: number; active?: boolean }
 
 export interface ChromeLike {
   storage: {
@@ -29,6 +29,10 @@ export interface ChromeLike {
   tabGroups: {
     update(groupId: number, properties: { title?: string; collapsed?: boolean }): Promise<unknown>;
     get(groupId: number): Promise<unknown>;
+  };
+  /** Only to answer one question: is the owner looking at this tab right now? */
+  windows: {
+    get(windowId: number): Promise<{ id?: number; focused?: boolean }>;
   };
   scripting: {
     executeScript<Args extends unknown[] = [], Result = unknown>(injection: {
@@ -50,6 +54,11 @@ export interface ChromeLike {
 /** `chrome.tabs.group` and `chrome.runtime`, kept apart because only the worker has them. */
 export interface WorkerChrome extends ChromeLike {
   tabs: ChromeLike['tabs'] & { group(options: { tabIds: number[]; groupId?: number; createProperties?: { windowId?: number } }): Promise<number> };
+  /** The one timer that survives an evicted service worker. */
+  alarms: {
+    create(name: string, info: { periodInMinutes?: number; delayInMinutes?: number }): void;
+    onAlarm: { addListener(listener: (alarm: { name: string }) => void): void };
+  };
   runtime: {
     getManifest(): { version: string };
     onMessage: { addListener(listener: (message: unknown, sender: unknown, respond: (response?: unknown) => void) => boolean | void): void };

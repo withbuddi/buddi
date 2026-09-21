@@ -39,6 +39,14 @@ What a plugin is *not*:
   one function, `executeApproved`, and only against an approval row.
 - It does not schedule anything by being installed. Missions are suggestions.
 
+A plugin that reaches outside the database is where these rules earn their keep.
+`@buddi/tool-browser` is the one to read first: one pair of tools over three
+backends (the owner's apps, a browser of its own, and "Your browser", the Chrome
+extension), each behind the same `BrowserDriver` seam, and none of them able to
+import the gateway — the extension's WebSocket endpoint is injected into the
+plugin as a bridge interface the plugin declares. `docs/browser.md` describes the
+three modes and what each refuses.
+
 ---
 
 ## 2. The contributions

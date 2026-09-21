@@ -30,6 +30,14 @@ export interface ExtensionBridge {
   connected(): boolean;
   send(command: ExtensionCommand): Promise<ExtensionResult>;
   close(): void;
+  /**
+   * Resolves once nothing this bridge gave up on is still being cancelled.
+   *
+   * A command that timed out may still be half-done in the owner's browser, so
+   * the driver waits here rather than dispatching the next one onto a page
+   * nobody has seen since.
+   */
+  idle?(): Promise<void>;
 }
 
 export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
@@ -64,6 +72,8 @@ export class ExtensionDriver implements BrowserDriver {
   readonly session = randomUUID();
   #observation?: Observation;
   #picture?: Buffer;
+  /** Set when a command failed: the next one waits for the browser to settle. */
+  #settling?: Promise<void>;
   constructor(readonly bridge: ExtensionBridge, readonly allowedHosts?: readonly string[]) {}
 
   async start(): Promise<void> {
@@ -73,8 +83,29 @@ export class ExtensionDriver implements BrowserDriver {
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
 
   async #send(name: ExtensionCommandName, args: Record<string, unknown> = {}): Promise<ExtensionResult> {
+    // A failure left the page in an unknown state and possibly a command still
+    // being abandoned. Nothing else goes out until that has settled.
+    const settling = this.#settling;
+    if (settling) { this.#settling = undefined; await settling; }
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
-    return this.bridge.send({ name, session: this.session, args });
+    try {
+      return await this.bridge.send({ name, session: this.session, args });
+    } catch (error) {
+      this.#invalidate();
+      this.#settling = Promise.resolve(this.bridge.idle?.()).then(() => undefined, () => undefined);
+      throw error;
+    }
+  }
+
+  /** Where the browser says it is, checked against where it is allowed to be. */
+  #checkHost(url: string): void {
+    if (url === '' || !this.allowedHosts?.length) return;
+    let hostname: string;
+    try { hostname = checkUrl(url).url.hostname; }
+    catch { throw new BrowserPreconditionError('Your browser is on an address this buddi cannot read. Navigate somewhere allowed and observe again.'); }
+    // A redirect can land anywhere; the allow list is about where the browser
+    // ends up, not only about where it was asked to go.
+    if (!this.allowedHosts.includes(hostname)) throw new BrowserPreconditionError('This website is outside the configured browser hosts.');
   }
 
   async perform(command: BrowserCommand): Promise<void> {
@@ -104,6 +135,8 @@ export class ExtensionDriver implements BrowserDriver {
   async observe(): Promise<Observation> {
     const result = await this.#send('observe');
     const seen = observationSchema.parse(result.observation ?? {});
+    this.#checkHost(seen.url);
+    for (const tab of seen.tabs) this.#checkHost(tab.url);
     this.#picture = undefined;
     this.#observation = { id: randomUUID(), url: seen.url, title: seen.title, tree: seen.tree.slice(0, 32_000),
       targets: seen.targets, tabs: seen.tabs, capturedAt: new Date().toISOString() };

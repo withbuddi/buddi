@@ -46,7 +46,9 @@ const protocol = new Protocol({
   chrome,
   version: chrome.runtime.getManifest().version,
   send: (frame) => socket?.send(JSON.stringify(frame)),
-  execute: (command) => commands.run(command),
+  execute: (command, cancel) => commands.run(command, cancel),
+  // The socket ended: sessions and refs go with it. The tabs do not.
+  onReset: () => commands.reset(),
   onState: (state) => {
     last = state;
     // The popup may not be open; nobody is listening then, and that is fine.
@@ -119,4 +121,16 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
 
 chrome.runtime.onInstalled.addListener(() => void connect());
 chrome.runtime.onStartup.addListener(() => void connect());
+
+/*
+ * The backoff timer lives in the worker, and an idle worker is evicted, which
+ * would leave a browser that never reconnects until the owner opened the popup.
+ * An alarm outlives the worker: it wakes it up once a minute, and `connect`
+ * returns immediately when a socket is already open, so a connected browser
+ * pays nothing for it.
+ */
+const RECONNECT_ALARM = 'buddi-reconnect';
+chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === RECONNECT_ALARM) void connect(); });
+
 void connect();
