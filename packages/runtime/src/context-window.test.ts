@@ -12,8 +12,10 @@ import {
   CHARS_PER_TOKEN,
   contextWindowTokens,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
+  estimateTokens,
   transcriptBudgetChars,
-  transcriptCharsForModel,
+  transcriptTokenBudget,
+  transcriptTokensForModel,
   TRANSCRIPT_WINDOW_SHARE,
 } from './context-window.js';
 
@@ -65,23 +67,55 @@ describe('the window of a model we bind', () => {
 });
 
 describe('the transcript budget that window buys', () => {
-  it('is the stated share of the window, in characters', () => {
-    expect(transcriptBudgetChars(200_000)).toBe(Math.floor(200_000 * TRANSCRIPT_WINDOW_SHARE * CHARS_PER_TOKEN));
-    expect(transcriptBudgetChars(200_000)).toBe(432_000);
+  it('is the stated share of the window, in tokens', () => {
+    expect(transcriptTokenBudget(200_000)).toBe(Math.floor(200_000 * TRANSCRIPT_WINDOW_SHARE));
+    expect(transcriptTokenBudget(200_000)).toBe(100_000);
   });
 
   it('leaves room to answer in: never the whole window', () => {
-    expect(transcriptBudgetChars(200_000)).toBeLessThan(200_000 * CHARS_PER_TOKEN);
+    expect(transcriptTokenBudget(200_000)).toBeLessThan(200_000);
   });
 
   it('scales with the model, which is the whole point', () => {
-    const small = transcriptCharsForModel('gpt-4o', 'openai');
-    const large = transcriptCharsForModel('claude-opus-5[1m]', 'anthropic');
+    const small = transcriptTokensForModel('gpt-4o', 'openai');
+    const large = transcriptTokensForModel('claude-opus-5[1m]', 'anthropic');
     expect(large).toBeGreaterThan(small * 5);
   });
 
   it('never returns zero for a nonsense window', () => {
-    expect(transcriptBudgetChars(0)).toBe(transcriptBudgetChars(DEFAULT_CONTEXT_WINDOW_TOKENS));
-    expect(transcriptBudgetChars(Number.NaN)).toBeGreaterThan(0);
+    expect(transcriptTokenBudget(0)).toBe(transcriptTokenBudget(DEFAULT_CONTEXT_WINDOW_TOKENS));
+    expect(transcriptTokenBudget(Number.NaN)).toBeGreaterThan(0);
+  });
+
+  it('expresses the same budget in prose characters, for the cheap precheck', () => {
+    expect(transcriptBudgetChars(200_000)).toBe(Math.floor(100_000 * CHARS_PER_TOKEN));
+  });
+});
+
+describe('what a transcript costs, estimated', () => {
+  it('counts English prose at the assumed characters per token', () => {
+    const prose = 'the quick brown fox jumps over the lazy dog. '.repeat(20);
+    expect(estimateTokens(prose)).toBe(Math.ceil(prose.length / CHARS_PER_TOKEN));
+  });
+
+  it('counts CJK at one token a character, because that is what it costs', () => {
+    // The bug this closes: 200k characters of Japanese claiming the room of
+    // 55k tokens, and filling the window three and a half times over.
+    const japanese = '今日は銀行の残高を確認してください。'.repeat(50);
+    expect(estimateTokens(japanese)).toBeGreaterThanOrEqual(japanese.length);
+    expect(estimateTokens(japanese)).toBeGreaterThan(estimateTokens('a'.repeat(japanese.length)) * 3);
+  });
+
+  it('is never below what the same text costs as prose, for dense JSON', () => {
+    // ASCII JSON still tokenises worse than 3.6 characters a token; that
+    // residual is what the 50% reserve is for, not this estimate.
+    const json = JSON.stringify({ observation: { id: 'a1b2', targets: Array.from({ length: 40 }, (_, i) => ({ ref: `t${i}`, name: `field_${i}` })) } });
+    expect(estimateTokens(json)).toBe(Math.ceil(json.length / CHARS_PER_TOKEN));
+    expect(estimateTokens(json)).toBeGreaterThan(0);
+  });
+
+  it('charges an emoji more than a letter, and empty text nothing', () => {
+    expect(estimateTokens('🙂')).toBeGreaterThanOrEqual(2);
+    expect(estimateTokens('')).toBe(0);
   });
 });

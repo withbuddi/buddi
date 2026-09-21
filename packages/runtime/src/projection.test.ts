@@ -217,3 +217,46 @@ describe('spent observations', () => {
     expect(JSON.stringify(bounded)).not.toContain('left out for room');
   });
 });
+
+describe('a browser result that carries no page', () => {
+  const TREE = 'Available balance $4,213.55 — '.repeat(200);
+  const page = (i: number): string =>
+    JSON.stringify({ completed: true, observation: { id: `o${i}`, url: `https://bank.example/${i}`, title: `Page ${i}`, tree: TREE } });
+
+  const call = (id: string, name: string, action: string): NeutralMessage =>
+    ({ role: 'assistant', content: [{ type: 'tool_use', id, name, input: { action } }] });
+  const result = (id: string, content: string, failed = false): NeutralMessage =>
+    ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(failed ? { is_error: true } : {}) }] });
+
+  it('never evicts the live page: status and failures do not count as observations', () => {
+    // The sequence that broke it: the page the agent is acting on, then a
+    // status call and a failed click. Both carry no tree, no observation id
+    // and no refs — and the next action needs exactly those, by value.
+    const turns: NeutralMessage[] = [
+      call('c0', 'browser.act', 'navigate'), result('c0', page(0)),
+      call('c1', 'browser.act', 'click'), result('c1', page(1)),
+      call('c2', 'browser.status', ''), result('c2', JSON.stringify({ mode: 'browser', busy: false })),
+      call('c3', 'browser.act', 'click'), result('c3', JSON.stringify({ error: 'Target is missing or ambiguous.' }), true),
+    ];
+    const out = compactObservations(turns);
+    // The two pages are the only observations, and the latest is untouched.
+    expect((out[3]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    expect((out[1]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    // The results with no page in them are left exactly as they were.
+    expect((out[5]!.content[0] as { content: string }).content).toBe(JSON.stringify({ mode: 'browser', busy: false }));
+    expect((out[7]!.content[0] as { content: string }).content).toContain('Target is missing');
+  });
+
+  it('still reduces an older page once two newer ones exist', () => {
+    const turns: NeutralMessage[] = [
+      call('c0', 'browser.act', 'navigate'), result('c0', page(0)),
+      call('c1', 'browser.status', ''), result('c1', JSON.stringify({ mode: 'browser' })),
+      call('c2', 'browser.act', 'click'), result('c2', page(2)),
+      call('c3', 'browser.act', 'click'), result('c3', page(3)),
+    ];
+    const out = compactObservations(turns);
+    expect((out[1]!.content[0] as { content: string }).content).toContain('earlier observation, summarised');
+    expect((out[5]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    expect((out[7]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+  });
+});

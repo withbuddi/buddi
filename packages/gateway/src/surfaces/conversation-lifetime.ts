@@ -85,7 +85,7 @@
  * anything longer would become the noise the owner learns to skip.
  */
 import { withdrawOffers, type Queryable } from '@buddi/core';
-import { projectedTranscriptChars, transcriptBudget } from './context-budget.js';
+import { projectedTranscriptTokens, transcriptBudget } from './context-budget.js';
 
 /** Silence longer than this ends a conversation. Three hours: a new sitting. */
 export const IDLE_TIMEOUT_MS = 3 * 60 * 60_000;
@@ -122,17 +122,20 @@ export interface ConversationVitals {
   /** Total characters of stored message content. */
   chars: number;
   /**
-   * What those messages cost the model once spent observations are reduced to
-   * a line each — the number the size rule is really about. Absent when nobody
-   * has asked (the stored count is one cheap aggregate; this one reads every
-   * row), and the stored count stands in for it then.
+   * What those messages cost the model, in tokens, once spent observations are
+   * reduced to a line each — the number the size rule is really about. Absent
+   * when nobody has asked (the stored count is one cheap aggregate; this one
+   * reads every row), and the character count stands in for it then.
    */
-  projectedChars?: number | undefined;
+  projectedTokens?: number | undefined;
 }
 
 export interface LifetimeLimits {
   idleMs?: number | undefined;
+  /** The cheap precheck, against stored characters. */
   maxChars?: number | undefined;
+  /** The real limit, against the projected transcript. */
+  maxTokens?: number | undefined;
 }
 
 /**
@@ -154,9 +157,14 @@ export function conversationExpiry(
   const maxChars = limits.maxChars ?? MAX_TRANSCRIPT_CHARS;
   const idle = now.getTime() - vitals.lastActivityAt.getTime();
   if (Number.isFinite(idle) && idle > idleMs) return 'idle';
-  // What is *sent* is what costs: a transcript of 300k stored characters whose
-  // spent observations reduce to 40k has not outgrown anything.
-  if ((vitals.projectedChars ?? vitals.chars) > maxChars) return 'size';
+  // What is *sent* is what costs, and it is charged in tokens: a transcript of
+  // 300k stored characters whose spent observations reduce to 10k tokens has
+  // outgrown nothing. Until somebody has projected it, the stored characters
+  // are all there is to go on.
+  if (vitals.projectedTokens !== undefined && limits.maxTokens !== undefined) {
+    return vitals.projectedTokens > limits.maxTokens ? 'size' : null;
+  }
+  if (vitals.chars > maxChars) return 'size';
   return null;
 }
 
@@ -267,12 +275,14 @@ export async function conversationForTurn(
   }
   if (input.continuation === true) return { conversationId: current };
 
-  // The limit is the bound model's, floored at the constant above. A caller
-  // that names one (a test, a surface with its own reason) is obeyed as is.
+  // The limit is the model's, not a constant. A caller that names one (a test,
+  // a surface with its own reason) is obeyed as is, in characters, the way it
+  // always was.
   const budget = input.maxChars === undefined
     ? await transcriptBudget(pool, current).catch(() => null)
     : null;
-  const maxChars = input.maxChars ?? budget?.maxChars ?? MAX_TRANSCRIPT_CHARS;
+  const maxChars = input.maxChars ?? budget?.precheckChars ?? MAX_TRANSCRIPT_CHARS;
+  const maxTokens = budget?.maxTokens;
 
   let reason: LifetimeReason | null = null;
   let vitals: ConversationVitals = { messages: 0, lastActivityAt: null, chars: 0 };
@@ -288,14 +298,17 @@ export async function conversationForTurn(
   }
   // The stored count said it is over. That count includes page trees nobody
   // sends any more, so the decision is taken again on what is actually
-  // projected — the cheap aggregate only decided whether to look.
-  if (reason === 'size') {
-    const projected = await projectedTranscriptChars(pool, current).catch(() => null);
+  // projected — the cheap aggregate only decided whether to look. The
+  // projection is cached against these same vitals, so a conversation that
+  // sits over the character precheck is not re-read on every turn.
+  if (reason === 'size' && maxTokens !== undefined) {
+    const projected = await projectedTranscriptTokens(pool, current, vitals).catch(() => null);
     if (projected !== null) {
-      vitals = { ...vitals, projectedChars: projected };
+      vitals = { ...vitals, projectedTokens: projected };
       reason = conversationExpiry(vitals, input.now, {
         ...(input.idleMs === undefined ? {} : { idleMs: input.idleMs }),
         maxChars,
+        maxTokens,
       });
     }
   }
@@ -316,9 +329,10 @@ export async function conversationForTurn(
   // can see in the log is a loss nobody can argue with.
   input.log?.(
     `conversation lifetime: ${current} ended (${reason}: ${vitals.messages} messages, ` +
-      `${vitals.chars} stored chars, ` +
-      `${vitals.projectedChars ?? vitals.chars} projected, limit ${maxChars}` +
-      `${budget?.model ? ` for ${budget.model} (${budget.windowTokens} tokens)` : ''}` +
+      `${vitals.chars} stored chars` +
+      `${vitals.projectedTokens === undefined ? '' : `, ${vitals.projectedTokens} projected tokens`}` +
+      `, limit ${maxTokens === undefined ? `${maxChars} chars` : `${maxTokens} tokens`}` +
+      `${budget?.model ? ` for ${budget.model} (${budget.windowTokens}-token window, ${budget.source})` : ''}` +
       `) — this turn runs in ${conversationId}`,
   );
   return {

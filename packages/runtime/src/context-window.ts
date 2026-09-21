@@ -10,19 +10,24 @@
  * loses the task it was in the middle of. Meanwhile the model it is talking to
  * has a 200k or 1M token window standing idle.
  *
- * So the budget is a property of the bound model. Two constants turn a window
- * into a transcript limit, and both are deliberately conservative:
+ * So the budget is a property of the bound model, and it is counted in
+ * **tokens**, not characters, because characters are not a currency any model
+ * accepts:
  *
- *  - `CHARS_PER_TOKEN` (3.6) converts a character count — which is what the
- *    database can measure cheaply — into tokens. English prose is nearer 4;
- *    JSON tool results, URLs and identifiers tokenise worse, and a transcript
- *    past the limit is mostly tool results. Under-estimating characters per
- *    token errs towards rolling over sooner, which is the safe direction.
- *  - `TRANSCRIPT_WINDOW_SHARE` (0.6) is the share of the window the *history*
+ *  - `estimateTokens` is the hybrid. Every non-ASCII character counts as a
+ *    whole token, because CJK, Cyrillic, Greek and emoji tokenise at or near
+ *    one token per character and a 3.6× conversion would let a Japanese
+ *    transcript claim three and a half times the room it has. Everything else
+ *    counts at `CHARS_PER_TOKEN` (3.6), which is about right for English prose
+ *    and still optimistic for dense JSON, URLs and identifiers — the residual
+ *    error there is what the reserve below is for.
+ *  - `TRANSCRIPT_WINDOW_SHARE` (0.5) is the share of the window the *history*
  *    may take. The rest pays for the system prompt, the memory preamble, the
  *    tool schemas (which are large), the turn's own new input, and the answer
- *    itself with its thinking budget. A history allowed the whole window
- *    leaves no room to reply in.
+ *    itself with its thinking budget — and for the fact that the estimate
+ *    above is an estimate. A history allowed the whole window leaves no room
+ *    to reply in, and one allowed 60% of it left too little slack for a
+ *    transcript that tokenises worse than prose.
  *
  * The table is a fallback, not a source of truth: no provider serves a context
  * window over the wire in a shape worth depending on, and a wrong entry here
@@ -31,11 +36,11 @@
  * never heard of is never given more room than it can hold.
  */
 
-/** Characters per token, assumed. Low on purpose: see the note above. */
+/** ASCII characters per token, assumed. Low on purpose: see the note above. */
 export const CHARS_PER_TOKEN = 3.6;
 
 /** The share of a model's window the stored transcript may occupy. */
-export const TRANSCRIPT_WINDOW_SHARE = 0.6;
+export const TRANSCRIPT_WINDOW_SHARE = 0.5;
 
 /** What a model this table does not know is assumed to hold. */
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
@@ -171,19 +176,51 @@ export function contextWindowTokens(
 }
 
 /**
- * The characters of transcript a window affords. The conversation lifetime's
- * size limit, before its floor is applied.
+ * What a piece of transcript costs, in tokens.
+ *
+ * Hybrid and deliberately pessimistic where it is cheap to be: a non-ASCII
+ * character is one token, an ASCII one is `1 / CHARS_PER_TOKEN`. A surrogate
+ * pair (an emoji) counts as two, which is also what most tokenisers charge.
+ *
+ * This is an estimate, not a count. Nothing here calls a provider: the number
+ * is wanted before a request exists, on every turn, for a decision whose cost
+ * of being slightly wrong is one early rollover. `TRANSCRIPT_WINDOW_SHARE`
+ * carries the error.
  */
-export function transcriptBudgetChars(windowTokens: number): number {
-  const tokens = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : DEFAULT_CONTEXT_WINDOW_TOKENS;
-  return Math.floor(tokens * TRANSCRIPT_WINDOW_SHARE * CHARS_PER_TOKEN);
+export function estimateTokens(text: string): number {
+  let ascii = 0;
+  let wide = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) > 127) wide += 1; else ascii += 1;
+  }
+  return Math.ceil(wide + ascii / CHARS_PER_TOKEN);
 }
 
-/** The two steps together: model in, characters of transcript out. */
-export function transcriptCharsForModel(
+/**
+ * The tokens of transcript a window affords: the conversation lifetime's real
+ * size limit.
+ */
+export function transcriptTokenBudget(windowTokens: number): number {
+  const tokens = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : DEFAULT_CONTEXT_WINDOW_TOKENS;
+  return Math.floor(tokens * TRANSCRIPT_WINDOW_SHARE);
+}
+
+/**
+ * The same budget expressed in characters, for the two places that can only
+ * speak in characters: the cheap `sum(length(content))` precheck, and the
+ * dashboard's transcript meter. Prose, at `CHARS_PER_TOKEN` — a transcript
+ * that is mostly CJK will reach its token budget long before this many
+ * characters, which is why the token budget is what actually decides.
+ */
+export function transcriptBudgetChars(windowTokens: number): number {
+  return Math.floor(transcriptTokenBudget(windowTokens) * CHARS_PER_TOKEN);
+}
+
+/** The two steps together: model in, tokens of transcript out. */
+export function transcriptTokensForModel(
   model: string,
   provider?: ContextProvider | undefined,
   override?: number | null | undefined,
 ): number {
-  return transcriptBudgetChars(contextWindowTokens(model, provider, override));
+  return transcriptTokenBudget(contextWindowTokens(model, provider, override));
 }

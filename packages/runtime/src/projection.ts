@@ -193,6 +193,13 @@ export const OBSERVATION_TOOLS: readonly string[] = ['browser.act', 'browser.sta
  * How many observations stay whole. Two, not one: the model needs the page it
  * is acting on *and* the page before it, to tell "the click worked" from "the
  * click did nothing". A third adds cost without adding an answer.
+ *
+ * *Observations*, not results. A `browser.status` answer and a failed action
+ * carry no page: they have no tree, no observation id and no target refs, so
+ * they cost nothing to keep and reducing them would save nothing. Counting
+ * them was a bug — two of them after the live page evicted that page, and the
+ * next action needs its observation id and its refs by value, so the agent had
+ * to observe again or act on evidence it no longer had.
  */
 export const OBSERVATIONS_KEPT_WHOLE = 2;
 
@@ -226,38 +233,42 @@ export function compactObservations(
   }
   if (calls.size === 0) return messages.map((m) => ({ role: m.role, content: m.content }));
 
-  // The observations, oldest first, by where they sit.
-  const found: Array<{ message: number; block: number }> = [];
+  // The results that actually carry a page, oldest first, by where they sit
+  // and with the page already parsed out of them. A result with no page in it
+  // is not an observation and is left exactly as it is.
+  const found: Array<{ message: number; block: number; page: { url: string; title: string } }> = [];
   messages.forEach((message, mi) => {
     message.content.forEach((block, bi) => {
-      if (block.type === 'tool_result' && calls.has(block.tool_use_id)) found.push({ message: mi, block: bi });
+      if (block.type !== 'tool_result' || !calls.has(block.tool_use_id)) return;
+      const page = observationOf(block.content);
+      if (page) found.push({ message: mi, block: bi, page });
     });
   });
   const compact = found.slice(0, Math.max(0, found.length - Math.max(0, keepWhole)));
   if (compact.length === 0) return messages.map((m) => ({ role: m.role, content: m.content }));
 
-  const at = new Set(compact.map((p) => `${p.message}:${p.block}`));
+  const at = new Map(compact.map((p) => [`${p.message}:${p.block}`, p.page]));
   return messages.map((message, mi) => ({
     role: message.role,
     content: message.content.map((block, bi) => {
-      if (!at.has(`${mi}:${bi}`) || block.type !== 'tool_result') return block;
+      const page = at.get(`${mi}:${bi}`);
+      if (!page || block.type !== 'tool_result') return block;
       const call = calls.get(block.tool_use_id)!;
-      return { ...block, content: observationLine(call, block.content, block.is_error === true) };
+      return { ...block, content: observationLine(call, page, block.is_error === true) };
     }),
   }));
 }
 
-/** `[browser.act click — Accounts (https://…) — ok]`, and nothing else. */
+/** `[browser.act click — Accounts — https://… — ok]`, and nothing else. */
 function observationLine(
   call: { name: string; action: string },
-  content: string,
+  seen: { url: string; title: string },
   failed: boolean,
 ): string {
-  const seen = observationOf(content);
   const parts = [
     call.action ? `${call.name} ${call.action}` : call.name,
-    seen?.title ?? '',
-    seen?.url ?? '',
+    seen.title,
+    seen.url,
     failed ? 'failed' : 'ok',
   ].filter((part) => part !== '');
   return `[earlier observation, summarised: ${parts.join(' — ')}; the whole of it is in the transcript]`;
