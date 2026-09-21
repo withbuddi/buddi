@@ -6,7 +6,7 @@
  * agent is doing is not here: it is on the Canvas of the conversation doing it,
  * and this page only says who is driving and links there.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, type BrowserStatus, type ControlSettings } from '../api';
 import { chatRoute } from '../routes';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
@@ -152,16 +152,67 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
 }
 
 /**
+ * The id Chrome gives this extension, which is the address the page sends to.
+ *
+ * Mirrored by hand from `packages/extension/src/id.ts`: the dashboard bundle
+ * must not import the extension's sources, and one string is a smaller price
+ * than a dependency between two things that are built differently and shipped
+ * separately. It is derived from the public key in the extension's manifest,
+ * so it is the same id on every machine, which is the whole point of pinning
+ * that key.
+ */
+const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
+
+/** What the extension answers `buddi.status` with. */
+interface ExtensionProbe {
+  installed: true;
+  version: string;
+  state: 'disconnected' | 'pairing' | 'paired';
+  code?: string;
+  gateway: string;
+}
+
+declare const chrome: { runtime?: { sendMessage?: (id: string, message: unknown) => Promise<unknown> } } | undefined;
+
+/**
+ * Is the buddi extension in the browser reading this page?
+ *
+ * There is no way to ask that but to speak to it: a page cannot enumerate
+ * extensions, and the manifest lets only loopback pages — this one — send it a
+ * message. A rejected promise is the answer "not installed", and so is any
+ * other browser, where `chrome.runtime` does not exist at all.
+ */
+async function askExtension(): Promise<ExtensionProbe | null> {
+  try {
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) return null;
+    const answer = await chrome.runtime.sendMessage(EXTENSION_ID, { type: 'buddi.status' }) as ExtensionProbe | undefined;
+    return answer?.installed ? answer : null;
+  } catch { return null; }
+}
+
+/** The same buddi, seen from two sides: the popup's address against this page's. */
+function sameGateway(gateway: string): boolean {
+  try { return new URL(gateway).origin === window.location.origin; } catch { return false; }
+}
+
+/**
  * Pair your browser, and say where the extension lives.
  *
  * Its own poll rather than a field on the browser status: the connection comes
  * and goes with Chrome, and the pairing code appears while this page is open.
+ * The extension is polled from here too, on the same three seconds, so the
+ * owner is told which half is missing instead of being left to guess: a page
+ * that waits for a code no extension is showing looks broken.
  */
 function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.extension(), [], 3_000);
+  const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const [code, setCode] = useState('');
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // The code is on screen in the popup already; typing it again is busywork.
+  const offered = probe?.state === 'pairing' ? probe.code ?? '' : '';
+  useEffect(() => { if (offered) setCode(offered); }, [offered]);
   const run = async (action: () => Promise<unknown>) => {
     setWorking(true); setFailure(null);
     try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
@@ -180,6 +231,16 @@ function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
           {data?.extension ? ` · extension ${data.extension}` : ''}
         </span>
       </Toolbar>
+      <Stack>
+        <p className="muted">
+          {probe ? `Extension found, version ${probe.version}.` : 'The buddi extension is not installed in this browser.'}
+          {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
+          {probe?.state === 'disconnected' ? ' It is not connected yet: press Connect in its popup.' : ''}
+        </p>
+        {probe && !sameGateway(probe.gateway) ? (
+          <Notice tone="warning">{`The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in the popup.`}</Notice>
+        ) : null}
+      </Stack>
       {data?.pending ? (
         <Toolbar valign="end">
           <Field grow label="Pair your browser" hint="Type the six digits the buddi extension is showing.">

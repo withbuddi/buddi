@@ -26,13 +26,50 @@ coordinate clicking, no passwords.
 1. Click the buddi icon in Chrome's toolbar. It shows the address of the buddi
    on this machine (`http://127.0.0.1:4317` unless you moved it) and a
    **Connect** button.
-2. Your buddi answers with a six-digit code, which the popup shows.
-3. In buddi, open Settings, Computer & browser, and type that code into
-   **Pair your browser**. The code is good for five minutes.
+2. Your buddi answers with a six-digit code, which the popup shows, with a
+   **Copy** button beside it.
+3. In buddi, open Settings, Computer & browser. If you are reading the
+   dashboard in the same Chrome, the code is already in **Pair your browser**;
+   otherwise type it. The code is good for five minutes.
 
 That is once. From then on the extension reconnects on its own whenever Chrome
 and your buddi are both running. **Forget this buddi** in the popup, or *Forget
 this browser* in Settings, ends it.
+
+## Its id, and the key that fixes it
+
+Chrome makes an unpacked extension's id out of the folder path unless the
+manifest pins a public key, so the id used to change with the machine and with
+every reinstall. `manifest.json` now carries a `key`: the public half of an RSA
+pair generated once with
+
+```
+openssl genrsa -out buddi-extension.pem 2048
+openssl rsa -in buddi-extension.pem -pubout -outform DER | base64
+```
+
+The id is Chrome's own derivation from those bytes — the SHA-256 of the DER
+public key, first sixteen bytes, each hex digit mapped from `0`-`f` onto
+`a`-`p` — and it is written down as `EXTENSION_ID` in `src/id.ts`, mirrored in
+the dashboard, and checked against the manifest by `manifest.test.ts`:
+
+```
+kmbckpnnjfggeffkkbmkggojnolkdokb
+```
+
+**The private half is not in this repository and is not needed.** It signs a
+`.crx` for the Chrome Web Store; loading the folder unpacked uses the public
+key only. Nothing here is weakened by its absence, and nothing is gained by
+keeping it around.
+
+The fixed id is what lets the dashboard find the extension. `manifest.json`
+allows loopback pages — `http://127.0.0.1/*`, `http://localhost/*`,
+`http://[::1]/*`, and a match pattern carries no port, so every port matches —
+to send one message, `{type:'buddi.status'}`. The worker checks `sender.origin`
+is loopback itself and answers with whether it is connected, which version it
+is and which buddi it is pointed at, plus the pairing code while one is on
+screen. Anything else, from anywhere else, is ignored. No token ever leaves
+`chrome.storage.local`.
 
 ## What it can do, and what it asks for
 
