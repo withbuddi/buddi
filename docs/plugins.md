@@ -1,11 +1,194 @@
 # Writing a plugin
 
 Everything an agent can actually *do* is a plugin. This document is the guide to
-writing one: the contract, the five things a plugin can contribute, the rules
-that bite, and a complete worked example you can copy.
+writing one: the ten-minute path from nothing to a tool an agent can call, the
+contract, the things a plugin can contribute, the rules that bite, a complete
+worked example you can copy, and a field-by-field reference at the end.
 
-Read `packages/core/src/tools.ts` first. It is 200 lines and it is the whole
-contract. This document explains it; it does not replace it.
+`packages/core/src/tools.ts` is the whole contract, in one file, and it is worth
+reading before or alongside this. This document explains it; it does not replace
+it. §9 is every field of it in a table.
+
+---
+
+## Start here: nothing to a running plugin
+
+Ten minutes, seven commands, no editing of buddi's source at any point.
+
+### What you need
+
+| | |
+| --- | --- |
+| **Node 22** | `node --version` → `v22.x` or newer. |
+| **pnpm** | `corepack enable` is enough; any recent npm works too. |
+| **A buddi you can restart** | `buddi doctor` answers, and `buddi plugins list` prints a table. If `buddi` is not on your PATH you are in a checkout: `pnpm build` there first, and read `docs/install.md`. |
+| **Postgres** | Already true if buddi runs: your plugin's schema goes in the same database. |
+| **`@buddi/core`** | The contract package, at the version your installation runs. `buddi plugins init` reads that version and writes it into your `package.json` for you. |
+
+You do **not** need a fork of buddi, a branch, or a line added to any file in
+it. A plugin is an ordinary npm-style package that lives wherever you keep your
+own code.
+
+### 1. Scaffold it
+
+```bash
+buddi plugins init weather            # writes ./weather
+buddi plugins init weather --dir ~/src/weather
+```
+
+It refuses a directory that already exists, so it can never write over work.
+What it writes:
+
+```
+weather/
+  package.json            # "buddi": { "manifest": "manifest" }, the keyword,
+                          #   @buddi/core as a PEER, and a dev link to the core
+                          #   your installation is running
+  tsconfig.json
+  src/index.ts            # the manifest: one `auto` tool, one `gated` tool with
+                          #   describe(), and a commented-out source stub
+  src/index.test.ts       # loads the manifest through core's own validation
+  migrations/001_weather.sql   # `create table note (...)`, in your own schema
+  buddi.md                # what the owner reads before anything is imported
+  README.md
+  .gitignore
+```
+
+The name you give is the plugin family (`weather.forecast`), the directory under
+`<data>/plugins`, and — with `-` folded to `_` — the Postgres schema it owns. It
+must be lowercase, start with a letter, and not be the name of a plugin this
+build already ships (`init` refuses those).
+
+### 2. Build it and run its test
+
+```bash
+cd weather
+pnpm install
+pnpm build          # tsc → dist/
+pnpm test           # registers the manifest in a real ToolRegistry
+```
+
+The test is the cheapest proof that the plugin will load: `ToolRegistry.register`
+is exactly what runs at startup — it derives a JSON Schema from every zod input
+and refuses one no provider would accept, refuses a colliding tool name, and
+parses every view descriptor. It needs no database.
+
+If `@buddi/core` will not resolve, the scaffold's devDependency is a `link:` at
+the core your installation is running and that checkout has to be **built**
+(`pnpm -r build` there): the link points at the package, and its types and entry
+point are in its `dist`.
+
+### 3. Install it from the directory
+
+```bash
+buddi plugins install ./weather          # stages it and prints what it claims
+buddi plugins install ./weather --yes    # approves it: imports it, migrates it
+```
+
+The first command installs **nothing**. It stages the package, reads its
+`package.json` and its `buddi.md`, hashes what is on disk, and prints the card —
+including the sentence that a plugin runs inside buddi's process with everything
+buddi can do. Your own directory is the one source that keeps the plain `--yes`;
+a package from a registry or a `.tgz` has to have its integrity hash typed back
+(§8).
+
+Approving is the first time your code is imported. Then the contribution summary
+is printed from your *manifest* — the `auto` tools first, in capitals — your
+`buddi.md` is compared with it, and your migrations are applied into your schema.
+
+### 4. Restart, and see it
+
+```bash
+buddi service restart     # a packaged install
+# or: stop `buddi serve` and start it again, in a checkout
+buddi plugins list
+```
+
+**Plugins are registered at start.** There is no reload; §8, "Plugins load at start", says why, and
+`buddi plugins dev` is the loop that makes living with it bearable.
+
+`buddi plugins list` should now show `ok weather 0.1.0 installed`. On the
+dashboard, **Plugins** lists what it brought and what it proposes. Nothing can
+call your tools yet: being installed grants nothing.
+
+### 5. Grant it to an agent
+
+A tool reaches a model only when an agent's own `tools:` line names it. Either
+edit the agent file in your agents directory:
+
+```yaml
+tools:
+  - weather.*
+```
+
+…or ask buddi to do it, which goes through the gated `platform.update_agent`
+and shows you the whole grant before it is written:
+
+```
+"grant @buddi the weather tools"
+```
+
+Then ask the agent something your tool answers. An `auto` tool runs inline; your
+`gated` one comes back as an approval card with the preview your `describe`
+rendered.
+
+### 6. The dev loop
+
+```bash
+buddi plugins dev ./weather
+```
+
+It watches `weather/dist`. On a rebuild it restarts the service when there is a
+service to restart, and otherwise prints the one line telling you to restart
+buddi yourself. Run `pnpm build --watch` beside it and the loop is: save, build,
+restart, ask.
+
+### 7. Ship it
+
+```bash
+npm pack                                    # → buddi-plugin-weather-0.1.0.tgz
+buddi plugins install ./buddi-plugin-weather-0.1.0.tgz
+```
+
+A tarball is the private path: it never goes near a registry, and it installs
+exactly like a published package — which means it is approved like one, with
+`--integrity <hash>`:
+
+```bash
+buddi plugins install ./buddi-plugin-weather-0.1.0.tgz
+#   … prints the card, including `integrity sha512-…`
+buddi plugins approve <id> --integrity sha512-…
+```
+
+Then publish, when you want other people to have it:
+
+```bash
+npm publish --access public
+buddi plugins install buddi-plugin-weather          # on somebody else's machine
+buddi plugins approve <id> --integrity sha512-…
+```
+
+Three things make a published plugin installable by a stranger, and the scaffold
+writes all three: the `keywords: ["buddi-plugin"]` they search for, the
+`"buddi": { "manifest": "manifest" }` field that lets the package be called
+`buddi-plugin-weather` while the manifest is `weather`, and `@buddi/core` as a
+**peer** dependency and never a normal one. §8 is the whole of distribution:
+what is staged, what is hashed, what the two approvals are, and what uninstall
+does.
+
+### Where to go next
+
+| If you want to… | Read |
+| --- | --- |
+| know what a plugin may contribute | §2 |
+| decide `auto` or `gated` | §2.1 |
+| poll the world with no agent in the loop | §2.2 |
+| watch for a fact and say so | §2.3 |
+| own tables | §3 |
+| copy something complete | §4 |
+| test it | §5 |
+| ship it to other people | §8 |
+| look up one field | §9 |
 
 ---
 
@@ -25,11 +208,22 @@ Core never imports a plugin. That direction is not a convention:
   `[]`, and `buddi missions add-defaults` registers only the gateway's own
   `sentinel-wake`.
 
-"Droppable" here means exactly that: **delete the directory, remove one
-registration line, drop one Postgres schema, and the system still boots.** There
-is no runtime plugin framework, no dynamic loading, no sandbox. A plugin is
-compiled into the gateway at its composition root, and the security properties
-come from the registry and the approval machinery, not from isolation.
+"Droppable" here means exactly that: **`buddi plugins uninstall <name>` removes
+the record, the code stops loading, and the system still boots.** Its Postgres
+schema is kept unless you also `--purge` it (§8).
+
+There is no sandbox, and that is the one thing to be clear-eyed about. A plugin
+*is* dynamically loaded — `packages/gateway/src/plugins/load.ts` imports the
+entry point named in `plugins.json`, once, at start — but loading is not
+isolation: the module runs inside buddi's process with everything buddi can do.
+The security properties come from the registry and the approval machinery, from
+the two approvals that stand between a package and its first import, and from
+the recorded hash that says later when the files changed. Not from a boundary
+around the running code, because there is none. The plugins this repository
+compiles in (`email`, `memory`, `artifacts`, `web`, the browser and host
+families) are registered at the composition root instead, in
+`createToolRegistry`; that line is for plugins shipped *inside* buddi and you
+never touch it to distribute one.
 
 What a plugin is *not*:
 
@@ -62,6 +256,7 @@ export interface PluginManifest {
   sources?: Source[];
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
+  home?: HomeContribution[];  // read-only blocks on the dashboard's Home page
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
   skills?: SuggestedSkill[];  // shared procedures you propose
   description?: string;       // one line, shown before anyone installs you
@@ -69,9 +264,11 @@ export interface PluginManifest {
 }
 ```
 
-Only `tools` is required, and it may be empty. The last four exist for one
+`name`, `version`, `schema`, `migrationsDir` and `tools` are required —
+`migrationsDir` may be `''` for a plugin that owns no tables, and `tools` may be
+empty. Everything after them is optional, and the last four exist for one
 reason: somebody who is not you has to decide whether to run your code. See
-§2.6 and §8.
+§2.6 and §8. Every field, with its type and one line, is §9.
 
 ### 2.1 Tools
 
@@ -84,10 +281,15 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   execute(input: I, ctx: ToolContext): Promise<O>;
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
   timeoutMs?: number;
+  reusableApproval?: boolean;   // the owner may remember their yes
+  producesArtifacts?: boolean;  // its output names files it saved
+  sequential?: boolean;         // dependent calls are skipped after it fails
+  waitsForOwner?: boolean;      // a success ends the run: the owner decides next
+  image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
 }
 ```
 
-**Choosing a tier.** `packages/core/src/registry.ts` executes exactly one:
+**Choosing a tier.** `packages/core/src/registry.ts` runs exactly one inline:
 
 ```ts
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -96,24 +298,32 @@ export const GATED_TIERS: readonly Tier[] = ['gated'];
 
 - **`auto`** — a read, or a write to your own schema. It runs inline inside the
   model's turn. Everything in `memory`, `artifacts` and `finance` is `auto`.
-- **`gated`** — it changes something outside this machine. `email.send` is the
-  only one shipped. `invoke` never runs it: the call becomes an immutable action
-  plus a pending approval, and the model is told `approval-required` with the
-  action id.
-- **`draft` and `session`** — refused with `tier-not-executable`. The machinery
-  those tiers need does not exist yet. Declaring one means your tool never runs.
+- **`gated`** — it changes something outside this machine. `invoke` never runs
+  it: the call becomes an immutable action plus a pending approval, and the
+  model is told `approval-required` with the action id. `email.send` and
+  finance's two destructive tools are the shipped examples.
+- **`session`** — it runs only inside a live owner request. `invoke` executes it
+  when, and only when, there is an unexpired `ctx.ownerRequest`, this tool is
+  named in `ctx.sessionTools`, there is an agent and a conversation, and
+  `delegationDepth` is 0. Anything less is `session-not-authorized`.
+  `browser.act` is the one shipped at this tier; do not reach for it unless the
+  whole point of your tool is "only while the owner is asking, right now".
+- **`draft`** — refused with `tier-not-executable`. The machinery it needs does
+  not exist. Declaring it means your tool never runs.
 
 The rule of thumb: if you would want to read the arguments before it happened,
 it is `gated`.
 
-**`invoke` fails closed.** Four refusals, in order:
+**`invoke` fails closed.** The refusals, in the order they are decided:
 
 | Situation | `reason` |
 | --- | --- |
 | Name not registered | `unknown-tool` |
 | Zod rejects the arguments | `invalid-args` |
 | Tier `gated` | *not a refusal* — `approval-required` plus an `actionId` |
-| Tier `draft` / `session` | `tier-not-executable` |
+| Tier `gated` with `reusableApproval`, called by a delegate | `tool-error` — a delegate never inherits a standing approval |
+| Tier `session` with no live owner request, no session grant, or inside a delegation | `session-not-authorized` |
+| Tier `draft` | `tier-not-executable` |
 | `execute` threw | `tool-error` |
 
 A defect never surfaces as success, and the model never sees a raw exception.
@@ -186,7 +396,7 @@ transport can legitimately take (`email.send` uses 60s), and when your dispatch
 throws after the wire was touched, leave the claim in place and record the error
 rather than releasing it.
 
-**`ToolContext`, in full:**
+**`ToolContext`, the part every tool uses:**
 
 ```ts
 interface ToolContext {
@@ -196,11 +406,17 @@ interface ToolContext {
   timezone: string;         // IANA; render days with localDateString, never UTC
   conversationId?: string;  // provenance
   agentId?: string;         // provenance
-  delegationDepth?: number;
+  delegationDepth?: number; // 0 or absent = the owner started this run
   jobId?: string;
-  actionId?: string;        // gated execute only
+  actionId?: string;        // gated execute only — your idempotency key
+  signal?: AbortSignal;     // check it before each external operation
 }
 ```
+
+That is nine of eighteen fields; the rest are for the runtime's own tools
+(`group`, `surface`, `ownerRequest`, `sessionTools`, `nativeSearch`,
+`approvedEffect`, `suspend`, `systemContext`, `toolUseId`) and §9 lists every
+one of them.
 
 The optional fields are optional so every caller keeps compiling. A tool that
 *needs* one must fail closed when it is absent rather than guess — see
@@ -581,10 +797,14 @@ gateway has installed:
   plugin that is not built** (`if (!existsSync(entry)) continue`). Core with zero
   plugins is a valid state, so a missing `dist` is not an error.
 
-**Uninstalling.** Delete the package directory, remove the registration line, and
-`drop schema weather cascade`. Core keeps no reference to your tables — the rows
-in `core.migrations` for that schema are the only trace, and they are harmless.
-The exception is data core owns on your behalf (artifacts): that stays.
+**Uninstalling.** `buddi plugins uninstall weather` removes the record and the
+package directory and **keeps your schema**, printing its tables and their row
+counts so the owner knows what is being kept; `--purge --confirm weather` is the
+separate verb that drops it. Core keeps no reference to your tables either way —
+the rows in `core.migrations` for that schema are the only trace, and they are
+harmless. The exception is data core owns on your behalf (artifacts): that
+stays. §8 has the whole plan, including what happens to agents that were granted
+your tools.
 
 ---
 
@@ -995,8 +1215,9 @@ export default manifest;
 
 ```bash
 pnpm build                                  # in your plugin's directory
-buddi plugins install /path/to/weather      # reads what it contributes, installs nothing
-buddi plugins install /path/to/weather --yes
+buddi plugins install /path/to/weather      # stages it and prints what it claims
+buddi plugins install /path/to/weather --yes   # approves it, imports it, migrates it
+buddi service restart                       # plugins are registered at start
 ```
 
 That is the whole of it, and none of it touches buddi's source. The record is
@@ -1008,7 +1229,7 @@ applies your schema, `buddi missions add-defaults` reads your suggestions, and
 `platform.plugin_agents` offers your agents. See §8.
 
 **The plugins this repository ships are different**: `email`, `memory`,
-`artifacts` and `web` are compiled into the build, registered in
+`artifacts`, `web`, `browser` and `host` are compiled into the build, registered in
 `createToolRegistry` in `packages/gateway/src/agents/catalog.ts`, and they cannot
 be uninstalled because they are part of it. (`installedManifests()` derives the
 migratable subset from the registry rather than repeating the list — a
@@ -1111,9 +1332,12 @@ third needs a fake transport:
   refuses it as a whole, and from then on your `tier` is the policy. The registry
   executes `auto` only and turns `gated` into an action and an approval — so
   declaring `auto` on something that leaves the machine is the failure mode to
-  watch for in review, not a clever shortcut. (`draft` and `session` are labels
-  the type carries; the registry refuses them with `tier-not-executable` because
-  the machinery they need does not exist yet. Do not ship a tool at either.)
+  watch for in review, not a clever shortcut. (`session` is a real tier and a
+  narrow one — a live owner request, an explicit per-session grant and no
+  delegation — and `draft` is a label the registry refuses with
+  `tier-not-executable` because the machinery it needs does not exist yet. Do
+  not ship a tool at `draft`, and reach for `session` only when "while the owner
+  is asking" is the whole point.)
 - **Unknown tool and invalid arguments fail closed,** before any code of yours
   runs. A model that hallucinates a tool name gets `unknown-tool`; arguments zod
   rejects get `invalid-args` with the field path. Make the schema tight: bounds
@@ -1160,7 +1384,8 @@ third needs a fake transport:
 [ ] Manifest: name, version, schema, migrationsDir (absolute, resolved from the
     built file), tools — plus sentinels / sources / missions if you have them.
 [ ] Tool names namespaced to the plugin; no collision (the registry throws).
-[ ] Every tool's tier is 'auto' or 'gated'. Nothing declares 'draft' or 'session'.
+[ ] Every tool's tier is 'auto' or 'gated'. Nothing declares 'draft'; 'session'
+    only where a live owner request is the whole point.
 [ ] Every gated tool has describe(); the envelope is complete and the preview is
     rendered from it.
 [ ] Every gated execute() refuses without ctx.actionId and claims atomically on it.
@@ -1180,6 +1405,12 @@ third needs a fake transport:
     tools driven through registry.invoke; a gated tool proven not to send.
 [ ] `pnpm -r build && pnpm typecheck && pnpm test` green — check-boundaries
     included.
+[ ] package.json: "buddi": { "manifest": "manifest" }, keywords ["buddi-plugin"],
+    @buddi/core in peerDependencies and NOT in dependencies, and "files" naming
+    dist, migrations and buddi.md.
+[ ] buddi.md shipped, with a Schema: line that is the schema the manifest owns
+    and a Hosts: line that matches `network` — anything else costs the owner a
+    second approval.
 [ ] Proposed agents (if any): the smallest grant that does the job; no
     platform.* write tool and no platform.* glob; a skill shipped with each one;
     a persona that says what the agent cannot see.
@@ -1226,6 +1457,9 @@ would install a stranger's package with the same name and say nothing.
 
 ### Publishing one
 
+`buddi plugins init` writes all of this for you; what follows is what it wrote
+and why, so you can check it or do it by hand.
+
 ```jsonc
 {
   "name": "buddi-plugin-weather",
@@ -1244,6 +1478,14 @@ and its approvals would be written by a machine nobody asks. Staging enforces
 this — the staged tree's `node_modules/@buddi/core` is replaced by a symlink to
 the core the gateway is running — but declaring it correctly is what makes
 `npm install` of your package outside buddi behave the same way.
+
+`npm pack` builds the same tarball npm would publish, and
+`buddi plugins install ./buddi-plugin-weather-1.0.0.tgz` installs it: the same
+two approvals, the same integrity hash, and nothing on a registry. It is the
+right shape for a plugin that is nobody else's business, and it is also how you
+check what `npm publish` would actually ship before you ship it — anything
+missing from `files` is missing from that tarball, `migrations` and `buddi.md`
+included.
 
 Ship a `buddi.md` beside it. It is prose, it is what the owner reads *before*
 anything of yours is imported, and two labelled lines are parsed out of it:
@@ -1335,6 +1577,38 @@ cannot both rename into the same directory.
 
 The tools are registered by the next process start. The CLI and the API both
 say so; the API returns `restartNeeded: true`.
+
+### Plugins load at start
+
+There is no "reload installed plugins". An installed plugin's tools appear when
+a buddi process starts and not before, and that is a property of the design
+rather than a missing feature:
+
+- **the import happens once.** `loadPluginsOnce` imports every entry point in
+  `plugins.json` before any registry exists, and publishes the result to the
+  process. Node's module cache is keyed by URL, so re-importing a rebuilt
+  `dist/index.js` hands back the module that is already loaded; picking up new
+  code would mean cache-busting the specifier and leaking the old module, its
+  timers and its pools for the life of the process.
+- **the registry is built once and held by reference.** `createWiring` builds
+  one `ToolRegistry`, and the agent catalog is loaded *against* it while the
+  delegation, platform and canvas tools close over it. There is no
+  `unregister`: `ToolRegistry.register` throws on a name it already has. A
+  reload would have to swap an object that a dozen live closures are holding,
+  mid-run, and re-run the collision checks against a half-replaced set.
+
+So the loop is: build, restart, ask. `buddi plugins dev <dir>` is what makes
+that bearable — it watches `<dir>/dist` and, on a rebuild, restarts the service
+when this installation has one and otherwise prints the one line reminding you
+to restart buddi yourself:
+
+```bash
+buddi plugins dev ./weather
+```
+
+The one thing that *is* reloaded without a restart is the agent catalog: a new
+agent, or a changed tool grant, is reachable from every surface on its next
+turn. Agents are files the gateway reads; plugins are modules it imported.
 
 ### What is recorded, and what doctor does with it
 
@@ -1483,3 +1757,237 @@ stays:
 
 Everything above is planned before anything happens, printed, and only then
 applied — the same shape as an approval.
+
+---
+
+## 9. Reference: every field of the contract
+
+Generated by hand from `packages/core/src/tools.ts`, `sentinels/types.ts` and
+`views.ts`, and kept honest by `packages/core/src/plugin-reference.test.ts`: it
+reads these tables and the interface declarations and fails, naming the field,
+when one has something the other does not. A field added to the contract without
+a line here is a failing test, on purpose — the type says what it is, and only
+this says what it is *for*.
+
+"Required" is the type's own answer: a `?` in the declaration is `no`.
+
+### The manifest
+
+#### `PluginManifest`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `name` | `string` | yes | The plugin family: `finance`, `weather`. It names the tools, the record entry and the directory under `<data>/plugins`. It must equal the package's `name` or its `buddi.name`. |
+| `version` | `string` | yes | Part of the approved args hash. Bumping it voids every standing approval for this plugin's tools. |
+| `schema` | `string` | yes | The one Postgres schema this plugin owns. Checked against `^[a-z_][a-z0-9_]*$`; `core` and another plugin's schema are refused. |
+| `migrationsDir` | `string` | yes | **Absolute** path to a directory of `*.sql`, resolved from the *built* file. `''` means this plugin owns no tables. |
+| `tools` | `ToolDefinition<any, any>[]` | yes | Everything an agent can call. May be empty. |
+| `sentinels` | `Sentinel[]` | no | Deterministic watchers that run on a period and return findings. Most plugins have none. |
+| `sources` | `Source[]` | no | Pollers that originate runs with no agent in the loop. Most plugins have none. |
+| `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
+| `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
+| `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
+| `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
+| `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
+| `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
+| `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
+
+### Tools
+
+#### `ToolDefinition`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `name` | `string` | yes | Namespaced to the plugin: `finance.project_cashflow`. A collision with an already-registered name throws at `register()`. |
+| `description` | `string` | yes | What the model reads. Say *when* to use it, in the second person. |
+| `tier` | `Tier` | yes | `'auto' \| 'draft' \| 'gated' \| 'session'` — see the table below. |
+| `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0`. |
+| `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
+| `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
+| `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
+| `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
+| `timeoutMs` | `number` | no | How long the Executor waits before recording the attempt as `unknown`. `DEFAULT_EFFECT_TIMEOUT_MS` when absent. |
+| `sequential` | `boolean` | no | Dependent calls in the same model turn are skipped after this one fails. |
+| `waitsForOwner` | `boolean` | no | A successful call leaves a decision with the owner: no more tools this run. |
+| `image` | `(output, ctx) => Promise<{mime,data}\|undefined>` | no | An ephemeral image for the next model call. Never stored as base64. |
+
+The tiers, as `packages/core/src/registry.ts` enforces them:
+
+| `tier` | What `invoke` does |
+| --- | --- |
+| `auto` | Executes inline, now. A read, or a write to your own schema. |
+| `gated` | Records an immutable action plus a pending approval and answers `approval-required` with the action id. `execute` runs later, once, from `executeApproved`. |
+| `session` | Executes only with a live `ctx.ownerRequest`, this tool named in `ctx.sessionTools`, an agent and a conversation, and `delegationDepth === 0`. Anything less is `session-not-authorized`. |
+| `draft` | `tier-not-executable`. The machinery does not exist; a tool declaring it never runs. |
+
+#### `EffectDescription`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `envelope` | `unknown` | yes | Everything that decides what the world will see — every recipient, the resolved account, the hashes. It is what `core.effect_attempts` hashes before dispatch. |
+| `preview` | `string` | yes | The short plain sentence the owner approves. Rendered from the envelope, never from model prose; no markdown. |
+
+#### `ToolContext`
+
+What a tool is handed. Optional fields are optional so every caller keeps
+compiling: a tool that *needs* one must fail closed when it is absent rather
+than guess.
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `db` | `Pool` | yes | The installation's pool. Your schema is yours; nothing stops you reading another's, and nothing excuses it. |
+| `ownerId` | `string` | yes | Whose installation this is. |
+| `now` | `() => Date` | yes | The clock. Never read the wall clock directly. |
+| `timezone` | `string` | yes | The owner's IANA zone. Render a *day* with `localDateString`, never in UTC. |
+| `systemContext` | `() => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. |
+| `ownerRequest` | `{ id; text; expiresAt }` | no | Issued by an authenticated interactive surface, never by a model. What a `session` tool is checked against. |
+| `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate never inherits them. |
+| `signal` | `AbortSignal` | no | Cooperative cancellation. Check it before each external operation. |
+| `approvedEffect` | `{ envelope: unknown }` | no | Set only by the executor: the exact effect the owner approved. |
+| `conversationId` | `string` | no | Provenance. The loop fills it in for every call it makes. |
+| `agentId` | `string` | no | Provenance: who called. |
+| `toolUseId` | `string` | no | The `tool_use` block this call answers. Provenance, never authorization. |
+| `group` | `GroupContext` | no | The room this run speaks in, when it is a group run. Trusted context from the group row. |
+| `suspend` | `(actionId: string) => void` | no | Say the run is now waiting on an owner decision elsewhere; the loop stops dispatching and ends the run as awaiting it. |
+| `delegationDepth` | `number` | no | 0 or absent for an owner-started run, 1 inside a delegation. The delegation tool refuses at `>= 1`, so no cycle can exist. |
+| `surface` | `SurfaceProfile` | no | The surface this run is answering on. Delegation's one reader. |
+| `nativeSearch` | `{ provider; maxUses }` | no | Set when the provider is searching the web itself, server-side, instead of a tool being dispatched. |
+| `jobId` | `string` | no | The durable job this run belongs to, when a job started it. |
+| `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
+
+#### `GroupContext`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | The group's id. |
+| `name` | `string` | yes | What the room is called. |
+| `coordinator` | `string` | yes | The agent running the room. |
+| `members` | `readonly string[]` | yes | Member agent ids, in roster order. A member request is checked against this. |
+| `requestId` | `string` | yes | The owner request this run spends against. |
+
+### Sources
+
+#### `Source`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | Namespaced and stable, e.g. `email.inbox-poll`. It keys `core.source_runs`, so changing it restarts the ledger. |
+| `description` | `string` | yes | One line, for the install summary and the logs. |
+| `every` | `number` | yes | Poll period in **seconds**. |
+| `poll` | `(ctx) => Promise<void>` | yes | One pass. It owns its cursor and its transaction; core decides only when it is due. |
+
+#### `SourceContext`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `db` | `Pool` | yes | The pool. Commit your rows and your cursor in one transaction. |
+| `now` | `() => Date` | yes | The clock. |
+| `timezone` | `string` | yes | The owner's IANA zone, for a source that needs a *day*. |
+| `log` | `(line: string) => void` | yes | Operational logging. Never the owner's channel: a source notifies nobody. |
+| `enqueueRun` | `(input) => Promise<void>` | yes | Start a run: `{ agentId, prompt, dedupKey, conversationHint? }`. Idempotent on `dedupKey`, and it cannot join your transaction — enqueue after the commit. |
+
+### Sentinels
+
+#### `Sentinel`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | Namespaced and stable, e.g. `finance.floor-breach`. It keys `core.sentinel_runs`. |
+| `description` | `string` | yes | One line: what it watches. |
+| `every` | `number` | yes | Period in **seconds**. |
+| `run` | `(ctx) => Promise<Finding[]>` | yes | Deterministic: SQL and TypeScript, no model. Returning a shorter list is how you say a fact stopped being true. |
+
+#### `SentinelContext`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `db` | `Pool` | yes | The pool. |
+| `now` | `() => Date` | yes | The clock. |
+| `timezone` | `string` | yes | The owner's IANA zone, for a sentinel that needs a *day*. |
+
+#### `Finding`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `key` | `string` | yes | The identity of a *fact*, stable across runs. Anchor it to the date or the row the condition rests on. |
+| `severity` | `Severity` | yes | `'urgent'` wakes the owner through the `sentinel-wake` mission, then stays quiet 24 h. `'info'` goes to the weekly digest, then stays quiet 7 days. |
+| `title` | `string` | yes | One line. |
+| `detail` | `string` | yes | The evidence, in prose the owner can act on. |
+| `agentId` | `string` | no | Who should speak about it. Defaults to the wake mission's agent. |
+| `data` | `unknown` | no | Structured evidence, handed to that agent verbatim. |
+
+### Suggestions
+
+#### `SuggestedMission`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | Stable mission id, e.g. `friday-recap`. |
+| `name` | `string` | yes | What the owner sees in the mission list. |
+| `cron` | `string` | yes | Five fields. A mission with no schedule is infrastructure, not this. |
+| `prompt` | `string` | yes | The run's instructions. Unless `alwaysDeliver`, say what counts as worth speaking and to call `mission.silent` otherwise. |
+| `agentRole` | `string` | no | Which agent runs it, by capability. Resolved through the agent catalog; a role nobody claims is skipped out loud. |
+| `agentId` | `string` | no | Or pinned by name, when the mission is meaningless on any other agent. |
+| `timezone` | `string` | no | IANA zone; the installation's own (`BUDDI_TZ`) when omitted. |
+| `misfirePolicy` | `MisfirePolicy` | no | What a closed laptop owes the owner: `coalesce` (default), `latest-only`, `skip-after-deadline`. |
+| `alwaysDeliver` | `boolean` | no | The owner asked for this message whatever it says. Default false. |
+| `enabledByDefault` | `boolean` | no | Default true; false registers a placeholder switched off. |
+
+#### `SuggestedAgent`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | Agent id and directory name, kebab-case. |
+| `handle` | `string` | yes | What the owner types, without the `@`. |
+| `name` | `string` | yes | Its display name. |
+| `description` | `string` | yes | One line: what it is for. Other agents read this to hand it work. |
+| `persona` | `string` | yes | The body of the file, in markdown. |
+| `tools` | `string[]` | yes | **The privilege boundary.** Names or family globs, shown to the owner tool by tool. A `platform.*` write tool is refused outright. |
+| `roles` | `string[]` | no | Capabilities it answers for, e.g. `['overview']`. |
+| `model` | `string` | no | The model it runs on. Checked against the provider. |
+| `provider` | `'anthropic' \| 'openai'` | no | Which provider. |
+| `maxTurns` | `number` | no | Turn budget per run. |
+| `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
+| `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
+
+#### `SuggestedSkill`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `name` | `string` | yes | Kebab-case, and also the file name: `staging-an-import`. |
+| `description` | `string` | yes | One line on when this procedure applies. |
+| `body` | `string` | yes | The procedure itself, in markdown. A skill grants no tool and lowers no tier. |
+
+### Views and the network
+
+#### `ViewDescriptor`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `tool` | `string` | yes | The tool whose result this draws. Naming a tool your manifest does not contribute is a startup error. |
+| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| envelope \| structured`. Shapes, never domains. |
+| `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
+| `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
+
+#### `NetworkUse`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `host` | `string` | yes | `api.open-meteo.com`, or `*.example.com` when it really is several. |
+| `why` | `string` | yes | One line the owner can weigh: what you send there and what you fetch. |
+
+Nothing enforces `network` at runtime. Saying so plainly is the point: an
+undeclared host is a plugin author who did not write it down, not a plugin that
+cannot reach the network. It is compared with the `Hosts:` line of your
+`buddi.md`, and a difference costs the owner a second approval.
+
+### Sentinel constants worth knowing
+
+| | |
+| --- | --- |
+| `URGENT_COOLDOWN_MS` | 24 h. How long the same urgent key stays quiet after it fires. |
+| `INFO_COOLDOWN_MS` | 7 days. The same, for the digest. |
+| `SENTINEL_WAKE_MISSION_ID` | `sentinel-wake` — the mission an urgent finding enqueues. |
+| `EXECUTABLE_TIERS` | `['auto']` — what `invoke` runs inline. |
+| `GATED_TIERS` | `['gated']` — what it turns into an action. |
+| `DEFAULT_EFFECT_TIMEOUT_MS` | The wait before an effect attempt is recorded `unknown`. |
