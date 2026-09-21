@@ -1095,7 +1095,7 @@ describe('TelegramSurface conversation handling', () => {
       await new Promise<void>((resolve) => {
         release = resolve;
       });
-      for (const item of req.interjections?.poll() ?? []) added.push(item.text);
+      for (const item of req.interjections?.lease() ?? []) added.push(item.text);
       return 'Answered once.';
     });
     const { surface, sent } = surfaceWith(db, run as any);
@@ -1112,6 +1112,63 @@ describe('TelegramSurface conversation handling', () => {
     expect(added).toEqual(['in euros, please']);
     // One reply, to the whole of what was asked.
     expect(sent.filter((s) => s.method === 'editMessageText' && String(s.body.text).includes('Answered once.'))).toHaveLength(1);
+  });
+
+  /**
+   * The run fell over holding the owner's message. Telegram keeps no durable
+   * copy of it, so if it is not promoted on the way out it is simply gone —
+   * and it is exactly the message somebody sends because the agent is taking
+   * too long.
+   */
+  it('still answers what it was holding when the run throws', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    const texts: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      texts.push(req.text);
+      if (texts.length === 1) {
+        await new Promise<void>((resolve) => { release = resolve; });
+        throw new Error('the provider fell over');
+      }
+      return 'Got it.';
+    });
+    const { surface } = surfaceWith(db, run as any);
+
+    await surface.processUpdates([message(74, OWNER, OWNER, 'draft the email')]);
+    await until(() => release !== null, 'the run to start');
+    await surface.processUpdates([message(75, OWNER, OWNER, 'in euros, please')]);
+    (release as unknown as () => void)();
+    await surface.drain();
+    await surface.drain();
+
+    expect(texts).toEqual(['draft the email', 'in euros, please']);
+  });
+
+  /**
+   * In a group Telegram writes the command with the bot's name in front of
+   * it. The folding decision has to see what `handleText` sees, or `/reset`
+   * goes into the agent's context as a sentence.
+   */
+  it('never folds a command, even with the bot mention in front of it', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    const added: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      for (const item of req.interjections?.lease() ?? []) added.push(item.text);
+      return 'Answered.';
+    });
+    const { surface } = surfaceWith(db, run as any, { botUsername: 'buddi_bot' });
+
+    await surface.processUpdates([message(76, OWNER, OWNER, 'how much did I spend?')]);
+    await until(() => release !== null, 'the run to start');
+    await surface.processUpdates([message(77, OWNER, OWNER, '@buddi_bot /reset')]);
+    (release as unknown as () => void)();
+    await surface.drain();
+
+    expect(added).toEqual([]);
+    // It was handled as the command it is: a fresh conversation for the chat.
+    expect(db.conversations.length).toBeGreaterThan(1);
   });
 
   /**

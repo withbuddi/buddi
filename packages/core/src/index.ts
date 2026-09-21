@@ -24,6 +24,7 @@ export * from './offers/index.js';
 export * from './questions/index.js';
 export * from './owner.js';
 export * from './onboarding/index.js';
+export * from './pending-input.js';
 export * from './recovery.js';
 export * from './web-settings.js';
 export * from './plugins/index.js';

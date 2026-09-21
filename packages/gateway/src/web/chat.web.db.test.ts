@@ -1306,10 +1306,12 @@ suite('the dashboard chat API', () => {
   /* ---------------- a word in edgeways ---------------- */
 
   /**
-   * The composer no longer refuses while the agent works. What it sends is not
-   * a second run: it is stored at once, marked as added while working, and
-   * handed to the run that is going — which takes it in the one place it can
-   * be taken safely, between two tool calls.
+   * The composer no longer refuses while the agent works. What it sends is
+   * not a second run and it is not a `core.messages` row either — a row
+   * written mid-tool-call would sit between a `tool_use` and its result, and
+   * no provider will replay that. It waits in `core.pending_input`, with a
+   * state of its own, until the run can take it into the turn that carries
+   * the tool results, or until nobody takes it and it becomes the next turn.
    */
   describe('a message sent while the agent is working', () => {
     /** Wait until the provider has been called `n` times. */
@@ -1320,7 +1322,16 @@ suite('the dashboard chat API', () => {
       expect(provider.seen.length).toBeGreaterThanOrEqual(n);
     };
 
-    it('is queued onto the live run, stored as an interjection, and reaches the next model step', async () => {
+    const pendingRows = async (conversationId: string): Promise<any[]> => {
+      const { rows } = await pool.query(
+        `select id, text, state, run_id, received_at, message_id from core.pending_input
+          where conversation_id = $1::uuid order by received_at asc, id asc`,
+        [conversationId],
+      );
+      return rows;
+    };
+
+    it('waits in its own table, rides in the tool-results turn, and is marked delivered after the model sees it', async () => {
       const client = await signedIn();
       provider.script = [call('t1', 'demo.read', { what: 'the ledger' }), say('In euros: 12.')];
       provider.block = () => {};
@@ -1330,42 +1341,70 @@ suite('the dashboard chat API', () => {
       ).json()) as any;
       await calls(1);
 
-      // Not a refusal and not a second run: the same run id comes back.
+      // Not a refusal and not a second run: the same run id comes back, with
+      // the id of the row the message is while it waits.
       const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
         conversationId: first.conversationId,
         text: 'in euros, please',
       });
       expect(res.status).toBe(202);
-      expect(await res.json()).toEqual({
-        conversationId: first.conversationId,
-        runId: first.runId,
-        queued: true,
-      });
+      const queued = (await res.json()) as any;
+      expect(queued).toMatchObject({ conversationId: first.conversationId, runId: first.runId, queued: true });
+      expect(queued.pendingId).toMatch(/^[0-9a-f-]{36}$/);
 
-      // Stored the moment it was typed, marked for what it is.
-      const { rows } = await pool.query(
-        `select speaker from core.messages where conversation_id = $1::uuid and speaker = 'owner:interjection'`,
+      // Waiting, and nothing has been written to the transcript.
+      expect(await pendingRows(first.conversationId)).toMatchObject([{ state: 'pending', text: 'in euros, please' }]);
+      const { rows: early } = await pool.query(
+        `select count(*)::int as n from core.messages where conversation_id = $1::uuid and content::text like '%in euros%'`,
         [first.conversationId],
       );
-      expect(rows).toHaveLength(1);
+      expect(early[0].n).toBe(0);
+
+      // The page sees it at the end of the thread, by its own id, marked.
+      const midRun = await client.json<any>(`/api/chat/conversations/${first.conversationId}`);
+      expect(midRun.messages.at(-1)).toMatchObject({
+        id: queued.pendingId,
+        role: 'user',
+        speaker: 'owner:interjection',
+        blocks: [{ type: 'text', text: 'in euros, please' }],
+      });
 
       provider.block?.();
       await calls(2);
       provider.block?.();
       await settled(first.conversationId);
 
-      // One run, and the second model step carries the owner's addition.
+      // One run, and the second model step carries it *inside* the
+      // tool-results turn: results first, the owner's addition after, and no
+      // two user messages in a row anywhere in the request.
       const { rows: runs } = await pool.query(
         `select count(*)::int as n from core.events where conversation_id = $1::uuid and kind = 'run.started'`,
         [first.conversationId],
       );
       expect(runs[0].n).toBe(1);
-      expect(JSON.stringify(provider.seen[1]!.messages)).toContain('the owner adds: in euros, please');
+      const sent = provider.seen[1]!.messages as any[];
+      const last = sent.at(-1);
+      expect(last.role).toBe('user');
+      expect(last.content[0].type).toBe('tool_result');
+      expect(JSON.stringify(last.content[1])).toContain('the owner adds: in euros, please');
+      for (let i = 1; i < sent.length; i += 1) expect(sent[i].role).not.toBe(sent[i - 1].role);
 
-      // And the page sees it as the owner's turn, added while working.
+      // Delivered only once a model was shown it, and pointed at the turn
+      // that carries it.
+      const after = await pendingRows(first.conversationId);
+      expect(after[0].state).toBe('delivered');
+      expect(after[0].message_id).not.toBeNull();
+      const { rows: carrier } = await pool.query(
+        `select content from core.messages where id = $1::uuid`,
+        [after[0].message_id],
+      );
+      const blocks = carrier[0].content as any[];
+      expect(blocks[0].type).toBe('tool_result');
+      expect(blocks.at(-1)).toEqual({ type: 'text', text: 'in euros, please' });
+      // And the owner's words are in the thread once, not twice.
       const transcript = await client.json<any>(`/api/chat/conversations/${first.conversationId}`);
-      const added = transcript.messages.find((m: any) => m.speaker === 'owner:interjection');
-      expect(added.blocks[0]).toEqual({ type: 'text', text: 'in euros, please' });
+      const said = JSON.stringify(transcript.messages).split('in euros, please').length - 1;
+      expect(said).toBe(1);
     });
 
     it('refuses a file in a plain sentence rather than queueing it', async () => {
@@ -1392,18 +1431,14 @@ suite('the dashboard chat API', () => {
       });
       expect(res.status).toBe(409);
       expect(((await res.json()) as any).error).toBe('Send files once the agent has answered.');
-      // Nothing was written: a refused message is not in the thread.
-      const { rows } = await pool.query(
-        `select count(*)::int as n from core.messages where conversation_id = $1::uuid and speaker = 'owner:interjection'`,
-        [first.conversationId],
-      );
-      expect(rows[0].n).toBe(0);
+      // Nothing was queued: a refused message is not waiting anywhere.
+      expect(await pendingRows(first.conversationId)).toHaveLength(0);
 
       provider.block?.();
       await settled(first.conversationId);
     });
 
-    it('goes out as the next turn when the owner stops the run, joined in order', async () => {
+    it('goes out as the next turn when the owner stops the run, joined in order into one new turn', async () => {
       const client = await signedIn();
       provider.script = [say('never said'), say('Yes — cancelled.')];
       provider.block = () => {};
@@ -1419,6 +1454,8 @@ suite('the dashboard chat API', () => {
         });
         expect(((await res.json()) as any).queued).toBe(true);
       }
+      const waiting = await pendingRows(first.conversationId);
+      const receipts = waiting.map((r: any) => new Date(r.received_at).toISOString());
 
       // Stop still means stop: the run ends, and what was queued is the turn
       // that follows it — one turn, in the order it was typed.
@@ -1429,16 +1466,51 @@ suite('the dashboard chat API', () => {
       await settled(first.conversationId, 2);
 
       expect(JSON.stringify(provider.seen.at(-1)!.messages)).toContain('wait\\n\\ndo the other one first');
-      // The two rows are still the ones written when they were typed — not
-      // said twice — and they are the owner's ordinary turn now.
-      const { rows } = await pool.query(
-        `select content, speaker from core.messages
-          where conversation_id = $1::uuid and role = 'user' order by created_at asc, id asc`,
+      // One new canonical turn carries both, and the queue rows point at it
+      // with the time they were actually said left untouched.
+      const promoted = await pendingRows(first.conversationId);
+      expect(promoted.map((r: any) => r.state)).toEqual(['promoted', 'promoted']);
+      expect(promoted.map((r: any) => new Date(r.received_at).toISOString())).toEqual(receipts);
+      expect(new Set(promoted.map((r: any) => String(r.message_id))).size).toBe(1);
+      const { rows: owner } = await pool.query(
+        `select content from core.messages where id = $1::uuid`,
+        [promoted[0].message_id],
+      );
+      expect(owner[0].content).toEqual([{ type: 'text', text: 'wait\n\ndo the other one first' }]);
+      // Said once: the run that answered it did not write it again.
+      const { rows: copies } = await pool.query(
+        `select count(*)::int as n from core.messages
+          where conversation_id = $1::uuid and role = 'user' and content::text like '%do the other one first%'`,
         [first.conversationId],
       );
-      const owner = rows.filter((r: any) => JSON.stringify(r.content).includes('wait'));
-      expect(owner).toHaveLength(1);
-      expect(owner[0].speaker).toBeNull();
+      expect(copies[0].n).toBe(1);
+    });
+
+    it('answers what the owner said to a run that did not survive the restart', async () => {
+      const client = await signedIn();
+      provider.script = [say('anything')];
+      const started = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'hello' })
+      ).json()) as any;
+      await settled(started.conversationId);
+
+      // A row left behind by a run this process no longer has: what a crash
+      // mid-run leaves in the table.
+      await pool.query(
+        `insert into core.pending_input (conversation_id, run_id, text, state)
+         values ($1::uuid, null, 'and the other account?', 'leased')`,
+        [started.conversationId],
+      );
+
+      provider.script = [say('Both, then.')];
+      const recovered = await web.chat!.recoverPendingInput();
+      expect(recovered).toBe(1);
+      await web.chat?.drain();
+      await settled(started.conversationId, 2);
+
+      expect(JSON.stringify(provider.seen.at(-1)!.messages)).toContain('and the other account?');
+      const rows = await pendingRows(started.conversationId);
+      expect(rows.map((r: any) => r.state)).toEqual(['promoted']);
     });
   });
 

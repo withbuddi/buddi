@@ -401,16 +401,31 @@ done one.
 
 **A message sent while the agent is working joins that run.** The composer used to refuse
 it, and Telegram answered it afterwards as a second run: both made the owner wait out a
-turn they could already see was going the wrong way. Now the message is stored at once —
-an ordinary owner turn, stamped `owner:interjection` so a transcript can say it was added
-while working — and handed to the run in flight, which takes it at the one point it can be
-taken safely: **between two tool calls, before the next model step, never inside a tool
-call**, framed as "the owner adds: …". What arrives after the model's last word is not
-lost and is not squeezed in either: it is the next turn, in order, joined into one owner
-turn. Stop keeps its meaning — it ends the run, and what was queued goes out as that next
-turn. Files are the exception, refused in a sentence rather than queued: a run's
-attachments are hydrated and capped when the request is built, and there is no honest way
-to add one to a call already sent.
+turn they could already see was going the wrong way.
+
+It cannot wait in `core.messages`. The moment it arrives is by definition mid-tool-call,
+and a user row written between a `tool_use` and its `tool_result` makes the whole
+transcript unreplayable. So it waits in **`core.pending_input`** — its own table, its own
+states (`pending → leased → delivered`, or `pending → promoted`) — which is also what
+makes it survive a restart: rows waiting on a run that no longer exists are promoted when
+the dashboard comes back up, rather than stranded behind an in-memory queue that died
+with the process.
+
+The run takes it at the one point it can be taken safely: after every tool call of a turn
+has been answered and before the next model step, **never inside a tool call**. What it
+takes goes into that same tool-results turn, after the results and framed as "the owner
+adds: …", because a turn of its own would be a second consecutive user message and the
+next request would be refused on the wire. **A lease is not a delivery**: the rows are
+marked delivered only once a model has actually been shown them, so a step that never
+happens — the turn budget spent, the provider down, the owner pressing Stop — hands them
+back rather than swallowing them.
+
+What no run took becomes the next turn: joined in order into one new canonical turn, in
+one transaction, with each row's `received_at` left exactly as it was. Stop keeps its
+meaning — it ends the run, and what was queued goes out after it. Files are the
+exception, refused in a sentence rather than queued: a run's attachments are hydrated and
+capped when the request is built, and there is no honest way to add one to a call already
+sent.
 
 **Asking is a tool-dispatch boundary.** A successful tool marked `waitsForOwner`
 (currently `conversation.ask`) blocks all remaining calls in that run, including

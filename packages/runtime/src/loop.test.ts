@@ -5,6 +5,7 @@ import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
 import type {
   CompletionRequest,
   CompletionResponse,
+  ContentBlock,
   RuntimeProvider,
 } from './anthropic.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
@@ -50,7 +51,7 @@ class FakeDb implements Queryable {
         content: JSON.parse(params[2]),
         speaker: (params[3] as string | undefined) ?? null,
       });
-      return { rows: [] };
+      return { rows: [{ id: this.messages.at(-1)!.id }] };
     }
     if (text.startsWith('select role, content from core.messages')) {
       return {
@@ -1607,8 +1608,10 @@ describe("a run's answer is everything the model said, in order", () => {
 
 /**
  * The promise the interjection point makes is about *where*, not whether:
- * between two tool calls, before the next model step, and never while an
- * effect is half-done. These three tests are that promise, said three ways.
+ * inside the tool-results turn, after the results, and never while an effect
+ * is half-done. Everything here is that promise, said several ways — plus the
+ * bargain that goes with it, which is that a line is only ever called
+ * delivered once a model has actually been shown it.
  */
 describe('an interjection', () => {
   /** Two tool calls and then an answer, so there is a gap to land in. */
@@ -1618,11 +1621,14 @@ describe('an interjection', () => {
     { model: 'fixture', content: [{ type: 'text', text: 'Done.' }], stopReason: 'end_turn', usage },
   ];
 
-  it('reaches the model between two tool calls, and is stored as the owner speaking', async () => {
+  /** The shape a provider checks: role, then the kind of each block. */
+  const shapeOf = (messages: readonly { role: string; content: readonly ContentBlock[] }[]): string[] =>
+    messages.map((m) => `${m.role}:${m.content.map((b) => b.type).join(',')}`);
+
+  it('rides in the tool-results turn, after the results, and never as a turn of its own', async () => {
     const db = new FakeDb();
     const queue = new InterjectionQueue();
     const provider = scriptedProvider(twoCalls());
-    // Said while the first tool call is being answered.
     queue.push({ text: 'in euros, not dollars' });
 
     await runAgent({
@@ -1632,15 +1638,30 @@ describe('an interjection', () => {
       interjections: queue,
     });
 
-    // The second model step carries it, framed as the owner adding to the run.
-    const second = provider.calls[1]!.messages;
-    const added = second.at(-1)!;
-    expect(added.role).toBe('user');
-    expect(JSON.stringify(added.content)).toContain('the owner adds: in euros, not dollars');
-    // And it is in the transcript as an ordinary user turn, marked.
-    const row = db.messages.find((m) => m.speaker === OWNER_INTERJECTION_SPEAKER);
-    expect(row).toBeDefined();
-    expect(row!.content).toEqual([{ type: 'text', text: 'in euros, not dollars' }]);
+    /*
+     * The whole sequence, as the provider sees it. Two things are load-
+     * bearing and both were wrong before: the tool_result follows its
+     * tool_use immediately, and no two user messages are adjacent.
+     */
+    expect(shapeOf(provider.calls[1]!.messages)).toEqual([
+      'user:text',
+      'assistant:tool_use',
+      'user:tool_result,text',
+    ]);
+    const added = provider.calls[1]!.messages.at(-1)!;
+    expect(added.content[0]!.type).toBe('tool_result');
+    expect(JSON.stringify(added.content[1])).toContain('the owner adds: in euros, not dollars');
+    for (let i = 1; i < provider.calls[1]!.messages.length; i += 1) {
+      expect(provider.calls[1]!.messages[i]!.role).not.toBe(provider.calls[1]!.messages[i - 1]!.role);
+    }
+
+    // The transcript keeps the owner's own words, in that same turn.
+    const stored = db.messages.find((m) => JSON.stringify(m.content).includes('tool_result'))!;
+    expect(stored.role).toBe('user');
+    expect(stored.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'a', content: JSON.stringify({ doubled: 2 }) },
+      { type: 'text', text: 'in euros, not dollars' },
+    ]);
     expect(db.eventKinds()).toContain('run.interjected');
   });
 
@@ -1648,7 +1669,7 @@ describe('an interjection', () => {
     const db = new FakeDb();
     const queue = new InterjectionQueue();
     const registry = new ToolRegistry();
-    /** What the model had been shown at the moment each tool ran. */
+    /** How much of the owner's text was in the transcript as each tool ran. */
     const seen: number[] = [];
     const provider = scriptedProvider(twoCalls());
     registry.register({
@@ -1658,7 +1679,7 @@ describe('an interjection', () => {
         execute: async (input: { n: number }) => {
           // The owner types mid-effect. It must not join this turn's results.
           queue.push({ text: 'stop, wrong account' });
-          seen.push(db.messages.filter((m) => m.speaker === OWNER_INTERJECTION_SPEAKER).length);
+          seen.push(db.messages.filter((m) => JSON.stringify(m.content).includes('wrong account')).length);
           return { doubled: input.n * 2 };
         },
       }],
@@ -1673,11 +1694,9 @@ describe('an interjection', () => {
 
     // Nothing was written while the first tool was running…
     expect(seen[0]).toBe(0);
-    // …and the tool_result turn is exactly the results, with no owner text
-    // spliced into it.
-    const results = provider.calls[1]!.messages.filter((m) => m.role === 'user');
-    const toolTurn = results.find((m) => m.content.some((b) => b.type === 'tool_result'))!;
-    expect(toolTurn.content.every((b) => b.type === 'tool_result')).toBe(true);
+    // …and the turn the model was sent still opens with its results.
+    const results = provider.calls[1]!.messages.at(-1)!;
+    expect(results.content[0]!.type).toBe('tool_result');
   });
 
   it('arriving after the answer is left for the next turn, not squeezed into this one', async () => {
@@ -1697,15 +1716,97 @@ describe('an interjection', () => {
     queue.push({ text: 'and last month?' });
 
     expect(result.stopped).toBe('end_turn');
-    expect(db.messages.some((m) => m.speaker === OWNER_INTERJECTION_SPEAKER)).toBe(false);
-    // Still queued, for whoever sends the next turn.
+    expect(JSON.stringify(db.messages)).not.toContain('and last month?');
     expect(queue.close().map((i) => i.text)).toEqual(['and last month?']);
+  });
+
+  it('is not taken on the last turn the run is allowed, where no model step is left', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    queue.push({ text: 'one more thing' });
+    const provider = scriptedProvider([
+      { model: 'fixture', content: [{ type: 'tool_use', id: 'a', name: 'demo.double', input: { n: 1 } }], stopReason: 'tool_use', usage },
+    ]);
+
+    const result = await runAgent({
+      agent: { ...agent, maxTurns: 1 }, provider, registry: registryWithDouble(), ctx, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'Do it',
+      interjections: queue,
+    });
+
+    expect(result.stopped).toBe('max_turns');
+    expect(JSON.stringify(db.messages)).not.toContain('one more thing');
+    // Still queued, so the next turn carries it rather than nobody carrying it.
+    expect(queue.close().map((i) => i.text)).toEqual(['one more thing']);
+  });
+
+  it('is only called delivered once a model has been shown it', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    const delivered: string[] = [];
+    const released: string[] = [];
+    /** The queue, watched: who was told what, and in which order. */
+    const watched = {
+      lease: () => queue.lease(),
+      deliver: (items: readonly { text: string }[]) => { delivered.push(...items.map((i) => i.text)); queue.deliver(items as never); },
+      release: (items: readonly { text: string }[]) => { released.push(...items.map((i) => i.text)); queue.release(items as never); },
+    };
+    queue.push({ text: 'in euros' });
+
+    let calls = 0;
+    const provider: RuntimeProvider = {
+      async complete(req) {
+        calls += 1;
+        if (calls === 1) {
+          return { model: 'fixture', content: [{ type: 'tool_use', id: 'a', name: 'demo.double', input: { n: 1 } }], stopReason: 'tool_use', usage };
+        }
+        // The step the interjection was leased for never lands.
+        expect(delivered).toEqual([]);
+        expect(JSON.stringify(req.messages)).toContain('the owner adds: in euros');
+        throw new Error('the provider fell over');
+      },
+    };
+
+    await expect(runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'What did we spend?',
+      interjections: watched,
+    })).rejects.toThrow('the provider fell over');
+
+    // Never acknowledged, handed back, and waiting for whoever runs next.
+    expect(delivered).toEqual([]);
+    expect(released).toEqual(['in euros']);
+    expect(queue.close().map((i) => i.text)).toEqual(['in euros']);
+  });
+
+  it('hands back what it was holding when the owner cancels the run', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    const controller = new AbortController();
+    queue.push({ text: 'stop, wrong account' });
+    const provider: RuntimeProvider = {
+      async complete() {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        controller.abort(new Error('The owner cancelled this run.'));
+        return { model: 'fixture', content: [{ type: 'tool_use', id: 'a', name: 'demo.double', input: { n: 1 } }], stopReason: 'tool_use', usage };
+      },
+    };
+
+    await expect(runAgent({
+      agent, provider, registry: registryWithDouble(), ctx: { ...ctx, signal: controller.signal }, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'Pay it', interjections: queue,
+    })).rejects.toThrow();
+
+    expect(queue.close().map((i) => i.text)).toEqual(['stop, wrong account']);
   });
 
   it('a turn the surface already stored is neither written again nor shown twice', async () => {
     const db = new FakeDb();
     const conversationId = await createConversation(db, agent.id);
-    // The surface wrote it when the owner typed it during the last run.
+    // The surface promoted it: the row is already the owner's turn.
     await db.query(
       `insert into core.messages (conversation_id, role, content, speaker) values ($1, $2, $3::jsonb, $4)`,
       [conversationId, 'user', JSON.stringify([{ type: 'text', text: 'and last month?' }]), null],

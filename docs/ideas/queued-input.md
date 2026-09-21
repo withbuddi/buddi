@@ -29,21 +29,29 @@ should match it and go one further.
 
 ## What was built
 
-- `runAgent` takes an `interjections` source and drains it between tool calls,
-  before the next model step — never inside a tool call. Each line is sent as
-  "the owner adds: …" and stored as an ordinary user turn stamped
-  `owner:interjection`.
-- `WebChat.send` on a live run stores the message, hands it to that run and
-  answers `{ ok: true, queued: true, runId }` with the *running* run's id. What
-  the run never picks up is promoted to the next turn: the rows are joined into
-  one owner turn, the marker cleared, and the turn re-timed to the end of the
-  thread rather than written a second time. Stop is unchanged, and what was
+- `core.pending_input` (migration 032) is the queue: one row per thing the
+  owner said mid-run, with `pending → leased → delivered` or `→ promoted`.
+  Never a `core.messages` row until a run can take it — a user turn written
+  between a `tool_use` and its result is a transcript no provider replays —
+  and durable, so a restart promotes what it finds instead of stranding it.
+- `runAgent` takes an `interjections` source and **leases** from it after the
+  tool calls of a turn have been answered and before the next model step. What
+  it takes rides in that same tool-results turn, after the results, framed as
+  "the owner adds: …"; the record keeps the owner's own words. Delivery is
+  acknowledged only once the model has been shown it, and nothing is leased on
+  the run's last allowed turn.
+- `WebChat.send` on a live run queues the row and answers
+  `{ ok: true, queued: true, runId, pendingId }`. What no run took is promoted
+  in one transaction into a single new canonical turn; `openingPersisted` is
+  set only when that transaction landed. Stop is unchanged, and what was
   queued goes out after it. Attachments are refused in a sentence.
-- Telegram folds a plain second message into the run in flight, and only then:
-  a command, an `@handle` and anything sent while something else is already
-  waiting on that chat's chain keep their own turn.
-- The composer always sends, with Stop beside it; a message sent mid-run shows
-  in the thread at once under "added while working".
+- The transcript read joins the waiting rows on at the end, by their own ids,
+  marked "added while working"; the page keeps its optimistic bubble under
+  that id and lets it go once the server has read it back — so two lines
+  promoted into one turn leave nothing behind.
+- Telegram folds a plain second message into the run in flight, decided on the
+  text with the bot mention stripped, and promotes whatever it was holding in
+  a `finally` — a run that throws no longer loses the owner's message.
 
 ## Open questions
 
