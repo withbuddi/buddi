@@ -56,7 +56,7 @@ export function createBrowserManifest(service: BrowserController = hostBrowser()
 
 export const manifest = createBrowserManifest();
 export default manifest;
-export { BrowserService } from './service.js';
+export { BrowserService, browserStoppedMessage } from './service.js';
 export type { BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
 export { BrowserManager } from './manager.js';
 export { PlaywrightHost } from './host.js';

@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatApi } from '../api';
-import { groupChatRoute, parseChatRoute, parseGroupChatRoute } from '../routes';
+import { chatRoute, groupChatRoute, parseChatRoute, parseGroupChatRoute } from '../routes';
 import { GroupSheet } from '../shell/GroupSheet';
 import { MessageList } from './MessageList';
 import type { ChatAgent, ChatMessage } from './types';
@@ -23,6 +23,16 @@ describe('the group route', () => {
     expect(parseGroupChatRoute('#/chat/g/g-1/c-2')).toEqual({ groupId: 'g-1', conversationId: 'c-2' });
     expect(parseChatRoute('#/chat/g/g-1')).toBeNull();
     expect(parseChatRoute('#/chat/ledger')).toEqual({ agentId: 'ledger' });
+  });
+
+  /* A link from another surface can name the panel it meant to open. */
+  it('carries ?tab=browser through without disturbing the ids', () => {
+    expect(chatRoute('ledger', 'c-2', 'browser')).toBe('#/chat/ledger/c-2?tab=browser');
+    expect(parseChatRoute('#/chat/ledger/c-2?tab=browser')).toEqual({ agentId: 'ledger', conversationId: 'c-2', tab: 'browser' });
+    expect(parseChatRoute('#/chat/ledger/c-2')).toEqual({ agentId: 'ledger', conversationId: 'c-2' });
+    // A group link with a tab is still a group link, never an agent called "g".
+    expect(parseChatRoute('#/chat/g/g-1/c-2?tab=browser')).toBeNull();
+    expect(parseGroupChatRoute('#/chat/g/g-1/c-2?tab=browser')).toEqual({ groupId: 'g-1', conversationId: 'c-2' });
   });
 });
 

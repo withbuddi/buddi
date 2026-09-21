@@ -99,6 +99,13 @@ export interface RunAgentOptions {
   onDelta?: (delta: CompletionDelta) => void;
   onToolCall?: (name: string, input: unknown) => void;
   /**
+   * The same call, answered. Never awaited and never allowed to change the
+   * run: a surface uses it to show what a step did — the Telegram surface
+   * sends the browser's own screenshot after every `browser.act` — and a
+   * throw here must not cost the owner their turn.
+   */
+  onToolResult?: (name: string, result: { ok: boolean; output?: unknown; error?: string }) => void;
+  /**
    * A run inside a shared room (docs/groups.md). The history is the room as
    * this agent is allowed to see it — the projection — instead of the raw
    * rows; every turn this run writes carries `speaker`, and the opening
@@ -985,6 +992,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         ? await registry.invoke(call.name, call.input, { ...toolCtx, toolUseId: call.id })
         : { ok: false as const, reason: registry.has(call.name) ? 'tool-not-granted' as const : 'unknown-tool' as const,
             message: `tool ${call.name} is not granted to this run` };
+      // What the step did, for a surface that draws it. Presentation only:
+      // an approval-required outcome is not a result — nothing happened yet —
+      // and a listener that throws must never cost the owner their turn.
+      if (outcome.ok || outcome.reason !== 'approval-required') {
+        try {
+          opts.onToolResult?.(call.name, outcome.ok
+            ? { ok: true, output: outcome.output }
+            : { ok: false, error: outcome.message });
+        } catch { /* a surface's drawing never decides a run */ }
+      }
       if (outcome.ok) {
         if (registry.waitsForOwner(call.name)) waitingForOwner = true;
         // A tool that declares it saves files, and names them in its output,

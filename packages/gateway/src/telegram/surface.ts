@@ -69,6 +69,11 @@ import {
   type ArtifactStore,
   type IncomingAttachment,
 } from './attachments.js';
+import {
+  BROWSER_COMMAND_HELP,
+  parseBrowserCommand,
+  type BrowserCommandWord,
+} from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 
@@ -175,6 +180,7 @@ export const HELP = [
   '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
   '/approvals — anything waiting for your approval',
+  '/browser — where the screen stands; /browser stop, /browser resume, /browser release',
   '/host — host execution permissions and running commands',
   '/hoststop — interrupt all host commands',
   '/hostrevoke — revoke all host auto-permissions and interrupt commands',
@@ -568,6 +574,12 @@ export interface TelegramSurfaceOptions {
   onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook;
   /** Authenticated, immediate controls: must not queue behind a long command. */
   hostControl?: (ownerId: string, command: 'status' | 'stop' | 'revoke') => Promise<string>;
+  /**
+   * `/browser …` — the dashboard's own browser controls, reachable from the
+   * phone. The surface routes the word and prints the sentence; what each one
+   * does is the host controller's, exactly as it is for the dashboard.
+   */
+  browserControl?: (command: BrowserCommandWord) => Promise<string>;
   api: TelegramApi;
   pool: Queryable;
   /** Every agent this installation can talk to; the surface only reads it. */
@@ -1482,6 +1494,16 @@ export class TelegramSurface {
     // rides along: it fills in a device that paired without one (the startup
     // allowlist pairs by id alone) and never overwrites a stored label.
     await this.#touch(userId, senderLabel(message.from));
+
+    // The screen, from the phone. Owner-only by construction: every path below
+    // this point has already resolved a paired owner identity.
+    const browserWord = parseBrowserCommand(message.text ?? '');
+    if (browserWord !== undefined && this.#opts.browserControl) {
+      await this.#opts.api.sendMessage(chatId, browserWord === 'unknown'
+        ? BROWSER_COMMAND_HELP
+        : await this.#opts.browserControl(browserWord));
+      return;
+    }
 
     const hostCommand = /^\/(host|hoststop|hostrevoke)(?:@\w+)?\s*$/i.exec(message.text ?? '');
     if (hostCommand && this.#opts.hostControl) {
