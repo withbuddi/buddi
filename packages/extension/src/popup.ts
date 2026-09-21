@@ -21,6 +21,30 @@ const TONES: Record<ClientState['connection'], { word: string; tone: string }> =
 
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
+/** How long the button admits to having copied before going back to offering it. */
+export const COPIED_FOR = 2000;
+
+/**
+ * The code is six digits read off one screen and typed into another, which is
+ * exactly the errand a clipboard is for.
+ *
+ * `textContent` only: the code comes from the gateway over a socket, and this
+ * page never builds markup out of anything it was sent. A clipboard write can
+ * be refused (no permission, no focus), and a button that then lied would be
+ * worse than one that says nothing, so a refusal leaves the word alone.
+ */
+export function wireCopy(button: HTMLButtonElement, read: () => string): void {
+  let restore: ReturnType<typeof setTimeout> | undefined;
+  button.addEventListener('click', () => {
+    void (async () => {
+      try { await navigator.clipboard.writeText(read()); } catch { return; }
+      button.textContent = 'Copied';
+      if (restore) clearTimeout(restore);
+      restore = setTimeout(() => { button.textContent = 'Copy'; restore = undefined; }, COPIED_FOR);
+    })();
+  });
+}
+
 function render(state: ClientState): void {
   const badge = el('state');
   const { word, tone } = TONES[state.connection] ?? TONES.offline;
@@ -44,6 +68,8 @@ async function main(): Promise<void> {
   const current = await ask<{ state: ClientState }>({ type: 'buddi-get-state' });
   if (current?.state) render(current.state);
 
+  wireCopy(el<HTMLButtonElement>('copy'), () => el('code').textContent ?? '');
+
   el('connect').addEventListener('click', async () => {
     const answer = await ask<{ state?: ClientState; error?: string }>({ type: 'buddi-connect', gateway: field.value.trim() });
     if (answer?.error) { el('hint').textContent = answer.error; return; }
@@ -55,11 +81,18 @@ async function main(): Promise<void> {
   });
 }
 
-// The worker pushes every state change; the popup only listens while it is open.
-(chrome as unknown as { runtime: { onMessage: { addListener(fn: (message: unknown) => void): void } } })
-  .runtime.onMessage.addListener((message) => {
-    const frame = message as { type?: string; state?: ClientState } | null;
-    if (frame?.type === 'buddi-state' && frame.state) render(frame.state);
-  });
+/*
+ * The worker pushes every state change; the popup only listens while it is
+ * open. Guarded on `chrome` existing so that importing this file outside an
+ * extension page — which is what its test does — wires nothing up and runs
+ * nothing.
+ */
+if (typeof chrome !== 'undefined') {
+  (chrome as unknown as { runtime: { onMessage: { addListener(fn: (message: unknown) => void): void } } })
+    .runtime.onMessage.addListener((message) => {
+      const frame = message as { type?: string; state?: ClientState } | null;
+      if (frame?.type === 'buddi-state' && frame.state) render(frame.state);
+    });
 
-void main();
+  void main();
+}

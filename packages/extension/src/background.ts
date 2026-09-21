@@ -15,10 +15,18 @@
 
 import { BrowserCommands } from './commands.js';
 import type { WorkerChrome } from './chrome.js';
+import { handleExternal, type ExtensionStatus } from './external.js';
 import { Protocol, type ClientState } from './protocol.js';
 
 declare const chrome: WorkerChrome & {
-  runtime: WorkerChrome['runtime'] & { onInstalled: { addListener(fn: () => void): void }; onStartup: { addListener(fn: () => void): void } };
+  runtime: WorkerChrome['runtime'] & {
+    onInstalled: { addListener(fn: () => void): void };
+    onStartup: { addListener(fn: () => void): void };
+    /** Only loopback pages may reach this, per `externally_connectable` in the manifest. */
+    onMessageExternal: {
+      addListener(fn: (message: unknown, sender: { origin?: string }, respond: (answer: ExtensionStatus) => void) => boolean | void): void;
+    };
+  };
 };
 
 export const DEFAULT_GATEWAY = 'http://127.0.0.1:4317';
@@ -128,6 +136,17 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (request.type === 'buddi-gateway') { void gateway().then((address) => respond({ gateway: address })); return true; }
   return;
 });
+
+/*
+ * The dashboard asking whether this browser has the extension in it.
+ *
+ * It cannot find out any other way, and an owner who has to be told to look in
+ * the popup for a code the page could have filled in for them is an owner
+ * doing the computer's work. `handleExternal` decides; this only hands it the
+ * three things it needs and Chrome's own `sender`.
+ */
+chrome.runtime.onMessageExternal.addListener((message, sender, respond) =>
+  handleExternal(message, { origin: sender.origin, state: () => last, gateway, version: chrome.runtime.getManifest().version }, respond));
 
 chrome.runtime.onInstalled.addListener(() => void connect());
 chrome.runtime.onStartup.addListener(() => void connect());
