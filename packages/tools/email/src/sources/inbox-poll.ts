@@ -45,8 +45,12 @@
 import type { Pool, PoolClient } from 'pg';
 import { currentAccount, INBOX, resolveAuth, type EnvLike } from '../config.js';
 import { prepareForIngest, triagePrompt } from '../mail.js';
+import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
+import { loadPolicies, recordEvent } from '../policies/store.js';
+import { senderVerdicts } from '../policies/learn.js';
 import type { AccountRecord, ImapClient, ImapClientFactory } from '../ports.js';
 import { MAILBOX_COLUMNS, toMailbox, type MailboxRecord } from '../rows.js';
+import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { Source, SourceContext } from '../types.js';
 
 /** The agent every new message is triaged by. */
@@ -144,10 +148,25 @@ export interface InboxPollOptions {
   backfill?: number;
 }
 
-/** One message that has landed but whose triage run has not been created yet. */
+/**
+ * One message that has landed but whose triage run has not been created yet.
+ *
+ * It carries the header the gate reads as well as the prompt, because the gate
+ * runs *here*, between the commit and the enqueue, and re-reading the row to
+ * find out who sent it would be a second query for something we already had.
+ */
 interface PendingTriage {
   id: string;
-  prompt: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  date: string | null;
+  hasAttachments: boolean;
+  attachments: Parameters<typeof triagePrompt>[0]['attachments'];
+  bodyText: string;
+  threadKey: string | null;
+  listId: string | null;
 }
 
 /** The mailbox row for `(account, name)`, created on first sight. */
@@ -189,10 +208,10 @@ async function commitBatch(
     for (const message of fetched) {
       const { rows } = await client.query(
         `insert into email.messages
-           (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr,
+           (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
             to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags)
-         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15::jsonb,
-                 $16::jsonb)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15,
+                 $16::jsonb, $17::jsonb)
          on conflict (account_id, mailbox_id, uidvalidity, uid) do nothing
          returning id`,
         [
@@ -202,6 +221,7 @@ async function commitBatch(
           message.uid,
           message.messageId,
           message.threadKey,
+          message.listId,
           message.from,
           JSON.stringify(message.to),
           JSON.stringify(message.cc),
@@ -218,17 +238,16 @@ async function commitBatch(
       if (!id) continue;
       pending.push({
         id: String(id),
-        prompt: triagePrompt({
-          messageId: String(id),
-          from: message.from,
-          to: message.to,
-          cc: message.cc,
-          subject: message.subject,
-          date: message.date ? message.date.toISOString() : null,
-          hasAttachments: message.hasAttachments,
-          attachments: message.attachments,
-          bodyText: message.bodyText,
-        }),
+        from: message.from,
+        to: message.to,
+        cc: message.cc,
+        subject: message.subject,
+        date: message.date ? message.date.toISOString() : null,
+        hasAttachments: message.hasAttachments,
+        attachments: message.attachments,
+        bodyText: message.bodyText,
+        threadKey: message.threadKey,
+        listId: message.listId,
       });
     }
 
@@ -250,7 +269,8 @@ async function commitBatch(
 /** Messages that landed but whose triage run was never created. */
 async function unstamped(db: Pool, accountId: string, limit: number): Promise<PendingTriage[]> {
   const { rows } = await db.query(
-    `select id, from_addr, to_addrs, subject, date, has_attachments, attachments, body_text
+    `select id, from_addr, to_addrs, cc, subject, date, has_attachments, attachments, body_text,
+            thread_key, list_id
        from email.messages
       where account_id = $1 and triage_enqueued_at is null
       order by fetched_at asc, uid asc
@@ -259,16 +279,16 @@ async function unstamped(db: Pool, accountId: string, limit: number): Promise<Pe
   );
   return rows.map((row) => ({
     id: String(row.id),
-    prompt: triagePrompt({
-      messageId: String(row.id),
-      from: row.from_addr,
-      to: Array.isArray(row.to_addrs) ? row.to_addrs : [],
-      subject: row.subject ?? '',
-      date: row.date instanceof Date ? row.date.toISOString() : (row.date ?? null),
-      hasAttachments: Boolean(row.has_attachments),
-      attachments: Array.isArray(row.attachments) ? row.attachments : [],
-      bodyText: row.body_text ?? '',
-    }),
+    from: row.from_addr,
+    to: Array.isArray(row.to_addrs) ? row.to_addrs : [],
+    cc: Array.isArray(row.cc) ? row.cc : [],
+    subject: row.subject ?? '',
+    date: row.date instanceof Date ? row.date.toISOString() : (row.date ?? null),
+    hasAttachments: Boolean(row.has_attachments),
+    attachments: Array.isArray(row.attachments) ? row.attachments : [],
+    bodyText: row.body_text ?? '',
+    threadKey: row.thread_key ?? null,
+    listId: row.list_id ?? null,
   }));
 }
 
@@ -412,9 +432,36 @@ async function plantCursor(
 }
 
 /**
- * Create the triage run for everything that landed, including anything an
- * earlier poll ingested but never managed to enqueue. Runs outside the IMAP
- * connection on purpose: the socket is already closed by the time we get here.
+ * The gate, and then the queue.
+ *
+ * docs/email.md §5. Every message that landed is put in front of the policy
+ * table *before* anybody is woken, and what the gate decided is written to
+ * `email.events` — every decision, including "nothing matched", because the
+ * owner auditing the silence needs to be able to tell a message that was
+ * ignored on purpose from one that was never seen.
+ *
+ * What each action does here:
+ *
+ *  - **`ignore`** writes the triage row from the policy itself and stops. No
+ *    run, no model, no line. This is the whole point of the feature.
+ *  - **`notify`** queues a run with a one-line instruction, because a source
+ *    cannot reach the owner. `SourceContext` is `db`, `now`, `timezone`, `log`
+ *    and `enqueueRun`, and `log` is operational output, not a channel — the
+ *    contract says so in as many words (docs/plugins.md §2.2: *«a source
+ *    notifies nobody»*). Speaking to the owner is an agent's act, so the
+ *    honest implementation of "send the Telegram line" today is a run whose
+ *    instruction is to send exactly that line and nothing else. It costs a
+ *    model call, which `ignore` does not: the saving this action makes is in
+ *    what the owner has to read, not in what buddi has to run.
+ *  - **`hand-to-agent`** queues the run for the named agent instead.
+ *  - **`draft`** queues the triage agent with the drafting instruction.
+ *  - **`wake`** is the ordinary run, said out loud.
+ *  - **`archive` / `label`** cannot happen: they are refused at creation, and
+ *    a row carrying one falls through to an ordinary run with the refusal
+ *    recorded, rather than dropping the message.
+ *
+ * Runs outside the IMAP connection on purpose: the socket is already closed by
+ * the time we get here.
  */
 async function drain(
   ctx: SourceContext,
@@ -426,17 +473,164 @@ async function drain(
   const recovered = await unstamped(ctx.db, account.id, limit);
   const byId = new Map(recovered.map((p) => [p.id, p]));
   for (const p of pending) byId.set(p.id, p);
+  if (byId.size === 0) return;
+
+  // One read of the policy table per poll, not per message.
+  const policies = await loadPolicies(ctx.db, account.id);
 
   for (const message of byId.values()) {
+    const decision = applyPolicies(
+      {
+        threadKey: message.threadKey,
+        from: message.from,
+        listId: message.listId,
+        accountId: account.id,
+      },
+      policies,
+    );
+    await recordEvent(
+      ctx.db,
+      {
+        messageId: message.id,
+        policyId: decision.policy?.id ?? null,
+        action: decision.refused ? 'refused' : decision.action,
+        detail: decision.detail,
+      },
+      ctx.now(),
+    );
+
+    if (!decision.refused && decision.action === 'ignore' && decision.policy) {
+      await ignoreByPolicy(ctx, message, decision.policy);
+      await stamp(ctx, message.id);
+      (ctx.log ?? (() => {}))(
+        `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
+          `${decision.policy.matcher} (ignore); no run started`,
+      );
+      continue;
+    }
+
     await ctx.enqueueRun({
-      agentId,
-      prompt: message.prompt,
+      agentId: runAgentFor(decision, agentId),
+      prompt: await promptFor(ctx, message, decision, policies),
       dedupKey: triageDedupKey(message.id),
     });
-    await ctx.db.query(
-      `update email.messages set triage_enqueued_at = $2
-        where id = $1 and triage_enqueued_at is null`,
-      [message.id, ctx.now()],
-    );
+    await stamp(ctx, message.id);
   }
+}
+
+/** Who runs: the named agent for `hand-to-agent`, the triage agent otherwise. */
+function runAgentFor(decision: GateDecision, fallback: string): string {
+  if (decision.action === 'hand-to-agent' && !decision.refused) {
+    return decision.policy?.params.agentId?.trim() || fallback;
+  }
+  return fallback;
+}
+
+/**
+ * The prompt, with what was decided about this sender before.
+ *
+ * docs/email.md §1's complaint was that a run *«judges it from zero, records a
+ * verdict nothing reads back»*. The verdicts are read back here, along with the
+ * sender's policy when there is one, so the run can be consistent with what was
+ * decided rather than starting the argument again every week.
+ */
+async function promptFor(
+  ctx: SourceContext,
+  message: PendingTriage,
+  decision: GateDecision,
+  policies: readonly PolicyRecord[],
+): Promise<string> {
+  const verdicts = await senderVerdicts(ctx.db, message.from, 5);
+  const senderPolicy =
+    decision.policy ??
+    policies.find(
+      (p) => p.scope === 'sender' && p.matcher === message.from.trim().toLowerCase(),
+    ) ??
+    null;
+  return triagePrompt({
+    messageId: message.id,
+    from: message.from,
+    to: message.to,
+    cc: message.cc,
+    subject: message.subject,
+    date: message.date,
+    hasAttachments: message.hasAttachments,
+    attachments: message.attachments,
+    bodyText: message.bodyText,
+    history: {
+      policy: senderPolicy
+        ? {
+            action: senderPolicy.action,
+            scope: senderPolicy.scope,
+            matcher: senderPolicy.matcher,
+            origin: senderPolicy.origin,
+            proposed: senderPolicy.proposed,
+          }
+        : null,
+      verdicts: verdicts.map((v) => ({
+        category: v.category,
+        urgency: v.urgency,
+        decidedAt: v.decidedAt,
+      })),
+    },
+    ...(instructionFor(decision) ? { instruction: instructionFor(decision) as string } : {}),
+  });
+}
+
+/** The standing instruction a policy adds to the run, or undefined. */
+function instructionFor(decision: GateDecision): string | undefined {
+  if (decision.refused || !decision.policy) return undefined;
+  const params = decision.policy.params;
+  switch (decision.action) {
+    case 'draft':
+      return (
+        params.instruction?.trim() ||
+        'draft a reply to this message with email.draft_reply, and do not send it'
+      );
+    case 'notify':
+      return (
+        `send the owner one line about this message — ${params.note?.trim() || 'what it is and who it is from'} — ` +
+        'and nothing else; no draft, no report'
+      );
+    case 'hand-to-agent':
+      return 'this message was handed to you by a standing policy of the owner\'s';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * An ignored message still gets a triage row — written from the policy, not by
+ * a model. "No run happened" must not read as "nothing is known about this
+ * message": the list view, the sender profile and every later count all read
+ * the triage table, and a hole in it would look like a bug.
+ */
+async function ignoreByPolicy(
+  ctx: SourceContext,
+  message: PendingTriage,
+  policy: PolicyRecord,
+): Promise<void> {
+  await ctx.db.query(
+    `insert into email.triage
+       (message_id, processing_version, category, urgency, summary, action_needed, decided_at)
+     values ($1, $2, $3, $4, $5, null, $6)
+     on conflict (message_id, processing_version) do nothing`,
+    [
+      message.id,
+      PROCESSING_VERSION,
+      policy.params.category ?? 'promo',
+      policy.params.urgency ?? 'low',
+      `Handled by a standing policy (${policy.scope} ${policy.matcher}): ignored without a triage run.`,
+      ctx.now(),
+    ],
+  );
+}
+
+/** The enqueue stamp, written last. See the module comment. */
+async function stamp(ctx: SourceContext, messageId: string): Promise<void> {
+  await ctx.db.query(
+    `update email.messages set triage_enqueued_at = $2
+      where id = $1 and triage_enqueued_at is null`,
+    [messageId, ctx.now()],
+  );
 }

@@ -191,6 +191,32 @@ export interface Overview {
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
 }
 
+/** One standing decision about incoming mail. `/api/email/policies`. */
+export interface EmailPolicy {
+  id: string;
+  scope: string;
+  matcher: string;
+  action: string;
+  params: Record<string, unknown>;
+  origin: string;
+  /** True while it is only a suggestion: it decides nothing until it is kept. */
+  proposed: boolean;
+  /** How many verdicts it was learned from. Zero when the owner wrote it. */
+  learnedFrom: number;
+  /** Triage runs it has skipped. Only `ignore` ever skips one. */
+  runsSaved: number;
+  decisions: number;
+  createdAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface EmailPoliciesView {
+  applied: EmailPolicy[];
+  proposed: EmailPolicy[];
+  /** Set when the email plugin is not installed on this machine. */
+  unavailable?: string;
+}
+
 export interface EventRow {
   id: string;
   kind: string;
@@ -1211,6 +1237,14 @@ export const api = {
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
+  /* ---- mail policies ---- */
+  emailPolicies: () => get<EmailPoliciesView>('/email/policies'),
+  /** Write one, or keep a proposal. Both answer with the two lists. */
+  setEmailPolicy: (body: { scope: string; matcher: string; action: string; agentId?: string; instruction?: string; note?: string }) =>
+    post<EmailPoliciesView>('/email/policies', body),
+  keepEmailPolicy: (id: string) => post<EmailPoliciesView>('/email/policies', { keep: id }),
+  revokeEmailPolicy: (id: string) =>
+    del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),

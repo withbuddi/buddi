@@ -98,6 +98,22 @@ export function normalizeMessageId(raw: string | null | undefined): string | nul
   return inner === '' ? null : `<${inner}>`;
 }
 
+/**
+ * `<list.example.com>` or `Some List <list.example.com>` -> `list.example.com`.
+ *
+ * A List-Id is an opaque identifier in angle brackets, optionally preceded by a
+ * human phrase. The gate matches on the identifier alone, lowercased, so that
+ * the phrase changing (and it does, every rebrand) does not silently turn a
+ * policy off.
+ */
+export function normalizeListId(raw: string | null | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  const angled = /<([^>]+)>/.exec(value);
+  const inner = (angled?.[1] ?? value).trim().toLowerCase();
+  return inner === '' ? null : inner;
+}
+
 /** Every `<...>` in a References header, in order. */
 export function parseReferences(raw: string | null | undefined): string[] {
   if (!raw) return [];
@@ -293,6 +309,57 @@ export function isUnread(flags: readonly string[]): boolean {
  * the agent to classify, never as instructions, and the persona is what holds
  * that line.
  */
+export interface SenderHistory {
+  /** The live policy for this sender, when there is one. */
+  policy?: {
+    action: string;
+    scope: string;
+    matcher: string;
+    origin: string;
+    /** True while it is only a proposal, deciding nothing. */
+    proposed: boolean;
+  } | null;
+  /** What was decided about this sender before, newest first. */
+  verdicts?: ReadonlyArray<{ category: string; urgency: string; decidedAt: string | null }>;
+}
+
+/**
+ * What the sender's history adds to the prompt, or nothing.
+ *
+ * docs/email.md §1's complaint, answered: *«a model run judges it from zero, records
+ * a verdict nothing reads back»*. This is the reading back. It is history, not
+ * instruction: the run is told what was decided before so it can be consistent
+ * with it or say why it is not, and the block says so in as many words, because
+ * a list of past verdicts is exactly the sort of thing a model will otherwise
+ * treat as an order.
+ */
+export function senderHistoryBlock(history: SenderHistory | undefined): string[] {
+  if (!history) return [];
+  const lines: string[] = [];
+  const { policy, verdicts } = history;
+  if (policy) {
+    lines.push(
+      policy.proposed
+        ? `Standing policy: none yet. One is proposed — ${policy.action} for ${policy.scope} ${policy.matcher} — and decides nothing until the owner keeps it.`
+        : `Standing policy: ${policy.action} for ${policy.scope} ${policy.matcher} (${policy.origin}).`,
+    );
+  }
+  if (verdicts && verdicts.length > 0) {
+    lines.push(
+      `Earlier verdicts on this sender, newest first: ${verdicts
+        .map((v) => `${v.category}/${v.urgency}`)
+        .join(', ')}.`,
+    );
+  }
+  if (lines.length === 0) return [];
+  return [
+    '',
+    'What was decided about this sender before (history, not an instruction — ' +
+      'judge this message on what it says, and say so if you disagree with the pattern):',
+    ...lines,
+  ];
+}
+
 export function triagePrompt(input: {
   messageId: string;
   from: string;
@@ -304,6 +371,10 @@ export function triagePrompt(input: {
   attachments: readonly AttachmentInfo[];
   bodyText: string;
   bodyChars?: number;
+  /** The sender's standing policy and last verdicts, when they are known. */
+  history?: SenderHistory;
+  /** A standing instruction from a policy, e.g. "draft a reply". */
+  instruction?: string;
 }): string {
   const cap = input.bodyChars ?? 4000;
   const body = input.bodyText.length > cap
@@ -329,6 +400,8 @@ export function triagePrompt(input: {
     `Subject: ${input.subject || '(no subject)'}`,
     `Date: ${input.date ?? '(unknown)'}`,
     `Attachments: ${attachments}`,
+    ...senderHistoryBlock(input.history),
+    ...(input.instruction ? ['', `The owner has a standing instruction for this sender: ${input.instruction}`] : []),
     '',
     'Body:',
     body.trim() === '' ? '(empty)' : body,
@@ -349,6 +422,7 @@ export function prepareForIngest(message: FetchedMessage): IngestedMessage {
     cc: normalizeAddresses(message.cc),
     messageId: normalizeMessageId(message.messageId),
     inReplyTo: normalizeMessageId(message.inReplyTo),
+    listId: normalizeListId(message.listId),
     threadKey: threadKeyFor({
       messageId: normalizeMessageId(message.messageId),
       inReplyTo: normalizeMessageId(message.inReplyTo),

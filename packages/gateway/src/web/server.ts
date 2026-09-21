@@ -116,6 +116,7 @@ import {
   type TailscaleProfile,
   type TailscaleWhois,
 } from './tailscale.js';
+import { deleteEmailPolicy, readEmailPolicies, writeEmailPolicy } from './email.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
@@ -1046,6 +1047,14 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
+        /*
+         * Settings → Email → Policies: the standing decisions about incoming
+         * mail, and the ones proposed from the owner's own history. A read.
+         */
+        case '/api/email/policies': {
+          const view = await readEmailPolicies(deps.pool);
+          return sendJson(res, view.status, view.body);
+        }
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
         case '/api/owner': {
@@ -1292,6 +1301,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+      }
+      /*
+       * Revoke one mail policy. The row stays as the record that the owner once
+       * decided this; only its effect stops. Answers with both lists, so the
+       * page redraws from the reply rather than asking again.
+       */
+      const policyGone = /^\/api\/email\/policies\/([0-9a-f-]{36})$/i.exec(path);
+      if (policyGone) {
+        const reply = await deleteEmailPolicy(deps.pool, policyGone[1]!, deps.now());
+        return sendJson(res, reply.status, reply.body);
       }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
@@ -1988,6 +2007,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
       const profile = await setOwnerProfile(deps.pool, patch);
       return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+    }
+
+    /*
+     * Write a mail policy, or keep one that was only proposed. The owner acting
+     * on their own settings page needs no approval card: the gate on
+     * `email.set_policy` exists because a *model* proposed the rule.
+     */
+    if (path === '/api/email/policies') {
+      const reply = await writeEmailPolicy(deps.pool, body, deps.now());
+      return sendJson(res, reply.status, reply.body);
     }
 
     /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */

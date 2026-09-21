@@ -1,0 +1,292 @@
+/**
+ * Reading and writing policies and the gate's events.
+ *
+ * Everything with SQL in it lives here, so `gate.ts` can stay a pure function
+ * and `learn.ts` can stay a pure rule. Nothing in this file decides anything.
+ */
+import type { Pool, PoolClient } from 'pg';
+import { normalizeAddress, normalizeListId } from '../mail.js';
+import {
+  domainOf,
+  isUnimplementedAction,
+  POLICY_ACTIONS,
+  POLICY_ORIGINS,
+  POLICY_SCOPES,
+  type PolicyAction,
+  type PolicyOrigin,
+  type PolicyParams,
+  type PolicyRecord,
+  type PolicyScope,
+} from './gate.js';
+
+type Db = Pool | PoolClient;
+
+export const POLICY_COLUMNS =
+  'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at';
+
+function iso(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+export function toPolicy(row: Record<string, any>): PolicyRecord {
+  return {
+    id: String(row.id),
+    accountId: row.account_id === null || row.account_id === undefined ? null : String(row.account_id),
+    scope: row.scope as PolicyScope,
+    matcher: row.matcher,
+    action: row.action as PolicyAction,
+    params: (row.params ?? {}) as PolicyParams,
+    origin: row.origin as PolicyOrigin,
+    proposed: Boolean(row.proposed),
+    createdFrom: Array.isArray(row.created_from) ? row.created_from : [],
+    createdAt: iso(row.created_at),
+    revokedAt: iso(row.revoked_at),
+  };
+}
+
+/**
+ * The matcher, as it is stored: lowercased, and reduced to the thing the scope
+ * actually compares. `@example.com` and `Example.com` are one domain;
+ * `Jane <jane@x.test>` is one sender.
+ */
+export function normalizeMatcher(scope: PolicyScope, raw: string): string {
+  const value = (raw ?? '').trim();
+  switch (scope) {
+    case 'sender': {
+      const address = normalizeAddress(value);
+      return address;
+    }
+    case 'domain': {
+      const stripped = value.replace(/^@/, '').trim().toLowerCase();
+      // `someone@example.com` given as a domain means `example.com`.
+      return stripped.includes('@') ? domainOf(stripped) : stripped;
+    }
+    case 'list-id':
+      return normalizeListId(value) ?? '';
+    case 'thread':
+      return value.toLowerCase();
+  }
+}
+
+/**
+ * Why a policy cannot be created, in one owner-facing line, or null.
+ *
+ * Validation, then refusal: `archive` and `label` are valid vocabulary with no
+ * implementation behind them, and the honest answer is "not yet" at the moment
+ * somebody asks for one — not a policy that silently never fires.
+ */
+export function refusalFor(input: {
+  scope: PolicyScope;
+  matcher: string;
+  action: PolicyAction;
+  params?: PolicyParams;
+}): string | null {
+  if (!POLICY_SCOPES.includes(input.scope)) return `unknown scope: ${input.scope}`;
+  if (!POLICY_ACTIONS.includes(input.action)) return `unknown action: ${input.action}`;
+  const matcher = normalizeMatcher(input.scope, input.matcher);
+  if (matcher === '') return `that is not a ${input.scope} to match on`;
+  if (input.scope === 'sender' && !matcher.includes('@')) return 'a sender policy needs an address';
+  if (input.scope === 'domain' && !matcher.includes('.')) return 'a domain policy needs a domain';
+  if (isUnimplementedAction(input.action)) {
+    return `not yet: "${input.action}" needs to write to the mailbox over IMAP, and this build only ever reads it. Ignore, notify, draft, hand-to-agent and wake work today.`;
+  }
+  if (input.action === 'hand-to-agent' && !input.params?.agentId?.trim()) {
+    return 'hand-to-agent needs the id of the agent that should get the message';
+  }
+  return null;
+}
+
+export class PolicyRefusal extends Error {
+  override readonly name = 'PolicyRefusal';
+}
+
+export interface CreatePolicyInput {
+  accountId?: string | null;
+  scope: PolicyScope;
+  matcher: string;
+  action: PolicyAction;
+  params?: PolicyParams;
+  origin: PolicyOrigin;
+  proposed?: boolean;
+  createdFrom?: Array<{ messageId: string; processingVersion: number }>;
+}
+
+/**
+ * Write one policy, replacing whatever live one held the same slot.
+ *
+ * Replacing rather than erroring is the right shape for a decision: the owner
+ * saying "ignore this sender" about a sender they already said "notify me
+ * about" is a *new* decision, not a conflict, and the old row stays as a
+ * revoked record of what they used to think.
+ */
+export async function createPolicy(
+  db: Db,
+  input: CreatePolicyInput,
+  now: Date,
+): Promise<PolicyRecord> {
+  const refusal = refusalFor(input);
+  if (refusal) throw new PolicyRefusal(refusal);
+  const matcher = normalizeMatcher(input.scope, input.matcher);
+  const accountId = input.accountId ?? null;
+
+  await db.query(
+    `update email.policies set revoked_at = $1
+      where revoked_at is null and scope = $2 and matcher = $3
+        and coalesce(account_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            = coalesce($4::uuid, '00000000-0000-0000-0000-000000000000'::uuid)`,
+    [now, input.scope, matcher, accountId],
+  );
+
+  const { rows } = await db.query(
+    `insert into email.policies
+       (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at)
+     values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9)
+     returning ${POLICY_COLUMNS}`,
+    [
+      accountId,
+      input.scope,
+      matcher,
+      input.action,
+      JSON.stringify(input.params ?? {}),
+      input.origin,
+      input.proposed ?? false,
+      JSON.stringify(input.createdFrom ?? []),
+      now,
+    ],
+  );
+  const row = rows[0];
+  if (!row) throw new Error('createPolicy: insert returned no row');
+  return toPolicy(row);
+}
+
+/** Every live policy the gate may consider, newest first. Proposals included. */
+export async function loadPolicies(db: Db, accountId?: string | null): Promise<PolicyRecord[]> {
+  const { rows } = await db.query(
+    `select ${POLICY_COLUMNS} from email.policies
+      where revoked_at is null
+        and ($1::uuid is null or account_id is null or account_id = $1::uuid)
+      order by created_at desc, id desc`,
+    [accountId ?? null],
+  );
+  return rows.map(toPolicy);
+}
+
+export async function findPolicy(db: Db, id: string): Promise<PolicyRecord | null> {
+  const { rows } = await db.query(`select ${POLICY_COLUMNS} from email.policies where id = $1`, [id]);
+  return rows[0] ? toPolicy(rows[0]) : null;
+}
+
+/** The live policy for one sender address, or null. */
+export async function policyForSender(
+  db: Db,
+  address: string,
+  accountId?: string | null,
+): Promise<PolicyRecord | null> {
+  const matcher = normalizeMatcher('sender', address);
+  if (matcher === '') return null;
+  const { rows } = await db.query(
+    `select ${POLICY_COLUMNS} from email.policies
+      where revoked_at is null and scope = 'sender' and matcher = $1
+        and ($2::uuid is null or account_id is null or account_id = $2::uuid)
+      order by created_at desc, id desc limit 1`,
+    [matcher, accountId ?? null],
+  );
+  return rows[0] ? toPolicy(rows[0]) : null;
+}
+
+/** Keep a proposal: it stops being a suggestion and starts deciding. */
+export async function keepPolicy(db: Db, id: string): Promise<PolicyRecord | null> {
+  const { rows } = await db.query(
+    `update email.policies set proposed = false
+      where id = $1 and revoked_at is null returning ${POLICY_COLUMNS}`,
+    [id],
+  );
+  return rows[0] ? toPolicy(rows[0]) : null;
+}
+
+/** Revoke. The row stays; its effect does not. Revoking twice is a no-op. */
+export async function revokePolicy(db: Db, id: string, now: Date): Promise<PolicyRecord | null> {
+  const { rows } = await db.query(
+    `update email.policies set revoked_at = coalesce(revoked_at, $2)
+      where id = $1 returning ${POLICY_COLUMNS}`,
+    [id, now],
+  );
+  return rows[0] ? toPolicy(rows[0]) : null;
+}
+
+export interface GateEvent {
+  id: string;
+  messageId: string;
+  policyId: string | null;
+  action: string;
+  detail: string;
+  at: string | null;
+}
+
+export function toEvent(row: Record<string, any>): GateEvent {
+  return {
+    id: String(row.id),
+    messageId: String(row.message_id),
+    policyId: row.policy_id === null || row.policy_id === undefined ? null : String(row.policy_id),
+    action: row.action,
+    detail: row.detail ?? '',
+    at: iso(row.at),
+  };
+}
+
+/** Record what the gate did. One row per decision, including `none`. */
+export async function recordEvent(
+  db: Db,
+  input: { messageId: string; policyId: string | null; action: string; detail: string },
+  now: Date,
+): Promise<GateEvent> {
+  const { rows } = await db.query(
+    `insert into email.events (message_id, policy_id, action, detail, at)
+     values ($1, $2, $3, $4, $5)
+     returning id, message_id, policy_id, action, detail, at`,
+    [input.messageId, input.policyId, input.action, input.detail, now],
+  );
+  const row = rows[0];
+  if (!row) throw new Error('recordEvent: insert returned no row');
+  return toEvent(row);
+}
+
+/**
+ * How many runs each policy has saved, and when it last decided anything.
+ *
+ * "Saved" is counted honestly: only `ignore` skips a model run outright. The
+ * other actions still start one, and claiming otherwise on the settings page
+ * would be the plugin flattering itself.
+ */
+export async function policyStats(
+  db: Db,
+): Promise<Map<string, { runsSaved: number; decisions: number; lastAt: string | null }>> {
+  const { rows } = await db.query(
+    `select policy_id,
+            count(*) filter (where action = 'ignore')::int as runs_saved,
+            count(*)::int as decisions,
+            max(at) as last_at
+       from email.events
+      where policy_id is not null
+      group by policy_id`,
+  );
+  const out = new Map<string, { runsSaved: number; decisions: number; lastAt: string | null }>();
+  for (const row of rows) {
+    out.set(String(row.policy_id), {
+      runsSaved: Number(row.runs_saved ?? 0),
+      decisions: Number(row.decisions ?? 0),
+      lastAt: iso(row.last_at),
+    });
+  }
+  return out;
+}
+
+/** Run the migration's backfill again. Idempotent; returns how many it wrote. */
+export async function seedLearnedIgnorePolicies(db: Db, now?: Date): Promise<number> {
+  const { rows } = await db.query<{ n: number }>(
+    `select email.seed_learned_ignore_policies($1) as n`,
+    [now ?? new Date()],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
