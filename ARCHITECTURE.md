@@ -432,7 +432,15 @@ second path. The tap carries an id and nothing else.
 
 The claim is atomic: the update *is* the claim, so an impatient thumb on Telegram and the
 same offer clicked on the dashboard produce one run and one "already taken", never two
-runs. Offers expire; a stale tap is about stale facts. And the rendering branches on a
+runs. Offers expire; a stale tap is about stale facts.
+
+*Where* that run happens follows the owner's eyes. A chip clicked in the conversation that
+offered it is sent as a **turn of that conversation**, through the same path a typed
+message takes — same queue, same stream, same approvals — stamped `offer:<label>` so the
+thread shows the chip the owner clicked rather than the sentence behind it, and nothing is
+queued. Everywhere else (the Offers page, a Telegram button) the run stays a queued
+`agent-run`, and the handler puts it in the offer's own conversation so its report lands in
+the thread it came from as well as in the notification. And the rendering branches on a
 *fact* rather than on a surface name — a surface already declares whether the owner can tap
 something, and that single declaration decides between buttons and a sentence. A fifth
 surface gets correct rendering by declaring what it is, not by being added to a switch.

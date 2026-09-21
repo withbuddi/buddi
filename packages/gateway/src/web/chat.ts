@@ -93,6 +93,7 @@ import {
   createOfferManifest,
   storeTurnOffers,
   withdrawTurnOffers,
+  offerTurnSpeaker,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import {
@@ -938,6 +939,17 @@ export interface SendRequest {
    * and it may be claimed once per installation.
    */
   opening?: boolean | undefined;
+  /**
+   * The turn was started by taking an offer, not by typing.
+   *
+   * `text` is still the prompt the *agent* wrote — the model is given exactly
+   * what it would have been given had the owner typed it — and the label is
+   * what the owner actually clicked, stamped on the stored turn so the
+   * transcript can draw the chip rather than the sentence behind it. Only the
+   * take route sets it, from a row it has just claimed; nothing a browser posts
+   * reaches this field.
+   */
+  offer?: { id: string; label: string } | undefined;
 }
 
 export type SendResult =
@@ -1096,7 +1108,8 @@ export class WebChat {
     const runId = randomUUID();
     const target = conversationId;
     const opening = request.opening === true;
-    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening }); });
+    const offer = request.offer;
+    this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening, ...(offer ? { offer } : {}) }); });
     return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
   }
 
@@ -1443,6 +1456,8 @@ export class WebChat {
     group?: RoomTurn;
     /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
     opening?: boolean;
+    /** The chip the owner clicked, when this turn is a taken offer. */
+    offer?: { id: string; label: string };
   }): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
@@ -1559,7 +1574,13 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
-      ...(turn.opening ? { openingSpeaker: OPENING_TURN_SPEAKER } : {}),
+      ...(turn.opening
+        ? { openingSpeaker: OPENING_TURN_SPEAKER }
+        // A taken chip is the owner's turn, stamped with the label they clicked
+        // so the thread shows "Send it" instead of the sentence behind it.
+        : turn.offer
+          ? { openingSpeaker: offerTurnSpeaker(turn.offer.label) }
+          : {}),
       systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),
