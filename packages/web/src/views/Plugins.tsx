@@ -115,6 +115,19 @@ function sourceWords(source: PluginSource): string {
   return `a directory on this machine · ${source.path}`;
 }
 
+/**
+ * Who put this code here.
+ *
+ * Only the registry has a publisher to name. Code that came off this machine
+ * was put there by the owner, and saying "nobody npm will name" about it reads
+ * as a warning about something that is simply not npm's to vouch for.
+ */
+function publisherWords(source: PluginSource, publisher: string | null | undefined): string {
+  if (source.kind === 'directory') return 'you, from this machine';
+  if (source.kind === 'tarball') return 'a file on this machine';
+  return publisher ?? 'nobody npm will name';
+}
+
 /** A stage watched to its end. */
 function useStageJob(id: string | null): { job: PluginJob | undefined; error: string | null } {
   const [job, setJob] = useState<PluginJob | undefined>(undefined);
@@ -728,7 +741,7 @@ function Installed({
           <KV
             items={[
               { label: 'From', value: sourceWords(plugin.source) },
-              { label: 'Published by', value: plugin.publisher ?? 'nobody npm will name' },
+              { label: 'Published by', value: publisherWords(plugin.source, plugin.publisher) },
               { label: 'Installed', value: fmtRelative(plugin.installedAt) },
               {
                 label: 'Contributes',

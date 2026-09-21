@@ -748,6 +748,7 @@ export function ChatPage({
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
+      agents={everyone}
       browserPanel={browserTab ? <BrowserPanel key={browserTab.id} data={browser.data} error={browser.error} reload={browser.reload} compact /> : null}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}
@@ -900,6 +901,10 @@ export function ChatPage({
           <div className="wb-chat-notice" data-testid="chat-notice">
             {notice}
           </div>
+        ) : null}
+
+        {conversation?.carriedOver ? (
+          <div className="wb-carryover" data-testid="chat-carryover">{conversation.carriedOver}</div>
         ) : null}
 
         <MessageList

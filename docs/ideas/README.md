@@ -10,6 +10,7 @@ conversations and can be reviewed alongside the code.
 | --- | --- | --- |
 | [Reusable Codex adapter](reusable-codex-adapter.md) | Proposed | Extract the backend integration into a package other projects can consume. |
 | [Conversation context budget](conversation-context-budget.md) | Proposed | The 80k projection cap ignores the model window and starves browser and computer conversations. |
+| [Browser canvas tab](browser-canvas-tab.md) | Proposed | One pinned live Browser tab while an agent drives the browser, instead of a tab per act. |
 | [Anthropic subscription login](anthropic-subscription-login.md) | Accepted | [Implementation](../anthropic-oauth.md) on the dedicated OAuth branch. |
 
 Existing tracked work remains in the [provider roadmap](../provider-roadmap.md);

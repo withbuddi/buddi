@@ -150,6 +150,10 @@ describe('the canvas knows no domain', () => {
    */
   const PLATFORM_LITERALS = new Set([
     "'canvas.show'",
+    // One agent asking another is the platform's own tool, like `canvas.*`:
+    // no plugin provides it, and a delegation draws a conversation of the
+    // owner's rather than a domain's result.
+    "'agent.delegate'",
     "'canvas.clear'",
     "'run.started'",
     "'run.finished'",

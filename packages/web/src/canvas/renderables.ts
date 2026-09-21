@@ -41,6 +41,51 @@ import type { Renderable, RendererName, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { commandResult } from './command-result';
 
+/**
+ * One agent asking another. Its call is drawn as the colleague's own run —
+ * the one place this file names a tool, and it names a *platform* tool rather
+ * than a plugin's: a delegation is a second conversation of the owner's, and
+ * nothing about its shape says so.
+ */
+export const DELEGATE_TOOL = 'agent.delegate';
+
+/** What the delegate panel is handed: where the work went, and how it ended. */
+export interface DelegatePanelProps {
+  conversationId: string;
+  agentId: string;
+  runId: string | null;
+  /** The delegation's own result, once the call has come back. */
+  result: { ok: boolean; text: string | null } | null;
+}
+
+/**
+ * Where a delegate call sent its work, from the call's recorded input.
+ *
+ * The server writes the ids onto the call the moment the colleague's
+ * conversation exists — before the answer, which is the point: the panel
+ * follows the run live rather than appearing when it is over.
+ */
+export function delegationOf(input: unknown): { conversationId: string; agentId: string; runId: string | null } | null {
+  if (input === null || typeof input !== 'object') return null;
+  const record = input as Record<string, unknown>;
+  const conversationId = record['conversationId'];
+  if (typeof conversationId !== 'string' || conversationId === '') return null;
+  const agentId = record['agentId'] ?? record['agent'];
+  return {
+    conversationId,
+    agentId: typeof agentId === 'string' ? agentId : '',
+    runId: typeof record['runId'] === 'string' ? record['runId'] : null,
+  };
+}
+
+/** The colleague's words out of a delegate result, whichever half it came in. */
+function delegateText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (value === null || typeof value !== 'object') return null;
+  const text = (value as Record<string, unknown>)['text'];
+  return typeof text === 'string' ? text : null;
+}
+
 /** The tool family the agent uses to drive the canvas on purpose. */
 export const CANVAS_SHOW = 'canvas.show';
 export const CANVAS_CLEAR = 'canvas.clear';
@@ -80,6 +125,25 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
           if (shown) collected.push(shown);
         }
         if (block.name === CANVAS_CLEAR) collected = [];
+        // A delegation draws the colleague's run, from the call: the ids are
+        // on it long before the answer is.
+        if (block.name === DELEGATE_TOOL) {
+          const ref = delegationOf(block.input);
+          if (ref) {
+            collected.push({
+              id: block.id,
+              tool: DELEGATE_TOOL,
+              title: 'Delegation',
+              renderer: 'delegate',
+              props: { ...ref, result: null } satisfies DelegatePanelProps,
+              at: message.at ?? null,
+              source: 'delegate',
+              // A colleague at work is the most interesting thing on the
+              // screen while it is happening.
+              substantial: true,
+            });
+          }
+        }
         continue;
       }
 
@@ -89,6 +153,19 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
       const use = uses.get(block.toolUseId);
       const at = message.at ?? use?.at ?? null;
       const tool = block.name || use?.name || 'tool';
+
+      // The delegate panel is already on the canvas, drawn from the call. The
+      // result does not open a second tab: it finishes the one that is there,
+      // and the colleague's answer stays on it as the summary.
+      const delegate = collected.find((item) => item.source === 'delegate' && item.id === block.toolUseId);
+      if (delegate) {
+        delegate.props = {
+          ...(delegate.props as DelegatePanelProps),
+          result: { ok: block.ok, text: delegateText(block.ok ? block.output : block.error ?? block.output) },
+        } satisfies DelegatePanelProps;
+        if (!block.ok) delegate.tone = 'critical';
+        continue;
+      }
 
       // A call that stopped on a gate is an envelope, whatever it would
       // otherwise have drawn.

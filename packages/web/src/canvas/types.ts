@@ -173,7 +173,7 @@ export interface StructuredProps {
  * tab — what may be pushed into the overflow, what is allowed to take the
  * screen — can tell it apart from something a run produced.
  */
-export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser' | 'artifact';
+export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser' | 'artifact' | 'delegate';
 
 /**
  * What draws a panel.
@@ -183,9 +183,11 @@ export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback'
  * them: they are the platform's own panels — its configuration, its live
  * browser session, a file the owner attached — and adding them to the renderer
  * registry would let an agent draw a convincing properties panel, or a file
- * that was never sent, out of `canvas.show` with data it made up.
+ * that was never sent, out of `canvas.show` with data it made up. `delegate`
+ * is the same kind of thing: it draws another conversation of the owner's,
+ * read from the server by id, and an agent must not be able to conjure one.
  */
-export type PanelName = RendererName | 'profile' | 'browser' | 'artifact';
+export type PanelName = RendererName | 'profile' | 'browser' | 'artifact' | 'delegate';
 
 /** One thing the canvas can show: a tab and a panel. */
 export interface Renderable {

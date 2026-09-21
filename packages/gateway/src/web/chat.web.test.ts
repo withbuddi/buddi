@@ -127,3 +127,154 @@ describe('the turn that carries a decided approval', () => {
     expect(transcript!.messages[0]!.blocks[0]!.type).toBe('text');
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * A delegation, told where it went
+ * ------------------------------------------------------------------ */
+
+/**
+ * The call the dashboard draws carries the colleague's conversation long
+ * before the colleague has answered. Without it the panel beside the thread
+ * would have nothing to read until the run was over, which is exactly the
+ * minute the owner wants to watch.
+ */
+describe('an agent.delegate call in a transcript', () => {
+  const conversationId = '22222222-2222-2222-2222-222222222222';
+  const delegated = '33333333-3333-3333-3333-333333333333';
+
+  function pool(events: unknown[], input: unknown = { agent: 'ledger', task: 'What did we spend?' }): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) {
+          return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        }
+        if (/from core\.messages/.test(sql)) {
+          return {
+            rows: [{
+              id: 'm1',
+              role: 'assistant',
+              created_at: new Date(),
+              speaker: null,
+              // The call, and no result: the colleague is still working.
+              content: [{ type: 'tool_use', id: 'toolu_1', name: 'agent.delegate', input }],
+            }],
+          };
+        }
+        if (/delegation\.started/.test(sql)) return { rows: events.map((payload) => ({ payload })) };
+        return { rows: [] };
+      }),
+    } as never;
+  }
+
+  it('carries the delegated conversation on the call, before any result', async () => {
+    const transcript = await readChatTranscript(
+      pool([{ from: 'ada', to: 'ledger', agentId: 'ledger', conversationId: delegated, runId: 'run-9', toolUseId: 'toolu_1' }]),
+      conversationId,
+    );
+    expect(transcript!.messages[0]!.blocks[0]).toEqual({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'agent.delegate',
+      input: { agent: 'ledger', task: 'What did we spend?', conversationId: delegated, agentId: 'ledger', runId: 'run-9' },
+    });
+  });
+
+  it('carries no ids at all when no conversation was opened', async () => {
+    const transcript = await readChatTranscript(pool([]), conversationId);
+    expect(transcript!.messages[0]!.blocks[0]).toEqual({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'agent.delegate',
+      input: { agent: 'ledger', task: 'What did we spend?' },
+    });
+  });
+
+  /*
+   * The one that matters: a model may write whatever it likes into a tool
+   * call, and these three keys are what the dashboard opens a live panel
+   * from. They are the installation's to write.
+   */
+  it('strips ids the model wrote itself, so no panel can be conjured', async () => {
+    const written = {
+      agent: 'ledger',
+      task: 'What did we spend?',
+      conversationId: '44444444-4444-4444-4444-444444444444',
+      agentId: 'somebody-else',
+      runId: 'run-invented',
+    };
+    const refused = await readChatTranscript(pool([], written), conversationId);
+    expect(refused!.messages[0]!.blocks[0]).toEqual({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'agent.delegate',
+      input: { agent: 'ledger', task: 'What did we spend?' },
+    });
+
+    // And when a delegation really did open one, the event's ids win.
+    const real = await readChatTranscript(
+      pool([{ agentId: 'ledger', conversationId: delegated, runId: 'run-9', toolUseId: 'toolu_1' }], written),
+      conversationId,
+    );
+    expect((real!.messages[0]!.blocks[0] as { input: Record<string, unknown> }).input).toEqual({
+      agent: 'ledger',
+      task: 'What did we spend?',
+      conversationId: delegated,
+      agentId: 'ledger',
+      runId: 'run-9',
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Which run finished
+ * ------------------------------------------------------------------ */
+
+/**
+ * A conversation can have two runs open at once — a resumed turn, a colleague
+ * writing into the thread — and a finish that is paired onto the wrong one
+ * shows the owner a thread as over while it is still going. The event's own
+ * `runId` decides.
+ */
+describe('runs in a transcript', () => {
+  const conversationId = '55555555-5555-5555-5555-555555555555';
+
+  function pool(events: Array<{ kind: string; payload: Record<string, unknown>; at: string }>): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) {
+          return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        }
+        if (/run\.started/.test(sql)) {
+          return { rows: events.map((e) => ({ kind: e.kind, payload: e.payload, created_at: new Date(e.at) })) };
+        }
+        return { rows: [] };
+      }),
+    } as never;
+  }
+
+  it('closes the run the event names, not the first one still open', async () => {
+    const transcript = await readChatTranscript(
+      pool([
+        { kind: 'run.started', payload: { runId: 'run-a' }, at: '2026-09-21T09:00:00Z' },
+        { kind: 'run.started', payload: { runId: 'run-b' }, at: '2026-09-21T09:00:01Z' },
+        { kind: 'run.finished', payload: { runId: 'run-b', turns: 2 }, at: '2026-09-21T09:00:05Z' },
+      ]),
+      conversationId,
+    );
+    const runs = transcript!.runs;
+    expect(runs.map((r) => [r.runId, r.finishedAt !== null])).toEqual([['run-a', false], ['run-b', true]]);
+    expect(runs[1]!.turns).toBe(2);
+  });
+
+  it('still pairs a finish that names no run onto the one that is open', async () => {
+    const transcript = await readChatTranscript(
+      pool([
+        { kind: 'run.started', payload: { runId: 'run-a' }, at: '2026-09-21T09:00:00Z' },
+        { kind: 'run.finished', payload: { turns: 1 }, at: '2026-09-21T09:00:03Z' },
+      ]),
+      conversationId,
+    );
+    expect(transcript!.runs).toHaveLength(1);
+    expect(transcript!.runs[0]!.finishedAt).not.toBeNull();
+  });
+});

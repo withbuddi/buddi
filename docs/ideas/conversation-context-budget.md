@@ -60,3 +60,7 @@ line when the projection drops turns, so the loss becomes visible.
 - `packages/runtime/src/projection.ts` (the projection and its truncation of
   large tool results).
 - `docs/browser.md`, `docs/computer-use.md` (what an observation holds).
+
+## Follow-up captured 2026-09-21
+
+A browser session ends the conversation (the rollover rule), and what the agent learned in it is lost unless it wrote it down: the Finance Advisor read a live balance from PNC, recorded only the transaction, and the next chat answered from stale ledger balances. Two fixes: the finance plugin instructs the advisor to record an observed balance with set_balance before answering; buddi writes a short handoff of what was learned into the fresh conversation the rollover starts.
