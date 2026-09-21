@@ -24,6 +24,14 @@ function describeElement(el: Element) {
 }
 type ElementDescription = ReturnType<typeof describeElement>;
 
+/** One character the page would have typed, as opposed to a named key. */
+function printableKey(key: string): boolean {
+  return [...key].length === 1 && key.codePointAt(0)! >= 0x20 && key.codePointAt(0)! !== 0x7f;
+}
+
+/** Control, Alt or Meta, as CDP packs them — Shift is part of typing. */
+const SHORTCUT_MODIFIERS = 1 | 2 | 4;
+
 export class PlaywrightDriver implements BrowserDriver, TabOwner {
   readonly host: PlaywrightHost;
   #page?: Page;
@@ -277,8 +285,16 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
         if (event.type === 'mousePressed') await page.mouse.down(options); else await page.mouse.up(options);
         return;
       }
+      // A paste: one insertion, however long the owner's clipboard was.
+      if (event.kind === 'text') { await page.keyboard.insertText(event.text); return; }
       // A typed character is inserted as text; a named key is pressed as one.
       if (event.type === 'char') { if (event.text) await page.keyboard.insertText(event.text); return; }
+      // And a printable key is *only* ever its `char`. `keyboard.down('a')`
+      // types an "a" all by itself, so pressing the key and then inserting the
+      // character it stands for is how "ame" came out as "aammee". A shortcut
+      // still goes down and up — Cmd+A is a key press, not a typed character,
+      // and Playwright omits the text once a real modifier is held.
+      if (printableKey(event.key) && (event.modifiers & SHORTCUT_MODIFIERS) === 0) return;
       if (event.type === 'keyDown') await page.keyboard.down(event.key); else await page.keyboard.up(event.key);
     },
     stop: async () => {

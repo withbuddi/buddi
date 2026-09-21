@@ -66,6 +66,22 @@ export function typedCharacter(key: string): boolean {
   return [...key].length === 1 && key.codePointAt(0)! >= 0x20 && key.codePointAt(0)! !== 0x7f;
 }
 
+/** A paste is as long as a form field, never as long as a file. */
+export const MAX_PASTE = 4_000;
+
+/**
+ * What the owner pasted, as the page on the other end may receive it.
+ *
+ * Their clipboard is theirs: the host has no way to reach it, so the text
+ * travels on this socket or not at all. A newline and a tab are typing and
+ * survive; everything else below a space is not text a keyboard makes, and a
+ * carriage return is spelt the one way both backends insert.
+ */
+export function pastedText(raw: string): string {
+  const text = raw.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
+  return text.slice(0, MAX_PASTE);
+}
+
 const BUTTONS = ['left', 'middle', 'right'] as const;
 
 /**
@@ -262,26 +278,63 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
     send({ kind: 'wheel', x: at.x, y: at.y, deltaX: Math.round(event.deltaX), deltaY: Math.round(event.deltaY) });
   };
 
+  /**
+   * A character, or a key — never both.
+   *
+   * A printable key with no Ctrl, Cmd or Alt on it is a *character*, and goes
+   * as one `char` and nothing else. Both backends type the character out of a
+   * `keyDown` all by themselves (Playwright's `keyboard.down`, Chrome's
+   * `dispatchKeyEvent` with text), so sending the key as well is why "ame"
+   * came back "aammee". Named keys and shortcuts are the other case: they go
+   * down and up, carrying no text, because Enter is a press and Cmd+A is a
+   * press, not something typed.
+   */
+  const shortcut = (event: React.KeyboardEvent): boolean => event.ctrlKey || event.metaKey || event.altKey;
+
   const keyDown = (event: React.KeyboardEvent): void => {
     // A modifier and Escape is how you get your own keyboard back; everything
     // else on this surface belongs to the page on the other end.
-    if (event.key === 'Escape' && (event.ctrlKey || event.metaKey || event.altKey)) {
+    if (event.key === 'Escape' && shortcut(event)) {
       setTyping(false);
       (event.target as HTMLElement).blur?.();
       return;
     }
     event.preventDefault();
+    // Paste is the owner's clipboard, which is here and not on the host: the
+    // shortcut would paste whatever the *host* machine happens to be holding,
+    // which is not theirs to reach. The `paste` event below does the real one.
+    if ((event.metaKey || event.ctrlKey) && (event.key === 'v' || event.key === 'V')) return;
     const modifiers = modifiersOf(event);
-    send({ kind: 'key', type: 'keyDown', key: event.key, code: event.code, modifiers });
-    if (typedCharacter(event.key) && !event.ctrlKey && !event.metaKey) {
+    if (typedCharacter(event.key) && !shortcut(event)) {
       send({ kind: 'key', type: 'char', key: event.key, code: event.code, text: event.key, modifiers });
+      return;
     }
+    send({ kind: 'key', type: 'keyDown', key: event.key, code: event.code, modifiers });
   };
 
   const keyUp = (event: React.KeyboardEvent): void => {
-    if (event.key === 'Escape' && (event.ctrlKey || event.metaKey || event.altKey)) return;
+    if (event.key === 'Escape' && shortcut(event)) return;
     event.preventDefault();
+    if ((event.metaKey || event.ctrlKey) && (event.key === 'v' || event.key === 'V')) return;
+    // The character went as a `char` on the way down; there is no key here to
+    // let go of, and a `keyUp` would be a second event for one keystroke.
+    if (typedCharacter(event.key) && !shortcut(event)) return;
     send({ kind: 'key', type: 'keyUp', key: event.key, code: event.code, modifiers: modifiersOf(event) });
+  };
+
+  /**
+   * The owner's clipboard, on the page they are driving.
+   *
+   * Nothing on the host can read what is on a phone's clipboard, so a paste is
+   * carried here as text and inserted there in one piece — bounded, stripped
+   * of anything that is not typing, and, like every keystroke on this panel,
+   * held by nothing: it goes from the clipboard event to the socket.
+   */
+  const paste = (event: React.ClipboardEvent): void => {
+    event.preventDefault();
+    const text = pastedText(event.clipboardData?.getData('text/plain') ?? '');
+    if (text === '') return;
+    send({ kind: 'text', text });
   };
 
   return (
@@ -322,6 +375,7 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
             onWheel={wheel}
             onKeyDown={keyDown}
             onKeyUp={keyUp}
+            onPaste={paste}
             onContextMenu={(event) => event.preventDefault()}
           />
         ) : (
@@ -345,6 +399,7 @@ export function RemoteHand({ sessionId, csrf, onGiveBack, connect }: RemoteHandP
         onChange={() => {}}
         onKeyDown={keyDown}
         onKeyUp={keyUp}
+        onPaste={paste}
         onBlur={() => setTyping(false)}
       />
     </section>
