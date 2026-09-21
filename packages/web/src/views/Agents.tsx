@@ -6,13 +6,14 @@
  * proposes, across everyone: missions, offers, reminders. One agent's page
  * holds the same things for that agent alone, plus how it is wired.
  */
+import { useState } from 'react';
 import type { PlaceProps } from '../App';
-import { chatApi } from '../api';
+import { api, chatApi, type DefaultAgentView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
 import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
 import { cannotRunFix, cannotRunSentence, waitingText } from '../shell/roster';
-import { Avatar, ButtonLink, Empty, List, ListRow, Notice, Panel, Pill, Sheet, Tab, Tabs, useAsync } from '../ui';
+import { Avatar, Button, ButtonLink, Empty, ErrorBanner, Field, List, ListRow, Notice, Panel, Pill, Section, Sheet, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Reminders } from './Reminders';
@@ -53,6 +54,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
       {tab === 'missions' ? <Missions timezone={timezone} embedded /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
+      {tab === 'team' ? <DefaultAgentPicker /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
           <Empty>No agents are installed. Agent files live under the installation's agents directory.</Empty>
@@ -91,6 +93,94 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
         </Sheet>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Who answers when you name nobody.
+ *
+ * This is a fact about the installation, not about a persona, so it is a
+ * choice made once at the head of the team rather than a checkbox buried in
+ * five agents' pages. The choice is recorded and wins over whatever the files
+ * say; when the files disagree the notice says so in the owner's words and
+ * points at the picker directly below it, which is the fix.
+ */
+function DefaultAgentPicker(): JSX.Element | null {
+  const { data, error, reload } = useAsync(() => api.agents(), []);
+  const view: DefaultAgentView | undefined = data?.default;
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  if (error) return <ErrorBanner message={error} />;
+  if (!view || view.choices.length === 0) return null;
+
+  const current = view.defaultAgentId;
+  const value = chosen ?? current ?? '';
+  const dirty = value !== '' && value !== current;
+  const problem = view.problem;
+  const named = (ids: readonly string[]): string =>
+    ids.map((id) => view.choices.find((c) => c.id === id)?.name ?? id).join(' and ');
+
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    setNote(null);
+    try {
+      const result = await api.setDefaultAgent(value);
+      setNote(result.note);
+      setChosen(null);
+      reload();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel>
+      <Section
+        title="Default agent"
+        aside={<span className="muted">Where a chat that names nobody lands.</span>}
+      >
+        <ErrorBanner message={failure} />
+        {problem?.code === 'multiple-defaults' ? (
+          <Notice tone="warning" role="status">
+            {`Two agents claim default in their files: ${named(problem.agents)}. The one chosen here wins.`}
+          </Notice>
+        ) : problem?.code === 'no-default-agent' ? (
+          <Notice tone="warning" role="status">
+            No agent file claims the default and this installation has not recorded one. Choose who answers
+            when you name nobody.
+          </Notice>
+        ) : null}
+        {note ? <Notice tone="good" role="status">{note}</Notice> : null}
+        <Toolbar valign="end">
+          <Field label="Answers when you name nobody">
+            <select
+              aria-label="Default agent"
+              value={value}
+              disabled={busy}
+              onChange={(e) => setChosen(e.target.value)}
+            >
+              {value === '' ? <option value="">Choose an agent</option> : null}
+              {view.choices.map((c) => (
+                <option key={c.id} value={c.id} disabled={!c.available}>
+                  {c.name} @{c.handle}
+                  {c.available ? '' : ' (cannot run)'}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <span className="ui-toolbar-spacer" />
+          <Button variant="accent" disabled={busy || !dirty} onClick={() => void save()}>
+            Save
+          </Button>
+        </Toolbar>
+      </Section>
+    </Panel>
   );
 }
 

@@ -45,6 +45,7 @@ import {
 import { bindDelegation } from './agents/delegation.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
+import { loadDefaultAgentRecord, writeDefaultAgentRecord } from './agents/default-agent.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
 import { sweepIncoming, sweepStages } from './plugins/stage.js';
@@ -258,6 +259,20 @@ export async function createWiringAsync(
     wiring.useProviderAccounts(providerAccounts);
   }
   catch (error) { await wiring.pool.end(); throw error; }
+  /*
+   * Who the default agent is, as the installation recorded it. Read once here
+   * and held for the process, then the catalog is rebuilt so that every
+   * surface — the dashboard, Telegram, a mission — resolves the same agent
+   * without anybody restarting anything. A database that cannot answer leaves
+   * the file flag deciding, which is what an installation that has never
+   * picked one has always done.
+   */
+  try {
+    const recorded = await loadDefaultAgentRecord(wiring.pool);
+    if (recorded !== undefined) wiring.reloadCatalog();
+  } catch {
+    // Reading a preference may never be the thing that stops a start.
+  }
   const selected = wiring.catalog.defaultAgent();
   return { ...wiring, secrets, providerSettings, providerAccounts, model: selected.model,
     providerKind: selected.provider.kind, credentialKind: selected.provider.credential.kind };
@@ -363,6 +378,11 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   bindPlatformTools(registry, {
     catalog,
     reload: () => catalog.reload(),
+    // Making an agent the default is a row, not a file edit: the tool records
+    // the owner's choice and the catalog reload below picks it up.
+    setDefaultAgent: async (agentId: string) => {
+      await writeDefaultAgentRecord(pool, agentId);
+    },
     accounts: () => {
       if (!accounts) return undefined;
       const service = accounts;

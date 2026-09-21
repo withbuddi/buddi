@@ -70,6 +70,8 @@ interface Harness {
   tool(name: string): ToolDefinition<any, any>;
   ctx: ToolContext;
   reloads: number;
+  /** The installation's recorded default agent, as this harness holds it. */
+  recorded(): string | undefined;
 }
 
 function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness {
@@ -81,6 +83,9 @@ function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness 
   writeFileSync(path.join(agentsDir, 'scout', 'agent.md'), SCOUT, 'utf8');
 
   const registry = createToolRegistry({});
+  // The installation record, in memory: which agent is the default is a row
+  // this process holds, not a flag in any of these files.
+  const state = { reloads: 0, defaultAgent: undefined as string | undefined };
   const load = () =>
     loadAgentCatalog({
       dirs: [
@@ -89,11 +94,14 @@ function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness 
       ],
       registry,
       env: {},
+      ...(state.defaultAgent === undefined ? {} : { defaultAgentId: state.defaultAgent }),
     });
   const catalog = reloadableCatalog(load);
-  const state = { reloads: 0 };
   bindPlatformTools(registry, {
     catalog,
+    setDefaultAgent: async (agentId: string) => {
+      state.defaultAgent = agentId;
+    },
     reload: () => {
       state.reloads += 1;
       catalog.reload();
@@ -118,6 +126,7 @@ function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness 
     skillsDir,
     catalog,
     registry,
+    recorded: () => state.defaultAgent,
     tool(name) {
       const found = manifest.tools.find((t) => t.name === name);
       if (!found) throw new Error(`no such tool: ${name}`);
@@ -587,18 +596,27 @@ describe('the default claim moves in one approval', () => {
     writePrivate(h, 'ledger', LEDGER);
   });
 
-  it('gives it to the named agent and takes it off the one that had it', async () => {
+  /*
+   * The claim moves as an installation *record*. Nobody's file is rewritten
+   * for it — which is what used to make this the one write that touched two
+   * agents at once, and the one state a half-finished write could corrupt.
+   */
+  it('records the named agent and rewrites nobody\'s file', async () => {
+    const before = readFileSync(path.join(h.agentsDir, 'concierge', 'agent.md'), 'utf8');
     const { preview } = described<UpdateAgentEnvelope>(h, 'platform.update_agent', { id: 'ledger', default: true });
     expect(preview).toContain('BECOMES THE DEFAULT AGENT');
-    expect(preview).toContain('concierge stops being the default');
+    expect(preview).toContain('stops being the default');
+    expect(preview).toContain('no other agent file is touched');
 
     const result = (await h.tool('platform.update_agent').execute({ id: 'ledger', default: true }, h.ctx)) as {
       message: string;
     };
+    expect(h.recorded()).toBe('ledger');
     expect(h.catalog.defaultAgent().id).toBe('ledger');
     expect(h.catalog.get('concierge')!.isDefault).toBe(false);
-    expect(readFileSync(path.join(h.agentsDir, 'concierge', 'agent.md'), 'utf8')).not.toContain('default: true');
-    expect(readFileSync(path.join(h.agentsDir, 'ledger', 'agent.md'), 'utf8')).toContain('default: true');
+    // Byte for byte: the persona that lost the claim never said it had one.
+    expect(readFileSync(path.join(h.agentsDir, 'concierge', 'agent.md'), 'utf8')).toBe(before);
+    expect(readFileSync(path.join(h.agentsDir, 'ledger', 'agent.md'), 'utf8')).not.toContain('default: true');
     expect(result.message).toContain('default agent now');
   });
 

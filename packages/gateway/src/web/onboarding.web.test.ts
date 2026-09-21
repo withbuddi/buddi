@@ -426,9 +426,10 @@ it('rewrites the shipped Concierge into the owner’s assistant instead of stand
     { id: 'one', enabled: true, configured: true },
     { id: 'two', enabled: true, configured: true },
   ]);
+  const pool = fakePool();
   const created = await createFirstAgent(
     {
-      pool: fakePool() as never,
+      pool: pool as never,
       catalog: {
         list: () => [shipped],
         get: (id: string) => (id === 'concierge' ? shipped : undefined),
@@ -450,7 +451,13 @@ it('rewrites the shipped Concierge into the owner’s assistant instead of stand
   expect(file).toContain('handle: ada');
   expect(file).toContain('name: Ada');
   expect(file).toContain('avatar: 📚');
-  expect(file).toContain('default: true');
+  // Being the default is recorded for the installation, not written into the
+  // persona: the file the wizard leaves behind claims nothing about it.
+  expect(file).not.toContain('default: true');
+  const recorded = pool.query.mock.calls.find(
+    ([sql]) => /core\.web_settings/.test(String(sql)) && /insert/.test(String(sql)),
+  );
+  expect(recorded?.[1]).toEqual(['agents', JSON.stringify({ defaultAgent: 'concierge' })]);
   expect(file).not.toContain('Concierge');
   // Bound to the account the wizard named, not to whichever one came first.
   expect(created.assigned).toBe('two');
