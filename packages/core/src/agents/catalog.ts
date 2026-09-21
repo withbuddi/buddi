@@ -136,6 +136,12 @@ export type AgentAvailability =
 
 /** One colleague as an agent's prompt sees it. */
 export interface AgentRosterEntry {
+  /**
+   * The catalog id. Handles are how the owner and the agents name each other;
+   * the id is what `agent.delegate` takes, so a prompt that lists colleagues
+   * to delegate to has to carry both or the model invents one.
+   */
+  id: string;
   handle: string;
   name: string;
   description: string;
@@ -263,6 +269,15 @@ export interface LoadAgentCatalogOptions {
   dirs?: ReadonlyArray<string | AgentDirSpec>;
   registry: ToolNameSource;
   env: NodeJS.ProcessEnv;
+  /**
+   * Who each agent may delegate to, by id. The allowlist is an installation's
+   * file (`agents/<id>/delegates.json`), which core does not read: the gateway
+   * hands the answer in so the generated wiring can name the colleagues an
+   * agent is allowed to ask — with their ids, which is what the tool takes.
+   * It is a *description* of authorization, never the authorization itself;
+   * the delegate tool checks the file again at the point of use.
+   */
+  delegatesFor?: (agentId: string) => readonly string[];
   /**
    * Directory of shared skills for the single-directory form. Defaults to
    * `skills/` next to the agents directory (so `<repo>/agents` pairs with
@@ -441,10 +456,28 @@ const LANGUAGE_LINE: Record<AgentLanguage, string> = {
  * baked in here because the surface is a property of the *run*, not of the
  * agent file: one persona answers on Telegram and on the dashboard.
  */
+/**
+ * The delegation tool's name, as the generated wiring refers to it. Written
+ * here rather than imported: core knows no plugin, and this is a string in a
+ * prompt, not a call.
+ */
+export const DELEGATE_TOOL_NAME = 'agent.delegate';
+
+/** A description as one line: the first sentence or line of it, trimmed. */
+function oneLine(description: string): string {
+  const first = description.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? '';
+  return first.length > 160 ? `${first.slice(0, 159)}…` : first;
+}
+
 export function generatedSection(
   tools: readonly string[],
   language: AgentLanguage,
-  wiring?: { handle: string; colleagues: readonly AgentRosterEntry[] },
+  wiring?: {
+    handle: string;
+    colleagues: readonly AgentRosterEntry[];
+    /** The colleagues this agent may ask with `agent.delegate`, in file order. */
+    delegates?: readonly AgentRosterEntry[];
+  },
 ): string {
   const toolLine =
     tools.length === 0
@@ -463,6 +496,20 @@ export function generatedSection(
         ...wiring.colleagues.map((c) => `  - @${c.handle} — ${c.name}: ${c.description}`),
         '- Always name another agent by its handle, never by its id.',
         '- The owner can put several agents in a group: one named conversation on the dashboard, with a coordinator that brings members in. Refer to a group by its name. Only an agent holding platform.create_group can make one; membership grants no tool.',
+      );
+    }
+    /*
+     * The one place an id belongs in a prompt: `agent.delegate` takes catalog
+     * ids, and a model that has only been shown handles guesses one and is
+     * refused. Listed only when the agent actually holds the tool.
+     */
+    if (tools.includes(DELEGATE_TOOL_NAME)) {
+      const delegates = wiring.delegates ?? [];
+      lines.push(
+        delegates.length === 0
+          ? `- You may not delegate to anyone: ${DELEGATE_TOOL_NAME} will refuse every id. Answer with what you have, or tell the owner who they should ask.`
+          : `- Colleagues you may ask with ${DELEGATE_TOOL_NAME}, by the id to pass as \`agent\` (these ids only — never guess one):`,
+        ...delegates.map((d) => `  - \`${d.id}\` (@${d.handle}) — ${d.name}: ${oneLine(d.description)}`),
       );
     }
   }
@@ -574,11 +621,19 @@ function buildAgent(
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
   const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
   const section = skillsSection(skills);
-  const colleagues = roster.filter((entry) => entry.handle !== frontmatter.handle);
+  const colleagues = roster.filter((entry) => entry.id !== frontmatter.id);
+  /*
+   * The allowlist as the installation holds it, resolved against the roster.
+   * An id the file names that no agent answers to is dropped rather than
+   * printed: the prompt must not promise a colleague that does not exist.
+   */
+  const delegates = (opts.delegatesFor?.(frontmatter.id) ?? [])
+    .map((id) => roster.find((entry) => entry.id === id))
+    .filter((entry): entry is AgentRosterEntry => entry !== undefined);
   const systemPromptTemplate = [
     body.trimEnd(),
     ...(section === '' ? [] : [section]),
-    generatedSection(tools, language, { handle: frontmatter.handle, colleagues }),
+    generatedSection(tools, language, { handle: frontmatter.handle, colleagues, delegates }),
   ].join('\n\n');
   const maxTurns = frontmatter.maxTurns ?? DEFAULT_MAX_TURNS;
 
@@ -773,6 +828,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   }
 
   const roster: AgentRosterEntry[] = files.map(({ frontmatter }) => ({
+    id: frontmatter.id,
     handle: frontmatter.handle,
     name: frontmatter.name,
     description: frontmatter.description,

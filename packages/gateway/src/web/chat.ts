@@ -480,6 +480,9 @@ export async function readChatTranscript(
     }
   }
   const artifacts = await artifactsById(pool, [...artifactIds]);
+  // Where each delegation in this conversation went, from the event the tool
+  // wrote when it opened the colleague's conversation. See `delegationsOf`.
+  const delegations = await delegationsOf(pool, conversationId);
   // Gates are persisted as provider-compatible text. Join their durable state
   // here so reloads and decisions from another surface show the same prompt.
   const { rows: actions } = await pool.query(
@@ -523,10 +526,73 @@ export async function readChatTranscript(
       blocks: m.speaker === APPROVAL_RESUME_SPEAKER
         ? approvalResultBlocks(m.raw, approvals)
         : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
+            .map((block) => withDelegation(block, delegations))
             .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
     ...(await runsOf(pool, conversationId)),
+  };
+}
+
+/** The tool whose calls open a conversation of their own. */
+export const DELEGATE_TOOL_NAME = 'agent.delegate';
+
+/** Where one `agent.delegate` call sent its work. */
+export interface DelegationRef {
+  conversationId: string;
+  agentId: string;
+  runId: string | null;
+}
+
+/**
+ * The delegations this conversation started, by the tool-use id that asked.
+ *
+ * The delegate tool writes `delegation.started` the moment the colleague's
+ * conversation exists — before the nested run takes a turn, and long before
+ * the result comes back. Joining it onto the call here is what lets a panel
+ * follow the colleague live: the recorded call carries where the work went,
+ * rather than the page waiting for an output that is a minute away.
+ */
+async function delegationsOf(
+  pool: Pool,
+  conversationId: string,
+): Promise<Map<string, DelegationRef>> {
+  const { rows } = await pool.query(
+    `select payload from core.events
+      where conversation_id = $1::uuid and kind = 'delegation.started'
+      order by id asc`,
+    [conversationId],
+  );
+  const found = new Map<string, DelegationRef>();
+  for (const row of rows) {
+    const p = (row.payload ?? {}) as Record<string, any>;
+    const toolUseId = typeof p.toolUseId === 'string' ? p.toolUseId : null;
+    const target = typeof p.conversationId === 'string' ? p.conversationId : null;
+    if (!toolUseId || !target) continue;
+    found.set(toolUseId, {
+      conversationId: target,
+      agentId: String(p.agentId ?? p.to ?? ''),
+      runId: typeof p.runId === 'string' ? p.runId : null,
+    });
+  }
+  return found;
+}
+
+/**
+ * A delegate call, told where it went.
+ *
+ * Only `agent.delegate`, only the three ids, and only when the event says so:
+ * a refused delegation opened no conversation and keeps the input the model
+ * wrote, unchanged.
+ */
+function withDelegation(block: ChatBlock, delegations: Map<string, DelegationRef>): ChatBlock {
+  if (block.type !== 'tool_use' || block.name !== DELEGATE_TOOL_NAME) return block;
+  const ref = delegations.get(block.id);
+  if (!ref) return block;
+  const input = block.input !== null && typeof block.input === 'object' ? block.input : {};
+  return {
+    ...block,
+    input: { ...(input as Record<string, unknown>), conversationId: ref.conversationId, agentId: ref.agentId, runId: ref.runId },
   };
 }
 

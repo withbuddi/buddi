@@ -331,6 +331,25 @@ export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (fami
   return (family) => (known.has(family) ? family : undefined);
 }
 
+/**
+ * The allowlist, for the *prompt* — never for the decision.
+ *
+ * `agent.delegate` takes a catalog id, so an agent that is shown only handles
+ * guesses one and is refused. The generated wiring names the colleagues it may
+ * ask, with their ids, and this is where that list comes from. A malformed or
+ * unreadable file yields nothing rather than failing the load: the refusal
+ * path reads the same file again at the point of use and is still loud there.
+ */
+function delegatesForPrompt(agentsDir?: string): (agentId: string) => readonly string[] {
+  return (agentId) => {
+    try {
+      return agentsDir === undefined ? readDelegates(agentId) : readDelegates(agentId, agentsDir);
+    } catch {
+      return [];
+    }
+  };
+}
+
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   const env = opts.env ?? process.env;
   const registry = opts.registry ?? createToolRegistry(env);
@@ -338,7 +357,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(opts.dir) });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -354,6 +373,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     env,
     providerSelection: opts.providerSelection,
     pluginForFamily,
+    delegatesFor: delegatesForPrompt(),
   });
   assertNoDelegationToWriters(catalog);
   return withHeldBackExamples(catalog);

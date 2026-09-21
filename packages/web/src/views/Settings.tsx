@@ -162,7 +162,14 @@ export function Tailscale(): JSX.Element {
                     ? 'Tailscale is running on this machine.'
                     : 'Tailscale is not running here.'}
             </p>
-            {locked ? <Notice tone="warning">Change this from the computer buddi runs on.</Notice> : null}
+            {locked ? (
+              <>
+                <Notice tone="warning">Change this from the computer buddi runs on.</Notice>
+                {/* Locked controls are greyed, and greyed controls are read by
+                    squinting. The setting says itself in a sentence instead. */}
+                <p className="ui-card-meta">{data?.enabled ? `On, for ${value}` : 'Off'}</p>
+              </>
+            ) : null}
             <label className="backup-check">
               <input
                 type="checkbox"
@@ -183,8 +190,16 @@ export function Tailscale(): JSX.Element {
             </Field>
             <p className="ui-card-meta">
               Anyone signed in to Tailscale as this login, on any device in your tailnet, is signed in to buddi.
-              The proxy must run on this machine: <span className="mono">{data?.serveCommand ?? 'tailscale serve'}</span>
+              The proxy must run on this machine:
             </p>
+            {/* The command is a thing to copy, not a phrase to read: its own
+                line, with the button that takes it beside it. */}
+            <div className="tailscale-command">
+              <code className="mono">{data?.serveCommand ?? 'tailscale serve'}</code>
+              <Button size="sm" disabled={busy || !data} onClick={() => { void copyText(data?.serveCommand ?? ''); }}>
+                Copy
+              </Button>
+            </div>
             <p className="ui-card-meta">
               This gives your tailnet the trust this machine already has: buddi cannot tell the Tailscale proxy from
               another program running here, and any program that can reach the dashboard on this machine can already
@@ -192,9 +207,6 @@ export function Tailscale(): JSX.Element {
             </p>
             {saved ? <Notice tone="good" role="status">Saved.</Notice> : null}
             <Toolbar align="end">
-              <Button disabled={busy || !data} onClick={() => { void copyText(data?.serveCommand ?? ''); }}>
-                Copy
-              </Button>
               <Button variant="accent" disabled={busy || !data || locked} onClick={() => save(data?.enabled ?? false)}>
                 Save
               </Button>

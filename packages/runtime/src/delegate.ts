@@ -30,6 +30,7 @@
  * Refusals are thrown: `ToolRegistry.invoke` turns them into an error-flagged
  * tool_result, so the calling model sees *that* it was refused and why.
  */
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   listArtifacts,
@@ -126,6 +127,8 @@ export interface DelegateOutput {
   handle: string;
   name: string;
   conversationId: string;
+  /** The nested run's own id, so a reader can follow it while it is alive. */
+  runId: string;
   text: string;
 }
 
@@ -161,6 +164,8 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       'Ask another of the owner\'s agents a question and get its answer back as text. ' +
       'The colleague answers in its own fresh conversation with its own tools, and any files or images it made come back as `artifacts` you can attach or describe; it cannot ' +
       'see this one. Use it when a question belongs to a specialist you are allowed to ask. ' +
+      '`agent` is a catalog **id**, never a handle and never a guess: the ids you may pass are ' +
+      'listed under "Colleagues you may ask" in your wiring section. ' +
       'Quote the answer back to the owner and attribute it by the handle the result ' +
       'carries, written with an @ — "@credo says: ...".',
     tier: 'auto',
@@ -217,10 +222,26 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       const now = base.now ?? ctx.now;
 
       const conversationId = await createConversation(pool, target.id);
+      const runId = randomUUID();
+      /*
+       * Written the moment the colleague's conversation exists, and *before*
+       * the nested run takes its first turn: a panel watching this call has to
+       * be able to find the conversation while the work is still happening,
+       * and the result — which is where the ids would otherwise live — does
+       * not exist for another minute. The tool-use id ties it to the exact
+       * call the caller's transcript already shows.
+       */
       await appendEvent(
         pool,
         'delegation.started',
-        { from, to: target.id, conversationId },
+        {
+          from,
+          to: target.id,
+          agentId: target.id,
+          conversationId,
+          runId,
+          ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
+        },
         ctx.conversationId ?? conversationId,
       );
 
@@ -236,6 +257,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           ctx: { ...base, delegationDepth: depth + 1, ...(ctx.signal ? { signal: ctx.signal } : {}) },
           pool,
           conversationId,
+          runId,
           userMessage: delegationMessage(input, from),
           // The delegate answers onto the caller's screen: its words are quoted
           // back verbatim into the same Telegram bubble or the same dashboard
@@ -254,6 +276,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
             from,
             to: target.id,
             conversationId,
+            runId,
             ok: false,
             error: err instanceof Error ? err.message : String(err),
           },
@@ -269,6 +292,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           from,
           to: target.id,
           conversationId,
+          runId,
           ok: true,
           turns: result.turns,
           stopped: result.stopped,
@@ -290,6 +314,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         handle: target.handle,
         name: target.name,
         conversationId,
+        runId,
         text: result.text,
         ...(artifacts.length > 0 ? { artifacts } : {}),
       };

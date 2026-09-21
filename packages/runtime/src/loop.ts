@@ -813,7 +813,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       const outcome = ctx.signal?.aborted
         ? { ok: false as const, reason: 'cancelled' as const, message: 'Cancelled before dispatch; no action was taken.' }
         : allowedTools.has(call.name)
-        ? await registry.invoke(call.name, call.input, toolCtx)
+        ? await registry.invoke(call.name, call.input, { ...toolCtx, toolUseId: call.id })
         : { ok: false as const, reason: registry.has(call.name) ? 'tool-not-granted' as const : 'unknown-tool' as const,
             message: `tool ${call.name} is not granted to this run` };
       if (outcome.ok) {

@@ -748,6 +748,7 @@ export function ChatPage({
       timezone={timezone}
       onDecided={onDecided}
       onChangeAgent={changeVia}
+      agents={everyone}
       browserPanel={browserTab ? <BrowserPanel key={browserTab.id} data={browser.data} error={browser.error} reload={browser.reload} compact /> : null}
       descriptors={descriptors}
       {...(agent ? { agentName: agent.name } : {})}

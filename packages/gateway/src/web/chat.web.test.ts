@@ -127,3 +127,65 @@ describe('the turn that carries a decided approval', () => {
     expect(transcript!.messages[0]!.blocks[0]!.type).toBe('text');
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * A delegation, told where it went
+ * ------------------------------------------------------------------ */
+
+/**
+ * The call the dashboard draws carries the colleague's conversation long
+ * before the colleague has answered. Without it the panel beside the thread
+ * would have nothing to read until the run was over, which is exactly the
+ * minute the owner wants to watch.
+ */
+describe('an agent.delegate call in a transcript', () => {
+  const conversationId = '22222222-2222-2222-2222-222222222222';
+  const delegated = '33333333-3333-3333-3333-333333333333';
+
+  function pool(events: unknown[]): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) {
+          return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        }
+        if (/from core\.messages/.test(sql)) {
+          return {
+            rows: [{
+              id: 'm1',
+              role: 'assistant',
+              created_at: new Date(),
+              speaker: null,
+              // The call, and no result: the colleague is still working.
+              content: [{ type: 'tool_use', id: 'toolu_1', name: 'agent.delegate', input: { agent: 'ledger', task: 'What did we spend?' } }],
+            }],
+          };
+        }
+        if (/delegation\.started/.test(sql)) return { rows: events.map((payload) => ({ payload })) };
+        return { rows: [] };
+      }),
+    } as never;
+  }
+
+  it('carries the delegated conversation on the call, before any result', async () => {
+    const transcript = await readChatTranscript(
+      pool([{ from: 'ada', to: 'ledger', agentId: 'ledger', conversationId: delegated, runId: 'run-9', toolUseId: 'toolu_1' }]),
+      conversationId,
+    );
+    expect(transcript!.messages[0]!.blocks[0]).toEqual({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'agent.delegate',
+      input: { agent: 'ledger', task: 'What did we spend?', conversationId: delegated, agentId: 'ledger', runId: 'run-9' },
+    });
+  });
+
+  it('leaves a refused delegation — which opened no conversation — exactly as the model wrote it', async () => {
+    const transcript = await readChatTranscript(pool([]), conversationId);
+    expect(transcript!.messages[0]!.blocks[0]).toEqual({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'agent.delegate',
+      input: { agent: 'ledger', task: 'What did we spend?' },
+    });
+  });
+});

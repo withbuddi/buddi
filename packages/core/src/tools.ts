@@ -55,6 +55,15 @@ export interface ToolContext {
   conversationId?: string;
   agentId?: string;
   /**
+   * The id of the `tool_use` block this call answers, stamped per call by the
+   * loop. It is provenance, not authorization: a tool that starts work of its
+   * own — a delegation opening a conversation for a colleague — records it so
+   * a reader can tie that work back to the exact call that asked for it,
+   * before any result exists. Absent outside the loop, and every tool that
+   * wants it must cope with that.
+   */
+  toolUseId?: string;
+  /**
    * The group this run speaks in, when it is a group run. Set by the group
    * orchestration from the group row — trusted context, never something a
    * model supplies — and read by the tools that scope to a room: memory

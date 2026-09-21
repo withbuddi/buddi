@@ -195,6 +195,38 @@ describe('the plugins section', () => {
     );
   });
 
+  /**
+   * npm is the only source with a publisher to name. Code that came off this
+   * machine was put there by the owner, and the line says that instead of
+   * reporting npm's silence about something npm never had.
+   */
+  it('names the owner, not npm, as the publisher of local code', async () => {
+    const base = {
+      name: 'weather',
+      version: '2.1.0',
+      publisher: undefined,
+      installedAt: new Date().toISOString(),
+      contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
+      unlocks: [],
+      loaded: true,
+    };
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        installed: [
+          { ...base, source: { kind: 'directory', path: '/home/o/code/weather' } },
+          { ...base, name: 'packed', source: { kind: 'tarball', path: '/home/o/packed.tgz' } },
+          { ...base, name: 'from-npm', publisher: 'someone', source: { kind: 'registry', name: 'from-npm', version: '2.1.0' } },
+        ],
+      }),
+    );
+    render(<Plugins />);
+
+    expect(await screen.findByText('you, from this machine')).toBeInTheDocument();
+    expect(screen.getByText('a file on this machine')).toBeInTheDocument();
+    expect(screen.getByText('someone')).toBeInTheDocument();
+    expect(screen.queryByText('nobody npm will name')).not.toBeInTheDocument();
+  });
+
   it('tells a checkout the command instead of offering a restart button', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: true }));
     render(<Plugins />);
