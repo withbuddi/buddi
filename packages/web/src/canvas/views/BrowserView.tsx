@@ -54,7 +54,7 @@ export interface BrowserViewProps {
 function screenshotUrl(status: BrowserStatus, refresh?: number): string | null {
   if (!status.hasScreenshot || !status.page) return null;
   const session = status.session ? `&sessionId=${encodeURIComponent(status.session.id)}` : '';
-  return `/api/browser/screenshot?v=${encodeURIComponent(status.page.id)}${session}${refresh ? `&t=${refresh}` : ''}`;
+  return `/api/browser/screenshot?v=${encodeURIComponent(status.page.id)}${session}${refresh ? `&tick=${refresh}` : ''}`;
 }
 
 export function BrowserView({ status, error, reload, steps, live, focusedStepId = null }: BrowserViewProps): JSX.Element {
