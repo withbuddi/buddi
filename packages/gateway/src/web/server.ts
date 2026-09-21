@@ -73,7 +73,7 @@ import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
-import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding } from '@buddi/core';
+import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
   engineChangeFromBody,
@@ -99,6 +99,19 @@ import {
 } from './chat.js';
 import { readAgentAttention, streamAttention } from './attention.js';
 import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
+import {
+  TAILSCALE_SETTING_KEY,
+  daemonWhois,
+  plausibleLogin,
+  proxiedThroughTailscale,
+  sameLogin,
+  tailscaleIdentity,
+  tailscaleSelf,
+  toTailscaleSetting,
+  type TailscaleIdentity,
+  type TailscaleProfile,
+  type TailscaleWhois,
+} from './tailscale.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import {
   CSRF_COOKIE,
@@ -256,6 +269,14 @@ export interface WebServerDeps {
    * a test passes its own so two servers never share a pairing.
    */
   extension?: ExtensionEndpoint;
+  /**
+   * The local Tailscale daemon, injected. A test passes a whois and a status
+   * of its own; a running gateway talks to `tailscaled` over its unix socket.
+   */
+  tailscale?: {
+    whois?: TailscaleWhois;
+    self?: () => Promise<{ available: boolean; self: TailscaleProfile | null }>;
+  } | undefined;
 }
 
 export interface WebServer {
@@ -362,6 +383,48 @@ export function createWebApp(deps: WebServerDeps): Server {
   // ticket-and-session gate. The override is a test seam, nothing more.
   const openAccess = deps.openAccess ?? (deps.env?.BUDDI_WEB_REQUIRE_AUTH !== '1' && isLoopback(deps.config.host));
 
+  /*
+   * Signing in through Tailscale: the daemon this process asks.
+   *
+   * Which sessions were established that way is a field on the session itself
+   * (`via`), not a map beside it — provenance that can drift out of step with
+   * the session it describes is provenance that eventually lies. It is what
+   * keeps a tailnet session from widening its own access (`PUT /api/tailscale`
+   * wants a session from this machine) and what lets `/api/session` say how
+   * the browser got in.
+   */
+  const whois = deps.tailscale?.whois ?? daemonWhois();
+  const tailscaleSelfOf = deps.tailscale?.self ?? (() => tailscaleSelf());
+  /**
+   * The command that publishes this dashboard on the tailnet, with this
+   * installation's own numbers in it: the HTTPS port of the configured public
+   * origin, and the port the gateway is actually listening on.
+   */
+  const serveCommand = (): string => {
+    const bound = (server.address() as AddressInfo | null)?.port ?? deps.config.port;
+    let https = 443;
+    if (deps.config.publicOrigin) {
+      const port = new URL(deps.config.publicOrigin).port;
+      if (port !== '') https = Number(port);
+    }
+    return `tailscale serve --bg --https=${https} http://127.0.0.1:${bound}`;
+  };
+  const readTailscaleSetting = async (): Promise<ReturnType<typeof toTailscaleSetting>> =>
+    toTailscaleSetting(await readWebSetting(deps.pool, TAILSCALE_SETTING_KEY).catch(() => null));
+  /**
+   * Who the daemon says this request is, with the sign-in budget in front of
+   * the daemon. Used to mint a session and, on every later request, to confirm
+   * the one the browser is holding.
+   */
+  const identityOf = (req: IncomingMessage, now: Date): Promise<TailscaleIdentity | null> =>
+    tailscaleIdentity(req, {
+      setting: readTailscaleSetting,
+      whois,
+      mayAskDaemon: () => !limiter.blocked(remoteKey(req), now),
+      log,
+      now: () => now,
+    });
+
   /**
    * The pair a browser holds: the HttpOnly session and the readable CSRF value
    * the page has to echo back in a header. Both carry the same `Max-Age`, which
@@ -458,6 +521,28 @@ export function createWebApp(deps: WebServerDeps): Server {
     let session = sessions.get(cookies[SESSION_COOKIE], scope, now);
 
     /*
+     * A Tailscale session is re-confirmed on every single request.
+     *
+     * A cookie on its own would be a bearer token the tailnet identity is only
+     * loosely related to: it would outlive the setting being turned off, the
+     * allowed login being changed, and the device being handed to somebody
+     * else. So the daemon is asked again — cheap, because a whois answer is
+     * reused for a minute — and the login it names now must be the login this
+     * session was minted for. Anything else and the session is gone, not
+     * merely ignored: the browser is 401 and has to sign in again, which it
+     * can only do if it is still the person the owner allowed.
+     */
+    if (session?.via === 'tailscale') {
+      const confirmed = await identityOf(req, now);
+      if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
+        sessions.destroy(session.id);
+        if (limiter.blocked(key, now)) return sendEmpty(res, 429);
+        limiter.fail(key, now);
+        return sendEmpty(res, 401);
+      }
+    }
+
+    /*
      * Open on loopback: the request is on this machine and the server is bound
      * to this machine, so there is nothing left to authenticate. A session is
      * minted silently — the page gets its CSRF pair like any other, writes stay
@@ -468,6 +553,31 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (!session && openAccess && scope === 'local') {
       session = sessions.create(scope, now);
       res.setHeader('Set-Cookie', sessionCookies(session));
+    }
+
+    /*
+     * Signed in through Tailscale.
+     *
+     * The proxy runs on this machine and the daemon on this machine confirms
+     * who is behind the forwarded address; when that agrees with the login the
+     * owner allowed, this is the owner's own tailnet identity arriving and the
+     * request gets a `remote` session exactly as the ticket exchange would
+     * have minted one — same cookies, same 12 hours, same CSRF on every write.
+     * Anything less returns null and the request falls through to the 401
+     * below, which is what it would have got before this existed.
+     */
+    if (!session) {
+      const identity = await identityOf(req, now);
+      if (identity) {
+        limiter.reset(key);
+        session = sessions.create('remote', now, {
+          via: 'tailscale',
+          tailscaleLogin: identity.login,
+          tailscaleAddress: identity.address,
+          tailscaleName: identity.name,
+        });
+        res.setHeader('Set-Cookie', sessionCookies(session));
+      }
     }
 
     if (!session) {
@@ -694,12 +804,38 @@ export function createWebApp(deps: WebServerDeps): Server {
             // nothing touched it again. Said out loud so the model is legible
             // from the page rather than implied by a number in a source file.
             scope: session.scope,
+            // How this browser got in. `local` is the open loopback mint,
+            // `ticket` the one-time exchange, `tailscale` an identity the
+            // local daemon confirmed — and then the name to greet.
+            signedInThrough: session.via,
+            ...(session.via === 'tailscale' ? { tailscaleName: session.tailscaleName, tailscaleLogin: session.tailscaleLogin } : {}),
             expiresAt: session.expiresAt.toISOString(),
             // What this gateway is running. The page keeps it across an
             // upgrade so that "it came back" can be told from "it is still
             // the old one" without a second route.
             version: await currentVersion(deps.env ?? process.env),
           });
+        /*
+         * The Tailscale panel's whole payload: what is stored, whether a
+         * daemon is here to ask, who this machine is signed in as (so the
+         * field can be prefilled without the owner typing their login from
+         * memory), and whether this very request came through the proxy —
+         * which is what disables the switch on a tailnet browser.
+         */
+        case '/api/tailscale': {
+          const stored = await readTailscaleSetting();
+          const daemon = await tailscaleSelfOf();
+          return sendJson(res, 200, {
+            enabled: stored.enabled,
+            login: stored.login,
+            available: daemon.available,
+            self: daemon.self,
+            proxied: session.via === 'tailscale' || proxiedThroughTailscale(req),
+            // What the owner has to run on this machine, with this
+            // installation's own two ports in it.
+            serveCommand: serveCommand(),
+          });
+        }
         case '/api/overview':
           return sendJson(
             res,
@@ -1053,13 +1189,60 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check'];
+      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
       try {
         put = await readJsonBody(req);
       } catch {
         return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      if (path === '/api/tailscale') {
+        /*
+         * Who may widen access: only a browser that is already on this
+         * machine.
+         *
+         * Said positively, because the negative version — refuse the requests
+         * that look like Tailscale — can only ever list the shapes somebody
+         * thought of. `via` is `local` exactly for a session minted from a
+         * loopback request with no proxy metadata on it, and `sessions.get`
+         * has already required *this* request to have arrived the same way. A
+         * ticket session from the network and a session established through
+         * Tailscale both get the sentence: a device someone walked off with
+         * cannot add its own login or turn the switch on for somebody else.
+         */
+        if (session.via !== 'local') {
+          return sendJson(res, 403, { error: 'Change this from the computer buddi runs on.' });
+        }
+        const enabled = put.enabled;
+        if (typeof enabled !== 'boolean') return sendJson(res, 400, { error: '`enabled` must be true or false' });
+        const login = typeof put.login === 'string' ? put.login.trim() : '';
+        // A login is required to turn this on, and checked for shape whenever
+        // one is given: turning it off with a typo left in the field is fine.
+        if ((enabled || login !== '') && !plausibleLogin(login)) {
+          return sendJson(res, 400, { error: 'That is not a Tailscale login. It is usually the email address you signed in to Tailscale with.' });
+        }
+        await writeWebSetting(deps.pool, TAILSCALE_SETTING_KEY, { enabled, login });
+        /*
+         * Every session this setting admitted goes, now.
+         *
+         * Each would die at its next request anyway — the daemon is asked
+         * again and the setting is re-read every time — but "now" is what the
+         * owner means when they turn the switch off, and a session nobody
+         * makes a request with is exactly the one that should not be waiting
+         * in a browser on the far side of the tailnet.
+         */
+        sessions.forget((s) => s.via === 'tailscale');
+        const daemon = await tailscaleSelfOf();
+        const stored = toTailscaleSetting({ enabled, login });
+        return sendJson(res, 200, {
+          enabled: stored.enabled,
+          login: stored.login,
+          available: daemon.available,
+          self: daemon.self,
+          proxied: false,
+          serveCommand: serveCommand(),
+        });
       }
       if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'PUT', put));
       return reply(res, path === '/api/backups/schedule'

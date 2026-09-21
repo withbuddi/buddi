@@ -41,6 +41,9 @@ import {
   verifyInstalledHash,
   TelegramApi,
   telegramFetchOn,
+  TAILSCALE_SETTING_KEY,
+  tailscaleSelf,
+  toTailscaleSetting,
   webConfig,
   webTokenExists,
   webUrl,
@@ -55,7 +58,7 @@ import {
   searchConfiguration,
 } from '@buddi/tool-web';
 import type { Pool } from 'pg';
-import { STALE_AFTER_MS, listArchives, readRecovery } from '@buddi/core';
+import { STALE_AFTER_MS, listArchives, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {
@@ -64,6 +67,7 @@ import {
   checkConfig,
   checkDatabaseExposure,
   checkRecovery,
+  checkTailscale,
   checkNodeVersion,
   checkPlugins,
   checkVault,
@@ -74,7 +78,7 @@ import {
 } from './doctor.js';
 import { DB_UNREACHABLE, dockerState } from './db-cmd.js';
 import { explicitUrlInEnvFile, isShippedDefaultUrl, publishedBinding } from './db-secure.js';
-import { versionOf } from './proc.js';
+import { run, versionOf } from './proc.js';
 import { createServiceManager } from './service/index.js';
 
 /** One lazily created pool, shared by the database probes and closed at the end. */
@@ -677,6 +681,30 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      * Read through core's own `readRecovery`, so the doctor and the dashboard
      * cannot disagree about what the row means.
      */
+    /**
+     * Signing in through Tailscale: is the daemon here, is the setting on and
+     * for whom, and is the dashboard actually published on the tailnet?
+     *
+     * `tailscale serve status --json` is read only when the binary is on the
+     * PATH; without it the row says it could not check rather than guessing.
+     */
+    async tailscale(): Promise<ProbeResult> {
+      const config = webConfig(env);
+      const daemon = await tailscaleSelf();
+      const pool = await connected();
+      const stored = pool === null
+        ? null
+        : toTailscaleSetting(await readWebSetting(pool, TAILSCALE_SETTING_KEY).catch(() => null));
+      const serve = await serveStatus(config.port);
+      return checkTailscale({
+        daemon: { reachable: daemon.available, self: daemon.self?.login ?? null },
+        setting: stored,
+        ...(config.publicOrigin !== undefined ? { publicOrigin: config.publicOrigin } : {}),
+        gatewayPort: config.port,
+        serve,
+      });
+    },
+
     async recovery(): Promise<ProbeResult> {
       const pool = await connected();
       if (pool === null) return checkRecovery({ active: false, unknown: true });
@@ -714,6 +742,28 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       await lazy.end();
     },
   };
+}
+
+/**
+ * What `tailscale serve status --json` says, when there is a `tailscale` to
+ * ask. Anything but a clean answer is "could not check" — the doctor reports
+ * what it saw and never guesses at a route it did not read.
+ */
+async function serveStatus(gatewayPort: number): Promise<{ checked: boolean; routesGateway?: boolean; error?: string }> {
+  const res = await run('tailscale', ['serve', 'status', '--json'], { timeoutMs: 10_000 });
+  if (res.code === 127) return { checked: false, error: 'the tailscale binary was not found' };
+  if (res.code !== 0) return { checked: false, error: (res.stderr || res.stdout).trim().split('\n')[0] ?? `exit ${res.code}` };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(res.stdout.trim() === '' ? 'null' : res.stdout);
+  } catch {
+    return { checked: false, error: 'tailscale answered with something that is not JSON' };
+  }
+  // The shape varies by version, and all this row needs is whether any
+  // handler in it proxies to the port the dashboard is bound to.
+  const text = JSON.stringify(parsed ?? {});
+  const routesGateway = text.includes(`127.0.0.1:${gatewayPort}`) || text.includes(`localhost:${gatewayPort}`);
+  return { checked: true, routesGateway };
 }
 
 /** A connection string without its password. Doctor output is pasted into issues. */
