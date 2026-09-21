@@ -19,12 +19,14 @@
  *    `installation.json`, and hands over — and the new supervisor migrates and
  *    writes the outcome. An upgrade interrupted anywhere is a `phase` on disk,
  *    never a guess.
- *  - **`--ignore-scripts` is wrong here**, and this is the one place in the
- *    repository where that is true. The Postgres binary package's own install
- *    script is what puts a cluster on disk (docs/install.md §2), and it is
- *    npm's dependency of *our own* package, approved by the owner the moment
- *    they asked for the upgrade. Plugins are the opposite case; see
- *    `packages/gateway/src/plugins/npm.ts`.
+ *  - **`--ignore-scripts`, here as everywhere else.** An upgrade is the one
+ *    moment this installation runs `npm install` against the network, and it
+ *    does it without letting any package in the tree run code. The Postgres
+ *    binaries do not need it: the per-platform package ships them under
+ *    `native/`, and `prepareBinaries` (`@buddi/core`, `postgres/binaries.ts`)
+ *    copies that directory into `<data>/runtime` and creates the symlinks from
+ *    the shipped `pg-symlinks.json` itself — which is also how the Docker image
+ *    installs (scripts off) and why it works there.
  *  - **Nothing here reaches the network on its own.** The registry check is a
  *    seam (`http`), the npm call is a seam (`install`), and both are handed in
  *    by the supervisor. No unit test in this repository touches the network.
@@ -35,12 +37,21 @@
  * those packages read at import time.
  */
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { request } from 'node:http';
 import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+/*
+ * The one value import from a `@buddi/*` package in this file, and the reason
+ * it is safe: `@buddi/core/semver` is a leaf module with no imports, no path
+ * constants and no side effects, so loading it before `environment()` has
+ * rewritten the environment cannot capture the wrong paths. Importing
+ * `@buddi/core` itself would, which is what the note at the top forbids.
+ */
+import { compareSemver, parseSemver } from '@buddi/core/semver';
 import type { HttpTransport } from '@buddi/gateway';
-import { atomicJson, launchAgentPlist } from './environment.js';
+import { atomicJson, launchAgentLabel } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { JobStore } from './backup.js';
 import type { BackupControl, BackupJob } from './backup.js';
@@ -58,6 +69,17 @@ export const TICK_INTERVAL_MS = 60 * 60 * 1000;
 
 /** The registry is asked for one small document; it does not get long. */
 export const CHECK_TIMEOUT_MS = 10_000;
+
+/**
+ * How long the successor of an upgrade has to answer on the socket.
+ *
+ * It starts a Postgres cluster and runs the migrations before it serves, so
+ * this is a minute rather than a moment.
+ */
+export const HANDOVER_WAIT_MS = 60_000;
+
+/** A backup that has not finished in this long is not going to. */
+export const BACKUP_WAIT_MS = 20 * 60_000;
 
 /** Enough history to see a pattern, few enough to read. */
 export const HISTORY_LIMIT = 10;
@@ -131,40 +153,67 @@ export function registryFor(env: NodeJS.ProcessEnv): string {
  * writes, and in a checkout it is the repository's own — the same number.
  */
 export async function installedVersion(root: string): Promise<string> {
+  return (await installedPackage(root)).version ?? 'unknown';
+}
+
+/**
+ * The installed package's own name and version, as npm left them.
+ *
+ * Read back after every install rather than assumed: `npm install <spec>` is
+ * capable of putting a different package, or a different version, at that path
+ * — a registry that answers with something else, a tarball that is not what it
+ * was said to be — and everything after this point (the migration under new
+ * code, the history, the way back) is written in terms of what is actually
+ * there now.
+ */
+export async function installedPackage(root: string): Promise<{ name?: string; version?: string }> {
   try {
-    const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as { version?: string };
-    return typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : 'unknown';
+    const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown };
+    return {
+      ...(typeof pkg.name === 'string' && pkg.name !== '' ? { name: pkg.name } : {}),
+      ...(typeof pkg.version === 'string' && pkg.version !== '' ? { version: pkg.version } : {}),
+    };
   } catch {
-    return 'unknown';
+    return {};
   }
 }
 
 /**
- * Compare two versions the way a release train moves: numerically, field by
- * field, with a prerelease sorting before the release it leads to.
+ * What a version has to look like before it is written down, sent to npm or
+ * offered as an upgrade: one canonical release, nothing else.
  *
- * Not a semver implementation, and not pretending to be one: `buddi` publishes
- * `x.y.z`, and the only question ever asked here is "is that one newer".
+ * A range (`^1.2.0`), a tag (`latest`, `next`), an alias (`npm:other@1.0.0`),
+ * a URL or a shell fragment are all things npm would happily install and this
+ * installation could never reason about afterwards: the history would name a
+ * version that is not what is on disk, and `updateAvailable` would compare a
+ * word with a number. `latest` is resolved to one of these through the check
+ * before it ever reaches npm.
  */
-export function compareVersions(a: string, b: string): number {
-  const parts = (value: string): { numbers: number[]; pre: string } => {
-    const [core = '', pre = ''] = value.trim().replace(/^v/, '').split('-', 2);
-    return { numbers: core.split('.').map(n => Number.parseInt(n, 10) || 0), pre };
-  };
-  const left = parts(a), right = parts(b);
-  for (let i = 0; i < Math.max(left.numbers.length, right.numbers.length); i++) {
-    const diff = (left.numbers[i] ?? 0) - (right.numbers[i] ?? 0);
-    if (diff !== 0) return diff < 0 ? -1 : 1;
-  }
-  if (left.pre === right.pre) return 0;
-  if (left.pre === '') return 1;
-  if (right.pre === '') return -1;
-  return left.pre < right.pre ? -1 : 1;
+export const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+export function isVersion(value: unknown): value is string {
+  return typeof value === 'string' && VERSION_PATTERN.test(value);
+}
+
+/**
+ * -1, 0 or 1, or `undefined` when one of them is not a version.
+ *
+ * The comparison itself is `@buddi/core`'s, so the supervisor, the plugin
+ * updater and the dashboard's disk fallback all answer "is that newer" the
+ * same way, prereleases included.
+ */
+export function compareVersions(a: string, b: string): number | undefined {
+  const left = parseSemver(a), right = parseSemver(b);
+  if (left === undefined || right === undefined) return undefined;
+  return compareSemver(left, right);
 }
 
 export function isNewer(candidate: string | undefined, current: string): boolean {
-  if (candidate === undefined || candidate === '' || current === 'unknown') return false;
-  return compareVersions(candidate, current) > 0;
+  if (candidate === undefined || candidate === '') return false;
+  const order = compareVersions(candidate, current);
+  // A version nobody can parse — `unknown` from a package.json that would not
+  // read — is never the older half of an upgrade this offers.
+  return order !== undefined && order > 0;
 }
 
 function emptyState(current: string): UpgradeState {
@@ -227,6 +276,9 @@ export async function fetchLatestVersion(registry: string, http: HttpTransport):
   if (response.status !== 200) throw new Error(`the registry answered ${response.status}`);
   const body = await response.json() as { version?: unknown };
   if (typeof body.version !== 'string' || body.version === '') throw new Error('the registry named no version');
+  // Whatever that registry is, what it says becomes a spec for `npm install`
+  // and a number on the dashboard. It gets to name a version, and nothing else.
+  if (!isVersion(body.version)) throw new Error(`the registry named "${body.version}", which is not a version`);
   return body.version;
 }
 
@@ -252,21 +304,60 @@ export interface InstallTarget {
  * creating a second one — while the running installation stayed exactly as it
  * was. The root we are running from is the only fact that cannot be wrong.
  */
-export function installTarget(root: string): InstallTarget {
+export function installTarget(root: string, platform: NodeJS.Platform | string = process.platform): InstallTarget {
   const parent = path.dirname(root);
   if (path.basename(parent) === 'node_modules') {
     const grandparent = path.dirname(parent);
     // `<prefix>/lib/node_modules/buddi` is a global install everywhere but
-    // Windows, where the global tree is `<prefix>/node_modules/buddi` — the
-    // same shape as a plain local install, which is what the smoke makes.
-    if (path.basename(grandparent) === 'lib') return { prefix: path.dirname(grandparent), global: true };
-    return { prefix: grandparent, global: process.platform === 'win32' };
+    // Windows, whose global tree is `<prefix>/node_modules/buddi` — the same
+    // shape as a plain install inside a project, which is why `upgradeTarget`
+    // below refuses to guess between the two there.
+    if (path.basename(grandparent) === 'lib' && platform !== 'win32') return { prefix: path.dirname(grandparent), global: true };
+    return { prefix: grandparent, global: false };
   }
   return { prefix: parent, global: false };
 }
 
+/** The one sentence an installation this cannot upgrade in place gets. */
+export const NOT_GLOBAL =
+  'This buddi was installed inside another project; upgrade it there with npm.';
+
+/**
+ * Where npm may write, or why it may not.
+ *
+ * `npm install --prefix <somebody's project>` is not an upgrade of buddi: it
+ * rewrites that project's `package.json` and its tree, for a project whose
+ * owner never asked. So an installation that is not the global one is refused
+ * in words rather than upgraded at a guess.
+ *
+ * "Global" is read off the path, and the exception is the prefix npm makes for
+ * an installation of its own: `npm install --prefix <dir> buddi` into an empty
+ * directory writes a `package.json` with nothing in it but `dependencies`,
+ * which is what the release smoke and the local verification of this hand-over
+ * both install into. A manifest with a `name` is somebody's project.
+ *
+ * On Windows the global tree and a project tree have the same shape, so there
+ * is nothing to read: it is refused until that layout is known.
+ */
+export function upgradeTarget(
+  root: string,
+  opts: { platform?: NodeJS.Platform | string; manifest?: (prefix: string) => { name?: unknown } | undefined } = {},
+): InstallTarget | { error: string } {
+  const platform = opts.platform ?? process.platform;
+  const target = installTarget(root, platform);
+  if (target.global) return target;
+  if (platform === 'win32') return { error: NOT_GLOBAL };
+  const read = opts.manifest ?? ((prefix: string) => {
+    try { return JSON.parse(readFileSync(path.join(prefix, 'package.json'), 'utf8')) as { name?: unknown }; }
+    catch { return undefined; }
+  });
+  const manifest = read(target.prefix);
+  if (manifest !== undefined && typeof manifest.name === 'string' && manifest.name !== '') return { error: NOT_GLOBAL };
+  return target;
+}
+
 /** Replace the installed package with `spec`. Throws with npm's own stderr. */
-export type UpgradeInstaller = (spec: string, opts: { registry: string; root: string }) => Promise<void>;
+export type UpgradeInstaller = (spec: string, opts: { registry: string; root: string; target?: InstallTarget }) => Promise<void>;
 
 /**
  * The npm beside the running node, for the reason `plugins/npm.ts` gives: a
@@ -281,16 +372,16 @@ export function npmBinary(execPath = process.execPath): string {
   return existsSync(beside) ? beside : process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
-export function installArgs(spec: string, opts: { registry: string; root: string }): string[] {
-  const target = installTarget(opts.root);
+export function installArgs(spec: string, opts: { registry: string; root: string; target?: InstallTarget }): string[] {
+  const target = opts.target ?? installTarget(opts.root);
   return [
     'install',
     ...(target.global ? ['-g'] : []),
     '--prefix', target.prefix,
     spec,
     '--registry', opts.registry,
-    // The one place this is right. See the header.
-    '--ignore-scripts=false',
+    // Nothing in that tree runs code at install time. See the header.
+    '--ignore-scripts',
     '--no-audit',
     '--no-fund',
   ];
@@ -340,12 +431,15 @@ export interface RestartPlan {
  * release smoke — nothing would start us again, so there we do spawn the new
  * launcher detached and wait for it to answer on the socket before exiting.
  *
- * The test is deliberately narrow: our own plist, and launchd as our parent.
- * A detached supervisor is also reparented to pid 1, which is why the plist
- * has to be there too.
+ * **The test is identity, not parentage.** launchd puts the job's label in
+ * `XPC_SERVICE_NAME`, so a supervisor that *is* this installation's launchd job
+ * can say so. A parent pid of 1 cannot: every detached process is reparented to
+ * pid 1 the moment its starter exits, so a `buddi --no-service` supervisor on a
+ * machine that also has the plist installed used to read as launchd's and exit
+ * into nothing, leaving the installation down until the next login.
  */
-export function restartPlan(facts: { platform: NodeJS.Platform | string; ppid: number; plist: string }): RestartPlan {
-  if (facts.platform === 'darwin' && facts.ppid === 1 && existsSync(facts.plist)) {
+export function restartPlan(facts: { platform: NodeJS.Platform | string; label: string; xpcServiceName?: string | undefined }): RestartPlan {
+  if (facts.platform === 'darwin' && facts.label !== '' && facts.xpcServiceName === facts.label) {
     return { mode: 'launchd', reason: 'launchd keeps this job alive and runs the launcher from the install root' };
   }
   return { mode: 'spawn', reason: 'nothing else would start the supervisor again' };
@@ -361,42 +455,93 @@ export interface HandOverOptions {
   log?: (line: string) => void;
   /** Injected in tests. */
   spawnProcess?: typeof import('node:child_process').spawn;
-  /** Is the successor listening yet? Injected in tests. */
-  alive?: () => Promise<boolean>;
+  /** Is the successor serving, and is it the new version? Injected in tests. */
+  ready?: () => Promise<boolean>;
   waitMs?: number;
+}
+
+/** What the hand-over did, and whether anybody is serving afterwards. */
+export interface HandOverResult {
+  plan: RestartPlan;
+  /** False only on the spawn path, and only when nothing ever answered. */
+  ok: boolean;
+  attempts: number;
 }
 
 /**
  * Start the successor, once this process has let go of the lock, the socket
  * and the database. Called after `supervise`'s cleanup, never before it.
+ *
+ * Readiness is the *socket answering with the new version*, not the lock file:
+ * a successor that takes the lock and then dies bringing the cluster up would
+ * look like a finished hand-over for exactly as long as it took to crash, and
+ * this process would exit into an installation that is down. Waiting for
+ * `/status` to name the version we installed is waiting for the thing the
+ * owner actually asked for.
  */
-export async function handOver(opts: HandOverOptions): Promise<RestartPlan> {
-  const plan = opts.plan ?? restartPlan({ platform: process.platform, ppid: process.ppid, plist: launchAgentPlist(opts.ctx.data) });
+export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
+  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME });
   const log = opts.log ?? ((line: string) => console.error(line));
   if (plan.mode === 'launchd') {
     log(`supervisor: exiting for the upgrade; ${plan.reason}.`);
-    return plan;
+    return { plan, ok: true, attempts: 0 };
   }
   const { spawn } = await import('node:child_process');
   const spawnProcess = opts.spawnProcess ?? spawn;
-  const logFile = await open(path.join(opts.ctx.data, 'logs/supervisor.log'), 'a', 0o600);
-  try {
-    const child = spawnProcess(process.execPath, [opts.launcher, 'supervise'], {
-      detached: true, stdio: ['ignore', logFile.fd, logFile.fd], env: opts.env,
-    });
-    child.unref();
-    log(`supervisor: started the upgraded supervisor (pid ${child.pid ?? '?'}); ${plan.reason}.`);
-  } finally { await logFile.close(); }
-  const deadline = Date.now() + (opts.waitMs ?? 30_000);
-  const alive = opts.alive ?? (async () => false);
-  for (;;) {
-    if (await alive().catch(() => false)) return plan;
-    if (Date.now() > deadline) {
-      log('supervisor: the upgraded supervisor did not answer within 30 seconds; its log is logs/supervisor.log.');
-      return plan;
+  const ready = opts.ready ?? (async () => false);
+  const waitMs = opts.waitMs ?? HANDOVER_WAIT_MS;
+  const launch = async (): Promise<void> => {
+    const logFile = await open(path.join(opts.ctx.data, 'logs/supervisor.log'), 'a', 0o600);
+    try {
+      // The successor is ours, not launchd's, whatever started this process:
+      // an inherited `XPC_SERVICE_NAME` would make it read its own hand-over
+      // as launchd's and exit into nothing.
+      const { XPC_SERVICE_NAME: _launchd, ...env } = opts.env;
+      const child = spawnProcess(process.execPath, [opts.launcher, 'supervise'], {
+        detached: true, stdio: ['ignore', logFile.fd, logFile.fd], env,
+      });
+      child.unref();
+      log(`supervisor: started the upgraded supervisor (pid ${child.pid ?? '?'}); ${plan.reason}.`);
+    } finally { await logFile.close(); }
+  };
+  // Two attempts, because the cheap failures here are transient: a socket the
+  // old process had not finished unlinking, a cluster port still in TIME_WAIT.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await launch();
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      if (await ready().catch(() => false)) return { plan, ok: true, attempts: attempt };
+      if (Date.now() > deadline) break;
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
-    await new Promise(resolve => setTimeout(resolve, 500));
+    log(`supervisor: the upgraded supervisor did not answer within ${Math.round(waitMs / 1000)} seconds${attempt === 1 ? '; trying once more' : ''}. Its log is logs/supervisor.log.`);
   }
+  return { plan, ok: false, attempts: 2 };
+}
+
+/**
+ * Ask a supervisor socket for `/status`, with no agent and nothing pooled.
+ *
+ * `fetch` cannot address a Unix socket and this module may not import the
+ * gateway's transport, so this is `node:http`'s client: one request, one
+ * answer, connection closed. It is the readiness test of the hand-over.
+ */
+export async function statusOnSocket(socket: string, timeoutMs = 2_000): Promise<{ current?: string; phase?: string } | undefined> {
+  return await new Promise((resolve) => {
+    const req = request({ socketPath: socket, path: '/status', method: 'GET', headers: { host: 'localhost' }, timeout: timeoutMs }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) return resolve(undefined);
+        try { resolve(JSON.parse(text) as { current?: string; phase?: string }); }
+        catch { resolve(undefined); }
+      });
+    });
+    req.once('timeout', () => req.destroy());
+    req.once('error', () => resolve(undefined));
+    req.end();
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -448,6 +593,8 @@ export interface UpgradeServiceOptions {
   http?: HttpTransport | undefined;
   log?: ((line: string) => void) | undefined;
   checkIntervalMs?: number | undefined;
+  /** How long the backup before the upgrade may take. Shortened in tests. */
+  backupWaitMs?: number | undefined;
 }
 
 function message(err: unknown): string {
@@ -461,7 +608,10 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const registry = registryFor(ctx.env);
   const checkInterval = opts.checkIntervalMs ?? (Number(ctx.env.BUDDI_UPGRADE_CHECK_INTERVAL_MS) || CHECK_INTERVAL_MS);
   const install = opts.install ?? createInstaller();
+  const backupWait = opts.backupWaitMs ?? BACKUP_WAIT_MS;
   let running: UpgradeJob | undefined;
+  /** Has the code under this process already been replaced? See `perform`. */
+  let replaced = false;
 
   const read = (): Promise<UpgradeState> => readUpgradeState(ctx.data, current);
   const save = async (state: UpgradeState): Promise<UpgradeState> => {
@@ -487,10 +637,18 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     }
   };
 
-  /** Wait for a backup job the upgrade started. The only job it ever awaits. */
-  const settled = async (job: BackupJob): Promise<BackupJob> => {
+  /**
+   * Wait for the backup the upgrade started. The only job it ever awaits.
+   *
+   * With a deadline, because everything after this waits behind it: a dump
+   * that hangs on a wedged disk would otherwise leave an upgrade "running"
+   * for ever, refusing every other maintenance verb along with it.
+   */
+  const settled = async (job: BackupJob, waitMs: number): Promise<BackupJob | undefined> => {
+    const deadline = Date.now() + waitMs;
     for (;;) {
       if (job.finishedAt !== undefined) return job;
+      if (Date.now() > deadline) return undefined;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
   };
@@ -500,28 +658,73 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     await save({ ...state, history: [...state.history, entry] });
   };
 
+  /**
+   * The version this upgrade is for, as a version.
+   *
+   * `latest` is a word, and a word cannot be compared, recorded or checked
+   * against what npm actually installed. The last check usually knows the
+   * number already; when it does not, this is what asks.
+   */
+  const resolveVersion = async (asked: string | undefined): Promise<{ version: string } | { error: string }> => {
+    if (asked !== undefined) {
+      return isVersion(asked) ? { version: asked } : { error: `"${asked}" is not a version this can install.` };
+    }
+    const known = (await read()).check.latest;
+    if (isNewer(known, current)) return { version: known as string };
+    const state = await runCheck();
+    if (isVersion(state.check.latest)) return { version: state.check.latest };
+    return { error: state.check.error ?? 'the registry did not name a version to upgrade to' };
+  };
+
   const perform = async (job: UpgradeJob, version: string | undefined): Promise<void> => {
     const startedAt = new Date().toISOString();
-    const source = ctx.env.BUDDI_UPGRADE_SOURCE;
+    const source = ctx.env.BUDDI_UPGRADE_SOURCE?.trim();
     // A tarball on disk instead of a registry spec: what the release smoke
-    // upgrades from, and the only way to exercise this path offline.
-    const spec = source !== undefined && source.trim() !== '' ? path.resolve(source.trim()) : `buddi@${version ?? 'latest'}`;
+    // upgrades from, and the only way to exercise this path offline. Its
+    // version is not knowable in advance; it is read back off the install.
+    const tarball = source !== undefined && source !== '' ? path.resolve(source) : undefined;
+    let to = version ?? 'unknown';
     let archive: string | undefined;
+    /** Everything that ends an upgrade before the new code is on disk. */
+    const give = async (step: string, error: string, restart: boolean): Promise<void> => {
+      jobs.finish(job, 'failed', { error, ...(archive === undefined ? {} : { report: { backup: archive } }) });
+      await record({ from: current, to, startedAt, finishedAt: new Date().toISOString(), outcome: 'failed', step, error, ...(archive === undefined ? {} : { backup: archive }) });
+      if (restart) {
+        // The old code is still on disk and still correct: start it again.
+        opts.startGateway();
+        log(`upgrade: ${step} failed, buddi is still running on ${current}: ${error}`);
+      } else log(`upgrade: ${step} failed: ${error}`);
+    };
+
+    // Where npm may write, decided before anything is stopped or archived.
+    const target = upgradeTarget(ctx.root);
+    if ('error' in target) return await give('checking', target.error, false);
+
+    let spec = tarball;
+    if (spec === undefined) {
+      const resolved = await resolveVersion(version);
+      if ('error' in resolved) return await give('checking', resolved.error, false);
+      to = resolved.version;
+      spec = `buddi@${resolved.version}`;
+    }
+
+    /*
+     * The backup is encrypted exactly as the schedule says, because that
+     * setting is the owner's answer to "may an archive of everything sit on
+     * this disk in the clear", and an upgrade is not an exception to it.
+     */
+    const schedule = await backup.schedule().catch(() => undefined);
+    const encrypt = schedule?.encryptLocal !== false;
+    if (encrypt && !backup.hasVault()) {
+      return await give('backup', 'This installation has no vault, so the backup an upgrade takes first cannot be encrypted. Turn off "Encrypt local backups" in Settings, or set up a vault.', false);
+    }
 
     jobs.phase(job, 'backup', 'taking a backup before anything changes');
-    const started = backup.create(undefined);
-    if ('status' in started) {
-      jobs.finish(job, 'failed', { error: started.error });
-      await record({ from: current, to: version ?? 'latest', startedAt, finishedAt: new Date().toISOString(), outcome: 'failed', step: 'backup', error: started.error });
-      return;
-    }
-    const done = await settled(started);
-    if (done.phase !== 'done') {
-      const error = done.error ?? 'the backup did not finish';
-      jobs.finish(job, 'failed', { error });
-      await record({ from: current, to: version ?? 'latest', startedAt, finishedAt: new Date().toISOString(), outcome: 'failed', step: 'backup', error });
-      return;
-    }
+    const started = backup.create(encrypt);
+    if ('status' in started) return await give('backup', started.error, false);
+    const done = await settled(started, backupWait);
+    if (done === undefined) return await give('backup', 'the backup did not finish within twenty minutes', false);
+    if (done.phase !== 'done') return await give('backup', done.error ?? 'the backup did not finish', false);
     archive = (done.report as { archive?: string } | undefined)?.archive;
 
     jobs.phase(job, 'stopping', 'stopping the gateway; the database stays up');
@@ -529,32 +732,56 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
 
     jobs.phase(job, 'installing', `installing ${spec}`);
     try {
-      await install(spec, { registry, root: ctx.root });
+      await install(spec, { registry, root: ctx.root, target });
     } catch (err) {
-      const error = message(err);
-      jobs.finish(job, 'failed', { error, ...(archive === undefined ? {} : { report: { backup: archive } }) });
-      await record({ from: current, to: version ?? 'latest', startedAt, finishedAt: new Date().toISOString(), outcome: 'failed', step: 'installing', error, ...(archive === undefined ? {} : { backup: archive }) });
-      // The old code is still on disk and still correct: start it again.
-      opts.startGateway();
-      log(`upgrade: the install failed, buddi is still running on ${current}: ${error}`);
-      return;
+      return await give('installing', message(err), true);
     }
 
-    const to = await installedVersion(ctx.root);
+    /*
+     * What is on disk now, rather than what was asked for. npm can be pointed
+     * at a registry that answers with a different package, and a tarball is
+     * whatever it is; migrating under code that is not the code this upgrade
+     * decided on is the failure this refuses to walk into.
+     */
+    const installed = await installedPackage(ctx.root);
+    if (installed.name !== 'buddi' || !isVersion(installed.version)) {
+      return await give('installing', `what was installed is ${installed.name ?? 'not a package'} ${installed.version ?? ''}`.trim() + ', not buddi at a version this can read', true);
+    }
+    if (tarball === undefined && installed.version !== to) {
+      return await give('installing', `${to} was asked for and ${installed.version} was installed`, true);
+    }
+    to = installed.version;
+
+    replaced = true;
     jobs.phase(job, 'restarting', `handing over to ${to}`);
     /*
      * The point of no return, written down before it is taken. From here the
      * process that finishes this upgrade is a different one, and the only
      * thing that connects them is this record: the new supervisor migrates,
-     * writes the history entry and clears the phase. An interruption in
-     * between leaves `phase: upgrading` on disk, which is exactly the state
-     * the next start knows how to finish.
+     * writes the history entry and clears the marker. An interruption in
+     * between leaves `state.upgrade` on disk, which is exactly the state the
+     * next start knows how to finish.
+     *
+     * Nothing below starts the old gateway again. The code under it has
+     * already been replaced, so "still running on the version it had" stopped
+     * being true one line above: what is down here is down until the new
+     * supervisor brings it up.
      */
-    ctx.state.phase = 'upgrading';
-    ctx.state.upgrade = { from: current, to, startedAt, ...(archive === undefined ? {} : { backup: archive }) };
-    await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
-    log(`upgrade: installed ${to}; handing over.`);
-    opts.restart();
+    try {
+      ctx.state.phase = 'upgrading';
+      ctx.state.upgrade = { from: current, to, startedAt, ...(archive === undefined ? {} : { backup: archive }) };
+      await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
+      log(`upgrade: installed ${to}; handing over.`);
+      opts.restart();
+    } catch (err) {
+      const error = message(err);
+      jobs.finish(job, 'failed', { error, ...(archive === undefined ? {} : { report: { backup: archive } }) });
+      await record({ from: current, to, startedAt, finishedAt: new Date().toISOString(), outcome: 'failed', step: 'restarting', error, ...(archive === undefined ? {} : { backup: archive }) }).catch(() => {});
+      log(`upgrade: ${to} is installed but the hand-over could not be written: ${error}. Run buddi again; the new code is what will start.`);
+      // Still the new code's installation: hand over anyway rather than start
+      // last month's gateway against a database the new code is about to own.
+      opts.restart();
+    }
   };
 
   return {
@@ -574,6 +801,9 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
     },
 
     start(version) {
+      if (version !== undefined && !isVersion(version)) {
+        return { status: 400, error: `"${version}" is not a version this can install.` };
+      }
       if (running !== undefined) return { status: 409, error: 'An upgrade is already running.' };
       if (backup.busy()) return { status: 409, error: 'A restore is running.' };
       const job = jobs.start('upgrade');
@@ -584,7 +814,8 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
         } catch (err) {
           jobs.finish(job, 'failed', { error: message(err) });
           log(`upgrade: failed: ${message(err)}`);
-          opts.startGateway();
+          // Only while the old code is still the installed code.
+          if (!replaced) opts.startGateway();
         } finally {
           running = undefined;
         }
@@ -598,6 +829,9 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
 
     async tick(now = new Date()) {
       if (running !== undefined) return;
+      // An installation whose migration failed is waiting for its owner, not
+      // for news: the one thing it must not do is offer another upgrade.
+      if (ctx.state.phase === 'upgrade-failed') return;
       const state = await read();
       if (!state.check.enabled) return;
       const last = state.check.lastAt === undefined ? 0 : Date.parse(state.check.lastAt);

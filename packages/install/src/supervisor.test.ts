@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { controlSocket, listenOnSocket, restartDelay, supervisorSocket, type SupervisorStatus } from './supervisor.js';
+import { controlSocket, listenOnSocket, pendingUpgrade, restartDelay, supervisorSocket, type SupervisorStatus } from './supervisor.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -124,10 +124,49 @@ describe('the supervisor', () => {
     expect((await call(socket, `/jobs/${job.id}`)).body).toEqual(job);
     expect((await call(socket, '/version', 'DELETE')).status).toBe(404);
 
+    // A version, not a range, a tag or anything npm would resolve itself.
+    for (const bad of ['latest', '^0.1.1', '0.1', 'npm:other@1.0.0']) {
+      expect(await call(socket, '/upgrade', 'POST', { host: 'localhost' }, { version: bad }))
+        .toEqual({ status: 400, body: { error: '"version" must be a version like 1.2.3.' } });
+    }
+    expect(upgrade.start).toHaveBeenCalledTimes(1);
+
     // While an upgrade runs, the gateway levers belong to it.
     upgrade.busy.mockReturnValue(true);
     expect(await call(socket, '/restart', 'POST')).toEqual({ status: 409, body: { error: 'An upgrade is running.' } });
     expect((await call(socket, '/upgrade', 'POST', { host: 'localhost' }, {})).status).toBe(202);
+  });
+
+  test('backing up and restoring wait for an upgrade, as an upgrade waits for them', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+    const socket = supervisorSocket(data);
+    const backup = {
+      busy: () => false,
+      create: () => ({ id: 'b', kind: 'backup', phase: 'starting', phases: [], startedAt: 'now' }),
+      restore: async () => ({ id: 'r', kind: 'restore', phase: 'starting', phases: [], startedAt: 'now' }),
+      job: () => undefined,
+      inRecovery: async () => false,
+      lastBackupAt: async () => null,
+    };
+    const upgrade = { busy: () => true, job: () => undefined };
+    const server = controlSocket({ status: () => STATUS, action: async () => {}, backup: backup as never, upgrade: upgrade as never, data });
+    servers.push(server);
+    await listenOnSocket(server, socket);
+    // The upgrade takes its own backup and replaces the code that would write
+    // another; a restore would replace the database under it.
+    expect(await call(socket, '/backup', 'POST', { host: 'localhost' }, {}))
+      .toEqual({ status: 409, body: { error: 'An upgrade is running.' } });
+    expect(await call(socket, '/restore', 'POST', { host: 'localhost' }, { name: 'buddi-backup-20260101-000000.tar.gz' }))
+      .toEqual({ status: 409, body: { error: 'An upgrade is running.' } });
+  });
+
+  test('a pending upgrade is the marker, not the phase', () => {
+    const marker = { from: '0.1.0', to: '0.1.1', startedAt: '2026-01-01T00:00:00.000Z' };
+    expect(pendingUpgrade(marker)).toBe(marker);
+    expect(pendingUpgrade(undefined)).toBeUndefined();
+    // Half a marker says nothing about which upgrade was under way.
+    expect(pendingUpgrade({ from: '0.1.0' } as never)).toBeUndefined();
+    expect(pendingUpgrade({ from: '', to: '0.1.1', startedAt: 'now' } as never)).toBeUndefined();
   });
 
   test('has no version verbs at all when the supervisor has no installation', async () => {

@@ -57,12 +57,13 @@ from `packages/*/dist` with its runtime dependencies), not a restructuring.
 
 Requirements on the machine: Node 22 or newer. Nothing else. No Docker, no
 git, no pnpm, no build step. `buddi` itself has no install script. The one
-exception is the Postgres binary package, whose upstream needs an install
-script to rebuild the symlinks inside its binaries directory; that script is
-permitted, it is the only one, and first run checks the binaries are runnable
-and repairs the links itself if the script did not run (an `--ignore-scripts`
-install still works). Provisioning of the cluster happens on first run, so a
-failed install leaves no half-state.
+package that would want one is the Postgres binary package, whose upstream
+rebuilds the symlinks inside its binaries directory that way; it is not
+needed, because first run copies that directory into the data directory,
+checks the binaries are runnable and creates those links itself from the
+manifest the package ships (`prepareBinaries`). Every install in this project,
+the upgrade included, therefore passes `--ignore-scripts`. Provisioning of the
+cluster happens on first run, so a failed install leaves no half-state.
 
 Versioning: the package version is the product version. `buddi upgrade`
 becomes `npm install -g buddi@latest` followed by the existing
@@ -72,12 +73,22 @@ npm registry, once a day, owner can turn it off).
 
 As built, the supervisor runs that sequence itself — `backup`, `stopping`,
 `installing`, then it hands over to the code it just installed, which migrates
-and records the outcome. The install is the one `npm install` in this project
-that does *not* pass `--ignore-scripts`: the Postgres binary package's own
-script is what the paragraph above is about, and it is a dependency of buddi's
-own package, asked for by the owner. The prefix comes from the install root
+and records the outcome. The install passes `--ignore-scripts` like every
+other install here; the symlinks the Postgres package would have made are made
+at the successor's first start instead. The prefix comes from the install root
 that is running rather than from npm's configuration, so an installation made
-with `--prefix` upgrades itself and not some other copy.
+with `--prefix` upgrades itself and not some other copy — and an installation
+that turns out to sit inside somebody's project is refused in one sentence
+rather than upgraded by rewriting that project's `package.json`.
+
+What may be installed is one version: `1.2.3`, or `1.2.3-rc.1`. A range, a
+tag, a URL or an npm alias is refused by the dashboard route, by the control
+socket and by the supervisor alike; `latest` is a word the check resolves to a
+version before npm is told anything, and after npm returns the installed
+`package.json` has to say `buddi` at exactly that version or the upgrade is a
+failure that leaves the running version running. The backup taken first is
+encrypted exactly as the backup schedule says, so an installation with
+encryption on and no vault is told so before anything stops.
 
 ---
 
@@ -247,8 +258,21 @@ while the gateway is down. Maintenance therefore never needs the gateway:
   launchd the hand-over is an exit: the agent has `KeepAlive` and its
   `ProgramArguments` name the launcher inside the install root, which the
   install has just replaced, so launchd starts the new code from the same path.
-  Off launchd the supervisor spawns its own successor and waits for it to take
-  the lock.
+  That case is recognised by identity — `XPC_SERVICE_NAME` naming this
+  installation's own agent — and not by having pid 1 as a parent, which every
+  detached process has. Off launchd the supervisor spawns its own successor and
+  waits up to a minute for it to answer `/status` with the new version, which
+  is the readiness that matters (holding the lock is not: a successor can take
+  the lock and then die bringing the cluster up). It tries a second time, and
+  if nothing answers it writes the attempt down as failed at `starting`, with
+  the recovery sentence, before it goes.
+
+  Which upgrade is half done is the marker in `installation.json`, not the
+  phase: a crash while migrating can leave any phase on disk, so a start
+  finishes whatever `state.upgrade` names and clears it only together with the
+  outcome. From the moment the new code is on disk the old gateway is never
+  started again — what is down stays down until the new supervisor brings it
+  up, rather than serving last month's code over a database the new code owns.
 
 `buddi service` remains the CLI face of the same manager and gains
 `buddi service status --json` for the page. Logs are files in the data

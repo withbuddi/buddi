@@ -4,7 +4,7 @@
  * itself. Nothing here is a page an owner visits daily, which is why it is
  * behind the gear and not on the rail's first screen.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
@@ -239,6 +239,32 @@ const UPGRADE_WARNING =
 const CHECKOUT_UPGRADE_LINE = 'A checkout upgrades with git pull, then buddi upgrade in a terminal.';
 
 /**
+ * How long a page waits for a buddi that went away to come back.
+ *
+ * Long enough for a backup-sized restart on a slow disk, short enough that an
+ * owner is not left watching a spinner into the evening. What ends the wait is
+ * a sentence naming the one command that can still say what happened.
+ */
+const UPGRADE_RETURN_MS = 10 * 60_000;
+
+/** The end of the wait, when nothing came back. */
+const NEVER_CAME_BACK = 'buddi did not come back. Run buddi doctor in a terminal.';
+
+/** The way back from an upgrade that failed under the new code. */
+export function recoveryLine(attempt: UpgradeAttempt): string {
+  const where = attempt.step === 'starting' ? 'while starting' : `at ${attempt.step ?? 'an unknown step'}`;
+  return `The upgrade to ${attempt.to} failed ${where}: ${attempt.error ?? 'no reason given'}. ` +
+    `The backup taken first is ${attempt.backup ?? 'not available'}. Run buddi doctor in a terminal; it prints the way back.`;
+}
+
+/** What the page is watching, and what it has to say about it. */
+interface UpgradeWatch {
+  job: UpgradeJob | undefined;
+  away: boolean;
+  error: string | null;
+}
+
+/**
  * One upgrade, watched past the death of the gateway reporting it.
  *
  * An upgrade restarts buddi, so losing contact is part of the job rather than
@@ -247,16 +273,31 @@ const CHECKOUT_UPGRADE_LINE = 'A checkout upgrades with git pull, then buddi upg
  * A different version in that answer is what "it came back" means, and then
  * the only honest thing is to reload, because this page was served by code
  * that no longer runs.
+ *
+ * Two things end the wait instead. A gateway that answers again on the old
+ * version while `/api/version` — which the supervisor writes to disk, so it
+ * outlives both — says the last attempt failed: that is the upgrade having
+ * failed and buddi having been started again, and the page says so rather
+ * than waiting for a version that is never coming. And a deadline, because
+ * "restarting" with nothing behind it is the one state a page must not show
+ * for ever.
  */
 function useUpgrade(
   id: string | null,
   startedOn: string | undefined,
   reload: () => void,
-): { job: UpgradeJob | undefined; away: boolean; error: string | null } {
+  onFailed?: (job: UpgradeJob) => void,
+): UpgradeWatch {
   const [job, setJob] = useState<UpgradeJob | undefined>(undefined);
   const [away, setAway] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lost = useRef(false);
+  // Held in refs so that a caller passing a fresh closure on every render does
+  // not tear the poll down and start it again on every render.
+  const reloadRef = useRef(reload);
+  const failedRef = useRef(onFailed);
+  reloadRef.current = reload;
+  failedRef.current = onFailed;
   useEffect(() => {
     if (!id) {
       setJob(undefined);
@@ -265,32 +306,54 @@ function useUpgrade(
       return undefined;
     }
     let stopped = false;
+    let deadline = 0;
     const gone = (): void => {
       lost.current = true;
+      deadline = Date.now() + UPGRADE_RETURN_MS;
       setAway(true);
     };
-    const ask = (): void => {
-      if (lost.current) {
-        // The gateway is away. What is being waited for now is a new one, and
-        // it is new only if it answers with a version this page did not start on.
-        api
-          .session()
+    const waiting = (): void => {
+      if (Date.now() < deadline) {
+        // Has a gateway come back, and is it a new one?
+        void api.session()
           .then((next) => {
             if (stopped) return;
             if (next.version !== undefined && next.version === startedOn) return;
             stopped = true;
-            reload();
+            reloadRef.current();
+          })
+          .catch(() => {});
+        // Whatever is answering, the record on disk is what says how it ended.
+        void api.version()
+          .then((view) => {
+            const last = view.history[view.history.length - 1];
+            if (stopped || last?.outcome !== 'failed') return;
+            stopped = true;
+            setAway(false);
+            setError(recoveryLine(last));
           })
           .catch(() => {});
         return;
       }
+      stopped = true;
+      setAway(false);
+      setError(NEVER_CAME_BACK);
+    };
+    const ask = (): void => {
+      if (stopped) return;
+      if (lost.current) return waiting();
       api
         .upgradeJob(id)
         .then((next) => {
           if (stopped) return;
           setJob(next);
           setError(null);
-          if (UPGRADE_ENDED.has(next.phase) || next.finishedAt) stopped = true;
+          if (UPGRADE_ENDED.has(next.phase) || next.finishedAt) {
+            // Nothing follows an ended job: a failure before the hand-over is
+            // the end of this upgrade, and the button is the owner's again.
+            stopped = true;
+            if (next.phase === 'failed') failedRef.current?.(next);
+          }
         })
         .catch((err: unknown) => {
           if (stopped) return;
@@ -306,7 +369,7 @@ function useUpgrade(
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [id, startedOn, reload]);
+  }, [id, startedOn]);
   return { job, away, error };
 }
 
@@ -324,9 +387,16 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  /*
+   * An upgrade that failed before the hand-over: buddi is still running on the
+   * version it had, so the page keeps what happened on screen and gives the
+   * button back rather than following a job that has already ended.
+   */
+  const [ended, setEnded] = useState<UpgradeJob | null>(null);
   const startedOn = view.data?.current;
   const reloadPage = reload ?? ((): void => window.location.reload());
-  const upgrade = useUpgrade(jobId, startedOn, reloadPage);
+  const onFailed = useCallback((job: UpgradeJob): void => { setJobId(null); setEnded(job); }, []);
+  const upgrade = useUpgrade(jobId, startedOn, reloadPage, onFailed);
   const data = view.data;
 
   const check = (): void => {
@@ -348,6 +418,7 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
   const start = (): void => {
     setBusy(true);
     setFailed(null);
+    setEnded(null);
     api
       .startUpgrade(data?.latest)
       .then((answer) => { setAsking(false); setJobId(answer.job?.id ?? null); })
@@ -415,7 +486,7 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
         </Section>
         <Section>
           <Stack gap="sm">
-            <UpgradeProgress {...upgrade} />
+            <UpgradeProgress {...upgrade} job={upgrade.job ?? ended ?? undefined} />
             {asking ? (
               <Notice tone="warning" role="alert">
                 {UPGRADE_WARNING}
@@ -463,7 +534,7 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
 }
 
 /** Where an upgrade has got to, or what it left behind when it stopped. */
-function UpgradeProgress({ job, away, error }: ReturnType<typeof useUpgrade>): JSX.Element | null {
+function UpgradeProgress({ job, away, error }: UpgradeWatch): JSX.Element | null {
   if (error) return <ErrorBanner message={error} />;
   if (away) {
     return (

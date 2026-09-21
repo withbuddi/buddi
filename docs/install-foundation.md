@@ -285,16 +285,29 @@ not to run one.
   add one: the way back from a migration that failed under new code is the
   backup taken before the upgrade started, named in `<data>/upgrade.json`, in
   `buddi doctor` and in the sentence it prints. A failed install, which is the
-  reversible half, does start the old gateway again by itself.
+  reversible half, does start the old gateway again by itself. That backup is
+  encrypted exactly as the backup schedule says; encryption on with no vault is
+  refused before the gateway is stopped, and a backup that has not finished in
+  twenty minutes fails the upgrade with buddi still running.
 - **The upgrade is the supervisor's, and it hands over to the code it
   installed.** `POST /upgrade` on the control socket runs `backup`, `stopping`,
-  `installing` (`npm install` with scripts *enabled*, `--prefix` derived from
-  the install root that is running, `--registry` always passed), writes
-  `phase: upgrading` into `installation.json` and goes away; the supervisor that
-  comes up on the new code migrates and writes the outcome. Under launchd
-  "goes away" is exiting — the agent has `KeepAlive` and its `ProgramArguments`
-  point into the install root that was just replaced — and off launchd it
-  spawns its own successor and waits for it to take the lock. `BUDDI_UPGRADE_SOURCE`
+  `installing` (`npm install --ignore-scripts`, like every other install here,
+  `--prefix` derived from the install root that is running, `--registry` always
+  passed), checks the installed `package.json` really says `buddi` at the
+  version that was asked for, writes the upgrade into `installation.json` and
+  goes away; the supervisor that comes up on the new code migrates and writes
+  the outcome. Only a version is installable — `latest` is resolved through the
+  check first, and a range, a tag, a URL or an alias is refused by the route,
+  the socket and the service alike. Under launchd "goes away" is exiting — the
+  agent has `KeepAlive` and its `ProgramArguments` point into the install root
+  that was just replaced, and the job recognises itself by `XPC_SERVICE_NAME`
+  rather than by a parent pid of 1, which any detached process has. Off launchd
+  it spawns its own successor and waits up to a minute for `/status` on the
+  socket to answer with the new version, retrying the spawn once and recording
+  a `failed` attempt at step `starting` if nothing ever does. What is pending is
+  the marker in `installation.json`, not the phase, and it is cleared only with
+  the outcome; once the new code is on disk the old gateway is never started
+  again. `BUDDI_UPGRADE_SOURCE`
   replaces the registry spec with a tarball on disk, which is how it is
   exercised offline. The `restarting` phase is set and the process is gone
   within the same tick, so a client polling the job may never observe it: what
@@ -356,7 +369,9 @@ reboot. No distribution choice is needed for backups: they use the driver, not
   `POST /upgrade` with `BUDDI_UPGRADE_SOURCE` pointing at a 0.1.1 tarball packed
   from the same tree. The socket went away after `installing` and came back on
   0.1.1 with `phase: ready`, a `done` history entry naming the backup, and the
-  check switch the owner had turned off still off.
+  check switch the owner had turned off still off. Re-verified after the fix
+  pass, with `--ignore-scripts` on the install, the socket-and-version readiness
+  test on the hand-over and the launchd detection by identity.
 
 ## Wizard
 

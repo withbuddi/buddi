@@ -184,7 +184,14 @@ async function run(): Promise<void> {
     // The checkout's `--no-backup` has no meaning here: the archive is the way
     // back from a migration, and this path migrates under code it just installed.
     if (args.includes('--no-backup')) throw new Error('A packaged upgrade always takes a backup first; it is the way back. Run buddi upgrade.');
-    const version = args[1] !== undefined && !args[1].startsWith('-') ? args[1] : undefined;
+    /*
+     * `buddi upgrade latest` is the one place the word is allowed, and it
+     * never leaves this process as a word: asking for nothing in particular
+     * is what makes the supervisor resolve the newest version through the
+     * check before npm is told anything (see VERSION_PATTERN in upgrade.ts).
+     */
+    const named = args[1] !== undefined && !args[1].startsWith('-') ? args[1] : undefined;
+    const version = named === 'latest' ? undefined : named;
     console.log('Upgrading. A backup is taken first, and buddi restarts itself when the new version is in place.');
     const { job } = await ask<{ job: UpgradeJob }>(ctx, 'POST', '/upgrade', version === undefined ? {} : { version });
     process.exitCode = await followUpgrade(ctx, job.id);
