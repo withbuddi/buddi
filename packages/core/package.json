@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./semver": {
+      "types": "./dist/semver.d.ts",
+      "default": "./dist/semver.js"
+    },
     "./testing": {
       "types": "./dist/testing/database-url.d.ts",
       "default": "./dist/testing/database-url.js"

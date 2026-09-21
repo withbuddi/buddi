@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import type { WriteStream } from 'node:fs';
-import { readdir, chmod, unlink, lstat } from 'node:fs/promises';
+import { readdir, readFile, chmod, unlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
@@ -22,9 +22,25 @@ import { createBackupService, isIncomingPath, isSafeArchiveName, parseSchedule, 
 import type { BackupControl } from './backup.js';
 import { startDatabase } from './postgres.js';
 import type { ManagedDatabase } from './postgres.js';
+import { createUpgradeService, finishUpgrade, handOver, installedVersion, isVersion, recoverySentence, statusOnSocket, TICK_INTERVAL_MS } from './upgrade.js';
+import type { UpgradeControl, UpgradeInProgress } from './upgrade.js';
 
 /** The launcher, as the supervisor spawns it for the gateway child. */
 const LAUNCHER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'launcher.js');
+
+/**
+ * Is there an upgrade waiting to be finished?
+ *
+ * The marker, not the phase: a crash between installing the new code and
+ * writing an outcome can leave any phase at all on disk, and only
+ * `state.upgrade` says which upgrade was under way and what it backed up.
+ */
+export function pendingUpgrade(marker: UpgradeInProgress | undefined): UpgradeInProgress | undefined {
+  if (!marker || typeof marker !== 'object') return undefined;
+  const { from, to, startedAt } = marker;
+  const named = [from, to, startedAt].every(value => typeof value === 'string' && value !== '');
+  return named ? marker : undefined;
+}
 
 /** The control socket of the installation whose data directory this is. */
 export function supervisorSocket(data: string): string {
@@ -32,6 +48,12 @@ export function supervisorSocket(data: string): string {
 }
 
 export function restartDelay(failures: number): number { return Math.min(30_000, 2000 * 2 ** Math.min(failures, 4)); }
+
+/**
+ * How long a handed-over supervisor waits to leave on its own before it is
+ * made to. Long enough for an orderly exit, short enough that nobody notices.
+ */
+export const HANDOVER_GRACE_MS = 5_000;
 
 /** What `/status` reports; the CLI prints it verbatim. */
 export interface SupervisorStatus {
@@ -43,6 +65,9 @@ export interface SupervisorStatus {
   databasePid: number | null | undefined;
   gateway: string;
   gatewayPid: number | null;
+  /** The installed product version, and whether it is being replaced. */
+  current?: string;
+  upgrading?: boolean;
 }
 
 export interface ControlSocketOptions {
@@ -50,6 +75,8 @@ export interface ControlSocketOptions {
   action: (name: string) => Promise<void>;
   /** The backup verbs, when this supervisor has an installation to back up. */
   backup?: BackupControl | undefined;
+  /** The version and upgrade verbs, for the same reason. */
+  upgrade?: UpgradeControl | undefined;
   /** The data directory, for the one path clients may name: `<data>/incoming/`. */
   data?: string | undefined;
 }
@@ -104,7 +131,7 @@ function optionalString(value: unknown): string | undefined {
  * `<data>/incoming/`, and that is checked to be under that directory, resolved,
  * before it is passed on.
  */
-export function controlSocket({ status, action, backup, data }: ControlSocketOptions): Server {
+export function controlSocket({ status, action, backup, upgrade, data }: ControlSocketOptions): Server {
   return createServer((req, res) => {
     void handle(req, res).catch(() => send(res, 500, { error: 'The supervisor could not complete that action.' }));
   });
@@ -124,6 +151,9 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
       // One hand on the lever at a time: a restore is already stopping and
       // starting the gateway around a database it is replacing.
       if (backup?.busy()) return send(res, 409, { error: 'A restore is running.' });
+      // An upgrade is the same lever: it stops the gateway, replaces the code
+      // under it and hands over to a new supervisor.
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
       const name = route.slice(1);
       /*
        * `start` and `stop` are answered when they are done, with the status
@@ -152,6 +182,37 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
       return;
     }
 
+    if (route === '/version') {
+      if (!upgrade) return send(res, 404, { error: 'no such endpoint' });
+      if (method === 'GET') return send(res, 200, await upgrade.view());
+    }
+    if (route === '/version/check') {
+      if (!upgrade) return send(res, 404, { error: 'no such endpoint' });
+      // A check the owner asked for runs whatever the switch says; the switch
+      // only decides whether the daily tick asks on its own.
+      if (method === 'POST') return send(res, 200, await upgrade.check());
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+        if (typeof body.enabled !== 'boolean') return send(res, 400, { error: '"enabled" must be true or false.' });
+        return send(res, 200, await upgrade.setCheckEnabled(body.enabled));
+      }
+    }
+    if (route === '/upgrade' && method === 'POST') {
+      if (!upgrade) return send(res, 404, { error: 'no such endpoint' });
+      const body = await readBody(req);
+      if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
+      // A version, not a range, a tag or anything npm would resolve for us:
+      // everything downstream records it, compares it and checks it against
+      // what ended up on disk. See VERSION_PATTERN in upgrade.ts.
+      if (body.version !== undefined && !isVersion(body.version)) {
+        return send(res, 400, { error: '"version" must be a version like 1.2.3.' });
+      }
+      const started = upgrade.start(optionalString(body.version));
+      if ('status' in started) return send(res, started.status, { error: started.error });
+      return send(res, 202, { job: started });
+    }
+
     if (route === '/backups' && method === 'GET') {
       if (!backup) return send(res, 404, { error: 'no such endpoint' });
       return send(res, 200, await backup.list());
@@ -159,6 +220,9 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
     if (route === '/backup' && method === 'POST') {
       if (!backup) return send(res, 404, { error: 'no such endpoint' });
       if (backup.busy()) return send(res, 409, { error: 'A restore is running.' });
+      // An upgrade has the same lever: it takes its own backup, stops the
+      // gateway and replaces the code that would write the next one.
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
       const body = await readBody(req);
       if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
       if (body.encrypt !== undefined && typeof body.encrypt !== 'boolean') {
@@ -177,6 +241,7 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
     }
     if (route === '/restore' && method === 'POST') {
       if (!backup) return send(res, 404, { error: 'no such endpoint' });
+      if (upgrade?.busy()) return send(res, 409, { error: 'An upgrade is running.' });
       const body = await readBody(req);
       if (body === null) return send(res, 400, { error: 'The body has to be a JSON object.' });
       // Exactly one of the two, and the path only under `<data>/incoming/`.
@@ -197,8 +262,10 @@ export function controlSocket({ status, action, backup, data }: ControlSocketOpt
     }
     const jobRoute = /^\/jobs\/([0-9a-f-]{36})$/i.exec(route);
     if (jobRoute && method === 'GET') {
-      if (!backup) return send(res, 404, { error: 'no such endpoint' });
-      const job = backup.job(jobRoute[1] as string);
+      if (!backup && !upgrade) return send(res, 404, { error: 'no such endpoint' });
+      // One job route for both stores: a client that was handed an id polls it
+      // without having to remember which verb produced it.
+      const job = backup?.job(jobRoute[1] as string) ?? upgrade?.job(jobRoute[1] as string);
       return job ? send(res, 200, job) : send(res, 404, { error: 'no such job' });
     }
     if (route === '/schedule') {
@@ -269,9 +336,19 @@ export async function listenOnSocket(server: Server, socket: string): Promise<vo
 }
 
 export async function supervise(ctx: InstallContext): Promise<void> {
+  /*
+   * The environment as this supervisor was started with it, captured before
+   * anything hydrates a database password or a vault key into it: it is what
+   * the successor of an upgrade is spawned with, and a secret that travelled
+   * through a restart would outlive the process that was allowed to hold it.
+   */
+  const startEnv = { ...ctx.env };
   const release = await acquireLock(ctx.data);
   let database: ManagedDatabase | undefined, server: Server | undefined, child: ChildProcess | undefined, retry: NodeJS.Timeout | undefined, log: WriteStream | undefined;
   let backup: BackupControl | undefined, scheduleTick: NodeJS.Timeout | undefined;
+  let upgrade: UpgradeControl | undefined, upgradeTick: NodeJS.Timeout | undefined, handingOver = false;
+  /** Has a pending upgrade been written into the history yet? */
+  let resolved = false, pending: UpgradeInProgress | undefined;
   let desired = true, closing = false, chain: Promise<void> = Promise.resolve();
   let failures = 0;
   const stopGateway = async () => {
@@ -288,14 +365,31 @@ export async function supervise(ctx: InstallContext): Promise<void> {
   try {
     await initialize(ctx);
     const ready = ctx as ReadyContext;
+    /*
+     * An upgrade that installed new code and handed over is finished here, by
+     * the code it installed. `phase` says whether there is one; it is read
+     * before the migration below rewrites it, and the entry it produces is
+     * what the dashboard, the CLI and the doctor all report afterwards.
+     */
+    pending = pendingUpgrade(ready.state.upgrade);
+    const current = await installedVersion(ready.root);
     const core = await import('@buddi/core');
     const gateway = await import('@buddi/gateway');
     database = await startDatabase(ready, core);
     database.exited.then(() => {
       if (!closing) { console.error('Managed Postgres exited; stopping the gateway. Restart buddi after checking logs/postgres.log.'); onSignal(); }
     });
-    ready.state.phase = 'migrating'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
+    /*
+     * `migrating` is not written over a pending upgrade. The marker in
+     * `state.upgrade` is the only thing that says an upgrade is half done, and
+     * a crash while these migrations run — the most likely moment for one —
+     * would otherwise leave a phase that says `migrating` and nothing that
+     * says which upgrade, so the next start would migrate as if none were
+     * under way. The marker is cleared in `finishUpgrade`, with the outcome.
+     */
+    if (!pending) { ready.state.phase = 'migrating'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state); }
     const pool = core.createPool(ready.env.DATABASE_URL as string);
+    let migrationFailure: string | undefined;
     try {
       const exists = await pool.query<{ table_name: string | null }>("SELECT to_regclass('core.migrations') AS table_name");
       if (exists.rows[0]!.table_name) {
@@ -321,8 +415,26 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         console.error(`supervisor: plugin ${problem.name} was not loaded: ${problem.message}`);
       }
     }
+    catch (error) {
+      // A migration that fails during an upgrade is not a supervisor that
+      // fails to start: the owner needs a process that can still be asked what
+      // happened, and one sentence telling them the way back. Every other
+      // start still throws, exactly as before.
+      if (!pending) throw error;
+      migrationFailure = error instanceof Error ? error.message : String(error);
+    }
     finally { await pool.end(); }
-    ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
+    if (pending) {
+      const entry = await finishUpgrade(ready, pending, migrationFailure === undefined ? { ok: true } : { ok: false, error: migrationFailure });
+      resolved = true;
+      // `finishing` is the entry a recovery produces: the old code was put
+      // back and came up, so the upgrade is over without having arrived.
+      console.error(entry.outcome === 'done'
+        ? `upgrade: ${entry.from} to ${entry.to} finished.`
+        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry));
+    } else {
+      ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
+    }
     await gateway.ensureWebToken({ env: ready.env });
     // The gateway's Settings page is the other client of the control socket.
     ready.env.BUDDI_SUPERVISOR_SOCKET = supervisorSocket(ready.data);
@@ -359,26 +471,139 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       void backup!.tick().catch(err => console.error(`backup: the schedule tick failed: ${err instanceof Error ? err.message : String(err)}`));
     }, 60_000);
     if (typeof scheduleTick.unref === 'function') scheduleTick.unref();
+    // Upgrading runs here for the same reason backing up does, and one more:
+    // the supervisor is the only process that survives the code being replaced
+    // under it, because it is the one that hands over. See upgrade.ts.
+    upgrade = createUpgradeService({
+      ctx: ready, current, backup,
+      stopGateway: async () => { await stopGateway(); },
+      startGateway: () => start(),
+      restart: () => { handingOver = true; onSignal(); },
+      http: gateway.defaultHttpTransport,
+      log: line => console.error(line),
+    });
     server = controlSocket({
       status: () => ({ phase: ready.state.phase, supervisorPid: process.pid, installRoot: ready.root, nodePath: process.execPath, database: database!.pid ? (database!.alive ? 'running' : 'failed') : 'external', databasePid: database!.pid,
-        gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null }),
+        gateway: child && child.exitCode === null && child.signalCode === null ? 'running' : 'stopped', gatewayPid: child?.pid ?? null,
+        current, upgrading: upgrade!.busy() }),
       action: name => { console.error(`supervisor: ${name} asked for on the control socket.`); chain = chain.catch(() => {}).then(async () => { if (name !== 'start') await stopGateway(); if (name !== 'stop') start(); }); return chain; },
-      backup, data: ready.data,
+      backup, upgrade, data: ready.data,
     });
     await listenOnSocket(server, supervisorSocket(ready.data));
-    start();
+    if (migrationFailure === undefined) start();
+    else console.error('supervisor: the gateway was not started; this installation is in upgrade-failed.');
+    // The daily version check: once at start, now that the installation is up,
+    // and then on the hour, which is only ever a question about the clock —
+    // `tick` itself refuses to ask the registry more than once a day.
+    const tick = (): void => {
+      void upgrade!.tick().catch(err => console.error(`upgrade: the version check failed: ${err instanceof Error ? err.message : String(err)}`));
+    };
+    upgradeTick = setInterval(tick, Number(ready.env.BUDDI_UPGRADE_TICK_MS) || TICK_INTERVAL_MS);
+    if (typeof upgradeTick.unref === 'function') upgradeTick.unref();
+    tick();
     console.log('Buddi supervisor ready.');
     await shutdown;
+  } catch (error) {
+    /*
+     * The new code could not start at all — a cluster it cannot run, a file
+     * the install did not land. That is an upgrade that failed just as much as
+     * a migration that threw, and without this it would be a `phase:
+     * upgrading` nobody ever writes an outcome for. The start still fails:
+     * there is no database here to serve a control socket around.
+     */
+    if (pending && !resolved) {
+      const entry = await finishUpgrade(ctx as ReadyContext, pending, { ok: false, error: error instanceof Error ? error.message : String(error) }, 'starting')
+        .catch(() => undefined);
+      if (entry) console.error(recoverySentence(entry));
+    }
+    throw error;
   } finally {
     closing = true;
     clearInterval(scheduleTick);
+    clearInterval(upgradeTick);
     await chain.catch(() => {});
     await stopGateway();
-    if (server?.listening) await new Promise(resolve => server!.close(resolve));
+    if (server?.listening) {
+      /*
+       * `close` stops the supervisor listening; it does not touch the
+       * connections already open, and `node:http`'s default agent keeps its
+       * connections alive — the dashboard and the CLI both poll `/jobs/:id`
+       * right up to the hand-over. A socket left open that way is a handle
+       * that holds the event loop, which is how a handed-over supervisor ends
+       * up alive and idle for the rest of the login session.
+       */
+      const closed = new Promise(resolve => server!.close(resolve));
+      server.closeAllConnections();
+      await closed;
+    }
     try { await database?.stop(); }
     finally {
       log?.end(); await release();
       process.removeListener('SIGINT', onSignal); process.removeListener('SIGTERM', onSignal);
     }
+  }
+  /*
+   * The hand-over, after everything above has let go: the lock, the socket,
+   * the database. It is last on purpose — the successor takes the same lock,
+   * and a supervisor that started its replacement before releasing it would
+   * hand the new code an installation it cannot open.
+   */
+  if (handingOver) {
+    const marker = ctx.state?.upgrade;
+    const result = await handOver({
+      ctx, launcher: LAUNCHER, env: startEnv,
+      /*
+       * The successor is ready when it serves, not when it holds the lock: it
+       * takes the lock first and then starts a cluster and runs migrations,
+       * either of which can still kill it. `/status` naming the version we
+       * installed is the whole hand-over, observed rather than assumed.
+       */
+      ready: async () => {
+        const status = await statusOnSocket(supervisorSocket(ctx.data));
+        if (status !== undefined && status.current === marker?.to) return true;
+        /*
+         * Or the successor has already been and written an outcome.
+         *
+         * `phase: 'upgrading'` is what this process wrote before handing over,
+         * and `finishUpgrade` in the successor is the only thing that replaces
+         * it. A successor that migrated, recorded the outcome and was then
+         * stopped — by an owner following the recovery sentence, or by the
+         * release smoke — leaves a socket that does not answer and a file that
+         * says the upgrade is over. Waiting another two minutes for it and
+         * then spawning a second supervisor over the top is how one idle
+         * process per upgrade used to survive the run.
+         */
+        const written = await readFile(path.join(ctx.data, 'installation.json'), 'utf8')
+          .then(text => (JSON.parse(text) as { phase?: string }).phase)
+          .catch(() => undefined);
+        return written !== undefined && written !== 'upgrading';
+      },
+    });
+    /*
+     * Nothing answered, twice. That is an upgrade that failed, and the one
+     * thing this process can still do for its owner is write down that it did
+     * — with the archive taken first — before it goes. The marker stays, so a
+     * successor that turns up late still finishes the upgrade properly.
+     */
+    if (!result.ok && marker) {
+      const entry = await finishUpgrade(ctx as ReadyContext, marker, { ok: false, error: `the upgraded supervisor did not answer on ${supervisorSocket(ctx.data)}` }, 'starting')
+        .catch(() => undefined);
+      if (entry) console.error(recoverySentence(entry));
+    }
+    /*
+     * And then go, whatever is still holding the loop.
+     *
+     * Everything this process owns has been let go of by here, but a handle
+     * nobody remembers — a client socket, a stream, a timer in a package this
+     * imported — is enough to keep it alive, and what that leaves behind is an
+     * idle supervisor per upgrade until the next login. The successor is
+     * serving; there is nothing this process can still be for. The timer is
+     * unref'd so a process that was going to exit anyway exits silently.
+     */
+    const grace = setTimeout(() => {
+      console.error('supervisor: handed over, but something is still holding this process open; exiting.');
+      process.exit(0);
+    }, HANDOVER_GRACE_MS);
+    grace.unref?.();
   }
 }

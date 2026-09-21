@@ -75,6 +75,7 @@ function fakeControl(): { control: BackupControl; seen: unknown[] } {
     schedule: async () => ({ ...DEFAULT_SCHEDULE }),
     setSchedule: async (next) => { seen.push({ schedule: next }); return { schedule: { ...next, lastRunAt: null } }; },
     passphrase: async () => 'able acid actor adult afraid agent',
+    hasVault: () => true,
     setPassphrase: async (value) => { seen.push({ passphrase: value }); },
     lastBackupAt: async () => '2026-01-01T03:30:00.000Z',
     inRecovery: async () => true,

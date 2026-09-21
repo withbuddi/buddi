@@ -32,3 +32,4 @@ export type { MigrationProblem, RunMigrationsOptions } from './cli-migrate.js';
 export * from './provider-accounts.js';
 export * from './system-context.js';
 export * from './groups.js';
+export * from './semver.js';

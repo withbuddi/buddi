@@ -107,7 +107,8 @@ is provided by the release launcher, not by changing the checkout CLI parser.
 The runtime of a packaged install is the workspace package `packages/install`
 (`@buddi/install`): `src/environment.ts` (data directory, private files,
 installation state, startup lock), `src/supervisor.ts` (process supervision and
-the control socket) and `src/launcher.ts`, the `buddi` binary the tarball
+the control socket), `src/upgrade.ts` (the version check, `<data>/upgrade.json`
+and the upgrade itself) and `src/launcher.ts`, the `buddi` binary the tarball
 installs (`packages/install/dist/launcher.js`). The dashboard's side of the
 socket is `packages/gateway/src/web/service.ts`, one `node:http` client used by
 the `/api/service` routes in `server.ts`; the page itself is the Service section
@@ -262,8 +263,10 @@ not to run one.
 - The chosen `@embedded-postgres` binary package supplies `initdb`, `postgres`
   and `pg_ctl`, **not `pg_dump`, `pg_restore` or `psql`**. Backups, restores,
   upgrades, direct migrations, and checkout/Docker initialization commands are
-  refused by the packaged launcher. Supply pinned client binaries before
-  enabling them. This foundation is not a production upgrade/restore solution.
+  refused by the packaged launcher, except `buddi upgrade`, `buddi version` and
+  the backup verbs, which are served by the supervisor and need none of those
+  binaries. Supply pinned client binaries before enabling the rest. This
+  foundation is not a production upgrade/restore solution.
   The npm distribution is pinned at **18.4.0-beta.17**; its bundled server reports
   **PostgreSQL 18.4**. The distribution's beta status remains a release risk to
   review before publication; passing these tests is not production certification.
@@ -278,8 +281,38 @@ not to run one.
   plugin edited after it was approved and not a tampered dependency. It is not a
   signature and there is no marketplace and no curation: a plugin comes from a
   name the owner typed, and it runs with everything buddi can do.
-- There is no automatic whole-install rollback here. The phase marker and
-  idempotent forward migrations do not implement upgrade/restore recovery.
+- There is no automatic whole-install rollback here, and the upgrade does not
+  add one: the way back from a migration that failed under new code is the
+  backup taken before the upgrade started, named in `<data>/upgrade.json`, in
+  `buddi doctor` and in the sentence it prints. A failed install, which is the
+  reversible half, does start the old gateway again by itself. That backup is
+  encrypted exactly as the backup schedule says; encryption on with no vault is
+  refused before the gateway is stopped, and a backup that has not finished in
+  twenty minutes fails the upgrade with buddi still running.
+- **The upgrade is the supervisor's, and it hands over to the code it
+  installed.** `POST /upgrade` on the control socket runs `backup`, `stopping`,
+  `installing` (`npm install --ignore-scripts`, like every other install here,
+  `--prefix` derived from the install root that is running, `--registry` always
+  passed), checks the installed `package.json` really says `buddi` at the
+  version that was asked for, writes the upgrade into `installation.json` and
+  goes away; the supervisor that comes up on the new code migrates and writes
+  the outcome. Only a version is installable — `latest` is resolved through the
+  check first, and a range, a tag, a URL or an alias is refused by the route,
+  the socket and the service alike. Under launchd "goes away" is exiting — the
+  agent has `KeepAlive` and its `ProgramArguments` point into the install root
+  that was just replaced, and the job recognises itself by `XPC_SERVICE_NAME`
+  rather than by a parent pid of 1, which any detached process has. Off launchd
+  it spawns its own successor and waits up to a minute for `/status` on the
+  socket to answer with the new version, retrying the spawn once and recording
+  a `failed` attempt at step `starting` if nothing ever does. What is pending is
+  the marker in `installation.json`, not the phase, and it is cleared only with
+  the outcome; once the new code is on disk the old gateway is never started
+  again. `BUDDI_UPGRADE_SOURCE`
+  replaces the registry spec with a tarball on disk, which is how it is
+  exercised offline. The `restarting` phase is set and the process is gone
+  within the same tick, so a client polling the job may never observe it: what
+  tells a client the upgrade worked is the socket coming back with a new
+  `current` and a `done` entry in the history.
 - **A required-auth dashboard refuses a link opened from outside the browser's
   own site.** The session cookie is `SameSite=Strict`, so a top-level navigation
   started elsewhere (a terminal's opener, a chat message) does not carry it: the
@@ -331,6 +364,14 @@ reboot. No distribution choice is needed for backups: they use the driver, not
   pass readiness, and the gateway exits when its required bind fails.
 - Test LaunchAgents are unloaded and removed; fixture directories are retained.
   The live Buddi installation was not restarted or reconfigured.
+- The upgrade path was verified on this host without a registry: 0.1.0 installed
+  into a throwaway `--prefix`, its supervisor started in the foreground, then
+  `POST /upgrade` with `BUDDI_UPGRADE_SOURCE` pointing at a 0.1.1 tarball packed
+  from the same tree. The socket went away after `installing` and came back on
+  0.1.1 with `phase: ready`, a `done` history entry naming the backup, and the
+  check switch the owner had turned off still off. Re-verified after the fix
+  pass, with `--ignore-scripts` on the install, the socket-and-version readiness
+  test on the hand-over and the launchd detection by identity.
 
 ## Wizard
 

@@ -128,6 +128,7 @@ suite('a rolled-back restore keeps the installed plugins', () => {
     }
 
     const created = await createBackup(base());
+    const phases: string[] = [];
     const report = await restoreBackup({
       ...base(),
       dataDir: await brokenData('broken-rollback'),
@@ -136,9 +137,20 @@ suite('a rolled-back restore keeps the installed plugins', () => {
       typed: DB,
       pluginMigrations: sources(),
       force: true,
+      onProgress: (step) => phases.push(step.phase),
     });
     expect(report.ok).toBe(false);
     expect(report.rolledBack).toBe(true);
+    /*
+     * The order, because `rolled-back` is terminal for every client there is:
+     * the dashboard, the CLI and the release smoke all stop polling on it and
+     * look at the database. Announcing it before the snapshot has gone back in
+     * shows them an installation whose schemas have been dropped and whose
+     * tables are not there yet.
+     */
+    expect(phases[phases.length - 1]).toBe('rolled-back');
+    expect(phases.filter((phase) => phase === 'rolled-back')).toHaveLength(1);
+    expect(phases.lastIndexOf('database')).toBeLessThan(phases.lastIndexOf('rolled-back'));
 
     pool = createPool(url);
     try {

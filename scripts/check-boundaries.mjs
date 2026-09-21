@@ -151,11 +151,15 @@ const HTTP_EXEMPT = [
   /^packages\/runtime\/src\/transport\.ts$/,
   // Browser code. See above.
   /^packages\/web\//,
-  // The two clients of the supervisor's control socket. A Unix domain socket
+  // The clients of the supervisor's control socket. A Unix domain socket
   // is not the network: there is no origin, so there is no per-origin pool to
   // wedge, and `fetch` cannot address one at all — `node:http`'s client is the
-  // only way to speak it. Both send one request with no agent and no keep-alive.
+  // only way to speak it. Each sends one request with no agent and no keep-alive.
+  // `upgrade.ts` is the third: an upgrade asks the successor's own socket for
+  // `/status` to know the hand-over worked, and it may not import a `@buddi/*`
+  // value (see the note at the top of that file), transport included.
   /^packages\/install\/src\/launcher\.ts$/,
+  /^packages\/install\/src\/upgrade\.ts$/,
   /^packages\/gateway\/src\/web\/service\.ts$/,
   // Tests may stand up servers, inject pooling agents, and prove the bug. The
   // rule is about what the *service* does at runtime.
