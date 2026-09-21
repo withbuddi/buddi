@@ -354,3 +354,120 @@ describe('the composer history', () => {
     expect(box.value).toBe('');
   });
 });
+
+/**
+ * The draft stays with its thread.
+ *
+ * A half-typed message is the owner's, and going to look something up in
+ * another conversation must not cost it. It is kept per thread in this
+ * browser, dropped the moment it is sent, and never followed by an
+ * attachment — an upload already exists somewhere, and re-offering it later
+ * would be offering a file the page no longer holds.
+ */
+describe('the composer draft', () => {
+  const draw = (threadKey: string, onSend: (text: string) => void = () => {}) =>
+    render(
+      <Composer
+        disabled={false}
+        running={false}
+        onSend={onSend}
+        onStop={() => {}}
+        agentName="Ada"
+        threadKey={threadKey}
+      />,
+    );
+
+  const field = (): HTMLTextAreaElement => screen.getByLabelText(/Message Ada/) as HTMLTextAreaElement;
+
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('survives leaving the thread and coming back, and the other thread is empty', () => {
+    const first = draw('conversation-1');
+    fireEvent.change(field(), { target: { value: 'half a question about the' } });
+    first.unmount();
+
+    // Another thread: its own draft, which is nothing.
+    const second = draw('conversation-2');
+    expect(field().value).toBe('');
+    fireEvent.change(field(), { target: { value: 'something else entirely' } });
+    second.unmount();
+
+    draw('conversation-1');
+    expect(field().value).toBe('half a question about the');
+  });
+
+  it('keeps nothing once the message is sent', () => {
+    const sent: string[] = [];
+    const view = draw('conversation-1', (text) => sent.push(text));
+    fireEvent.change(field(), { target: { value: 'ship it' } });
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(sent).toEqual(['ship it']);
+    expect(field().value).toBe('');
+    view.unmount();
+
+    draw('conversation-1');
+    expect(field().value).toBe('');
+  });
+
+  /*
+   * A new chat is a different thread, so it opens empty — and the draft the
+   * owner left in the old one is still there when they go back to it.
+   */
+  it('starts a new chat empty and leaves the old draft where it was typed', () => {
+    const before = draw('ada');
+    fireEvent.change(field(), { target: { value: 'not finished yet' } });
+    before.unmount();
+
+    const fresh = draw('conversation-new');
+    expect(field().value).toBe('');
+    fresh.unmount();
+
+    draw('ada');
+    expect(field().value).toBe('not finished yet');
+  });
+
+  it('is the same value the arrow-key walk stashes, so Escape hands it back', () => {
+    render(
+      <Composer
+        disabled={false}
+        running={false}
+        onSend={() => {}}
+        onStop={() => {}}
+        agentName="Ada"
+        threadKey="conversation-1"
+        history={['what I said before']}
+      />,
+    );
+    const box = field();
+    fireEvent.change(box, { target: { value: 'my own half line' } });
+    // The walk needs an empty-of-its-own box, so clear it, walk, and come back.
+    fireEvent.change(box, { target: { value: '' } });
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('what I said before');
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(box.value).toBe('');
+    // What is on disk is the stash, never the recalled line.
+    expect(window.localStorage.getItem('buddi.draft.conversation-1')).toBeNull();
+  });
+
+  it('still types when the browser refuses to remember anything', () => {
+    const refuse = (): never => {
+      throw new Error('storage is not available in this context');
+    };
+    const store = window.localStorage;
+    const spies = (['getItem', 'setItem', 'removeItem'] as const).map((name) =>
+      vi.spyOn(store, name).mockImplementation(refuse),
+    );
+    try {
+      draw('conversation-1');
+      const box = field();
+      fireEvent.change(box, { target: { value: 'typed anyway' } });
+      expect(box.value).toBe('typed anyway');
+    } finally {
+      // Only these three: another suite's mocks are not this test's to undo.
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});

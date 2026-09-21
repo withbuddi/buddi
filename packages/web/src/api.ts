@@ -420,6 +420,12 @@ export interface AgentRow {
   maxTurns: number;
   language: string;
   tools: string[];
+  /** Capabilities it answers for, in declaration order. */
+  roles: string[];
+  /** An emoji, or an image file name inside the agent's folder. */
+  avatar?: string;
+  /** Its own colour, `#rrggbb`. */
+  accent?: string;
   skills: Array<{ name: string; provenance: string; file: string }>;
   /** Who it may hand work to. */
   delegates: string[];
@@ -476,11 +482,40 @@ export interface ProvidersView {
     test: { state: string; message: string; checkedAt: string } | null }>;
 }
 
+/**
+ * Which agent a chat that names nobody lands on.
+ *
+ * An installation record, not a flag in an agent file: the picker on the
+ * Agents page writes it, and both the dashboard and Telegram read the same
+ * row. `problem` is what the *files* still disagree about, which the picker
+ * turns into one sentence — the choice recorded here wins over all of them.
+ */
+export interface DefaultAgentView {
+  defaultAgentId: string | null;
+  problem?: { code: 'multiple-defaults' | 'no-default-agent'; agents: string[]; message: string };
+  choices: Array<{ id: string; handle: string; name: string; available: boolean }>;
+}
+
 export interface AgentsView {
   providerAccounts?: ProviderAccountsView;
   agents: AgentRow[];
   engines: AgentEngine[];
   providers: ProviderModels[];
+  default?: DefaultAgentView;
+}
+
+/** The front matter the runtime reads, as the agent's page edits it. */
+export interface AgentFileEdit {
+  name?: string;
+  handle?: string;
+  description?: string;
+  avatar?: string;
+  accent?: string;
+  tools?: string[];
+  roles?: string[];
+  maxTurns?: number;
+  language?: string;
+  persona?: string;
 }
 
 export interface ProviderAccount {
@@ -1213,6 +1248,13 @@ export const api = {
     }),
   retryJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/retry`),
   cancelJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/cancel`),
+  setDefaultAgent: (agentId: string) =>
+    post<DefaultAgentView & { note: string }>('/agents/default', { agentId }),
+  updateAgentFile: (id: string, change: AgentFileEdit) =>
+    post<{ id: string; handle: string; file: string; tools: string[]; changed: string[]; personaChanged: boolean; live: boolean; message: string }>(
+      `/agents/${encodeURIComponent(id)}/file`,
+      change,
+    ),
   setAgentEngine: (id: string, change: EngineChange) =>
     post<{ agent: AgentEngine; changed: string[]; note: string }>(
       `/agents/${encodeURIComponent(id)}/engine`,

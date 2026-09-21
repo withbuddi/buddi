@@ -250,7 +250,13 @@ export function AgentFace({
             {agent.avatar?.kind === 'image' ? <img src={agent.avatar.url} alt="" /> : agent.avatar?.kind === 'emoji' ? agent.avatar.value : monogram(agent.name)}
           </span>
           <span className="wb-face-text" aria-hidden="true">
-            <span className="wb-face-name">{agent.name}</span>
+            {/* The handle rides the title line, muted, because it is the other
+                half of the name: it is what the owner types. The second line
+                stays what it was — last spoke, or why nobody can. */}
+            <span className="wb-face-name">
+              {agent.name}
+              <span className="wb-face-handle">@{agent.handle}</span>
+            </span>
             <span className="wb-face-status" data-tone={waiting ? 'critical' : undefined}>{status}</span>
           </span>
           {badge ? (

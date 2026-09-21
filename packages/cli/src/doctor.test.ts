@@ -348,11 +348,25 @@ describe('the agents row', () => {
     expect(row.detail).not.toContain('the default agent @ledger cannot run');
   });
 
-  it('is ok when everything installed can run', () => {
+  it('is ok when everything installed can run, and names who answers by default', () => {
     expect(checkAgents([agent({ isDefault: true })]).status).toBe('ok');
     expect(checkAgents([agent({ isDefault: true })]).detail).toBe(
-      '1 agent — 1 anthropic (claude-sonnet-5)',
+      '1 agent — 1 anthropic (claude-sonnet-5); default @ledger',
     );
+  });
+
+  /*
+   * Files disagreeing about the default is a *configuration*, not a broken
+   * installation: the record settles it, somebody answers, and the row says
+   * what the owner should go and fix.
+   */
+  it('warns, and never fails, when the agent files disagree about the default', () => {
+    const row = checkAgents([agent({ isDefault: true })], {
+      code: 'multiple-defaults',
+      message: 'a and b both declare "default: true" in their files.',
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('both declare');
   });
 
   it('fails an installation with no agents at all', () => {

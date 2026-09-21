@@ -20,7 +20,7 @@
  *    agent and not about the window;
  *  - the `@father` line walks the owner to the maker with the sentence ready.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentProfile } from '../api';
 import type { ChatAgent } from './types';
@@ -182,8 +182,9 @@ describe('the properties panel', () => {
     expect(screen.getByRole('tab', { name: /properties/i })).toBeDefined();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('canvas')).toBeDefined();
-    // The panel names the agent it is about.
-    expect(screen.getByText('@keeper')).toBeDefined();
+    // The panel names the agent it is about. (The chat header names it too,
+    // now that the handle rides beside the name, so this looks in the panel.)
+    expect(within(screen.getByTestId('canvas')).getByText('@keeper')).toBeDefined();
   });
 
   it('marks a gated tool unmistakably and leaves an automatic one plain', async () => {

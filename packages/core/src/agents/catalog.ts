@@ -7,8 +7,6 @@
  *
  *  - a tool entry that resolves to nothing in the registry is a load error, so a
  *    persona never instructs the model to call something that is not installed;
- *  - two agents claiming `default: true` is a load error — "the agent used when a
- *    chat has no active one" must be unambiguous;
  *  - two agents answering to one `@handle` (case-insensitively) is a load error:
  *    the handle is what the owner types, and it must name exactly one agent;
  *  - an unknown id at resolve time throws, it is never coerced to the default.
@@ -21,6 +19,14 @@
  * for a second provider must still be able to run the four agents they have.
  * Running an unavailable agent still fails closed: the run path resolves the
  * provider itself, and resolution is where the refusal lives.
+ *
+ * **Which agent is the default is not one of those axes any more.** It is a
+ * fact about the *installation*, not about a file: the owner picks it on the
+ * dashboard and the gateway records it (see `defaultAgentId`). The file flag
+ * survives as a fallback for an installation that has never recorded one, and
+ * a tree where zero or several files claim it is no longer fatal — the catalog
+ * loads, the first runnable agent answers, and `defaultProblem` says what the
+ * files disagree about so a surface can offer the fix.
  *
  * The catalog knows tools only through the registry contract, and never reads
  * `process.env` itself: the caller passes `env`, as everywhere else in core.
@@ -220,6 +226,22 @@ export function roleProblemMessage(role: string): string {
   );
 }
 
+/**
+ * The files disagree about who the default is, and the catalog decided anyway.
+ *
+ * Typed rather than thrown, for the reason a missing credential is: an
+ * installation whose files claim the default twice — or not at all — is a
+ * *configuration*, and it must still answer while the owner fixes it. The
+ * dashboard turns this into one sentence and a picker.
+ */
+export interface DefaultAgentProblem {
+  code: 'multiple-defaults' | 'no-default-agent';
+  /** The ids that claim it, in catalog order. Empty for `no-default-agent`. */
+  agents: string[];
+  /** One sentence a surface may print verbatim. */
+  message: string;
+}
+
 export interface AgentCatalog {
   get(id: string): CatalogAgent | undefined;
   /** Every agent claiming this role, in catalog (declaration) order. */
@@ -233,7 +255,20 @@ export interface AgentCatalog {
   /** By `@handle`, case-insensitively and with or without the leading `@`. */
   byHandle(handle: string): CatalogAgent | undefined;
   list(): AgentSummary[];
+  /**
+   * The agent a chat that names nobody lands on, resolved in this order:
+   *
+   *  1. the installation's recorded choice (`defaultAgentId`), when it names a
+   *     loaded agent this machine can actually run;
+   *  2. the single file that declares `default: true`;
+   *  3. the first runnable agent in roster order — never an error, because an
+   *     installation with agents in it always has somewhere to land.
+   *
+   * Throws only when there is no agent at all.
+   */
   defaultAgent(): CatalogAgent;
+  /** Set when the *files* disagree about the default. See `DefaultAgentProblem`. */
+  readonly defaultProblem?: DefaultAgentProblem;
   /**
    * An id, a handle, or the default when nothing is given. Unknown names throw
    * — never silently the default.
@@ -276,6 +311,17 @@ export interface LoadAgentCatalogOptions {
   dirs?: ReadonlyArray<string | AgentDirSpec>;
   registry: ToolNameSource;
   env: NodeJS.ProcessEnv;
+  /**
+   * The installation's recorded default agent, by id or handle.
+   *
+   * The owner's choice, held by the installation rather than by a file — core
+   * does not know where it is kept (the gateway reads it out of
+   * `core.web_settings`), only that it wins over every file flag when it names
+   * a loaded agent this machine can run. An id that names nothing, or names an
+   * agent that cannot run, is ignored rather than fatal: a removed plugin or a
+   * lapsed credential must not leave the installation with nowhere to land.
+   */
+  defaultAgentId?: string;
   /**
    * Who each agent may delegate to, by id. The allowlist is an installation's
    * file (`agents/<id>/delegates.json`), which core does not read: the gateway
@@ -902,25 +948,73 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
    * Two directories may both ship a `default: true` — the example agent does,
    * and so does the owner's front desk. That is not an ambiguity: the later
    * entry on the search path wins, exactly as it does for a file. Two agents
-   * claiming it *within one directory* is still an error, because there is
-   * nothing to break the tie.
+   * claiming it *within one directory* is a disagreement the owner has to
+   * settle, and it is reported rather than thrown (see `DefaultAgentProblem`).
    */
   const lastClaim = Math.max(...claimed.map((c) => c.order), -1);
-  const defaults = claimed.filter((c) => c.order === lastClaim).map((c) => c.id);
-  // An example that lost the tie is no longer the default, and must not keep
-  // saying it is: `buddi agents` prints this flag.
-  for (const { id } of claimed) {
-    if (!defaults.includes(id)) (agents.get(id) as { isDefault: boolean }).isDefault = false;
-  }
-  if (defaults.length > 1) {
-    throw new AgentCatalogError(
-      'multiple-defaults',
-      `exactly one agent may be default; ${defaults.join(' and ')} both declare it`,
-    );
+  const fileDefaults = claimed.filter((c) => c.order === lastClaim).map((c) => c.id);
+
+  const ordered = [...agents.values()];
+  const runnable = (agent: CatalogAgent | undefined): agent is CatalogAgent =>
+    agent !== undefined && agent.availability.ok;
+
+  /**
+   * The record's choice, when it names a loaded agent that can actually run.
+   *
+   * An agent that cannot run is passed over — but only when *somebody else*
+   * can. On an installation whose credential has lapsed nothing is runnable,
+   * and landing on a different agent that is equally unable to answer would
+   * throw away the owner's choice to gain nothing.
+   */
+  const recorded = ((): CatalogAgent | undefined => {
+    const wanted = opts.defaultAgentId?.trim();
+    if (wanted === undefined || wanted === '') return undefined;
+    const found = agents.get(wanted) ?? byHandle.get(wanted.replace(/^@/, '').toLowerCase());
+    if (found === undefined) return undefined;
+    return runnable(found) || !ordered.some((a) => a.availability.ok) ? found : undefined;
+  })();
+
+  const resolvedDefaultId =
+    recorded?.id ??
+    (fileDefaults.length === 1 ? fileDefaults[0] : undefined) ??
+    ordered.find((a) => a.availability.ok)?.id ??
+    ordered[0]?.id;
+
+  /*
+   * The problem describes the *files*, not the outcome: the owner's picker
+   * needs to say "two of your files claim it, and the one chosen here wins"
+   * even though the installation is landing somewhere perfectly sensible. The
+   * "nobody claims it" half is worth saying only when no record settles it
+   * either — otherwise the owner has already answered the question.
+   */
+  const defaultProblem: DefaultAgentProblem | undefined =
+    fileDefaults.length > 1
+      ? {
+          code: 'multiple-defaults',
+          agents: fileDefaults,
+          message:
+            `${fileDefaults.join(' and ')} both declare "default: true" in their files. ` +
+            'The default agent chosen for this installation wins over both.',
+        }
+      : fileDefaults.length === 0 && recorded === undefined
+        ? {
+            code: 'no-default-agent',
+            agents: [],
+            message:
+              `No agent in ${specs.map((entry) => entry.dir).join(', ')} declares "default: true", ` +
+              'and this installation has not recorded one. Pick a default agent.',
+          }
+        : undefined;
+
+  // `isDefault` is the *answer*, not the flag: an agent whose file claims it
+  // but lost to the record must not keep saying it is the one.
+  for (const agent of ordered) {
+    (agent as { isDefault: boolean }).isDefault = agent.id === resolvedDefaultId;
   }
 
-  const known = [...agents.values()].map((a) => `${a.id} (@${a.handle})`);
+  const known = ordered.map((a) => `${a.id} (@${a.handle})`);
   return {
+    ...(defaultProblem === undefined ? {} : { defaultProblem }),
     get: (id) => agents.get(id),
     byHandle: (handle) => byHandle.get(handle.trim().replace(/^@/, '').toLowerCase()),
     list: () =>
@@ -961,14 +1055,13 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
           };
     },
     defaultAgent(): CatalogAgent {
-      const id = defaults[0];
-      if (id === undefined) {
+      if (resolvedDefaultId === undefined) {
         throw new AgentCatalogError(
           'no-default-agent',
-          `no agent in ${specs.map((entry) => entry.dir).join(', ')} declares "default: true"`,
+          `there is no agent in ${specs.map((entry) => entry.dir).join(', ')} to be the default`,
         );
       }
-      return agents.get(id) as CatalogAgent;
+      return agents.get(resolvedDefaultId) as CatalogAgent;
     },
     resolve(idOrHandle?: string): CatalogAgent {
       if (idOrHandle === undefined || idOrHandle.trim() === '') return this.defaultAgent();

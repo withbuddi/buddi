@@ -99,7 +99,15 @@ set as today, and one line "What should it help you with?" prefilled with
 "Whatever I ask, and remembering what I tell it." Primary: "Introduce us".
 
 This creates the assistant through `/api/onboarding/agent`, bound to the
-account just tested, as the installation's default agent.
+account just tested, and records it as the installation's default agent.
+
+Being the default is an installation record (`core.web_settings`, key
+`agents`), not a flag in the agent file: the owner changes it from the picker
+at the head of the Agents page, and every surface — the dashboard, Telegram,
+the scheduler — reads the same row on its next message with no restart. A file
+that still says `default: true` is a fallback for an installation that never
+recorded one; when zero or several files claim it, nothing fails, the first
+runnable agent answers, and the picker says what the files disagree about.
 
 **The switch**
 

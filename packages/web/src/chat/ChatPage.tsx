@@ -930,7 +930,14 @@ export function ChatPage({
             <div className="wb-head-text">
               {group ? (
                 <span className="wb-head-title">{group.name}</span>
-              ) : agent ? <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a> : <span className="wb-head-title">No agent</span>}
+              ) : agent ? (
+                /* Name and handle together: the handle is what you type to
+                   reach this agent, and it belongs beside the name it names. */
+                <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>
+                  {agent.name}
+                  <span className="wb-head-handle">@{agent.handle}</span>
+                </a>
+              ) : <span className="wb-head-title">No agent</span>}
               <span className="wb-head-meta" data-tone={line.tone} title={group ? `${members.map((m) => m.name).join(', ')}. Coordinator: ${agent?.name ?? group.coordinator}.` : line.title}>
                 {group ? `${members.map((m) => m.name).join(', ')} · ${line.text}` : line.text}
               </span>
@@ -1110,6 +1117,7 @@ export function ChatPage({
             agentName={group ? group.name : (agent?.name ?? 'the agent')}
             draft={draft}
             history={ownHistory}
+            threadKey={conversationId ?? (group ? `group:${group.id}` : agentId)}
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup') : null)}
             thinking={thinking}

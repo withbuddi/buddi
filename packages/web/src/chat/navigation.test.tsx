@@ -41,6 +41,9 @@ describe('chat links and history', () => {
     expect(await screen.findByText('Transcript scout-old')).toBeInTheDocument();
     expect(chatApi.conversations).not.toHaveBeenCalled();
     expect(screen.getByTestId('chat-head')).toHaveTextContent('Scout');
+    // Name and handle together: the header names the agent and shows the word
+    // you type to reach it.
+    expect(screen.getByTestId('chat-head')).toHaveTextContent('@scout');
     expect(window.location.hash).toBe(chatRoute('scout', 'scout-old'));
   });
   it('updates agent URLs, opens history entries and responds to browser Back/Forward routes', async () => {
@@ -63,7 +66,8 @@ describe('chat links and history', () => {
   it('supports a fresh conversation link without loading or creating an old thread', async () => {
     window.history.replaceState(null, '', chatRoute('keeper', 'new'));
     render(<App />);
-    await screen.findByRole('link', { name: 'Keeper' });
+    // The header link is "Keeper @keeper": the name, and the word you type.
+    await screen.findByRole('link', { name: /^Keeper @keeper$/ });
     expect(chatApi.conversation).not.toHaveBeenCalled();
     expect(chatApi.conversations).not.toHaveBeenCalled();
     expect(screen.queryByText(/Transcript/)).not.toBeInTheDocument();
@@ -85,6 +89,28 @@ describe('chat links and history', () => {
     expect(await screen.findByText(/belongs to another agent/)).toBeInTheDocument();
     expect(screen.queryByText('Transcript scout-old')).not.toBeInTheDocument();
   });
+  /*
+   * A half-typed message is the owner's. Going to look something up in
+   * another agent's thread must not cost it.
+   */
+  it('keeps a half-typed message with its thread across a trip to another agent', async () => {
+    render(<App />);
+    await screen.findByText('Transcript keeper-latest');
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'the thing I was about to ask' } });
+
+    fireEvent.click(screen.getByTestId('agent-face-scout'));
+    await screen.findByText('Transcript scout-latest');
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
+
+    fireEvent.click(screen.getByTestId('agent-face-keeper'));
+    await screen.findByText('Transcript keeper-latest');
+    await waitFor(() =>
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('the thing I was about to ask'),
+    );
+    window.localStorage.clear();
+  });
+
   it('does not blank the transcript when reselecting the current history entry', async () => {
     render(<App />); await screen.findByText('Transcript keeper-latest');
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
