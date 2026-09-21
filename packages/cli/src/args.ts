@@ -519,6 +519,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi reminders [--agent <id>] [--all]      one-off nudges the agents set
   buddi reminders cancel <id>
   buddi nudges status|stop|resume             the first-run arc and its budget
+  buddi plugins init <name> [--dir <path>]  scaffold a new plugin you can build and install
+  buddi plugins dev <dir>                   watch its dist and restart: plugins load at start
   buddi plugins list|info <name>            what is installed, and what each one brought
   buddi plugins install <spec> [--yes]      a directory, a .tgz, or an npm package
                                             --yes on a .tgz or an npm package also needs
