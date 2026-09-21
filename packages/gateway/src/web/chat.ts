@@ -58,6 +58,7 @@ import {
   answerQuestion,
   APPROVAL_RESUME_SPEAKER,
   OPENING_TURN_SPEAKER,
+  OWNER_INTERJECTION_SPEAKER,
   ToolRegistry,
   type AgentAvailability,
   type AgentCatalog,
@@ -69,6 +70,7 @@ import {
 import {
   BudgetExhausted,
   DELEGATE_TOOL,
+  InterjectionQueue,
   GROUP_ASK_TOOL,
   MAX_ATTACHMENTS_PER_MESSAGE,
   boundProjection,
@@ -78,6 +80,7 @@ import {
   projectTranscript,
   runAgent,
   type AttachmentRef,
+  type Interjection,
   type RunAgentOptions,
   type RuntimeProvider,
 } from '@buddi/runtime';
@@ -909,6 +912,40 @@ function groupKey(groupId: string): string {
   return `group:${groupId}`;
 }
 
+/**
+ * The run in flight for one conversation, as everything outside it sees it.
+ *
+ * Three things and nothing else: which run it is, how to abandon it, and where
+ * to put a word the owner gets in while it works.
+ */
+/** One turn this surface runs: what opens it, and what it belongs to. */
+interface RunTurn {
+  agent: CatalogAgent;
+  conversationId: string;
+  runId: string;
+  text: string;
+  files: ArtifactRow[];
+  resume?: RunAgentOptions['resume'];
+  /** Set for a run inside a room: which group, which request, and whose voice. */
+  group?: RoomTurn;
+  /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
+  opening?: boolean;
+  /** The chip the owner clicked, when this turn is a taken offer. */
+  offer?: { id: string; label: string };
+  /**
+   * The owner's words are already a row in `core.messages`: they were typed
+   * during the previous run, stored at once, and never picked up by it. The
+   * run is given them as its turn and writes nothing new.
+   */
+  promoted?: boolean;
+}
+
+interface LiveRun {
+  runId: string;
+  cancel: () => void;
+  interjections: InterjectionQueue;
+}
+
 /** A run inside a room: which group, which request, whose voice, and what opens it. */
 interface RoomTurn {
   row: GroupRow;
@@ -957,8 +994,25 @@ export type SendResult =
       ok: true;
       conversationId: string;
       runId: string;
+      /**
+       * The message was handed to a run that is *already going*, not to a new
+       * one: it is in the transcript, marked as added while working, and the
+       * run picks it up between two tool calls. `runId` is that run's, so a
+       * page that is watching one stream keeps watching it.
+       */
+      queued?: true;
     }
   | { ok: false; status: number; error: string };
+
+/**
+ * Why a file cannot ride along mid-run.
+ *
+ * A turn's attachments are hydrated and capped when the run is built; there is
+ * no honest way to add one to a request that has already been sent. So it is
+ * refused in a sentence rather than queued into a surprise, and the owner
+ * sends it the moment the answer lands.
+ */
+export const FILES_DURING_RUN = 'Send files once the agent has answered.';
 
 /**
  * The web surface's run queue.
@@ -975,7 +1029,7 @@ export class WebChat {
   /** One send at a time per group decides its conversation and opens its request. */
   readonly #groupLocks = new Map<string, Promise<void>>();
   readonly #queues = new Map<string, Promise<void>>();
-  readonly #running = new Map<string, { runId: string; cancel: () => void }>();
+  readonly #running = new Map<string, LiveRun>();
   readonly #log: (line: string) => void;
 
   constructor(deps: WebChatDeps) {
@@ -1048,6 +1102,40 @@ export class WebChat {
           status: 409,
           error: `that conversation belongs to ${owner}, not to ${agent.id}`,
         };
+      }
+      /*
+       * The agent is working, and the owner has one more thing to say.
+       *
+       * It is not a second run and it is not a refusal: the words go to the
+       * run that is already going, which takes them between two tool calls,
+       * and they are written into the transcript here and now so the thread
+       * shows them landing rather than swallowing them for forty seconds.
+       * Decided before the lifetime rule below, because a conversation with a
+       * run in flight is by definition the one being spoken to.
+       */
+      const live = this.#running.get(conversationId);
+      if (live && live.interjections.open) {
+        // Files are hydrated and capped when the run is built; there is no
+        // honest way to add one to a request already in flight.
+        if (attachmentIds.length > 0) return { ok: false, status: 409, error: FILES_DURING_RUN };
+        const id = await this.#storeInterjection(conversationId, text);
+        if (live.interjections.push({ text, stored: id !== null, ...(id ? { id } : {}) })) {
+          await this.#event(conversationId, 'chat.message.appended', {
+            role: 'user',
+            runId: live.runId,
+            queued: true,
+          });
+          return { ok: true, conversationId, runId: live.runId, queued: true };
+        }
+        // The run ended between writing the row and handing it over. The row
+        // exists, so it becomes this turn rather than being said twice.
+        if (id !== null) {
+          await this.#promote([id], text);
+          const runId = randomUUID();
+          const target = conversationId;
+          this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files: [], promoted: true }); });
+          return { ok: true, conversationId: target, runId };
+        }
       }
       /*
        * The page opens on this agent's most recent conversation, which is the
@@ -1414,7 +1502,15 @@ export class WebChat {
   }
 
   async drain(): Promise<void> {
-    await Promise.all([...this.#queues.values()]);
+    // Until it stays drained. A run that ends holding interjections chains the
+    // next turn onto the same queue while this is waiting, and a single pass
+    // would return with that turn still to come.
+    for (;;) {
+      const waiting = [...this.#queues.values()];
+      await Promise.all(waiting);
+      const after = [...this.#queues.values()];
+      if (after.length === waiting.length && after.every((p, i) => p === waiting[i])) return;
+    }
   }
 
   /** Serialize per conversation, exactly as Telegram serializes per chat. */
@@ -1433,21 +1529,61 @@ export class WebChat {
     return this.#deps.catalog.get(wanted) ?? this.#deps.catalog.byHandle(wanted.replace(/^@/, ''));
   }
 
+  /**
+   * One turn, from the outside: the run, and then whatever the owner said
+   * while it was going and it never picked up.
+   *
+   * The queue lives out here rather than inside the run because it outlives
+   * it by exactly one step — a line that arrives after the model's last word
+   * is not lost, it is the next turn.
+   */
+  async #run(turn: RunTurn): Promise<'ran' | 'suspended' | 'failed'> {
+    const interjections = new InterjectionQueue();
+    try {
+      return await this.#turn(turn, interjections);
+    } finally {
+      await this.#afterRun(turn, interjections.close());
+    }
+  }
+
+  /**
+   * What the run never heard, sent as the next turn.
+   *
+   * In order, joined into one owner turn: two half-thoughts typed thirty
+   * seconds apart are one thing the owner wanted to say, and answering them
+   * as two runs answers the first one twice. The rows are already in the
+   * transcript — they were written the moment they were typed — so they are
+   * promoted rather than written again: the "added while working" marker goes
+   * (this is the turn now) and they move to the end of the thread, where the
+   * turn they open belongs.
+   */
+  async #afterRun(turn: RunTurn, left: readonly Interjection[]): Promise<void> {
+    if (left.length === 0) return;
+    // A room is spoken to as a room; nothing queues onto a group run.
+    if (turn.group) return;
+    const stored = left.map((item) => item.id).filter((id): id is string => typeof id === 'string');
+    const text = left.map((item) => item.text.trim()).filter((line) => line !== '').join('\n\n');
+    if (text === '') return;
+    const conversationId = turn.conversationId;
+    const promoted = stored.length === left.length;
+    // Mixed: something failed to store when it was typed, so the whole thing
+    // is said once, as one new turn, and the half-rows go.
+    if (promoted) await this.#promote(stored, text);
+    else if (stored.length > 0) await this.#discard(stored);
+    this.#enqueue(conversationId, async () => {
+      await this.#run({
+        agent: turn.agent,
+        conversationId,
+        runId: randomUUID(),
+        text,
+        files: [],
+        ...(promoted ? { promoted: true } : {}),
+      });
+    });
+  }
+
   /** One turn: the user message, the run, and whatever stopped it. */
-  async #run(turn: {
-    agent: CatalogAgent;
-    conversationId: string;
-    runId: string;
-    text: string;
-    files: ArtifactRow[];
-    resume?: RunAgentOptions['resume'];
-    /** Set for a run inside a room: which group, which request, and whose voice. */
-    group?: RoomTurn;
-    /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
-    opening?: boolean;
-    /** The chip the owner clicked, when this turn is a taken offer. */
-    offer?: { id: string; label: string };
-  }): Promise<'ran' | 'suspended' | 'failed'> {
+  async #turn(turn: RunTurn, interjections: InterjectionQueue): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
     let toolsCalled = 0;
@@ -1563,6 +1699,11 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
+      ...(turn.promoted ? { openingPersisted: true } : {}),
+      // Where anything the owner says while this run works arrives. The loop
+      // drains it between tool calls; whatever is left when the run ends comes
+      // back here and goes out as the next turn.
+      interjections,
       ...(turn.opening
         ? { openingSpeaker: OPENING_TURN_SPEAKER }
         // A taken chip is the owner's turn, stamped with the label they clicked
@@ -1604,6 +1745,7 @@ export class WebChat {
     const result = await this.#cancellable(
       conversationId,
       runId,
+      interjections,
       async (signal) => runAgent({ ...options, ctx: { ...options.ctx, signal } }),
       () => {
         cancelled = true;
@@ -1792,12 +1934,13 @@ export class WebChat {
   async #cancellable<T>(
     conversationId: string,
     runId: string,
+    interjections: InterjectionQueue,
     work: (signal: AbortSignal) => Promise<T>,
     onCancel: () => void,
     onError: (err: unknown) => void,
   ): Promise<T | undefined> {
     const controller = new AbortController();
-    this.#running.set(conversationId, { runId, cancel: () => {
+    this.#running.set(conversationId, { runId, interjections, cancel: () => {
       if (controller.signal.aborted) return;
       onCancel();
       controller.abort(new Error('The owner cancelled this run.'));
@@ -1868,6 +2011,62 @@ export class WebChat {
       message: outcome.rendered.text,
       failureClass: outcome.failureClass,
     });
+  }
+
+  /**
+   * Write what the owner typed mid-run, at once, marked for what it is.
+   *
+   * Before it is handed to the run, so the thread shows it landing rather
+   * than holding it in memory where a restart would lose it. Returns the row
+   * id — the handle the surface needs if the run ends without picking it up —
+   * or null when the write failed, in which case the run stores it on
+   * delivery as it would any turn of its own.
+   */
+  async #storeInterjection(conversationId: string, text: string): Promise<string | null> {
+    try {
+      const { rows } = await this.#deps.pool.query(
+        `insert into core.messages (conversation_id, role, content, speaker)
+         values ($1::uuid, 'user', $2::jsonb, $3) returning id`,
+        [conversationId, JSON.stringify([{ type: 'text', text }]), OWNER_INTERJECTION_SPEAKER],
+      );
+      return rows[0] ? String(rows[0].id) : null;
+    } catch (err) {
+      this.#log(`web chat: storing the queued message failed: ${message(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * The interjections nobody picked up become one ordinary turn.
+   *
+   * Three things at once, and they are one idea: the marker goes (it is no
+   * longer "added while working" — it is what the owner is asking now), the
+   * lines are joined into the first row (two half-thoughts are one turn, and
+   * two user turns in a row is not a shape every provider likes), and it moves
+   * to the end of the thread, where the turn it opens belongs.
+   */
+  async #promote(ids: readonly string[], text: string): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+      await this.#deps.pool.query(
+        `update core.messages set speaker = null, created_at = now(), content = $2::jsonb
+          where id = $1::uuid`,
+        [ids[0], JSON.stringify([{ type: 'text', text }])],
+      );
+      await this.#discard(ids.slice(1));
+    } catch (err) {
+      this.#log(`web chat: promoting a queued message failed: ${message(err)}`);
+    }
+  }
+
+  /** Drop rows that are about to be said again, so nothing is said twice. */
+  async #discard(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+      await this.#deps.pool.query(`delete from core.messages where id = any($1::uuid[])`, [ids]);
+    } catch (err) {
+      this.#log(`web chat: dropping a queued message failed: ${message(err)}`);
+    }
   }
 
   /** Append to the event log. Never allowed to fail a turn. */

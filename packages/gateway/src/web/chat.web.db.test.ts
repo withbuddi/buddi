@@ -1303,6 +1303,145 @@ suite('the dashboard chat API', () => {
     });
   });
 
+  /* ---------------- a word in edgeways ---------------- */
+
+  /**
+   * The composer no longer refuses while the agent works. What it sends is not
+   * a second run: it is stored at once, marked as added while working, and
+   * handed to the run that is going — which takes it in the one place it can
+   * be taken safely, between two tool calls.
+   */
+  describe('a message sent while the agent is working', () => {
+    /** Wait until the provider has been called `n` times. */
+    const calls = async (n: number): Promise<void> => {
+      for (let i = 0; i < 400 && provider.seen.length < n; i += 1) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(provider.seen.length).toBeGreaterThanOrEqual(n);
+    };
+
+    it('is queued onto the live run, stored as an interjection, and reaches the next model step', async () => {
+      const client = await signedIn();
+      provider.script = [call('t1', 'demo.read', { what: 'the ledger' }), say('In euros: 12.')];
+      provider.block = () => {};
+
+      const first = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'what did we spend?' })
+      ).json()) as any;
+      await calls(1);
+
+      // Not a refusal and not a second run: the same run id comes back.
+      const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+        conversationId: first.conversationId,
+        text: 'in euros, please',
+      });
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({
+        conversationId: first.conversationId,
+        runId: first.runId,
+        queued: true,
+      });
+
+      // Stored the moment it was typed, marked for what it is.
+      const { rows } = await pool.query(
+        `select speaker from core.messages where conversation_id = $1::uuid and speaker = 'owner:interjection'`,
+        [first.conversationId],
+      );
+      expect(rows).toHaveLength(1);
+
+      provider.block?.();
+      await calls(2);
+      provider.block?.();
+      await settled(first.conversationId);
+
+      // One run, and the second model step carries the owner's addition.
+      const { rows: runs } = await pool.query(
+        `select count(*)::int as n from core.events where conversation_id = $1::uuid and kind = 'run.started'`,
+        [first.conversationId],
+      );
+      expect(runs[0].n).toBe(1);
+      expect(JSON.stringify(provider.seen[1]!.messages)).toContain('the owner adds: in euros, please');
+
+      // And the page sees it as the owner's turn, added while working.
+      const transcript = await client.json<any>(`/api/chat/conversations/${first.conversationId}`);
+      const added = transcript.messages.find((m: any) => m.speaker === 'owner:interjection');
+      expect(added.blocks[0]).toEqual({ type: 'text', text: 'in euros, please' });
+    });
+
+    it('refuses a file in a plain sentence rather than queueing it', async () => {
+      const client = await signedIn();
+      const png = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64',
+      );
+      const stored = (await (
+        await client.upload('/api/chat/attachments', { name: 'receipt.png', type: 'image/png', bytes: png })
+      ).json()) as any;
+
+      provider.script = [say('done')];
+      provider.block = () => {};
+      const first = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'hold on' })
+      ).json()) as any;
+      await calls(1);
+
+      const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+        conversationId: first.conversationId,
+        text: 'and this receipt',
+        attachmentIds: [stored.artifactId],
+      });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as any).error).toBe('Send files once the agent has answered.');
+      // Nothing was written: a refused message is not in the thread.
+      const { rows } = await pool.query(
+        `select count(*)::int as n from core.messages where conversation_id = $1::uuid and speaker = 'owner:interjection'`,
+        [first.conversationId],
+      );
+      expect(rows[0].n).toBe(0);
+
+      provider.block?.();
+      await settled(first.conversationId);
+    });
+
+    it('goes out as the next turn when the owner stops the run, joined in order', async () => {
+      const client = await signedIn();
+      provider.script = [say('never said'), say('Yes — cancelled.')];
+      provider.block = () => {};
+      const first = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft the email' })
+      ).json()) as any;
+      await calls(1);
+
+      for (const text of ['wait', 'do the other one first']) {
+        const res = await client.post(`/api/chat/${AGENT_ID}/messages`, {
+          conversationId: first.conversationId,
+          text,
+        });
+        expect(((await res.json()) as any).queued).toBe(true);
+      }
+
+      // Stop still means stop: the run ends, and what was queued is the turn
+      // that follows it — one turn, in the order it was typed.
+      expect((await client.post(`/api/chat/conversations/${first.conversationId}/cancel`)).status).toBe(200);
+      provider.block?.();
+      provider.block = null;
+      await web.chat?.drain();
+      await settled(first.conversationId, 2);
+
+      expect(JSON.stringify(provider.seen.at(-1)!.messages)).toContain('wait\\n\\ndo the other one first');
+      // The two rows are still the ones written when they were typed — not
+      // said twice — and they are the owner's ordinary turn now.
+      const { rows } = await pool.query(
+        `select content, speaker from core.messages
+          where conversation_id = $1::uuid and role = 'user' order by created_at asc, id asc`,
+        [first.conversationId],
+      );
+      const owner = rows.filter((r: any) => JSON.stringify(r.content).includes('wait'));
+      expect(owner).toHaveLength(1);
+      expect(owner[0].speaker).toBeNull();
+    });
+  });
+
   it('cancels a run in flight, and says so on the stream', async () => {
     const client = await signedIn();
     // Hold the provider open so there is something to cancel.

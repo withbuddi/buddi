@@ -1081,6 +1081,54 @@ describe('TelegramSurface conversation handling', () => {
     expect(final?.body.text).toBe('Status — 2026-09-13\n\nYou have 1 240,50 € left.');
   });
 
+  /*
+   * A second message while the agent is working is not a second run. It joins
+   * the one already going — the runtime takes it between two tool calls — and
+   * the owner gets one reply, to the whole of what they said.
+   */
+  it('takes a second message into the run in flight rather than starting another', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    let release: (() => void) | null = null;
+    /** What the run was handed when it asked, after the owner added to it. */
+    const added: string[] = [];
+    const run = vi.fn(async (req: any) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      for (const item of req.interjections?.poll() ?? []) added.push(item.text);
+      return 'Answered once.';
+    });
+    const { surface, sent } = surfaceWith(db, run as any);
+
+    await surface.processUpdates([message(70, OWNER, OWNER, 'how much did I spend?')]);
+    await until(() => run.mock.calls.length > 0, 'the run to start');
+    await surface.processUpdates([message(71, OWNER, OWNER, 'in euros, please')]);
+    // Still one run, and the second message did not queue behind it.
+    expect(run).toHaveBeenCalledTimes(1);
+    (release as unknown as () => void)();
+    await surface.drain();
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(added).toEqual(['in euros, please']);
+    // One reply, to the whole of what was asked.
+    expect(sent.filter((s) => s.method === 'editMessageText' && String(s.body.text).includes('Answered once.'))).toHaveLength(1);
+  });
+
+  /**
+   * Too late to join: the run had already answered. Nothing is lost — it is
+   * the next turn, exactly as if the owner had typed it a second later.
+   */
+  it('answers a message that arrives after the run has finished as the next turn', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (_req?: any) => 'Done.');
+    const { surface } = surfaceWith(db, run as any);
+    await surface.processUpdates([message(72, OWNER, OWNER, 'first')]);
+    await surface.drain();
+    await surface.processUpdates([message(73, OWNER, OWNER, 'second')]);
+    await surface.drain();
+    expect(run.mock.calls.map((c: any) => c[0].text)).toEqual(['first', 'second']);
+  });
+
   it('maps /status onto the advisor status overview', async () => {
     const db = withOwner(new FakeDb());
     const { surface, run } = surfaceWith(db);

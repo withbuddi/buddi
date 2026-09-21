@@ -34,6 +34,13 @@ import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
 import type { UploadedAttachment } from './types';
 
+/**
+ * The one thing that waits for the answer. A run's attachments are hydrated
+ * when the request is built, so there is no honest way to add one to a call
+ * already in flight; the server says the same sentence.
+ */
+export const FILES_DURING_RUN = 'Send files once the agent has answered.';
+
 export interface PendingAttachment {
   key: string;
   filename: string;
@@ -242,7 +249,23 @@ export const Composer = forwardRef<ComposerHandle, {
   };
 
   const uploading = attachments.some((attachment) => attachment.state === 'uploading');
-  const canSend = !disabled && !running && !uploading && text.trim() !== '';
+  /*
+   * A file cannot join a run that has already been sent: its bytes are
+   * hydrated and capped when the request is built. So the one thing the box
+   * will not do mid-run is send a file, and it says so on the line where it
+   * says everything else.
+   */
+  const holdingFiles = attachments.length > 0;
+  const filesWait = running && holdingFiles;
+  /*
+   * The box always sends.
+   *
+   * While the agent works the message is not a second run: it goes to the run
+   * that is going, which takes it between two tool calls. Refusing it was the
+   * old bargain — type it, wait, type it again — and it cost the owner the
+   * one minute in which saying "actually, in euros" is worth anything.
+   */
+  const canSend = !disabled && !uploading && !filesWait && text.trim() !== '';
 
   const take = (files: FileList | File[] | null): void => {
     for (const file of Array.from(files ?? [])) {
@@ -550,29 +573,42 @@ export const Composer = forwardRef<ComposerHandle, {
               thread, where the reply will land, not here. */}
           <span
             className="wb-hint"
-            data-shown={(text !== '' && !running) || failed > 0}
+            data-shown={(text !== '' && !running) || failed > 0 || filesWait}
             data-tone={failed > 0 ? 'critical' : undefined}
           >
             {failed > 0
               ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
-              : 'Enter sends, Shift+Enter for a new line'}
+              : filesWait
+                ? FILES_DURING_RUN
+                : 'Enter sends, Shift+Enter for a new line'}
           </span>
 
+          {/* Stop keeps its meaning — it ends the run — and the send button
+              stays beside it, on the right where the primary action lives:
+              what the owner types now joins the run rather than waiting for
+              it. */}
           {running ? (
             <button className="ui-btn" data-variant="stop" onClick={onStop}>
               Stop
             </button>
-          ) : (
-            <button
-              className="wb-send"
-              aria-label="Send"
-              title={uploading ? 'Waiting for the upload to finish' : 'Send'}
-              onClick={send}
-              disabled={!canSend}
-            >
-              <SendIcon />
-            </button>
-          )}
+          ) : null}
+          <button
+            className="wb-send"
+            aria-label="Send"
+            title={
+              filesWait
+                ? FILES_DURING_RUN
+                : uploading
+                  ? 'Waiting for the upload to finish'
+                  : running
+                    ? `Send — ${agentName} picks it up between steps`
+                    : 'Send'
+            }
+            onClick={send}
+            disabled={!canSend}
+          >
+            <SendIcon />
+          </button>
         </div>
       </div>
     </div>
