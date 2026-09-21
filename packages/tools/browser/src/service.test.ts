@@ -2,8 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, type ToolContext } from '@buddi/core';
-import { BrowserService } from './service.js';
+import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, type ToolContext } from '@buddi/core';
+import { browserStoppedMessage, BrowserService } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';
 
@@ -277,5 +277,20 @@ describe('host browser authority and lifecycle', () => {
       await restarted.control('resume');
       await restarted.execute(navigate, ctx);
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('the stopped refusal says where the owner can undo it', () => {
+  it('names /browser resume on Telegram and the Settings page elsewhere', async () => {
+    const { service, ctx } = await setup();
+    await service.control('stop');
+    await expect(service.execute(navigate, { ...ctx, surface: TELEGRAM_SURFACE }))
+      .rejects.toThrow('send /browser resume here');
+    await expect(service.execute(navigate, { ...ctx, surface: WEB_SURFACE }))
+      .rejects.toThrow('in the dashboard, on the Settings page');
+    // No surface declared is the dashboard's wording, not Telegram's: a
+    // command nobody can type is worse than a page anybody can open.
+    await expect(service.execute(navigate, ctx)).rejects.toThrow('Settings page');
+    expect(browserStoppedMessage(TELEGRAM_SURFACE)).toContain('/browser resume');
   });
 });
