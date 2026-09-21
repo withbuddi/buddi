@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { Page, Locator, ElementHandle, CDPSession } from 'playwright';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
-import type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandInput, Observation, ObservedTarget } from './types.js';
+import { HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget } from './types.js';
 import { BrowserPreconditionError } from './types.js';
 export type { DriverOptions } from './host.js';
 
@@ -158,6 +158,28 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   }
   async screenshot(): Promise<Buffer | undefined> { return this.#picture; }
   async takeover(): Promise<void> { this.#invalidate(); if (this.#page && !this.#page.isClosed()) await this.host.foreground(this, this.#page, true); }
+  /**
+   * Abandon the command in flight without abandoning the tab.
+   *
+   * Playwright has no cancel, so this stops the two things that keep a page
+   * busy: a load that has not finished, which `Page.stopLoading` ends at once
+   * rather than at its twenty-second timeout, and the evidence the agent was
+   * about to act on, which is void the moment somebody else has the mouse. The
+   * action's own promise still rejects on its way out — `BrowserService` has
+   * already aborted the controller that decides what that rejection means — but
+   * the page, its context and its cookies are all still there for the owner.
+   */
+  async interrupt(): Promise<void> {
+    const page = this.#page;
+    if (!page || page.isClosed()) throw new BrowserPreconditionError('The browser tab is closed.');
+    this.#invalidate();
+    const cdp = await page.context().newCDPSession(page).catch(() => null);
+    if (cdp) {
+      await cdp.send('Page.stopLoading').catch(() => {});
+      await cdp.detach().catch(() => {});
+    }
+    await this.host.foreground(this, page, true);
+  }
   resume(): void { this.#invalidate(); this.host.resume(this); }
   /**
    * The remote hand, over one CDP session on one held page.
@@ -169,6 +191,8 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
    * notion of where the pointer is.
    */
   readonly supportsHand = true;
+  /** A tab that is open is a tab that can be painted; a closed one cannot. */
+  handReady(): boolean { return !!this.#page && !this.#page.isClosed(); }
   #cdp?: CDPSession;
   /**
    * The exact page the hand is on.
@@ -181,9 +205,14 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
    */
   #handPage?: Page;
   #handWatch?: { page: Page; closed: () => void; navigated: (frame: { url(): string }) => void };
+  /** What the relay last asked for, so a re-tune restarts on the same page. */
+  #handQuality: HandQuality = HAND_QUALITY;
+  #handFrames?: (frame: HandFrame) => void;
   readonly hand: BrowserHand = {
-    start: async (onFrame: (frame: HandFrame) => void) => {
+    start: async (onFrame: (frame: HandFrame) => void, quality: HandQuality = HAND_QUALITY) => {
       await this.hand.stop();
+      this.#handQuality = quality;
+      this.#handFrames = onFrame;
       const page = this.#active();
       if (page.url() !== 'about:blank') this.host.check(page.url(), true);
       this.#invalidate();
@@ -204,15 +233,33 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       this.#handWatch = { page, closed, navigated };
       cdp.on('Page.screencastFrame', (event: { data: string; sessionId: number; metadata: HandFrame['metadata'] }) => {
         if (this.#cdp !== cdp) return;
-        const { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } = event.metadata;
-        onFrame({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } });
-        // A send that fails is a CDP session that is gone, which is a hand
-        // that is over rather than a picture that stopped moving.
+        // The ack first, and before anything this frame costs. Chrome paints
+        // nothing more until it has one, so every millisecond spent decoding,
+        // relaying or queueing before the ack is a millisecond the *next*
+        // frame is late by. A send that fails is a CDP session that is gone,
+        // which is a hand that is over rather than a picture that stopped.
         void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => end());
+        const { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } = event.metadata;
+        this.#handFrames?.({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } });
       });
       try {
-        await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+        await cdp.send('Page.startScreencast', { format: 'jpeg', quality: quality.quality, maxWidth: quality.maxWidth, maxHeight: quality.maxHeight, everyNthFrame: 1 });
       } catch (error) { await this.hand.stop(); throw error; }
+    },
+    /**
+     * The same page, painted smaller.
+     *
+     * CDP has no way to change a running screencast's bounds, so it is stopped
+     * and started again on the session already attached — which keeps the page,
+     * the watchers and the frame handler exactly as they were.
+     */
+    tune: async (quality: HandQuality) => {
+      const cdp = this.#cdp;
+      if (!cdp || !this.#handPage) return;
+      this.#handQuality = quality;
+      await cdp.send('Page.stopScreencast').catch(() => {});
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: quality.quality, maxWidth: quality.maxWidth, maxHeight: quality.maxHeight, everyNthFrame: 1 })
+        .catch(() => {});
     },
     input: async (event: HandInput) => {
       const page = this.#handPage;
@@ -237,6 +284,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
     stop: async () => {
       const cdp = this.#cdp;
       const watch = this.#handWatch;
+      this.#handFrames = undefined;
       this.#cdp = undefined;
       this.#handPage = undefined;
       this.#handWatch = undefined;

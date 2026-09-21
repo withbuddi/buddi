@@ -25,7 +25,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { BrowserController, BrowserHand, HandFrame, HandInput } from '@buddi/tool-browser';
+import { HAND_QUALITY, HAND_QUALITY_LOW, type BrowserController, type BrowserHand, type HandFrame, type HandInput, type HandQuality } from '@buddi/tool-browser';
 import { SessionStore, type Session } from './sessions.js';
 
 /** The dashboard's half of the take-over, on the same upgrade listener. */
@@ -49,6 +49,43 @@ const LEASE_FRESH_MS = 1_000;
 /** Unsent JPEGs are this process's memory, not the viewer's problem. */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const CONGESTION_MS = 10_000;
+/**
+ * The socket is behind when this much is still waiting to go out.
+ *
+ * One frame is in flight at a time, so anything much past a frame's worth
+ * means the link is not carrying what this page is painting.
+ */
+const SLOW_LINK_BYTES = 256 * 1024;
+/** How long the link has to stay that way before the picture gets smaller. */
+const SLOW_LINK_MS = 1_000;
+/** And how long it has to be clear again before the picture grows back. */
+const FAST_LINK_MS = 5_000;
+
+/**
+ * At most this many of the owner's events are in flight at the host at once.
+ *
+ * Not one: waiting for each result before forwarding the next puts a whole
+ * round trip between every keystroke, and a drag arrives as a slideshow. Not
+ * unbounded either — a hand that has run away from its host is a hand whose
+ * events are landing on a page the owner stopped looking at.
+ */
+const IN_FLIGHT = 4;
+
+/**
+ * One frame, as one message.
+ *
+ * A metadata line and then the bytes is two messages the dashboard has to pair
+ * up, and on a link with any latency it is two chances to wait. So: a version
+ * byte, the metadata's length, the metadata as JSON, and the JPEG. The
+ * dashboard's `readFrame` is the other half of this and nothing else reads it.
+ */
+export function packFrame(picture: HandFrame): Buffer {
+  const head = Buffer.from(JSON.stringify(picture.metadata), 'utf8');
+  const prefix = Buffer.alloc(3);
+  prefix.writeUInt8(1, 0);
+  prefix.writeUInt16BE(head.length, 1);
+  return Buffer.concat([prefix, head, picture.jpeg]);
+}
 
 /** Coordinates are page pixels, and no page is twenty thousand wide. */
 const MAX_COORDINATE = 20_000;
@@ -175,6 +212,43 @@ interface Live {
   finishing?: Promise<void>;
   held: Held;
   timer?: NodeJS.Timeout;
+  /**
+   * The newest picture that has not gone out, and whether one is going out.
+   *
+   * Only the newest: a frame the owner never saw is not worth a second of
+   * their link. This is the whole flow-control rule — one frame on the wire,
+   * the latest one waiting, and everything painted in between dropped.
+   */
+  latest?: HandFrame;
+  sending: boolean;
+  /** When the frame now on the wire was handed to the socket. */
+  sendingSince?: number;
+  /** How big the picture is right now, and when the link last looked slow or fast. */
+  quality: HandQuality;
+  slowSince?: number;
+  fastSince?: number;
+  tuning: boolean;
+  /** The owner's events, in order, with mouse moves coalesced to the last one. */
+  queue: HandInput[];
+  /** Resolves when nothing of the owner's is still on its way to the host. */
+  draining?: Promise<void>;
+  /** True while that drain runs, so ending from inside it cannot await itself. */
+  inDrain: boolean;
+}
+
+/**
+ * Which events may be in flight together.
+ *
+ * Keys may: each one is a single call, and calls made in order arrive in
+ * order. Mouse moves may, though coalescing means there is rarely more than
+ * one. A press, a release or a wheel may not: each of those is a move *and*
+ * then a button, and letting the move of one overtake the button of another is
+ * how a click lands somewhere the owner did not click.
+ */
+function pipelined(input: HandInput): 'key' | 'move' | 'alone' {
+  if (input.kind === 'key') return 'key';
+  if (input.kind === 'mouse' && input.type === 'mouseMoved') return 'move';
+  return 'alone';
 }
 
 /**
@@ -241,7 +315,7 @@ export class RemoteHandEndpoint {
       if (!input) { this.#say('input refused by validation'); ws.send(JSON.stringify({ type: 'refused', error: 'That input was not understood.' })); return; }
       if (live.closing) { ws.send(JSON.stringify({ type: 'refused', error: 'The take-over is ending.' })); return; }
       live.lastInput = Date.now();
-      this.#enqueue(() => this.#dispatch(live, input));
+      this.#offer(live, input);
       return;
     }
     if (frame.type === 'bye') void this.#finish(live, 'The take-over ended.');
@@ -267,19 +341,72 @@ export class RemoteHandEndpoint {
   }
 
   /**
-   * One input, once the lease still says this dashboard may drive.
+   * One of the owner's events, queued rather than dispatched.
    *
-   * A failure here is the end of the hand rather than a message: the host
-   * refuses input when the page it was driving is gone, and the honest answer
-   * to that is to stop showing a picture of it. The exception itself is never
-   * logged — Playwright puts the key it was given into its message.
+   * A finger dragging across a phone screen produces a mouse move per pixel,
+   * and on a link with any latency they arrive faster than the host can
+   * consume them. Every one but the last describes a pointer position nobody
+   * will ever see, so a move that lands behind a move simply replaces it: the
+   * hand goes where the finger is, not where it has been. Presses, releases,
+   * wheels and keys are never coalesced — each of those *is* an event.
    */
-  async #dispatch(live: Live, input: HandInput): Promise<void> {
-    if (live.closing || this.#live !== live) return;
-    if (!(await this.#leased(live))) { await this.#finish(live, 'Your session ended. Sign in again.'); return; }
-    try { await live.hand.input(input); }
-    catch { this.#say('input failed at the host'); await this.#finish(live, 'The screen you were driving is gone. Take over again.'); return; }
-    this.#track(live.held, input);
+  #offer(live: Live, input: HandInput): void {
+    const last = live.queue.at(-1);
+    if (input.kind === 'mouse' && input.type === 'mouseMoved' && last?.kind === 'mouse' && last.type === 'mouseMoved') live.queue[live.queue.length - 1] = input;
+    else live.queue.push(input);
+    this.#pump(live);
+  }
+
+  /**
+   * Start a drain, unless one is already running.
+   *
+   * It pumps itself once more on the way out, because an event that arrives
+   * between the drain's last look at the queue and the moment it declares
+   * itself finished would otherwise sit there until the next one pushed it.
+   */
+  #pump(live: Live): void {
+    if (live.draining || live.queue.length === 0 || live.closing) return;
+    live.draining = this.#drain(live).finally(() => { live.draining = undefined; this.#pump(live); });
+  }
+
+  /**
+   * The owner's events, in order, several at a time.
+   *
+   * Ordering is the promise, not one-at-a-time: a click and the key that
+   * follows it must reach the host in the order they were made, and they do,
+   * because they are handed to the driver in that order over one connection.
+   * What is *not* waited for is each one's result before the next goes out —
+   * that put a full round trip between every event, which is what made typing
+   * over a phone link feel like a telegraph.
+   *
+   * A failure is the end of the hand rather than a message: the host refuses
+   * input when the page it was driving is gone, and the honest answer to that
+   * is to stop showing a picture of it. The exception itself is never logged —
+   * Playwright puts the key it was given into its message.
+   */
+  async #drain(live: Live): Promise<void> {
+    live.inDrain = true;
+    try { await this.#drainLoop(live); } finally { live.inDrain = false; }
+  }
+
+  async #drainLoop(live: Live): Promise<void> {
+    while (live.queue.length > 0) {
+      if (live.closing || this.#live !== live) { live.queue.length = 0; return; }
+      if (!(await this.#leased(live))) { live.queue.length = 0; await this.#finish(live, 'Your session ended. Sign in again.'); return; }
+      const together = pipelined(live.queue[0]!);
+      let count = 1;
+      if (together !== 'alone') while (count < IN_FLIGHT && count < live.queue.length && pipelined(live.queue[count]!) === together) count++;
+      const batch = live.queue.splice(0, count);
+      const sent: Array<Promise<void>> = [];
+      for (const input of batch) { sent.push(live.hand.input(input)); this.#track(live.held, input); }
+      const settled = await Promise.allSettled(sent);
+      if (settled.some((result) => result.status === 'rejected')) {
+        live.queue.length = 0;
+        this.#say('input failed at the host');
+        await this.#finish(live, 'The screen you were driving is gone. Take over again.');
+        return;
+      }
+    }
   }
 
   /** What is down, so what is down can be let go of. Never the typed text. */
@@ -346,10 +473,11 @@ export class RemoteHandEndpoint {
     }
     const now = Date.now();
     const live: Live = { ws, req, lease: session.id, sessionId, hand: offer.hand, since: now, lastInput: now,
-      checkedAt: now, missed: 0, closing: false, held: { keys: new Map(), buttons: new Set(), x: 0, y: 0 } };
+      checkedAt: now, missed: 0, closing: false, sending: false, quality: HAND_QUALITY, tuning: false, queue: [], inDrain: false,
+      held: { keys: new Map(), buttons: new Set(), x: 0, y: 0 } };
     this.#live = live;
     try {
-      await offer.hand.start((picture) => this.#picture(live, picture));
+      await offer.hand.start((picture) => this.#picture(live, picture), HAND_QUALITY);
     } catch {
       // Whatever went wrong, the words belong to the owner, not to the log.
       this.#say('screencast failed to start');
@@ -363,24 +491,81 @@ export class RemoteHandEndpoint {
   }
 
   /**
-   * A frame, unless the socket is too far behind to take it.
+   * A frame, held until the last one has actually gone.
+   *
+   * This is where the take-over stopped being live. The host paints sixty
+   * times a second; a phone two hops away carries a fraction of that. Feeding
+   * every frame to the socket does not make the picture faster, it makes it
+   * *older*: the frames queue, and what the owner is looking at is however
+   * many seconds of backlog have piled up since they pressed Take over. A
+   * minute of driving was a minute behind.
+   *
+   * So: one frame on the wire at a time, and only the newest one waiting
+   * behind it. Everything painted while a frame is in flight is dropped,
+   * because a picture nobody will see is worth nothing and costs a second of
+   * someone's link. What the owner loses is frames they would never have seen
+   * anyway; what they gain is that the picture is always *now*.
    *
    * A phone that walks out of range does not close its TCP connection; it goes
-   * quiet, and the JPEGs pile up in this process. So a socket with two
-   * megabytes still unsent is skipped rather than fed, and one that stays that
-   * way for ten seconds is not a viewer at all.
+   * quiet. A socket with two megabytes still unsent is therefore still not fed,
+   * and one that stays that way for ten seconds is not a viewer at all.
    */
   #picture(live: Live, picture: HandFrame): void {
     const ws = live.ws;
     if (this.#live !== live || live.closing || ws.readyState !== ws.OPEN) return;
     if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
       live.congestedSince ??= Date.now();
+      live.latest = undefined;
       return;
     }
     live.congestedSince = undefined;
-    // Metadata first, bytes second: the picture is what it says it is.
-    ws.send(JSON.stringify({ type: 'frame', metadata: picture.metadata }));
-    ws.send(picture.jpeg, { binary: true });
+    live.latest = picture;
+    this.#flush(live);
+  }
+
+  /** The newest waiting picture, once the socket says the last one left. */
+  #flush(live: Live): void {
+    const ws = live.ws;
+    if (live.sending || !live.latest) return;
+    if (this.#live !== live || live.closing || ws.readyState !== ws.OPEN) return;
+    const picture = live.latest;
+    live.latest = undefined;
+    live.sending = true;
+    live.sendingSince = Date.now();
+    try {
+      ws.send(packFrame(picture), { binary: true }, () => {
+        live.sending = false;
+        live.sendingSince = undefined;
+        this.#link(live);
+        this.#flush(live);
+      });
+    } catch { live.sending = false; live.sendingSince = undefined; }
+  }
+
+  /**
+   * How the link is doing, asked once per frame that leaves.
+   *
+   * `bufferedAmount` is what this process is still holding for a socket that
+   * has not taken it. With one frame in flight, a number that stays above a
+   * frame's worth means the link cannot carry this picture — so the picture
+   * gets smaller, and grows back when the link is clear again.
+   */
+  #link(live: Live): void {
+    if (!live.hand.tune || live.tuning || live.closing) return;
+    const now = Date.now();
+    const slow = live.ws.bufferedAmount > SLOW_LINK_BYTES;
+    if (slow) { live.slowSince ??= now; live.fastSince = undefined; }
+    else { live.fastSince ??= now; live.slowSince = undefined; }
+    const low = live.quality === HAND_QUALITY_LOW;
+    const wanted = !low && live.slowSince && now - live.slowSince >= SLOW_LINK_MS ? HAND_QUALITY_LOW
+      : low && live.fastSince && now - live.fastSince >= FAST_LINK_MS ? HAND_QUALITY
+        : undefined;
+    if (!wanted) return;
+    live.quality = wanted;
+    live.slowSince = undefined;
+    live.fastSince = undefined;
+    live.tuning = true;
+    void live.hand.tune(wanted).catch(() => this.#say('the picture could not be resized')).finally(() => { live.tuning = false; });
   }
 
   /** Liveness, idleness, the lease and the send buffer, on one timer. */
@@ -388,7 +573,12 @@ export class RemoteHandEndpoint {
     const ws = live.ws;
     if (this.#live !== live || live.closing) return;
     const now = Date.now();
-    if (live.congestedSince && now - live.congestedSince > (this.deps.congestionMs ?? CONGESTION_MS)) {
+    // Behind in either sense: frames refused outright because megabytes are
+    // already queued, or one single frame the socket has not finished taking.
+    // With one frame on the wire at a time the second is the usual shape of a
+    // viewer that has quietly stopped reading.
+    const behind = live.congestedSince ?? (live.sending ? live.sendingSince : undefined);
+    if (behind !== undefined && now - behind > (this.deps.congestionMs ?? CONGESTION_MS)) {
       this.#say('socket fell too far behind');
       ws.terminate();
       void this.#finish(live, 'The connection fell behind.');
@@ -429,6 +619,11 @@ export class RemoteHandEndpoint {
       // Called from inside the queue: that task is the only one running, and
       // waiting for it here would be waiting for this.
       if (!this.#inQueue) await this.#queue.catch(() => {});
+      // And nothing of the owner's may still be on its way to the host when
+      // Resume hands the screen back to the agent.
+      live.queue.length = 0;
+      if (!live.inDrain) await live.draining?.catch(() => {});
+      live.latest = undefined;
       await this.#letGo(live);
       await live.hand.stop().catch(() => this.#say('screencast did not stop cleanly'));
       clearInterval(live.timer);

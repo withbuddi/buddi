@@ -1,9 +1,22 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RemoteHand, modifiersOf, pagePoint, type HandSocket } from './RemoteHand';
+import { RemoteHand, modifiersOf, pagePoint, readFrame, type HandSocket } from './RemoteHand';
 
 const metadata = { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0 };
+
+/** The gateway's `packFrame`, as the dashboard has to be able to read it. */
+function packFrame(bytes: string, meta = metadata): ArrayBuffer {
+  const head = new TextEncoder().encode(JSON.stringify(meta));
+  const jpeg = new TextEncoder().encode(bytes);
+  const out = new Uint8Array(3 + head.length + jpeg.length);
+  const view = new DataView(out.buffer);
+  view.setUint8(0, 1);
+  view.setUint16(1, head.length);
+  out.set(head, 3);
+  out.set(jpeg, 3 + head.length);
+  return out.buffer;
+}
 
 /** A socket the test drives from both ends. */
 function fakeSocket() {
@@ -21,15 +34,14 @@ function fakeSocket() {
     // Wrapped, because every one of these is the server changing the panel.
     open: () => act(() => { socket.onopen?.({}); }),
     say: (message: unknown) => act(() => { socket.onmessage?.({ data: JSON.stringify(message) }); }),
-    picture: (bytes: string) => act(() => { socket.onmessage?.({ data: new TextEncoder().encode(bytes).buffer }); }),
+    picture: (bytes: string) => act(() => { socket.onmessage?.({ data: packFrame(bytes) }); }),
     drop: () => act(() => { socket.onclose?.({}); }),
   };
 }
 
-beforeEach(() => {
-  // jsdom has no object URLs, and the panel must not need them to be tested.
-  vi.stubGlobal('URL', Object.assign(globalThis.URL, { createObjectURL: () => 'blob:frame', revokeObjectURL: () => {} }));
-});
+// jsdom has neither a JPEG decoder nor a 2D canvas context. The panel must not
+// need either to be driven: a frame that cannot be drawn is still a frame the
+// owner may click on, and everything below is about what reaches the socket.
 afterEach(() => vi.unstubAllGlobals());
 
 describe('mapping a click back onto the page', () => {
@@ -67,10 +79,17 @@ describe('driving the host browser', () => {
     expect(screen.getByRole('status', { name: '' }).textContent).toContain('Nothing you type here is kept');
 
     wire.say({ type: 'driving', sessionId: 's1' });
-    wire.say({ type: 'frame', metadata });
     wire.picture('jpeg-bytes');
-    const picture = await screen.findByAltText('The host browser, live');
-    expect(picture).toHaveAttribute('src', 'blob:frame');
+    expect(await screen.findByLabelText('The host browser, live')).toBeInTheDocument();
+  });
+
+  it('reads a frame out of the one message the gateway sends', () => {
+    const read = readFrame(packFrame('jpeg-bytes', { ...metadata, offsetTop: 40 }));
+    expect(read?.metadata.offsetTop).toBe(40);
+    expect(read?.jpeg.size).toBe('jpeg-bytes'.length);
+    // Anything that is not one of those is not drawn rather than guessed at.
+    expect(readFrame(new Uint8Array([9, 9, 9]).buffer)).toBeNull();
+    expect(readFrame(new Uint8Array([1]).buffer)).toBeNull();
   });
 
   it('sends a click at page coordinates and a keystroke that is never shown', async () => {
@@ -78,9 +97,8 @@ describe('driving the host browser', () => {
     panel(wire.socket);
     wire.open();
     wire.say({ type: 'driving', sessionId: 's1' });
-    wire.say({ type: 'frame', metadata });
     wire.picture('jpeg-bytes');
-    const picture = await screen.findByAltText('The host browser, live');
+    const picture = await screen.findByLabelText('The host browser, live');
     picture.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 400 } as DOMRect);
 
     fireEvent.mouseDown(picture, { clientX: 320, clientY: 200, button: 0, detail: 1 });
@@ -109,14 +127,39 @@ describe('driving the host browser', () => {
     expect(wire.inputs().at(-1)).toMatchObject({ kind: 'key', type: 'keyDown', key: 'Enter', modifiers: 8 });
   });
 
+  it('sends at most one pointer position every thirty milliseconds, and always the last one', async () => {
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+    picture.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1280, height: 800 } as DOMRect);
+
+    // A finger dragging across the picture: a move per pixel, none of which
+    // anyone will ever see but the last.
+    for (let i = 0; i < 40; i++) fireEvent.mouseMove(picture, { clientX: 100 + i, clientY: 300 });
+    const moves = () => wire.inputs().filter((input) => input.type === 'mouseMoved');
+    expect(moves().length).toBe(1);
+    // The one waiting is the newest, and it goes out on its own.
+    await waitFor(() => expect(moves().length).toBe(2));
+    expect(moves().at(-1)).toMatchObject({ x: 139, y: 300 });
+
+    // A press does not wait behind the throttle, and takes the pending
+    // position with it so the button lands where the finger is.
+    for (let i = 0; i < 5; i++) fireEvent.mouseMove(picture, { clientX: 300 + i, clientY: 300 });
+    fireEvent.mouseDown(picture, { clientX: 304, clientY: 300, button: 0, detail: 1 });
+    expect(wire.inputs().at(-1)).toMatchObject({ type: 'mousePressed', x: 304 });
+    expect(wire.inputs().at(-2)).toMatchObject({ type: 'mouseMoved', x: 304 });
+  });
+
   it('gives the keyboard back on a modifier and Escape rather than sending it', async () => {
     const wire = fakeSocket();
     panel(wire.socket);
     wire.open();
     wire.say({ type: 'driving', sessionId: 's1' });
-    wire.say({ type: 'frame', metadata });
     wire.picture('jpeg-bytes');
-    const picture = await screen.findByAltText('The host browser, live');
+    const picture = await screen.findByLabelText('The host browser, live');
     const before = wire.inputs().length;
     fireEvent.keyDown(picture, { key: 'Escape', code: 'Escape', metaKey: true });
     expect(wire.inputs()).toHaveLength(before);
@@ -141,9 +184,8 @@ describe('driving the host browser', () => {
     const giveBack = panel(wire.socket);
     wire.open();
     wire.say({ type: 'driving', sessionId: 's1' });
-    wire.say({ type: 'frame', metadata });
     wire.picture('jpeg-bytes');
-    await screen.findByAltText('The host browser, live');
+    await screen.findByLabelText('The host browser, live');
 
     fireEvent.click(screen.getByRole('button', { name: 'Give it back' }));
     expect(giveBack).toHaveBeenCalled();
@@ -152,7 +194,7 @@ describe('driving the host browser', () => {
     await waitFor(() => expect(screen.getByTestId('remote-hand')).toHaveAttribute('data-phase', 'lost'));
     expect(screen.getByText(/Connection lost/)).toBeInTheDocument();
     // The last frame is still there to look at, and Reconnect asks again.
-    expect(screen.getByAltText('The host browser, live')).toBeInTheDocument();
+    expect(screen.getByLabelText('The host browser, live')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
   });
 

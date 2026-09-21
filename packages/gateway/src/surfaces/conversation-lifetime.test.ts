@@ -11,13 +11,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Queryable } from '@buddi/core';
 import { forgetProjectedSizes } from './context-budget.js';
 import {
-  boundaryNote,
   conversationExpiry,
   conversationForTurn,
   IDLE_TIMEOUT_MS,
   MAX_TRANSCRIPT_CHARS,
   readVitals,
-  sinceText,
   type ConversationVitals,
 } from './conversation-lifetime.js';
 
@@ -71,35 +69,6 @@ describe('when a conversation has ended', () => {
   });
 });
 
-describe('what the owner reads', () => {
-  it('names how long it had been', () => {
-    const note = boundaryNote('idle', vitals({ lastActivityAt: ago(14 * HOUR) }), NOW);
-    expect(note).toBe(
-      '(New conversation — we last spoke 14 hours ago. What I remember about you carries over.)',
-    );
-  });
-
-  it('says plainly that the last one had grown, without a number nobody can use', () => {
-    expect(boundaryNote('size', vitals({ chars: 95_221 }), NOW)).toBe(
-      '(New conversation — the last one had grown long. What I remember about you carries over.)',
-    );
-  });
-
-  it('is one plain-text line: it has to read the same on Telegram as at a prompt', () => {
-    const note = boundaryNote('idle', vitals({ lastActivityAt: ago(14 * HOUR) }), NOW);
-    expect(note).not.toMatch(/[*_`#|]/);
-    expect(note.split('\n')).toHaveLength(1);
-  });
-
-  it('counts the gap in the coarsest honest unit', () => {
-    expect(sinceText(ago(30 * 1000), NOW)).toBe('1 minute');
-    expect(sinceText(ago(9 * MINUTE), NOW)).toBe('9 minutes');
-    expect(sinceText(ago(1 * HOUR), NOW)).toBe('1 hour');
-    expect(sinceText(ago(14 * HOUR), NOW)).toBe('14 hours');
-    expect(sinceText(ago(50 * HOUR), NOW)).toBe('2 days');
-  });
-});
-
 /* ------------------------------------------------------------------ *
  * The surface-facing half
  * ------------------------------------------------------------------ */
@@ -140,13 +109,16 @@ describe('the conversation a turn runs in', () => {
     expect(out.boundary).toBeUndefined();
   });
 
-  it('is a new one when the old one had ended, and says so', async () => {
+  it('is a new one when the old one had ended, and says nothing about it', async () => {
     const pool = fakePool({ vitals: { lastActivityAt: ago(14 * HOUR) } });
     const out = await conversationForTurn(pool, { current: 'old', start, now: NOW });
     expect(out.conversationId).toBe('fresh');
     expect(out.boundary?.reason).toBe('idle');
     expect(out.boundary?.previousConversationId).toBe('old');
-    expect(out.boundary?.note).toContain('New conversation');
+    // The boundary is for the surface to act on — clearing a pending question,
+    // handing the page a new id — and carries no line for the owner. Which
+    // transcript a reply was composed in is not news.
+    expect(Object.keys(out.boundary ?? {}).sort()).toEqual(['previousConversationId', 'reason']);
   });
 
   it('withdraws what the ended conversation still had on the table', async () => {
