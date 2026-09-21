@@ -16,7 +16,7 @@
  */
 
 import type { TabInfo, WorkerChrome } from './chrome.js';
-import { Cancellation, PreconditionError, type Command, type CommandResult, type Observation, type ObservedTarget } from './protocol.js';
+import { Cancellation, PreconditionError, type Command, type CommandResult, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 
 interface Session {
@@ -54,6 +54,28 @@ const LOAD_TIMEOUT = 30_000;
 /** How long a click or a key gets to turn into a navigation before we stop watching. */
 const SETTLE_MS = 600;
 const SETTLE_STEP_MS = 50;
+/** At most ten frames a second leave this browser, whatever Chrome paints. */
+const MIN_FRAME_MS = 100;
+/** The screencast's own bounds; the gateway asks within them and gets clamped if it does not. */
+const MAX_CAST_SIDE = 4096;
+/** A page coordinate no real viewport reaches, past which the input is not a coordinate. */
+const MAX_COORDINATE = 20_000;
+const MAX_DELTA = 10_000;
+
+/** No screencast for this session, so nobody is looking and nothing may be typed. */
+const NO_CAST = 'No screencast is running for this conversation, so there is nothing to type into.';
+
+interface ScreencastFrame { data: string; metadata: Record<string, number>; sessionId: string | number }
+
+/** One live screencast: the tab it watches, and the frame it is holding back. */
+interface Screencast {
+  session: string;
+  tabId: number;
+  lastSentAt: number;
+  pending?: ScreencastFrame;
+  timer?: ReturnType<typeof setTimeout>;
+  stopped: boolean;
+}
 
 const KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
   Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
@@ -70,6 +92,105 @@ const KEYS: Record<string, { key: string; code: string; keyCode: number; text?: 
 function str(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** A screencast side Chrome will accept, whatever the gateway asked for. */
+function side(value: unknown, fallback: number): number {
+  const asked = num(value) ?? fallback;
+  return Math.min(MAX_CAST_SIDE, Math.max(1, Math.round(asked)));
+}
+
+function clamp(value: unknown, limit: number, fallback = 0): number {
+  const asked = num(value);
+  if (asked === undefined) return fallback;
+  return Math.min(limit, Math.max(-limit, asked));
+}
+
+/**
+ * The six numbers the dashboard needs to turn a click on its picture back into
+ * a page coordinate, and nothing else Chrome happened to attach.
+ */
+function metadataOf(value: unknown): Record<string, number> {
+  const source = (value ?? {}) as Record<string, unknown>;
+  const metadata: Record<string, number> = {};
+  for (const key of ['deviceWidth', 'deviceHeight', 'pageScaleFactor', 'offsetTop', 'scrollOffsetX', 'scrollOffsetY']) {
+    const found = num(source[key]);
+    if (found !== undefined) metadata[key] = found;
+  }
+  return metadata;
+}
+
+const MOUSE_TYPES = new Set(['mousePressed', 'mouseReleased', 'mouseMoved']);
+const KEY_TYPES = new Set(['keyDown', 'keyUp', 'char', 'rawKeyDown']);
+const BUTTONS: Record<string, number> = { none: 0, left: 1, right: 2, middle: 4, back: 8, forward: 16 };
+
+/** Windows virtual key codes for the keys whose `key` is not the character itself. */
+const VIRTUAL_KEYS: Record<string, number> = {
+  Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18, Pause: 19, CapsLock: 20, Escape: 27,
+  ' ': 32, PageUp: 33, PageDown: 34, End: 35, Home: 36,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+  Insert: 45, Delete: 46, Meta: 91,
+  F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
+};
+
+function virtualKey(key: string): number {
+  const named = VIRTUAL_KEYS[key];
+  if (named !== undefined) return named;
+  return key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
+}
+
+function text(value: unknown, limit: number): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= limit ? value : undefined;
+}
+
+/**
+ * One event from the owner's hand, turned into one CDP call.
+ *
+ * Everything is bounded here as well as at the gateway, because what arrives is
+ * whatever a socket sent and what leaves operates the owner's real browser.
+ */
+function inputEvent(args: Record<string, unknown>): { method: string; params: Record<string, unknown> } {
+  const kind = str(args, 'kind');
+  const modifiers = Math.min(15, Math.max(0, Math.trunc(num(args['modifiers']) ?? 0)));
+  if (kind === 'wheel') {
+    return { method: 'Input.dispatchMouseEvent', params: {
+      type: 'mouseWheel', x: clamp(args['x'], MAX_COORDINATE), y: clamp(args['y'], MAX_COORDINATE),
+      deltaX: clamp(args['deltaX'], MAX_DELTA), deltaY: clamp(args['deltaY'], MAX_DELTA), modifiers,
+    } };
+  }
+  if (kind === 'mouse') {
+    const type = str(args, 'type') ?? '';
+    if (!MOUSE_TYPES.has(type)) throw new PreconditionError(`${type || 'That'} is not a mouse event this browser dispatches.`);
+    const name = str(args, 'button') ?? 'left';
+    const button = name in BUTTONS ? name : 'left';
+    // `buttons` is what is held down now, which only the press and a drag have.
+    const buttons = num(args['buttons']) !== undefined
+      ? Math.min(31, Math.max(0, Math.trunc(num(args['buttons'])!)))
+      : type === 'mousePressed' ? BUTTONS[button]! : 0;
+    return { method: 'Input.dispatchMouseEvent', params: {
+      type, x: clamp(args['x'], MAX_COORDINATE), y: clamp(args['y'], MAX_COORDINATE),
+      button, buttons, clickCount: Math.min(3, Math.max(0, Math.trunc(num(args['clickCount']) ?? (type === 'mouseMoved' ? 0 : 1)))), modifiers,
+    } };
+  }
+  if (kind === 'key') {
+    const type = str(args, 'type') ?? '';
+    if (!KEY_TYPES.has(type)) throw new PreconditionError(`${type || 'That'} is not a key event this browser dispatches.`);
+    const key = text(args['key'], 32) ?? '';
+    const code = text(args['code'], 32) ?? '';
+    const typed = text(args['text'], 8);
+    if (type === 'char' && !typed) throw new PreconditionError('A typed character arrived with no text in it.');
+    const virtual = virtualKey(key);
+    return { method: 'Input.dispatchKeyEvent', params: {
+      type, key, code, modifiers,
+      ...(typed ? { text: typed } : {}),
+      ...(type === 'char' ? {} : { windowsVirtualKeyCode: virtual, nativeVirtualKeyCode: virtual }),
+    } };
+  }
+  throw new PreconditionError(`This browser cannot dispatch ${kind ?? 'that'} input.`);
 }
 
 /** Only http(s). A chrome:// or file:// tab is not somewhere an agent gets to go. */
@@ -94,9 +215,27 @@ export class BrowserCommands implements Executor {
   #refs = new Map<string, Map<string, Ref>>();
   #uuid: () => string;
   #contentFile: string;
+  #onFrame: (frame: FrameMessage) => void;
+  #now: () => number;
+  /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
+  #attached = new Map<number, number>();
+  #casts = new Map<string, Screencast>();
+  #castsByTab = new Map<number, Screencast>();
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string } = {}) {
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; now?: () => number } = {}) {
     this.#chrome = chrome;
+    this.#onFrame = options.onFrame ?? (() => undefined);
+    this.#now = options.now ?? (() => Date.now());
+    chrome.debugger.onEvent.addListener((source, method, params) => this.#debuggerEvent(source, method, params));
+    // Chrome took the debugger back: the tab closed, the owner dismissed the
+    // yellow bar, or another client attached. Either way this screencast is over.
+    chrome.debugger.onDetach.addListener((source) => {
+      const tabId = source.tabId;
+      if (tabId === undefined) return;
+      this.#attached.delete(tabId);
+      const cast = this.#castsByTab.get(tabId);
+      if (cast) this.#forgetCast(cast);
+    });
     this.#uuid = options.uuid ?? (() => crypto.randomUUID());
     this.#contentFile = options.contentFile ?? 'content.js';
   }
@@ -113,6 +252,9 @@ export class BrowserCommands implements Executor {
       case 'scroll': return this.#scroll(command, cancel);
       case 'tab': return this.#tab(command);
       case 'screenshot': return { screenshot: await this.#screenshot(command.session, cancel) };
+      case 'screencast.start': return this.#startScreencast(command, cancel);
+      case 'screencast.stop': { await this.#stopScreencast(command.session); return {}; }
+      case 'input': return this.#input(command, cancel);
       case 'close': return this.#close(command, cancel);
       default: throw new PreconditionError(`This browser cannot run ${command.name}.`);
     }
@@ -126,6 +268,7 @@ export class BrowserCommands implements Executor {
    * nobody can still see.
    */
   reset(): void {
+    for (const session of [...this.#casts.keys()]) void this.#stopScreencast(session).catch(() => undefined);
     this.#sessions.clear();
     this.#refs.clear();
   }
@@ -167,8 +310,14 @@ export class BrowserCommands implements Executor {
     return session.active;
   }
 
-  /** Reading a tab is harmless; typing into one the owner is reading is not. */
-  async #background(tab: TabInfo): Promise<void> {
+  /**
+   * Reading a tab is harmless; typing into one the owner is reading is not.
+   *
+   * Unless the typing is theirs: a command marked `owner` came from the hand on
+   * the dashboard, and refusing it would refuse the owner their own browser.
+   */
+  async #background(tab: TabInfo, owner = false): Promise<void> {
+    if (owner) return;
     if (tab.active !== true || tab.windowId === undefined) return;
     const window = await this.#chrome.windows.get(tab.windowId).catch(() => undefined);
     if (window?.focused) throw new PreconditionError(WATCHED);
@@ -424,7 +573,7 @@ export class BrowserCommands implements Executor {
     // observation is visible from here. A subframe's is not, and the page side
     // refuses a ref whose element no longer matches what was observed.
     if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
-    await this.#background(tab);
+    await this.#background(tab, command.owner);
     cancel.check();
     return { ref, tab };
   }
@@ -439,23 +588,181 @@ export class BrowserCommands implements Executor {
   }
 
   /**
-   * The debugger stays attached for exactly one command, so the yellow bar is
-   * never left up, and it is detached even when the command is cancelled.
+   * Claim the debugger on a tab, attaching it if nobody holds it yet.
+   *
+   * A screencast holds one of these for its whole life, so a command that runs
+   * while the owner is watching finds the debugger already there and shares it
+   * instead of attaching a second one, which Chrome would refuse.
    *
    * An attach that fails is a precondition failure, not a broken command: the
    * usual reason is that the owner has DevTools open on that tab, and nothing
    * was dispatched.
    */
-  async #withDebugger<T>(tabId: number, body: (send: (method: string, params?: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
-    try { await this.#chrome.debugger.attach({ tabId }, '1.3'); }
-    catch (error) {
-      throw new PreconditionError(`Chrome would not let buddi drive that tab (${error instanceof Error ? error.message : String(error)}). Close DevTools on it and observe again.`);
+  async #claimDebugger(tabId: number): Promise<void> {
+    const held = this.#attached.get(tabId) ?? 0;
+    if (held === 0) {
+      try { await this.#chrome.debugger.attach({ tabId }, '1.3'); }
+      catch (error) {
+        throw new PreconditionError(`Chrome would not let buddi drive that tab (${error instanceof Error ? error.message : String(error)}). Close DevTools on it and observe again.`);
+      }
     }
-    try {
-      return await body((method, params) => this.#chrome.debugger.sendCommand({ tabId }, method, params));
-    } finally {
+    this.#attached.set(tabId, held + 1);
+  }
+
+  /** Let go, and detach once nothing else is holding it, so the yellow bar never outlives the work. */
+  async #releaseDebugger(tabId: number): Promise<void> {
+    const held = this.#attached.get(tabId) ?? 0;
+    if (held <= 1) {
+      this.#attached.delete(tabId);
       await this.#chrome.debugger.detach({ tabId }).catch(() => undefined);
+      return;
     }
+    this.#attached.set(tabId, held - 1);
+  }
+
+  #send(tabId: number, method: string, params?: unknown): Promise<unknown> {
+    return this.#chrome.debugger.sendCommand({ tabId }, method, params);
+  }
+
+  /**
+   * The debugger for exactly one command, unless a screencast is already
+   * holding it, and released even when the command is cancelled.
+   */
+  async #withDebugger<T>(tabId: number, body: (send: (method: string, params?: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
+    await this.#claimDebugger(tabId);
+    try {
+      return await body((method, params) => this.#send(tabId, method, params));
+    } finally {
+      await this.#releaseDebugger(tabId);
+    }
+  }
+
+  /* ---- the owner's own hand: a screencast out, input in ---- */
+
+  /**
+   * Start painting this session's tab to the dashboard.
+   *
+   * The debugger is claimed for the screencast's whole life rather than per
+   * frame: frames arrive as events, not as answers, and a detach between them
+   * would end the stream. Starting twice on the same session restarts it,
+   * which is what a reconnecting dashboard does.
+   */
+  async #startScreencast(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const session = await this.#session(command.session);
+    const tab = await this.#ownTab(session, this.#activeKey(session));
+    this.#liveUrl(tab);
+    const tabId = tab.id!;
+    cancel.check();
+    await this.#stopScreencast(command.session);
+    await this.#claimDebugger(tabId);
+    const cast: Screencast = { session: command.session, tabId, lastSentAt: 0, stopped: false };
+    this.#casts.set(command.session, cast);
+    this.#castsByTab.set(tabId, cast);
+    try {
+      await this.#send(tabId, 'Page.startScreencast', {
+        format: 'jpeg',
+        quality: 60,
+        maxWidth: side(command.args['maxWidth'], 1280),
+        maxHeight: side(command.args['maxHeight'], 800),
+        everyNthFrame: Math.min(10, Math.max(1, Math.trunc(num(command.args['everyNthFrame']) ?? 1))),
+      });
+      // A cancel that landed while the screencast was starting has already
+      // given up on the answer, so leaving the stream running would paint at
+      // nobody.
+      cancel.check();
+    } catch (error) {
+      await this.#stopScreencast(command.session);
+      throw error;
+    }
+    return {};
+  }
+
+  /** Idempotent: a stop for a session with no screencast is an answer, not a failure. */
+  async #stopScreencast(session: string): Promise<void> {
+    const cast = this.#casts.get(session);
+    if (!cast) return;
+    this.#forgetCast(cast);
+    await this.#send(cast.tabId, 'Page.stopScreencast').catch(() => undefined);
+    await this.#releaseDebugger(cast.tabId);
+  }
+
+  /** Drop every trace of a screencast without touching the debugger, for when Chrome already has. */
+  #forgetCast(cast: Screencast): void {
+    cast.stopped = true;
+    if (cast.timer) { clearTimeout(cast.timer); cast.timer = undefined; }
+    cast.pending = undefined;
+    if (this.#casts.get(cast.session) === cast) this.#casts.delete(cast.session);
+    if (this.#castsByTab.get(cast.tabId) === cast) this.#castsByTab.delete(cast.tabId);
+  }
+
+  #debuggerEvent(source: { tabId?: number }, method: string, params?: unknown): void {
+    if (method !== 'Page.screencastFrame' || source.tabId === undefined) return;
+    const cast = this.#castsByTab.get(source.tabId);
+    if (!cast || cast.stopped) return;
+    const message = (params ?? {}) as Record<string, unknown>;
+    const data = message['data'];
+    const sessionId = message['sessionId'];
+    if (typeof data !== 'string' || typeof sessionId !== 'number' && typeof sessionId !== 'string') return;
+    this.#offer(cast, { data, metadata: metadataOf(message['metadata']), sessionId });
+  }
+
+  /**
+   * One painted frame, at most ten a second.
+   *
+   * Every frame Chrome paints is acked whether or not it is sent, because an
+   * unacked frame stops the stream; what the throttle drops is the bytes on the
+   * socket, not the acknowledgement. A frame that arrives too soon is held
+   * rather than thrown away, so a burst that ends inside the window still
+   * leaves the dashboard looking at the page as it finally settled.
+   */
+  #offer(cast: Screencast, frame: ScreencastFrame): void {
+    const wait = cast.lastSentAt + MIN_FRAME_MS - this.#now();
+    if (wait <= 0) { this.#emit(cast, frame); return; }
+    if (cast.pending) this.#ack(cast, cast.pending.sessionId);
+    cast.pending = frame;
+    if (cast.timer) return;
+    cast.timer = setTimeout(() => {
+      cast.timer = undefined;
+      const held = cast.pending;
+      cast.pending = undefined;
+      if (held && !cast.stopped) this.#emit(cast, held);
+    }, wait);
+  }
+
+  #emit(cast: Screencast, frame: ScreencastFrame): void {
+    cast.lastSentAt = this.#now();
+    this.#onFrame({ type: 'frame', session: cast.session, data: frame.data, metadata: frame.metadata, sessionId: frame.sessionId });
+    this.#ack(cast, frame.sessionId);
+  }
+
+  #ack(cast: Screencast, sessionId: string | number): void {
+    void this.#send(cast.tabId, 'Page.screencastFrameAck', { sessionId }).catch(() => undefined);
+  }
+
+  /**
+   * A pointer or a key from the owner's hand.
+   *
+   * Only while a screencast is running for that session: input with nothing
+   * painting it is an agent reaching for coordinates, which this backend does
+   * not do. The tab is the screencast's, not the session's active one, so a
+   * click cannot land somewhere the owner is not looking at.
+   */
+  async #input(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const cast = this.#casts.get(command.session);
+    if (!cast) throw new PreconditionError(NO_CAST);
+    const session = await this.#session(command.session);
+    const tab = await this.#chrome.tabs.get(cast.tabId).catch(() => undefined);
+    if (!tab) { await this.#stopScreencast(command.session); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
+    if (session.groupId >= 0 && tab.groupId !== session.groupId) { await this.#stopScreencast(command.session); throw new PreconditionError(TAKEN); }
+    await this.#background(tab, command.owner);
+    const event = inputEvent(command.args);
+    cancel.check();
+    cancel.dispatch();
+    await this.#send(cast.tabId, event.method, event.params);
+    // Evidence the agent holds describes a page the owner has since been
+    // typing into, so nothing here refreshes it; `resume` is what makes the
+    // agent look again.
+    return {};
   }
 
   async #click(command: Command, cancel: Cancellation): Promise<CommandResult> {
@@ -534,7 +841,7 @@ export class BrowserCommands implements Executor {
     if (!observed || observed.generation !== session.generation) throw new PreconditionError('Stale page observation. Observe again before scrolling.');
     const tab = await this.#ownTab(session, observed.tabKey);
     if (this.#liveUrl(tab) !== observed.url) throw new PreconditionError(MOVED);
-    await this.#background(tab);
+    await this.#background(tab, command.owner);
     const tabId = tab.id!;
     const direction = str(command.args, 'direction') === 'up' ? 'up' : 'down';
     cancel.check();

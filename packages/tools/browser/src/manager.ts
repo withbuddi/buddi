@@ -1,4 +1,4 @@
-import { BrowserService, type BrowserController, type BrowserScope, type BrowserStatus, type BrowserRollover } from './service.js';
+import { BrowserService, type BrowserController, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover } from './service.js';
 import type { BrowserCommand, BrowserDriver } from './types.js';
 import type { ToolContext } from '@buddi/core';
 
@@ -43,6 +43,12 @@ export class BrowserManager implements BrowserController {
   screenshot(sessionId?: string): Buffer | undefined {
     const id = sessionId ?? this.status().session?.id;
     return id ? this.#find({ sessionId: id })?.screenshot() : undefined;
+  }
+  /** The hand belongs to one conversation's session, never to "the browser". */
+  hand(scope?: BrowserScope): BrowserHandOffer {
+    const child = scope ? this.#find(scope) : undefined;
+    if (!child) return { supported: true, message: 'The browser session changed. Refresh before driving it.' };
+    return child.hand(scope);
   }
   rollover(input: BrowserRollover): boolean {
     if (!this.#enabled || this.#stopped || this.#controlling) return false;

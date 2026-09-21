@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
-import type { Page, Locator, ElementHandle } from 'playwright';
+import type { Page, Locator, ElementHandle, CDPSession } from 'playwright';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
-import type { BrowserCommand, BrowserDriver, Observation, ObservedTarget } from './types.js';
+import type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandInput, Observation, ObservedTarget } from './types.js';
 import { BrowserPreconditionError } from './types.js';
 export type { DriverOptions } from './host.js';
 
@@ -159,8 +159,57 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   async screenshot(): Promise<Buffer | undefined> { return this.#picture; }
   async takeover(): Promise<void> { this.#invalidate(); if (this.#page && !this.#page.isClosed()) await this.host.foreground(this, this.#page, true); }
   resume(): void { this.#invalidate(); this.host.resume(this); }
+  /**
+   * The remote hand, over one CDP session on the active tab.
+   *
+   * The screencast is CDP's because Playwright has no streaming capture, and
+   * every frame is acked as it leaves: an unacked screencast simply stops
+   * after a frame or two. The input side is Playwright's own mouse and
+   * keyboard rather than `Input.dispatch*`, which keeps this driver's one
+   * notion of where the pointer is.
+   */
+  readonly supportsHand = true;
+  #cdp?: CDPSession;
+  readonly hand: BrowserHand = {
+    start: async (onFrame: (frame: HandFrame) => void) => {
+      const page = this.#active();
+      this.#invalidate();
+      await this.hand.stop();
+      const cdp = await page.context().newCDPSession(page);
+      this.#cdp = cdp;
+      cdp.on('Page.screencastFrame', (event: { data: string; sessionId: number; metadata: HandFrame['metadata'] }) => {
+        const { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } = event.metadata;
+        onFrame({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } });
+        void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+      });
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+    },
+    input: async (event: HandInput) => {
+      const page = this.#active();
+      if (event.kind === 'wheel') { await page.mouse.move(event.x, event.y); await page.mouse.wheel(event.deltaX, event.deltaY); return; }
+      if (event.kind === 'mouse') {
+        await page.mouse.move(event.x, event.y);
+        if (event.type === 'mouseMoved') return;
+        const button = event.button === 'none' ? 'left' : event.button;
+        const options = { button, clickCount: Math.max(1, event.clickCount) } as const;
+        if (event.type === 'mousePressed') await page.mouse.down(options); else await page.mouse.up(options);
+        return;
+      }
+      // A typed character is inserted as text; a named key is pressed as one.
+      if (event.type === 'char') { if (event.text) await page.keyboard.insertText(event.text); return; }
+      if (event.type === 'keyDown') await page.keyboard.down(event.key); else await page.keyboard.up(event.key);
+    },
+    stop: async () => {
+      const cdp = this.#cdp;
+      this.#cdp = undefined;
+      if (!cdp) return;
+      await cdp.send('Page.stopScreencast').catch(() => {});
+      await cdp.detach().catch(() => {});
+    },
+  };
   async close(): Promise<void> {
     ++this.#generation; this.#invalidate(); this.#picture = undefined; this.#page = undefined;
+    await this.hand.stop();
     await this.host.release(this); this.#tabs.clear();
   }
 }

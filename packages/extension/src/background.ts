@@ -43,8 +43,13 @@ export function socketUrl(address: string): string {
   return `${parsed.protocol === 'https:' ? 'wss' : 'ws'}://${parsed.host}/api/extension/socket`;
 }
 
-const commands = new BrowserCommands(chrome);
 let socket: WebSocket | undefined;
+/** One way out for everything this worker says, so a frame and a result travel the same socket. */
+const send = (frame: unknown): void => socket?.send(JSON.stringify(frame));
+
+// Screencast frames are not answers to anything: they arrive while the owner
+// is driving and go straight out, outside the command/result pairing.
+const commands = new BrowserCommands(chrome, { onFrame: send });
 let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;
@@ -55,7 +60,7 @@ let incoming: Promise<void> = Promise.resolve();
 const protocol = new Protocol({
   chrome,
   version: chrome.runtime.getManifest().version,
-  send: (frame) => socket?.send(JSON.stringify(frame)),
+  send,
   execute: (command, cancel) => commands.run(command, cancel),
   // The socket ended: sessions and refs go with it. The tabs do not.
   onReset: () => commands.reset(),

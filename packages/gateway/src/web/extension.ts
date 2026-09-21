@@ -27,7 +27,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionResult } from '@buddi/tool-browser';
+import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand, type ExtensionResult, type HandFrame } from '@buddi/tool-browser';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
@@ -145,6 +145,10 @@ export class ExtensionEndpoint implements ExtensionBridge {
   /** A socket that was sent a proof and owes this buddi its token. */
   #challenge?: { socket: WebSocket; nonce: string; extension: string; extensionId: string; timer: NodeJS.Timeout };
   #pending = new Map<string, { resolve: (value: ExtensionResult) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  /** Screencast listeners, by browser session. Frames are never kept here. */
+  #frames = new Map<string, (frame: HandFrame) => void>();
+  /** Other upgrade paths on this server's one listener; see `attachPath`. */
+  #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
   #cancelling = new Map<string, NodeJS.Timeout>();
   #idle: Array<() => void> = [];
@@ -176,6 +180,18 @@ export class ExtensionEndpoint implements ExtensionBridge {
     server.on('upgrade', (req, socket, head) => this.#upgrade(req, socket as Duplex, head));
   }
 
+  /**
+   * Lend this server's `upgrade` listener to a second path.
+   *
+   * Node stops closing unhandled upgrades once any listener exists, so there
+   * is exactly one, here. The remote hand is a different socket with different
+   * authentication, and it gets the request untouched — this only decides
+   * which of the two paths it was.
+   */
+  attachPath(pathname: string, handle: (req: IncomingMessage, socket: Duplex, head: Buffer) => void): void {
+    this.#routes.set(pathname, handle);
+  }
+
   #refuse(socket: Duplex, status: number, reason: string): void {
     socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     socket.destroy();
@@ -183,6 +199,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
 
   #upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const pathname = (req.url ?? '').split('?')[0]?.replace(/\/+$/, '') || '/';
+    const route = this.#routes.get(pathname);
+    if (route) return route(req, socket, head);
     if (pathname !== EXTENSION_SOCKET_PATH) return this.#refuse(socket, 404, 'Not Found');
     // Loopback by the socket, never by a header: a proxy in front of this is
     // not this machine, whatever it says about itself.
@@ -218,6 +236,27 @@ export class ExtensionEndpoint implements ExtensionBridge {
     if (frame.type === 'hello') return this.#hello(ws, frame, extensionId);
     if (frame.type === 'auth') return this.#auth(ws, frame, extensionId);
     if (frame.type === 'result') return this.#result(ws, frame);
+    if (frame.type === 'frame') return this.#screencast(ws, frame);
+  }
+
+  /**
+   * A screencast frame, which nobody asked for by id.
+   *
+   * It is handed straight to whoever is driving that session and kept
+   * nowhere: not in a field here, not in a log line. A frame for a session
+   * with no hand on it is dropped — the extension acks its own frames, so
+   * there is nothing to answer.
+   */
+  #screencast(ws: WebSocket, frame: Record<string, unknown>): void {
+    if (ws !== this.#socket) return;
+    const onFrame = this.#frames.get(typeof frame.session === 'string' ? frame.session : '');
+    if (!onFrame) return;
+    const data = typeof frame.data === 'string' ? frame.data : '';
+    if (data === '') return;
+    const raw = (frame.metadata ?? {}) as Record<string, unknown>;
+    const number = (key: string): number => { const value = raw[key]; return typeof value === 'number' && Number.isFinite(value) ? value : 0; };
+    onFrame({ jpeg: Buffer.from(data, 'base64'), metadata: { deviceWidth: number('deviceWidth'), deviceHeight: number('deviceHeight'),
+      pageScaleFactor: number('pageScaleFactor') || 1, offsetTop: number('offsetTop'), scrollOffsetX: number('scrollOffsetX'), scrollOffsetY: number('scrollOffsetY') } });
   }
 
   #clearPair(): void {
@@ -488,8 +527,14 @@ export class ExtensionEndpoint implements ExtensionBridge {
       }, this.options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS);
       timer.unref?.();
       this.#pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ type: 'command', id, name: command.name, session: command.session, args: command.args }));
+      socket.send(JSON.stringify({ type: 'command', id, name: command.name, session: command.session, args: command.args, ...(command.owner ? { owner: true } : {}) }));
     });
+  }
+
+  /** One hand per session: a second subscription replaces the first. */
+  frames(session: string, onFrame: (frame: HandFrame) => void): () => void {
+    this.#frames.set(session, onFrame);
+    return () => { if (this.#frames.get(session) === onFrame) this.#frames.delete(session); };
   }
 
   /** Close the live connection. The pairing on disk survives it. */
@@ -509,6 +554,8 @@ export class ExtensionEndpoint implements ExtensionBridge {
     for (const timer of this.#cancelling.values()) clearTimeout(timer);
     this.#cancelling.clear();
     for (const waiter of this.#idle.splice(0)) waiter();
+    this.#frames.clear();
+    this.#routes.clear();
     for (const client of this.#wss.clients) client.terminate();
     this.#wss.close();
     this.#server = undefined;

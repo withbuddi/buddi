@@ -7,9 +7,10 @@
  * and this page only says who is driving and links there.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { api, type BrowserStatus, type ControlSettings } from '../api';
+import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
 import { chatRoute } from '../routes';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
+import { RemoteHand } from './RemoteHand';
 
 export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
@@ -410,16 +411,35 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  /*
+   * The take-over that is also a hand.
+   *
+   * The gateway answers Take over with whether this mode can be driven from
+   * here, so the panel does not have to know which of the three is running.
+   * `driving` is the session that answer belonged to: a later status for some
+   * other session must not hand this tab a live view of a screen it never
+   * took over.
+   */
+  const [driving, setDriving] = useState<string | null>(null);
+  const [handNote, setHandNote] = useState<string | null>(null);
   const control = async (action: 'stop' | 'takeover' | 'resume' | 'release') => {
     setBusy(true);
     setFailure(null);
+    setHandNote(null);
     try {
-      if (action !== 'stop' && data?.session) await api.browserControl(action, data.session.id);
-      else await api.browserControl(action);
+      const next = action !== 'stop' && data?.session
+        ? await api.browserControl(action, data.session.id)
+        : await api.browserControl(action);
+      if (action === 'takeover') {
+        if (next.hand && next.session) setDriving(next.session.id);
+        else setHandNote(next.handMessage ?? null);
+      } else setDriving(null);
     }
     catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); reload(); }
   };
+  // The hand lives exactly as long as the take-over does.
+  const hand = driving && data?.session?.id === driving && data.state === 'paused' ? driving : null;
   const canControl = !!data?.enabled && !busy;
   const computer = data?.mode === 'computer';
   // The owner's own Chrome, through the extension: their tabs, not ours.
@@ -453,7 +473,8 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
         </Toolbar>
       ) : null}
       {!controls ? null : compact ? <Details summary="About these controls"><p className="muted">{help}</p></Details> : <p className="muted">{help}</p>}
-      {data?.message ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
+      {handNote ? <Notice tone="warning" role="status">{handNote}</Notice> : null}
+      {data?.message && !hand ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
       {data?.session ? (
         <div className="browser-task">
           <div className="ui-row"><strong>{data.session.agentId}</strong><span className="muted">{data.session.steps} / {data.session.maxSteps} steps</span></div>
@@ -463,7 +484,10 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
       ) : (
         <p className="browser-task muted">{data?.enabled ? computer ? 'No agent is driving. Ask an agent granted browser.* to open a website or an allowed native app.' : 'No agent is driving. Ask an agent granted browser.* to open a website.' : 'The host browser is unavailable. Start buddi serve on a machine with a desktop session.'}</p>
       )}
-      <div className="browser-window">
+      {hand ? (
+        <RemoteHand sessionId={hand} csrf={csrfToken()} onGiveBack={() => void control('resume')} />
+      ) : null}
+      <div className="browser-window" hidden={!!hand}>
         <div className="browser-address"><span aria-hidden="true">◉</span><span>{data?.page?.url ?? (computer ? 'Waiting for an application' : 'Waiting for a website')}</span></div>
         {data?.hasScreenshot && data.page ? (
           <figure>
@@ -485,7 +509,7 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
           <ul className="ui-prose">{data!.page!.tabs.map((tab) => <li key={tab.id}>{tab.title || tab.id} — {tab.url}</li>)}</ul>
         </Details>
       ) : null}
-      <p className="muted">{computer ? 'Sign in directly in the host app during takeover. Don’t send passwords or MFA codes in chat. Native apps retain your existing logins and documents. Secure accessibility fields are masked; other sensitive window content can still appear in screenshots.' : 'Sign in directly in this conversation’s host tab during takeover. Don’t send passwords or MFA codes in chat. Agent tabs share saved logins and cookies.'} Screenshots update after agent actions; this is not a live video feed.</p>
+      <p className="muted">{computer ? 'Sign in directly in the host app during takeover. Don’t send passwords or MFA codes in chat. Native apps retain your existing logins and documents. Secure accessibility fields are masked; other sensitive window content can still appear in screenshots.' : 'Sign in directly in this conversation’s host tab during takeover. Don’t send passwords or MFA codes in chat. Agent tabs share saved logins and cookies.'} {hand ? 'While you are driving this is a live view of the page; nothing you type is kept.' : 'Screenshots update after agent actions; this is not a live video feed.'}</p>
     </section>
   );
 }

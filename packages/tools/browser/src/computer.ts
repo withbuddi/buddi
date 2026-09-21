@@ -72,6 +72,16 @@ const roles: Record<string, string> = { AXButton: 'button', AXLink: 'link', AXTe
 
 export class ComputerDriver implements BrowserDriver {
   readonly preservesWindows = true;
+  /**
+   * No remote hand in computer mode.
+   *
+   * The native helper acts on accessibility nodes — click this button, fill
+   * that field — and has no raw pointer or keystroke primitive to forward a
+   * hand to. Streaming the window would therefore give the owner a picture
+   * they cannot touch, which is worse than one honest sentence.
+   */
+  readonly supportsHand = false;
+  readonly handMessage = 'Take over at the computer for this mode.';
   #appId?: string;
   #snapshot?: Snapshot;
   #observation?: Observation;

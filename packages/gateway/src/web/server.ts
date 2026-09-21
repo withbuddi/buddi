@@ -113,6 +113,7 @@ import {
   type TailscaleWhois,
 } from './tailscale.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
+import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
   CSRF_COOKIE,
   CSRF_HEADER,
@@ -354,6 +355,32 @@ export function createWebApp(deps: WebServerDeps): Server {
   const assetsDir = deps.assetsDir ?? webAssetsDir();
   const log = deps.log ?? ((line: string) => console.error(line));
   const extension = deps.extension ?? extensionEndpoint(deps.env ?? process.env, log);
+  /*
+   * The remote hand, on the same upgrade listener as the extension socket.
+   *
+   * Its gate is this server's, not the extension's: the owner's session cookie
+   * on the upgrade, an Origin this server would accept a write from, and the
+   * CSRF token as the socket's first frame. A tailnet session is re-confirmed
+   * here exactly as it is on every request, because a socket that outlives the
+   * identity behind it is a socket nobody revoked.
+   */
+  const hand = new RemoteHandEndpoint({
+    log,
+    browser: () => deps.browser ?? hostBrowser(deps.env ?? process.env),
+    authorize: async (req) => {
+      const now = deps.now();
+      const origin = requestOrigin(req);
+      if (origin === undefined || !allowed().has(origin)) return null;
+      const scope = requestScope(req);
+      const session = sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE], scope, now);
+      if (!session) return null;
+      if (session.via === 'tailscale') {
+        const confirmed = await identityOf(req, now);
+        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) { sessions.destroy(session.id); return null; }
+      }
+      return session;
+    },
+  });
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -472,7 +499,8 @@ export function createWebApp(deps: WebServerDeps): Server {
   // "Your browser": the only path this server ever upgrades. Attached here
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
-  server.once('close', () => extension.shutdown());
+  extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
+  server.once('close', () => { extension.shutdown(); hand.shutdown(); });
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1283,8 +1311,22 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (control) {
       const body = await readJsonBody(req) as { sessionId?: unknown } | null;
       if (body?.sessionId !== undefined && typeof body.sessionId !== 'string') return sendJson(res, 400, { error: 'sessionId must be a string' });
+      const action = control[1] as 'stop' | 'takeover' | 'resume' | 'release';
+      const sessionId = body?.sessionId as string | undefined;
       try {
-        return sendJson(res, 200, await browser.control(control[1] as 'stop' | 'takeover' | 'resume' | 'release', body?.sessionId as string | undefined));
+        // Giving it back, releasing and stopping all end the take-over, so
+        // they all end the hand — before the status is read, so a dashboard
+        // still holding the socket is told rather than left clicking on a
+        // frozen picture.
+        if (action !== 'takeover') await hand.close(action === 'stop' ? undefined : sessionId, action === 'resume' ? 'You gave the screen back.' : 'That session was released.');
+        const status = await browser.control(action, sessionId);
+        // Whether this screen can be driven from here at all. The dashboard
+        // shows the mode's own sentence when it cannot.
+        const taken = sessionId ?? status.session?.id;
+        const offer = action === 'takeover' && taken ? browser.hand?.({ sessionId: taken }) : undefined;
+        return sendJson(res, 200, offer
+          ? { ...status, hand: !!offer.hand, ...(offer.hand ? {} : { handMessage: offer.message }) }
+          : status);
       } catch (error) {
         return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) });
       }
