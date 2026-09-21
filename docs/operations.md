@@ -198,6 +198,32 @@ Do not put a ticket in logs or persistent configuration. After sign-in, bookmark
 the clean URL. A service restart or expired session requires a fresh ticket.
 Disable only this mapping with `tailscale serve --https=9443 off`.
 
+**Signing in through Tailscale.** With Serve in front of the dashboard, you can
+skip the ticket entirely: Settings → System → *Sign in through Tailscale*, turn
+it on and name the Tailscale login that may sign in (the field is prefilled with
+the login this machine is signed in as). Anyone signed in to Tailscale as that
+login, on any device in your tailnet, is then signed in to buddi; everyone else
+still gets a 401.
+
+The headers Serve adds (`Tailscale-User-Login` and friends) are *not* what
+grants this. An identity is honoured only when the setting is on with an allowed
+login, the connection to the gateway comes from loopback (Serve is a local
+process), `X-Forwarded-For` is a tailnet address (`100.64.0.0/10` or
+`fd7a:115c:a1e0::/48`), and the local `tailscaled` — asked over its own unix
+socket — says that address belongs to that login. A mismatch, a missing daemon
+or a failed whois is no identity at all: the request is unauthenticated and gets
+the same 401 it would have got before, with one line in the log saying why (at
+most once a minute). Answers are cached for a minute, so removing a device from
+the tailnet takes effect while you are still looking at the screen.
+
+The session it mints is an ordinary **remote** session: 12 hours idle, `Secure`
+cookies, CSRF and Origin checks on every write. The setting itself can only be
+changed from a local or ticket session — the panel is read-only when viewed
+through Tailscale — so a device someone walked off with cannot widen access.
+`buddi doctor`'s `tailscale` row says whether the daemon is there, who may sign
+in, whether the public origin is a `.ts.net` one and whether `tailscale serve
+status` forwards anything to the gateway's port.
+
 **Opening it without a terminal.** Optional, and alongside `buddi service
 install` rather than part of it:
 

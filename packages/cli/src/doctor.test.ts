@@ -6,6 +6,7 @@ import {
   checkNodeVersion,
   checkPlugins,
   checkRecovery,
+  checkTailscale,
   checkVault,
   collectChecks,
   exitCodeFor,
@@ -580,5 +581,64 @@ describe('the recovery row', () => {
 
   it('says so plainly when the database could not be asked', () => {
     expect(checkRecovery({ active: false, unknown: true }).status).toBe('warn');
+  });
+});
+
+describe('the tailscale row', () => {
+  const SERVING = { checked: true, routesGateway: true };
+
+  it('is quiet, and says whether a daemon is here, while the setting is off', () => {
+    const row = checkTailscale({ daemon: { reachable: true, self: 'owner@example.com' }, setting: null, gatewayPort: 4317, serve: SERVING });
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('off');
+    expect(row.detail).toContain('tailscaled is running as owner@example.com');
+  });
+
+  it('names who may sign in, and where it is published', () => {
+    const row = checkTailscale({
+      daemon: { reachable: true, self: 'owner@example.com' },
+      setting: { enabled: true, login: 'owner@example.com' },
+      publicOrigin: 'https://buddi.tail1234.ts.net:9443',
+      gatewayPort: 4317,
+      serve: SERVING,
+    });
+    expect(row).toEqual({ status: 'ok', detail: 'on for owner@example.com; tailscaled is running as owner@example.com; published at https://buddi.tail1234.ts.net:9443; serve forwards to 127.0.0.1:4317' });
+  });
+
+  it('warns when it is on but nothing forwards to the gateway', () => {
+    const row = checkTailscale({
+      daemon: { reachable: true, self: 'owner@example.com' },
+      setting: { enabled: true, login: 'owner@example.com' },
+      publicOrigin: 'https://buddi.tail1234.ts.net:9443',
+      gatewayPort: 4317,
+      serve: { checked: true, routesGateway: false },
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('serve forwards nothing to 127.0.0.1:4317');
+  });
+
+  it('warns when it is on with no daemon and no .ts.net origin', () => {
+    const row = checkTailscale({
+      daemon: { reachable: false },
+      setting: { enabled: true, login: 'owner@example.com' },
+      publicOrigin: 'https://buddi.example.com',
+      gatewayPort: 4317,
+      serve: SERVING,
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('without a local tailscaled');
+    expect(row.detail).toContain('not a .ts.net origin');
+  });
+
+  it('says it could not check when there is no tailscale binary', () => {
+    const row = checkTailscale({
+      daemon: { reachable: true, self: 'owner@example.com' },
+      setting: { enabled: true, login: 'owner@example.com' },
+      publicOrigin: 'https://buddi.tail1234.ts.net:9443',
+      gatewayPort: 4317,
+      serve: { checked: false, error: 'the tailscale binary was not found' },
+    });
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('could not check');
   });
 });

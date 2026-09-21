@@ -10,6 +10,7 @@ export * from './agents.js';
 export * from './profile.js';
 export * from './static.js';
 export * from './extension.js';
+export * from './tailscale.js';
 export * from './server.js';
 export * from './chat.js';
 export * from './stream.js';
