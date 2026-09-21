@@ -42,6 +42,7 @@ import {
   runSources,
   runWorker,
   collectSentinels,
+  createPool,
   type Job,
   type JobHandler,
   type Mission,
@@ -61,6 +62,7 @@ import {
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
+import { migrateAtStart } from './plugins/migrate.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
 import {
   createMissionExecutor,
@@ -370,6 +372,33 @@ export async function main(): Promise<void> {
   // Waiting here costs nothing and makes the installation self-healing: the
   // first probe after Docker comes up connects and serve starts.
   await waitForDatabase({ databaseUrl: process.env.DATABASE_URL });
+
+  /*
+   * Migrations, before anything is built on the schema they change.
+   *
+   * The packaged installation has always done this — the supervisor migrates
+   * and then spawns the gateway — and a checkout used to be the one place
+   * where `serve` would happily come up on last month's schema because the
+   * owner forgot `buddi migrate` after a pull. Same function, same order, same
+   * meanings: the "newer than this code" refusal first, then core and the
+   * compiled-in plugins (a failure here stops the start), then the installed
+   * third-party ones (a failure there demotes that plugin to the load report
+   * and the start continues).
+   *
+   * Its own pool, ended here: `createWiringAsync` below reads tables this may
+   * have just created, so it must not be the thing that opens them.
+   */
+  const migrationPool = createPool(process.env.DATABASE_URL as string);
+  try {
+    await migrateAtStart(migrationPool, process.env, { log: (line) => console.error(line) });
+  } catch (err) {
+    console.error(
+      `buddi serve did not start: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    await migrationPool.end().catch(() => {});
+    process.exit(1);
+  }
+  await migrationPool.end().catch(() => {});
 
   let wiring;
   try {
