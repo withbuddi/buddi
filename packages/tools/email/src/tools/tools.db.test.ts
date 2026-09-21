@@ -653,9 +653,16 @@ suite('email tools (postgres)', () => {
       // An offered action ("Draft a reply") leads, at most, to a draft. This is
       // the assertion that says so structurally rather than by inspection:
       // every tool this plugin ships is a read or a write over its own schema
-      // except the one gated tool, so there is no second path to the wire.
+      // except the gated ones, and only one of those reaches the network.
+      //
+      // The two policy tools are gated for a different reason: nothing leaves
+      // this machine, but a standing rule decides every future message from a
+      // sender with no model and no second chance to object, so the moment it
+      // is *written* is the moment the owner has to agree to it.
       const gated = registry.list().filter((t) => t.tier !== 'auto');
-      expect(gated.map((t) => t.name)).toEqual(['email.send']);
+      expect(new Set(gated.map((t) => t.name))).toEqual(
+        new Set(['email.send', 'email.set_policy', 'email.revoke_policy']),
+      );
 
       // And drafting, the thing a tapped action actually does, sends nothing.
       const before = smtp.sent.length;

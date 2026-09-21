@@ -12,6 +12,7 @@ import { SETTINGS_SECTIONS, WELCOME_ROUTE, settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
+import { Email } from './Email';
 import { Providers } from './Providers';
 import { Watchers } from './Watchers';
 import { You } from './You';
@@ -39,6 +40,7 @@ export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
+      {section === 'email' ? <Email embedded /> : null}
       {section === 'backup' ? <Backup /> : null}
       {section === 'plugins' ? <Plugins /> : null}
       {section === 'system' ? <System timezone={timezone} /> : null}

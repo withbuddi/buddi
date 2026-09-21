@@ -50,6 +50,8 @@ export interface MessageRecord {
   uid: number;
   messageId: string | null;
   threadKey: string | null;
+  /** The List-Id header, normalized, or null. Null on rows ingested before it. */
+  listId: string | null;
   from: string;
   to: string[];
   /** Who was copied. `[]` on rows ingested before the column existed. */
@@ -67,7 +69,7 @@ export interface MessageRecord {
 }
 
 export const MESSAGE_COLUMNS =
-  'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr, ' +
+  'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr, ' +
   'to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
   'body_purged_at';
 
@@ -89,6 +91,7 @@ export function toMessage(row: Record<string, any>): MessageRecord {
     uid: Number(row.uid),
     messageId: row.message_id ?? null,
     threadKey: row.thread_key ?? null,
+    listId: row.list_id ?? null,
     from: row.from_addr,
     to: stringArray(row.to_addrs),
     cc: stringArray(row.cc),

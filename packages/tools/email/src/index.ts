@@ -22,6 +22,7 @@ import { draftNew, draftReply } from './tools/drafts.js';
 import { listRecent, readMessage, search } from './tools/read.js';
 import { senderProfile } from './tools/sender.js';
 import { createSendTool } from './tools/send.js';
+import { listPolicies, revokeEmailPolicy, setPolicy } from './tools/policies.js';
 import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
 import type { EnvLike } from './config.js';
@@ -84,6 +85,9 @@ export function createEmailManifest(
       draftNew,
       getSettings,
       setSettings,
+      listPolicies,
+      setPolicy,
+      revokeEmailPolicy,
       createSendTool({
         send: opts.send ?? smtpFactory,
         ...(opts.env ? { env: opts.env } : {}),
@@ -105,6 +109,63 @@ export { listRecent, readMessage, search } from './tools/read.js';
 export { senderProfile } from './tools/sender.js';
 export { triageRecord } from './tools/triage.js';
 export { getSettings, setSettings } from './tools/settings.js';
+export {
+  listPolicies,
+  policiesView,
+  renderPolicyPreview,
+  revokeEmailPolicy,
+  setPolicy,
+  viewOf,
+  type PolicyEnvelope,
+  type PolicyView,
+} from './tools/policies.js';
+export {
+  applyPolicies,
+  describeDecision,
+  domainOf,
+  isLive,
+  isUnimplementedAction,
+  matches,
+  POLICY_ACTIONS,
+  POLICY_ORIGINS,
+  POLICY_SCOPES,
+  UNIMPLEMENTED_ACTIONS,
+  type GateDecision,
+  type MessageHeader,
+  type PolicyAction,
+  type PolicyOrigin,
+  type PolicyParams,
+  type PolicyRecord,
+  type PolicyScope,
+} from './policies/gate.js';
+export {
+  createPolicy,
+  findPolicy,
+  keepPolicy,
+  loadPolicies,
+  normalizeMatcher,
+  policyForSender,
+  policyStats,
+  recordEvent,
+  refusalFor,
+  revokePolicy,
+  seedLearnedIgnorePolicies,
+  toEvent,
+  toPolicy,
+  PolicyRefusal,
+  POLICY_COLUMNS,
+  type CreatePolicyInput,
+  type GateEvent,
+} from './policies/store.js';
+export {
+  CONSISTENT_VERDICTS,
+  learnedProposal,
+  learnFromVerdict,
+  ownerHasRepliedTo,
+  senderVerdicts,
+  type Proposal,
+  type Verdict,
+} from './policies/learn.js';
 export {
   DEFAULT_RETENTION_DAYS,
   MAX_RETENTION_DAYS,

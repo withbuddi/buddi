@@ -27,6 +27,12 @@ export interface FetchedMessage {
   messageId: string | null;
   inReplyTo: string | null;
   references: string[];
+  /**
+   * The List-Id header, as it arrived, or null when the message carried none.
+   * The gate's `list-id` scope is matched against it: a newsletter changes its
+   * From address far more readily than its list.
+   */
+  listId: string | null;
   from: Address;
   to: Address[];
   cc: Address[];

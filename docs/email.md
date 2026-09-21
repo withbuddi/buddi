@@ -1,7 +1,9 @@
 # Email: accounts, threads, policies, watchers
 
-Status: specification for review, 2026-09-21. It replaces nothing yet; the
-current plugin has no document, and this is the one it should have had.
+Status: step 1 built on branch email-policies, 2026-09-21. The rest is still a
+specification for review; the current plugin had no document, and this is the
+one it should have had. What §13.1 asks for — policies, the gate, the backfill
+and the Learned list — is implemented, with two departures noted in §5.
 
 ## 1. The verdict on today
 
@@ -85,6 +87,20 @@ Before a new message wakes anyone, the source runs the gate:
 The gate is a pure function over the policy table and the message header,
 tested without a model. What it did is written to `events` and shown on
 the message's row.
+
+Two departures, as built:
+
+- **`archive` and `label` are refused, not performed.** The IMAP port is
+  peek-only by construction — reading mail must not mutate it — so both are
+  valid vocabulary with nothing behind them, and a policy carrying one is
+  refused at creation with "not yet" rather than written and silently never
+  fired.
+- **`notify` queues a run rather than sending the line itself.** A source
+  has no channel to the owner: `SourceContext` is `db`, `now`, `timezone`,
+  `log` and `enqueueRun`, and speaking is an agent's act. So the action
+  queues a run whose instruction is to send exactly that one line and
+  nothing else. It saves the owner's attention, not a model call; only
+  `ignore` saves the call.
 
 ## 6. What a triage run receives
 
