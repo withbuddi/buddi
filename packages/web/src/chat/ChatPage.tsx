@@ -124,6 +124,15 @@ export function ChatPage({
   /** "(New conversation — …)". Said once, above the thread it explains. */
   const [notice, setNotice] = useState<string | null>(null);
   const [takingOffer, setTakingOffer] = useState<string | null>(null);
+  /**
+   * Chips the owner has clicked, gone from the page before the server answers.
+   *
+   * A chip is a thing you click once, and leaving it sitting there while the
+   * take is in flight invites the second click that the claim then refuses. It
+   * comes back if the take fails — with the reason in the banner — because a
+   * chip that vanished and did nothing is the worse half of the same bug.
+   */
+  const [takenOffers, setTakenOffers] = useState<string[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [width, setWidth] = useState(readWidth);
@@ -569,6 +578,18 @@ export function ChatPage({
   // Model accounts otherwise.
   const blockedFix = cannotRunFix(group ? null : agent);
 
+  /**
+   * The chips that are still on the table: not clicked, not expired.
+   *
+   * An offer has a life — the server stops listing it once it is past — and a
+   * page that has been open all afternoon is holding an older answer than the
+   * server's. Drawing a chip that can only be refused is worse than drawing
+   * none, so the expiry it was sent with is honoured here too.
+   */
+  const openOffers = (conversation?.offers ?? []).filter(
+    (offer) => !takenOffers.includes(offer.id) && Date.parse(offer.expiresAt) > now,
+  );
+
   const thinking = agent && switchedFor === agent.id ? thinkingNow : (agent?.thinking ?? null);
   /**
    * Switch thinking from the composer.
@@ -642,13 +663,25 @@ export function ChatPage({
   const takeOffer = (id: string): void => {
     setError(null);
     setTakingOffer(id);
+    setTakenOffers((taken) => [...taken, id]);
     api
-      .takeOffer(id)
-      .catch((err: unknown) => setError(message(err)))
-      .finally(() => {
-        setTakingOffer(null);
+      .takeOffer(id, conversationId ?? undefined)
+      .then((result) => {
+        // Taken in this thread: it is a turn like any other, so the page waits
+        // for it the way it waits for something typed — the label appears as
+        // the owner's message and the answer streams in under it.
+        if (result.runId) {
+          setNotice(null);
+          setRunning(true);
+        }
         if (conversationId) void refresh(conversationId);
-      });
+      })
+      .catch((err: unknown) => {
+        setTakenOffers((taken) => taken.filter((other) => other !== id));
+        setError(message(err));
+        if (conversationId) void refresh(conversationId);
+      })
+      .finally(() => setTakingOffer(null));
   };
 
   const answerQuestion = (answer: string, optionId?: string): void => {
@@ -1070,9 +1103,9 @@ export function ChatPage({
         )) : null}
         </MessageList>
 
-        {(conversation?.offers ?? []).length > 0 ? (
+        {openOffers.length > 0 ? (
           <div className="wb-offers" data-testid="chat-offers">
-            {(conversation?.offers ?? []).map((offer) => (
+            {openOffers.map((offer) => (
               <button
                 key={offer.id}
                 className="ui-btn"

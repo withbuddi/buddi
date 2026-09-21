@@ -1260,9 +1260,18 @@ export const api = {
       `/agents/${encodeURIComponent(id)}/engine`,
       change,
     ),
-  takeOffer: (id: string) =>
-    post<{ id: string; label: string; jobId: string | null }>(
+  /**
+   * Take one of the things an agent offered.
+   *
+   * The request names an id — never a prompt. `conversationId` is the thread
+   * the page has open, and it only decides *where the owner is looking*: a chip
+   * taken in its own conversation runs there, as a turn they can watch, and
+   * anything else goes on the queue exactly as it did.
+   */
+  takeOffer: (id: string, conversationId?: string) =>
+    post<{ id: string; label: string; jobId: string | null; conversationId?: string; runId?: string }>(
       `/offers/${encodeURIComponent(id)}/take`,
+      conversationId ? { conversationId } : {},
     ),
   cancelReminder: (id: string) =>
     post<{ id: string; state: string }>(`/reminders/${encodeURIComponent(id)}/cancel`, {

@@ -14,6 +14,7 @@ import {
   listOpenOffers,
   offerActions,
   recordOfferJob,
+  releaseOffer,
   takeOffer,
   withdrawOffers,
 } from './store.js';
@@ -128,6 +129,32 @@ suite('offers (postgres)', () => {
     const row = await getOffer(pool, id);
     expect(row?.takenJobId).toBe('11111111-1111-4111-8111-111111111111');
     expect(row?.takenVia).toBe('telegram');
+  });
+
+  /**
+   * The claim is made before the run, so two taps cannot become two runs. When
+   * the run then fails to start at all, the claim is handed back — otherwise a
+   * surface that stumbled would leave a button that is dead for everybody.
+   * Never a claim that did start something: a job on the row is the proof.
+   */
+  it('gives a claim back when nothing was started from it, and never one that was', async () => {
+    const [first, second] = await two();
+    const nothing = first?.id as string;
+    const started = second?.id as string;
+
+    await takeOffer(pool, { id: nothing, via: 'web', now: NOW });
+    expect(await releaseOffer(pool, nothing)).toBe(true);
+    const back = await getOffer(pool, nothing);
+    expect(back?.takenAt).toBeNull();
+    expect(back?.takenVia).toBeNull();
+    // On the table again, and takeable again.
+    expect((await listOpenOffers(pool, { now: NOW })).map((o) => o.id)).toContain(nothing);
+    expect((await takeOffer(pool, { id: nothing, via: 'web', now: NOW })).ok).toBe(true);
+
+    await takeOffer(pool, { id: started, via: 'telegram', now: NOW });
+    await recordOfferJob(pool, started, '11111111-1111-4111-8111-111111111111');
+    expect(await releaseOffer(pool, started)).toBe(false);
+    expect((await getOffer(pool, started))?.takenAt).not.toBeNull();
   });
 
   /**

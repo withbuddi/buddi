@@ -1012,6 +1012,87 @@ suite('the dashboard chat API', () => {
       expect(await offersOf(client, conversationId)).toHaveLength(0);
     });
 
+    it('takes a chip in the open thread as a turn of it, and queues nothing', async () => {
+      const client = await signedIn();
+      provider.script = [
+        declare([{ label: 'Send it', prompt: 'send the reply I drafted to Dorothée' }]),
+        say("The draft is ready. It hasn't been sent."),
+        say('Sent.'),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply to Dorothée' })
+      ).json()) as any;
+      await settled(conversationId);
+      const [offer] = await offersOf(client, conversationId);
+
+      // Clicked in the conversation that offered it: the page says where it is,
+      // and the take runs there rather than queueing a run whose answer arrives
+      // somewhere the owner is not looking.
+      const res = await client.post(`/api/offers/${offer.id}/take`, { conversationId });
+      expect(res.status).toBe(200);
+      const took = (await res.json()) as any;
+      expect(took).toMatchObject({ label: 'Send it', jobId: null, conversationId });
+      expect(took.runId).toMatch(/^[0-9a-f-]{36}$/);
+      await settled(conversationId, 2);
+
+      // The transcript shows what the owner *did*: the chip's label, stamped
+      // with where it came from, with the sentence the agent wrote behind it.
+      const view = await client.json<any>(`/api/chat/conversations/${conversationId}`);
+      const turn = (view.messages as any[]).find((m: any) => m.speaker === 'offer:Send it');
+      expect(turn).toBeDefined();
+      expect(turn.role).toBe('user');
+      expect(turn.blocks[0].text).toBe('send the reply I drafted to Dorothée');
+      // And the answer to it is in the same thread, under it.
+      const texts = (view.messages as any[])
+        .filter((m: any) => m.role === 'assistant')
+        .flatMap((m: any) => m.blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text));
+      expect(texts).toContain('Sent.');
+
+      // Nothing was queued: no job row, and no job stamped on the offer.
+      const { rows } = await pool.query('select taken_via, taken_job_id from core.offers where id = $1', [offer.id]);
+      expect(rows[0].taken_via).toBe('web');
+      expect(rows[0].taken_job_id).toBeNull();
+      const { rows: jobs } = await pool.query(
+        'select count(*)::int as n from core.jobs where dedup_key = $1',
+        [`offer:${offer.id}`],
+      );
+      expect(jobs[0].n).toBe(0);
+      // The chip is gone from the thread: taken, not still on the table.
+      expect(await offersOf(client, conversationId)).toEqual([]);
+    });
+
+    it('refuses an expired chip with a sentence the page can show', async () => {
+      const client = await signedIn();
+      provider.script = [
+        declare([{ label: 'Send it', prompt: 'send the reply I drafted' }]),
+        say('Drafted.'),
+      ];
+      const { conversationId } = (await (
+        await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'draft a reply' })
+      ).json()) as any;
+      await settled(conversationId);
+      const [offer] = await offersOf(client, conversationId);
+
+      // A week later, on a page that has been open all along.
+      await pool.query(
+        "update core.offers set expires_at = now() - interval '1 minute' where id = $1",
+        [offer.id],
+      );
+      // It is not offered any more...
+      expect(await offersOf(client, conversationId)).toEqual([]);
+      // ...and clicking the one the page still holds says so, in words.
+      const late = await client.post(`/api/offers/${offer.id}/take`, { conversationId });
+      expect(late.status).toBe(409);
+      expect(((await late.json()) as any).error).toBe('This offer has expired.');
+      // Nothing ran: the transcript is the one turn it always was.
+      const view = await client.json<any>(`/api/chat/conversations/${conversationId}`);
+      expect(
+        (view.messages as any[]).some(
+          (m: any) => typeof m.speaker === 'string' && m.speaker.startsWith('offer:'),
+        ),
+      ).toBe(false);
+    });
+
     it('adds nothing to a turn that offered nothing', async () => {
       const client = await signedIn();
       // The database's own clock, for a column the database stamps: what this

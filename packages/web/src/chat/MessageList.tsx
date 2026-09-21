@@ -19,7 +19,7 @@ import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import { Markdown, MarkdownAgents } from './markdown';
-import type { ChatAgent, ChatBlock, ChatMessage } from '../chat/types';
+import { offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage } from '../chat/types';
 import { AgentAvatar } from '../ui';
 
 /**
@@ -156,6 +156,27 @@ export function MessageList({
             </div>
           );
         }
+        /*
+         * A turn the owner started by clicking a chip.
+         *
+         * What the model was given is the sentence the agent wrote; what the
+         * owner did was click "Send it". Both are true, and the thread shows
+         * the one they did — the sentence is the title, a hover away, so
+         * nothing is hidden about what was actually asked.
+         */
+        const offerLabel = message.role === 'user' ? offerTurnLabel(speaker) : null;
+        if (offerLabel) {
+          const asked = (message.blocks ?? [])
+            .filter((b): b is Extract<ChatBlock, { type: 'text' }> => b.type === 'text')
+            .map((b) => b.text)
+            .join('\n');
+          return (
+            <div key={message.id} className="wb-msg" data-role="user" data-testid="offer-turn">
+              <div className="wb-bubble wb-bubble-offer" title={asked}>{offerLabel}</div>
+            </div>
+          );
+        }
+
         const ask = speakers && who && message.role === 'user' ? askedFor(message) : null;
         if (ask) {
           // The member asked is whoever answers next; the request names only the asker.

@@ -27,6 +27,7 @@ import {
   getAction,
   getMission,
   recordOfferJob,
+  releaseOffer,
   resumeJobForAction,
   retryJob,
   takeOffer,
@@ -315,42 +316,127 @@ export async function cancelReminderFromWeb(
   return { ok: true, status: 200, body: { id: reminder.id, state: reminder.state } };
 }
 
+/** What the page is told when it clicks a chip that has already gone stale. */
+export const OFFER_EXPIRED = 'This offer has expired.';
+
+/** Start the offer's prompt as a turn of its own conversation. */
+export type SendOfferTurn = (input: {
+  agentId: string;
+  conversationId: string;
+  prompt: string;
+  offer: { id: string; label: string };
+}) => Promise<
+  | { ok: true; conversationId: string; runId: string }
+  | { ok: false; status: number; error: string }
+>;
+
+export interface TakeOfferOptions {
+  /** The conversation open on the page when the chip was clicked, if any. */
+  conversationId?: string | undefined;
+  /** How this process runs a turn. Absent: everything goes on the queue. */
+  send?: SendOfferTurn | undefined;
+}
+
+export interface TakeOfferResultBody {
+  id: string;
+  label: string;
+  /** The queued run, when this take went on the queue. */
+  jobId: string | null;
+  /** The conversation the turn is running in, when it ran in the thread. */
+  conversationId?: string;
+  runId?: string;
+}
+
 /**
  * The owner chose one of the actions an agent offered, on the dashboard.
  *
- * Identical to the Telegram tap in every way that matters, because it is the
- * same two steps against the same rows: claim the offer atomically, then
- * enqueue an ordinary agent run with the prompt the *agent* wrote. The request
- * body names an id and nothing else — there is no way to post a prompt of your
- * own through here — and the run that starts has the tools, tiers and approval
- * gate it always had.
+ * The claim is the Telegram tap's claim, to the letter: one atomic update, so
+ * two surfaces racing the same chip produce one run and one "already on it".
+ * What happens *after* the claim is where the dashboard differs, and it differs
+ * because the owner is looking at the conversation.
+ *
+ *  - **The chip in the open thread runs as a turn of that thread.** The offer's
+ *    prompt is sent on the offer's conversation exactly as `POST
+ *    /api/chat/:agent/messages` sends a typed one — same queue, same stream,
+ *    same approvals — carrying the label so the transcript shows what was
+ *    clicked. No job: a run the owner is watching does not belong on a queue
+ *    whose answer is delivered by notification.
+ *  - **Anything else stays queued**: a chip taken from the Offers list, or a
+ *    take in a process with no chat surface. The handler puts that run in the
+ *    offer's own conversation, so its answer lands in the thread it came from
+ *    rather than only in Telegram.
+ *
+ * The request still names an id and nothing else. There is no way to post a
+ * prompt of your own through here, and the run that starts has the tools,
+ * tiers and approval gate it always had.
  */
 export async function takeOfferFromWeb(
   deps: WriteDeps,
   offerId: string,
-): Promise<WriteResult<{ id: string; label: string; jobId: string | null }>> {
+  options: TakeOfferOptions = {},
+): Promise<WriteResult<TakeOfferResultBody>> {
   const taken = await takeOffer(deps.pool, { id: offerId, via: 'web', now: deps.now() });
   if (!taken.ok) {
-    return fail(taken.reason === 'unknown' ? 404 : 409, taken.message);
+    // Expired is said in the page's own words: the store's sentence is written
+    // for a chat ("just ask me instead"), and this one lands in a banner.
+    return fail(
+      taken.reason === 'unknown' ? 404 : 409,
+      taken.reason === 'expired' ? OFFER_EXPIRED : taken.message,
+    );
   }
+  const offer = taken.offer;
+
+  const inThread =
+    options.send !== undefined &&
+    offer.conversationId !== null &&
+    options.conversationId === offer.conversationId;
+
+  if (inThread) {
+    const sent = await options.send!({
+      agentId: offer.agentId,
+      conversationId: offer.conversationId as string,
+      prompt: offer.prompt,
+      offer: { id: offer.id, label: offer.label },
+    });
+    if (!sent.ok) {
+      // The claim was made before the turn, so two clicks cannot become two
+      // runs. A turn that never started would otherwise leave the chip claimed
+      // with nothing behind it, so the claim is given back and the page is told
+      // why — the chip comes back rather than going quietly dead.
+      await releaseOffer(deps.pool, offer.id).catch(() => false);
+      return fail(sent.status, sent.error);
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        id: offer.id,
+        label: offer.label,
+        jobId: null,
+        conversationId: sent.conversationId,
+        runId: sent.runId,
+      },
+    };
+  }
+
   let jobId: string | null = null;
   if (deps.jobs) {
     const job = await enqueue(deps.pool, {
       kind: 'agent-run',
       payload: {
-        agentId: taken.offer.agentId,
-        prompt: taken.offer.prompt,
-        conversationHint: `offer:${taken.offer.id}`,
+        agentId: offer.agentId,
+        prompt: offer.prompt,
+        conversationHint: `offer:${offer.id}`,
       },
-      dedupKey: `offer:${taken.offer.id}`,
+      dedupKey: `offer:${offer.id}`,
     });
     jobId = job.id;
-    await recordOfferJob(deps.pool, taken.offer.id, job.id).catch(() => {});
+    await recordOfferJob(deps.pool, offer.id, job.id).catch(() => {});
   }
   return {
     ok: true,
     status: 200,
-    body: { id: taken.offer.id, label: taken.offer.label, jobId },
+    body: { id: offer.id, label: offer.label, jobId },
   };
 }
 
