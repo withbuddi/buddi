@@ -41,7 +41,7 @@ import {
   TRIAGE_AGENT_ID,
   triageDedupKey,
 } from '@buddi/tool-email';
-import { manifest as financeManifest } from '@buddi/tool-finance';
+import { fixturePluginManifest } from './__fixtures__/plugin-manifest.js';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -223,7 +223,7 @@ suite('end to end: mail in, approved send out', () => {
     url.pathname = `/${TEST_DB}`;
     pool = createPool(url.toString());
     // Core plus every plugin the catalog needs a schema for.
-    await runMigrations(pool, [emailManifest, memoryManifest, financeManifest, artifactsManifest]);
+    await runMigrations(pool, [emailManifest, memoryManifest, artifactsManifest]);
     await ensureOwner(pool, 'owner');
     await pairSurfaceIdentity(pool, {
       surface: SURFACE,
@@ -257,7 +257,7 @@ suite('end to end: mail in, approved send out', () => {
 
     /* ---- 2. the source poll enqueues an agent-run ---- */
     const registry = new ToolRegistry();
-    registry.register(financeManifest);
+    registry.register(fixturePluginManifest);
     registry.register(emailManifest);
     registry.register(memoryManifest);
     registry.register(artifactsManifest);

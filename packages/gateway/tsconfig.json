@@ -6,7 +6,7 @@
     "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"],
+  "exclude": ["src/**/*.test.ts", "src/__fixtures__/**/*.ts"],
   "references": [
     { "path": "../core" },
     { "path": "../runtime" },
@@ -14,7 +14,6 @@
     { "path": "../tools/browser" },
     { "path": "../tools/host" },
     { "path": "../tools/email" },
-    { "path": "../tools/finance" },
     { "path": "../tools/memory" },
     { "path": "../tools/web" }
   ]
