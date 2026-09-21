@@ -279,6 +279,29 @@ export async function loadDatabase(
     });
   }
 
+  /*
+   * Everything else this installation owns, back at its current level.
+   *
+   * A schema is dropped above because this build ships migrations for it or
+   * the target's own ledger named it, and it is rebuilt only when the archive
+   * names it too. An archive that does not name it — a snapshot of a target
+   * taken before that plugin first migrated, or an archive from an
+   * installation that never had the plugin — used to leave the schema dropped
+   * and absent, with no ledger row to say so: an installed plugin whose tables
+   * were simply gone until something migrated the database again. It carries
+   * no data here, so empty and migrated is the right state, and it is the
+   * state the next start would have produced anyway.
+   *
+   * It runs in step 4, after the load has committed, because the load rewrites
+   * `core.migrations` from the archive: a schema migrated before the COPY
+   * would end up present and unrecorded.
+   */
+  const unrebuilt = (opts.pluginMigrations ?? []).filter(
+    (source) =>
+      source.dir.trim() !== '' && source.schema !== CORE_SCHEMA && !rebuilt.has(source.schema),
+  );
+
+
   /* 2. the data, in one transaction ---------------------------------- */
   progress({ phase: 'database', detail: `loading ${tables.length} table(s)` });
   const client = await pool.connect();
@@ -382,6 +405,21 @@ export async function loadDatabase(
     report.applied.push(...(await migrate(pool, { schema: CORE_SCHEMA, dir: coreDir })));
     for (const entry of plan.rebuild) {
       report.applied.push(...(await migrate(pool, { schema: entry.schema, dir: entry.dir })));
+    }
+    for (const source of unrebuilt) {
+      try {
+        report.applied.push(...(await migrate(pool, { schema: source.schema, dir: source.dir })));
+      } catch (err) {
+        // Reported, never fatal: this schema is not in the archive, so failing
+        // the restore over it would lose an installation to save nothing.
+        report.notLoaded.push({
+          schema: source.schema,
+          rows: 0,
+          reason:
+            'the archive does not describe it and this build could not create it either: ' +
+            `${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     }
     return report;
   } catch (err) {

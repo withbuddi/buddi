@@ -30,7 +30,7 @@
  * Nothing here restarts anything: an installed plugin is registered by the
  * next process start, and the caller is told so with `restartNeeded`.
  */
-import { existsSync, renameSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, realpathSync, renameSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
   migrate,
@@ -47,7 +47,6 @@ import { agentSearchPath } from '../agents/catalog.js';
 import { driftBetween } from './claims.js';
 import { entryPointOf, planInstall, type InstallPlan } from './install.js';
 import { InstallRefusal } from './refusals.js';
-import { loadManifest } from './load.js';
 import { assertInsidePluginsRoot, installedPackageDir } from './paths.js';
 import { treeHash, TreeRefusal } from './tree.js';
 import {
@@ -284,6 +283,12 @@ async function place(
     ...(provenance === undefined ? {} : { provenance }),
   };
 
+  // Taken before the move, because a manifest answers with the path the module
+  // resolved for itself: on macOS `/var/folders/...` is a symlink to
+  // `/private/var/folders/...`, so `import.meta.dirname` and the staging path
+  // this file built are the same directory spelled two ways.
+  const stagedRoots = [staged.packageDir, realpathQuietly(staged.packageDir)];
+
   let asideDir: string | undefined;
   const previousRecord = readPluginsFile(file).plugins.find((p) => p.name === base.name);
   if (moving) {
@@ -327,13 +332,16 @@ async function place(
   writePluginsFile(file, upsertInstalledPlugin(readPluginsFile(file), record));
   if (asideDir !== undefined) rmSync(asideDir, { recursive: true, force: true });
 
-  // The manifest was read from the staging directory, so its `migrationsDir`
-  // points there. Re-read it from where it now lives rather than rewriting the
-  // path: the package decides what its migrations directory is, not this file.
+  // One import per install. The manifest this uses is the one `planInstall`
+  // already loaded, from the staging directory, so its `migrationsDir` points
+  // there; re-importing the entry from its new home to re-read it would run a
+  // plugin's top-level code a second time, and a plugin with a side effect at
+  // import would do it twice on every install. The bytes are the same bytes,
+  // which is what the hash above has just proved, so the directory is the same
+  // directory under a new prefix.
   let migrations: string[] = [];
   let migrationProblem: string | undefined;
-  const moved = await loadManifest(entry, { name: record.name }, env);
-  const migrationsDir = moved.ok ? moved.manifest.migrationsDir : plan.manifest.migrationsDir;
+  const migrationsDir = relocate(plan.manifest.migrationsDir, stagedRoots, finalDir);
   if (migrationsDir.trim() === '') {
     migrations = [];
   } else if (opts.pool === undefined) {
@@ -352,6 +360,35 @@ async function place(
     migrations,
     ...(migrationProblem === undefined ? {} : { migrationProblem }),
   };
+}
+
+/** The real path, or the one given: a path that is gone is still a path. */
+function realpathQuietly(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
+/**
+ * The same path, under the directory the package now lives in.
+ *
+ * A manifest read from the stage answers with staged paths. Anything inside
+ * the package moves with it; anything outside it (a plugin that points at a
+ * directory elsewhere on disk) is its own absolute path and is left alone, and
+ * an empty string stays empty. `fromDirs` is the staging directory spelled
+ * every way it can be, symlinks resolved and not.
+ */
+function relocate(target: string, fromDirs: readonly string[], toDir: string): string {
+  if (target.trim() === '') return target;
+  for (const fromDir of fromDirs) {
+    if (fromDir === toDir) return target;
+    const rel = path.relative(fromDir, target);
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    return path.join(toDir, rel);
+  }
+  return target;
 }
 
 /**

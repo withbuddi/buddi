@@ -301,6 +301,10 @@ describe('approval 1', () => {
     // stage that held them is gone.
     expect(outcome.record.entry.startsWith(installedPackageDir('fixture-marker', env))).toBe(true);
     expect(listStaged(env)).toEqual([]);
+    // Once, not twice. The install used to import the entry a second time to
+    // re-read the manifest from where the package now lives, so a plugin with
+    // a side effect at import did it twice on every install.
+    expect(readFileSync(marker, 'utf8').trimEnd().split('\n')).toHaveLength(1);
   });
 });
 

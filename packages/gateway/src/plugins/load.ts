@@ -302,6 +302,34 @@ export function adoptPlugins(env: NodeJS.ProcessEnv, plugins: LoadedPlugins): vo
   adopted = { env, plugins };
 }
 
+/**
+ * A plugin that will not migrate is a plugin that did not load.
+ *
+ * It is moved out of `loaded` and into `problems`, which is the same place an
+ * entry that threw at import lands: `installedManifests` stops offering it for
+ * the rest of this run, so nothing registers its tools against a schema that
+ * is not there, and `pluginLoadReport` — what the Plugins page and doctor read
+ * — says why. `docs/install.md` §7: one plugin never stops the gateway.
+ */
+export function demoteToLoadFailure(
+  name: string,
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const plugins = adoptedPlugins(env);
+  if (plugins === undefined) return;
+  const failed = plugins.loaded.find((p) => p.record.name === name);
+  if (failed === undefined) return;
+  adoptPlugins(env, {
+    file: plugins.file,
+    loaded: plugins.loaded.filter((p) => p !== failed),
+    problems: [
+      ...plugins.problems,
+      { name, entry: failed.record.entry, message, record: failed.record },
+    ],
+  });
+}
+
 /** Forget what was adopted. Tests only. */
 export function resetAdoptedPlugins(): void {
   adopted = undefined;

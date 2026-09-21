@@ -12,6 +12,7 @@
  * makes it the thing that fails loudly if the staged tree's peer link is wrong.
  */
 import { appendFileSync } from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { contributionOf } from '@buddi/core';
 
@@ -25,7 +26,11 @@ export const manifest = {
   version: '1.0.0',
   description: 'A fixture: it remembers the first moment its code ran.',
   schema: 'fixture_marker',
-  migrationsDir: new URL('./migrations', import.meta.url).pathname,
+  // A real path, never `new URL('./migrations', import.meta.url).pathname`:
+  // that form percent-encodes a space, so under a data directory called
+  // "owner data" it names a directory that is not there. `import.meta.dirname`
+  // here, `fileURLToPath` in the shipped plugins; either is a path on disk.
+  migrationsDir: path.join(import.meta.dirname, 'migrations'),
   network: [{ host: 'example.invalid', why: 'a host nobody reaches, declared so the claim can be compared' }],
   tools: [
     {

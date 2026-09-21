@@ -300,15 +300,26 @@ export async function supervise(ctx: InstallContext): Promise<void> {
       const exists = await pool.query<{ table_name: string | null }>("SELECT to_regclass('core.migrations') AS table_name");
       if (exists.rows[0]!.table_name) {
         const shipped = new Map([['core', new Set(await readdir(core.CORE_MIGRATIONS_DIR))]]);
-        for (const manifest of gateway.installedManifests()) {
-          if (manifest.migrationsDir) shipped.set(manifest.schema, new Set(await readdir(manifest.migrationsDir)));
+        for (const manifest of gateway.installedManifests(ready.env)) {
+          // A directory that is not readable is a plugin problem, not a reason
+          // to refuse the start: `migrateInstalled` below says so in words.
+          if (!manifest.migrationsDir) continue;
+          const files = await readdir(manifest.migrationsDir).catch(() => null);
+          if (files) shipped.set(manifest.schema, new Set(files));
         }
         const applied = await pool.query<{ schema: string; filename: string }>('SELECT schema, filename FROM core.migrations');
         if (applied.rows.some(row => shipped.has(row.schema) && !shipped.get(row.schema)!.has(row.filename))) {
           throw new Error('Database schema is newer than this release. Install the matching release; no migration or gateway start was attempted.');
         }
       }
-      await core.runMigrations(pool, gateway.installedManifests());
+      // An installed third-party plugin whose migrations will not apply is
+      // that plugin failing to load, not this installation failing to start
+      // (docs/install.md §7). It is reported on the log and by the Plugins
+      // page; core and the compiled-in plugins still throw.
+      const migrated = await gateway.migrateInstalled(pool, ready.env);
+      for (const problem of migrated.problems) {
+        console.error(`supervisor: plugin ${problem.name} was not loaded: ${problem.message}`);
+      }
     }
     finally { await pool.end(); }
     ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
