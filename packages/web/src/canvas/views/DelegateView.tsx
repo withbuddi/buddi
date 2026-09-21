@@ -15,6 +15,7 @@
  * Polling stops when the work does. A finished delegation is history, and
  * history does not need a request every two seconds.
  */
+import { useEffect, useState } from 'react';
 import { chatApi } from '../../api';
 import { Markdown } from '../../chat/markdown';
 import { ToolRow, Thought } from '../../chat/MessageList';
@@ -38,19 +39,44 @@ export interface DelegateViewProps {
 
 type Status = 'working' | 'done' | 'failed';
 
-export function DelegateView({ conversationId, agentId, result = null, agents = [] }: DelegateViewProps): JSX.Element {
+export function DelegateView({ conversationId, agentId, runId = null, result = null, agents = [] }: DelegateViewProps): JSX.Element {
   // The call has come back: whatever the colleague did is done, and the
   // transcript is read once more rather than watched.
   const settled = result !== null;
+  /*
+   * Watched, or history. `done` is *state* rather than a derived flag so that
+   * the moment the work settles it changes the read's dependencies: the
+   * transcript is fetched one last time, so the final tool row and the
+   * colleague's last words are on the panel rather than one poll short of it,
+   * and only then does the asking stop.
+   */
+  const [done, setDone] = useState(settled);
   const { data, error } = useAsync<ChatConversation | undefined>(
     () => chatApi.conversation(conversationId),
-    [conversationId],
-    settled ? undefined : DELEGATE_POLL_MS,
+    [conversationId, done],
+    done ? undefined : DELEGATE_POLL_MS,
   );
 
+  /*
+   * Is *this* delegation's run over?
+   *
+   * By its id, not by position: a colleague's conversation can hold several
+   * runs — one of its own delegations, a resumed turn — so "some run is still
+   * open" would spin after this work finished, and "no run is open" would
+   * call it done the moment another one closed. The id comes from the
+   * recorded call, which the server wrote. An older call carries none, and
+   * falls back to the shape of the whole conversation.
+   */
   const runs = data?.runs ?? [];
-  const alive = !settled && (runs.length === 0 || runs.some((run) => run.finishedAt === null));
-  const status: Status = result ? (result.ok ? 'done' : 'failed') : alive ? 'working' : 'done';
+  const own = runId === null ? null : runs.find((run) => run.runId === runId) ?? null;
+  const over = settled || (runId !== null
+    ? own !== null && own.finishedAt !== null
+    : runs.length > 0 && runs.every((run) => run.finishedAt !== null));
+  useEffect(() => {
+    if (over) setDone(true);
+  }, [over]);
+
+  const status: Status = result ? (result.ok ? 'done' : 'failed') : over ? 'done' : 'working';
 
   const colleague = agents.find((agent) => agent.id === agentId) ?? null;
   const name = colleague?.name ?? data?.agentId ?? agentId;
@@ -114,7 +140,10 @@ export function DelegateView({ conversationId, agentId, result = null, agents = 
       {/* The way out of the summary and into the thread itself. On the right,
           where every action on this dashboard is. */}
       <div className="wb-delegate-actions">
-        <a className="ui-btn" href={chatRoute(agentId, conversationId)}>Open this conversation</a>
+        {/* The call may carry no colleague id — an older row, a call whose
+            event named only the conversation — and a link to `/chat//<id>`
+            goes nowhere. The transcript knows whose thread it is. */}
+        <a className="ui-btn" href={chatRoute(agentId || data?.agentId || '', conversationId)}>Open this conversation</a>
       </div>
     </div>
   );

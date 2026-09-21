@@ -294,14 +294,26 @@ export function allowedIn(message: string): string | null {
 }
 
 /**
+ * The runtime's word for "you may not ask that agent". The prefix, not a
+ * guess: `createDelegateTool` writes every authorization refusal with it.
+ */
+export const REFUSAL_PREFIX = 'delegation refused:';
+
+/**
  * Is this block the head of a run of refused delegations?
  *
  * A model that has guessed a colleague's id guesses several, one after the
  * other, in the same turn. Four red rows saying the same thing is the tool
  * reporting itself rather than the turn reporting the work, so a run of two
  * or more collapses into one row that names every id it tried and the list it
- * was given. Anything else — a single refusal, a delegation that ran, any
- * other tool — is untouched.
+ * was given.
+ *
+ * Only *refusals* — a delegation the installation would not allow. A
+ * delegation that was allowed and then failed is news about the work: the
+ * colleague threw, the provider was unreachable, the nested run ran out of
+ * turns. Folding those into "delegation refused 3 times" would hide three
+ * different errors behind a sentence that is not true of any of them, so
+ * anything that is not a refusal keeps its own row.
  *
  * Returns `'inside'` for the blocks the head already speaks for.
  */
@@ -315,10 +327,12 @@ export function refusedRun(
     if (!block || block.type !== 'tool_use' || block.name !== DELEGATE_TOOL) return null;
     const result = findResult(messages, block.id);
     if (!result || result.ok !== false) return null;
+    const message = typeof result.error === 'string' ? result.error : String(result.error ?? '');
+    if (!message.trimStart().startsWith(REFUSAL_PREFIX)) return null;
     const input = (block.input ?? {}) as Record<string, unknown>;
     return {
       target: typeof input['agent'] === 'string' && input['agent'] !== '' ? input['agent'] : 'a colleague',
-      message: typeof result.error === 'string' ? result.error : String(result.error ?? ''),
+      message,
     };
   };
 
@@ -355,11 +369,16 @@ function RefusedDelegations({ refusals }: { refusals: Refusal[] }): JSX.Element 
       {open ? (
         <div className="wb-refusals-list">
           {refusals.map((refusal, index) => (
-            <span className="wb-tool" data-static="true" data-ok={false} key={index}>
-              <span className="wb-tool-mark" data-ok="false" aria-hidden="true" />
-              <span className="wb-tool-label">{labelFor(DELEGATE_TOOL)} · {refusal.target}</span>
-              <span className="wb-tool-elapsed">refused</span>
-            </span>
+            <div className="wb-refusal" key={index}>
+              <span className="wb-tool" data-static="true" data-ok={false}>
+                <span className="wb-tool-mark" data-ok="false" aria-hidden="true" />
+                <span className="wb-tool-label">{labelFor(DELEGATE_TOOL)} · {refusal.target}</span>
+                <span className="wb-tool-elapsed">refused</span>
+              </span>
+              {/* What it actually said. Opened, the owner wants the reason,
+                  not four copies of the word "refused". */}
+              <p className="wb-refusal-why">{refusal.message}</p>
+            </div>
           ))}
         </div>
       ) : null}

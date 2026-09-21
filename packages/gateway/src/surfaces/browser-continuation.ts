@@ -1,12 +1,18 @@
 import type { Queryable } from '@buddi/core';
 import type { BrowserController, BrowserRollover } from '@buddi/tool-browser';
 import type { LifetimeReason } from './conversation-lifetime.js';
+import { carryBrowserHandoff } from './browser-handoff.js';
 
 export type ConversationRolloverHook = (agentId: string, previousConversationId: string, conversationId: string, reason: LifetimeReason) => Promise<void>;
 
 /** Called only by a surface's automatic size rollover, before it adopts the
  * new conversation. No model-supplied IDs, cross-agent adoption or new grants. */
 export async function continueBrowserTask(pool: Queryable, browser: BrowserController, input: BrowserRollover, reason: LifetimeReason): Promise<void> {
+  // What the old conversation *learned* in a browser carries over whichever
+  // way it ended, and whether or not a session is still live: the fresh
+  // conversation opens with the task, the pages and the agent's last words.
+  // Never at the cost of the turn — a note is a convenience, not the answer.
+  await carryBrowserHandoff(pool, input).catch(() => null);
   if (reason !== 'size' || !browser.rollover) return;
   const before = browser.status({ agentId: input.agentId, conversationId: input.previousConversationId });
   if (!before.session || Date.parse(before.session.expiresAt) <= Date.now()) return;

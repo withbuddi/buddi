@@ -64,7 +64,10 @@ export function readDelegates(agentId: string, agentsDir: string = AGENTS_DIR): 
   if (!Array.isArray(parsed) || parsed.some((id) => typeof id !== 'string' || id.trim() === '')) {
     throw new Error(`${file} must be a JSON array of agent ids, e.g. ["credit-coach"]`);
   }
-  return parsed as string[];
+  // A file the owner edited twice can name the same colleague twice. It is one
+  // permission either way, and a prompt that lists it twice reads as if there
+  // were two of them.
+  return [...new Set((parsed as string[]).map((id) => id.trim()))];
 }
 
 export interface DelegationBinding {
@@ -132,7 +135,20 @@ export function createDelegationManifest(
   registry: ToolRegistry,
   opts: DelegationManifestOptions = {},
 ): PluginManifest {
-  const agentsDir = opts.agentsDir ?? AGENTS_DIR;
+  const configured = opts.agentsDir;
+  /*
+   * Whose `delegates.json`? The caller's own directory, which the catalog
+   * knows: on a search path the owner's agents and the shipped examples do
+   * not share an `agents/`, and reading the allowlist from the wrong half
+   * would refuse a delegation the owner did grant. An explicit `agentsDir`
+   * (a test, a fixture) still wins, and a catalog that cannot say where an
+   * agent's file is falls back to the repo's.
+   */
+  const dirFor = (agentId: string, catalog: DelegateCatalog): string => {
+    if (configured !== undefined) return configured;
+    const file = (catalog.get(agentId) as { file?: unknown } | undefined)?.file;
+    return typeof file === 'string' && file !== '' ? path.dirname(path.dirname(file)) : AGENTS_DIR;
+  };
   return {
     name: AGENT_PLUGIN,
     version: '0.1.0',
@@ -156,7 +172,7 @@ export function createDelegationManifest(
          */
         allowlistFor: (agentId) => {
           const catalog = boundOrThrow(registry).catalog;
-          return readDelegates(agentId, agentsDir).filter((targetId) => {
+          return readDelegates(agentId, dirFor(agentId, catalog)).filter((targetId) => {
             // `DelegateCatalog` exposes the grant through the definition it
             // would run with, which is the same resolved list the loader built.
             const held = writeToolsIn(catalog.get(targetId)?.definition(new Date()).tools ?? []);

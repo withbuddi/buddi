@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry, type ToolContext } from '@buddi/core';
+import { loadAgentCatalog, ToolRegistry, type ToolContext } from '@buddi/core';
 import { DELEGATE_TOOL } from '@buddi/runtime';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 import {
@@ -32,6 +32,11 @@ const ctx: ToolContext = {
 describe('readDelegates', () => {
   it('reads the allowlist next to the agent file', () => {
     const dir = agentsDirWith({ 'finance-advisor/delegates.json': '["credit-coach"]' });
+    expect(readDelegates('finance-advisor', dir)).toEqual(['credit-coach']);
+  });
+
+  it('names a colleague once, however often the file does', () => {
+    const dir = agentsDirWith({ 'finance-advisor/delegates.json': '["credit-coach", "credit-coach", " credit-coach "]' });
     expect(readDelegates('finance-advisor', dir)).toEqual(['credit-coach']);
   });
 
@@ -157,6 +162,33 @@ describe('the delegate roster in an agent\'s context', () => {
     // Only the allowlist. A colleague it may not ask is on the roster as
     // somebody to name, never as somebody to hand work to.
     expect(prompt).not.toContain('`postman` (@postman)');
+  });
+
+  /*
+   * With a search path the owner's agents and the shipped examples live in
+   * two directories. The allowlist is read from the one the agent's own file
+   * is in — reaching for a single default would print nothing here.
+   */
+  it('reads the allowlist from the directory the agent itself came from', () => {
+    const owner = agentsDirWith({
+      'asker/agent.md': agentFile('asker', { tools: 'agent.delegate' }),
+      'asker/delegates.json': '["ledger"]',
+    });
+    const examples = agentsDirWith({ 'ledger/agent.md': agentFile('ledger', { description: 'Keeps the books' }) });
+    const catalog = loadAgentCatalog({
+      dirs: [{ dir: examples, source: 'example' }, { dir: owner, source: 'private' }],
+      registry: createToolRegistry({}),
+      env: {},
+      delegatesFor: (agentId, agentsDir) => readDelegates(agentId, agentsDir),
+    });
+    expect(catalog.get('asker')!.systemPromptTemplate).toContain('`ledger` (@ledger) — Ledger: Keeps the books');
+  });
+
+  it('marks a colleague this installation cannot run', () => {
+    const prompt = loadGatewayCatalog({ env: {}, dir: dir() }).get('asker')!.systemPromptTemplate;
+    // No credential anywhere in this env: every colleague is offered as one
+    // that cannot take a turn right now.
+    expect(prompt).toContain('`ledger` (@ledger) — Ledger: Keeps the books (not available now)');
   });
 
   it('says so plainly when an agent holds the tool and may ask nobody', () => {

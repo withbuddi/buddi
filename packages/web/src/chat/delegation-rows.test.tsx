@@ -59,14 +59,52 @@ describe('a turn that was refused four delegations', () => {
     expect(screen.getAllByTestId('delegation-refusals')).toHaveLength(1);
   });
 
-  it('opens onto the individual calls', () => {
+  it('opens onto the individual calls, each with what it was told', () => {
     show(thread(['ledger', 'postman', 'scout', 'credo']));
     const toggle = screen.getByRole('button', { expanded: false });
     fireEvent.click(toggle);
     expect(screen.getByRole('button', { expanded: true })).toBeInTheDocument();
     for (const target of ['ledger', 'postman', 'scout', 'credo']) {
       expect(screen.getByText(`Agent · Delegate · ${target}`)).toBeInTheDocument();
+      expect(
+        screen.getByText(`delegation refused: "ada" may not delegate to "${target}" ${allowed}`),
+      ).toBeInTheDocument();
     }
+  });
+
+  /*
+   * A delegation that was *allowed* and then went wrong is news about the
+   * work, not about the allowlist. Three different errors folded behind
+   * "delegation refused 3 times" would be a sentence that is true of none of
+   * them.
+   */
+  it('leaves delegations that failed for any other reason as their own rows', () => {
+    const failed = (index: number, error: string): ChatMessage['blocks'][number] => ({
+      type: 'tool_result', toolUseId: `u${index}`, name: 'agent.delegate', ok: false, output: null, error,
+    });
+    show([
+      { id: 'm1', role: 'assistant', at: '', blocks: [refusal(0, 'ledger'), refusal(1, 'postman'), refusal(2, 'scout')] },
+      { id: 'm2', role: 'user', at: '', blocks: [
+        failed(0, 'Ledger cannot run here: Provider account “Work” is disabled.'),
+        failed(1, 'the nested run ran out of turns'),
+        failed(2, 'Postman threw: ECONNREFUSED'),
+      ] },
+    ]);
+    expect(screen.queryByTestId('delegation-refusals')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Agent · Delegate')).toHaveLength(3);
+  });
+
+  it('collapses a run of real refusals even when another failure follows it', () => {
+    show([
+      { id: 'm1', role: 'assistant', at: '', blocks: [refusal(0, 'ledger'), refusal(1, 'postman'), refusal(2, 'scout')] },
+      { id: 'm2', role: 'user', at: '', blocks: [
+        refused(0, 'ledger'),
+        refused(1, 'postman'),
+        { type: 'tool_result', toolUseId: 'u2', name: 'agent.delegate', ok: false, output: null, error: 'the nested run ran out of turns' },
+      ] },
+    ]);
+    expect(screen.getByTestId('delegation-refusals')).toHaveTextContent('Delegation refused 2 times: ledger, postman');
+    expect(screen.getByText('Agent · Delegate')).toBeInTheDocument();
   });
 
   it('leaves a single refusal as the row it always was', () => {

@@ -903,6 +903,10 @@ export function ChatPage({
           </div>
         ) : null}
 
+        {conversation?.carriedOver ? (
+          <div className="wb-carryover" data-testid="chat-carryover">{conversation.carriedOver}</div>
+        ) : null}
+
         <MessageList
           messages={[...(conversation?.messages ?? []), ...optimistic]}
           live={live}

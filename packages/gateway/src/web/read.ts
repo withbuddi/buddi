@@ -36,6 +36,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
+import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 
 /** How many rows a listing returns when the caller names no limit. */
 export const DEFAULT_LIMIT = 100;
@@ -216,9 +217,9 @@ async function openingByConversation(
     `select distinct on (conversation_id) conversation_id, content
        from core.messages
       where conversation_id = any($1::uuid[]) and role = 'user'
-        and speaker is distinct from $2
+        and speaker is distinct from $2 and speaker is distinct from $3
       order by conversation_id, created_at asc, id asc`,
-    [ids, OPENING_TURN_SPEAKER],
+    [ids, OPENING_TURN_SPEAKER, CARRIED_OVER_SPEAKER],
   );
   for (const row of rows) {
     const text = textOfContent(row.content);
@@ -291,8 +292,9 @@ export async function readConversation(
   const { rows: messages } = await pool.query(
     `select id, role, content, created_at, speaker from core.messages
       where conversation_id = $1::uuid and speaker is distinct from $2
+        and speaker is distinct from $3
       order by created_at asc, id asc`,
-    [conversationId, OPENING_TURN_SPEAKER],
+    [conversationId, OPENING_TURN_SPEAKER, CARRIED_OVER_SPEAKER],
   );
   const { rows: events } = await pool.query(
     `select kind, payload, created_at from core.events
