@@ -11,7 +11,8 @@ published to npm. The full contract remains [install.md](install.md).
   copied. Per-platform Postgres binaries are pinned optional dependencies.
 - **Platform plugins only.** The staged package list is core, runtime, gateway,
   cli, install and the platform tools (artifacts, browser, host, email, memory,
-  web). `tools/finance` is not staged and is no longer compiled in anywhere:
+  web). `finance` is not staged, is not compiled in anywhere, and no longer
+  lives in this tree at all — it is its own repository, `buddi-plugins`:
   money is one owner's domain, not something every installation should claim a
   `finance.*` family for, so it is installed like any other plugin. A gateway
   that has not been given it — packaged or checkout — has no `finance.*`
@@ -21,8 +22,10 @@ published to npm. The full contract remains [install.md](install.md).
 
   **Migrating a checkout whose agents grant `finance.*`.** Finance used to be
   registered by the composition root wherever the workspace had it, so in a
-  checkout it was simply there. It is not any more. Before the next restart,
-  run `buddi plugins install packages/tools/finance` — a directory source, so
+  checkout it was simply there. It is not any more, and the package is not in
+  this repository either. Build it in the `buddi-plugins` checkout and, before
+  the next restart, run `buddi plugins install <path>/buddi-plugins/finance` —
+  a directory source, so
   it stages the package you already have, imports it once for the plan, and
   records it; nothing is fetched and no hash has to be typed back. The
   `finance` schema and everything in it are untouched by this: the plugin

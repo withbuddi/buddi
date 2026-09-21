@@ -410,7 +410,8 @@ means, the page knows how to draw a line, and this says which is which.
 
 The shipped example is `examples/plugins/weather/src/views.ts`: eight lines that
 turn a forecast into a line chart with freezing drawn on it. The real thing is
-`packages/tools/finance/src/views.ts`, which has six.
+the finance plugin's `src/views.ts` (in the `buddi-plugins` repository), which
+has thirteen.
 
 An agent can also draw deliberately, with the platform's own `canvas.show` — for
 something it worked out that no single tool result covers. Precedence in the
@@ -998,7 +999,7 @@ your sentinels and sources over `wiring.registry.manifests()`, `buddi migrate`
 applies your schema, `buddi missions add-defaults` reads your suggestions, and
 `platform.plugin_agents` offers your agents. See §8.
 
-**The plugins this repository ships are different**: `finance`, `email`, `memory`,
+**The plugins this repository ships are different**: `email`, `memory`,
 `artifacts` and `web` are compiled into the build, registered in
 `createToolRegistry` in `packages/gateway/src/agents/catalog.ts`, and they cannot
 be uninstalled because they are part of it. (`installedManifests()` derives the
@@ -1017,9 +1018,9 @@ install is exercised against.
 
 **Pure helpers first.** Put every judgement in a function that takes plain values
 and returns a `Finding`, a number or a string, and test it with no database and
-no clock. `packages/tools/finance/src/sentinels/helpers.ts` is the pattern: the
-sentinels are a query plus a call into it, and `helpers.test.ts` covers the
-rules. The weather example does the same with `frostFinding`.
+no clock. The finance plugin's `src/sentinels/helpers.ts` (in `buddi-plugins`)
+is the pattern: the sentinels are a query plus a call into it, and
+`helpers.test.ts` covers the rules. The weather example does the same with `frostFinding`.
 
 **The throwaway database.** Anything that needs SQL gets a real Postgres, never a
 mock, and never the developer's own database. The suite creates a database,
@@ -1062,8 +1063,8 @@ suite('memory tools (postgres)', () => {
 
 `${process.pid}` in the name is what lets two suites run at once. Use
 `runMigrations(pool, [manifest])` instead of `migrate` when your plugin also
-reads a core table — that applies core's migrations first
-(`packages/tools/finance/src/sentinels/sentinels.db.test.ts`).
+reads a core table — that applies core's migrations first (the finance plugin's
+`src/sentinels/sentinels.db.test.ts` does exactly that).
 
 Drive tools **through the registry**, not by calling `execute` directly. That is
 what proves the tier, the zod schema and the refusal paths, which is most of what

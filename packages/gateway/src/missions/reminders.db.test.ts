@@ -34,7 +34,6 @@ import {
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { manifest as emailManifest } from '@buddi/tool-email';
-import { manifest as financeManifest } from '@buddi/tool-finance';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -131,7 +130,7 @@ suite('reminders and proposed schedules (postgres)', () => {
     const url = new URL(databaseUrl as string);
     url.pathname = `/${TEST_DB}`;
     pool = createPool(url.toString());
-    await runMigrations(pool, [emailManifest, memoryManifest, financeManifest, artifactsManifest]);
+    await runMigrations(pool, [emailManifest, memoryManifest, artifactsManifest]);
     await ensureOwner(pool, 'owner');
     ctx = { db: pool, ownerId: 'owner', now: () => NOW, timezone: TZ };
   }, 60_000);

@@ -220,9 +220,10 @@ describe('a new built-in plugin cannot slip past the guards', () => {
    * walks.
    *
    * "Compiled in" is read off the gateway's own dependencies rather than off
-   * the directory listing, because a package under `packages/tools/` is no
-   * longer proof of it: `finance` lives there and is installed like any other
-   * plugin, which is the case below.
+   * the directory listing, because a package under `packages/tools/` is not
+   * proof of it: a domain plugin is installed, not compiled in — `finance`
+   * left this tree for its own repository and arrives the way the case below
+   * arrives.
    */
   it('knows every plugin package the gateway depends on', async () => {
     const dirs = readdirSync(TOOLS_DIR, { withFileTypes: true })
@@ -266,9 +267,9 @@ describe('a new built-in plugin cannot slip past the guards', () => {
 
   /**
    * And the other direction, which is the whole point of the change: finance
-   * is a package in this tree that the gateway does *not* compile in, so its
-   * name is free for an installed plugin — which is exactly what the owner
-   * installs when they run `buddi plugins install packages/tools/finance`.
+   * is not in this tree at all — it lives in the `buddi-plugins` repository —
+   * so its name is free for an installed plugin, which is exactly what the
+   * owner installs when they run `buddi plugins install <path>/finance`.
    */
   it('does not claim finance, which is installed rather than compiled in', () => {
     expect(builtInPluginNames().has('finance')).toBe(false);
@@ -292,19 +293,21 @@ describe('a new built-in plugin cannot slip past the guards', () => {
 });
 
 /**
- * Finance is the first plugin to make the whole trip: it used to be compiled
- * in, and an existing checkout's agents still grant `finance.*`. The way back
- * for them is `buddi plugins install packages/tools/finance`, which records a
- * directory source — so this is that record, loaded exactly as the gateway
- * loads it at start, with the family arriving through `externalManifests`
- * rather than through the composition root.
+ * A directory source, loaded exactly as the gateway loads one at start.
+ *
+ * Finance was the first plugin to make the whole trip: it used to be compiled
+ * in, and an existing checkout's agents still grant `finance.*`. It is not in
+ * this tree any more, so the trip is walked here with the fixture package this
+ * repository ships for the purpose — the family arrives through
+ * `externalManifests` rather than through the composition root, which is the
+ * property that matters and is true of any installed plugin.
  */
-describe('finance, now installed rather than compiled in', () => {
+describe('a plugin installed rather than compiled in', () => {
   it('loads from a directory source and registers its family', async () => {
     const env = isolatedEnv();
-    const dir = path.join(TOOLS_DIR, 'finance');
-    const entry = path.join(dir, 'dist', 'index.js');
-    expect(existsSync(entry), 'packages/tools/finance is not built — run `pnpm -r build`').toBe(true);
+    const dir = path.join(GATEWAY_SRC, '__fixtures__', 'test-plugin');
+    const entry = path.join(dir, 'index.js');
+    expect(existsSync(entry)).toBe(true);
     const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version: string };
     writeFileSync(
       env.BUDDI_PLUGINS_FILE as string,
@@ -312,12 +315,12 @@ describe('finance, now installed rather than compiled in', () => {
         version: 2,
         plugins: [
           {
-            name: 'finance',
+            name: 'testplug',
             version: pkg.version,
             source: { kind: 'directory', path: dir },
             entry,
             installedAt: '2026-01-01T00:00:00.000Z',
-            schema: 'finance',
+            schema: 'buddi_fixture_testplug',
           },
         ],
       }),
@@ -325,15 +328,15 @@ describe('finance, now installed rather than compiled in', () => {
 
     const loaded = await loadInstalledPlugins(env);
     expect(loaded.problems).toEqual([]);
-    expect(loaded.loaded.map((p) => p.manifest.name)).toEqual(['finance']);
+    expect(loaded.loaded.map((p) => p.manifest.name)).toEqual(['testplug']);
 
     adoptPlugins(env, loaded);
-    expect(externalManifests(env).map((m) => m.name)).toContain('finance');
+    expect(externalManifests(env).map((m) => m.name)).toContain('testplug');
     const registry = createToolRegistry(env);
-    expect(registry.manifests().map((m) => m.name)).toContain('finance');
-    expect(registry.list().some((t) => t.name.startsWith('finance.'))).toBe(true);
+    expect(registry.manifests().map((m) => m.name)).toContain('testplug');
+    expect(registry.list().some((t) => t.name.startsWith('testplug.'))).toBe(true);
     // And the built-in set is still without it: the same process that loaded
     // it as a plugin does not also ship it.
-    expect(builtInManifests(env).map((m) => m.name)).not.toContain('finance');
+    expect(builtInManifests(env).map((m) => m.name)).not.toContain('testplug');
   });
 });
