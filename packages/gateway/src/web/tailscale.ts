@@ -21,8 +21,8 @@
  *   4. That address is a tailnet address (`100.64.0.0/10` or
  *      `fd7a:115c:a1e0::/48`), and `X-Forwarded-Proto` is `https` — Serve
  *      terminates TLS and says so. Anything else did not come through it.
- *   5. The local `tailscaled` confirms, through its own API over its unix
- *      socket, that the address belongs to the allowed login, and that the
+ *   5. The local daemon confirms, through the `tailscale` CLI (or its unix
+ *      socket, when there is no binary to run), that the address belongs to the allowed login, and that the
  *      login the header claimed is the very one the daemon names. This is the
  *      step the headers cannot fake: the answer comes from the daemon.
  *
@@ -48,14 +48,21 @@
  * The session it mints is bound (see `sessions.ts`): the daemon is asked again
  * on every request, and the setting going off or naming another login ends it.
  */
+import { execFile } from 'node:child_process';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { isLoopbackAddress } from './http.js';
 
 /** The key this setting is stored under in `core.web_settings`. */
 export const TAILSCALE_SETTING_KEY = 'tailscale';
 
-/** Where `tailscaled` listens, on both platforms buddi runs on. */
+/**
+ * Where the open-source `tailscaled` listens. The macOS app does not open it,
+ * which is why the `tailscale` CLI — which knows how to reach its own daemon
+ * whichever variant is installed — is asked first and this is the fallback.
+ */
 export const TAILSCALED_SOCKET = '/var/run/tailscale/tailscaled.sock';
 
 /** The host name the local API insists on. Not a network name; never resolved. */
@@ -320,11 +327,174 @@ export async function tailscaleIdentity(
  * ------------------------------------------------------------------ */
 
 /**
+ * Where a `tailscale` binary lives when it is not on the PATH.
+ *
+ * The Homebrew/open-source install puts it in `/usr/local/bin`; the Mac App
+ * Store app ships its own copy inside the bundle. Tried in this order, after
+ * the PATH, so a deliberately installed binary always wins.
+ */
+export const TAILSCALE_FALLBACK_BINARIES: readonly string[] = [
+  '/usr/local/bin/tailscale',
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+];
+
+/** How long the CLI is given to answer before it is killed. */
+export const TAILSCALE_TIMEOUT_MS = 5_000;
+
+/** Enough for a large `status --json`; anything past it is not an answer. */
+const MAX_OUTPUT = 4_000_000;
+
+export interface BinaryLookup {
+  /** The PATH to search. Defaults to this process's. */
+  path?: string | undefined;
+  /** Is this an executable file? Defaults to a real `access(X_OK)`. */
+  canExec?: ((path: string) => boolean) | undefined;
+}
+
+/**
+ * The `tailscale` binary to talk to the daemon through, or null.
+ *
+ * The CLI knows how to reach its own daemon on every variant — the unix
+ * socket of the open-source `tailscaled`, and the port-and-token the macOS app
+ * uses instead — which is precisely why it, and not a hard-coded socket path,
+ * is what this module asks. Only absolute PATH entries are considered: a
+ * relative one would resolve against whatever directory the gateway happens to
+ * be running in.
+ */
+export function resolveTailscaleBinary(look: BinaryLookup = {}): string | null {
+  const canExec = look.canExec ?? defaultCanExec;
+  const path = look.path ?? process.env.PATH ?? '';
+  for (const dir of path.split(delimiter)) {
+    if (dir === '' || !isAbsolute(dir)) continue;
+    const candidate = join(dir, 'tailscale');
+    if (canExec(candidate)) return candidate;
+  }
+  for (const candidate of TAILSCALE_FALLBACK_BINARIES) {
+    if (canExec(candidate)) return candidate;
+  }
+  return null;
+}
+
+function defaultCanExec(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Running the CLI, injected so tests never spawn anything. */
+export type TailscaleExec = (binary: string, args: string[]) => Promise<{ code: number; stdout: string }>;
+
+/**
+ * One `tailscale` invocation.
+ *
+ * `execFile`, so there is no shell and no word of the argv is ever parsed by
+ * one; a five second timeout, so a wedged daemon cannot hold a request open.
+ * A non-zero exit is an answer ("does not know"), not a crash.
+ */
+export const execTailscale: TailscaleExec = (binary, args) =>
+  new Promise((resolve) => {
+    execFile(
+      binary,
+      args,
+      { timeout: TAILSCALE_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, shell: false, windowsHide: true },
+      (error, stdout) => {
+        const code = error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1;
+        resolve({ code, stdout: typeof stdout === 'string' ? stdout : String(stdout ?? '') });
+      },
+    );
+  });
+
+/**
+ * Is this a literal IP address?
+ *
+ * The address comes off a request header, and it is about to become an
+ * argument to a program. `execFile` already means no shell parses it, and this
+ * means nothing that is not an address gets that far in the first place: a
+ * flag, a path, an option-looking string — none of them are IPs, so none of
+ * them are ever spelled into an argv.
+ */
+export function isIpAddress(address: string): boolean {
+  const a = address.trim();
+  if (a === '' || a.length > 45) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(a)) {
+    return a.split('.').every((part) => part.length <= 3 && Number(part) <= 255);
+  }
+  // IPv6: hex groups and at most one `::`, no zone and no embedded IPv4 —
+  // tailnet addresses are plain, and anything exotic simply is not asked.
+  if (!/^[0-9a-fA-F:]+$/.test(a)) return false;
+  if ((a.match(/::/g) ?? []).length > 1) return false;
+  if (/:::/.test(a)) return false;
+  const groups = a.split(':').filter((g) => g !== '');
+  if (groups.length === 0 || groups.length > 8) return false;
+  if (!a.includes('::') && a.split(':').length !== 8) return false;
+  return groups.every((g) => g.length <= 4);
+}
+
+/* ---- Reading what the CLI says ---- */
+
+function profileOf(value: unknown): TailscaleProfile | null {
+  const node = value as { UserProfile?: { LoginName?: unknown; DisplayName?: unknown }; Node?: { Name?: unknown } } | null;
+  const profile = node?.UserProfile;
+  const login = typeof profile?.LoginName === 'string' ? profile.LoginName.trim() : '';
+  if (login === '') return null;
+  const display = typeof profile?.DisplayName === 'string' && profile.DisplayName.trim() !== '' ? profile.DisplayName.trim() : '';
+  const nodeName = typeof node?.Node?.Name === 'string' && node.Node.Name.trim() !== '' ? node.Node.Name.trim() : '';
+  return { login, name: display !== '' ? display : nodeName !== '' ? nodeName : login };
+}
+
+/** The entry in `status --json`'s `User` map for a user id, if there is one. */
+function userOf(body: { User?: unknown }, id: unknown): unknown {
+  if (typeof id !== 'number' && typeof id !== 'string') return undefined;
+  const users = body.User as Record<string, unknown> | null | undefined;
+  if (users === null || typeof users !== 'object') return undefined;
+  return users[String(id)];
+}
+
+function parsed(text: string): unknown {
+  const body = text.trim();
+  if (body === '') return null;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
+  }
+}
+
+/** What `tailscale whois --json <ip>` says about an address, or nothing. */
+export function parseWhois(stdout: string): TailscaleProfile | null {
+  return profileOf(parsed(stdout));
+}
+
+/** What `tailscale status --json` says about this machine. */
+export function parseStatus(stdout: string): { running: boolean; self: TailscaleProfile | null; addresses: string[] } {
+  const body = parsed(stdout) as { Self?: unknown; BackendState?: unknown; User?: unknown } | null;
+  if (body === null || typeof body !== 'object') return { running: false, self: null, addresses: [] };
+  const state = typeof body.BackendState === 'string' ? body.BackendState : '';
+  // `Running` is signed in and up; `Stopped`/`NeedsLogin` are a daemon that is
+  // there but has nothing to say about anyone, which is not an identity source.
+  const running = state === 'Running';
+  // `status --json` does not inline the profile the way `whois` does: `Self`
+  // carries a `UserID` into the top-level `User` map. Both shapes are read,
+  // the inline one first, because versions differ on which they emit.
+  const self = profileOf(body.Self) ?? profileOf({ UserProfile: userOf(body, (body.Self as { UserID?: unknown } | null)?.UserID), Node: body.Self });
+  const ips = (body.Self as { TailscaleIPs?: unknown } | null)?.TailscaleIPs;
+  const addresses = Array.isArray(ips) ? ips.filter((ip): ip is string => typeof ip === 'string') : [];
+  return { running, self, addresses };
+}
+
+/* ---- The unix socket, kept as the fallback ---- */
+
+/**
  * One GET against `tailscaled`'s local API.
  *
- * `fetch` cannot address a unix socket, so this is `node:http`'s client with
- * `socketPath` — the same shape `service.ts` uses for the supervisor. Nothing
- * here ever leaves the machine.
+ * Only reached when there is no `tailscale` binary to ask but the socket the
+ * open-source daemon opens is there all the same. `fetch` cannot address a
+ * unix socket, so this is `node:http`'s client with `socketPath` — the same
+ * shape `service.ts` uses for the supervisor. Nothing here ever leaves the
+ * machine.
  */
 export function localApiGet(route: string, socketPath = TAILSCALED_SOCKET, timeoutMs = 3_000): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -344,11 +514,45 @@ export function localApiGet(route: string, socketPath = TAILSCALED_SOCKET, timeo
   });
 }
 
-function profileOf(value: unknown): TailscaleProfile | null {
-  const profile = (value as { UserProfile?: { LoginName?: unknown; DisplayName?: unknown } } | null)?.UserProfile;
-  const login = typeof profile?.LoginName === 'string' ? profile.LoginName : '';
-  if (login === '') return null;
-  return { login, name: typeof profile?.DisplayName === 'string' && profile.DisplayName !== '' ? profile.DisplayName : login };
+/** Everything the two questions below need, all of it injectable. */
+export interface TailscaleDaemonDeps {
+  /** Which binary to run, or null for "there is none". */
+  binary?: (() => string | null) | undefined;
+  exec?: TailscaleExec | undefined;
+  socketPath?: string | undefined;
+  /** Is the socket there? Only asked when there is no binary. */
+  socketExists?: ((path: string) => boolean) | undefined;
+  api?: ((route: string, socketPath: string) => Promise<{ status: number; body: unknown }>) | undefined;
+  now?: (() => Date) | undefined;
+}
+
+function binaryOf(deps: TailscaleDaemonDeps): string | null {
+  return (deps.binary ?? (() => resolveTailscaleBinary()))();
+}
+
+function socketOf(deps: TailscaleDaemonDeps): string | null {
+  const path = deps.socketPath ?? TAILSCALED_SOCKET;
+  const exists = deps.socketExists ?? ((p: string) => existsSync(p));
+  return exists(path) ? path : null;
+}
+
+/**
+ * Who the daemon says is behind an address — through the CLI, or through the
+ * socket when there is no CLI to run.
+ */
+export async function whoisOnce(address: string, deps: TailscaleDaemonDeps = {}): Promise<TailscaleProfile | null> {
+  // Never an argv word that is not an address. See `isIpAddress`.
+  if (!isIpAddress(address)) return null;
+  const binary = binaryOf(deps);
+  if (binary !== null) {
+    const res = await (deps.exec ?? execTailscale)(binary, ['whois', '--json', address]);
+    if (res.code !== 0) return null;
+    return parseWhois(res.stdout);
+  }
+  const socket = socketOf(deps);
+  if (socket === null) throw new Error('no tailscale binary and no tailscaled socket');
+  const answer = await (deps.api ?? localApiGet)(`/localapi/v0/whois?addr=${encodeURIComponent(address)}`, socket);
+  return answer.status === 200 ? profileOf(answer.body) : null;
 }
 
 /**
@@ -359,23 +563,38 @@ function profileOf(value: unknown): TailscaleProfile | null {
  * is still looking at the screen, and long enough that a page of a dozen
  * requests asks the daemon once.
  */
-export function daemonWhois(socketPath = TAILSCALED_SOCKET, now: () => Date = () => new Date()): TailscaleWhois {
+export function daemonWhois(deps: TailscaleDaemonDeps = {}): TailscaleWhois {
+  const now = deps.now ?? (() => new Date());
   const cache = new Map<string, { at: number; profile: TailscaleProfile | null }>();
   return async (address: string) => {
     const at = now().getTime();
     const hit = cache.get(address);
     if (hit && at - hit.at < WHOIS_CACHE_MS) return hit.profile;
-    const answer = await localApiGet(`/localapi/v0/whois?addr=${encodeURIComponent(address)}`, socketPath);
-    const profile = answer.status === 200 ? profileOf(answer.body) : null;
+    const profile = await whoisOnce(address, deps);
     cache.set(address, { at, profile });
     return profile;
   };
 }
 
-/** Is `tailscaled` running here, and who is this machine signed in as? */
-export async function tailscaleSelf(socketPath = TAILSCALED_SOCKET): Promise<{ available: boolean; self: TailscaleProfile | null }> {
+/** Is Tailscale running here, and who is this machine signed in as? */
+export async function tailscaleSelf(deps: TailscaleDaemonDeps = {}): Promise<{ available: boolean; self: TailscaleProfile | null }> {
+  const binary = binaryOf(deps);
+  if (binary !== null) {
+    try {
+      const res = await (deps.exec ?? execTailscale)(binary, ['status', '--json']);
+      // A daemon that is installed but stopped answers non-zero, and its JSON
+      // says so; either way there is nobody to sign in as.
+      const status = parseStatus(res.stdout);
+      if (!status.running) return { available: false, self: null };
+      return { available: true, self: status.self };
+    } catch {
+      return { available: false, self: null };
+    }
+  }
+  const socket = socketOf(deps);
+  if (socket === null) return { available: false, self: null };
   try {
-    const answer = await localApiGet('/localapi/v0/status', socketPath);
+    const answer = await (deps.api ?? localApiGet)('/localapi/v0/status', socket);
     if (answer.status !== 200) return { available: false, self: null };
     return { available: true, self: profileOf((answer.body as { Self?: unknown } | null)?.Self) };
   } catch {

@@ -14,7 +14,15 @@ import { startWebServer, type WebServer } from './server.js';
 import { SessionStore, TAILSCALE_SESSION_MAX_MS } from './sessions.js';
 import { mintTicket } from './token.js';
 import {
+  TAILSCALED_SOCKET,
+  daemonWhois,
+  isIpAddress,
   isTailnetAddress,
+  parseStatus,
+  parseWhois,
+  resolveTailscaleBinary,
+  tailscaleSelf,
+  whoisOnce,
   plausibleLogin,
   resetTailscaleLog,
   tailscaleIdentity,
@@ -397,4 +405,172 @@ it('holds a Tailscale session to an absolute lifetime the sliding one cannot ext
   // A ticket or local session has no such edge.
   const ticket = store.create('remote', start, { via: 'ticket' });
   expect(ticket.absoluteExpiresAt).toBeUndefined();
+});
+
+/* ------------------------------------------------------------------ *
+ * Talking to the daemon through the `tailscale` CLI
+ *
+ * Nothing below spawns anything: the binary lookup, the runner and the socket
+ * probe are all injected, and what is under test is the reading of the CLI's
+ * own JSON, the order the binary is looked for in, that an address which is
+ * not an address never reaches an argv, and that the unix socket still answers
+ * when there is no binary to run.
+ * ------------------------------------------------------------------ */
+
+const WHOIS_JSON = JSON.stringify({
+  Node: { Name: 'mac-mini.tail1234.ts.net.', ID: 'n123' },
+  UserProfile: { ID: 4, LoginName: OWNER, DisplayName: 'The Owner', ProfilePicURL: '' },
+});
+
+const STATUS_JSON = JSON.stringify({
+  BackendState: 'Running',
+  Self: {
+    ID: 'n123',
+    HostName: 'mac-mini',
+    DNSName: 'mac-mini.tail1234.ts.net.',
+    TailscaleIPs: ['100.94.221.98', 'fd7a:115c:a1e0::1'],
+    UserProfile: { LoginName: OWNER, DisplayName: 'The Owner' },
+  },
+});
+
+/** A runner that records what it was asked to run and answers from a script. */
+function execSaying(answers: Record<string, { code?: number; stdout: string }>) {
+  const calls: { binary: string; args: string[] }[] = [];
+  const exec = async (binary: string, args: string[]) => {
+    calls.push({ binary, args });
+    const answer = answers[args[0] ?? ''] ?? { code: 1, stdout: '' };
+    return { code: answer.code ?? 0, stdout: answer.stdout };
+  };
+  return { exec, calls };
+}
+
+it('reads the login, the display name and the node out of `tailscale whois --json`', async () => {
+  expect(parseWhois(WHOIS_JSON)).toEqual({ login: OWNER, name: 'The Owner' });
+  // No display name: the node's own name stands in, and then the login.
+  expect(parseWhois(JSON.stringify({ Node: { Name: 'mac-mini.tail1234.ts.net.' }, UserProfile: { LoginName: OWNER } })))
+    .toEqual({ login: OWNER, name: 'mac-mini.tail1234.ts.net.' });
+  expect(parseWhois(JSON.stringify({ UserProfile: { LoginName: OWNER, DisplayName: '  ' } })))
+    .toEqual({ login: OWNER, name: OWNER });
+  // An address the daemon does not know, and output that is not an answer at
+  // all, are both "cannot say" rather than a throw.
+  expect(parseWhois(JSON.stringify({ Node: { Name: 'x' } }))).toBeNull();
+  expect(parseWhois('')).toBeNull();
+  expect(parseWhois('is not a tailscale ip')).toBeNull();
+  expect(parseWhois(JSON.stringify({ UserProfile: { LoginName: 42 } }))).toBeNull();
+});
+
+it('reads who this machine is, and whether it is up, out of `tailscale status --json`', async () => {
+  const status = parseStatus(STATUS_JSON);
+  expect(status.running).toBe(true);
+  expect(status.self).toEqual({ login: OWNER, name: 'The Owner' });
+  expect(status.addresses).toEqual(['100.94.221.98', 'fd7a:115c:a1e0::1']);
+  // Installed but not signed in, or stopped: a daemon that vouches for nobody.
+  expect(parseStatus(JSON.stringify({ BackendState: 'NeedsLogin', Self: null }))).toEqual({ running: false, self: null, addresses: [] });
+  expect(parseStatus(JSON.stringify({ BackendState: 'Stopped', Self: { UserProfile: { LoginName: OWNER } } })).running).toBe(false);
+  // The shape the CLI actually emits: `Self` names a user id and the profile
+  // lives in the top-level `User` map.
+  const byId = parseStatus(JSON.stringify({
+    BackendState: 'Running',
+    Self: { UserID: 1202412987709414, DNSName: 'mac-mini.tail1234.ts.net.', TailscaleIPs: ['100.94.221.98'] },
+    User: { '1202412987709414': { ID: 1202412987709414, LoginName: OWNER, DisplayName: 'The Owner' } },
+  }));
+  expect(byId).toEqual({ running: true, self: { login: OWNER, name: 'The Owner' }, addresses: ['100.94.221.98'] });
+  // A id with no entry in the map is a machine that cannot name itself.
+  expect(parseStatus(JSON.stringify({ BackendState: 'Running', Self: { UserID: 7 }, User: {} })).self).toBeNull();
+  expect(parseStatus('')).toEqual({ running: false, self: null, addresses: [] });
+  expect(parseStatus('Tailscale is stopped.')).toEqual({ running: false, self: null, addresses: [] });
+});
+
+it('asks the CLI, and uses its answer as the whois', async () => {
+  const { exec, calls } = execSaying({ whois: { stdout: WHOIS_JSON } });
+  const whois = daemonWhois({ binary: () => '/usr/local/bin/tailscale', exec });
+  expect(await whois(TAILNET_IP)).toEqual({ login: OWNER, name: 'The Owner' });
+  expect(calls).toEqual([{ binary: '/usr/local/bin/tailscale', args: ['whois', '--json', TAILNET_IP] }]);
+  // A minute's memory: the second question does not reach the daemon.
+  expect(await whois(TAILNET_IP)).toEqual({ login: OWNER, name: 'The Owner' });
+  expect(calls).toHaveLength(1);
+});
+
+it('reads a non-zero exit as "the daemon does not know", not as a failure', async () => {
+  const { exec } = execSaying({ whois: { code: 1, stdout: '' } });
+  expect(await whoisOnce(TAILNET_IP, { binary: () => '/usr/local/bin/tailscale', exec })).toBeNull();
+});
+
+it('reports the machine itself through the CLI', async () => {
+  const { exec, calls } = execSaying({ status: { stdout: STATUS_JSON } });
+  expect(await tailscaleSelf({ binary: () => '/usr/local/bin/tailscale', exec }))
+    .toEqual({ available: true, self: { login: OWNER, name: 'The Owner' } });
+  expect(calls).toEqual([{ binary: '/usr/local/bin/tailscale', args: ['status', '--json'] }]);
+  // `tailscale status` on a stopped daemon exits non-zero and says so.
+  const stopped = execSaying({ status: { code: 1, stdout: JSON.stringify({ BackendState: 'Stopped' }) } });
+  expect(await tailscaleSelf({ binary: () => '/usr/local/bin/tailscale', exec: stopped.exec }))
+    .toEqual({ available: false, self: null });
+});
+
+it('looks for the binary on the PATH first, then where a Mac keeps one', () => {
+  const present = (...paths: string[]) => (p: string) => paths.includes(p);
+  // The PATH wins, and the first PATH entry that has one wins within it.
+  expect(resolveTailscaleBinary({
+    path: ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'].join(':'),
+    canExec: present('/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale'),
+  })).toBe('/opt/homebrew/bin/tailscale');
+  // Nothing on the PATH: `/usr/local/bin` before the app bundle.
+  expect(resolveTailscaleBinary({
+    path: '/usr/bin:/bin',
+    canExec: present('/usr/local/bin/tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'),
+  })).toBe('/usr/local/bin/tailscale');
+  // Only the App Store app is installed — the case this whole change is about.
+  expect(resolveTailscaleBinary({
+    path: '/usr/bin:/bin',
+    canExec: present('/Applications/Tailscale.app/Contents/MacOS/Tailscale'),
+  })).toBe('/Applications/Tailscale.app/Contents/MacOS/Tailscale');
+  // No Tailscale at all.
+  expect(resolveTailscaleBinary({ path: '/usr/bin:/bin', canExec: () => false })).toBeNull();
+  // A relative PATH entry is not searched: it would mean whatever directory
+  // the gateway happens to have been started in.
+  expect(resolveTailscaleBinary({ path: '.:bin::/usr/bin', canExec: present('tailscale', 'bin/tailscale', './tailscale') })).toBeNull();
+  expect(resolveTailscaleBinary({ path: '', canExec: () => false })).toBeNull();
+});
+
+it('spells nothing but an IP address into the argv', async () => {
+  for (const good of ['100.94.221.98', '100.64.0.1', 'fd7a:115c:a1e0::1', '::1', '2001:db8::8a2e:370:7334']) {
+    expect(isIpAddress(good)).toBe(true);
+  }
+  for (const bad of [
+    '', '   ', '--help', '-v', '100.94.221.98 --socket=/tmp/x', '100.94.221.98;id', '$(id)',
+    'mac-mini.tail1234.ts.net', '100.94.221.256', '100.94.221', '100.94.221.98/24',
+    '100.94.221.98%en0', 'fd7a::115c::1', 'fd7a:115c:a1e0::1;rm', 'fd7a:115c:a1e0:0:0:0:0:0:0:1', 'g::1',
+    '1.2.3.4'.padEnd(60, '0'),
+  ]) {
+    expect(isIpAddress(bad), bad).toBe(false);
+  }
+  // And a whois for something that is not an address never runs a thing.
+  const { exec, calls } = execSaying({ whois: { stdout: WHOIS_JSON } });
+  expect(await whoisOnce('--socket=/tmp/evil.sock', { binary: () => '/usr/local/bin/tailscale', exec })).toBeNull();
+  expect(calls).toEqual([]);
+});
+
+it('falls back to the tailscaled socket when there is no binary but a socket', async () => {
+  const asked: string[] = [];
+  const api = async (route: string, socketPath: string) => {
+    asked.push(`${socketPath} ${route}`);
+    return route.startsWith('/localapi/v0/whois')
+      ? { status: 200, body: JSON.parse(WHOIS_JSON) as unknown }
+      : { status: 200, body: JSON.parse(STATUS_JSON) as unknown };
+  };
+  const deps = { binary: () => null, socketExists: (p: string) => p === TAILSCALED_SOCKET, api };
+  expect(await whoisOnce(TAILNET_IP, deps)).toEqual({ login: OWNER, name: 'The Owner' });
+  expect(await tailscaleSelf(deps)).toEqual({ available: true, self: { login: OWNER, name: 'The Owner' } });
+  expect(asked).toEqual([
+    `${TAILSCALED_SOCKET} /localapi/v0/whois?addr=${encodeURIComponent(TAILNET_IP)}`,
+    `${TAILSCALED_SOCKET} /localapi/v0/status`,
+  ]);
+
+  // Neither a binary nor a socket: the panel says Tailscale is not running
+  // here, and a whois is a failure rather than a quiet "does not know" — the
+  // identity path reads that as `daemon-unreachable`.
+  const nothing = { binary: () => null, socketExists: () => false, api };
+  expect(await tailscaleSelf(nothing)).toEqual({ available: false, self: null });
+  await expect(whoisOnce(TAILNET_IP, nothing)).rejects.toThrow();
+  expect(await tailscaleIdentity(req(), { setting: setting(), whois: daemonWhois(nothing) })).toBeNull();
 });
