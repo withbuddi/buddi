@@ -115,14 +115,16 @@ describe('a turn added while the agent was working', () => {
     // And now the correction, typed while it works. The server takes it into
     // the live run and says so; the page shows it landing straight away.
     send.mockImplementation(async () => {
+      // The server keeps it in `core.pending_input` and the transcript read
+      // joins it on at the end, under its own id.
       transcript = {
         ...transcript,
         messages: [
           ...transcript.messages,
-          { id: 'm2', role: 'user', at: '', speaker: OWNER_INTERJECTION_SPEAKER, blocks: [{ type: 'text', text: 'in euros, please' }] },
+          { id: 'p1', role: 'user', at: '', speaker: OWNER_INTERJECTION_SPEAKER, blocks: [{ type: 'text', text: 'in euros, please' }] },
         ],
       };
-      return { conversationId: 'c2', runId: 'r1', queued: true } as never;
+      return { conversationId: 'c2', runId: 'r1', queued: true, pendingId: 'p1' } as never;
     });
     fireEvent.change(area, { target: { value: 'in euros, please' } });
     fireEvent.click(screen.getByRole('button', { name: /Send/ }));
@@ -133,5 +135,58 @@ describe('a turn added while the agent was working', () => {
     // goes: one bubble, not two.
     await waitFor(() => expect(screen.getAllByText('in euros, please')).toHaveLength(1));
     expect(screen.getAllByTestId('added-while-working')).toHaveLength(1);
+  });
+});
+
+/**
+ * Two things typed while the agent worked become *one* turn when nobody
+ * picked them up — and neither of them equals the joined text. Matching on
+ * words would leave both copies on screen beside the turn they became, which
+ * is why the page lets its own copies go by identity once the server has
+ * read them back.
+ */
+describe('two messages added while the agent was working', () => {
+  it('leaves nothing behind once they are promoted into one turn', async () => {
+    let transcript: any = {
+      conversationId: 'c2', agentId: 'keeper',
+      messages: [{ id: 'm1', role: 'user', at: '', blocks: [{ type: 'text', text: 'draft the email' }] }],
+    };
+    vi.spyOn(chatApi, 'conversation').mockImplementation(async () => transcript);
+    const send = vi.spyOn(chatApi, 'send').mockResolvedValue({ conversationId: 'c2', runId: 'r1' } as never);
+
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const area = await screen.findByPlaceholderText(/Message/i);
+    fireEvent.change(area, { target: { value: 'draft the email' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    await screen.findByRole('button', { name: 'Stop' });
+
+    let queued = 0;
+    send.mockImplementation(async () => {
+      queued += 1;
+      return { conversationId: 'c2', runId: 'r1', queued: true, pendingId: `p${queued}` } as never;
+    });
+    for (const text of ['wait', 'do the other one first']) {
+      fireEvent.change(area, { target: { value: text } });
+      fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(queued + 1));
+    }
+
+    // The run ended without taking them, so the server promoted both into one
+    // turn whose text is neither of the two.
+    transcript = {
+      ...transcript,
+      messages: [
+        ...transcript.messages,
+        { id: 'm9', role: 'user', at: '', blocks: [{ type: 'text', text: 'wait\n\ndo the other one first' }] },
+      ],
+    };
+    fireEvent.change(area, { target: { value: 'anything else' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send/ }));
+
+    await waitFor(() => expect(screen.getByText(/do the other one first/)).toBeInTheDocument());
+    // One bubble for the promoted turn, and no orphaned copies of either half.
+    await waitFor(() => expect(screen.queryAllByTestId('added-while-working')).toHaveLength(0));
+    expect(screen.getAllByText(/do the other one first/)).toHaveLength(1);
   });
 });

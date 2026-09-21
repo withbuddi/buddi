@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, OWNER_INTERJECTION_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -182,14 +182,14 @@ export interface RunAgentOptions {
   /**
    * What the owner said *while this run was working*.
    *
-   * The loop drains it between tool calls and before the next model step —
-   * never inside a tool call, where a half-finished effect has no way to hear
-   * about a change of mind. Each queued line is appended to this run's context
-   * as an owner message and stored as an ordinary user turn, stamped
-   * `OWNER_INTERJECTION_SPEAKER` so a transcript can say it was added while
-   * working. Anything that arrives after the model's final answer is simply
-   * left in the source: the run is over, and the surface sends it as the next
-   * turn.
+   * The loop leases from it at one point only: after every tool call of a
+   * turn has been answered and before the next model step. What it takes goes
+   * into that same tool-results turn, after the results — never into a turn
+   * of its own, which would put a user message between a `tool_use` and its
+   * `tool_result` and make the history unreplayable. Delivery is acknowledged
+   * only once the model has actually been shown it; anything that arrives too
+   * late, or that a failed step never carried, stays in the source for the
+   * surface to send as the next turn.
    */
   interjections?: InterjectionSource;
   /**
@@ -208,44 +208,46 @@ export interface RunAgentOptions {
  * One thing the owner added while the agent was working.
  */
 export interface Interjection {
-  text: string;
-  /**
-   * The id of the row the surface wrote, when it wrote one. The loop never
-   * reads it; it rides along so that a surface getting its own line back
-   * undelivered knows which row it is about.
-   */
+  /** Whoever queued it knows it by this. The loop only hands it back. */
   id?: string;
-  /**
-   * The surface has already written this turn to `core.messages` (with the
-   * interjection speaker on it), so the loop sends it and stores nothing.
-   * Absent means the loop owns the row, which is the ordinary case.
-   */
-  stored?: boolean;
+  text: string;
 }
 
 /**
  * Where a run hears about what the owner said while it worked.
  *
- * A pull, not a push: the loop asks at the one point where a new owner
- * message can be taken safely, and a source that has nothing says so with an
- * empty array. Whatever is handed over is *delivered* — a source must not
- * return the same line twice.
+ * Lease, then acknowledge — never a destructive read. The loop takes a batch
+ * under lease at its safe point, shows it to the model, and only then says
+ * the model saw it; if that step never happens (the run is aborted, the
+ * provider throws, the turn budget is spent) the batch goes back, and the
+ * surface sends it as the next turn instead. A queue that handed its lines
+ * out and forgot them would lose exactly the message the owner most wants
+ * answered: the one they typed a second before everything stopped.
  */
 export interface InterjectionSource {
-  poll(): readonly Interjection[];
+  /** Everything waiting, in order, marked as being shown to the model. */
+  lease(): Promise<readonly Interjection[]> | readonly Interjection[];
+  /**
+   * The model was shown them, and `messageId` is the turn that carries them,
+   * when the caller wrote one.
+   */
+  deliver(items: readonly Interjection[], messageId?: string): Promise<void> | void;
+  /** The step never happened. They are waiting again. */
+  release(items: readonly Interjection[]): Promise<void> | void;
 }
 
 /**
- * The queue a surface hands to a run and pushes into from outside it.
+ * The in-memory queue a surface with no durable store of its own hands to a
+ * run: Telegram, and the tests.
  *
- * Deliberately tiny and deliberately synchronous: push and poll are the only
- * two operations, and neither awaits, so there is no window in which a line is
- * both queued and delivered. `close` ends it — the run is over — and returns
- * whatever was never picked up, which is what the surface then sends as the
- * next turn.
+ * Deliberately tiny. `push` is synchronous so there is no window in which a
+ * line is both accepted and lost; `close` ends it and returns everything the
+ * run never acknowledged — leased or still waiting — which is what the
+ * surface then sends as the next turn.
  */
 export class InterjectionQueue implements InterjectionSource {
   #pending: Interjection[] = [];
+  #leased: Interjection[] = [];
   #closed = false;
 
   /** Is this run still able to take something? */
@@ -261,17 +263,30 @@ export class InterjectionQueue implements InterjectionSource {
     return true;
   }
 
-  poll(): readonly Interjection[] {
-    if (this.#pending.length === 0) return [];
+  lease(): readonly Interjection[] {
+    if (this.#closed || this.#pending.length === 0) return [];
     const taken = this.#pending;
     this.#pending = [];
+    this.#leased.push(...taken);
     return taken;
   }
 
-  /** End it, and hand back everything the run never picked up, in order. */
+  deliver(items: readonly Interjection[]): void {
+    this.#leased = this.#leased.filter((held) => !items.includes(held));
+  }
+
+  release(items: readonly Interjection[]): void {
+    this.#leased = this.#leased.filter((held) => !items.includes(held));
+    this.#pending = [...items, ...this.#pending];
+  }
+
+  /** End it, and hand back everything that was never delivered, in order. */
   close(): readonly Interjection[] {
     this.#closed = true;
-    return this.poll();
+    const left = [...this.#leased, ...this.#pending];
+    this.#leased = [];
+    this.#pending = [];
+    return left;
   }
 }
 
@@ -444,24 +459,24 @@ async function persistMessage(
   content: ContentBlock[],
   speaker?: string,
   uses: readonly ArtifactUse[] = [],
-): Promise<void> {
+): Promise<string | undefined> {
   if (uses.length === 0) {
     // The column is written only when a room needs it, so a single-agent
     // conversation's rows keep the shape they always had.
     if (speaker === undefined) {
-      await pool.query(
+      const { rows } = await pool.query(
         `insert into core.messages (conversation_id, role, content)
-         values ($1, $2, $3::jsonb)`,
+         values ($1, $2, $3::jsonb) returning id`,
         [conversationId, role, JSON.stringify(content)],
       );
-      return;
+      return rows[0]?.id === undefined ? undefined : String(rows[0].id);
     }
-    await pool.query(
+    const { rows } = await pool.query(
       `insert into core.messages (conversation_id, role, content, speaker)
-       values ($1, $2, $3::jsonb, $4)`,
+       values ($1, $2, $3::jsonb, $4) returning id`,
       [conversationId, role, JSON.stringify(content), speaker],
     );
-    return;
+    return rows[0]?.id === undefined ? undefined : String(rows[0].id);
   }
   // The message and the library's record of every file it carries, in one
   // statement: either both land or neither does. An upload already part of
@@ -490,6 +505,10 @@ async function persistMessage(
      on conflict (artifact_id, conversation_id, kind, coalesce(agent_id, '')) do nothing`,
     [conversationId, role, JSON.stringify(content), speaker ?? null, JSON.stringify(uses)],
   );
+  // The statement that also records artifact uses returns the conversation,
+  // not the row: nothing needs this turn's id, and asking for it would mean a
+  // second shape for the one statement that must stay atomic.
+  return undefined;
 }
 
 async function appendEvent(
@@ -838,7 +857,30 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // Run-local: only a successful declared question tool can close dispatch.
   // The next owner turn starts with a fresh boundary, not a permanent grant.
   let waitingForOwner = false;
+  /**
+   * What the owner added, leased for the step that has not happened yet.
+   *
+   * Held between the safe point that took it and the provider call that shows
+   * it to the model. Acknowledged after that call comes back, and handed back
+   * to the queue if it never does — a line the model was never shown is a
+   * line the owner is still waiting on.
+   */
+  let inFlight: readonly Interjection[] = [];
+  let inFlightMessageId: string | undefined;
+  const letGo = async (): Promise<void> => {
+    if (inFlight.length === 0) return;
+    const held = inFlight;
+    inFlight = [];
+    inFlightMessageId = undefined;
+    try {
+      await opts.interjections?.release(held);
+    } catch {
+      // The queue's own bookkeeping must not turn a failed turn into a
+      // second failure; the durable state is already the truth.
+    }
+  };
 
+  try {
   while (turns < agent.maxTurns) {
     ctx.signal?.throwIfAborted();
     turns++;
@@ -851,6 +893,16 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       ...(agent.thinking ? { thinking: agent.thinking } : {}),
       ...(opts.onDelta ? { onDelta: opts.onDelta } : {}),
     });
+    // The model has seen whatever was handed to it with the last turn's tool
+    // results. Only now is it delivered: before this, the call could still
+    // have failed and the words gone nowhere.
+    if (inFlight.length > 0) {
+      const held = inFlight;
+      const messageId = inFlightMessageId;
+      inFlight = [];
+      inFlightMessageId = undefined;
+      await opts.interjections?.deliver(held, messageId);
+    }
     ctx.signal?.throwIfAborted();
     usage.input += res.usage.input;
     usage.output += res.usage.output;
@@ -1009,15 +1061,56 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       }
     }
 
-    messages.push({ role: 'user', content: results });
-    await persistMessage(pool, conversationId, 'user', results, opts.transcript?.speaker, produced);
+    /*
+     * The one place the owner can get a word in.
+     *
+     * Every tool call of this turn has been dispatched and answered, and the
+     * next model step has not been built yet: a correction taken here reaches
+     * the model *before* it decides what to do next, and it cannot arrive
+     * halfway through an effect.
+     *
+     * It goes into *this* turn — the tool-results turn, after the results —
+     * and not into a turn of its own. Two reasons, and both are fatal
+     * otherwise: a user turn between a `tool_use` and its `tool_result` makes
+     * the stored transcript unreplayable, and two user messages in a row make
+     * the very next request invalid on the wire.
+     *
+     * Nothing is taken when this turn is the last one allowed, or when the
+     * run is stopping on an approval: there is no model step left to show it
+     * to, and a line nobody will see must stay queued for the next turn.
+     */
+    const lastTurn = turns >= agent.maxTurns || pendingActionId !== undefined || ctx.signal?.aborted === true;
+    const leased = lastTurn ? [] : ((await opts.interjections?.lease()) ?? []).filter((item) => item.text.trim() !== '');
+    // What the model is shown, and what the transcript keeps: the framing is
+    // for the model — the record holds the owner's own words.
+    const spokenBlocks: ContentBlock[] = leased.length === 0
+      ? []
+      : [{ type: 'text', text: interjectionText(leased.map((item) => item.text)) }];
+    const storedBlocks: ContentBlock[] = leased.length === 0
+      ? []
+      : [{ type: 'text', text: leased.map((item) => item.text.trim()).join('\n\n') }];
+
+    messages.push({ role: 'user', content: [...results, ...spokenBlocks] });
+    const turnMessageId = await persistMessage(
+      pool, conversationId, 'user', [...results, ...storedBlocks], opts.transcript?.speaker, produced,
+    );
+    if (leased.length > 0) {
+      inFlight = leased;
+      inFlightMessageId = turnMessageId;
+      await appendEvent(
+        pool,
+        'run.interjected',
+        { count: leased.length, ...(opts.runId ? { runId: opts.runId } : {}) },
+        conversationId,
+      );
+    }
     // Ephemeral observations: only the latest picture is sent, never base64 in
     // durable transcripts or stale screenshots repeated on every later turn.
     for (const message of messages) message.content = message.content.filter((b) => !ephemeralImages.has(b));
     if (images.length > 0) {
       const latest = images[images.length - 1]!;
       ephemeralImages.add(latest);
-      messages[messages.length - 1]!.content = [...results, latest];
+      messages[messages.length - 1]!.content = [...results, ...spokenBlocks, latest];
     }
     ctx.signal?.throwIfAborted();
 
@@ -1025,32 +1118,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       stopped = 'awaiting-approval';
       break;
     }
-
-    /*
-     * The one place the owner can get a word in.
-     *
-     * Every tool call of this turn has been dispatched and answered, and the
-     * next model step has not been built yet: a correction taken here reaches
-     * the model *before* it decides what to do next, and cannot arrive halfway
-     * through an effect. Anything queued after the model's last word is left
-     * where it is — the run is ending, and it belongs to the next turn.
-     */
-    const added = opts.interjections?.poll() ?? [];
-    const taken = added.filter((item) => item.text.trim() !== '');
-    if (taken.length > 0) {
-      messages.push({ role: 'user', content: [{ type: 'text', text: interjectionText(taken.map((item) => item.text)) }] });
-      for (const item of taken) {
-        if (item.stored) continue;
-        await persistMessage(pool, conversationId, 'user', [{ type: 'text', text: item.text.trim() }], OWNER_INTERJECTION_SPEAKER);
-      }
-      await appendEvent(
-        pool,
-        'run.interjected',
-        { count: taken.length, ...(opts.runId ? { runId: opts.runId } : {}) },
-        conversationId,
-      );
-    }
   }
+  } catch (err) {
+    // However this run ended, nothing it was holding is lost: it goes back to
+    // the queue, and the surface sends it as the next turn.
+    await letGo();
+    throw err;
+  }
+  await letGo();
 
   await appendEvent(
     pool,

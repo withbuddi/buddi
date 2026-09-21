@@ -650,7 +650,7 @@ export function ChatPage({
     (group
       ? chatApi.sendToGroup(group.id, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
       : chatApi.send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds }))
-      .then((result: { conversationId: string; rolledOver?: boolean }) => {
+      .then(async (result: { conversationId: string; rolledOver?: boolean; queued?: boolean }) => {
         if (selection.current.agentId !== agentId || selection.current.conversationId !== conversationId) return;
         // A room summarises itself across a rollover, and says so. A one-to-one
         // conversation says nothing: the page lands in the new thread, and the
@@ -660,7 +660,18 @@ export function ChatPage({
           setConversation(null);
           setConversationId(result.conversationId);
         }
-        else void refresh(result.conversationId);
+        else await refresh(result.conversationId);
+        /*
+         * A queued message is the server's now, under an id of its own, and
+         * the refresh above has just read it back — waiting, inside the turn
+         * that took it, or promoted with whatever else was queued into one
+         * turn. So this copy goes by *identity*: matching on text cannot
+         * survive the joining, and two half-thoughts would otherwise sit on
+         * the screen for ever beside the turn they became.
+         */
+        if (result.queued === true) {
+          setOptimistic((pending) => pending.filter((entry) => entry.id !== local.id));
+        }
         onConversationOpened?.(agentId, result.conversationId);
       })
       .catch((err: unknown) => {

@@ -1525,14 +1525,20 @@ export class TelegramSurface {
      * Only a plain sentence to whoever is working. A command is its own
      * thing, and `@handle …` is addressed to somebody else — folding either
      * into the run in flight would answer a question nobody asked it.
+     *
+     * Decided on the *normalised* text, the way `handleText` decides
+     * everything else: in a group Telegram writes `@buddi_bot /reset`, and a
+     * check against the raw string sees no slash and would push a command
+     * into the agent's context as though it were a sentence.
      */
+    const normalized = stripBotMention(text, this.#opts.botUsername).trim();
     const live = this.#interjections.get(chatId);
     if (
       live
       && (this.#waiting.get(chatId) ?? 0) <= 1
-      && !text.startsWith('/')
-      && parseMention(text, this.#opts.botUsername) === undefined
-      && live.push({ text })
+      && !normalized.startsWith('/')
+      && parseMention(normalized, this.#opts.botUsername) === undefined
+      && live.push({ text: normalized })
     ) {
       this.#log(`telegram: chat ${chatId} added to the run in flight`);
       return;
@@ -2100,9 +2106,6 @@ export class TelegramSurface {
     // agent is working.
     const interjections = new InterjectionQueue();
     this.#interjections.set(chatId, interjections);
-    /** What arrived too late for this run to take, whatever ended it. */
-    let left: readonly { text: string }[] = [];
-
     try {
       await this.#withBubble(
         chatId,
@@ -2144,20 +2147,25 @@ export class TelegramSurface {
         { agentId: agent.id, conversationId, prompt },
         );
     } finally {
-      // However the turn ended, the window closes with it: nothing may be
-      // handed to a run that is no longer there to take it.
-      left = interjections.close();
+      /*
+       * However the turn ended — answered, thrown, cancelled — the window
+       * closes with it and what it was holding becomes the next turn.
+       *
+       * In the `finally`, because the case that matters is the one that does
+       * not reach the end of this function: a run that throws had no chance
+       * to take the owner's message, and Telegram has no durable copy of it.
+       * Promoting it after the `try` would lose exactly the message the owner
+       * sent because the agent was taking too long.
+       */
+      const left = interjections.close();
       if (this.#interjections.get(chatId) === interjections) this.#interjections.delete(chatId);
+      const added = left.map((item) => item.text.trim()).filter((line) => line !== '').join('\n\n');
+      // Onto the back of the chat's chain, not into this call: it is a turn
+      // of its own now, and it takes its place behind anything the owner sent
+      // in between rather than jumping the queue from inside the turn before
+      // it.
+      if (added !== '') this.enqueue(chatId, () => this.#runFor(chatId, agent, added, { carry: false }).then(() => undefined));
     }
-
-    // What arrived after the agent had already answered. The run could not
-    // take it, so it is the next turn — in order, as one message, the way it
-    // would have been had the owner sent it a second later.
-    const added = left.map((item) => item.text.trim()).filter((line) => line !== '').join('\n\n');
-    // Onto the back of the chat's chain, not into this call: it is a turn of
-    // its own now, and it takes its place behind anything the owner sent in
-    // between rather than jumping the queue from inside the turn before it.
-    if (added !== '') this.enqueue(chatId, () => this.#runFor(chatId, agent, added, { carry: false }).then(() => undefined));
 
     return { askedOwner };
   }
