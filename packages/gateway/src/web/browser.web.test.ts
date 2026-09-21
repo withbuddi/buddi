@@ -12,7 +12,9 @@ afterEach(async () => { await Promise.all(instances.splice(0).map((s) => s.close
 async function setup(openAccess = true, supplied?: BrowserController, publicOrigin?: string) {
   const driver: BrowserDriver = { start: vi.fn(), perform: vi.fn(), observe: vi.fn(), screenshot: vi.fn(), close: vi.fn() };
   const browser: BrowserController = supplied ?? new BrowserService(driver); services.push(browser); await browser.enable();
-  const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+  // `/api/session` asks the database whether this installation is in
+  // recovery, so the fixture pool answers a query, as version.web.test.ts's does.
+  const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0, publicOrigin }, openAccess, token: TOKEN, browser });
   instances.push(app);
