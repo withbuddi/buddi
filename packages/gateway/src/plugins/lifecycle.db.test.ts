@@ -28,6 +28,7 @@ import {
   createPool,
   listMissions,
   migrate,
+  runMigrations,
   readPluginsFile,
   upsertMission,
   type PluginManifest,
@@ -38,7 +39,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { applyInstall, entryPointOf, InstallRefusal, planInstall } from './install.js';
-import { adoptPlugins, loadManifest, resetAdoptedPlugins } from './load.js';
+import { adoptPlugins, loadManifest, pluginLoadReport, resetAdoptedPlugins } from './load.js';
+import { migrateInstalled } from './migrate.js';
+import { installedManifests } from '../agents/catalog.js';
 import { applyUninstall, declaredTools, namesPlugin, planUninstall, UninstallRefusal } from './uninstall.js';
 
 const WEATHER_DIR = path.join(REPO_ROOT, 'examples', 'plugins', 'weather');
@@ -125,6 +128,58 @@ suite('installing a plugin from a directory', () => {
       schema: SCHEMA,
       source: { kind: 'directory', path: PLUGIN_DIR },
     });
+  });
+
+  /*
+   * docs/install.md §7: a plugin that fails to load never stops the gateway.
+   * A plugin whose migrations will not apply has not loaded — it has no schema
+   * to work in — so a start migrates what it can, leaves that one out of the
+   * manifests for the rest of the run, and says why where the owner looks.
+   */
+  it('does not stop the start when an installed plugin cannot migrate', async () => {
+    const plan = await planInstall(PLUGIN_DIR, env);
+    const record = applyInstall(plan, { env });
+    const broken = path.join(PLUGIN_DIR, 'migrations-that-are-not-there');
+    adoptPlugins(env, {
+      file: plan.recordFile,
+      loaded: [
+        {
+          record,
+          manifest: { ...plan.manifest, migrationsDir: broken },
+          contribution: plan.contribution,
+        },
+      ],
+      problems: [],
+    });
+    expect(installedManifests(env).some((m) => m.name === PLUGIN)).toBe(true);
+
+    const result = await migrateInstalled(pool, env);
+
+    // Core and the compiled-in plugins migrated; this one is a load failure.
+    expect(result.problems.map((p) => p.name)).toEqual([PLUGIN]);
+    expect(result.problems[0]?.message).toContain(broken);
+    expect(installedManifests(env).some((m) => m.name === PLUGIN)).toBe(false);
+    const report = pluginLoadReport(env);
+    expect(report.map((r) => r.name)).toEqual([PLUGIN]);
+    expect(report[0]?.error).toContain('migrations could not be applied');
+    // And nothing was created for it.
+    const { rows } = await pool.query(
+      'select table_name from information_schema.tables where table_schema = $1',
+      [SCHEMA],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('still refuses when the plugin that cannot migrate is a compiled-in one', async () => {
+    // The same failure for something this build ships is this build being
+    // wrong about itself: nothing names it optional, so it throws and the
+    // installation does not start on a schema it could not create.
+    const loaded = await loadManifest(entryPointOf(PLUGIN_DIR));
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    await expect(
+      runMigrations(pool, [{ ...loaded.manifest, migrationsDir: path.join(root, 'nowhere') }]),
+    ).rejects.toThrow(/no migrations directory/);
   });
 
   it('applies the plugin\'s own migrations into the plugin\'s own schema', async () => {

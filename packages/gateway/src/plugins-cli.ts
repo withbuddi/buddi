@@ -73,6 +73,8 @@ export const USAGE = `buddi plugins — what this installation has installed
                                           The hash is the one the staged card printed; a
                                           package that came from a registry or a .tgz is
                                           never approved without it, not even with --yes.
+                                          Without it the command stages, prints the card and
+                                          exits 3: staged, not installed.
   buddi plugins update <name> [--version] stage the next version; --yes --integrity approves it
   buddi plugins staged                    what is staged and waiting for you
   buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
@@ -473,6 +475,16 @@ export function needsIntegrityFirst(staged: StagedPlugin, args: ParsedPluginsArg
   return args.yes && staged.source.kind !== 'directory' && args.integrity === undefined;
 }
 
+/**
+ * The exit code for "staged, not installed".
+ *
+ * A refusal to act that exits 0 reads as success: a `set -e` install step in
+ * somebody's setup notes would report the plugin installed and leave it
+ * waiting for an approval nobody typed. 3 is distinct from 1 (something went
+ * wrong) so a script can tell the two apart and go on to `plugins approve`.
+ */
+export const STAGED_NOT_INSTALLED = 3;
+
 /** What to print when `--yes` arrived without the hash it has to carry. */
 function askForIntegrity(staged: StagedPlugin): number {
   console.log('');
@@ -482,7 +494,7 @@ function askForIntegrity(staged: StagedPlugin): number {
   console.log('');
   console.log(`  buddi plugins approve ${staged.id} --integrity ${staged.integrity}`);
   console.log(`  buddi plugins reject ${staged.id}      (and it is deleted, with everything it fetched)`);
-  return 0;
+  return STAGED_NOT_INSTALLED;
 }
 
 async function commandInstall(

@@ -521,6 +521,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi nudges status|stop|resume             the first-run arc and its budget
   buddi plugins list|info <name>            what is installed, and what each one brought
   buddi plugins install <spec> [--yes]      a directory, a .tgz, or an npm package
+                                            --yes on a .tgz or an npm package also needs
+                                            --integrity <hash>; without it: exit 3, staged
   buddi plugins update <name> [--yes]       stage the next version and approve it
   buddi plugins uninstall <name> [--yes]    remove it; its database schema is kept
   buddi migrate              apply core + plugin migrations

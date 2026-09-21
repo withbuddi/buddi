@@ -28,6 +28,7 @@ export * from './recovery.js';
 export * from './plugins/index.js';
 export * from './backup/index.js';
 export { runMigrations } from './cli-migrate.js';
+export type { MigrationProblem, RunMigrationsOptions } from './cli-migrate.js';
 export * from './provider-accounts.js';
 export * from './system-context.js';
 export * from './groups.js';

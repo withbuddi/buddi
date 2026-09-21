@@ -531,7 +531,13 @@ export const MIGRATIONS_DIR = path.resolve(
 );
 ```
 
-and `migrations` goes in the package's `files` array.
+and `migrations` goes in the package's `files` array. Use `fileURLToPath`, never
+`new URL('./migrations', import.meta.url).pathname`: that form percent-encodes a
+space, so under a data directory called `owner data` — or
+`~/Library/Application Support/...` — the path does not exist on disk. A
+`migrationsDir` that is not there is now an error naming the directory
+(`migrate` used to treat it as "nothing to do"), reported on install as
+`migrationProblem`.
 
 `migrate(pool, { schema, dir })` (`packages/core/src/db.ts`) is per-plugin and
 additive:
@@ -546,8 +552,14 @@ additive:
   one.** Number them `001_`, `002_`.
 - the schema name is checked against `/^[a-z_][a-z0-9_]*$/` before it is quoted.
 
-`runMigrations(pool, manifests)` runs core's first, then each manifest's. A
-manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
+`runMigrations(pool, manifests, { optional, onProblem })` runs core's first,
+then each manifest's. `optional` names the installed third-party plugins: one
+of those failing is that plugin failing to load (`docs/install.md` §7), so it
+is reported through `onProblem`, left out of `installedManifests` for the rest
+of the run and listed by `pluginLoadReport` — the Plugins page and doctor say
+why. Core's own migrations and a compiled-in plugin's still throw. Both start
+paths go through the gateway's `migrateInstalled(pool, env)`, which fills those
+two options in. A manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
 saying it owns no schema at all, not a missing path. Its tools read `core.artifacts`
 because a dropped plugin must not take the owner's files with it.
 
@@ -1288,7 +1300,10 @@ refuses and still imports nothing. `--yes` does not stand in for this: for a
 registry or a tarball source, `buddi plugins install <spec> --yes` without
 `--integrity <hash>` prints the card and the `approve` command and installs
 nothing, because a yes typed before the fetch cannot be a yes to a particular
-package. A directory source has no hash and keeps the plain `--yes`.
+package. It **exits 3** when it does that: "staged, not installed", distinct
+from 1 (something failed) and from 0, so a `set -e` install step in somebody's
+setup notes cannot read a refusal as success. A directory source has no hash
+and keeps the plain `--yes`.
 
 Immediately before the first import the staged tree is hashed again and has to
 equal `stagedHash`; a stage that changed while it waited is refused. Only then

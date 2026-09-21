@@ -22,6 +22,7 @@ export * from './stage.js';
 export * from './approve.js';
 export * from './update.js';
 export * from './load.js';
+export * from './migrate.js';
 export * from './install.js';
 export * from './uninstall.js';
 export * from './provenance.js';
