@@ -23,7 +23,7 @@
  * vocabulary for the same idea.
  */
 import { realpathSync } from 'node:fs';
-import { readdirSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -54,6 +54,7 @@ import {
   listStaged,
   readStaged,
   rejectStaged,
+  resolveCoreDir,
   stagePlugin,
   StageRefusal,
   TRUST_SENTENCE,
@@ -62,9 +63,16 @@ import {
 } from './plugins/stage.js';
 import { updatePlugin } from './plugins/update.js';
 import { verifyInstalledHash } from './plugins/hash.js';
+import { assertScaffoldName, schemaFor, writeScaffold } from './plugins/scaffold.js';
+import { assertBuilt, defaultDevDeps, watchDist } from './plugins/dev.js';
 
 export const USAGE = `buddi plugins — what this installation has installed
 
+  buddi plugins init <name> [--dir <path>] write a new plugin: manifest, one auto tool, one gated
+                                          tool, a migration, a buddi.md and a test. Refuses a
+                                          directory that already exists.
+  buddi plugins dev <dir>                 watch <dir>/dist and, when it changes, restart the
+                                          service (or say to restart buddi): plugins load at start
   buddi plugins list                      what is installed, its version, and whether it is healthy
   buddi plugins info <name>               what it is, what it brought, and what it proposes
   buddi plugins install <spec>            STAGE it and read what it claims (imports nothing)
@@ -89,7 +97,18 @@ A <spec> is a directory that exists, a .tgz on disk, or an npm package:
 \`finance\`, \`@you/buddi-plugin-finance@1.2.3\`. Installing one runs its code inside buddi.`;
 
 export interface ParsedPluginsArgs {
-  command: 'help' | 'list' | 'info' | 'install' | 'update' | 'staged' | 'approve' | 'reject' | 'uninstall';
+  command:
+    | 'help'
+    | 'list'
+    | 'info'
+    | 'init'
+    | 'dev'
+    | 'install'
+    | 'update'
+    | 'staged'
+    | 'approve'
+    | 'reject'
+    | 'uninstall';
   target?: string;
   yes: boolean;
   detachAgents: boolean;
@@ -101,9 +120,11 @@ export interface ParsedPluginsArgs {
   confirm?: string;
   version?: string;
   registry?: string;
+  /** Where `init` writes the scaffold. Default: `./<name>`. */
+  dir?: string;
 }
 
-const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm'] as const;
+const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir'] as const;
 const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
@@ -138,16 +159,19 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     ...(values.has('--confirm') ? { confirm: values.get('--confirm') as string } : {}),
     ...(values.has('--version') ? { version: values.get('--version') as string } : {}),
     ...(values.has('--registry') ? { registry: values.get('--registry') as string } : {}),
+    ...(values.has('--dir') ? { dir: values.get('--dir') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
   if (head === 'list') return { command: 'list', ...base };
   if (head === 'staged') return { command: 'staged', ...base };
-  if (['info', 'install', 'update', 'approve', 'reject', 'uninstall'].includes(head)) {
+  if (['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'uninstall'].includes(head)) {
     const target = positional[0];
     if (target === undefined) {
       const what =
         head === 'install' ? 'plugin to install (a directory, a .tgz, or an npm package)'
         : head === 'approve' || head === 'reject' ? 'staging id'
+        : head === 'init' ? 'name for the new plugin'
+        : head === 'dev' ? "plugin directory to watch (the one whose dist/ you are building)"
         : 'plugin name';
       throw new Error(`buddi plugins ${head} needs a ${what}`);
     }
@@ -665,6 +689,98 @@ async function commandUninstall(
   return 0;
 }
 
+/* ------------------------------------------------------------------ *
+ * Starting one, and working on one
+ * ------------------------------------------------------------------ */
+
+/** The version of `@buddi/core` this process is running, for the peer range. */
+export function runningCoreVersion(): string {
+  const dir = resolveCoreDir();
+  if (dir !== undefined) {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as {
+        version?: string;
+      };
+      if (typeof pkg.version === 'string' && pkg.version.trim() !== '') return pkg.version;
+    } catch {
+      // Fall through: a core whose package.json cannot be read is a bundle,
+      // and the published range below is the honest answer for one.
+    }
+  }
+  return '0.1.0';
+}
+
+/**
+ * `init` — the first ten minutes.
+ *
+ * It writes and nothing else: no database, no record, no import. The scaffold
+ * is already installable, so the sentence at the end is the whole rest of the
+ * path and the owner can paste it.
+ */
+function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessEnv): number {
+  const checked = assertScaffoldName(name);
+  if (isBuiltInPlugin(checked, env)) {
+    console.error(
+      `"${checked}" is the name of a plugin this build already ships, so an install would refuse ` +
+        'it: every one of its tool names would collide. Pick another name.',
+    );
+    return 1;
+  }
+  const dir = path.resolve(process.cwd(), args.dir ?? checked);
+  const coreDir = resolveCoreDir();
+  const written = writeScaffold(dir, {
+    name: checked,
+    coreVersion: runningCoreVersion(),
+    ...(coreDir === undefined ? {} : { coreDir }),
+  });
+  console.log(`${checked} — a new plugin in ${dir}\n`);
+  for (const file of written) console.log(`  ${file}`);
+  console.log('');
+  console.log(`It owns the Postgres schema "${schemaFor(checked)}" and contributes two tools:`);
+  console.log(`  ${checked}.list_notes    tier auto    a read of its own schema, runs when asked`);
+  console.log(`  ${checked}.forget_note   tier gated   describes the effect; the owner approves it`);
+  console.log('');
+  console.log('Next:');
+  console.log(`  cd ${path.relative(process.cwd(), dir) || '.'}`);
+  console.log('  pnpm install && pnpm build && pnpm test');
+  console.log(`  buddi plugins install . --yes`);
+  console.log('  buddi service restart      # plugins are registered at start');
+  console.log('');
+  console.log('The guide is docs/plugins.md in the buddi repository — start at "Start here".');
+  return 0;
+}
+
+/**
+ * `dev` — watch the build and say what has to happen for it to take effect.
+ *
+ * It does not reload anything, and `plugins/dev.ts` says at length why it
+ * cannot: the registry is built once at start and held by reference everywhere,
+ * and Node's module cache would hand back the plugin that is already loaded.
+ * So this is a watcher over `dist` that restarts a supervised installation and
+ * otherwise prints the one line a developer in a checkout needs.
+ */
+async function commandDev(dir: string): Promise<number> {
+  const resolved = path.resolve(process.cwd(), dir);
+  const dist = assertBuilt(resolved);
+  const name = path.basename(resolved);
+  console.log(`watching ${dist}`);
+  console.log(
+    'Plugins are loaded once, at start. A rebuild is not picked up until buddi restarts; this ' +
+      'watcher does the restart when there is a service to restart, and tells you when there is not.',
+  );
+  console.log('Ctrl-C to stop.');
+  const watcher = watchDist(resolved, defaultDevDeps(), name);
+  await new Promise<void>((resolve) => {
+    const stop = (): void => {
+      watcher.close();
+      resolve();
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  });
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   let args: ParsedPluginsArgs;
   try {
@@ -679,6 +795,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
   await loadEnvironment();
+  // Writing a scaffold and watching a build touch nothing an installation owns:
+  // no record, no schema, no import. They are dispatched before the pool so
+  // they work on a machine whose database was never started — which is exactly
+  // the machine somebody writes their first plugin on.
+  try {
+    if (args.command === 'init') return commandInit(args.target as string, args, process.env);
+    if (args.command === 'dev') return await commandDev(args.target as string);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
   // Every subcommand works with the database down; it just says less. That is
   // deliberate — "what is installed here" is exactly the question an owner asks
   // when something is broken.
