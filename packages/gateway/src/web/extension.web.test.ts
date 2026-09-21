@@ -226,12 +226,30 @@ describe('the browser extension endpoint', () => {
     expect(statuses).toEqual([403, 403, 403, 403, 429]);
     // The code it was showing is spent, and the browser is told to start over.
     expect(await client.next('rehello')).toMatchObject({ reason: expect.stringContaining('Too many wrong') });
-    // The spent code is waiting for nobody, and the failures keep counting
-    // against the dashboard's own rate limiter like any other wrong answer.
-    const after: number[] = [];
-    for (let i = 0; i < 6; i++) after.push((await attempt(JSON.stringify({ code }))).status);
-    expect(after[0]).toBe(409);
-    expect(after.at(-1)).toBe(429);
+    // Five wrong answers is also this session's whole pairing budget, so the
+    // sixth is refused by the gateway before the endpoint is asked at all —
+    // an empty 429, not the endpoint's sentence.
+    const sixth = await attempt(JSON.stringify({ code }));
+    expect(sixth.status).toBe(429);
+    expect(await sixth.text()).toBe('');
+  });
+
+  it('pairs even when local sign-in attempts have exhausted the shared rate limiter', async () => {
+    const { socketUrl, origin } = await setup();
+    const headers = await session(origin);
+    // Anything else on this machine failing to sign in: on loopback every
+    // client shares one remote key, so ten of these used to lock the owner out
+    // of pairing on their very first attempt.
+    for (let i = 0; i < 12; i++) {
+      await fetch(`${origin}/?t=not-a-ticket`, { redirect: 'manual' });
+    }
+    const client = connect(socketUrl);
+    await client.open;
+    await client.hello(null);
+    const code = String((await client.next('pair')).code);
+    const res = await fetch(`${origin}/api/extension/pair`, { method: 'POST', headers, body: JSON.stringify({ code }) });
+    expect(res.status).toBe(200);
+    await client.next('paired');
   });
 
   it('pings, carries a command round trip, and fails a silent extension with one sentence', async () => {
