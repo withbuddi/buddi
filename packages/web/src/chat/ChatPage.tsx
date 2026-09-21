@@ -407,6 +407,26 @@ export function ChatPage({
     return profile ? [...items, profileRenderable(profile)] : items;
   }, [conversation, descriptors, awaiting, profile, browserTabId, activeTab, dismissedTabs, conversationId, openedFiles]);
 
+  /*
+   * What the owner has said here, newest first, for the composer's Up key.
+   *
+   * Only their own words: a tool result travels as a user message with no
+   * text, an approval coming back is nobody speaking, and in a room the
+   * agents' turns carry their own speaker. The transcript the page already
+   * holds is the whole source — the carried-over note and first run's opening
+   * turn are not in it, so neither can be recalled.
+   */
+  const ownHistory = useMemo(() => {
+    const said: string[] = [];
+    for (const message of conversation?.messages ?? []) {
+      if (message.role !== 'user') continue;
+      if (message.speaker && message.speaker !== 'owner') continue;
+      const text = message.blocks.find((block) => block.type === 'text')?.text.trim();
+      if (text) said.unshift(text);
+    }
+    return said;
+  }, [conversation]);
+
   const inlineApprovals = useMemo(
     () => renderables.filter((item) => item.source === 'approval'),
     [renderables],
@@ -989,6 +1009,7 @@ export function ChatPage({
             onStop={stop}
             agentName={group ? group.name : (agent?.name ?? 'the agent')}
             draft={draft}
+            history={ownHistory}
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup') : null)}
             thinking={thinking}
