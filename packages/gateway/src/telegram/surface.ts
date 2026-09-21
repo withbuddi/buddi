@@ -2060,10 +2060,12 @@ export class TelegramSurface {
           typeof produced === 'string' ? undefined : produced.askedOwner,
           reply,
         );
-        const turnNote = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
-        // One line, above everything, when this turn began a new conversation:
-        // a boundary the owner cannot see is indistinguishable from amnesia.
-        const note = [boundary?.note, turnNote].filter((line) => line).join('\n');
+        // Only what this turn itself has to say. A conversation boundary is
+        // not announced: the owner did not ask which transcript their answer
+        // was composed in, memory carries over regardless, and a size rollover
+        // that had work in flight has already written the carry-over note into
+        // the new conversation for the agent to read.
+        const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
         // The offers this turn stored, drawn the way Telegram's own profile
         // says they are drawn — buttons here, words on a surface without any.
         // Nothing offered is the normal case, and then this is the identity.

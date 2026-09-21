@@ -121,7 +121,12 @@ export function ChatPage({
   selection.current = { agentId, conversationId };
   const dismissed = dismissedTabs[conversationId ?? ''] ?? [];
   const [error, setError] = useState<string | null>(null);
-  /** "(New conversation — …)". Said once, above the thread it explains. */
+  /**
+   * A line about the thread itself, said once, above it. A room that rolled
+   * over is the only thing that still speaks here: an agent conversation
+   * ending is not announced at all — memory carries over, and where work was
+   * in flight the grey "Carried over" note in the transcript says so.
+   */
   const [notice, setNotice] = useState<string | null>(null);
   const [takingOffer, setTakingOffer] = useState<string | null>(null);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
@@ -612,11 +617,12 @@ export function ChatPage({
     (group
       ? chatApi.sendToGroup(group.id, { ...(conversationId ? { conversationId } : {}), text, attachmentIds })
       : chatApi.send(agentId, { ...(conversationId ? { conversationId } : {}), text, attachmentIds }))
-      .then((result: { conversationId: string; boundary?: { note: string; previousConversationId: string }; rolledOver?: boolean }) => {
+      .then((result: { conversationId: string; rolledOver?: boolean }) => {
         if (selection.current.agentId !== agentId || selection.current.conversationId !== conversationId) return;
-        // The conversation the page was in had ended, and this message opened a
-        // new one. The empty thread is explained rather than surprising.
-        setNotice(result.boundary?.note ?? (result.rolledOver ? '(New thread — the room had grown long. Where it stopped carries over as a summary.)' : null));
+        // A room summarises itself across a rollover, and says so. A one-to-one
+        // conversation says nothing: the page lands in the new thread, and the
+        // carry-over note is in the transcript when there was work to carry.
+        setNotice(result.rolledOver === true ? '(New thread — the room had grown long. Where it stopped carries over as a summary.)' : null);
         if (result.conversationId !== conversationId) {
           setConversation(null);
           setConversationId(result.conversationId);

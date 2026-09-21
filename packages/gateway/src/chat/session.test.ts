@@ -1071,7 +1071,7 @@ describe('a conversation has a lifetime here too', () => {
     expect(h.text()).not.toContain('New conversation');
   });
 
-  it('starts a fresh one the next morning, and says why', async () => {
+  it('starts a fresh one the next morning, silently', async () => {
     const h = harness({ responses: [textResponse('One.'), textResponse('Two.')] });
     h.db.clock = () => NOW;
     await h.session.handle('any new mail?');
@@ -1079,7 +1079,9 @@ describe('a conversation has a lifetime here too', () => {
 
     await h.session.handle('any new mail?');
     expect(h.db.conversations).toHaveLength(2);
-    expect(h.text()).toContain('(New conversation — we last spoke 14 hours ago.');
+    // No preamble above the answer. The owner asked about their mail, not
+    // about which transcript the reply was composed in.
+    expect(h.text()).not.toContain('New conversation');
     // The second run replayed nothing of the first: that is the whole point.
     // (The request object is the live message array, so the answer it appended
     // after the call is in it too — the owner's message is the only history.)
@@ -1095,7 +1097,7 @@ describe('a conversation has a lifetime here too', () => {
     await h.session.handle('read me everything');
     await h.session.handle('and now something else');
     expect(h.db.conversations).toHaveLength(2);
-    expect(h.text()).toContain('the last one had grown long');
+    expect(h.text()).not.toContain('the last one had grown long');
   });
 
   it('a failed turn is not answered by the next message', async () => {

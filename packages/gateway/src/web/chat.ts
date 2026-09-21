@@ -945,13 +945,6 @@ export type SendResult =
       ok: true;
       conversationId: string;
       runId: string;
-      /**
-       * Set when the conversation the page asked for had ended and this message
-       * opened a new one. The page follows `conversationId` — it already does,
-       * because a first message returns an id the page did not have — and shows
-       * `note` so the fresh, empty thread is explained rather than surprising.
-       */
-      boundary?: { note: string; previousConversationId: string };
     }
   | { ok: false; status: number; error: string };
 
@@ -1022,8 +1015,6 @@ export class WebChat {
     }
 
     let conversationId = request.conversationId;
-    /** Set when the thread the page was in had ended and this message starts one. */
-    let boundary: { note: string; previousConversationId: string } | undefined;
     if (conversationId === undefined) {
       conversationId = await createConversation(this.#deps.pool, agent.id);
     } else {
@@ -1052,7 +1043,9 @@ export class WebChat {
        * most recent one is yesterday's. The rule is the one Telegram and the
        * terminal use — three hours idle, or a transcript past the budget — and
        * here it costs the page nothing: `send` already returns the id to use,
-       * and the page already follows it.
+       * and the page already follows it. Nothing is said about it: the page
+       * simply lands in the new thread, and the grey "Carried over" note is
+       * there when — and only when — a size rollover carried work across.
        */
       const decided = await conversationForTurn(this.#deps.pool, {
         current: conversationId,
@@ -1066,10 +1059,6 @@ export class WebChat {
       });
       conversationId = decided.conversationId;
       if (decided.boundary) {
-        boundary = {
-          note: decided.boundary.note,
-          previousConversationId: decided.boundary.previousConversationId,
-        };
         await this.#event(conversationId, 'chat.conversation.started', {
           reason: decided.boundary.reason,
           previousConversationId: decided.boundary.previousConversationId,
@@ -1097,7 +1086,7 @@ export class WebChat {
     const target = conversationId;
     const opening = request.opening === true;
     this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening }); });
-    return { ok: true, conversationId: target, runId, ...(boundary ? { boundary } : {}) };
+    return { ok: true, conversationId: target, runId };
   }
 
   /** Answer one exact structured question, then continue its conversation. */

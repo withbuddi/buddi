@@ -626,19 +626,19 @@ reply, as `You can ask me to:` and one line each.
 conversation ends before the next turn starts once it has been idle for **3
 hours**, or once its transcript passes **80,000 characters** — a boundary is
 never taken mid-run, and never while you are answering a question the agent
-asked. You are told once, in one line above the reply:
+asked. Nothing is announced when one happens: you get your answer, not a note
+about which transcript it was composed in.
 
-```
-(New conversation — we last spoke 14 hours ago. What I remember about you carries over.)
-```
-
-That sentence is the contract. What the agent remembers about you, and your
+That silence is the contract. What the agent remembers about you, and your
 owner profile, are keyed to you and not to the conversation, so they carry
 over; a pending approval resumes the conversation that proposed it. What does
-not carry over is the old conversation's open offers, which are withdrawn. The
-dashboard says the same thing ambiently, in the conversation header: *12
-messages · started 2 hours ago*, and, once a limit is crossed, *your next
-message starts a fresh one*. Neither limit is configurable.
+not carry over is the old conversation's open offers, which are withdrawn. When
+a conversation ends *in the middle of work* — the size limit, a browser session
+— what it was doing is carried into the next one as a short note, which the
+dashboard draws as a grey *Carried over from the previous conversation* line.
+The dashboard also says where a thread stands ambiently, in the conversation
+header: *12 messages · started 2 hours ago*, and, once a limit is crossed,
+*your next message starts a fresh one*. Neither limit is configurable.
 
 **Attachments.** `/attach ~/Downloads/statement.pdf`, or just drag the file into
 the terminal — if the whole message is a path that exists, it asks

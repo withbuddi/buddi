@@ -662,7 +662,7 @@ suite('the dashboard chat API', () => {
     await settled(conversationId, 2);
   });
 
-  it('starts a fresh conversation for a message the next morning, and says so', async () => {
+  it('starts a fresh conversation for a message the next morning, and says nothing about it', async () => {
     const client = await signedIn();
     provider.script = [say('One.'), say('Two.')];
     const first = await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'any new mail?' });
@@ -682,8 +682,9 @@ suite('the dashboard chat API', () => {
     });
     const body = (await second.json()) as any;
     expect(body.conversationId).not.toBe(conversationId);
-    expect(body.boundary.previousConversationId).toBe(conversationId);
-    expect(body.boundary.note).toContain('New conversation');
+    // The page follows the new id and is told nothing else: no note to print
+    // above a thread whose emptiness costs the owner nothing.
+    expect(body.boundary).toBeUndefined();
     await settled(body.conversationId);
 
     // Nothing of yesterday was replayed, and the boundary is on the record.
