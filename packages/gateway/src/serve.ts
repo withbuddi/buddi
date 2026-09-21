@@ -74,7 +74,7 @@ import { createInlineMissionRunner, type InlineMissionDeps } from './missions/in
 import { createDigestPrepare } from './missions/recap.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
-import { ensureWebToken, startWebServer, webConfig, type WebServer } from './web/index.js';
+import { ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
@@ -410,7 +410,10 @@ export async function main(): Promise<void> {
   const idle = idleLoops();
 
   try {
-    try { await hostBrowser(process.env).enable(); }
+    // "Your browser" mode drives the owner's Chrome through the dashboard's
+    // own WebSocket endpoint. Handed over before `enable`, which is what
+    // builds the driver for whichever mode the owner last chose.
+    try { await hostBrowser(process.env, { extensionBridge: () => extensionEndpoint(process.env) }).enable(); }
     catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
     // The mail account this installation sends and receives as, from the named
     // environment variable. Idempotent, and a no-op when none is configured —

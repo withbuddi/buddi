@@ -5,7 +5,7 @@ import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel } from './Browser';
 
-vi.mock('../api', () => ({ api: { browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
@@ -14,6 +14,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.browser).mockResolvedValue(status); vi.mocked(api.browserControl).mockResolvedValue(status);
   vi.mocked(api.browserProfiles).mockResolvedValue({ profiles: [{ directory: 'Default', name: 'Amen' }, { directory: 'Profile 2', name: 'Work' }] });
+  vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
   vi.mocked(api.installedApps).mockResolvedValue({ apps: [{ id: 'com.google.Chrome', name: 'Google Chrome', path: '/Applications/Google Chrome.app' }, { id: 'com.apple.TextEdit', name: 'TextEdit', path: '/System/Applications/TextEdit.app' }] });
 });
 
@@ -59,6 +60,40 @@ describe('computer & browser settings', () => {
     expect(screen.getByRole('button', { name: 'Add an app' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Stop computer control' }));
     await waitFor(() => expect(api.browserControl).toHaveBeenCalledWith('stop'));
+  });
+});
+
+describe('your own browser', () => {
+  const chosen = { ...settings, mode: 'extension' as const };
+  it('offers the third mode and shows nothing about pairing until it is chosen', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
+    render(<Browser />);
+    fireEvent.click(await screen.findByRole('radio', { name: /Your browser/ }));
+    await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith(chosen));
+    expect(screen.queryByText(/Load unpacked/)).not.toBeInTheDocument();
+  });
+  it('says it is not connected, prints the unpacked folder and the four words', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+    render(<Browser />);
+    expect(await screen.findByText('Not connected')).toBeInTheDocument();
+    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Developer mode');
+    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
+    expect(screen.getByText('/opt/buddi/extension')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pairing code')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Forget this browser' })).toBeDisabled();
+  });
+  it('pairs with the code the extension is showing, and forgets a paired browser', async () => {
+    const paired = new Date('2026-09-20T10:00:00Z').toISOString();
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/opt/buddi/extension', pairedAt: paired, extension: '0.1.0' });
+    render(<Browser />);
+    const field = await screen.findByLabelText('Pairing code');
+    expect(screen.getByRole('button', { name: 'Pair' })).toBeDisabled();
+    fireEvent.change(field, { target: { value: '482 913' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pair' }));
+    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482 913'));
+    fireEvent.click(screen.getByRole('button', { name: 'Forget this browser' }));
+    await waitFor(() => expect(api.forgetExtension).toHaveBeenCalled());
   });
 });
 

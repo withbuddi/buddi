@@ -119,6 +119,45 @@ report the result, and release control while leaving Calculator open. Then test
 Wikipedia: ask the agent to open it and wait, take over and choose an article,
 resume, and ask it to observe and summarize without navigating away.
 
+## Optional: "Your browser", the Chrome extension
+
+The third mode, shown in **Computer & browser** as **Your browser**: agents work
+in the Chrome you are already signed in to, through a Manifest V3 extension that
+ships unpacked in `<install root>/extension`. It works on macOS, Linux and
+Windows, because it is Chrome doing the work.
+
+Setup, in the owner's words:
+
+1. Choose **Your browser** in Computer & browser. Release any active session
+   first; modes never switch themselves.
+2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load
+   unpacked**, and pick the folder the settings page prints.
+3. Press **Connect** in the extension popup. It shows a six-digit code, valid
+   for five minutes. Type it into **Pair your browser** on the settings page.
+
+The extension keeps a token in `chrome.storage.local` and reconnects with it
+from then on. Buddi stores only a SHA-256 of that token, in
+`<BUDDI_DATA_DIR>/extension.json` (owner-only), together with when it was
+paired, which extension build it is and when it was last seen. **Forget this
+browser** deletes that record and closes the socket; the extension then asks to
+pair again. `buddi doctor`'s `browser` row says the same thing from the command
+line.
+
+The wire is one WebSocket on `ws://127.0.0.1:<port>/api/extension/socket`,
+upgraded only from a loopback socket with no proxy headers and only from a
+`chrome-extension://` origin. One extension at a time: a newer connection with a
+valid token replaces the older one. Buddi pings every 20 seconds and closes a
+browser that misses three; a command that goes unanswered for a minute fails
+with a sentence rather than hanging.
+
+Tabs open in the background, in a tab group named **buddi**, one group per
+conversation. `close` removes that group's tabs; a dropped socket leaves them
+open, because by then they are yours. Observations carry the same `e12` refs,
+tree, tabs and screenshots as Playwright mode, and `open` (native apps) and
+coordinate targets are refused here exactly as they are there. The extension
+never fills a password field: it refuses with a precondition error, and you sign
+in yourself.
+
 ## Optional: Playwright browser automation
 
 **Everything below describes the explicit Playwright mode**, not the native

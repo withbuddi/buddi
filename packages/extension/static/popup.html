@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>buddi</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <span class="mark" aria-hidden="true">b</span>
+      <span class="head-name">buddi</span>
+      <span class="state" id="state" data-tone="idle">Not connected</span>
+    </header>
+
+    <section class="section">
+      <label class="label" for="gateway">Your buddi</label>
+      <input class="field" id="gateway" type="url" spellcheck="false" autocomplete="off" />
+      <p class="hint" id="hint">The address of the buddi running on this machine.</p>
+      <div class="actions"><button class="button" id="connect" type="button">Connect</button></div>
+    </section>
+
+    <section class="section" id="pairing" hidden>
+      <span class="label">Pair this browser</span>
+      <p class="code" id="code">000 000</p>
+      <p class="hint">Type this code into buddi, under Settings, Computer &amp; browser, within five minutes.</p>
+    </section>
+
+    <section class="section">
+      <div class="actions actions-left"><button class="button button-quiet" id="forget" type="button">Forget this buddi</button></div>
+    </section>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
