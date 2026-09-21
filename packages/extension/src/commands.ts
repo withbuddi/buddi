@@ -181,7 +181,12 @@ function inputEvent(args: Record<string, unknown>): { method: string; params: Re
     if (!KEY_TYPES.has(type)) throw new PreconditionError(`${type || 'That'} is not a key event this browser dispatches.`);
     const key = text(args['key'], 32) ?? '';
     const code = text(args['code'], 32) ?? '';
-    const typed = text(args['text'], 8);
+    // A named key that carries a character carries it here too: Chrome makes
+    // no keypress out of a `keyDown` with no text, and with no keypress an
+    // Enter in the login form the owner took the browser over for submits
+    // nothing. The wire only ever carries a printable `text`, so the carriage
+    // return is supplied on this side or nowhere.
+    const typed = text(args['text'], 8) ?? (type === 'keyDown' ? KEYS[key]?.text : undefined);
     if (type === 'char' && !typed) throw new PreconditionError('A typed character arrived with no text in it.');
     const virtual = virtualKey(key);
     return { method: 'Input.dispatchKeyEvent', params: {

@@ -54,24 +54,54 @@ describe('the extension driver’s hand', () => {
 });
 
 /** Just enough Playwright to see which CDP calls and gestures come out. */
-function fakePage() {
+function fakePage(url = 'https://example.com/') {
   const cdp = {
     sent: [] as Array<{ method: string; params?: Record<string, unknown> }>,
     listeners: new Map<string, (event: unknown) => void>(),
+    fail: false,
     on(event: string, handler: (event: unknown) => void) { this.listeners.set(event, handler); },
-    send(method: string, params?: Record<string, unknown>) { this.sent.push({ method, ...(params ? { params } : {}) }); return Promise.resolve({}); },
+    send(method: string, params?: Record<string, unknown>) {
+      this.sent.push({ method, ...(params ? { params } : {}) });
+      return this.fail ? Promise.reject(new Error('detached')) : Promise.resolve({});
+    },
     detach: vi.fn(async () => {}),
   };
   const mouse = { move: vi.fn(async () => {}), down: vi.fn(async () => {}), up: vi.fn(async () => {}), wheel: vi.fn(async () => {}) };
   const keyboard = { down: vi.fn(async () => {}), up: vi.fn(async () => {}), insertText: vi.fn(async () => {}) };
-  const page = { isClosed: () => false, mouse, keyboard, context: () => ({ newCDPSession: async () => cdp }) };
-  return { page, cdp, mouse, keyboard };
+  const events = new Map<string, Set<(value: unknown) => void>>();
+  const frame = { url: () => page.here };
+  const page = {
+    here: url,
+    closed: false,
+    mainFrame: () => frame,
+    url: () => page.here,
+    isClosed: () => page.closed,
+    mouse, keyboard,
+    context: () => ({ newCDPSession: async () => cdp }),
+    on(event: string, handler: (value: unknown) => void) { (events.get(event) ?? events.set(event, new Set()).get(event)!).add(handler); },
+    off(event: string, handler: (value: unknown) => void) { events.get(event)?.delete(handler); },
+    once(event: string, handler: (value: unknown) => void) { page.on(event, handler); },
+    emit(event: string, value?: unknown) { for (const handler of [...(events.get(event) ?? [])]) handler(value); },
+    /** The page went somewhere else, and said so the way Playwright does. */
+    navigate(to: string) { page.here = to; page.emit('framenavigated', frame); },
+    close() { page.closed = true; page.emit('close'); },
+  };
+  return { page, cdp, mouse, keyboard, frame };
+}
+
+/** A host that allows one website, the way the real one is configured to. */
+function fakeHost(page: unknown, allowed = 'example.com') {
+  return {
+    open: async () => page,
+    check: (url: string) => { if (new URL(url).hostname !== allowed) throw new Error('This website is outside the configured browser hosts.'); },
+    foreground: async () => {}, resume: () => {}, release: async () => {},
+  } as never;
 }
 
 describe('the Playwright driver’s hand', () => {
   it('screencasts over CDP, acks every frame, and drives the real mouse and keyboard', async () => {
     const { page, cdp, mouse, keyboard } = fakePage();
-    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, { open: async () => page } as never);
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
     await driver.start();
     const frames: HandFrame[] = [];
     await driver.hand.start((frame) => frames.push(frame));
@@ -97,6 +127,45 @@ describe('the Playwright driver’s hand', () => {
     await driver.hand.stop();
     expect(cdp.sent.at(-1)).toMatchObject({ method: 'Page.stopScreencast' });
     expect(cdp.detach).toHaveBeenCalled();
+  });
+
+  it('ends rather than typing into the tab that replaced the one being shown', async () => {
+    const { page, keyboard } = fakePage();
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await driver.hand.start(() => {});
+    // The login page the owner was looking at closes; the driver falls back to
+    // another owned tab for its own work, but the hand must not follow it.
+    page.close();
+    await Promise.resolve();
+    await expect(driver.hand.input({ kind: 'key', type: 'char', key: 'p', code: 'KeyP', text: 'p', modifiers: 0 }))
+      .rejects.toThrow(/Take over again/);
+    expect(keyboard.insertText).not.toHaveBeenCalled();
+  });
+
+  it('ends when the page it holds navigates outside the allowed websites', async () => {
+    const { page, cdp, mouse } = fakePage();
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await driver.hand.start(() => {});
+    page.navigate('https://elsewhere.invalid/collect');
+    await Promise.resolve();
+    expect(cdp.sent.some((call) => call.method === 'Page.stopScreencast')).toBe(true);
+    await expect(driver.hand.input({ kind: 'mouse', type: 'mousePressed', x: 1, y: 1, button: 'left', clickCount: 1, modifiers: 0 }))
+      .rejects.toThrow(/Take over again/);
+    expect(mouse.down).not.toHaveBeenCalled();
+  });
+
+  it('ends when the CDP session behind it goes away', async () => {
+    const { page, cdp } = fakePage();
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await driver.hand.start(() => {});
+    cdp.fail = true;
+    cdp.listeners.get('Page.screencastFrame')!({ data: '', sessionId: 1, metadata });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(driver.hand.input({ kind: 'key', type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 0 }))
+      .rejects.toThrow(/Take over again/);
   });
 });
 

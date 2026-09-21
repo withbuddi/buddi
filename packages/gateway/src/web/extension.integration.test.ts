@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { BrowserContext, Page, Worker } from 'playwright';
-import { commandSchema, ExtensionDriver, type Observation } from '@buddi/tool-browser';
+import { commandSchema, ExtensionDriver, type HandFrame, type Observation } from '@buddi/tool-browser';
 import { ExtensionEndpoint } from './extension.js';
 
 /** The buddi address the extension dials on its own, before anyone tells it otherwise. */
@@ -266,4 +266,103 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
     expect(ownerTab.isClosed()).toBe(false);
     expect(ownerTab.url()).toBe(ownerUrl);
   }, 3 * MINUTE);
+
+  /*
+   * The other half: the owner's own hand on the screen the agent was driving.
+   *
+   * Everything below goes through the same path the dashboard's socket uses —
+   * `takeover()`, then the driver's `hand` — so the frames are frames Chrome
+   * really painted and the clicks are clicks Chrome really dispatched. No
+   * `chrome.tabs.update` shortcut moves the page: only the pointer does.
+   */
+  it('hands the owner the wheel: a live picture out, their pointer and keyboard in', async function () {
+    if (skip) { console.log(`skipped: ${skip}`); return; }
+    const driver = new ExtensionDriver(endpoint);
+    const act = async (command: Record<string, unknown>) => driver.perform(commandSchema.parse(command));
+    await driver.start();
+    await act({ action: 'navigate', url: `${FIXTURE_URL}/` });
+    let page: Observation = await driver.observe();
+
+    // The take-over itself: the agent's evidence is dropped, and the hand the
+    // gateway would offer the dashboard is this driver's own.
+    await driver.takeover!();
+    expect(driver.supportsHand).toBe(true);
+    const frames: HandFrame[] = [];
+    await driver.hand!.start((frame) => { frames.push(frame); });
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), { timeout: 5_000, interval: 50 });
+
+    // A frame is a JPEG, and it says where on the page it was cut from.
+    const first = frames[0]!;
+    expect(first.jpeg.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+    expect(first.metadata.deviceWidth).toBeGreaterThan(0);
+    expect(first.metadata.deviceHeight).toBeGreaterThan(0);
+
+    /*
+     * The fixture never scrolls, so a target's document bounds are its
+     * viewport bounds — which is what CDP dispatches into. The dashboard does
+     * this arithmetic from the frame metadata; the test does it from the
+     * layout it controls.
+     */
+    const centre = (target: NonNullable<Observation['targets']>[number]) =>
+      ({ x: target.bounds!.x + target.bounds!.width / 2, y: target.bounds!.y + target.bounds!.height / 2 });
+    const click = async ({ x, y }: { x: number; y: number }) => {
+      await driver.hand!.input({ kind: 'mouse', type: 'mouseMoved', x, y, button: 'none', clickCount: 0, modifiers: 0 });
+      await driver.hand!.input({ kind: 'mouse', type: 'mousePressed', x, y, button: 'left', clickCount: 1, modifiers: 0 });
+      await driver.hand!.input({ kind: 'mouse', type: 'mouseReleased', x, y, button: 'left', clickCount: 1, modifiers: 0 });
+    };
+
+    // A pointer on the link, and the page goes where the owner pointed.
+    await click(centre(page.targets!.find((target) => target.role === 'link')!));
+    await vi.waitFor(async () => {
+      expect((await driver.observe()).url).toBe(`${FIXTURE_URL}/receipt`);
+    }, { timeout: 15_000, interval: 200 });
+
+    /*
+     * The X5 rule, from the other side.
+     *
+     * An agent may not act in a tab the owner is watching (the test above
+     * proves it is refused). The owner's own hand may: the watcher and the
+     * typist are the same person, which is what `owner: true` says.
+     */
+    const agentTabId = await worker.evaluate(async () => {
+      const api = (globalThis as any).chrome;
+      const [group] = await api.tabGroups.query({ title: 'buddi' });
+      return (await api.tabs.query({ groupId: group.id }))[0].id as number;
+    });
+    const ownerTabId = await worker.evaluate(async () => (await (globalThis as any).chrome.tabs.query({ active: true }))[0].id as number);
+    const activate = (tabId: number) => worker.evaluate(async (id) => {
+      const api = (globalThis as any).chrome;
+      const tab = await api.tabs.get(id);
+      await api.windows.update(tab.windowId, { focused: true });
+      await api.tabs.update(id, { active: true });
+    }, tabId);
+    await activate(agentTabId);
+
+    // One character, then Enter, into the field the owner clicked into — with
+    // that tab active in a focused window, which is where a take-over always
+    // leaves it once the owner has been looking.
+    booked = '';
+    await act({ action: 'navigate', url: `${FIXTURE_URL}/` });
+    page = await driver.observe();
+    await click(centre(page.targets!.find((target) => target.name === 'Your name')!));
+    await driver.hand!.input({ kind: 'key', type: 'char', key: 'z', code: 'KeyZ', text: 'z', modifiers: 0 });
+    await driver.hand!.input({ kind: 'key', type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0 });
+    await driver.hand!.input({ kind: 'key', type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 0 });
+    await vi.waitFor(() => expect(booked).toContain('name=z'), { timeout: 15_000, interval: 200 });
+    await activate(ownerTabId);
+
+    // Give it back: the picture stops, and nothing painted afterwards arrives.
+    await driver.hand!.stop();
+    const painted = frames.length;
+    await act({ action: 'navigate', url: `${FIXTURE_URL}/receipt` });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(frames.length).toBe(painted);
+    // And the hand is shut, not merely quiet: input with no screencast behind
+    // it is what an agent reaching for coordinates would look like.
+    await expect(driver.hand!.input({ kind: 'mouse', type: 'mouseMoved', x: 10, y: 10, button: 'none', clickCount: 0, modifiers: 0 }))
+      .rejects.toThrow(/screencast/i);
+
+    await driver.close();
+  }, 3 * MINUTE);
+
 });

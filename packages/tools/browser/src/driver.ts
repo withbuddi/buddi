@@ -160,7 +160,7 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
   async takeover(): Promise<void> { this.#invalidate(); if (this.#page && !this.#page.isClosed()) await this.host.foreground(this, this.#page, true); }
   resume(): void { this.#invalidate(); this.host.resume(this); }
   /**
-   * The remote hand, over one CDP session on the active tab.
+   * The remote hand, over one CDP session on one held page.
    *
    * The screencast is CDP's because Playwright has no streaming capture, and
    * every frame is acked as it leaves: an unacked screencast simply stops
@@ -170,22 +170,57 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
    */
   readonly supportsHand = true;
   #cdp?: CDPSession;
+  /**
+   * The exact page the hand is on.
+   *
+   * Not `#active()`: that one moves. A popup, or the screencast page closing,
+   * would otherwise leave the owner looking at a login form while their next
+   * keystroke went to whatever tab took its place — which is how a password
+   * ends up typed into a page nobody chose. The hand holds one page, and when
+   * that page is gone so is the hand.
+   */
+  #handPage?: Page;
+  #handWatch?: { page: Page; closed: () => void; navigated: (frame: { url(): string }) => void };
   readonly hand: BrowserHand = {
     start: async (onFrame: (frame: HandFrame) => void) => {
-      const page = this.#active();
-      this.#invalidate();
       await this.hand.stop();
+      const page = this.#active();
+      if (page.url() !== 'about:blank') this.host.check(page.url(), true);
+      this.#invalidate();
       const cdp = await page.context().newCDPSession(page);
       this.#cdp = cdp;
+      this.#handPage = page;
+      const end = (): void => { if (this.#handPage === page) void this.hand.stop().catch(() => {}); };
+      const closed = end;
+      // A page that navigates somewhere this browser is not allowed to be is
+      // not a page the owner may keep driving, whoever sent it there.
+      const navigated = (frame: { url(): string }): void => {
+        if (frame !== page.mainFrame() || this.#handPage !== page) return;
+        try { if (frame.url() !== 'about:blank') this.host.check(frame.url(), true); }
+        catch { end(); }
+      };
+      page.on('close', closed);
+      page.on('framenavigated', navigated as never);
+      this.#handWatch = { page, closed, navigated };
       cdp.on('Page.screencastFrame', (event: { data: string; sessionId: number; metadata: HandFrame['metadata'] }) => {
+        if (this.#cdp !== cdp) return;
         const { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } = event.metadata;
         onFrame({ jpeg: Buffer.from(event.data, 'base64'), metadata: { deviceWidth, deviceHeight, pageScaleFactor, offsetTop, scrollOffsetX, scrollOffsetY } });
-        void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+        // A send that fails is a CDP session that is gone, which is a hand
+        // that is over rather than a picture that stopped moving.
+        void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => end());
       });
-      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+      try {
+        await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+      } catch (error) { await this.hand.stop(); throw error; }
     },
     input: async (event: HandInput) => {
-      const page = this.#active();
+      const page = this.#handPage;
+      if (!page || page.isClosed() || !this.#cdp) throw new BrowserPreconditionError('The screen you were driving is gone. Take over again.');
+      if (page.url() !== 'about:blank') {
+        try { this.host.check(page.url(), true); }
+        catch (error) { await this.hand.stop(); throw error; }
+      }
       if (event.kind === 'wheel') { await page.mouse.move(event.x, event.y); await page.mouse.wheel(event.deltaX, event.deltaY); return; }
       if (event.kind === 'mouse') {
         await page.mouse.move(event.x, event.y);
@@ -201,7 +236,14 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
     },
     stop: async () => {
       const cdp = this.#cdp;
+      const watch = this.#handWatch;
       this.#cdp = undefined;
+      this.#handPage = undefined;
+      this.#handWatch = undefined;
+      if (watch) {
+        watch.page.off('close', watch.closed);
+        watch.page.off('framenavigated', watch.navigated as never);
+      }
       if (!cdp) return;
       await cdp.send('Page.stopScreencast').catch(() => {});
       await cdp.detach().catch(() => {});

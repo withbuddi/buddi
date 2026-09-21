@@ -568,6 +568,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       const confirmed = await identityOf(req, now);
       if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
         sessions.destroy(session.id);
+        // A hand this session was holding does not outlive the session.
+        hand.revoke((lease) => lease === session!.id);
         if (limiter.blocked(key, now)) return sendEmpty(res, 429);
         limiter.fail(key, now);
         return sendEmpty(res, 401);
@@ -1264,7 +1266,10 @@ export function createWebApp(deps: WebServerDeps): Server {
          * makes a request with is exactly the one that should not be waiting
          * in a browser on the far side of the tailnet.
          */
-        sessions.forget((s) => s.via === 'tailscale');
+        const forgotten = new Set<string>();
+        sessions.forget((s) => { const drop = s.via === 'tailscale'; if (drop) forgotten.add(s.id); return drop; });
+        // Including whichever of them had a hand on the owner's browser.
+        hand.revoke((lease) => forgotten.has(lease), 'Tailscale access changed. Sign in again.');
         const daemon = await tailscaleSelfOf();
         const stored = toTailscaleSetting({ enabled, login });
         return sendJson(res, 200, {
