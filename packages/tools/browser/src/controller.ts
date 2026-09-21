@@ -6,6 +6,7 @@ import { BrowserManager } from './manager.js';
 import { PlaywrightHost } from './host.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
+import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import type { BrowserController, BrowserScope, BrowserStatus, BrowserRollover } from './service.js';
 import type { BrowserCommand } from './types.js';
 
@@ -17,13 +18,30 @@ export class HostController implements BrowserController {
   #enabled = false;
   #changing = false;
   #requests = new Map<string, { expiresAt: number; revoked: boolean }>();
+  #extension?: () => ExtensionBridge;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     bridge?: () => ComputerBridge;
+    extensionBridge?: () => ExtensionBridge;
     manager?: (settings: ControlSettings) => BrowserManager;
-  } = {}) { this.#manager = this.#create(); }
+  } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
+  /**
+   * The gateway hands its WebSocket endpoint over once it exists.
+   *
+   * Late rather than through the constructor because `hostBrowser` is a
+   * singleton per data dir and the module that reads its manifest builds it
+   * before the gateway has a server to attach a socket to. Only the composition
+   * root calls this, and only before `enable`.
+   */
+  useExtension(bridge: () => ExtensionBridge): void { this.#extension = bridge; }
   #create(): BrowserManager {
     if (this.options.manager) return this.options.manager(this.#settings);
+    if (this.#settings.mode === 'extension') {
+      // Never silently fall back to another browser: with no endpoint wired,
+      // the mode the owner chose simply says it is not connected.
+      const offline: ExtensionBridge = { connected: () => false, send: () => Promise.reject(new Error(NOT_CONNECTED)), close: () => {} };
+      return new BrowserManager(() => new ExtensionDriver(this.#extension?.() ?? offline, this.options.allowedHosts), { controlFile: path.join(this.dir, 'control.json') });
+    }
     if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts), {
       controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
     });
@@ -53,7 +71,7 @@ export class HostController implements BrowserController {
       if (this.#requests.get(ctx.ownerRequest.id)?.revoked) throw new Error('Control settings changed. A new owner request is required.');
       this.#requests.set(ctx.ownerRequest.id, { expiresAt: ctx.ownerRequest.expiresAt, revoked: false });
     }
-    if (this.#settings.mode === 'playwright' && (command.action === 'open' || command.target?.x !== undefined)) throw new Error('Native apps and coordinate targets require Computer mode. Only the owner can change modes.');
+    if (this.#settings.mode !== 'computer' && (command.action === 'open' || command.target?.x !== undefined)) throw new Error('Native apps and coordinate targets require Computer mode. Only the owner can change modes.');
     return this.#manager.execute(command, ctx);
   }
   async control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus> {

@@ -5,7 +5,8 @@
  * the owner could fix (that is the *answer*), and every one of them is cheap
  * enough to run on every `buddi doctor`.
  */
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
 import {
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
@@ -27,6 +28,8 @@ import {
 import {
   agentSearchPath,
   createToolRegistry,
+  dataDir,
+  readExtensionRecord,
   defaultHttpTransport,
   describeDatabaseError,
   hydrateSecrets,
@@ -601,6 +604,36 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         problems: plugins.problems.map((p) => ({ name: p.name, message: p.message })),
         changed,
       });
+    },
+
+    /**
+     * How agents get a screen.
+     *
+     * The mode the owner last chose, and — in "Your browser" mode — whether a
+     * Chrome has been paired and which extension build it was. Whether that
+     * extension is connected *right now* is only visible to the running
+     * gateway, which holds the socket, so this row says when it was last seen
+     * instead of guessing.
+     */
+    async browser(): Promise<ProbeResult> {
+      let mode = 'computer';
+      try {
+        const settings = JSON.parse(await readFile(path.join(dataDir(env), 'browser', 'settings.json'), 'utf8')) as { mode?: unknown };
+        if (typeof settings.mode === 'string') mode = settings.mode;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return { status: 'warn', detail: `browser settings will not read: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
+      if (mode !== 'extension') {
+        return { status: 'ok', detail: `mode=${mode}${mode === 'computer' && process.platform !== 'darwin' ? ' — computer mode needs macOS; switch to a browser mode in Computer & browser' : ''}` };
+      }
+      const record = await readExtensionRecord(env);
+      if (!record) {
+        return { status: 'warn', detail: 'mode=extension, no browser paired — open the buddi extension in Chrome and pair it in Computer & browser' };
+      }
+      const seen = record.lastSeenAt === '' ? 'never seen' : `last seen ${record.lastSeenAt}`;
+      return { status: 'ok', detail: `mode=extension, paired ${record.pairedAt || 'at an unknown time'}${record.extension ? `, extension ${record.extension}` : ''}, ${seen} (the running gateway holds the live connection)` };
     },
 
     /**

@@ -5,12 +5,15 @@ import type { ToolContext } from '@buddi/core';
 import type { BrowserCommand, BrowserDriver, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
 
+/** The three ways an agent can get a screen. */
+export type BrowserMode = 'computer' | 'playwright' | 'extension';
+
 /** Already classified: do not retry observation or overwrite the paused state. */
 class ObservationFailure extends Error {}
 
 export interface BrowserStatus {
-  mode?: 'computer' | 'playwright';
-  settings?: { mode: 'computer' | 'playwright'; browserApp: string; allowedApps: string[]; browserProfile?: string };
+  mode?: BrowserMode;
+  settings?: { mode: BrowserMode; browserApp: string; allowedApps: string[]; browserProfile?: string };
   permissions?: { accessibility: boolean; screenRecording: boolean; supported: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;

@@ -506,15 +506,22 @@ what to reinstall. Logs.
 
 ## 9. Platforms
 
+The third browser mode, **Your browser**, is Chrome on every platform: the
+tarball carries the unpacked extension at `<root>/extension`, the owner loads it
+through `chrome://extensions` → Developer mode → Load unpacked, and pairs it
+with a six-digit code in Computer & browser. Nothing about it is macOS-only.
+
 - **macOS**: the reference platform. Everything above; computer control
   (browser plugin's computer mode) stays macOS-only as it is today.
 - **Linux**: full support. systemd user unit, Secret Service or file vault,
-  bundled Postgres. Browser automation through Playwright works; computer
-  control does not, and says so.
+  bundled Postgres. Browser automation through Playwright works, and so does
+  "Your browser" — the Chrome extension in `<root>/extension`, loaded unpacked
+  and paired from Settings; computer control does not, and says so.
 - **Windows**: the core loop, the dashboard, the bundled Postgres, Telegram,
   email, memory and web plugins work. Host execution (`host.exec`) refuses on
   Windows today and stays refused until it is written against PowerShell
-  with the same approval shape; browser automation via Playwright works. The
+  with the same approval shape; browser automation via Playwright works, as
+  does "Your browser" through the Chrome extension. The
   Task Scheduler service and Credential Manager vault are the new pieces.
   Windows is supported for the generic install; plugins declare their own
   platform support in the manifest, and the Plugins page shows it.
