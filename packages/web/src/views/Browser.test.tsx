@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel } from './Browser';
@@ -102,6 +102,71 @@ describe('your own browser', () => {
     await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482 913'));
     fireEvent.click(screen.getByRole('button', { name: 'Forget this browser' }));
     await waitFor(() => expect(api.forgetExtension).toHaveBeenCalled());
+  });
+});
+
+/**
+ * The dashboard noticing the extension.
+ *
+ * `chrome.runtime.sendMessage` to a fixed id is the only way a page can ask,
+ * so the fake below is exactly what the browser would put on `globalThis`: a
+ * function that answers when the extension is there and rejects when it is not.
+ */
+describe('finding the extension from the dashboard', () => {
+  const chosen = { ...settings, mode: 'extension' as const };
+  const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
+  const answers = (answer: unknown) => {
+    const sendMessage = vi.fn(async (id: string, message: unknown) => {
+      expect(id).toBe(EXTENSION_ID);
+      expect(message).toEqual({ type: 'buddi.status' });
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    return sendMessage;
+  };
+  const here = () => window.location.origin;
+  beforeEach(() => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('says the extension is missing when nothing answers', async () => {
+    answers(new Error('Could not establish connection.'));
+    render(<Browser />);
+    expect(await screen.findByText('The buddi extension is not installed in this browser.')).toBeInTheDocument();
+    expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
+  });
+
+  it('says so in a browser that has no extensions at all', async () => {
+    render(<Browser />);
+    expect(await screen.findByText('The buddi extension is not installed in this browser.')).toBeInTheDocument();
+  });
+
+  it('names the version it found, and fills in the code it is showing', async () => {
+    answers({ installed: true, version: '0.1.0', state: 'pairing', code: '482 913', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/opt/buddi/extension' });
+    render(<Browser />);
+    expect(await screen.findByText(/Extension found, version 0\.1\.0/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Pairing code')).toHaveValue('482 913'));
+    // Pair is the only thing to press: the code arrived, nothing else changed.
+    const pair = screen.getByRole('button', { name: 'Pair' });
+    expect(pair).toBeEnabled();
+    fireEvent.click(pair);
+    await waitFor(() => expect(api.pairExtension).toHaveBeenCalledWith('482 913'));
+  });
+
+  it('says when the browser it found is already paired', async () => {
+    answers({ installed: true, version: '0.1.0', state: 'paired', gateway: here() });
+    render(<Browser />);
+    expect(await screen.findByText(/already paired/)).toBeInTheDocument();
+    expect(screen.queryByText(/pointed at/)).not.toBeInTheDocument();
+  });
+
+  it('points out an extension aimed at another buddi', async () => {
+    answers({ installed: true, version: '0.1.0', state: 'disconnected', gateway: 'http://127.0.0.1:4999' });
+    render(<Browser />);
+    expect(await screen.findByText(`The extension is pointed at http://127.0.0.1:4999; set it to ${here()} in the popup.`)).toBeInTheDocument();
   });
 });
 
