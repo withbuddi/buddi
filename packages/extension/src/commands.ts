@@ -61,6 +61,8 @@ const MAX_CAST_SIDE = 4096;
 /** A page coordinate no real viewport reaches, past which the input is not a coordinate. */
 const MAX_COORDINATE = 20_000;
 const MAX_DELTA = 10_000;
+/** A paste is what fits on a clipboard worth pasting, not a file. */
+const MAX_PASTE = 4_000;
 
 /** No screencast for this session, so nobody is looking and nothing may be typed. */
 const NO_CAST = 'No screencast is running for this conversation, so there is nothing to type into.';
@@ -176,17 +178,27 @@ function inputEvent(args: Record<string, unknown>): { method: string; params: Re
       button, buttons, clickCount: Math.min(3, Math.max(0, Math.trunc(num(args['clickCount']) ?? (type === 'mouseMoved' ? 0 : 1)))), modifiers,
     } };
   }
+  if (kind === 'text') {
+    // A paste. The owner's clipboard is on the owner's machine, so the only
+    // way its contents reach the page they are driving is through this socket
+    // — as one insertion, bounded, and kept by nothing on the way.
+    const pasted = text(args['text'], MAX_PASTE);
+    if (!pasted) throw new PreconditionError('A paste arrived with nothing in it.');
+    return { method: 'Input.insertText', params: { text: pasted } };
+  }
   if (kind === 'key') {
     const type = str(args, 'type') ?? '';
     if (!KEY_TYPES.has(type)) throw new PreconditionError(`${type || 'That'} is not a key event this browser dispatches.`);
     const key = text(args['key'], 32) ?? '';
     const code = text(args['code'], 32) ?? '';
-    // A named key that carries a character carries it here too: Chrome makes
-    // no keypress out of a `keyDown` with no text, and with no keypress an
-    // Enter in the login form the owner took the browser over for submits
-    // nothing. The wire only ever carries a printable `text`, so the carriage
-    // return is supplied on this side or nowhere.
-    const typed = text(args['text'], 8) ?? (type === 'keyDown' ? KEYS[key]?.text : undefined);
+    // A printable character is typed by its `char` event and by nothing else:
+    // a `keyDown` that also carried text dispatched that character twice, which
+    // is how "ame" reached the page as "aammee". A named key that carries a
+    // character carries it here too: Chrome makes no keypress
+    // out of a `keyDown` with no text, and with no keypress an Enter in the
+    // login form the owner took the browser over for submits nothing. That
+    // carriage return is supplied on this side or nowhere.
+    const typed = type === 'char' ? text(args['text'], 8) : type === 'keyDown' ? KEYS[key]?.text : undefined;
     if (type === 'char' && !typed) throw new PreconditionError('A typed character arrived with no text in it.');
     const virtual = virtualKey(key);
     return { method: 'Input.dispatchKeyEvent', params: {

@@ -138,6 +138,42 @@ describe('the Playwright driver’s hand', () => {
     expect(cdp.detach).toHaveBeenCalled();
   });
 
+  it('types "ame" once, not "aammee", and pastes in one piece', async () => {
+    const { page, keyboard } = fakePage();
+    const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));
+    await driver.start();
+    await driver.hand.start(() => {});
+
+    // What the dashboard now sends for three keystrokes: one `char` each, and
+    // no key of their own. `keyboard.down('a')` types an "a" all by itself, so
+    // a key *and* its character is how the page saw every letter twice.
+    for (const character of 'ame') {
+      await driver.hand.input({ kind: 'key', type: 'char', key: character, code: `Key${character.toUpperCase()}`, text: character, modifiers: 0 });
+    }
+    expect(keyboard.insertText.mock.calls.flat()).toEqual(['a', 'm', 'e']);
+    expect(keyboard.down).not.toHaveBeenCalled();
+
+    // An older dashboard's printable keyDown inserts nothing at all here,
+    // rather than a second copy of the character.
+    await driver.hand.input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 0 });
+    await driver.hand.input({ kind: 'key', type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 0 });
+    expect(keyboard.down).not.toHaveBeenCalled();
+    expect(keyboard.up).not.toHaveBeenCalled();
+    expect(keyboard.insertText).toHaveBeenCalledTimes(3);
+
+    // A shortcut is still a press: Cmd+A selects, and Playwright leaves the
+    // text off a key held under a real modifier.
+    await driver.hand.input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 4 });
+    expect(keyboard.down).toHaveBeenCalledWith('a');
+
+    // And a paste is one insertion, however many characters the owner had.
+    await driver.hand.input({ kind: 'text', text: 'hunter2\nsecond line' });
+    expect(keyboard.insertText).toHaveBeenCalledWith('hunter2\nsecond line');
+    expect(keyboard.insertText).toHaveBeenCalledTimes(4);
+
+    await driver.hand.stop();
+  });
+
   it('ends rather than typing into the tab that replaced the one being shown', async () => {
     const { page, keyboard } = fakePage();
     const driver = new PlaywrightDriver({ profileDir: '/tmp/never-opened' } as never, fakeHost(page));

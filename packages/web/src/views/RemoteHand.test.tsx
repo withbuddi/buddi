@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RemoteHand, modifiersOf, pagePoint, readFrame, type HandSocket } from './RemoteHand';
+import { MAX_PASTE, RemoteHand, modifiersOf, pagePoint, pastedText, readFrame, type HandSocket } from './RemoteHand';
 
 const metadata = { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0 };
 
@@ -59,6 +59,12 @@ describe('mapping a click back onto the page', () => {
     expect(pagePoint(box, metadata, 5_000, 5_000)).toEqual({ x: 1280, y: 800 });
   });
 
+  it('keeps a paste to typing: newlines and tabs, and nothing longer than a field', () => {
+    expect(pastedText('one\r\ntwo\tthree')).toBe('one\ntwo\tthree');
+    expect(pastedText('bell\u0007null\u0000')).toBe('bellnull');
+    expect(pastedText('x'.repeat(MAX_PASTE + 100))).toHaveLength(MAX_PASTE);
+  });
+
   it('packs the modifiers the way CDP expects', () => {
     expect(modifiersOf({ altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })).toBe(0);
     expect(modifiersOf({ altKey: false, ctrlKey: true, metaKey: false, shiftKey: true })).toBe(10);
@@ -111,20 +117,75 @@ describe('driving the host browser', () => {
     fireEvent.wheel(picture, { clientX: 0, clientY: 0, deltaX: 0, deltaY: 120 });
     expect(wire.inputs().at(-1)).toMatchObject({ kind: 'wheel', deltaY: 120 });
 
-    // A printable key is both a key press and a typed character.
+    // A printable key is a typed character and only that: the key itself types
+    // it at the far end, so sending both is how "ame" came back "aammee".
     fireEvent.keyDown(picture, { key: 'a', code: 'KeyA' });
     fireEvent.keyUp(picture, { key: 'a', code: 'KeyA' });
-    expect(wire.inputs().slice(-3)).toMatchObject([
-      { kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA' },
-      { kind: 'key', type: 'char', text: 'a' },
-      { kind: 'key', type: 'keyUp', key: 'a' },
-    ]);
+    expect(wire.inputs().slice(-1)).toMatchObject([{ kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a' }]);
     // It went to the socket and nowhere a person or a test can read it back.
     expect(document.body.textContent).not.toContain('KeyA');
     expect(screen.getByLabelText('Type into the host browser')).toHaveValue('');
 
     fireEvent.keyDown(picture, { key: 'Enter', code: 'Enter', shiftKey: true });
     expect(wire.inputs().at(-1)).toMatchObject({ kind: 'key', type: 'keyDown', key: 'Enter', modifiers: 8 });
+  });
+
+  it('types one character per key, and nothing else', async () => {
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+
+    for (const character of 'ame') {
+      fireEvent.keyDown(picture, { key: character, code: `Key${character.toUpperCase()}` });
+      fireEvent.keyUp(picture, { key: character, code: `Key${character.toUpperCase()}` });
+    }
+    // Three keystrokes, three events, one insertion each — not "aammee".
+    expect(wire.inputs()).toHaveLength(3);
+    expect(wire.inputs().map((event) => event.type)).toEqual(['char', 'char', 'char']);
+    expect(wire.inputs().map((event) => event.text).join('')).toBe('ame');
+
+    // A shortcut is a press, not a character: it goes down and up, with no
+    // text on it for a backend to type.
+    fireEvent.keyDown(picture, { key: 'a', code: 'KeyA', metaKey: true });
+    fireEvent.keyUp(picture, { key: 'a', code: 'KeyA', metaKey: true });
+    expect(wire.inputs().slice(-2)).toMatchObject([
+      { kind: 'key', type: 'keyDown', key: 'a', modifiers: 4 },
+      { kind: 'key', type: 'keyUp', key: 'a', modifiers: 4 },
+    ]);
+    expect(wire.inputs().slice(-2).every((event) => event.text === undefined)).toBe(true);
+  });
+
+  it('carries a paste as text, and never forwards the paste shortcut', async () => {
+    const wire = fakeSocket();
+    panel(wire.socket);
+    wire.open();
+    wire.say({ type: 'driving', sessionId: 's1' });
+    wire.picture('jpeg-bytes');
+    const picture = await screen.findByLabelText('The host browser, live');
+
+    // The shortcut itself is the *host's* clipboard, which is not the owner's,
+    // so it goes nowhere. The paste event is the real one.
+    fireEvent.keyDown(picture, { key: 'v', code: 'KeyV', metaKey: true });
+    fireEvent.keyUp(picture, { key: 'v', code: 'KeyV', metaKey: true });
+    fireEvent.keyDown(picture, { key: 'v', code: 'KeyV', ctrlKey: true });
+    expect(wire.inputs()).toHaveLength(0);
+
+    fireEvent.paste(picture, { clipboardData: { getData: () => 'hunter2\r\nsecond line\u0007' } });
+    expect(wire.inputs()).toEqual([{ kind: 'text', text: 'hunter2\nsecond line' }]);
+
+    // Nothing pasted is anywhere a person or a test can read it back.
+    expect(document.body.textContent).not.toContain('hunter2');
+    expect(screen.getByLabelText('Type into the host browser')).toHaveValue('');
+
+    // An empty clipboard is not an event.
+    fireEvent.paste(picture, { clipboardData: { getData: () => '' } });
+    expect(wire.inputs()).toHaveLength(1);
+    // And nothing longer than a form field's worth goes at all.
+    fireEvent.paste(picture, { clipboardData: { getData: () => 'x'.repeat(5_000) } });
+    expect((wire.inputs().at(-1)!.text as string).length).toBe(MAX_PASTE);
   });
 
   it('sends at most one pointer position every thirty milliseconds, and always the last one', async () => {
