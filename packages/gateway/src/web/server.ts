@@ -165,6 +165,14 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
+import {
+  currentVersion,
+  upgradeJobRoute,
+  upgradeRoute,
+  versionCheckRoute,
+  versionRoute,
+  type VersionDeps,
+} from './version.js';
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
@@ -512,6 +520,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       log,
     });
+    /** The same, for the version and upgrade routes. */
+    const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
     const pluginDeps = (): PluginsDeps => ({
       env: deps.env ?? process.env,
@@ -663,6 +673,10 @@ export function createWebApp(deps: WebServerDeps): Server {
             // from the page rather than implied by a number in a source file.
             scope: session.scope,
             expiresAt: session.expiresAt.toISOString(),
+            // What this gateway is running. The page keeps it across an
+            // upgrade so that "it came back" can be told from "it is still
+            // the old one" without a second route.
+            version: await currentVersion(),
           });
         case '/api/overview':
           return sendJson(
@@ -780,6 +794,13 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/recovery':
           return sendJson(res, 200, await readRecoveryView({ pool: deps.pool, env: deps.env ?? process.env }, deps.ctx.ownerId));
+        /*
+         * What is running, and what upgrading has done before. Supervised,
+         * this is the supervisor's answer; in a checkout it is the version
+         * alone and the line saying that git, not this page, upgrades it.
+         */
+        case '/api/version':
+          return reply(res, await versionRoute(versionDeps()));
         case '/api/backups':
           return reply(res, await listBackups(backupDeps()));
         case '/api/backups/schedule':
@@ -825,6 +846,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         default:
           break;
       }
+
+      const upgradeJob = /^\/api\/upgrade\/jobs\/([0-9a-f-]{36})$/i.exec(path);
+      if (upgradeJob) return reply(res, await upgradeJobRoute(versionDeps(), upgradeJob[1] as string));
 
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (backupJob) return reply(res, await backupJobRoute(backupDeps(), backupJob[1] as string));
@@ -1001,13 +1025,15 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      if (path !== '/api/backups/schedule' && path !== '/api/backups/passphrase') return sendEmpty(res, 405);
+      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check'];
+      if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
       try {
         put = await readJsonBody(req);
       } catch {
         return sendJson(res, 400, { error: 'request body must be JSON' });
       }
+      if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'PUT', put));
       return reply(res, path === '/api/backups/schedule'
         ? await scheduleRoute(backupDeps(), 'PUT', put)
         : await passphraseRoute(backupDeps(), 'PUT', put));
@@ -1278,6 +1304,15 @@ export function createWebApp(deps: WebServerDeps): Server {
         ? updateRoute(pluginDeps(), name, body)
         : await uninstallRoute(pluginDeps(), name, body));
     }
+
+    /*
+     * The version check, and the upgrade itself. Both are the supervisor's
+     * work; an upgrade answers with a job and then takes this gateway down,
+     * which is why the page follows the job until it stops answering and then
+     * waits for `/api/session` to come back with a different version.
+     */
+    if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'POST'));
+    if (path === '/api/upgrade') return reply(res, await upgradeRoute(versionDeps(), body));
 
     if (path === '/api/backups') return reply(res, await createBackupRoute(backupDeps(), body));
     if (path === '/api/backups/verify') return reply(res, await verifyBackupRoute(backupDeps(), body));

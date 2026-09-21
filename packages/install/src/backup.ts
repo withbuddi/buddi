@@ -314,7 +314,7 @@ export function backupDue(file: ScheduleFile, now: Date): boolean {
  * Jobs
  * ------------------------------------------------------------------ */
 
-export type JobKind = 'backup' | 'verify' | 'restore';
+export type JobKind = 'backup' | 'verify' | 'restore' | 'upgrade';
 
 export interface BackupJob {
   id: string;

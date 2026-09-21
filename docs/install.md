@@ -70,6 +70,15 @@ build-free sequence: backup, migrate, restart. The dashboard shows the running
 version and says when a newer one is published (a version check against the
 npm registry, once a day, owner can turn it off).
 
+As built, the supervisor runs that sequence itself — `backup`, `stopping`,
+`installing`, then it hands over to the code it just installed, which migrates
+and records the outcome. The install is the one `npm install` in this project
+that does *not* pass `--ignore-scripts`: the Postgres binary package's own
+script is what the paragraph above is about, and it is a dependency of buddi's
+own package, asked for by the owner. The prefix comes from the install root
+that is running rather than from npm's configuration, so an installation made
+with `--prefix` upgrades itself and not some other copy.
+
 ---
 
 ## 3. Postgres without Docker
@@ -206,10 +215,11 @@ while the gateway is down. Maintenance therefore never needs the gateway:
 
 - The supervisor's whole control surface is a Unix domain socket,
   `supervisor.sock` in the data directory, mode 0600 inside a 0700 directory.
-  It answers `GET /status` and `POST /start|/stop|/restart`, JSON in and out,
-  with no token and no session: the filesystem is the credential, because only
-  the owning user can open the socket. There is no second web surface to log
-  in to.
+  It answers `GET /status` and `POST /start|/stop|/restart`, the backup verbs,
+  `GET /version`, `POST /version/check`, `PUT /version/check` and
+  `POST /upgrade`, JSON in and out, with no token and no session: the
+  filesystem is the credential, because only the owning user can open the
+  socket. There is no second web surface to log in to.
 - `buddi upgrade`, `buddi backup restore` and `buddi db migrate` talk to the
   supervisor over that socket: "stop the gateway, keep the database", do the
   work, "start the gateway". With no supervisor running (a headless developer
@@ -227,6 +237,18 @@ while the gateway is down. Maintenance therefore never needs the gateway:
   the step it was on in a state file; the next start reads it, finishes or
   rolls back, and reports in doctor. The gateway refuses to start against a
   schema newer than its own code and says which version it needs.
+
+  As built: `installation.json` carries `phase: upgrading` plus the versions
+  and the archive from the moment the new code is on disk until the supervisor
+  running that code has migrated. On success the phase is `ready` again and
+  `<data>/upgrade.json` gains a `done` entry; on failure the phase stays
+  `upgrade-failed`, the gateway is deliberately not started, and doctor prints
+  the one sentence that names the archive and the two commands back. Under
+  launchd the hand-over is an exit: the agent has `KeepAlive` and its
+  `ProgramArguments` name the launcher inside the install root, which the
+  install has just replaced, so launchd starts the new code from the same path.
+  Off launchd the supervisor spawns its own successor and waits for it to take
+  the lock.
 
 `buddi service` remains the CLI face of the same manager and gains
 `buddi service status --json` for the page. Logs are files in the data
