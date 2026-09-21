@@ -134,18 +134,10 @@ describe('the owner\'s own Chrome, through the buddi extension', () => {
 
     const paired = await endpoint.pair(code);
     expect(paired.status).toBe(200);
+    // Connected is connected: the endpoint reports it only once the `paired`
+    // frame is written, and the extension is authenticated by that frame
+    // rather than by the storage write it starts (G2).
     await vi.waitFor(() => expect(endpoint.connected()).toBe(true), { timeout: MINUTE, interval: 100 });
-    /*
-     * G2 in the contract: the gateway counts the socket as connected before the
-     * extension has finished becoming authenticated, and the extension handles
-     * frames concurrently, so a command sent on the heels of `paired` can be
-     * refused with "This browser is not paired with you." Waiting for the token
-     * to reach `chrome.storage.local` waits for the last step of that write.
-     */
-    await vi.waitFor(async () => {
-      const stored = await worker.evaluate(() => (globalThis as any).chrome.storage.local.get(['token']) as Promise<{ token?: string }>);
-      expect(typeof stored.token).toBe('string');
-    }, { timeout: MINUTE, interval: 100 });
   }, 3 * MINUTE);
 
   afterAll(async () => {

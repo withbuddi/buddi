@@ -128,6 +128,27 @@ describe('the handshake', () => {
     expect(protocol.state().connection).toBe('offline');
   });
 
+  it('runs the very first command, even while the token is still being written', async () => {
+    // The owner types the code and the first action follows immediately. What
+    // authenticates this socket is the frame, not the disk write it starts.
+    const { chrome, store } = fakeChrome();
+    let finishWrite = () => {};
+    const written = new Promise<void>((resolve) => { finishWrite = resolve; });
+    const slow = { ...chrome, storage: { local: { ...chrome.storage.local,
+      set: async (items: Record<string, unknown>) => { await written; await chrome.storage.local.set(items); } } } };
+    const sent: Array<Record<string, unknown>> = [];
+    const execute = vi.fn(async () => ({}));
+    const protocol = new Protocol({ chrome: slow, version: '0.1.0', send: (frame) => { sent.push(frame as Record<string, unknown>); }, execute });
+
+    const pairing = protocol.receive(JSON.stringify({ type: 'paired', token: 'granted', installation: 'buddi' }));
+    await protocol.receive(JSON.stringify({ type: 'command', id: 'first', name: 'observe', session: 's1', args: {} }));
+    expect(execute).toHaveBeenCalled();
+    expect(sent[0]).toMatchObject({ id: 'first', ok: true });
+    finishWrite();
+    await pairing;
+    expect(store.get('token')).toBe('granted');
+  });
+
   it('answers a ping with a pong', async () => {
     const { protocol, sent } = harness();
     await protocol.receive(JSON.stringify({ type: 'ping' }));

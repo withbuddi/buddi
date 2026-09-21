@@ -41,6 +41,8 @@ let attempt = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let silence: ReturnType<typeof setTimeout> | undefined;
 let last: ClientState = { connection: 'offline', code: null, installation: null, error: null };
+/** The tail of the frame queue: every frame waits for the one before it. */
+let incoming: Promise<void> = Promise.resolve();
 
 const protocol = new Protocol({
   chrome,
@@ -77,7 +79,15 @@ async function connect(): Promise<void> {
   const opening = new WebSocket(url);
   socket = opening;
   opening.addEventListener('open', () => { attempt = 0; quiet(); void protocol.open(); });
-  opening.addEventListener('message', (event) => { quiet(); void protocol.receive(String(event.data)); });
+  // One frame at a time, in the order they arrived. A WebSocket delivers them
+  // in order and the protocol is written as if they were handled that way: a
+  // command that follows `paired` must not overtake it, and two commands must
+  // not interleave their dispatches in the owner's browser.
+  opening.addEventListener('message', (event) => {
+    quiet();
+    const text = String(event.data);
+    incoming = incoming.then(() => protocol.receive(text)).catch(() => undefined);
+  });
   opening.addEventListener('error', () => undefined);
   opening.addEventListener('close', () => {
     if (socket === opening) socket = undefined;
