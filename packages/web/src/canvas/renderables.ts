@@ -374,19 +374,44 @@ export function approvalIdOf(block: Extract<ChatBlock, { type: 'tool_result' }>)
   return null;
 }
 
-/** Small results stay quiet, but every recorded call can be inspected on demand. */
-export function inspectToolCall(messages: ChatMessage[], id: string): Renderable | null {
+/**
+ * Small results stay quiet, but every recorded call can be inspected on
+ * demand.
+ *
+ * `redactInputOf` names tools whose arguments carry what the owner typed —
+ * the page knows which those are; this file does not — and their input is
+ * drawn with the typed strings held back. An inspector is a panel on a shared
+ * screen, and a password does not stop being one because the call recording it
+ * is three days old.
+ */
+export function inspectToolCall(
+  messages: ChatMessage[],
+  id: string,
+  options: { redactInputOf?: ReadonlySet<string> } = {},
+): Renderable | null {
   const blocks = messages.flatMap(message => message.blocks);
   const call = blocks.find(block => block.type === 'tool_use' && block.id === id);
   if (call?.type !== 'tool_use') return null;
   const result = blocks.find(block => block.type === 'tool_result' && block.toolUseId === id);
+  const input = options.redactInputOf?.has(call.name) ? redacted(call.input) : call.input;
   return {
     id, tool: call.name, title: labelFor(call.name), renderer: 'structured',
-    props: { value: { input: call.input, ...(result?.type === 'tool_result'
+    props: { value: { input, ...(result?.type === 'tool_result'
       ? { status: result.approval?.state ?? (result.ok ? 'completed' : 'failed'), output: result.output, ...(result.error ? { error: result.error } : {}) }
       : { status: 'Awaiting result' }) } },
     at: null, source: 'fallback', substantial: false,
   };
+}
+
+/** The same arguments with anything that was typed replaced, one level deep. */
+const TYPED_KEYS = new Set(['value', 'text', 'password', 'secret', 'code']);
+function redacted(input: unknown): unknown {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return input;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    out[key] = TYPED_KEYS.has(key) && typeof value === 'string' ? '— withheld —' : redacted(value);
+  }
+  return out;
 }
 
 function findApprovalId(value: unknown, depth: number): string | null {

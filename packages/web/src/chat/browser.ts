@@ -35,8 +35,10 @@ export interface BrowserStep {
   action: string;
   /** Where it went or what it touched, in a few words. Never a typed value. */
   target: string | null;
-  /** `null` while the call is still out. */
+  /** `null` while the call is still out, or while it waits on the owner. */
   ok: boolean | null;
+  /** Stopped on a gate: the owner has to decide before this step happens. */
+  awaiting: boolean;
   /** Why it failed, when it did. */
   error: string | null;
   at: string | null;
@@ -63,9 +65,14 @@ export function conversationBrowser(
 /**
  * The same tab once the session is over: the last screenshot, kept, and no
  * longer holding the strip. History does not get to pin itself.
+ *
+ * The label is derived from the mode last seen rather than the mode at the
+ * moment the session opened — the first status poll can land before the
+ * gateway has said which mode this is, and a computer session that ended must
+ * not be remembered as a browser.
  */
-export function endedBrowser(tab: Renderable): Renderable {
-  return { ...tab, title: `${tab.title} (ended)`, pinned: false };
+export function endedBrowser(tab: Renderable, mode: BrowserStatus['mode']): Renderable {
+  return { ...tab, title: `${mode === 'computer' ? 'Computer' : 'Browser'} (ended)`, pinned: false };
 }
 
 /** Every step this conversation took on the screen, oldest first. */
@@ -80,6 +87,7 @@ export function browserSteps(messages: readonly ChatMessage[]): BrowserStep[] {
           action: actionOf(block.input) ?? 'act',
           target: targetOf(block.input),
           ok: null,
+          awaiting: false,
           error: null,
           at: message.at ?? null,
         };
@@ -90,23 +98,39 @@ export function browserSteps(messages: readonly ChatMessage[]): BrowserStep[] {
       if (block.type !== 'tool_result') continue;
       const step = byId.get(block.toolUseId);
       if (!step) continue;
+      // Stopped on a gate: the call has not happened yet, whatever its result
+      // block says. Calling that "Done" would tell the owner their decision
+      // had already been taken for them.
+      if (block.approval?.state === 'pending') {
+        step.awaiting = true;
+        step.ok = null;
+        step.error = null;
+        continue;
+      }
+      step.awaiting = false;
       step.ok = block.ok;
-      if (!block.ok) step.error = reasonOf(block);
+      step.error = block.ok ? null : reasonOf(block);
     }
   }
   return steps;
 }
 
-/** Which of the recorded steps a chat row points at, if any. */
+/**
+ * Which of the recorded steps a chat row points at, if any.
+ *
+ * A call waiting on the owner is not one: its row opens the envelope, which
+ * is the only place the decision can be made, and the panel is not allowed to
+ * swallow it.
+ */
 export function stepFor(messages: readonly ChatMessage[], toolUseId: string): string | null {
+  let named = false;
   for (const message of messages) {
     for (const block of message.blocks ?? []) {
-      if (block.type === 'tool_use' && block.id === toolUseId) {
-        return BROWSER_TOOLS.has(block.name) ? block.id : null;
-      }
+      if (block.type === 'tool_use' && block.id === toolUseId) named = BROWSER_TOOLS.has(block.name);
+      if (block.type === 'tool_result' && block.toolUseId === toolUseId && block.approval?.state === 'pending') return null;
     }
   }
-  return null;
+  return named ? toolUseId : null;
 }
 
 function actionOf(input: unknown): string | null {

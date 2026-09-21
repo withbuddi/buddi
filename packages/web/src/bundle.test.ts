@@ -155,15 +155,6 @@ describe('the canvas knows no domain', () => {
     // owner's rather than a domain's result.
     "'agent.delegate'",
     "'canvas.clear'",
-    /*
-     * Driving the owner's own screen. The gateway has a status route, owner
-     * controls and a page of its own for it (`/api/browser`, `views/Browser`)
-     * — it is the machine this installation runs on, not a domain's data —
-     * and the canvas tab that folds those calls into one live panel has to
-     * know which calls it covers. Named in `chat/browser.ts` and nowhere else.
-     */
-    "'browser.act'",
-    "'browser.status'",
     "'run.started'",
     "'run.finished'",
     "'tool.called'",
@@ -201,8 +192,24 @@ describe('the canvas knows no domain', () => {
     // fixtures exist precisely so the tests need no plugin to be installed.
     // The monitoring pages are exempt: they name *event kinds* the platform
     // emits (`mission.delivered` and friends), which are not tools.
+    /*
+     * One file is allowed the browser tools by name, and only that file.
+     *
+     * Driving the owner's own screen is a platform surface — the gateway has
+     * a status route, owner controls and a page of its own for it — and the
+     * canvas tab that folds those calls into one live panel has to know which
+     * calls it covers. `chat/browser.ts` is where that knowledge lives; if it
+     * spreads, this check says so.
+     */
+    const BROWSER_SURFACE = path.join('src', 'chat', 'browser.ts');
+    const BROWSER_LITERALS = new Set(["'browser.act'", "'browser.status'"]);
     for (const file of NEW_SURFACE.filter((candidate) => !/\.test\.tsx?$/.test(candidate))) {
       const text = readFileSync(file, 'utf8');
+      if (path.relative(PACKAGE, file) === BROWSER_SURFACE) {
+        const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
+        expect(literals.filter((literal) => !BROWSER_LITERALS.has(literal))).toEqual([]);
+        continue;
+      }
       const relative = path.relative(PACKAGE, file);
       const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
       const foreign = literals.filter((literal) => !PLATFORM_LITERALS.has(literal));

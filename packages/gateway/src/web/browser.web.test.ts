@@ -113,10 +113,21 @@ describe('browser dashboard endpoints', () => {
       page: { url: string; title: string; id: string };
       hasScreenshot: boolean;
     };
-    expect(status.session).toMatchObject({ agentId: 'keeper', conversationId: 'c1', steps: 1 });
+    expect(status.session.agentId).toBe('keeper');
+    expect(status.session.conversationId).toBe('c1');
+    expect(status.session.steps).toBe(1);
     expect(status.session.maxSteps).toBeGreaterThan(0);
-    expect(status.page).toMatchObject({ url: 'https://example.com/statements', title: 'Statements', id: 'o1' });
+    expect(status.page.url).toBe('https://example.com/statements');
+    expect(status.page.title).toBe('Statements');
+    expect(status.page.id).toBe('o1');
     expect(status.hasScreenshot).toBe(true);
+    // A second action moves the count the canvas prints.
+    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), {
+      ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
+      ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
+    } as ToolContext);
+    const again = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as { session: { steps: number } };
+    expect(again.session.steps).toBe(2);
     // Another conversation asking gets nothing of this one's.
     const other = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c2`, { headers })).json() as { session?: unknown };
     expect(other.session).toBeUndefined();
