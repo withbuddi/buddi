@@ -8,22 +8,45 @@
  * `X-Forwarded-For` carrying the tailnet address of the device.
  *
  * Headers are not a credential, and this module never treats them as one. An
- * identity is honoured only when all four of these hold:
+ * identity is honoured only when all of these hold:
  *
  *   1. The owner turned this on and named the login that may sign in. Off by
  *      default; nothing about having Tailscale installed widens access.
  *   2. The socket's remote address is loopback. The proxy is a local process,
  *      so a request that arrives from the network — headers and all — is a
  *      stranger spelling the headers themselves, and is refused.
- *   3. `X-Forwarded-For` is a tailnet address (`100.64.0.0/10` or
- *      `fd7a:115c:a1e0::/48`). Anything else did not come through Serve.
- *   4. The local `tailscaled` confirms, through its own API over its unix
- *      socket, that the address belongs to that login. This is the step the
- *      headers cannot fake: the answer comes from the daemon, not the request.
+ *   3. `X-Forwarded-For` names exactly one address. Serve *overwrites* that
+ *      header; a second proxy in front of it appends instead, so a list is
+ *      proof that something other than Serve handled this request.
+ *   4. That address is a tailnet address (`100.64.0.0/10` or
+ *      `fd7a:115c:a1e0::/48`), and `X-Forwarded-Proto` is `https` — Serve
+ *      terminates TLS and says so. Anything else did not come through it.
+ *   5. The local `tailscaled` confirms, through its own API over its unix
+ *      socket, that the address belongs to the allowed login, and that the
+ *      login the header claimed is the very one the daemon names. This is the
+ *      step the headers cannot fake: the answer comes from the daemon.
  *
  * Anything short of that is no identity at all, and the request carries on
- * unauthenticated — a 401, exactly as before. The reason is logged once a
- * minute at most, so a misconfigured proxy says so without filling the log.
+ * unauthenticated — a 401, exactly as before. The reason is logged by a fixed
+ * name, once a minute at most and never with a supplied login or address in
+ * it, so a misconfigured proxy says so without filling the log or letting a
+ * caller choose what goes in it.
+ *
+ * ## What this does not prove, said plainly
+ *
+ * The gateway sees a loopback connection carrying headers. It cannot tell
+ * `tailscale serve` from any other process on the same machine that opens the
+ * same port and spells the same headers: the daemon confirms that the
+ * *claimed* address belongs to the allowed login, not that the request came
+ * from that address. So this feature extends to the tailnet the trust the
+ * loopback dashboard already gives this machine — no more, and no less. That
+ * is a small step, because a process that can reach the loopback port could
+ * already read the data directory, the `.env` and the keychain, and therefore
+ * already had everything a session would have given it. It is worth saying out
+ * loud all the same: turning this on does not make the machine's own processes
+ * less trusted than they were, and it does not make them more trusted either.
+ * The session it mints is bound (see `sessions.ts`): the daemon is asked again
+ * on every request, and the setting going off or naming another login ends it.
  */
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
@@ -67,6 +90,11 @@ export interface TailscaleIdentityDeps {
   /** The stored setting. Asked only once the headers are actually present. */
   setting: () => Promise<TailscaleSetting | null>;
   whois: TailscaleWhois;
+  /**
+   * The caller's sign-in budget, asked immediately before the daemon is. False
+   * means "over budget": no whois is made and the request earns no identity.
+   */
+  mayAskDaemon?: (() => boolean) | undefined;
   log?: ((line: string) => void) | undefined;
   now?: (() => Date) | undefined;
 }
@@ -104,13 +132,21 @@ function normalize(address: string | undefined): string {
   return a;
 }
 
-/** The first hop of `X-Forwarded-For`: the client the nearest proxy saw. */
+/**
+ * The one address `X-Forwarded-For` names, or nothing.
+ *
+ * Serve overwrites this header with the tailnet address it is forwarding for,
+ * so a single value is what an unmediated Serve hop looks like. Every other
+ * proxy *appends*, which is why a list — or a repeated header line — is not
+ * read as "the first one is the client" but as "something else is in the
+ * path", and earns no identity at all.
+ */
 export function forwardedAddress(req: IncomingMessage): string | undefined {
   const raw = req.headers['x-forwarded-for'];
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof value !== 'string') return undefined;
-  const first = value.split(',')[0];
-  const address = normalize(first);
+  // Two header lines are two hops as surely as one line with a comma in it.
+  if (Array.isArray(raw)) return undefined;
+  if (typeof raw !== 'string' || raw.includes(',')) return undefined;
+  const address = normalize(raw);
   return address === '' ? undefined : address;
 }
 
@@ -159,18 +195,64 @@ export function plausibleLogin(login: string): boolean {
  * The identity
  * ------------------------------------------------------------------ */
 
-const lastLogged = new Map<string, number>();
+/**
+ * Why a request earned no identity — the whole vocabulary of it.
+ *
+ * Every refusal is one of these, and the log says the name and nothing else.
+ * The supplied login and the claimed address are exactly the parts a caller
+ * chooses, so they are never the key of the throttle map and never a word in
+ * the line: a caller varying a header cannot mint an unbounded number of
+ * entries, nor write into a log only the owner reads.
+ */
+export type TailscaleRefusal =
+  | 'setting-off'
+  | 'not-this-machine'
+  | 'forwarded-more-than-once'
+  | 'not-a-tailnet-address'
+  | 'not-forwarded-over-https'
+  | 'login-not-allowed'
+  | 'too-many-attempts'
+  | 'daemon-unreachable'
+  | 'daemon-does-not-know'
+  | 'daemon-names-another-login';
 
-function complain(deps: TailscaleIdentityDeps, reason: string, at: number): void {
+const REASONS: Readonly<Record<TailscaleRefusal, string>> = {
+  'setting-off': 'a request carried Tailscale identity headers but signing in through Tailscale is off',
+  'not-this-machine': 'Tailscale identity headers arrived from an address that is not this machine',
+  'forwarded-more-than-once': 'the request was forwarded more than once, so it did not come straight from tailscale serve',
+  'not-a-tailnet-address': 'the forwarded address is not a tailnet address',
+  'not-forwarded-over-https': 'the request was not forwarded over HTTPS',
+  'login-not-allowed': 'the forwarded login is not the login allowed to sign in through Tailscale',
+  'too-many-attempts': 'too many failed sign-ins from here to ask the local tailscaled again yet',
+  'daemon-unreachable': 'the local tailscaled could not be asked about the forwarded address',
+  'daemon-does-not-know': 'the local tailscaled does not know the forwarded address',
+  'daemon-names-another-login': 'the local tailscaled names a different login for the forwarded address',
+};
+
+/**
+ * When each reason was last said. Bounded by construction — the keys are the
+ * enum above and there is no way to add another — and cleared wholesale if it
+ * ever somehow exceeds that, so this map cannot grow with traffic.
+ */
+const lastLogged = new Map<TailscaleRefusal, number>();
+
+function complain(deps: TailscaleIdentityDeps, reason: TailscaleRefusal, at: number): null {
   const last = lastLogged.get(reason) ?? 0;
-  if (at - last < LOG_EVERY_MS) return;
+  if (at - last < LOG_EVERY_MS) return null;
+  if (lastLogged.size > Object.keys(REASONS).length) lastLogged.clear();
   lastLogged.set(reason, at);
-  (deps.log ?? ((line: string) => console.error(line)))(`tailscale: ${reason}`);
+  (deps.log ?? ((line: string) => console.error(line)))(`tailscale: ${REASONS[reason]}`);
+  return null;
 }
 
 /** Test seam: forget what has been said, so a suite can assert on the throttle. */
 export function resetTailscaleLog(): void {
   lastLogged.clear();
+}
+
+/** Test seam: how many reasons the throttle map is holding. */
+export function tailscaleLogSize(): number {
+  return lastLogged.size;
 }
 
 /**
@@ -186,42 +268,46 @@ export async function tailscaleIdentity(
   const at = (deps.now ?? (() => new Date()))().getTime();
 
   const setting = await deps.setting();
-  if (!setting?.enabled || !setting.login.trim()) {
-    complain(deps, 'a request carried Tailscale identity headers but signing in through Tailscale is off', at);
-    return null;
-  }
+  if (!setting?.enabled || !setting.login.trim()) return complain(deps, 'setting-off', at);
   // The proxy is a process on this machine. A request that arrives from
   // anywhere else and spells these headers is a stranger, not Serve.
-  if (!isLoopbackAddress(req.socket.remoteAddress)) {
-    complain(deps, `Tailscale identity headers arrived from ${req.socket.remoteAddress ?? 'an unknown address'}, which is not this machine`, at);
-    return null;
+  if (!isLoopbackAddress(req.socket.remoteAddress)) return complain(deps, 'not-this-machine', at);
+  // A list, or a second header line, means a proxy that appends — not Serve,
+  // which overwrites. See `forwardedAddress`.
+  if (req.headers['x-forwarded-for'] !== undefined && forwardedAddress(req) === undefined) {
+    return complain(deps, 'forwarded-more-than-once', at);
   }
   const address = forwardedAddress(req);
-  if (!isTailnetAddress(address)) {
-    complain(deps, `the forwarded address ${address ?? '(none)'} is not a tailnet address`, at);
-    return null;
+  if (!isTailnetAddress(address)) return complain(deps, 'not-a-tailnet-address', at);
+  // Serve terminates TLS for the tailnet and says so on the way through.
+  if ((header(req, 'x-forwarded-proto') ?? '').toLowerCase() !== 'https') {
+    return complain(deps, 'not-forwarded-over-https', at);
   }
-  if (!sameLogin(login, setting.login)) {
-    complain(deps, `${login} is not the login allowed to sign in through Tailscale`, at);
-    return null;
-  }
+  if (!sameLogin(login, setting.login)) return complain(deps, 'login-not-allowed', at);
+
+  /*
+   * Only now is the daemon asked.
+   *
+   * Everything above is a string comparison this process makes to itself. The
+   * whois is a round trip to `tailscaled` over its socket, so it sits behind
+   * the same per-caller sign-in budget the 401 below consumes: a caller
+   * varying a header to miss the one-minute whois cache cannot turn the
+   * gateway into a load generator pointed at the daemon.
+   */
+  if (deps.mayAskDaemon && !deps.mayAskDaemon()) return complain(deps, 'too-many-attempts', at);
 
   let profile: TailscaleProfile | null;
   try {
     profile = await deps.whois(address as string);
-  } catch (err) {
-    complain(deps, `the local tailscaled could not be asked about ${address}: ${err instanceof Error ? err.message : String(err)}`, at);
-    return null;
+  } catch {
+    return complain(deps, 'daemon-unreachable', at);
   }
-  if (!profile) {
-    complain(deps, `the local tailscaled does not know ${address}`, at);
-    return null;
-  }
+  if (!profile) return complain(deps, 'daemon-does-not-know', at);
   // The daemon's answer is the credential; the header only said what to check.
-  if (!sameLogin(profile.login, setting.login)) {
-    complain(deps, `tailscaled says ${address} is ${profile.login}, not the allowed login`, at);
-    return null;
-  }
+  // Both have to agree with the setting *and* with each other, so a header
+  // naming one person for an address the daemon gives another earns nothing.
+  if (!sameLogin(profile.login, setting.login)) return complain(deps, 'daemon-names-another-login', at);
+  if (!sameLogin(login, profile.login)) return complain(deps, 'daemon-names-another-login', at);
   return {
     login: profile.login,
     name: header(req, 'tailscale-user-name') ?? profile.name ?? profile.login,

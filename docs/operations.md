@@ -208,18 +208,32 @@ still gets a 401.
 The headers Serve adds (`Tailscale-User-Login` and friends) are *not* what
 grants this. An identity is honoured only when the setting is on with an allowed
 login, the connection to the gateway comes from loopback (Serve is a local
-process), `X-Forwarded-For` is a tailnet address (`100.64.0.0/10` or
-`fd7a:115c:a1e0::/48`), and the local `tailscaled` — asked over its own unix
-socket — says that address belongs to that login. A mismatch, a missing daemon
+process), `X-Forwarded-For` names exactly one address — Serve overwrites that
+header, so a list means a second proxy is in the path and is refused — that
+address is a tailnet address (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`),
+`X-Forwarded-Proto` is `https`, and the local `tailscaled` — asked over its own
+unix socket — says that address belongs to that login and names the very login
+the header claimed. A mismatch, a missing daemon
 or a failed whois is no identity at all: the request is unauthenticated and gets
 the same 401 it would have got before, with one line in the log saying why (at
 most once a minute). Answers are cached for a minute, so removing a device from
 the tailnet takes effect while you are still looking at the screen.
 
 The session it mints is an ordinary **remote** session: 12 hours idle, `Secure`
-cookies, CSRF and Origin checks on every write. The setting itself can only be
-changed from a local or ticket session — the panel is read-only when viewed
-through Tailscale — so a device someone walked off with cannot widen access.
+cookies, CSRF and Origin checks on every write — and seven days at the outside,
+however much it is used. It is not a bearer token: the daemon is asked again on
+every request and must still name the login the session was minted for, so
+turning the setting off or naming a different login signs every tailnet browser
+out at once. The setting itself can only be changed from a session established
+on this machine — the panel is read-only when viewed through Tailscale — so a
+device someone walked off with cannot widen access.
+
+What this does not prove is worth saying plainly: buddi cannot distinguish
+`tailscale serve` from any other process on the same machine that connects to
+the same loopback port and spells the same headers. Turning this on extends to
+your tailnet the trust the loopback dashboard already gives this machine, and no
+more — a process that can reach that port could already read the data
+directory.
 `buddi doctor`'s `tailscale` row says whether the daemon is there, who may sign
 in, whether the public origin is a `.ts.net` one and whether `tailscale serve
 status` forwards anything to the gateway's port.

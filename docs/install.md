@@ -547,12 +547,26 @@ runs first-run headless, and asserts the gateway answers.
   doctor can say if what is on disk is what was approved.
 - Signing in through Tailscale is off until an owner turns it on in Settings
   → System and names the login that may sign in. It never trusts the proxy's
-  headers on their own: the connection must arrive on loopback from a Serve
-  running on this machine, the forwarded address must be a tailnet address,
-  and the local `tailscaled` must confirm over its own socket that the address
-  belongs to that login. The session it mints is a remote one — 12 hours,
-  Secure cookies, CSRF and Origin checks — and the setting cannot be changed
-  from a Tailscale session, so a stolen device cannot widen access.
+  headers on their own: the connection must arrive on loopback, `X-Forwarded-For`
+  must name exactly one address (Serve overwrites that header; a second proxy
+  appends, and a list is refused), that address must be a tailnet address,
+  `X-Forwarded-Proto` must be `https`, and the local `tailscaled` must confirm
+  over its own socket that the address belongs to that login and that the login
+  the header claimed is the one it names. The session it mints is a remote one
+  — 12 hours idle, seven days at the outside, Secure cookies, CSRF and Origin
+  checks — and it is re-confirmed against the daemon on every request, so
+  turning the setting off or naming a different login ends every tailnet
+  session at once. The setting itself can only be changed from a session
+  established on this machine.
+- What that does **not** prove, plainly: the gateway cannot distinguish
+  `tailscale serve` from another process on the same machine connecting to the
+  same loopback port and spelling the same headers. This feature therefore
+  extends to the tailnet the trust the loopback dashboard already gives the
+  machine — no more than that, and no less. It is a small step rather than a
+  new exposure, because a process that can reach the loopback port could
+  already read the data directory, the `.env` and the keychain, and so already
+  had everything a dashboard session could give it. An owner who does not
+  accept that should not publish the dashboard on the tailnet at all.
 - The version check and the plugin install are the only outbound calls the
   install path makes, both to the npm registry, both through the shared
   transport, both disclosed on the security screen. A cloud backup target

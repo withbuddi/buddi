@@ -185,6 +185,11 @@ export function Tailscale(): JSX.Element {
               Anyone signed in to Tailscale as this login, on any device in your tailnet, is signed in to buddi.
               The proxy must run on this machine: <span className="mono">{data?.serveCommand ?? 'tailscale serve'}</span>
             </p>
+            <p className="ui-card-meta">
+              This gives your tailnet the trust this machine already has: buddi cannot tell the Tailscale proxy from
+              another program running here, and any program that can reach the dashboard on this machine can already
+              read buddi&rsquo;s files.
+            </p>
             {saved ? <Notice tone="good" role="status">Saved.</Notice> : null}
             <Toolbar align="end">
               <Button disabled={busy || !data} onClick={() => { void copyText(data?.serveCommand ?? ''); }}>
