@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import { api, type BrowserStatus, type ControlSettings } from '../api';
 import { chatRoute } from '../routes';
-import { Avatar, Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Stack, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 
 export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
@@ -115,8 +115,15 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
                 body="A separate browser profile with its own tabs, one per conversation. Your apps are never touched."
                 onPick={() => save({ ...settings, mode: 'playwright' })}
               />
+              <ModeOption
+                current={settings.mode} value="extension" disabled={busy || active || !data.enabled}
+                title="Your browser"
+                body="Uses the Chrome you are signed in to, in background tabs, through the buddi extension."
+                onPick={() => save({ ...settings, mode: 'extension' })}
+              />
             </div>
             {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
+            {settings.mode === 'extension' ? <ExtensionPairing busy={busy} /> : null}
           </Panel>
 
           <Panel title="Apps agents may use">
@@ -140,6 +147,55 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
           ) : null}
         </>
       ) : null}
+    </Stack>
+  );
+}
+
+/**
+ * Pair your browser, and say where the extension lives.
+ *
+ * Its own poll rather than a field on the browser status: the connection comes
+ * and goes with Chrome, and the pairing code appears while this page is open.
+ */
+function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
+  const { data, error, reload } = useAsync(() => api.extension(), [], 3_000);
+  const [code, setCode] = useState('');
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const run = async (action: () => Promise<unknown>) => {
+    setWorking(true); setFailure(null);
+    try { await action(); } catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+    finally { setWorking(false); reload(); }
+  };
+  const disabled = busy || working;
+  return (
+    <Stack divided>
+      <ErrorBanner message={error ?? failure} />
+      <Toolbar>
+        <Pill tone={data?.connected ? 'good' : 'warning'}>{data?.connected ? 'Connected' : 'Not connected'}</Pill>
+        <span className="muted">
+          {data?.connected && data.pairedAt ? `Connected since ${new Date(data.pairedAt).toLocaleString()}`
+            : data?.pairedAt ? 'Paired, but Chrome is not running the extension right now.'
+            : 'No browser is paired with this buddi yet.'}
+          {data?.extension ? ` · extension ${data.extension}` : ''}
+        </span>
+      </Toolbar>
+      {data?.pending ? (
+        <Toolbar valign="end">
+          <Field grow label="Pair your browser" hint="Type the six digits the buddi extension is showing.">
+            <input aria-label="Pairing code" inputMode="numeric" placeholder="482 913" value={code} onChange={(e) => setCode(e.target.value)} />
+          </Field>
+          <Spacer />
+          <Button variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void run(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
+        </Toolbar>
+      ) : null}
+      <div className="ui-prose muted">
+        <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick that folder.</p>
+        <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
+      </div>
+      <Toolbar align="end">
+        <Button variant="danger" disabled={disabled || !data?.pairedAt} onClick={() => void run(() => api.forgetExtension())}>Forget this browser</Button>
+      </Toolbar>
     </Stack>
   );
 }
@@ -280,6 +336,8 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
   };
   const canControl = !!data?.enabled && !busy;
   const computer = data?.mode === 'computer';
+  // The owner's own Chrome, through the extension: their tabs, not ours.
+  const yours = data?.mode === 'extension';
   const help = computer ? 'Stop computer control interrupts native input and revokes access. Take over pauses agent input. Release ends this conversation’s control without closing your apps. Already dispatched actions cannot be undone. Avoid using the same mouse and keyboard while the agent is working.' : 'Stop all browsers closes every session and revokes access until you resume. Take over, Resume and Close & release affect only the selected conversation. An in-flight action is interrupted by closing its tabs. Actions already submitted cannot be undone.';
   const state = data?.busy ? 'Working' : data?.state === 'running' ? 'Ready' : data?.state ?? 'Connecting';
   const tone = data?.busy || data?.state === 'running' ? 'good' : data?.state === 'stopped' || data?.state === 'error' ? 'critical' : undefined;
@@ -288,7 +346,7 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
       <div className="browser-heading">
         <div>
           {compact ? null : <p className="browser-eyebrow">On your host machine</p>}
-          <h2 className="browser-title">{computer ? 'Computer' : 'Browser'}</h2>
+          <h2 className="browser-title">{computer ? 'Computer' : yours ? 'Your browser' : 'Browser'}</h2>
         </div>
         <Pill tone={tone}>
           <span role="status">{state}</span>
@@ -297,7 +355,7 @@ export function BrowserPanel({ data, error, reload, compact = false }: {
       {compact ? (
         <a className="browser-full-view" href="#/browser">{computer ? 'Open computer view & settings ↗' : 'Open full browser view ↗'}</a>
       ) : (
-        <p className="ui-page-lede">{computer ? 'Your apps, operated through macOS accessibility, screenshots and input. No browser debugging connection.' : 'A real browser window, driven by your assistant. You stay in control.'}</p>
+        <p className="ui-page-lede">{computer ? 'Your apps, operated through macOS accessibility, screenshots and input. No browser debugging connection.' : yours ? 'Your own Chrome, signed in as you, working in background tabs grouped as “buddi”. You keep browsing.' : 'A real browser window, driven by your assistant. You stay in control.'}</p>
       )}
       <ErrorBanner message={error ?? failure} />
       <Toolbar>

@@ -119,6 +119,65 @@ report the result, and release control while leaving Calculator open. Then test
 Wikipedia: ask the agent to open it and wait, take over and choose an article,
 resume, and ask it to observe and summarize without navigating away.
 
+## Optional: "Your browser", the Chrome extension
+
+The third mode, shown in **Computer & browser** as **Your browser**: agents work
+in the Chrome you are already signed in to, through a Manifest V3 extension that
+ships unpacked in `<install root>/extension`. It works on macOS, Linux and
+Windows, because it is Chrome doing the work.
+
+Setup, in the owner's words:
+
+1. Choose **Your browser** in Computer & browser. Release any active session
+   first; modes never switch themselves.
+2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load
+   unpacked**, and pick the folder the settings page prints.
+3. Press **Connect** in the extension popup. It shows a six-digit code, valid
+   for five minutes. Type it into **Pair your browser** on the settings page.
+
+The extension keeps a token in `chrome.storage.local` and reconnects with it
+from then on. Buddi stores only a SHA-256 of that token, in
+`<BUDDI_DATA_DIR>/extension.json` (owner-only), together with when it was
+paired, which extension build it is, which extension id it is, and when it was
+last seen. **Forget this browser** deletes that record and closes the socket;
+the extension then asks to pair again. `buddi doctor`'s `browser` row says the
+same thing from the command line.
+
+Five wrong codes spend the code: the extension is told to start over and shows
+a new one, and the wrong tries count against the dashboard's own rate limiter.
+A code lives five minutes and so does the connection waiting on it. The pairing
+binds the extension's id, so a second unpacked copy cannot take over the
+pairing; it is refused until you forget this browser.
+
+Both ends prove themselves at every connection, and neither trusts the other
+first. The extension's `hello` carries a random nonce and no token; buddi
+answers with that nonce signed by the stored hash, which is the only secret it
+has; the extension checks the signature against the token it kept, and only then
+sends the token, which buddi checks against the hash. A socket that has not
+finished both halves is never sent a command, and the extension runs none.
+
+The wire is one WebSocket on `ws://127.0.0.1:<port>/api/extension/socket`,
+upgraded only from a loopback socket with no proxy headers and only from a
+`chrome-extension://` origin. One extension at a time: a newer connection that
+completes the handshake replaces the older one. Buddi pings every 20 seconds and
+closes a browser that misses three; a command that goes unanswered for a minute
+fails with a sentence rather than hanging, and the browser is told to abandon
+it. Nothing else is sent until it confirms it has, or ten seconds pass, so the
+next command never lands on a page nobody has seen.
+
+Tabs open in the background, in a tab group named **buddi**, one group per
+conversation. `close` removes that group's tabs; a dropped socket leaves them
+open, because by then they are yours, and buddi forgets which tabs and refs were
+whose. Those tabs stay yours in the other direction too: drag one out of the
+**buddi** group and agents refuse to act in it or close it, and while you are
+looking at one of their tabs in the window you are using, input is refused
+rather than typed under your hands. A ref belongs to the page it was read from,
+so a redirect between observing and acting is refused instead of clicked
+through. Observations carry the same `e12` refs, tree, tabs and screenshots as
+Playwright mode, and `open` (native apps) and coordinate targets are refused here
+exactly as they are there. The extension never fills a password field: it
+refuses with a precondition error, and you sign in yourself.
+
 ## Optional: Playwright browser automation
 
 **Everything below describes the explicit Playwright mode**, not the native

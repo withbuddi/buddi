@@ -39,6 +39,11 @@ for (const { dir, source, pkg } of packages) {
   await writeFile(path.join(dest, 'package.json'), JSON.stringify(staged, null, 2));
 }
 await cp(path.join(root, 'packages/web/dist'), path.join(stage, 'packages/web/dist'), { recursive: true });
+// The Chrome extension ships unpacked, at the top of the installation, because
+// the owner has to point Chrome's "Load unpacked" at this exact folder and the
+// Settings page prints its path. It is not a workspace package here: nothing
+// imports it, Chrome loads it.
+await cp(path.join(root, 'packages/extension/dist'), path.join(stage, 'extension'), { recursive: true });
 for (const asset of ['examples/agents', 'examples/skills']) await cp(path.join(root, asset), path.join(stage, asset), { recursive: true });
 // The launcher, the supervisor and the managed cluster ship as one built
 // package (@buddi/install), not as loose scripts copied out of this checkout.
@@ -50,7 +55,7 @@ Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
 const manifest = {
   name: 'buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
-  files: ['packages', 'examples'], dependencies,
+  files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),
   optionalDependencies: Object.fromEntries(['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'windows-x64'].map(platform => [`@embedded-postgres/${platform}`, BINARY_VERSION])),
 };
