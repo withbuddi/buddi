@@ -683,6 +683,20 @@ export interface UpgradeAttempt {
   step?: string;
 }
 
+/** Signing in through Tailscale, as the System panel draws it. */
+export interface TailscaleView {
+  enabled: boolean;
+  login: string;
+  /** Is a local `tailscaled` there to ask? */
+  available: boolean;
+  /** Who this machine is signed in to Tailscale as, so the field can prefill. */
+  self: { login: string; name: string } | null;
+  /** Did this very request come through the tailnet proxy? */
+  proxied: boolean;
+  /** The `tailscale serve` command, with this installation's own ports in it. */
+  serveCommand: string;
+}
+
 export interface VersionView {
   current: string;
   latest?: string;
@@ -1012,7 +1026,7 @@ export const api = {
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),
-  session: () => get<{ csrf: string; timezone: string; host: string; port: number; version?: string }>('/session'),
+  session: () => get<{ csrf: string; timezone: string; host: string; port: number; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
   eventKinds: () => get<{ kinds: Array<{ kind: string; count: number }> }>('/events/kinds'),
@@ -1116,6 +1130,9 @@ export const api = {
   /** Ask the registry now. The only outbound call this page can cause. */
   checkVersion: () => post<VersionView>('/version/check'),
   setVersionCheck: (enabled: boolean) => put<VersionView>('/version/check', { enabled }),
+  /* ---- signing in through Tailscale ---- */
+  tailscale: () => get<TailscaleView>('/tailscale'),
+  setTailscale: (change: { enabled: boolean; login: string }) => put<TailscaleView>('/tailscale', change),
   /**
    * Start an upgrade. Accepted rather than completed, like a restart: it takes
    * a backup, installs the new version and restarts buddi under this page.

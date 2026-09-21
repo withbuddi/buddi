@@ -27,8 +27,46 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 export const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 export const REMOTE_SESSION_TTL_MS = 12 * 60 * 60_000;
 
+/**
+ * How long a session established through Tailscale may live *however much* it
+ * is used.
+ *
+ * The idle lifetime above is a sliding one, so a browser polling the dashboard
+ * keeps its session forever. That is the right answer for a session whose
+ * credential is the machine itself, and the wrong one for a session whose
+ * credential is a tailnet identity that can be revoked, transferred or stolen
+ * with a device. Seven days is the outer edge: past it the browser signs in
+ * through Tailscale again, which costs the owner nothing and costs a walked-off
+ * device everything.
+ */
+export const TAILSCALE_SESSION_MAX_MS = 7 * 24 * 60 * 60_000;
+
 /** Where a session was established from. Decided from the socket, never a header. */
 export type SessionScope = 'local' | 'remote';
+
+/**
+ * *How* a session was established, recorded when it is minted and never
+ * re-decided.
+ *
+ * `local` is a request that arrived on loopback with no proxy metadata on it —
+ * the open mint, or a ticket exchanged from this machine. `ticket` is a ticket
+ * exchanged from anywhere else. `tailscale` is an identity the local daemon
+ * confirmed. This lives on the session rather than in a second map beside it,
+ * so provenance cannot drift out of step with the session it describes, and so
+ * a route that must refuse everything but "this machine" can simply say so.
+ */
+export type SessionVia = 'local' | 'ticket' | 'tailscale';
+
+/** What established a session, as `create` is told it. */
+export interface SessionProvenance {
+  via: SessionVia;
+  /** The daemon-confirmed login, when `via` is `tailscale`. */
+  tailscaleLogin?: string;
+  /** The tailnet address it was confirmed at. */
+  tailscaleAddress?: string;
+  /** The display name, kept only so the page can greet the person by it. */
+  tailscaleName?: string;
+}
 
 export const SESSION_TTL_MS: Readonly<Record<SessionScope, number>> = {
   local: LOCAL_SESSION_TTL_MS,
@@ -59,10 +97,17 @@ export interface Session {
   csrf: string;
   /** Loopback or not, fixed at the ticket exchange and never re-decided. */
   scope: SessionScope;
+  /** What established it, and — through Tailscale — whose identity did. */
+  via: SessionVia;
+  tailscaleLogin?: string;
+  tailscaleAddress?: string;
+  tailscaleName?: string;
   /** The idle lifetime this session runs on, in ms. `SESSION_TTL_MS[scope]`. */
   ttlMs: number;
   createdAt: Date;
   expiresAt: Date;
+  /** The moment no amount of use extends past, where the session has one. */
+  absoluteExpiresAt?: Date;
   /** When the browser was last handed this cookie. Drives the refresh rule. */
   cookieIssuedAt: Date;
 }
@@ -80,9 +125,11 @@ function equal(a: string, b: string): boolean {
 export class SessionStore {
   readonly #sessions = new Map<string, Session>();
   readonly #ttl: Record<SessionScope, number>;
+  readonly #tailscaleMaxMs: number;
 
-  constructor(ttlMs: Partial<Record<SessionScope, number>> = {}) {
+  constructor(ttlMs: Partial<Record<SessionScope, number>> = {}, tailscaleMaxMs: number = TAILSCALE_SESSION_MAX_MS) {
     this.#ttl = { ...SESSION_TTL_MS, ...ttlMs };
+    this.#tailscaleMaxMs = tailscaleMaxMs;
   }
 
   /** The idle lifetime a session established from `scope` gets. */
@@ -90,20 +137,48 @@ export class SessionStore {
     return this.#ttl[scope];
   }
 
-  create(scope: SessionScope, now: Date = new Date()): Session {
+  create(
+    scope: SessionScope,
+    now: Date = new Date(),
+    provenance: SessionProvenance = { via: scope === 'local' ? 'local' : 'ticket' },
+  ): Session {
     this.#prune(now);
     const ttlMs = this.#ttl[scope];
     const session: Session = {
       id: id(),
       csrf: id(24),
       scope,
+      via: provenance.via,
+      ...(provenance.tailscaleLogin !== undefined ? { tailscaleLogin: provenance.tailscaleLogin } : {}),
+      ...(provenance.tailscaleAddress !== undefined ? { tailscaleAddress: provenance.tailscaleAddress } : {}),
+      ...(provenance.tailscaleName !== undefined ? { tailscaleName: provenance.tailscaleName } : {}),
       ttlMs,
       createdAt: now,
       expiresAt: new Date(now.getTime() + ttlMs),
+      ...(provenance.via === 'tailscale' ? { absoluteExpiresAt: new Date(now.getTime() + this.#tailscaleMaxMs) } : {}),
       cookieIssuedAt: now,
     };
     this.#sessions.set(session.id, session);
     return session;
+  }
+
+  /**
+   * Forget every session matching this, and say how many went.
+   *
+   * What the setting page uses to revoke the sessions an identity earned the
+   * moment that identity stops being allowed one: turning the switch off, or
+   * naming a different login, empties the tailnet's access immediately rather
+   * than at the next request that happens to be made.
+   */
+  forget(matches: (session: Session) => boolean): number {
+    let gone = 0;
+    for (const [key, session] of this.#sessions) {
+      if (matches(session)) {
+        this.#sessions.delete(key);
+        gone += 1;
+      }
+    }
+    return gone;
   }
 
   /**
@@ -124,7 +199,7 @@ export class SessionStore {
     if (!sessionId) return undefined;
     const session = this.#sessions.get(sessionId);
     if (!session) return undefined;
-    if (session.expiresAt.getTime() <= now.getTime()) {
+    if (this.#dead(session, now)) {
       this.#sessions.delete(sessionId);
       return undefined;
     }
@@ -164,8 +239,14 @@ export class SessionStore {
 
   #prune(now: Date): void {
     for (const [key, session] of this.#sessions) {
-      if (session.expiresAt.getTime() <= now.getTime()) this.#sessions.delete(key);
+      if (this.#dead(session, now)) this.#sessions.delete(key);
     }
+  }
+
+  /** Idle too long, or past the absolute edge no use extends. */
+  #dead(session: Session, now: Date): boolean {
+    if (session.expiresAt.getTime() <= now.getTime()) return true;
+    return session.absoluteExpiresAt !== undefined && session.absoluteExpiresAt.getTime() <= now.getTime();
   }
 }
 
