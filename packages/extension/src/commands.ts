@@ -16,12 +16,30 @@
  */
 
 import type { TabInfo, WorkerChrome } from './chrome.js';
-import { PreconditionError, type Command, type CommandResult, type Observation, type ObservedTarget } from './protocol.js';
+import { Cancellation, PreconditionError, type Command, type CommandResult, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 
-interface Session { groupId: number; tabs: Map<string, number>; active: string | null }
+interface Session {
+  groupId: number;
+  tabs: Map<string, number>;
+  active: string | null;
+  /** Bumped by every observation, so a ref from an older one is recognisable. */
+  generation: number;
+  /** The tab and page the last observation described. */
+  observed?: { generation: number; tabKey: string; url: string };
+}
 /** What a ref points at, and what it looked like, so a semantic target can find it again. */
-interface Ref { tabId: number; frameId: number; local: string; frame: number; role: string; name: string }
+interface Ref {
+  tabKey: string; tabId: number; frameId: number; local: string; frame: number; role: string; name: string;
+  /** The document the ref was read from, and the observation it belongs to. */
+  docUrl: string; generation: number;
+}
+
+/** The owner moved this tab out of the group: it is theirs now, and off limits. */
+const TAKEN = 'The owner took this tab; observe again to continue in a new one.';
+/** The page under a ref is not the page the ref was read from. */
+const MOVED = 'This page has changed since that observation. Observe again.';
+const WATCHED = 'You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.';
 
 interface FrameObservation {
   url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number };
@@ -33,6 +51,9 @@ const MAX_FRAMES = 11;
 const MAX_TREE = 32_000;
 const MAX_TARGETS = 240;
 const LOAD_TIMEOUT = 30_000;
+/** How long a click or a key gets to turn into a navigation before we stop watching. */
+const SETTLE_MS = 600;
+const SETTLE_STEP_MS = 50;
 
 const KEYS: Record<string, { key: string; code: string; keyCode: number; text?: string }> = {
   Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
@@ -59,7 +80,12 @@ function checkUrl(url: string): string {
   return parsed.toString();
 }
 
-export interface Executor { run(command: Command): Promise<CommandResult> }
+/** Two URLs are compared as strings, so both go through the same parser first. */
+function normalize(url: string): string {
+  try { return new URL(url).toString(); } catch { return url; }
+}
+
+export interface Executor { run(command: Command, cancel?: Cancellation): Promise<CommandResult> }
 
 export class BrowserCommands implements Executor {
   #chrome: WorkerChrome;
@@ -75,20 +101,33 @@ export class BrowserCommands implements Executor {
     this.#contentFile = options.contentFile ?? 'content.js';
   }
 
-  async run(command: Command): Promise<CommandResult> {
+  async run(command: Command, cancel: Cancellation = new Cancellation()): Promise<CommandResult> {
+    cancel.check();
     switch (command.name) {
-      case 'navigate': return this.#navigate(command);
-      case 'observe': return { observation: await this.#observe(command.session) };
-      case 'click': return this.#click(command);
-      case 'fill': return this.#fill(command);
-      case 'select': return this.#select(command);
-      case 'press': return this.#press(command);
-      case 'scroll': return this.#scroll(command);
+      case 'navigate': return this.#navigate(command, cancel);
+      case 'observe': return { observation: await this.#observe(command.session, cancel) };
+      case 'click': return this.#click(command, cancel);
+      case 'fill': return this.#fill(command, cancel);
+      case 'select': return this.#select(command, cancel);
+      case 'press': return this.#press(command, cancel);
+      case 'scroll': return this.#scroll(command, cancel);
       case 'tab': return this.#tab(command);
-      case 'screenshot': return { screenshot: await this.#screenshot(command.session) };
-      case 'close': return this.#close(command);
+      case 'screenshot': return { screenshot: await this.#screenshot(command.session, cancel) };
+      case 'close': return this.#close(command, cancel);
       default: throw new PreconditionError(`This browser cannot run ${command.name}.`);
     }
+  }
+
+  /**
+   * The socket ended: forget which tabs belonged to which conversation.
+   *
+   * The tabs themselves stay open, because they are the owner's now; what goes
+   * is every ref and every session, so a later socket cannot act on evidence
+   * nobody can still see.
+   */
+  reset(): void {
+    this.#sessions.clear();
+    this.#refs.clear();
   }
 
   /* ---- sessions and tabs ---- */
@@ -96,18 +135,52 @@ export class BrowserCommands implements Executor {
   async #session(session: string): Promise<Session> {
     const existing = this.#sessions.get(session);
     if (existing) return existing;
-    const created: Session = { groupId: -1, tabs: new Map(), active: null };
+    const created: Session = { groupId: -1, tabs: new Map(), active: null, generation: 0 };
     this.#sessions.set(session, created);
     return created;
   }
 
-  #activeTab(session: Session): number {
-    const id = session.active ? session.tabs.get(session.active) : undefined;
-    if (id === undefined) throw new PreconditionError('This conversation has no browser tab yet. Navigate to open one.');
-    return id;
+  #forget(session: Session, key: string): void {
+    session.tabs.delete(key);
+    if (session.active === key) session.active = null;
+    if (session.observed?.tabKey === key) session.observed = undefined;
   }
 
-  async #openTab(session: Session, url: string): Promise<number> {
+  /**
+   * This session's tab, if it is still this session's.
+   *
+   * A tab the owner dragged out of the "buddi" group is theirs: an agent must
+   * not act in it and must not close it, so the session forgets it here rather
+   * than anywhere a command could still reach it.
+   */
+  async #ownTab(session: Session, key: string): Promise<TabInfo> {
+    const tabId = session.tabs.get(key);
+    if (tabId === undefined) throw new PreconditionError('This conversation has no browser tab yet. Navigate to open one.');
+    const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+    if (!tab) { this.#forget(session, key); throw new PreconditionError('That tab is gone. Observe again to continue in a new one.'); }
+    if (session.groupId >= 0 && tab.groupId !== session.groupId) { this.#forget(session, key); throw new PreconditionError(TAKEN); }
+    return tab;
+  }
+
+  #activeKey(session: Session): string {
+    if (!session.active) throw new PreconditionError('This conversation has no browser tab yet. Navigate to open one.');
+    return session.active;
+  }
+
+  /** Reading a tab is harmless; typing into one the owner is reading is not. */
+  async #background(tab: TabInfo): Promise<void> {
+    if (tab.active !== true || tab.windowId === undefined) return;
+    const window = await this.#chrome.windows.get(tab.windowId).catch(() => undefined);
+    if (window?.focused) throw new PreconditionError(WATCHED);
+  }
+
+  /** Where the tab actually is now, which a redirect may have changed. */
+  #liveUrl(tab: TabInfo): string {
+    return checkUrl(tab.url ?? '');
+  }
+
+  async #openTab(session: Session, url: string, cancel: Cancellation): Promise<number> {
+    cancel.dispatch();
     const tab = await this.#chrome.tabs.create({ url, active: false });
     if (tab.id === undefined) throw new Error('Chrome opened a tab without an id.');
     const groupId = await this.#chrome.tabs.group(session.groupId >= 0
@@ -123,6 +196,47 @@ export class BrowserCommands implements Executor {
     return tab.id;
   }
 
+  /** The key of this session's current tab, opening one when there is none to reuse. */
+  async #reuseOrOpen(session: Session, url: string, cancel: Cancellation): Promise<void> {
+    const key = session.active;
+    if (key) {
+      // Check the group before the URL: a tab the owner adopted gets a new one
+      // opened beside it rather than navigated away under their hands.
+      const tab = await this.#ownTab(session, key).catch(() => undefined);
+      if (tab && tab.id !== undefined) {
+        cancel.dispatch();
+        await this.#chrome.tabs.update(tab.id, { url });
+        await this.#waitForLoad(tab.id);
+        return;
+      }
+    }
+    const opened = await this.#openTab(session, url, cancel);
+    await this.#waitForLoad(opened);
+  }
+
+  /**
+   * Wait for what the input may have started, not for what was already there.
+   *
+   * After a click or an Enter that submits, the tab's `status` is still
+   * `complete` for the page the event was dispatched on, so waiting for
+   * `complete` returns immediately and the next observation describes the page
+   * the agent has just left. So watch briefly for the tab to leave `complete`
+   * or change its URL, and only then wait for the load. A click that navigates
+   * nowhere costs those few hundred milliseconds and nothing else. Polling
+   * rather than `tabs.onUpdated`, because the worker can be evicted between
+   * registering a listener and the event, and a missed event would hang.
+   */
+  async #settle(tabId: number, before: TabInfo): Promise<void> {
+    const deadline = Date.now() + SETTLE_MS;
+    for (;;) {
+      const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+      if (!tab) return; // Closed under us; the next command is the one that says so.
+      if (tab.status !== 'complete' || tab.url !== before.url) return this.#waitForLoad(tabId);
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_STEP_MS));
+    }
+  }
+
   async #waitForLoad(tabId: number): Promise<void> {
     const deadline = Date.now() + LOAD_TIMEOUT;
     for (;;) {
@@ -134,46 +248,56 @@ export class BrowserCommands implements Executor {
     }
   }
 
-  async #navigate(command: Command): Promise<CommandResult> {
+  async #navigate(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const url = checkUrl(str(command.args, 'url') ?? '');
     const session = await this.#session(command.session);
-    let tabId: number | undefined = session.active ? session.tabs.get(session.active) : undefined;
-    if (tabId !== undefined && !(await this.#chrome.tabs.get(tabId).catch(() => undefined))) {
-      session.tabs.delete(session.active!);
-      session.active = null;
-      tabId = undefined;
-    }
-    if (tabId === undefined) tabId = await this.#openTab(session, url);
-    else await this.#chrome.tabs.update(tabId, { url });
-    await this.#waitForLoad(tabId);
+    // Evidence from the old page cannot describe the new one.
+    session.observed = undefined;
+    this.#refs.delete(command.session);
+    cancel.check();
+    await this.#reuseOrOpen(session, url, cancel);
     return {};
   }
 
   async #tab(command: Command): Promise<CommandResult> {
     const session = await this.#session(command.session);
     const wanted = str(command.args, 'tabId') ?? '';
-    const tabId = session.tabs.get(wanted);
-    if (tabId === undefined || !(await this.#chrome.tabs.get(tabId).catch(() => undefined))) throw new PreconditionError('No such tab in this conversation.');
+    if (!session.tabs.has(wanted)) throw new PreconditionError('No such tab in this conversation.');
+    await this.#ownTab(session, wanted).catch((error: unknown) => {
+      throw error instanceof PreconditionError ? error : new PreconditionError('No such tab in this conversation.');
+    });
     session.active = wanted;
     return {};
   }
 
-  async #close(command: Command): Promise<CommandResult> {
+  /** Closes this session's own tabs, and only the ones still in its group. */
+  async #close(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const session = this.#sessions.get(command.session);
     if (!session) return {};
-    const ids = [...session.tabs.values()];
-    if (ids.length > 0) await this.#chrome.tabs.remove(ids).catch(() => undefined);
+    const ids: number[] = [];
+    for (const [key, tabId] of [...session.tabs]) {
+      const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
+      if (!tab) continue;
+      // A tab the owner took out of the group is not this session's to close.
+      if (session.groupId >= 0 && tab.groupId !== session.groupId) { this.#forget(session, key); continue; }
+      ids.push(tabId);
+    }
+    if (ids.length > 0) {
+      cancel.check();
+      cancel.dispatch();
+      await this.#chrome.tabs.remove(ids).catch(() => undefined);
+    }
     this.#sessions.delete(command.session);
     this.#refs.delete(command.session);
     return {};
   }
 
-  /** The owner may have closed an agent tab by hand; a session forgets those before it reports. */
+  /** The owner may have closed or adopted an agent tab; a session forgets those before it reports. */
   async #liveTabs(session: Session): Promise<Array<{ id: string; tab: TabInfo }>> {
     const live: Array<{ id: string; tab: TabInfo }> = [];
     for (const [key, tabId] of [...session.tabs]) {
       const tab = await this.#chrome.tabs.get(tabId).catch(() => undefined);
-      if (!tab) { session.tabs.delete(key); if (session.active === key) session.active = null; continue; }
+      if (!tab || (session.groupId >= 0 && tab.groupId !== session.groupId)) { this.#forget(session, key); continue; }
       live.push({ id: key, tab });
     }
     if (!session.active && live[0]) session.active = live[0].id;
@@ -187,27 +311,45 @@ export class BrowserCommands implements Executor {
     await this.#chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: [this.#contentFile] }).catch(() => undefined);
   }
 
-  async #observe(sessionId: string): Promise<Observation> {
+  async #observe(sessionId: string, cancel: Cancellation): Promise<Observation> {
     const session = await this.#session(sessionId);
     const live = await this.#liveTabs(session);
-    const tabId = this.#activeTab(session);
+    const key = this.#activeKey(session);
+    const tab = await this.#ownTab(session, key);
+    const tabId = tab.id!;
+    cancel.check();
     await this.#inject(tabId);
     const frames = await this.#chrome.scripting.executeScript<[], FrameObservation | null>({
       target: { tabId, allFrames: true }, func: readObservation,
     }).catch(() => [] as Array<{ frameId: number; result: FrameObservation | null }>);
 
+    /*
+     * Frame 0 is the main frame by frame id, not by arrival order: Chrome
+     * returns the frames in whatever order they answered, and reading a
+     * subframe as the page would put the model on the wrong document. With no
+     * main frame there is no observation to give.
+     */
+    const top = frames.find((frame) => frame.frameId === 0);
+    if (!top?.result) throw new PreconditionError('The page did not answer. Wait for it to finish loading and observe again.');
+    const ordered = [top, ...frames.filter((frame) => frame.frameId !== 0)];
+
+    const generation = session.generation + 1;
+    session.generation = generation;
     const refs = new Map<string, Ref>();
     const targets: ObservedTarget[] = [];
     const parts: string[] = [];
     let main: FrameObservation | undefined;
-    for (const [index, frame] of frames.slice(0, MAX_FRAMES).entries()) {
+    for (const [index, frame] of ordered.slice(0, MAX_FRAMES).entries()) {
       const result = frame.result;
       if (!result) { parts.push(`Frame ${index} ([frame not readable]):\n`); continue; }
       if (index === 0) main = result;
       for (const element of result.elements) {
-        if (targets.length >= MAX_TARGETS) break;
+        // Past the cap there is no ref to hand out, so the local id goes too:
+        // a `[ref=l7]` left in the tree is a ref the model cannot use.
+        if (targets.length >= MAX_TARGETS) { result.tree = result.tree.split(` [ref=${element.id}]`).join('').split(`[ref=${element.id}]`).join(''); continue; }
         const ref = `e${targets.length + 1}`;
-        refs.set(ref, { tabId, frameId: frame.frameId, local: element.id, frame: index, role: element.role, name: element.name });
+        refs.set(ref, { tabKey: key, tabId, frameId: frame.frameId, local: element.id, frame: index,
+          role: element.role, name: element.name, docUrl: normalize(result.url), generation });
         targets.push({ ref, frame: index, role: element.role, name: element.name,
           ...(element.href ? { href: element.href } : {}), ...(element.bounds ? { bounds: element.bounds } : {}) });
         result.tree = result.tree.split(`[ref=${element.id}]`).join(`[ref=${ref}]`);
@@ -215,7 +357,7 @@ export class BrowserCommands implements Executor {
       parts.push(`Frame ${index} (${result.url}):\n${result.tree.slice(0, index === 0 ? 20_000 : 3_000)}`);
     }
     this.#refs.set(sessionId, refs);
-    const tab = await this.#chrome.tabs.get(tabId);
+    session.observed = { generation, tabKey: key, url: normalize(main?.url ?? tab.url ?? '') };
     const scroll = main?.scroll ?? { x: 0, y: 0 };
     const tree = `${parts.join('\n\n')}\n\nScroll: ${scroll.x}, ${scroll.y}`.slice(0, MAX_TREE);
     return {
@@ -238,7 +380,7 @@ export class BrowserCommands implements Executor {
    * ambiguous label is where a model quietly clicks the wrong "Edit", so two
    * matches is a refusal that hands back the refs to choose between.
    */
-  #ref(command: Command): Ref {
+  #ref(session: Session, command: Command): Ref {
     const raw = command.args['target'];
     const target = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     if (target['x'] !== undefined || target['y'] !== undefined) throw new PreconditionError('Native apps and coordinate targets require Computer mode.');
@@ -246,7 +388,7 @@ export class BrowserCommands implements Executor {
     const ref = target['ref'];
     if (typeof ref === 'string' && ref) {
       const found = table?.get(ref);
-      if (!found) throw new PreconditionError('Stale page observation. Observe again and use a fresh ref.');
+      if (!found || found.generation !== session.generation) throw new PreconditionError('Stale page observation. Observe again and use a fresh ref.');
       return found;
     }
     const name = typeof target['name'] === 'string' ? target['name'] : '';
@@ -269,6 +411,24 @@ export class BrowserCommands implements Executor {
     return matches[0]![1];
   }
 
+  /**
+   * Everything an acting command has to be sure of before it dispatches: the
+   * ref is from the latest observation, the tab is still this session's, it is
+   * still on the page that was observed, and the owner is not looking at it.
+   */
+  async #aim(command: Command, cancel: Cancellation): Promise<{ ref: Ref; tab: TabInfo }> {
+    const session = await this.#session(command.session);
+    const ref = this.#ref(session, command);
+    const tab = await this.#ownTab(session, ref.tabKey);
+    // The main frame's document is the tab's URL, so a redirect since the
+    // observation is visible from here. A subframe's is not, and the page side
+    // refuses a ref whose element no longer matches what was observed.
+    if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
+    await this.#background(tab);
+    cancel.check();
+    return { ref, tab };
+  }
+
   async #locate(ref: Ref, options: { focus?: boolean; clear?: boolean } = {}): Promise<{ point?: { x: number; y: number } }> {
     const [frame] = await this.#chrome.scripting.executeScript<[string, { focus?: boolean; clear?: boolean }], { ok: boolean; reason?: string; point?: { x: number; y: number } }>({
       target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: locateRef, args: [ref.local, options],
@@ -278,9 +438,19 @@ export class BrowserCommands implements Executor {
     return { point: result.point };
   }
 
-  /** The debugger stays attached for exactly one command, so the yellow bar is never left up. */
+  /**
+   * The debugger stays attached for exactly one command, so the yellow bar is
+   * never left up, and it is detached even when the command is cancelled.
+   *
+   * An attach that fails is a precondition failure, not a broken command: the
+   * usual reason is that the owner has DevTools open on that tab, and nothing
+   * was dispatched.
+   */
   async #withDebugger<T>(tabId: number, body: (send: (method: string, params?: unknown) => Promise<unknown>) => Promise<T>): Promise<T> {
-    await this.#chrome.debugger.attach({ tabId }, '1.3');
+    try { await this.#chrome.debugger.attach({ tabId }, '1.3'); }
+    catch (error) {
+      throw new PreconditionError(`Chrome would not let buddi drive that tab (${error instanceof Error ? error.message : String(error)}). Close DevTools on it and observe again.`);
+    }
     try {
       return await body((method, params) => this.#chrome.debugger.sendCommand({ tabId }, method, params));
     } finally {
@@ -288,9 +458,11 @@ export class BrowserCommands implements Executor {
     }
   }
 
-  async #click(command: Command): Promise<CommandResult> {
-    const ref = this.#ref(command);
+  async #click(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const { ref, tab } = await this.#aim(command, cancel);
     const { point } = await this.#locate(ref);
+    cancel.check();
+    cancel.dispatch();
     if (ref.frameId !== 0 || !point) {
       await this.#chrome.scripting.executeScript({ target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: clickRef, args: [ref.local] });
       return {};
@@ -301,14 +473,17 @@ export class BrowserCommands implements Executor {
       await send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' });
       await send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' });
     });
-    await this.#waitForLoad(ref.tabId);
+    await this.#settle(ref.tabId, tab);
     return {};
   }
 
-  async #fill(command: Command): Promise<CommandResult> {
-    const ref = this.#ref(command);
+  async #fill(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const { ref } = await this.#aim(command, cancel);
     const value = str(command.args, 'value') ?? '';
+    // Focusing and clearing the field is already a change to the page.
+    cancel.dispatch();
     await this.#locate(ref, { focus: true, clear: true });
+    cancel.check();
     if (ref.frameId !== 0) {
       await this.#chrome.scripting.executeScript({ target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: typeRef, args: [ref.local, value] });
       return {};
@@ -317,12 +492,14 @@ export class BrowserCommands implements Executor {
     return {};
   }
 
-  async #press(command: Command): Promise<CommandResult> {
-    const ref = this.#ref(command);
+  async #press(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const key = str(command.args, 'key') ?? '';
     const descriptor = KEYS[key];
     if (!descriptor) throw new PreconditionError(`This browser cannot press ${key}.`);
+    const { ref, tab } = await this.#aim(command, cancel);
+    cancel.dispatch();
     await this.#locate(ref, { focus: true });
+    cancel.check();
     if (ref.frameId !== 0) {
       await this.#chrome.scripting.executeScript({ target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: pressRef, args: [ref.local, descriptor.key, descriptor.code, descriptor.keyCode] });
       return {};
@@ -332,13 +509,14 @@ export class BrowserCommands implements Executor {
       await send('Input.dispatchKeyEvent', { ...common, type: descriptor.text ? 'keyDown' : 'rawKeyDown', ...(descriptor.text ? { text: descriptor.text } : {}) });
       await send('Input.dispatchKeyEvent', { ...common, type: 'keyUp' });
     });
-    await this.#waitForLoad(ref.tabId);
+    await this.#settle(ref.tabId, tab);
     return {};
   }
 
-  async #select(command: Command): Promise<CommandResult> {
-    const ref = this.#ref(command);
+  async #select(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const { ref } = await this.#aim(command, cancel);
     const value = str(command.args, 'value') ?? '';
+    cancel.dispatch();
     const [frame] = await this.#chrome.scripting.executeScript<[string, string], { ok: boolean; reason?: string }>({
       target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: chooseRef, args: [ref.local, value],
     });
@@ -346,18 +524,35 @@ export class BrowserCommands implements Executor {
     return {};
   }
 
-  async #scroll(command: Command): Promise<CommandResult> {
+  /**
+   * Scroll names no element, so what it checks instead is the observation: the
+   * page the model is reading has to be the page still in the tab.
+   */
+  async #scroll(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const session = await this.#session(command.session);
-    const tabId = this.#activeTab(session);
+    const observed = session.observed;
+    if (!observed || observed.generation !== session.generation) throw new PreconditionError('Stale page observation. Observe again before scrolling.');
+    const tab = await this.#ownTab(session, observed.tabKey);
+    if (this.#liveUrl(tab) !== observed.url) throw new PreconditionError(MOVED);
+    await this.#background(tab);
+    const tabId = tab.id!;
     const direction = str(command.args, 'direction') === 'up' ? 'up' : 'down';
+    cancel.check();
     await this.#inject(tabId);
+    cancel.check();
+    cancel.dispatch();
     await this.#chrome.scripting.executeScript<[('up' | 'down')], unknown>({ target: { tabId }, func: scrollPage, args: [direction] });
     return {};
   }
 
-  async #screenshot(sessionId: string): Promise<string | null> {
+  async #screenshot(sessionId: string, cancel: Cancellation): Promise<string | null> {
     const session = await this.#session(sessionId);
-    const tabId = this.#activeTab(session);
+    const tab = await this.#ownTab(session, this.#activeKey(session));
+    // A tab that redirected somewhere this browser may not drive is not
+    // evidence about anything; the driver asks for a fresh observation.
+    this.#liveUrl(tab);
+    const tabId = tab.id!;
+    cancel.check();
     return this.#withDebugger(tabId, async (send) => {
       const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }) as { data?: string } | undefined;
       return shot?.data ?? null;

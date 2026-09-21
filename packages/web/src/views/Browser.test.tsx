@@ -65,12 +65,20 @@ describe('computer & browser settings', () => {
 
 describe('your own browser', () => {
   const chosen = { ...settings, mode: 'extension' as const };
-  it('offers the third mode and shows nothing about pairing until it is chosen', async () => {
+  it('offers the third mode and shows pairing only once it is chosen', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });
     render(<Browser />);
+    expect(screen.queryByText(/Load unpacked/)).not.toBeInTheDocument();
+    // Saving the mode is what makes the page reload; from then on the host
+    // answers with the new mode, which is when the pairing block appears.
+    vi.mocked(api.browserSettings).mockImplementation(async (next) => {
+      vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: next });
+      return { ...status, mode: 'extension', session: undefined, settings: next };
+    });
     fireEvent.click(await screen.findByRole('radio', { name: /Your browser/ }));
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith(chosen));
-    expect(screen.queryByText(/Load unpacked/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/Load unpacked/)).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: /Your browser/ })).toHaveAttribute('aria-checked', 'true');
   });
   it('says it is not connected, prints the unpacked folder and the four words', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });

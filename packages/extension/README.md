@@ -42,11 +42,20 @@ this browser* in Settings, ends it.
 | `scripting` | Read the page when an agent observes. The reader is injected for that command only, not declared for every page you visit. |
 | `debugger` | Click, type and screenshot the way a person does. Synthetic events do not reach a background tab, and half the web can tell them apart. |
 | `storage` | Remember the address of your buddi and the pairing token. |
-| `activeTab`, `<all_urls>` | The sites it operates are the ones you ask it for, and they can be any site. It opens none on its own. |
+| `alarms` | Wake up and reconnect after Chrome has put the extension to sleep. |
+| `http://*/*`, `https://*/*` | The sites it operates are the ones you ask it for, and they can be any website. It opens none on its own, and it can reach no other kind of address. |
 
-It talks to one address only: a buddi on this machine, over loopback. It loads
-no remote code, fetches no asset and reports to nobody. The tabs it opened stay
-open if the connection drops, because by then they are yours.
+It talks to one address only: a buddi on this machine, over loopback, and it
+only ever works in background tabs: a tab you are looking at, or one you have
+dragged out of the `buddi` group, is yours and it will refuse to touch it. It
+loads no remote code, fetches no asset and reports to nobody. The tabs it opened
+stay open if the connection drops, because by then they are yours.
+
+Both ends prove themselves at every connection. The extension sends a fresh
+random number and holds the token back; your buddi signs that number with the
+token's hash, which is all it stores; only then does the extension send the
+token, and only then will it run a command. A program that answers the port
+without holding your pairing gets nothing out of this browser.
 
 ## Working on it
 

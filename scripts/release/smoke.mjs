@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, writeFile, mkdir, unlink, stat, copyFile, cp, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile, mkdir, unlink, stat, copyFile, cp, realpath, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -177,6 +177,26 @@ try {
   const ollamaBody = await ollama.json();
   assert.equal(typeof ollamaBody.running, 'boolean', 'the Ollama probe says whether it is running');
   assert.ok(Array.isArray(ollamaBody.models), 'the Ollama probe lists models');
+  /*
+   * "Your browser": the Chrome extension ships unpacked, at the top of the
+   * installation, because the owner has to point Chrome's "Load unpacked" at
+   * that exact folder and the Settings page prints its path. So the path the
+   * API prints has to be a real folder inside *this* installation, and a fresh
+   * install has never been paired and has nobody waiting for a code.
+   */
+  const installRoot = path.join(testRoot, 'node_modules/buddi');
+  const packaged = JSON.parse(await readFile(path.join(installRoot, 'package.json'), 'utf8'));
+  assert.ok(packaged.files.includes('extension'), 'the tarball ships the extension folder');
+  const extensionManifest = JSON.parse(await readFile(path.join(installRoot, 'extension/manifest.json'), 'utf8'));
+  assert.equal(extensionManifest.manifest_version, 3);
+  assert.ok((await stat(path.join(installRoot, 'extension', extensionManifest.background.service_worker))).size > 0,
+    'the manifest points at a service worker that is there');
+  const extensionView = await (await fetch(new URL('/api/extension', dashboard), { headers: { cookie } })).json();
+  assert.equal(extensionView.connected, false, 'no browser has connected to a fresh install');
+  assert.equal(extensionView.pending, false, 'and none is waiting to be paired');
+  assert.equal(await realpath(extensionView.path), await realpath(path.join(installRoot, 'extension')),
+    'Settings prints the unpacked folder inside this installation');
+
   // Telegram, from the dashboard: behind the same CSRF gate as every write,
   // and refusing a pasted string that is not a bot token.
   assert.equal((await fetch(new URL('/api/telegram/token', dashboard), { method: 'POST', headers: { cookie, origin: dashboard.origin }, body: '{}' })).status, 403, 'the Telegram token requires CSRF');
@@ -1459,7 +1479,7 @@ try {
   assert.ok((await (await recoveredSession.get('/api/agents')).json()).agents.some(agent => agent.handle === 'smoke'),
     'and the dashboard is back, on the version that was reinstalled, with the owner\'s agent');
 
-  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done'
+  console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done, the unpacked Chrome extension shipped and its folder named by an install nobody has paired a browser to'
     + ', encrypted backup and verify with no external binary, a flipped byte caught by the envelope, a wrong passphrase refused in plain words by verify and by restore, the passphrase replaced and verify passing again'
     + ', a second installation restored from the upload before its first question — agents, conversation, artifact bytes, memory, setting and account checklist all back, phases in order'
     + ', recovery holding the queue and Telegram down, a failed file step rolled back with the pre-restore snapshot kept and the rows unchanged, and leaving recovery letting the queue claim again'

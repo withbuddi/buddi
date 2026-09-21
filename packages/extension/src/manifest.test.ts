@@ -31,8 +31,13 @@ describe('the built extension', () => {
   });
 
   it('asks for the permissions the commands need, and says why it wants every site', () => {
-    expect(new Set(manifest['permissions'])).toEqual(new Set(['tabs', 'tabGroups', 'scripting', 'debugger', 'storage', 'activeTab']));
-    expect(manifest['host_permissions']).toEqual(['<all_urls>']);
+    // `activeTab` would be the permission for a browser the owner is driving;
+    // this one only ever works in background tabs. The web pages it may reach
+    // are named as the two schemes it can drive, never as `<all_urls>`, which
+    // would also cover `file://` and every other scheme Chrome invents.
+    expect(new Set(manifest['permissions'])).toEqual(new Set(['tabs', 'tabGroups', 'scripting', 'debugger', 'storage', 'alarms']));
+    expect(manifest['permissions']).not.toContain('activeTab');
+    expect(manifest['host_permissions']).toEqual(['http://*/*', 'https://*/*']);
     expect(String(manifest['description'])).toMatch(/sites it opens are the ones you ask/);
   });
 
