@@ -1067,7 +1067,7 @@ try {
     const [major, minor, patch] = baseVersion.split('-')[0].split('.').map(Number);
     return `${major}.${minor}.${patch + n}`;
   };
-  const nextVersion = bumped(1), unpublishedVersion = bumped(2), unMigratableVersion = bumped(3);
+  const nextVersion = bumped(1), unpublishedVersion = bumped(2), unMigratableVersion = bumped(3), corruptVersion = bumped(4);
   /*
    * Every release below is *this* tarball, unpacked and packed again with a
    * different version in its manifest. Two tarballs from one tree, as the
@@ -1279,7 +1279,7 @@ try {
   assert.equal(failedInstall.phase, 'failed');
   assert.ok(isSubsequence(['backup', 'stopping', 'installing'], failedInstall.phases), failedInstall.phases.join(' → '));
   assert.equal(failedInstall.phases.includes('restarting'), false, 'an install that failed never reached the hand-over');
-  assert.match(failedInstall.error, /npm install/, 'the job carries npm\'s own account of it');
+  assert.match(failedInstall.error, /npm (cache add|install)/, 'the job carries npm\'s own account of it');
   let stillUp;
   for (let i = 0; i < 300; i++) {
     await pause(500);
@@ -1299,6 +1299,46 @@ try {
     'and the installed package was not touched');
   assert.equal((await (await (await signIn(cliU)).get('/api/version')).json()).current, nextVersion,
     'the dashboard is up and answering after a failed install');
+
+  /* 6b. A tarball that is not the tarball the registry promised.
+   *
+   * `dist.integrity` that does not match the bytes is a truncated download, a
+   * corrupted mirror or a tampered publish, and it used to be the worst
+   * failure there was: npm checks the hash while unpacking, so it gave up
+   * having already emptied `<root>/node_modules/buddi` — no package.json, no
+   * launcher, nothing left to start the gateway with, and the backup taken
+   * first the only way back. The tarball is fetched into npm's cache first
+   * now, so the same bytes are refused before anything in the install root is
+   * touched. */
+  const corrupt = await buildRelease(corruptVersion);
+  await registry.publish('buddi', corruptVersion, corrupt.file, {
+    manifest: corrupt.manifest,
+    integrity: `sha512-${Buffer.alloc(64, 7).toString('base64')}`,
+    tag: false,
+  });
+  const doomedBytes = await socketCall(socketA, '/upgrade', 'POST', { version: corruptVersion });
+  assert.equal(doomedBytes.status, 202, JSON.stringify(doomedBytes.body));
+  const failedBytes = await awaitJob(socketA, doomedBytes.body.job.id, 900);
+  assert.equal(failedBytes.phase, 'failed');
+  assert.equal(failedBytes.phases.includes('restarting'), false, 'the bytes never reached the hand-over');
+  assert.match(failedBytes.error, /EINTEGRITY|integrity check/i, 'npm caught the hash before anything was replaced');
+  const untouched = JSON.parse(await readFile(installedPackage, 'utf8'));
+  assert.equal(untouched.name, 'buddi');
+  assert.equal(untouched.version, nextVersion, 'the installed package is untouched');
+  assert.ok((await stat(path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js'))).size > 0,
+    'and the launcher the recovery needs is still there');
+  let afterBytes;
+  for (let i = 0; i < 300; i++) {
+    await pause(500);
+    afterBytes = JSON.parse(await cliU(['service', 'status']));
+    if (afterBytes.gateway === 'running') break;
+  }
+  assert.equal(afterBytes.gateway, 'running', 'buddi is running again after a tarball that did not verify');
+  assert.equal(afterBytes.current, nextVersion);
+  const bytesEntry = (await socketCall(socketA, '/version')).body.history.at(-1);
+  assert.equal(bytesEntry.outcome, 'failed');
+  assert.equal(bytesEntry.step, 'installing');
+  assert.equal(bytesEntry.to, corruptVersion);
 
   /* 7. A migration that throws under the new code.
    *
@@ -1381,16 +1421,23 @@ try {
    * failure this archive exists for would have emptied it.
    */
   await cliU(['service', 'stop']);
-  const backupCli = { ...cliEnv, BUDDI_DATA_DIR: data };
+  /*
+   * Through the packaged `buddi` itself, because that is the command the
+   * recovery sentence names: an owner reads `buddi backup restore <archive>`
+   * off `buddi doctor` and types it. It reaches the supervisor's restore,
+   * which stops the gateway, puts the archive back and starts it again.
+   */
   const restoreCli = async args => {
     try {
-      const ran = await exec(process.execPath, [buddiCli, ...args], { env: backupCli, cwd: testRoot, timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
+      const ran = await exec(process.execPath, [entry, ...args], { env: upgradeEnv, cwd: testRoot, timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
       return { code: 0, out: `${ran.stdout}${ran.stderr}` };
     } catch (error) { return { code: error.code ?? 1, out: `${error.stdout ?? ''}${error.stderr ?? ''}` }; }
   };
-  const refusedRecovery = await restoreCli(['backup', 'restore', upgradeArchive, '--yes']);
+  const refusedRecovery = await restoreCli(['backup', 'restore', upgradeArchive]);
   assert.equal(refusedRecovery.code, 1, refusedRecovery.out);
-  assert.match(refusedRecovery.out, /not the database name/, 'a restore over live rows is refused without the name typed back');
+  // The guard's second half is a human typing the database name, and nothing
+  // running from a script can: with no terminal to ask, the refusal stands.
+  assert.match(refusedRecovery.out, /Type \S+ to confirm/, 'a restore over live rows is refused without the name typed back');
   assert.deepEqual(
     (await ask(connection, `select role from core.messages where conversation_id = $1`, [conversation.id])).map(row => row.role).sort(),
     ['assistant', 'user'], 'and it changed nothing');
@@ -1398,8 +1445,9 @@ try {
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')`);
   await ask(connection, `truncate ${tables.map(row => `"${row.schema}"."${row.name}"`).join(', ')} cascade`);
-  const recoveredRestore = await restoreCli(['backup', 'restore', upgradeArchive, '--yes']);
+  const recoveredRestore = await restoreCli(['backup', 'restore', upgradeArchive]);
   assert.equal(recoveredRestore.code, 0, recoveredRestore.out);
+  assert.match(recoveredRestore.out, /The backup is back/, 'the packaged binary ran the restore itself');
   assert.deepEqual(
     (await ask(connection, `select role from core.messages where conversation_id = $1 order by created_at`, [conversation.id])).map(row => row.role),
     ['user', 'assistant'], 'the backup the upgrade took first brought the conversation back');
@@ -1419,7 +1467,7 @@ try {
     + ', its tool registered after a restart and held by an agent, its migration applied to its own schema, doctor clean and then naming it changed on disk, a package that throws at import refused and an installed one that stops importing reported with the gateway still answering'
     + ', uninstall keeping the schema and purge dropping it, and the same two steps from the terminal'
     + ', a version check against a registry of the smoke\'s own, the daily tick running and then stopped by the switch, an upgrade through the control socket with the hand-over to a new supervisor, the data intact on the new version and nothing newer afterwards'
-    + ', an install that cannot succeed leaving buddi running on the version it was on with the history naming the step, and a migration that throws under the new code recorded as upgrade-failed with no gateway started, the doctor\'s recovery sentence, the previous version reinstalled and the backup it took first restored through the CLI'
+    + ', an install that cannot succeed leaving buddi running on the version it was on with the history naming the step, a tarball that does not match its integrity refused before the install root is touched, and a migration that throws under the new code recorded as upgrade-failed with no gateway started, the doctor\'s recovery sentence, the previous version reinstalled and the backup it took first restored with the buddi backup restore that sentence names'
     + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.

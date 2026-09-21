@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import type { WriteStream } from 'node:fs';
-import { readdir, chmod, unlink, lstat } from 'node:fs/promises';
+import { readdir, readFile, chmod, unlink, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireLock, initialize, atomicJson, stopChild } from './environment.js';
@@ -48,6 +48,12 @@ export function supervisorSocket(data: string): string {
 }
 
 export function restartDelay(failures: number): number { return Math.min(30_000, 2000 * 2 ** Math.min(failures, 4)); }
+
+/**
+ * How long a handed-over supervisor waits to leave on its own before it is
+ * made to. Long enough for an orderly exit, short enough that nobody notices.
+ */
+export const HANDOVER_GRACE_MS = 5_000;
 
 /** What `/status` reports; the CLI prints it verbatim. */
 export interface SupervisorStatus {
@@ -421,9 +427,11 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     if (pending) {
       const entry = await finishUpgrade(ready, pending, migrationFailure === undefined ? { ok: true } : { ok: false, error: migrationFailure });
       resolved = true;
-      console.error(migrationFailure === undefined
+      // `finishing` is the entry a recovery produces: the old code was put
+      // back and came up, so the upgrade is over without having arrived.
+      console.error(entry.outcome === 'done'
         ? `upgrade: ${entry.from} to ${entry.to} finished.`
-        : recoverySentence(entry));
+        : entry.step === 'finishing' ? `upgrade: ${entry.error}.` : recoverySentence(entry));
     } else {
       ready.state.phase = 'ready'; await atomicJson(path.join(ready.data, 'installation.json'), ready.state);
     }
@@ -515,7 +523,19 @@ export async function supervise(ctx: InstallContext): Promise<void> {
     clearInterval(upgradeTick);
     await chain.catch(() => {});
     await stopGateway();
-    if (server?.listening) await new Promise(resolve => server!.close(resolve));
+    if (server?.listening) {
+      /*
+       * `close` stops the supervisor listening; it does not touch the
+       * connections already open, and `node:http`'s default agent keeps its
+       * connections alive — the dashboard and the CLI both poll `/jobs/:id`
+       * right up to the hand-over. A socket left open that way is a handle
+       * that holds the event loop, which is how a handed-over supervisor ends
+       * up alive and idle for the rest of the login session.
+       */
+      const closed = new Promise(resolve => server!.close(resolve));
+      server.closeAllConnections();
+      await closed;
+    }
     try { await database?.stop(); }
     finally {
       log?.end(); await release();
@@ -540,7 +560,23 @@ export async function supervise(ctx: InstallContext): Promise<void> {
        */
       ready: async () => {
         const status = await statusOnSocket(supervisorSocket(ctx.data));
-        return status !== undefined && status.current === marker?.to;
+        if (status !== undefined && status.current === marker?.to) return true;
+        /*
+         * Or the successor has already been and written an outcome.
+         *
+         * `phase: 'upgrading'` is what this process wrote before handing over,
+         * and `finishUpgrade` in the successor is the only thing that replaces
+         * it. A successor that migrated, recorded the outcome and was then
+         * stopped — by an owner following the recovery sentence, or by the
+         * release smoke — leaves a socket that does not answer and a file that
+         * says the upgrade is over. Waiting another two minutes for it and
+         * then spawning a second supervisor over the top is how one idle
+         * process per upgrade used to survive the run.
+         */
+        const written = await readFile(path.join(ctx.data, 'installation.json'), 'utf8')
+          .then(text => (JSON.parse(text) as { phase?: string }).phase)
+          .catch(() => undefined);
+        return written !== undefined && written !== 'upgrading';
       },
     });
     /*
@@ -554,5 +590,20 @@ export async function supervise(ctx: InstallContext): Promise<void> {
         .catch(() => undefined);
       if (entry) console.error(recoverySentence(entry));
     }
+    /*
+     * And then go, whatever is still holding the loop.
+     *
+     * Everything this process owns has been let go of by here, but a handle
+     * nobody remembers — a client socket, a stream, a timer in a package this
+     * imported — is enough to keep it alive, and what that leaves behind is an
+     * idle supervisor per upgrade until the next login. The successor is
+     * serving; there is nothing this process can still be for. The timer is
+     * unref'd so a process that was going to exit anyway exits silently.
+     */
+    const grace = setTimeout(() => {
+      console.error('supervisor: handed over, but something is still holding this process open; exiting.');
+      process.exit(0);
+    }, HANDOVER_GRACE_MS);
+    grace.unref?.();
   }
 }

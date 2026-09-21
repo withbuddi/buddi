@@ -7,6 +7,7 @@ import type { ReadyContext } from './environment.js';
 import {
   NOT_GLOBAL,
   compareVersions,
+  createInstaller,
   createUpgradeService,
   finishUpgrade,
   handOver,
@@ -188,6 +189,39 @@ describe('where npm is told to install', () => {
     const args = installArgs('buddi@0.1.1', { registry: 'r', root: '/opt/homebrew/lib/node_modules/buddi' });
     expect(args).toContain('--ignore-scripts');
     expect(args.some(arg => arg.includes('ignore-scripts=false'))).toBe(false);
+  });
+
+  test('verifies the tarball into the cache before the tree is touched', async () => {
+    const calls: string[][] = [];
+    const runner = vi.fn(async (_binary: string, argv: string[]) => { calls.push(argv); });
+    const where = { registry: 'https://r.example', root: '/opt/homebrew/lib/node_modules/buddi' };
+    await createInstaller({ binary: 'npm', runner })('buddi@0.1.1', where);
+    expect(calls[0]).toEqual(['cache', 'add', 'buddi@0.1.1', '--registry', 'https://r.example']);
+    expect(calls[1]?.[0]).toBe('install');
+
+    /*
+     * The one that matters: bytes that do not match the registry's
+     * `dist.integrity` fail here, where nothing in the install root has been
+     * replaced yet. `npm install` fails at the same hash *after* it has begun
+     * unpacking, and leaves an installation that cannot be started again.
+     */
+    calls.length = 0;
+    const corrupt = createInstaller({
+      binary: 'npm',
+      runner: async (_binary, argv) => {
+        calls.push(argv);
+        if (argv[0] === 'cache') throw Object.assign(new Error('exit 1'), { stderr: 'npm error code EINTEGRITY' });
+      },
+    });
+    await expect(corrupt('buddi@0.1.1', where)).rejects.toThrow(/npm cache add buddi@0\.1\.1 failed: .*EINTEGRITY/s);
+    // Nothing was installed: the tree is untouched.
+    expect(calls.map(argv => argv[0])).toEqual(['cache']);
+
+    // A tarball on disk has no registry to verify it against, so there is
+    // nothing to fetch first: `BUDDI_UPGRADE_SOURCE` installs as it always did.
+    calls.length = 0;
+    await createInstaller({ binary: 'npm', runner })('/tmp/buddi-0.1.1.tgz', where);
+    expect(calls.map(argv => argv[0])).toEqual(['install']);
   });
 
   test('refuses an installation that lives inside somebody else\'s project', () => {
@@ -434,6 +468,35 @@ describe('finishing in the new code', () => {
     expect(ctx.state.upgrade).toBeUndefined();
     const state = await readUpgradeState(ctx.data, '0.1.1');
     expect(state.history).toHaveLength(1);
+  });
+
+  test('a migration that worked under the wrong build is never done', async () => {
+    /*
+     * The recovery an owner is told to run: the previous version is
+     * reinstalled and the supervisor that comes up finds the same marker. The
+     * migration that broke is not in that tree any more, so it migrates
+     * happily — and calling that `done: 0.1.0 to 0.1.1` would put a version
+     * that is not installed into the history as a success.
+     */
+    const ctx = await installation('0.1.0');
+    ctx.state.phase = 'upgrade-failed';
+    const pending = { from: '0.1.0', to: '0.1.1', backup: 'buddi-backup-20260101-000000.tar.gz', startedAt: 'then' };
+    ctx.state.upgrade = pending;
+    const entry = await finishUpgrade(ctx, pending, { ok: true });
+    expect(entry).toMatchObject({
+      outcome: 'failed',
+      step: 'finishing',
+      from: '0.1.0',
+      to: '0.1.1',
+      error: 'buddi 0.1.0 finished an upgrade that was meant to reach 0.1.1',
+    });
+    // The upgrade is over either way, and the installation opens: the code
+    // that is on disk is code that runs.
+    expect(ctx.state.upgrade).toBeUndefined();
+    expect(ctx.state.phase).toBe('ready');
+    const state = await readUpgradeState(ctx.data, '0.1.0');
+    expect(state.current).toBe('0.1.0');
+    expect(state.history.at(-1)?.outcome).toBe('failed');
   });
 
   test('a migration that failed leaves the phase, the archive and the way back', async () => {

@@ -387,16 +387,57 @@ export function installArgs(spec: string, opts: { registry: string; root: string
   ];
 }
 
-export function createInstaller(opts: { binary?: string; timeoutMs?: number } = {}): UpgradeInstaller {
+/**
+ * Fetch and verify the tarball before anything in the install root is touched.
+ *
+ * Measured rather than guessed, in the release smoke: a registry that serves
+ * the tarball under a `dist.integrity` that does not match its bytes — a
+ * truncated download, a corrupted mirror, a tampered publish — makes
+ * `npm install` fail with `EINTEGRITY` *after* it has begun replacing the
+ * installed package, and what it leaves behind is a `<root>/node_modules/buddi`
+ * with no `package.json`, no `packages/` and no launcher. The upgrade's own
+ * recovery for a failed install is "start the old gateway again", and there is
+ * no old gateway left to start: the installation is gone and only the backup
+ * taken first can bring it back.
+ *
+ * `npm cache add` downloads and verifies the same tarball into npm's cache and
+ * writes nothing else, so an integrity failure becomes the clean refusal the
+ * design assumes — the tree untouched, buddi still running, the job failed at
+ * `installing`. The install that follows finds the bytes in the cache.
+ */
+export function cacheArgs(spec: string, opts: { registry: string }): string[] {
+  return ['cache', 'add', spec, '--registry', opts.registry];
+}
+
+/** `execFile`, as much of it as this needs. A seam, so no test runs npm. */
+export type NpmRunner = (binary: string, args: string[], opts: { timeout: number; maxBuffer: number }) => Promise<unknown>;
+
+/** A tarball on disk (`BUDDI_UPGRADE_SOURCE`) has no registry to verify against. */
+function isLocalTarball(spec: string): boolean {
+  return spec.endsWith('.tgz') || spec.endsWith('.tar.gz');
+}
+
+export function createInstaller(opts: { binary?: string; timeoutMs?: number; runner?: NpmRunner } = {}): UpgradeInstaller {
   const binary = opts.binary ?? npmBinary();
   const timeout = opts.timeoutMs ?? 15 * 60_000;
+  const exec: NpmRunner = opts.runner ?? (async (bin, argv, where) => { await run(bin, argv, where); });
+  const failed = (verb: string, spec: string, err: unknown): Error => {
+    const stderr = (err as { stderr?: string } | null)?.stderr;
+    const text = (stderr ?? (err instanceof Error ? err.message : String(err))).toString().trim();
+    return new Error(`npm ${verb} ${spec} failed: ${text.split('\n').slice(-8).join('\n')}`);
+  };
   return async (spec, where) => {
+    if (!isLocalTarball(spec)) {
+      try {
+        await exec(binary, cacheArgs(spec, where), { timeout, maxBuffer: 32 * 1024 * 1024 });
+      } catch (err) {
+        throw failed('cache add', spec, err);
+      }
+    }
     try {
-      await run(binary, installArgs(spec, where), { timeout, maxBuffer: 32 * 1024 * 1024 });
+      await exec(binary, installArgs(spec, where), { timeout, maxBuffer: 32 * 1024 * 1024 });
     } catch (err) {
-      const stderr = (err as { stderr?: string } | null)?.stderr;
-      const text = (stderr ?? (err instanceof Error ? err.message : String(err))).toString().trim();
-      throw new Error(`npm install ${spec} failed: ${text.split('\n').slice(-8).join('\n')}`);
+      throw failed('install', spec, err);
     }
   };
 }
@@ -855,17 +896,41 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
  * half-migrated schema is the one outcome worse than being down.
  */
 export async function finishUpgrade(ctx: ReadyContext, pending: UpgradeInProgress, outcome: { ok: true } | { ok: false; error: string }, step = 'migrating'): Promise<UpgradeHistoryEntry> {
+  /*
+   * Whose code finished this, rather than whose code was meant to.
+   *
+   * The recovery an owner is told to run is `npm install -g buddi@<from>`,
+   * and the supervisor that comes up afterwards finds the same marker and
+   * migrates happily — the migration that broke is not in that tree any more.
+   * Calling that `done: <from> to <to>` would put a version that is not
+   * installed into the history as a success. The marker is still cleared:
+   * this upgrade is over, whatever it reached.
+   */
+  const installed = await installedVersion(ctx.root);
+  const wrongBuild = outcome.ok && installed !== pending.to;
+  const resolved = wrongBuild
+    ? { ok: false as const, error: `buddi ${installed} finished an upgrade that was meant to reach ${pending.to}`, step: 'finishing' }
+    : { ok: outcome.ok, ...(outcome.ok ? {} : { error: outcome.error }), step };
   const entry: UpgradeHistoryEntry = {
     from: pending.from,
     to: pending.to,
     startedAt: pending.startedAt,
     finishedAt: new Date().toISOString(),
-    outcome: outcome.ok ? 'done' : 'failed',
+    outcome: resolved.ok ? 'done' : 'failed',
     ...(pending.backup === undefined ? {} : { backup: pending.backup }),
-    ...(outcome.ok ? {} : { step, error: outcome.error }),
+    ...(resolved.ok ? {} : { step: resolved.step, error: resolved.error as string }),
   };
-  const state = await readUpgradeState(ctx.data, pending.to);
-  await writeUpgradeState(ctx.data, { ...state, current: pending.to, history: [...state.history, entry] });
+  // What is on disk is what `current` says, here as everywhere else.
+  const current = installed === 'unknown' ? pending.to : installed;
+  const state = await readUpgradeState(ctx.data, current);
+  await writeUpgradeState(ctx.data, { ...state, current, history: [...state.history, entry] });
+  /*
+   * `upgrade-failed` is the state that keeps the gateway down until an owner
+   * has been through the checklist, and it belongs to a start that failed —
+   * not to this one, which came up on code that runs. So the wrong-build case
+   * is recorded and then left `ready`: the installation opens, and the
+   * history is what says the upgrade did not reach what it aimed at.
+   */
   ctx.state.phase = outcome.ok ? 'ready' : 'upgrade-failed';
   if (outcome.ok) delete ctx.state.upgrade;
   await atomicJson(path.join(ctx.data, 'installation.json'), ctx.state);
