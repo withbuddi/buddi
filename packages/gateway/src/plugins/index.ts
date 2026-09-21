@@ -24,5 +24,7 @@ export * from './update.js';
 export * from './load.js';
 export * from './migrate.js';
 export * from './install.js';
+export * from './scaffold.js';
+export * from './dev.js';
 export * from './uninstall.js';
 export * from './provenance.js';
