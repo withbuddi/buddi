@@ -5,7 +5,7 @@ import {
   resolveProviderAccount, vaultState, type AgentCatalog, type AgentFrontmatter,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -16,6 +16,7 @@ type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | nul
 type Binding = { agentId: string; accountId: string; model: string };
 type TestResult = ProviderDiagnostic & { checkedAt: string };
 const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as "defaultModel",
+  context_window_tokens as "contextWindowTokens",
   enabled, deleting, revision, secret_ref as "secretRef", legacy_env as "legacyEnv"`;
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
@@ -23,6 +24,13 @@ const saveSchema = z.object({
   auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt', 'anthropic-oauth']),
   baseUrl: z.string().trim().max(2048).optional(), defaultModel: z.string().trim().min(1).max(150),
   enabled: z.boolean(), secret: z.string().trim().min(1).max(16384).optional(),
+  /**
+   * What this endpoint's models actually hold, when the owner knows better
+   * than the runtime's table — a local host serves whatever `num_ctx` it was
+   * started with, under the same model name either way. Null or absent leaves
+   * the table in charge, which is the answer for almost everyone.
+   */
+  contextWindowTokens: z.number().int().min(8_000).max(2_000_000).nullable().optional(),
 }).strict();
 const probeSchema = z.object({
   kind: z.enum(['anthropic', 'openai', 'openai-compatible']),
@@ -175,6 +183,10 @@ export class ProviderAccounts {
       anthropicOAuthEnabled: this.anthropicOAuthEnabled,
       accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, ...row }) => ({
         ...row, configured: this.#configured.get(row.id) ?? false,
+        // What the runtime would assume for this account's default model, so
+        // the field can show it as a placeholder instead of a blank the owner
+        // has to guess at.
+        detectedContextWindowTokens: contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind),
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
@@ -292,11 +304,13 @@ export class ProviderAccounts {
     try {
       if (old) {
         const result = await this.deps.pool.query(`update core.provider_accounts set label=$2,base_url=$3,default_model=$4,
-          enabled=$5,secret_ref=$6,legacy_env=$7,revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
-        [id,input.label,baseUrl,input.defaultModel,input.enabled,secretRef,input.secret ? null : old.legacyEnv,old.revision]);
+          enabled=$5,secret_ref=$6,legacy_env=$7,context_window_tokens=$9,revision=revision+1,updated_at=now() where id=$1 and revision=$8 returning id`,
+        [id,input.label,baseUrl,input.defaultModel,input.enabled,secretRef,input.secret ? null : old.legacyEnv,old.revision,
+          input.contextWindowTokens ?? null]);
         if (!result.rows.length) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
-      } else await this.deps.pool.query(`insert into core.provider_accounts (id,label,kind,auth,base_url,default_model,enabled,secret_ref)
-        values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id,input.label,input.kind,input.auth,baseUrl,input.defaultModel,input.enabled,secretRef]);
+      } else await this.deps.pool.query(`insert into core.provider_accounts (id,label,kind,auth,base_url,default_model,enabled,secret_ref,context_window_tokens)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id,input.label,input.kind,input.auth,baseUrl,input.defaultModel,input.enabled,secretRef,
+          input.contextWindowTokens ?? null]);
     } catch (error) {
       // Only delete the new, unreferenced secret; never alter the previous one.
       if (input.secret && secretRef) await this.vault?.delete(secretRef).catch(() => {});

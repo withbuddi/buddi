@@ -20,6 +20,7 @@ import type {
   CompletionDelta,
 } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
+import { compactObservations } from './projection.js';
 import {
   degradeMessages,
   DEFAULT_CAPABILITIES,
@@ -641,7 +642,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const attachments = opts.attachments ?? [];
   assertAttachmentCount(attachments);
 
-  const history = opts.transcript ? await opts.transcript.load() : await loadMessages(pool, conversationId);
+  // Observations the run has finished with are reduced to a line before the
+  // history is replayed: a browser session is mostly page trees it already
+  // acted on, and carrying all of them is what ends the conversation early.
+  // The stored transcript is untouched (`compactObservations`).
+  const history = compactObservations(
+    opts.transcript ? await opts.transcript.load() : await loadMessages(pool, conversationId),
+  );
   // Stored history carries artifact_ref blocks; the provider needs the bytes.
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 

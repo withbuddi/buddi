@@ -103,6 +103,7 @@ import {
 } from '../surfaces/pending-question.js';
 import { failedTurnReply } from '../surfaces/failure.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
+import { transcriptBudget } from '../surfaces/context-budget.js';
 import {
   IDLE_TIMEOUT_MS,
   MAX_TRANSCRIPT_CHARS,
@@ -515,6 +516,9 @@ export async function readChatTranscript(
     openQuestion(pool, { now, conversationId }).catch(() => null),
   ]);
   const vitals = await readVitals(pool, conversationId);
+  // The size limit is this conversation's model's, not a constant: the header
+  // must not promise 80k to a thread that has 400k, or the reverse.
+  const budget = await transcriptBudget(pool, conversationId).catch(() => null);
 
   return {
     lifetime: {
@@ -522,7 +526,7 @@ export async function readChatTranscript(
       lastActivityAt: vitals.lastActivityAt?.toISOString() ?? null,
       chars: vitals.chars,
       idleTimeoutMs: IDLE_TIMEOUT_MS,
-      maxChars: MAX_TRANSCRIPT_CHARS,
+      maxChars: budget?.maxChars ?? MAX_TRANSCRIPT_CHARS,
     },
     offers: open.map((offer) => ({
       id: offer.id,
