@@ -487,6 +487,10 @@ export interface ProviderAccount {
   id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
   auth: 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth'; baseUrl: string;
   defaultModel: string; enabled: boolean; revision: number; configured: boolean;
+  /** The owner's context-window override, in tokens, or null for automatic. */
+  contextWindowTokens?: number | null;
+  /** What the server would assume for `defaultModel`: the field's placeholder. */
+  detectedContextWindowTokens?: number;
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
@@ -501,7 +505,7 @@ export interface ProviderAccountsView {
   bindings: Array<{ agentId: string; accountId: string; model: string }>;
 }
 export type SaveProviderAccount = Pick<ProviderAccount, 'label' | 'kind' | 'auth' | 'baseUrl' | 'defaultModel' | 'enabled'> & {
-  id?: string; revision?: number; secret?: string;
+  id?: string; revision?: number; secret?: string; contextWindowTokens?: number | null;
 };
 
 /**

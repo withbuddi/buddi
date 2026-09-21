@@ -177,6 +177,125 @@ function cloneBlock(block: ContentBlock): ContentBlock {
 /** How much of an agent's own tool output stays in its projection. */
 export const OWN_TOOL_RESULT_CHARS = 8000;
 
+/* ------------------------------------------------------------------ *
+ * Observations: evidence for one step, not for the conversation
+ * ------------------------------------------------------------------ */
+
+/**
+ * The tools whose results are an observation: a page (or window) tree, a list
+ * of targets and a screenshot reference, thousands of characters each. The
+ * computer driver returns the same shape as the browser one on purpose
+ * (`packages/tools/browser/src/computer.ts`), so one rule covers both.
+ */
+export const OBSERVATION_TOOLS: readonly string[] = ['browser.act', 'browser.status', 'computer'];
+
+/**
+ * How many observations stay whole. Two, not one: the model needs the page it
+ * is acting on *and* the page before it, to tell "the click worked" from "the
+ * click did nothing". A third adds cost without adding an answer.
+ *
+ * *Observations*, not results. A `browser.status` answer and a failed action
+ * carry no page: they have no tree, no observation id and no target refs, so
+ * they cost nothing to keep and reducing them would save nothing. Counting
+ * them was a bug — two of them after the live page evicted that page, and the
+ * next action needs its observation id and its refs by value, so the agent had
+ * to observe again or act on evidence it no longer had.
+ */
+export const OBSERVATIONS_KEPT_WHOLE = 2;
+
+/**
+ * Older observations, reduced to what a person would remember of them.
+ *
+ * A browsing session is a dozen page trees, and eleven of them are already
+ * spent: the agent acted on them and moved on. What it still needs from those
+ * is where it was and whether the step worked — `URL, title, action, ok` —
+ * which is one line instead of four thousand characters. The latest two stay
+ * exactly as they were, because those are the ones it is still working in.
+ *
+ * Only what is *sent* changes. The transcript on disk keeps every observation
+ * whole, so nothing is lost and the reduction is recomputed on every call.
+ */
+export function compactObservations(
+  messages: readonly NeutralMessage[],
+  keepWhole: number = OBSERVATIONS_KEPT_WHOLE,
+): NeutralMessage[] {
+  // Which calls were observations, and what they were asked to do. A result
+  // names only the call it answers, so the name comes from the call.
+  const calls = new Map<string, { name: string; action: string }>();
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type !== 'tool_use') continue;
+      if (!OBSERVATION_TOOLS.includes(block.name)) continue;
+      const input = block.input as { action?: unknown } | null;
+      const action = typeof input?.action === 'string' ? input.action : '';
+      calls.set(block.id, { name: block.name, action });
+    }
+  }
+  if (calls.size === 0) return messages.map((m) => ({ role: m.role, content: m.content }));
+
+  // The results that actually carry a page, oldest first, by where they sit
+  // and with the page already parsed out of them. A result with no page in it
+  // is not an observation and is left exactly as it is.
+  const found: Array<{ message: number; block: number; page: { url: string; title: string } }> = [];
+  messages.forEach((message, mi) => {
+    message.content.forEach((block, bi) => {
+      if (block.type !== 'tool_result' || !calls.has(block.tool_use_id)) return;
+      const page = observationOf(block.content);
+      if (page) found.push({ message: mi, block: bi, page });
+    });
+  });
+  const compact = found.slice(0, Math.max(0, found.length - Math.max(0, keepWhole)));
+  if (compact.length === 0) return messages.map((m) => ({ role: m.role, content: m.content }));
+
+  const at = new Map(compact.map((p) => [`${p.message}:${p.block}`, p.page]));
+  return messages.map((message, mi) => ({
+    role: message.role,
+    content: message.content.map((block, bi) => {
+      const page = at.get(`${mi}:${bi}`);
+      if (!page || block.type !== 'tool_result') return block;
+      const call = calls.get(block.tool_use_id)!;
+      return { ...block, content: observationLine(call, page, block.is_error === true) };
+    }),
+  }));
+}
+
+/** `[browser.act click — Accounts — https://… — ok]`, and nothing else. */
+function observationLine(
+  call: { name: string; action: string },
+  seen: { url: string; title: string },
+  failed: boolean,
+): string {
+  const parts = [
+    call.action ? `${call.name} ${call.action}` : call.name,
+    seen.title,
+    seen.url,
+    failed ? 'failed' : 'ok',
+  ].filter((part) => part !== '');
+  return `[earlier observation, summarised: ${parts.join(' — ')}; the whole of it is in the transcript]`;
+}
+
+/** URL and title out of one observation. Never the tree, never the text. */
+function observationOf(content: string): { url: string; title: string } | null {
+  let value: unknown;
+  try { value = JSON.parse(content); } catch { return null; }
+  const seek = (node: unknown, depth: number): { url: string; title: string } | null => {
+    if (!node || typeof node !== 'object' || depth > 4) return null;
+    const record = node as Record<string, unknown>;
+    const page = (record.observation ?? record.page) as Record<string, unknown> | undefined;
+    if (page && typeof page.url === 'string' && page.url !== '') {
+      return { url: clip(page.url, 200), title: clip(String(page.title ?? ''), 120) };
+    }
+    if (Array.isArray(node)) {
+      for (const part of node) {
+        const found = seek(part, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  return seek(value, 0);
+}
+
 /** The room could not be made to fit the cap. The run must not proceed blind. */
 export class ProjectionOverflow extends Error {
   override readonly name = 'ProjectionOverflow';
@@ -198,9 +317,12 @@ export class ProjectionOverflow extends Error {
  */
 export function boundProjection(messages: NeutralMessage[], maxChars: number): NeutralMessage[] {
   // A copy: the caller's history is the run's own and must not be clipped in place.
-  const kept: NeutralMessage[] = messages.map((m) => ({ role: m.role, content: m.content.map((b) => cloneBlock(b)) }));
+  const kept: NeutralMessage[] = compactObservations(messages).map((m) => ({ role: m.role, content: m.content.map((b) => cloneBlock(b)) }));
   const size = (): number => kept.reduce((sum, m) => sum + JSON.stringify(m.content).length, 0);
 
+  // 0. Spent observations reduced to a line (above), before anything is
+  //    dropped: a page tree the agent has finished with is the cheapest thing
+  //    in the room to give up, and giving it up may mean no turn is lost.
   // 1. Own tool results, clipped.
   for (const m of kept) {
     m.content = m.content.map((b) =>

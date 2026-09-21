@@ -155,7 +155,8 @@ function StatusDot({ account: a }: { account: ProviderAccount }): JSX.Element {
 }
 
 function accountSettings(a: ProviderAccount): SaveProviderAccount {
-  return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled };
+  return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled,
+    contextWindowTokens: a.contextWindowTokens ?? null };
 }
 
 function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { account: ProviderAccount; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean }): JSX.Element {
@@ -172,6 +173,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
         items={[
           { label: 'Provider', value: providerName(a) },
           { label: 'Default model', value: <span className="mono">{a.defaultModel || '—'}</span> },
+          { label: 'Context window', value: <span className="mono">{`${(a.contextWindowTokens ?? a.detectedContextWindowTokens ?? 0).toLocaleString()} tokens${a.contextWindowTokens ? '' : ' (detected)'}`}</span> },
           ...(a.baseUrl ? [{ label: 'Endpoint', value: <span className="mono">{a.baseUrl}</span> }] : []),
           {
             label: 'Used by',
@@ -259,6 +261,9 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
   const [baseUrl, setBaseUrl] = useState(a?.baseUrl ?? '');
   const [model, setModel] = useState(a?.defaultModel ?? 'claude-sonnet-5');
   const [secret, setSecret] = useState('');
+  // Blank means "whatever the model is known to hold". Only somebody serving
+  // a model themselves, at a window of their own choosing, needs this.
+  const [contextWindow, setContextWindow] = useState(a?.contextWindowTokens ? String(a.contextWindowTokens) : '');
   const changeKind = (value: ProviderAccount['kind']) => {
     setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
     setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
@@ -270,7 +275,8 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
       e.preventDefault();
       const value = secret; setSecret('');
       void run(() => api.saveProviderAccount({ ...(a ? { id: a.id, revision: a.revision } : {}), label, kind, auth, baseUrl,
-        defaultModel: model, enabled: a?.enabled ?? true, ...(value.trim() ? { secret: value } : {}) }), 'Account saved. Agent model selections are unchanged.').then(ok => { if (ok) onDone(); });
+        defaultModel: model, enabled: a?.enabled ?? true, contextWindowTokens: contextWindow.trim() ? Number(contextWindow) : null,
+        ...(value.trim() ? { secret: value } : {}) }), 'Account saved. Agent model selections are unchanged.').then(ok => { if (ok) onDone(); });
     }}>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
         <Field label="Account name">
@@ -299,6 +305,11 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
         <Toolbar valign="end">
           <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
         </Toolbar>
+        <Field label="Context window" hint="Tokens this endpoint actually serves. Leave blank unless you run the model yourself and set a window of your own — a conversation is ended once its history would fill half of this.">
+          <input type="number" inputMode="numeric" min={8000} max={2000000} step={1000} value={contextWindow}
+            placeholder={a?.detectedContextWindowTokens ? String(a.detectedContextWindowTokens) : 'detected from the model'}
+            onChange={e => setContextWindow(e.target.value)} />
+        </Field>
         {kind === 'codex' && <p className="muted">Enter a model available to your Codex subscription. API model availability is different; there is no automatic model fallback.</p>}
         {auth === 'anthropic-oauth' && <p className="muted">Save this account, then choose Connect Claude. You will approve in your browser and paste the authorization code here, not in chat. No existing agent assignment changes.</p>}
         {auth === 'api-key' && (

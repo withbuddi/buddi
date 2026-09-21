@@ -12,6 +12,14 @@ export interface ProviderAccount {
   defaultModel: string;
   enabled: boolean;
   revision: number;
+  /**
+   * What this endpoint's models hold, when the owner has said so. Null or
+   * absent means the runtime's own table decides
+   * (`@buddi/runtime`'s `contextWindowTokens`). It is per account because two
+   * compatible endpoints are two different machines with two different
+   * `num_ctx` values under the same model names.
+   */
+  contextWindowTokens?: number | null;
 }
 
 export function accountProtocol(kind: ProviderAccountKind): ProviderKind {

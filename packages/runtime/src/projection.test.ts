@@ -3,7 +3,8 @@
  * rules before any orchestration is built on them.
  */
 import { describe, expect, it } from 'vitest';
-import { projectTranscript, type StoredTurn } from './projection.js';
+import type { NeutralMessage } from './anthropic.js';
+import { boundProjection, compactObservations, projectTranscript, type StoredTurn } from './projection.js';
 
 const handles = new Map([['ledger', 'ledger'], ['concierge', 'concierge'], ['advisor', 'advisor']]);
 const text = (t: string) => ({ type: 'text' as const, text: t });
@@ -144,5 +145,118 @@ describe('the projection', () => {
     const out = projectTranscript({ turns, agentId: 'ledger', handles });
     (out[0]!.content[0] as { text: string }).text = 'changed';
     expect((turns[0]!.content[0] as { text: string }).text).toBe('a');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Observations: evidence for one step, not for the conversation
+ * ------------------------------------------------------------------ */
+
+describe('spent observations', () => {
+  const TREE = 'Available balance $4,213.55 — '.repeat(200);
+  const observation = (id: string, url: string, title: string): string =>
+    JSON.stringify({ completed: true, observation: { id, url, title, tree: TREE } });
+
+  /** Browser steps, as a run leaves them: call, result, call, result… */
+  const session = (n = 5): NeutralMessage[] =>
+    Array.from({ length: n }, (_, i) => [
+      { role: 'assistant' as const, content: [{ type: 'tool_use' as const, id: `c${i}`, name: 'browser.act', input: { action: i === 0 ? 'navigate' : 'click' } }] },
+      { role: 'user' as const, content: [{ type: 'tool_result' as const, tool_use_id: `c${i}`, content: observation(`o${i}`, `https://bank.example/${i}`, `Page ${i}`) }] },
+    ]).flat();
+
+  it('keeps the latest two whole and reduces the rest to one line', () => {
+    const out = compactObservations(session());
+    const results = out.filter((m) => m.role === 'user').map((m) => (m.content[0] as { content: string }).content);
+    expect(results).toHaveLength(5);
+    for (const spent of results.slice(0, 3)) {
+      expect(spent).not.toContain(TREE.slice(0, 40));
+      expect(spent.split('\n')).toHaveLength(1);
+      expect(spent).toContain('earlier observation, summarised');
+    }
+    for (const live of results.slice(3)) expect(live).toContain(TREE.slice(0, 40));
+  });
+
+  it('a reduced observation says where it was, what it did and whether it worked', () => {
+    const line = (compactObservations(session())[1]!.content[0] as { content: string }).content;
+    expect(line).toContain('browser.act navigate');
+    expect(line).toContain('Page 0');
+    expect(line).toContain('https://bank.example/0');
+    expect(line).toContain('ok');
+  });
+
+  it('says so when the step failed', () => {
+    const turns = session(3);
+    (turns[1]!.content[0] as { is_error?: boolean }).is_error = true;
+    const line = (compactObservations(turns)[1]!.content[0] as { content: string }).content;
+    expect(line).toContain('failed');
+  });
+
+  it('buys real room: a session that would not fit, fits', () => {
+    const raw = JSON.stringify(session().map((m) => m.content)).length;
+    const compacted = JSON.stringify(compactObservations(session()).map((m) => m.content)).length;
+    expect(compacted).toBeLessThan(raw / 2);
+  });
+
+  it('leaves everything that is not an observation alone, and never mutates', () => {
+    const turns: NeutralMessage[] = [
+      { role: 'user', content: [text('what is my balance?')] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'ledger.read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: TREE }] },
+      ...session(3),
+    ];
+    const out = compactObservations(turns);
+    expect((out[2]!.content[0] as { content: string }).content).toBe(TREE);
+    expect((turns[4]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+  });
+
+  it('is how a bounded room pays first, before it drops a turn', () => {
+    const bounded = boundProjection(session(6), 20_000);
+    expect(JSON.stringify(bounded.map((m) => m.content)).length).toBeLessThanOrEqual(20_000);
+    // Nothing was dropped: compaction alone made the room.
+    expect(bounded).toHaveLength(12);
+    expect(JSON.stringify(bounded)).not.toContain('left out for room');
+  });
+});
+
+describe('a browser result that carries no page', () => {
+  const TREE = 'Available balance $4,213.55 — '.repeat(200);
+  const page = (i: number): string =>
+    JSON.stringify({ completed: true, observation: { id: `o${i}`, url: `https://bank.example/${i}`, title: `Page ${i}`, tree: TREE } });
+
+  const call = (id: string, name: string, action: string): NeutralMessage =>
+    ({ role: 'assistant', content: [{ type: 'tool_use', id, name, input: { action } }] });
+  const result = (id: string, content: string, failed = false): NeutralMessage =>
+    ({ role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, ...(failed ? { is_error: true } : {}) }] });
+
+  it('never evicts the live page: status and failures do not count as observations', () => {
+    // The sequence that broke it: the page the agent is acting on, then a
+    // status call and a failed click. Both carry no tree, no observation id
+    // and no refs — and the next action needs exactly those, by value.
+    const turns: NeutralMessage[] = [
+      call('c0', 'browser.act', 'navigate'), result('c0', page(0)),
+      call('c1', 'browser.act', 'click'), result('c1', page(1)),
+      call('c2', 'browser.status', ''), result('c2', JSON.stringify({ mode: 'browser', busy: false })),
+      call('c3', 'browser.act', 'click'), result('c3', JSON.stringify({ error: 'Target is missing or ambiguous.' }), true),
+    ];
+    const out = compactObservations(turns);
+    // The two pages are the only observations, and the latest is untouched.
+    expect((out[3]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    expect((out[1]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    // The results with no page in them are left exactly as they were.
+    expect((out[5]!.content[0] as { content: string }).content).toBe(JSON.stringify({ mode: 'browser', busy: false }));
+    expect((out[7]!.content[0] as { content: string }).content).toContain('Target is missing');
+  });
+
+  it('still reduces an older page once two newer ones exist', () => {
+    const turns: NeutralMessage[] = [
+      call('c0', 'browser.act', 'navigate'), result('c0', page(0)),
+      call('c1', 'browser.status', ''), result('c1', JSON.stringify({ mode: 'browser' })),
+      call('c2', 'browser.act', 'click'), result('c2', page(2)),
+      call('c3', 'browser.act', 'click'), result('c3', page(3)),
+    ];
+    const out = compactObservations(turns);
+    expect((out[1]!.content[0] as { content: string }).content).toContain('earlier observation, summarised');
+    expect((out[5]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
+    expect((out[7]!.content[0] as { content: string }).content).toContain(TREE.slice(0, 40));
   });
 });
