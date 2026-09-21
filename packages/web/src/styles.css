@@ -634,6 +634,8 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 .group-pick-text { display: flex; flex-direction: column; min-width: 0; }
 .group-pick-name { font-weight: var(--weight-medium); }
 .group-pick-desc { color: var(--text-muted); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Ending a group is not part of the form: a hairline, then the quiet door. */
+.group-archive { border-top: 1px solid var(--line); padding-top: 12px; }
 
 .wb-msg-who {
   font-size: var(--text-xs);

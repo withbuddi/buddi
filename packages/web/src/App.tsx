@@ -128,6 +128,8 @@ export function App(): JSX.Element {
   /** The owner's groups: a team of agents in one conversation (docs/groups.md). */
   const [groups, setGroups] = useState<GroupView[]>([]);
   const [newGroup, setNewGroup] = useState(false);
+  /** The group whose sheet is open for editing, if any. */
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const attention = useAttention();
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
   /*
@@ -279,11 +281,33 @@ export function App(): JSX.Element {
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);
   const onChat = place === CHAT_ROUTE;
+  const editingGroup = editingGroupId ? (groups.find((g) => g.id === editingGroupId) ?? null) : null;
+  /*
+   * One sheet, two jobs: making a group and changing one. Whatever it answers
+   * goes straight into the roster this component holds, so the rail and the
+   * room's header are right without a reload — an archived group leaves the
+   * rail and the page goes back to the agents.
+   */
   const groupSheet = newGroup ? (
     <GroupSheet
       agents={agents}
       onClose={() => setNewGroup(false)}
       onCreated={(group) => { setGroups((current) => [...current, group]); setNewGroup(false); navigate(groupChatRoute(group.id)); }}
+    />
+  ) : editingGroup ? (
+    <GroupSheet
+      agents={agents}
+      group={editingGroup}
+      onClose={() => setEditingGroupId(null)}
+      onSaved={(group) => {
+        setGroups((current) => current.map((g) => (g.id === group.id ? group : g)));
+        setEditingGroupId(null);
+      }}
+      onArchived={(id) => {
+        setGroups((current) => current.filter((g) => g.id !== id));
+        setEditingGroupId(null);
+        navigate(CHAT_ROUTE);
+      }}
     />
   ) : null;
 
@@ -336,6 +360,7 @@ export function App(): JSX.Element {
               agentId={selectedGroup ? selectedGroup.coordinator : selectedAgentId}
               defaultAgentId={defaultAgentId}
               group={selectedGroup}
+              onEditGroup={selectedGroup ? () => setEditingGroupId(selectedGroup.id) : undefined}
               requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
               onConversationOpened={conversationOpened}
               onSelectAgent={selectAgent}
