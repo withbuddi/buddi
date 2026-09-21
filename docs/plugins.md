@@ -782,16 +782,18 @@ then each manifest's. `optional` names the installed third-party plugins: one
 of those failing is that plugin failing to load (`docs/install.md` §7), so it
 is reported through `onProblem`, left out of `installedManifests` for the rest
 of the run and listed by `pluginLoadReport` — the Plugins page and doctor say
-why. Core's own migrations and a compiled-in plugin's still throw. Both start
-paths go through the gateway's `migrateInstalled(pool, env)`, which fills those
-two options in. A manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
+why. Core's own migrations and a compiled-in plugin's still throw. Every start
+path goes through the gateway's `migrateAtStart(pool, env)` — the "newer than
+this code" refusal, then `migrateInstalled(pool, env)`, which fills those two
+options in — and so does `buddi migrate`. A manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
 saying it owns no schema at all, not a missing path. Its tools read `core.artifacts`
 because a dropped plugin must not take the owner's files with it.
 
-**How your schema gets applied.** Two entry points, both over the manifests the
-gateway has installed:
+**How your schema gets applied.** A start does it for you, and there are two
+entry points besides, both over the manifests the gateway has installed:
 
-- `buddi migrate` → `runMigrations(pool, installedManifests())`;
+- `buddi migrate` → `runMigrations(pool, installedManifests())`, for migrating
+  without starting;
 - `pnpm db:migrate` → `scripts/migrate.mjs`, which imports
   `packages/tools/<name>/dist/index.js` for each name in its list and **skips any
   plugin that is not built** (`if (!existsSync(entry)) continue`). Core with zero
@@ -1596,6 +1598,19 @@ rather than a missing feature:
   `unregister`: `ToolRegistry.register` throws on a name it already has. A
   reload would have to swap an object that a dozen live closures are holding,
   mid-run, and re-run the collision checks against a half-replaced set.
+
+**A start migrates before it loads.** There is nothing to run by hand first.
+Every start path — the packaged supervisor, and a checkout's `buddi serve` —
+goes through the gateway's `migrateAtStart(pool, env)` before any wiring
+exists: a schema newer than the running code refuses the start before anything
+runs; core's migrations and the compiled-in plugins' are this build describing
+itself, so one that will not apply stops the start with the error; an installed
+third-party plugin's failure demotes that plugin to the load report
+(`docs/install.md` §7) and the start carries on without it. Each applied
+migration is one line on the log, followed by one summary. A migration
+transaction takes an advisory lock, so two processes started at once queue
+instead of racing. `buddi migrate` is still there for the owner who wants to
+migrate *without* starting.
 
 So the loop is: build, restart, ask. `buddi plugins dev <dir>` is what makes
 that bearable — it watches `<dir>/dist` and, on a rebuild, restarts the service
