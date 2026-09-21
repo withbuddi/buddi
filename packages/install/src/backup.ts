@@ -314,7 +314,7 @@ export function backupDue(file: ScheduleFile, now: Date): boolean {
  * Jobs
  * ------------------------------------------------------------------ */
 
-export type JobKind = 'backup' | 'verify' | 'restore';
+export type JobKind = 'backup' | 'verify' | 'restore' | 'upgrade';
 
 export interface BackupJob {
   id: string;
@@ -452,6 +452,15 @@ export interface BackupControl {
   schedule(): Promise<ScheduleFile>;
   setSchedule(next: BackupSchedule): Promise<{ error: string } | { schedule: ScheduleFile }>;
   passphrase(): Promise<string>;
+  /**
+   * Is there somewhere to keep a passphrase at all?
+   *
+   * Asked before an upgrade takes its backup: encryption the owner turned on
+   * with no vault to hold the key is a backup that cannot be made, and saying
+   * so before the gateway is stopped is the difference between a refusal and
+   * an outage.
+   */
+  hasVault(): boolean;
   setPassphrase(value: string): Promise<void>;
   lastBackupAt(): Promise<string | null>;
   /** Is the installation still in recovery? Reported by `/status`. */
@@ -804,6 +813,8 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
         await pool.end().catch(() => {});
       }
     },
+
+    hasVault: () => vault() !== undefined,
 
     busy: () => restoring !== undefined,
 

@@ -196,7 +196,15 @@ suite('host execution permissions and file workflow', () => {
       const response = await fetch(download, { headers });
       expect(response.headers.get('content-disposition')).toContain('attachment');
       expect(await response.text()).toBe('fixture-download');
-      expect((await fetch(`${origin}/api/artifacts/${file.id}/preview`, { headers })).status).toBe(415);
+      // A text file previews as text/plain, bounded to its prefix, since the
+      // library landed (603ab8c): nothing in it is ever parsed as markup.
+      const text = await fetch(`${origin}/api/artifacts/${file.id}/preview`, { headers });
+      expect(text.status).toBe(200);
+      expect(text.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+      expect(text.headers.get('content-disposition')).toContain('inline');
+      expect(text.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(text.headers.get('x-preview-truncated')).toBe('0');
+      expect(await text.text()).toBe('fixture-download');
       const png = await saveArtifact(pool, { bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1kAAAAASUVORK5CYII=', 'base64'), filename: 'preview.png', mime: 'image/png', createdBy: 'ledger' }, service.env);
       const previewUrl = `${origin}/api/artifacts/${png.id}/preview`;
       expect((await fetch(previewUrl)).status).toBe(401);

@@ -666,6 +666,49 @@ export interface ServiceView {
 }
 
 /* ------------------------------------------------------------------ *
+ * The version, and upgrading to the next one.
+ * ------------------------------------------------------------------ */
+
+/** One upgrade this installation has been through, newest last. */
+export interface UpgradeAttempt {
+  from: string;
+  to: string;
+  startedAt: string;
+  finishedAt?: string;
+  outcome: 'done' | 'failed' | 'rolled-back';
+  /** The backup taken before it started, which is the way back from a bad one. */
+  backup?: string;
+  error?: string;
+  /** Where it stopped, when it stopped: backup, installing, migrating. */
+  step?: string;
+}
+
+export interface VersionView {
+  current: string;
+  latest?: string;
+  checkedAt?: string;
+  checkEnabled: boolean;
+  updateAvailable: boolean;
+  /** The last check that did not get an answer. Never fatal, always said. */
+  error?: string;
+  history: UpgradeAttempt[];
+  supervised: boolean;
+  /** A developer checkout, which upgrades with git rather than with this page. */
+  checkout: boolean;
+}
+
+/** An upgrade in flight, as the supervisor reports it while it still can. */
+export interface UpgradeJob {
+  id: string;
+  phase: string;
+  phases?: string[];
+  detail?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+/* ------------------------------------------------------------------ *
  * Backups and recovery, from the supervisor through the gateway.
  * ------------------------------------------------------------------ */
 
@@ -966,7 +1009,7 @@ export const api = {
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
-  session: () => get<{ csrf: string; timezone: string; host: string; port: number }>('/session'),
+  session: () => get<{ csrf: string; timezone: string; host: string; port: number; version?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
   eventKinds: () => get<{ kinds: Array<{ kind: string; count: number }> }>('/events/kinds'),
@@ -1065,6 +1108,17 @@ export const api = {
    * terminal, not this page, is what starts a gateway that is down.
    */
   serviceAction: (action: 'start' | 'stop' | 'restart') => post<ServiceView>(`/service/${action}`),
+  /* ---- the version, and upgrading ---- */
+  version: () => get<VersionView>('/version'),
+  /** Ask the registry now. The only outbound call this page can cause. */
+  checkVersion: () => post<VersionView>('/version/check'),
+  setVersionCheck: (enabled: boolean) => put<VersionView>('/version/check', { enabled }),
+  /**
+   * Start an upgrade. Accepted rather than completed, like a restart: it takes
+   * a backup, installs the new version and restarts buddi under this page.
+   */
+  startUpgrade: (version?: string) => post<{ job: UpgradeJob }>('/upgrade', version === undefined ? {} : { version }),
+  upgradeJob: (id: string) => get<UpgradeJob>(`/upgrade/jobs/${encodeURIComponent(id)}`),
   /* ---- backups and recovery ---- */
   backups: () => get<BackupsView>('/backups'),
   startBackup: (encrypt: boolean) => post<{ job: BackupJob }>('/backups', { encrypt }),
