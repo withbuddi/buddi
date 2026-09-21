@@ -255,6 +255,51 @@ directory accordingly. No tool exports passwords, cookies or profile files.
 - **Close & release** ends only the selected conversation's task and closes its
   tabs. Other conversations keep working. It does not undo a global Stop.
 
+### The remote hand: driving from the dashboard
+
+**Take over** now offers more than a pause. In the two browser modes — "Your
+browser" and Playwright — the Browser tab answers it with a live picture of the
+page and takes your pointer and keyboard on it, so a login, an MFA prompt or a
+consent banner can be dealt with from a phone instead of by walking to the
+machine. A thin bar over the picture says *You are driving. Nothing you type
+here is kept*, with **Give it back** beside it and a **Keyboard** toggle that
+raises a phone's keyboard. **Give it back** is `resume`: the agent's evidence is
+invalidated and it must observe again before acting.
+
+Computer mode has no remote hand and says so — *Take over at the computer for
+this mode* — because the native helper acts on accessibility targets and has no
+raw pointer or keystroke to forward. Telegram is unchanged; it still says to
+take over from the dashboard.
+
+**Nothing typed during a take-over is kept.** The keystroke goes from the page
+to the socket to the host browser and is gone: it is never written to a log, an
+event row, the transcript or the model's context, and the gateway holds it in
+no field on its way through. What reaches the socket is validated first —
+bounded coordinates, an allow list of key names, and a single character for a
+typed one — so nothing longer than a keystroke can be pushed through that
+field.
+
+The wire is one WebSocket at `/api/browser/hand`, on the same upgrade listener
+as the extension socket and gated the way every dashboard write is: the session
+cookie on the upgrade request, an `Origin` this gateway would accept a write
+from, the CSRF token as the socket's first frame, and a tailnet session
+re-confirmed against the daemon. One hand at a time — a second dashboard tab is
+told *Another tab is driving* rather than fighting it for the mouse — and only
+for the session that holds the take-over. Frames arrive as a small JSON line
+carrying the page metadata followed by the JPEG bytes it describes; the
+dashboard maps clicks back to page coordinates through that metadata and the
+size the picture is displayed at. When the socket drops the picture freezes
+with *Connection lost* and a **Reconnect** button. `resume`, `release` and
+**Stop** all end the hand and close the socket.
+
+In "Your browser" the frames are Chrome's own `Page.startScreencast` through
+the extension's debugger, acked as they leave and throttled to ten a second,
+and the input is `Input.dispatchMouseEvent`/`dispatchKeyEvent` on the session's
+tab; input is refused unless a screencast is running. The extension's rule that
+it will not type into a tab you are looking at does not apply to your own hand.
+In Playwright mode the screencast is a CDP session on the page and the input is
+Playwright's own mouse and keyboard.
+
 The agent should close its tabs when its task is finished, unless you asked to
 leave them open. Up to eight conversations can share one host profile, each
 with its own tabs, observation IDs, screenshots, step budget and takeover state.

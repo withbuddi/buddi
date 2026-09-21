@@ -7,7 +7,7 @@ import { PlaywrightHost } from './host.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import type { BrowserController, BrowserScope, BrowserStatus, BrowserRollover } from './service.js';
+import type { BrowserController, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover } from './service.js';
 import type { BrowserCommand } from './types.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
@@ -60,6 +60,10 @@ export class HostController implements BrowserController {
     return { ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => ({ ...session, ...metadata })) } : {}) };
   }
   screenshot(sessionId?: string): Buffer | undefined { return this.#manager.screenshot(sessionId); }
+  hand(scope?: BrowserScope): BrowserHandOffer {
+    if (this.#changing) return { supported: true, message: 'Control settings are changing. Wait before driving.' };
+    return this.#manager.hand(scope);
+  }
   rollover(input: BrowserRollover): boolean {
     if (this.#changing) throw new Error('Control settings are changing. Wait before continuing.');
     return this.#manager.rollover(input);

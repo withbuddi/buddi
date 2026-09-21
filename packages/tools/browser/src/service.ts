@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolContext } from '@buddi/core';
-import type { BrowserCommand, BrowserDriver, Observation } from './types.js';
+import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
 
 /** The three ways an agent can get a screen. */
@@ -27,6 +27,14 @@ export interface BrowserStatus {
   sessions?: BrowserStatus[];
 }
 export interface BrowserScope { sessionId?: string; agentId?: string; conversationId?: string }
+/**
+ * What the dashboard is offered when it asks to drive.
+ *
+ * `supported: false` is a mode that will never have a hand and the sentence to
+ * show instead; a supported mode with no `hand` is one nobody has taken over
+ * yet, which is a state the owner can leave by pressing Take over.
+ */
+export interface BrowserHandOffer { supported: boolean; message?: string; hand?: BrowserHand }
 /** Trusted lifecycle input, never exposed in an agent tool schema. */
 export interface BrowserRollover { ownerId: string; agentId: string; previousConversationId: string; conversationId: string }
 export interface BrowserController {
@@ -36,6 +44,8 @@ export interface BrowserController {
   screenshot(sessionId?: string): Buffer | undefined;
   execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown>;
   control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus>;
+  /** The remote hand for one session. Owner UI only; no agent tool reaches it. */
+  hand?(scope?: BrowserScope): BrowserHandOffer;
   configure?(settings: unknown): Promise<BrowserStatus>;
   checkPermissions?(prompt?: boolean): Promise<BrowserStatus>;
   rollover?(input: BrowserRollover): boolean;
@@ -92,6 +102,22 @@ export class BrowserService {
   }
 
   screenshot(_sessionId?: string): Buffer | undefined { return this.#picture; }
+
+  /**
+   * The remote hand, and only while the owner holds this screen.
+   *
+   * Paused is the take-over state, so it is also the only state in which a
+   * dashboard may drive: an agent mid-action and a hand on the same page would
+   * be two drivers, and the evidence rules here assume exactly one.
+   */
+  hand(_scope?: BrowserScope): BrowserHandOffer {
+    if (this.driver.supportsHand === false || !this.driver.hand) {
+      return { supported: false, message: this.driver.handMessage ?? 'Take over at the computer for this mode.' };
+    }
+    if (!this.#session) return { supported: true, message: 'No agent is driving this screen.' };
+    if (this.#state !== 'paused') return { supported: true, message: 'Take over first, then you can drive.' };
+    return { supported: true, hand: this.driver.hand };
+  }
 
   rollover(input: BrowserRollover): boolean {
     const session = this.#session;

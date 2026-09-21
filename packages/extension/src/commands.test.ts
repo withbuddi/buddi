@@ -3,10 +3,10 @@
  * wrote instead. Chrome is a fake here; what is under test is which element a
  * command lands on and what it refuses.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserCommands } from './commands.js';
 import type { WorkerChrome } from './chrome.js';
-import { Cancellation, CancelledError, PreconditionError, type Command } from './protocol.js';
+import { Cancellation, CancelledError, PreconditionError, type Command, type FrameMessage } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 
 interface FrameResult { url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number } }
@@ -24,9 +24,16 @@ const PAGE: FrameResult = {
 
 interface FakeTab { id: number; url: string; title: string; status: string; groupId: number; windowId: number; active: boolean }
 
+type DebuggerEvent = (source: { tabId?: number }, method: string, params?: unknown) => void;
+type DebuggerDetach = (source: { tabId?: number }, reason?: string) => void;
+
 function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null }> = [{ frameId: 0, result: structuredClone(PAGE) }]) {
   const located: string[] = [];
   const dispatched: string[] = [];
+  const sent: Array<{ method: string; params?: unknown }> = [];
+  const attachments: number[] = [];
+  const events: DebuggerEvent[] = [];
+  const detaches: DebuggerDetach[] = [];
   const injected: string[] = [];
   const tabs = new Map<number, FakeTab>();
   const windows = new Map<number, { id: number; focused: boolean }>([[1, { id: 1, focused: true }]]);
@@ -61,21 +68,27 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
       },
     },
     debugger: {
-      async attach() { if (failures.attach) throw new Error(failures.attach); },
+      async attach({ tabId }: { tabId: number }) { if (failures.attach) throw new Error(failures.attach); attachments.push(tabId); },
       async detach() { dispatched.push('detach'); },
-      async sendCommand(_target: unknown, method: string) { dispatched.push(method); return { data: 'iVBORw0KGgo=' }; },
+      async sendCommand(_target: unknown, method: string, params?: unknown) {
+        dispatched.push(method);
+        sent.push({ method, params });
+        return { data: 'iVBORw0KGgo=' };
+      },
+      onEvent: { addListener(listener: DebuggerEvent) { events.push(listener); } },
+      onDetach: { addListener(listener: DebuggerDetach) { detaches.push(listener); } },
     },
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, injected, tabs, windows, failures };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures };
 }
 
-const command = (name: Command['name'], args: Record<string, unknown> = {}): Command => ({ id: 'c1', name, session: 's1', args });
+const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
 
-async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>) {
+async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; now?: () => number } = {}) {
   const fake = fakeChrome(frames);
-  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value' });
+  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', ...options });
   await commands.run(command('navigate', { url: 'https://example.test/' }));
   return { ...fake, commands };
 }
@@ -338,5 +351,188 @@ describe('waiting for what the input started', () => {
     await commands.run(command('click', { target: { ref: 'e1' } }));
     expect(loaded).toBe(true);
     expect(tab.url).toBe('https://example.test/next');
+  });
+});
+
+/*
+ * The owner's own hand: a screencast out of the tab and their pointer and keys
+ * back into it. The fake chrome plays Chrome's side of the debugger, so what is
+ * under test is the throttle, the acks, the mapping, and what is refused.
+ */
+describe('the screencast', () => {
+  // The throttle holds a frame back on a timer; nothing else here waits on one.
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const frame = (n: number) => ({ data: `frame-${n}`, sessionId: n, metadata: { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 40 } });
+
+  async function casting() {
+    const frames: FrameMessage[] = [];
+    let clock = 1_000;
+    const fake = await opened(undefined, { onFrame: (f) => frames.push(f), now: () => clock });
+    await fake.commands.run(command('screencast.start', { maxWidth: 1280, maxHeight: 800 }));
+    const paint = (n: number) => { for (const listener of fake.events) listener({ tabId: [...fake.tabs.keys()][0]! }, 'Page.screencastFrame', frame(n)); };
+    return { ...fake, frames, paint, tick: (ms: number) => { clock += ms; } };
+  }
+
+  it('starts jpeg frames on the session tab and keeps the debugger attached', async () => {
+    const { sent, dispatched, attachments } = await casting();
+    expect(sent.find((call) => call.method === 'Page.startScreencast')!.params)
+      .toMatchObject({ format: 'jpeg', quality: 60, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+    expect(attachments).toHaveLength(1);
+    expect(dispatched).not.toContain('detach');
+  });
+
+  it('sends each frame with its metadata and acks it', async () => {
+    const { frames, paint, sent } = await casting();
+    paint(1);
+    await Promise.resolve();
+    expect(frames).toEqual([{ type: 'frame', session: 's1', data: 'frame-1', sessionId: 1,
+      metadata: { deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 40 } }]);
+    expect(sent.filter((call) => call.method === 'Page.screencastFrameAck').map((call) => call.params)).toEqual([{ sessionId: 1 }]);
+  });
+
+  it('sends at most ten frames a second and acks the ones it drops, so Chrome keeps painting', async () => {
+    const { frames, paint, sent, tick } = await casting();
+    paint(1);
+    tick(10);
+    paint(2);
+    tick(10);
+    paint(3);
+    await Promise.resolve();
+    // One went out; the two that came too soon were acked, and the last is held.
+    expect(frames.map((f) => f.data)).toEqual(['frame-1']);
+    expect(sent.filter((call) => call.method === 'Page.screencastFrameAck')).toHaveLength(2);
+    tick(100);
+    await vi.advanceTimersByTimeAsync(100);
+    // The page settled inside the window, so the owner still sees where it settled.
+    expect(frames.map((f) => f.data)).toEqual(['frame-1', 'frame-3']);
+    expect(sent.filter((call) => call.method === 'Page.screencastFrameAck')).toHaveLength(3);
+  });
+
+  it('shares its debugger with a command that runs while it is on, and detaches only at the end', async () => {
+    const { commands, dispatched, attachments, frames, paint } = await casting();
+    await commands.run(command('observe'));
+    await commands.run(command('screenshot'));
+    expect(attachments).toHaveLength(1);
+    expect(dispatched).not.toContain('detach');
+    paint(1);
+    await Promise.resolve();
+    expect(frames).toHaveLength(1);
+    await commands.run(command('screencast.stop'));
+    expect(dispatched).toContain('detach');
+  });
+
+  it('stops the screencast and detaches on stop, and answers a second stop all the same', async () => {
+    const { commands, dispatched, sent, frames, paint } = await casting();
+    await commands.run(command('screencast.stop'));
+    expect(sent.some((call) => call.method === 'Page.stopScreencast')).toBe(true);
+    expect(dispatched).toContain('detach');
+    paint(1);
+    await Promise.resolve();
+    expect(frames).toEqual([]);
+    await expect(commands.run(command('screencast.stop'))).resolves.toEqual({});
+  });
+
+  it('gives up the screencast when the socket ends', async () => {
+    const { commands, dispatched, frames, paint } = await casting();
+    commands.reset();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatched).toContain('detach');
+    paint(1);
+    await Promise.resolve();
+    expect(frames).toEqual([]);
+  });
+
+  it('forgets the screencast when Chrome takes the debugger away', async () => {
+    const { commands, detaches, tabs, frames, paint } = await casting();
+    for (const listener of detaches) listener({ tabId: [...tabs.keys()][0]! }, 'target_closed');
+    paint(1);
+    await Promise.resolve();
+    expect(frames).toEqual([]);
+    await expect(commands.run(command('input', { kind: 'mouse', type: 'mousePressed', x: 1, y: 1 }), new Cancellation()))
+      .rejects.toThrow(/No screencast is running/);
+  });
+
+  it('detaches when a cancel lands while it is starting', async () => {
+    const fake = await opened();
+    const cancel = new Cancellation();
+    fake.chrome.debugger.sendCommand = async (_target: unknown, method: string) => { if (method === 'Page.startScreencast') cancel.cancel(); return {}; };
+    await expect(fake.commands.run(command('screencast.start'), cancel)).rejects.toBeInstanceOf(CancelledError);
+    expect(fake.dispatched).toContain('detach');
+  });
+});
+
+describe('the owner’s input', () => {
+  async function casting(owner = true) {
+    const fake = await opened(undefined, { now: () => 1_000 });
+    await fake.commands.run(command('screencast.start'));
+    const input = (args: Record<string, unknown>) => fake.commands.run(command('input', args, owner));
+    return { ...fake, input };
+  }
+
+  it('refuses input when no screencast is running', async () => {
+    const { commands, dispatched } = await opened();
+    await expect(commands.run(command('input', { kind: 'mouse', type: 'mousePressed', x: 3, y: 4 }, true)))
+      .rejects.toThrow(/No screencast is running/);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('dispatches a click where the dashboard pointed', async () => {
+    const { input, sent } = await casting();
+    await input({ kind: 'mouse', type: 'mousePressed', x: 12, y: 34, button: 'left', clickCount: 2, modifiers: 2 });
+    await input({ kind: 'mouse', type: 'mouseReleased', x: 12, y: 34, button: 'left', clickCount: 2 });
+    const mouse = sent.filter((call) => call.method === 'Input.dispatchMouseEvent').map((call) => call.params);
+    expect(mouse).toEqual([
+      { type: 'mousePressed', x: 12, y: 34, button: 'left', buttons: 1, clickCount: 2, modifiers: 2 },
+      { type: 'mouseReleased', x: 12, y: 34, button: 'left', buttons: 0, clickCount: 2, modifiers: 0 },
+    ]);
+  });
+
+  it('turns a wheel into a mouseWheel and a key into a key event', async () => {
+    const { input, sent } = await casting();
+    await input({ kind: 'wheel', x: 5, y: 6, deltaX: 0, deltaY: -120 });
+    await input({ kind: 'key', type: 'keyDown', key: 'Enter', code: 'Enter' });
+    await input({ kind: 'key', type: 'char', key: 'a', code: 'KeyA', text: 'a' });
+    expect(sent.at(-3)).toEqual({ method: 'Input.dispatchMouseEvent', params: { type: 'mouseWheel', x: 5, y: 6, deltaX: 0, deltaY: -120, modifiers: 0 } });
+    expect(sent.at(-2)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 0, windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 } });
+    expect(sent.at(-1)).toEqual({ method: 'Input.dispatchKeyEvent', params: { type: 'char', key: 'a', code: 'KeyA', modifiers: 0, text: 'a' } });
+  });
+
+  it('keeps coordinates and deltas inside what a viewport can be', async () => {
+    const { input, sent } = await casting();
+    await input({ kind: 'mouse', type: 'mouseMoved', x: 9e9, y: Number.NaN });
+    expect(sent.at(-1)!.params).toMatchObject({ x: 20_000, y: 0, clickCount: 0 });
+  });
+
+  it('refuses an event kind and a mouse type it does not dispatch', async () => {
+    const { input, sent } = await casting();
+    const before = sent.length;
+    await expect(input({ kind: 'touch', type: 'touchStart' })).rejects.toBeInstanceOf(PreconditionError);
+    await expect(input({ kind: 'mouse', type: 'contextMenu', x: 1, y: 1 })).rejects.toBeInstanceOf(PreconditionError);
+    await expect(input({ kind: 'key', type: 'char', key: 'a', code: 'KeyA' })).rejects.toThrow(/no text in it/);
+    expect(sent).toHaveLength(before);
+  });
+
+  it('types into the tab the owner is looking at, because the hands are theirs', async () => {
+    const { input, tabs, sent } = await casting();
+    [...tabs.values()][0]!.active = true;
+    await input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' });
+    expect(sent.at(-1)!.method).toBe('Input.dispatchKeyEvent');
+  });
+
+  it('still refuses input that is not the owner’s while they are looking at the tab', async () => {
+    const { input, tabs } = await casting(false);
+    [...tabs.values()][0]!.active = true;
+    await expect(input({ kind: 'key', type: 'keyDown', key: 'a', code: 'KeyA', text: 'a' }))
+      .rejects.toThrow(/only acts in background tabs/);
+  });
+
+  it('refuses input into a tab the owner took out of the group, and ends the screencast', async () => {
+    const { input, tabs, commands } = await casting();
+    [...tabs.values()][0]!.groupId = -1;
+    await expect(input({ kind: 'mouse', type: 'mousePressed', x: 1, y: 1 })).rejects.toThrow(/The owner took this tab/);
+    await expect(commands.run(command('input', { kind: 'mouse', type: 'mousePressed', x: 1, y: 1 }, true)))
+      .rejects.toThrow(/No screencast is running/);
   });
 });

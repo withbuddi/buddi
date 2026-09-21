@@ -1,17 +1,32 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/tool-web';
-import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type Observation } from './types.js';
+import { BrowserPreconditionError, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type Observation } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
 export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot'] as const;
-export type ExtensionCommandName = (typeof EXTENSION_COMMANDS)[number];
+/**
+ * The take-over's own three, kept out of the list above.
+ *
+ * Nothing an agent can name reaches them: they exist for the owner's hand, and
+ * the extension keeps the same split on its side.
+ */
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
+export type ExtensionCommandName = (typeof EXTENSION_COMMANDS)[number] | (typeof HAND_COMMANDS)[number];
 
 export interface ExtensionCommand {
   name: ExtensionCommandName;
   /** Conversation-scoped: the extension keeps one "buddi" tab group per session. */
   session: string;
   args: Record<string, unknown>;
+  /**
+   * The owner's own hand, not the agent's.
+   *
+   * The extension refuses input into a tab the owner is looking at, which is
+   * exactly the wrong answer when the owner is the one driving. Only the
+   * remote hand sets this, and only for `input`.
+   */
+  owner?: boolean;
 }
 export interface ExtensionResult {
   observation?: unknown;
@@ -38,6 +53,11 @@ export interface ExtensionBridge {
    * nobody has seen since.
    */
   idle?(): Promise<void>;
+  /**
+   * Screencast frames for one session, which arrive unasked rather than as the
+   * answer to a command. Returns the unsubscribe.
+   */
+  frames?(session: string, onFrame: (frame: HandFrame) => void): () => void;
 }
 
 export const NOT_CONNECTED = 'Your browser is not connected. Open the buddi extension in Chrome and press Connect.';
@@ -82,14 +102,14 @@ export class ExtensionDriver implements BrowserDriver {
 
   #invalidate(): void { this.#observation = undefined; this.#picture = undefined; }
 
-  async #send(name: ExtensionCommandName, args: Record<string, unknown> = {}): Promise<ExtensionResult> {
+  async #send(name: ExtensionCommandName, args: Record<string, unknown> = {}, owner = false): Promise<ExtensionResult> {
     // A failure left the page in an unknown state and possibly a command still
     // being abandoned. Nothing else goes out until that has settled.
     const settling = this.#settling;
     if (settling) { this.#settling = undefined; await settling; }
     if (!this.bridge.connected()) throw new Error(NOT_CONNECTED);
     try {
-      return await this.bridge.send({ name, session: this.session, args });
+      return await this.bridge.send({ name, session: this.session, args, ...(owner ? { owner: true } : {}) });
     } catch (error) {
       this.#invalidate();
       this.#settling = Promise.resolve(this.bridge.idle?.()).then(() => undefined, () => undefined);
@@ -161,8 +181,38 @@ export class ExtensionDriver implements BrowserDriver {
   async takeover(): Promise<void> { this.#invalidate(); }
   resume(): void { this.#invalidate(); }
 
+  /**
+   * The remote hand: a screencast out of the session's tab, and the owner's
+   * pointer and keyboard into it.
+   *
+   * Frames do not come back as the answer to a command — the extension pushes
+   * them — so the subscription is taken before the screencast is asked for,
+   * and dropped when it stops. Input is marked `owner`, which is what lets it
+   * through the extension's refusal to type into a tab being watched: the
+   * watcher and the typist are the same person here.
+   */
+  readonly supportsHand = true;
+  #frames?: () => void;
+  readonly hand: BrowserHand = {
+    start: async (onFrame: (frame: HandFrame) => void) => {
+      this.#frames?.();
+      this.#frames = this.bridge.frames?.(this.session, onFrame);
+      this.#invalidate();
+      await this.#send('screencast.start', { maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+    },
+    input: async (event: HandInput) => { await this.#send('input', event as unknown as Record<string, unknown>, true); },
+    stop: async () => {
+      this.#frames?.();
+      this.#frames = undefined;
+      if (!this.bridge.connected()) return;
+      await this.#send('screencast.stop').catch(() => undefined);
+    },
+  };
+
   async close(): Promise<void> {
     this.#invalidate();
+    this.#frames?.();
+    this.#frames = undefined;
     // A closed socket has already forgotten the session; nothing to close.
     if (!this.bridge.connected()) return;
     await this.bridge.send({ name: 'close', session: this.session, args: {} }).catch(() => undefined);

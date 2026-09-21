@@ -48,6 +48,10 @@ export interface ChromeLike {
     attach(target: { tabId: number }, version: string): Promise<void>;
     detach(target: { tabId: number }): Promise<void>;
     sendCommand(target: { tabId: number }, method: string, params?: unknown): Promise<unknown>;
+    /** Screencast frames arrive here, not as the answer to a command. */
+    onEvent: { addListener(listener: (source: { tabId?: number }, method: string, params?: unknown) => void): void };
+    /** Chrome took the debugger away: the tab closed, or the owner dismissed the yellow bar. */
+    onDetach: { addListener(listener: (source: { tabId?: number }, reason?: string) => void): void };
   };
 }
 

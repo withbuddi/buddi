@@ -30,7 +30,7 @@ export class ApiError extends Error {
   }
 }
 
-function csrfToken(): string {
+export function csrfToken(): string {
   const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`));
   return match?.[1] ? decodeURIComponent(match[1]) : '';
 }
@@ -1258,5 +1258,9 @@ export interface BrowserStatus {
   lastAction?: string;
   message?: string;
   hasScreenshot: boolean;
+  /** Take over only: whether this screen can be driven from the dashboard. */
+  hand?: boolean;
+  /** Why it cannot, in the mode's own words. */
+  handMessage?: string;
   sessions?: BrowserStatus[];
 }

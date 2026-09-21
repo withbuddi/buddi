@@ -57,13 +57,13 @@ export function createBrowserManifest(service: BrowserController = hostBrowser()
 export const manifest = createBrowserManifest();
 export default manifest;
 export { BrowserService } from './service.js';
-export type { BrowserStatus, BrowserController, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
+export type { BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
 export { BrowserManager } from './manager.js';
 export { PlaywrightHost } from './host.js';
 export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
 export { ComputerDriver, NativeComputerBridge, settingsSchema } from './computer.js';
-export { ExtensionDriver, EXTENSION_COMMANDS, NOT_CONNECTED } from './extension.js';
+export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
 export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionResult } from './extension.js';
 export { commandSchema, UNTRUSTED, BrowserPreconditionError } from './types.js';
-export type { BrowserCommand, BrowserDriver, Observation, ObservedTarget } from './types.js';
+export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, Observation, ObservedTarget } from './types.js';

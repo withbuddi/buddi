@@ -168,7 +168,7 @@ describe('commands', () => {
     const observation = { id: 'o1', url: 'https://example.test/', title: 'T', tree: '- link "Home" [ref=e1]', tabs: [], capturedAt: '2026-09-21T00:00:00.000Z' };
     const { protocol, sent, execute } = await paired({ execute: async () => ({ observation, screenshot: 'AAAA' }) });
     await protocol.receive(JSON.stringify({ type: 'command', id: 'c1', name: 'observe', session: 's1', args: {} }));
-    expect(execute).toHaveBeenCalledWith({ id: 'c1', name: 'observe', session: 's1', args: {} }, expect.any(Cancellation));
+    expect(execute).toHaveBeenCalledWith({ id: 'c1', name: 'observe', session: 's1', args: {}, owner: false }, expect.any(Cancellation));
     expect(sent).toEqual([{ type: 'result', id: 'c1', ok: true, observation, screenshot: 'AAAA' }]);
   });
 
@@ -182,7 +182,16 @@ describe('commands', () => {
     const { protocol, execute } = await paired();
     const target = { by: 'role', role: 'link', name: 'Sign in', frame: 0 };
     await protocol.receive(JSON.stringify({ type: 'command', id: 'c7', name: 'click', session: 's1', args: { target } }));
-    expect(execute).toHaveBeenCalledWith({ id: 'c7', name: 'click', session: 's1', args: { target } }, expect.any(Cancellation));
+    expect(execute).toHaveBeenCalledWith({ id: 'c7', name: 'click', session: 's1', args: { target }, owner: false }, expect.any(Cancellation));
+  });
+
+  it('knows the hand commands and carries the owner flag through to the executor', async () => {
+    const { protocol, sent, execute } = await paired();
+    for (const name of ['screencast.start', 'screencast.stop', 'input']) {
+      await protocol.receive(JSON.stringify({ type: 'command', id: `h-${name}`, name, session: 's1', args: { kind: 'mouse' }, owner: true }));
+      expect(execute).toHaveBeenCalledWith({ id: `h-${name}`, name, session: 's1', args: { kind: 'mouse' }, owner: true }, expect.any(Cancellation));
+    }
+    expect(sent.every((frame) => (frame as { ok?: boolean }).ok === true)).toBe(true);
   });
 
   it('marks a precondition refusal so the gateway can reconsider instead of retrying', async () => {
