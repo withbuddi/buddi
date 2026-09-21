@@ -12,7 +12,7 @@ import {
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
-import { manifest as financeManifest } from '@buddi/tool-finance';
+import { fixturePluginManifest } from '../__fixtures__/plugin-manifest.js';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { createDelegationManifest } from '../agents/delegation.js';
 import { createReminderManifest, createScheduleManifest } from './reminders.js';
@@ -401,7 +401,7 @@ function decidingProvider(
 
 function realExecutorOver(db: FakeDb, provider: RuntimeProvider): MissionExecute {
   const registry = new ToolRegistry();
-  registry.register(financeManifest);
+  registry.register(fixturePluginManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
   registry.register(createReminderManifest());

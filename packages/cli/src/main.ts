@@ -5,8 +5,8 @@
  * This file is a dispatcher and nothing else. Every subcommand is implemented
  * somewhere it already belonged: `chat`/`ask`/`agents` and `missions` are the
  * gateway's own entry points, called as functions; `serve` is the gateway's
- * `main`; `migrate` is core's `runMigrations` over the gateway's installed
- * manifests. The binary adds only what has nowhere else to live — `init`,
+ * `main`; `migrate` is the gateway's `migrateInstalled` over core's
+ * `runMigrations`. The binary adds only what has nowhere else to live — `init`,
  * `doctor`, `service`, `telegram`, `backup`.
  *
  * The repo root comes from this module's location (see `paths.ts`), never from
@@ -14,11 +14,11 @@
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { createPool, runMigrations } from '@buddi/core';
+import { createPool } from '@buddi/core';
 import {
   describeDatabaseError,
   hydrateSecrets,
-  installedManifests,
+  migrateInstalled,
   requireDatabase,
   runChatCli,
   runMissionsCli,
@@ -50,10 +50,17 @@ export async function migrate(): Promise<number> {
   }
   const pool = createPool(url);
   try {
-    const applied = await runMigrations(pool, installedManifests());
+    // An installed plugin whose migrations will not apply is that plugin
+    // failing to load, not this command failing (docs/install.md §7): it is
+    // named here and by `buddi plugins list`, and core's own migrations and
+    // the compiled-in plugins' still throw.
+    const { applied, problems } = await migrateInstalled(pool);
     if (applied.length === 0) console.log('migrations: up to date');
     for (const m of applied) console.log(`applied ${m.schema}/${m.filename}`);
-    return 0;
+    for (const problem of problems) {
+      console.error(`plugin ${problem.name} was not loaded: ${problem.message}`);
+    }
+    return problems.length > 0 ? 1 : 0;
   } finally {
     await pool.end();
   }

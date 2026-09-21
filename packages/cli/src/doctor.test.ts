@@ -312,6 +312,41 @@ describe('the agents row', () => {
     expect(row.detail).toContain('the default agent @ledger cannot run');
   });
 
+  /*
+   * A plugin that is not installed is a state of the installation, not a
+   * broken one: the gateway starts, every other agent runs, and the owner
+   * fixes it from one page. So the row *names* the held-back agents and warns
+   * — even when the default one is among them, which is exactly the case that
+   * used to take `buddi doctor` down with the catalog.
+   */
+  it('warns about a held-back agent and never fails on one', () => {
+    const row = checkAgents([
+      agent({ isDefault: true }),
+      agent({
+        id: 'ledger-2',
+        handle: 'credo',
+        available: false,
+        heldBack: true,
+        reason: 'Needs the finance plugin.',
+      }),
+    ]);
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('@credo held back until the plugin they grant is installed');
+    expect(row.detail).toContain('Needs the finance plugin.');
+    // Not reported as a credential problem: nothing is wrong with the engine.
+    expect(row.detail).not.toContain('unavailable: Needs');
+    expect(row.detail).not.toContain('cannot run here');
+  });
+
+  it('still only warns when the DEFAULT agent is the held-back one', () => {
+    const row = checkAgents([
+      agent({ isDefault: true, available: false, heldBack: true, reason: 'Needs the finance plugin.' }),
+      agent({ id: 'other', handle: 'other' }),
+    ]);
+    expect(row.status).toBe('warn');
+    expect(row.detail).not.toContain('the default agent @ledger cannot run');
+  });
+
   it('is ok when everything installed can run', () => {
     expect(checkAgents([agent({ isDefault: true })]).status).toBe('ok');
     expect(checkAgents([agent({ isDefault: true })]).detail).toBe(
@@ -478,6 +513,31 @@ describe('the plugins row', () => {
     expect(row.detail).toContain('weather (its entry point is not on disk any more');
     expect(row.detail).toContain('loaded: trains@1.0.0');
     expect(row.detail).toContain('buddi plugins list');
+  });
+
+  it('names where each one came from, when the record says', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [{ name: 'weather', version: '0.2.0', source: 'npm buddi-plugin-weather@0.2.0' }],
+      problems: [],
+    });
+    expect(row.detail).toContain('weather@0.2.0 (npm buddi-plugin-weather@0.2.0)');
+  });
+
+  /**
+   * The row the recorded hash exists for. The plugin still loads and still
+   * works; what it is not is what the owner approved, and a plugin runs with
+   * everything buddi can do. A warning, named, never a silent pass.
+   */
+  it('warns when a plugin no longer hashes to what was approved', () => {
+    const row = checkPlugins({
+      record,
+      loaded: [{ name: 'weather', version: '0.2.0' }],
+      problems: [],
+      changed: [{ name: 'weather', message: 'weather changed on disk since it was approved.' }],
+    });
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('weather changed on disk since it was approved');
   });
 
   it('is never critical: a broken plugin does not make the installation broken', async () => {

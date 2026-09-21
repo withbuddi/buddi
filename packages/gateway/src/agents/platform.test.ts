@@ -220,7 +220,7 @@ describe('validation happens before the action exists', () => {
     // it, and from then on the self-edit preview rule applies to the copy.
     const message = refusalOf(h, 'platform.update_agent', {
       id: 'agent-father',
-      tools: ['platform.*', 'finance.*'],
+      tools: ['platform.*', 'web.*'],
     });
     expect(message).toContain('one of the examples this repository ships');
   });
@@ -325,23 +325,25 @@ describe('the envelope carries the whole file and the resolved grant', () => {
     expect(preview).toContain(firstSentence(memoryNote?.description ?? ''));
     // And what it does not reach is named too.
     expect(preview).toContain('It reaches nothing else');
-    expect(preview).toContain('finance');
+    expect(preview).toContain('web');
   });
 });
 
 describe('an update that widens a grant says so', () => {
-  const widen = { id: 'scout', tools: ['memory.note', 'memory.recall', 'finance.*'] };
+  // `web.*` rather than `finance.*`: finance is no longer compiled in, and a
+  // widening has to name a family this build actually registers.
+  const widen = { id: 'scout', tools: ['memory.note', 'memory.recall', 'web.*'] };
 
   it('names the widening, the added tools and what they reach', () => {
     const { envelope, preview } = described<UpdateAgentEnvelope>(h, 'platform.update_agent', widen);
     expect(envelope.widened).toBe(true);
-    expect(envelope.added).toContain('finance.list_accounts');
+    expect(envelope.added).toContain('web.search');
     expect(envelope.toolsBefore).toEqual(['memory.note', 'memory.recall']);
 
     expect(preview).toContain('THIS WIDENS WHAT @scout CAN REACH.');
-    expect(preview).toContain('This adds @scout your finance tools');
+    expect(preview).toContain('This adds @scout your web tools');
     expect(preview).toContain('What it newly reaches:');
-    expect(preview).toContain('finance.list_accounts —');
+    expect(preview).toContain('web.search —');
     // The tools it already had are shown separately, so the two never blur.
     expect(preview).toContain('Unchanged, and it already had these: memory.note, memory.recall');
   });
@@ -683,7 +685,7 @@ describe('the read tools', () => {
       families: Array<{ family: string; glob: string; tools: unknown[] }>;
       total: number;
     };
-    expect(result.families.map((f) => f.family)).toContain('finance');
+    expect(result.families.map((f) => f.family)).toContain('web');
     expect(result.families.find((f) => f.family === 'memory')?.glob).toBe('memory.*');
     expect(result.total).toBeGreaterThan(20);
   });

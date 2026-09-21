@@ -11,7 +11,7 @@ import { chatApi } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
 import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
-import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, waitingText } from '../shell/roster';
+import { cannotRunFix, cannotRunSentence, waitingText } from '../shell/roster';
 import { Avatar, ButtonLink, Empty, List, ListRow, Notice, Panel, Pill, Sheet, Tab, Tabs, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
@@ -130,7 +130,7 @@ function AgentPage({
       </header>
       {agent && !agent.available ? (
         <Notice tone="warning" role="status">
-          {cannotRunSentence(agent)} <a href={settingsRoute('accounts')}>{MODEL_ACCOUNTS_LABEL}</a>
+          {cannotRunSentence(agent)} <a href={settingsRoute(cannotRunFix(agent).section)}>{cannotRunFix(agent).label}</a>
         </Notice>
       ) : null}
       <Tabs>

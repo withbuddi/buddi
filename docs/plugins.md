@@ -410,7 +410,8 @@ means, the page knows how to draw a line, and this says which is which.
 
 The shipped example is `examples/plugins/weather/src/views.ts`: eight lines that
 turn a forecast into a line chart with freezing drawn on it. The real thing is
-`packages/tools/finance/src/views.ts`, which has six.
+the finance plugin's `src/views.ts` (in the `buddi-plugins` repository), which
+has thirteen.
 
 An agent can also draw deliberately, with the platform's own `canvas.show` — for
 something it worked out that no single tool result covers. Precedence in the
@@ -531,7 +532,13 @@ export const MIGRATIONS_DIR = path.resolve(
 );
 ```
 
-and `migrations` goes in the package's `files` array.
+and `migrations` goes in the package's `files` array. Use `fileURLToPath`, never
+`new URL('./migrations', import.meta.url).pathname`: that form percent-encodes a
+space, so under a data directory called `owner data` — or
+`~/Library/Application Support/...` — the path does not exist on disk. A
+`migrationsDir` that is not there is now an error naming the directory
+(`migrate` used to treat it as "nothing to do"), reported on install as
+`migrationProblem`.
 
 `migrate(pool, { schema, dir })` (`packages/core/src/db.ts`) is per-plugin and
 additive:
@@ -546,8 +553,14 @@ additive:
   one.** Number them `001_`, `002_`.
 - the schema name is checked against `/^[a-z_][a-z0-9_]*$/` before it is quoted.
 
-`runMigrations(pool, manifests)` runs core's first, then each manifest's. A
-manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
+`runMigrations(pool, manifests, { optional, onProblem })` runs core's first,
+then each manifest's. `optional` names the installed third-party plugins: one
+of those failing is that plugin failing to load (`docs/install.md` §7), so it
+is reported through `onProblem`, left out of `installedManifests` for the rest
+of the run and listed by `pluginLoadReport` — the Plugins page and doctor say
+why. Core's own migrations and a compiled-in plugin's still throw. Both start
+paths go through the gateway's `migrateInstalled(pool, env)`, which fills those
+two options in. A manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
 saying it owns no schema at all, not a missing path. Its tools read `core.artifacts`
 because a dropped plugin must not take the owner's files with it.
 
@@ -986,7 +999,7 @@ your sentinels and sources over `wiring.registry.manifests()`, `buddi migrate`
 applies your schema, `buddi missions add-defaults` reads your suggestions, and
 `platform.plugin_agents` offers your agents. See §8.
 
-**The plugins this repository ships are different**: `finance`, `email`, `memory`,
+**The plugins this repository ships are different**: `email`, `memory`,
 `artifacts` and `web` are compiled into the build, registered in
 `createToolRegistry` in `packages/gateway/src/agents/catalog.ts`, and they cannot
 be uninstalled because they are part of it. (`installedManifests()` derives the
@@ -1005,9 +1018,9 @@ install is exercised against.
 
 **Pure helpers first.** Put every judgement in a function that takes plain values
 and returns a `Finding`, a number or a string, and test it with no database and
-no clock. `packages/tools/finance/src/sentinels/helpers.ts` is the pattern: the
-sentinels are a query plus a call into it, and `helpers.test.ts` covers the
-rules. The weather example does the same with `frostFinding`.
+no clock. The finance plugin's `src/sentinels/helpers.ts` (in `buddi-plugins`)
+is the pattern: the sentinels are a query plus a call into it, and
+`helpers.test.ts` covers the rules. The weather example does the same with `frostFinding`.
 
 **The throwaway database.** Anything that needs SQL gets a real Postgres, never a
 mock, and never the developer's own database. The suite creates a database,
@@ -1050,8 +1063,8 @@ suite('memory tools (postgres)', () => {
 
 `${process.pid}` in the name is what lets two suites run at once. Use
 `runMigrations(pool, [manifest])` instead of `migrate` when your plugin also
-reads a core table — that applies core's migrations first
-(`packages/tools/finance/src/sentinels/sentinels.db.test.ts`).
+reads a core table — that applies core's migrations first (the finance plugin's
+`src/sentinels/sentinels.db.test.ts` does exactly that).
 
 Drive tools **through the registry**, not by calling `execute` directly. That is
 what proves the tier, the zod schema and the refusal paths, which is most of what
@@ -1186,20 +1199,167 @@ weather/
   migrations/*.sql    # if you own tables
 ```
 
-`buddi plugins install <directory>` resolves `main` (or the `.` export),
-imports it, and expects `manifest` or `default` to be a `PluginManifest`.
+`buddi plugins install <spec>` resolves `main` (or the `.` export), imports it,
+and expects `manifest` or `default` to be a `PluginManifest`.
 
-**A local directory is the only source this build installs from.** Deliberately:
-it is the honest first increment — it works for a git clone, a `pnpm pack`
-unpacked, a sibling checkout — and it leaves for later the parts that need real
-thought. Installing from npm means running a package manager on the owner's
-behalf, deciding what happens to transitive dependencies inside a process that
-holds their bank data, and pinning and verifying versions. A signed, verified
-registry is a different feature and it should be built as one.
+### The three sources
+
+`parsePluginSpec` decides, in this order:
+
+| What you type | What it is |
+| --- | --- |
+| a path that **exists and is a directory** | the developer path: your own build, in place |
+| a path ending `.tgz` | a tarball on disk, for a plugin that should never be public |
+| anything else | an npm package: `weather`, `@you/buddi-plugin-weather@1.2.3` |
+
+A directory wins over a registry name on purpose. A developer with a `finance`
+directory beside them means *that* directory; resolving the registry instead
+would install a stranger's package with the same name and say nothing.
+
+### Publishing one
+
+```jsonc
+{
+  "name": "buddi-plugin-weather",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "keywords": ["buddi-plugin"],
+  "buddi": { "manifest": "manifest", "core": "^0.1.0" },
+  "peerDependencies": { "@buddi/core": "^0.1.0" }
+}
+```
+
+`@buddi/core` is a **peer** dependency and never a normal one. A plugin holding
+its own copy of core would get a second registry, a second pool and a second set
+of module-level singletons: its tools would register into an object nobody reads
+and its approvals would be written by a machine nobody asks. Staging enforces
+this — the staged tree's `node_modules/@buddi/core` is replaced by a symlink to
+the core the gateway is running — but declaring it correctly is what makes
+`npm install` of your package outside buddi behave the same way.
+
+Ship a `buddi.md` beside it. It is prose, it is what the owner reads *before*
+anything of yours is imported, and two labelled lines are parsed out of it:
+
+```markdown
+# weather
+
+Looks up the forecast for a place you name and remembers nothing else.
+
+Schema: weather
+Hosts: api.open-meteo.com
+```
+
+Anything else in the file is shown verbatim. There is no schema to learn: what
+matters is that an owner can read it and that it agrees with your manifest,
+because those two are compared and any difference costs them a second approval.
+
+### Install is two halves, and nothing runs in the first
+
+Importing a module executes it, so an install splits at exactly that line.
+
+**Stage.** `npm view` for the exact version, the integrity hash and the
+publisher; `npm pack` to fetch it; extract; `npm install --ignore-scripts
+--omit=dev` for its dependencies; symlink core. Then read *static metadata only*
+— `package.json`, the integrity hash and publisher, your `buddi.md`, and which
+packages in the installed tree declare `preinstall`/`install`/`postinstall` or
+ship a `binding.gyp` (node-gyp is an install script nobody wrote down).
+Nothing is imported, nothing is registered, no schema exists. The staged package
+sits in `<data>/plugins/staging/<id>/`, and a stage nobody decides on is deleted
+after a day.
+
+Four things are checked before any of that is shown, and each one refuses
+rather than warns:
+
+- **the tarball is the one the registry named.** The sha512 of what `npm pack`
+  wrote is compared with the `dist.integrity` of the packument, and the
+  extracted `package.json` has to carry the same name and version npm resolved.
+- **it is files and directories.** The extracted tree is walked with `lstat`,
+  and a symlink, a device, a fifo or anything whose real path is outside the
+  staging directory is refused and the whole stage deleted. This is not
+  hypothetical tidiness: a member called `node_modules/@buddi` pointing
+  somewhere else turns the `@buddi/core` peer link that comes next into a write
+  outside the stage. `tar` is also run with `--no-same-owner
+  --no-same-permissions`, because an archive's mode bits are its author's
+  opinion.
+- **the tree is hashed.** `stagedHash` is sha256 over the extracted package
+  *and* its `node_modules` — every path, every byte, and the target of every
+  link npm wrote among the dependencies — with `node_modules/@buddi/core`
+  excluded, since that is the link to the running installation's core and not
+  part of your package. It is shown beside the integrity hash.
+- **the entry point is inside the package.** `main` (or the `.` export) is
+  resolved with its links followed and has to land under the package's own real
+  path.
+
+**Approve 1.** The owner is shown all of it and this sentence:
+
+> A plugin runs inside buddi's process with everything buddi can do; it is not
+> sandboxed, and a plugin that wants to can bypass tool approvals and the
+> network allowlist. Install only what you would run as yourself.
+
+They approve by passing back the integrity hash they were shown; a mismatch
+refuses and still imports nothing. `--yes` does not stand in for this: for a
+registry or a tarball source, `buddi plugins install <spec> --yes` without
+`--integrity <hash>` prints the card and the `approve` command and installs
+nothing, because a yes typed before the fetch cannot be a yes to a particular
+package. It **exits 3** when it does that: "staged, not installed", distinct
+from 1 (something failed) and from 0, so a `set -e` install step in somebody's
+setup notes cannot read a refusal as success. A directory source has no hash
+and keeps the plain `--yes`.
+
+Immediately before the first import the staged tree is hashed again and has to
+equal `stagedHash`; a stage that changed while it waited is refused. Only then
+is the entry point imported for the first time, the plan below runs, and your
+`buddi.md` is compared with your manifest.
+
+**Approve 2**, and only when that comparison found a difference. Then the
+record is written first, marked `placing`, and only then does the package move
+to `<data>/plugins/<name>/` — so a machine that dies in between leaves a record
+that says what was happening rather than a directory nothing accounts for, and
+the sweep at the next start can tell an orphan from an install. After the move
+the tree is hashed once more and must still equal the pre-import hash: a plugin
+that rewrote its own files while it was being imported is refused and removed.
+Then its migrations are applied into its own schema, and the record is
+finalised with its provenance: the source, the integrity hash, the publisher,
+the hash of the files as installed, and when it was approved.
+
+Approvals are serialised per plugin name, so two of them for the same name
+cannot both rename into the same directory.
+
+The tools are registered by the next process start. The CLI and the API both
+say so; the API returns `restartNeeded: true`.
+
+### What is recorded, and what doctor does with it
+
+`plugins.json` is version 2. A v1 file still reads — every entry in one is a
+directory source with no provenance, which is exactly what it was. A registry
+entry carries `installedHash`: sha256 over the package's files and its
+`node_modules`, path and content both, sorted, with `node_modules/@buddi/core`
+(the link to the running installation) and `.git` excluded. It is the hash that
+was taken before the plugin was ever imported. `buddi doctor` recomputes it —
+for every plugin in the record, including the ones that did not load — and
+warns, naming the plugin, when it no longer matches.
+
+Including `node_modules` is deliberate and it has a consequence worth stating:
+the hash covers the bytes that actually run, dependencies and all, so a
+dependency rewritten in place is now visible. It is not a reproducibility claim
+about `npm install`. Installing the same version twice on two machines can
+produce two different trees and therefore two different hashes; what is
+recorded is *what was staged here*, and an update is the only thing that is
+supposed to change those files afterwards. A symlink among the package's own
+files is refused rather than skipped, because a hash that ignores what it
+cannot read proves nothing; links inside `node_modules` are hashed by their
+target.
+
+Be clear about what that buys. It detects a plugin whose files changed after the
+owner approved them. It is not a signature, and it protects nobody from what the
+plugin does while running. A plugin is trusted code; the honest controls are the
+sentence above, the recorded hash, and doctor saying when what is on disk is no
+longer what was agreed to.
 
 ### What the owner sees before they say yes
 
-`install` with no `--yes` installs nothing and prints the contribution:
+`install` with no `--yes` stages and prints, and installs nothing. After
+approval the same contribution summary is printed, and it lists:
 
 - every tool, and — first, and in capitals — **the ones at tier `auto`**, which
   run the moment a model decides to call them, with nobody asked. A plugin
@@ -1212,10 +1372,32 @@ registry is a different feature and it should be built as one.
 - the agents it proposes, each with the grant it asks for, and the sentence that
   nothing is created by installing.
 
-Reading that summary already imported your entry point — there is no way to
-describe a module without loading it, and the CLI says so rather than implying a
-sandbox that does not exist. What `--yes` buys is registration, migration,
-scheduling and the offer of agents.
+That summary is produced by importing your entry point — there is no way to
+describe a module without loading it — which is why it comes *after* the first
+approval and never before it. What the staged screen shows beforehand is your
+own claim, labelled as one.
+
+### The name, and where the files go
+
+A published package is usually called `buddi-plugin-weather` while its manifest
+is `weather`, so the rule is written down rather than guessed:
+
+> The manifest's `name` must equal the package's `name`, or the `buddi.name`
+> the package declares in its `package.json`.
+
+An install refuses when it does neither. Otherwise a package called
+`buddi-plugin-weather` could carry a manifest called `finance`, take that name
+in the record, take that schema, and be granted to an agent under a name the
+owner never installed. A directory source is exempt: the owner typed a path to
+a build on their own disk, and the identity of that build is the path.
+
+The name also decides a directory: `<data>/plugins/<name>`, with a scoped name
+folded to one segment (`@you/weather` → `@you+weather`). It is validated against
+npm's charset first, `staging` is reserved, and the resolved directory is
+checked to be inside the plugins root before anything is renamed or removed. A
+schema name is validated too, against `^[a-z_][a-z0-9_]*$`, before it is ever
+recorded — it reaches `create schema`, `set search_path` and, on a purge, `drop
+schema`, where it is also quoted.
 
 ### What a plugin may not be called
 
@@ -1236,8 +1418,22 @@ behind by one plugin.
 
 ### Upgrades
 
-Install the same plugin again. The record is replaced; the migrations run
-forward; **no agent file is written**. Per proposed agent you get one line
+```bash
+buddi plugins update weather                 # stages the newer version
+buddi plugins update weather --version 2.1.0
+buddi plugins update weather --yes --integrity <hash>   # ...and approves it
+```
+
+An update is a stage plus the same two approvals, because a new version is
+somebody else's code exactly as the first one was. It is **newer only**:
+migrations in this system run forward and nothing knows how to undo one, so a
+downgrade is refused with both versions named rather than silently left
+half-migrated. The comparison is semver's own, prerelease rules included, and a
+version it cannot parse is refused rather than guessed at — "not newer" is the
+answer that stops an update, so guessing is how a downgrade gets through.
+
+Installing the same plugin again does the same thing. The record is replaced;
+the migrations run forward; **no agent file is written**. Per proposed agent you get one line
 saying where the owner's copy stands — untouched, edited by them, or superseded
 by a proposal you have changed. See §2.6.
 
@@ -1249,11 +1445,14 @@ an upgrade, and it should be decided deliberately.
 ```bash
 buddi plugins uninstall weather              # shows what it would do
 buddi plugins uninstall weather --yes        # removes the code, KEEPS the data
-buddi plugins uninstall weather --yes --purge   # ...and drops the schema
+buddi plugins uninstall weather --yes --purge --confirm weather   # ...and drops the schema
 ```
 
 The default keeps the data, and the command prints the schema, its tables and
 its row counts so the owner knows exactly what is being kept and where.
+`--purge` also requires the plugin's own name typed back (`--confirm <name>`, or
+the same field on the dashboard); the engine requires it too, so a caller that
+forgets is refused rather than obeyed.
 Reinstalling finds it again. For the finance plugin the alternative would be
 every account, transaction and card ledger the owner has, destroyed by a verb
 that sounds like "remove the code" — so destroying is a separate flag that
@@ -1271,6 +1470,7 @@ stays:
 | Approvals pending on your tools | Rejected: they could never execute. |
 | Agents the owner accepted from your proposals | Left alone — except for the grant rewrite above. They are the owner's files. |
 | Your schema | Kept, unless `--purge`. |
+| The package directory under `<data>/plugins` | Removed — buddi put it there. A `directory` source is left exactly where it is, because buddi did not. |
 | Rows in core's tables (the action ledger, the event log) | Kept. They are the record of what happened, and history does not become false because a plugin left. |
 
 Everything above is planned before anything happens, printed, and only then

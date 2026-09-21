@@ -61,6 +61,7 @@ import {
   ToolRegistry,
   type AgentAvailability,
   type AgentCatalog,
+  type AgentHoldBack,
   type ArtifactRow,
   type CatalogAgent,
   type ToolContext,
@@ -139,6 +140,12 @@ export interface ChatAgentView {
   description: string;
   available: boolean;
   unavailableReason?: string;
+  /**
+   * Set when a tool family this agent was granted is not installed here. The
+   * page greys it exactly as it greys an agent with no account, and sends the
+   * owner to Settings → Plugins instead of Settings → Model accounts.
+   */
+  heldBack?: AgentHoldBack;
   roles: string[];
   provider: string;
   model: string;
@@ -241,6 +248,7 @@ export function readChatAgents(catalog: AgentCatalog): {
       ...(summary.unavailableReason === undefined
         ? {}
         : { unavailableReason: summary.unavailableReason }),
+      ...(summary.heldBack === undefined ? {} : { heldBack: summary.heldBack }),
       roles: [...summary.roles],
       provider: summary.providerKind,
       model: modelOf(full),

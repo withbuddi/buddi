@@ -123,6 +123,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'computer', label: 'Computer & browser' },
   { id: 'watchers', label: 'Watchers' },
   { id: 'backup', label: 'Backup' },
+  { id: 'plugins', label: 'Plugins' },
   { id: 'system', label: 'System' },
 ] as const;
 

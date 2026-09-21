@@ -10,22 +10,59 @@ import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from './db.js';
 import type { AppliedMigration } from './db.js';
 import type { PluginManifest } from './tools.js';
 
+export interface MigrationProblem {
+  /** The plugin's name, as the record and the load report spell it. */
+  name: string;
+  schema: string;
+  message: string;
+}
+
+export interface RunMigrationsOptions {
+  /**
+   * The plugins whose migrations may fail without stopping the start.
+   *
+   * `docs/install.md` §7: a plugin that fails to load never stops the gateway,
+   * and a plugin whose migrations will not apply has not loaded — it has no
+   * schema to work in. So the installed third-party ones are named here by the
+   * caller, each failure is handed to `onProblem` and the plugin is left out
+   * of what this run considers installed. Core and the compiled-in plugins are
+   * never in this list: their schema not applying is this build being wrong
+   * about itself, and starting on it would be worse than not starting.
+   */
+  optional?: readonly string[];
+  /** One call per optional plugin that could not migrate. */
+  onProblem?: (problem: MigrationProblem) => void;
+}
+
 export async function runMigrations(
   pool: Pool,
   manifests: PluginManifest[] = [],
+  opts: RunMigrationsOptions = {},
 ): Promise<AppliedMigration[]> {
+  const optional = new Set(opts.optional ?? []);
   const applied: AppliedMigration[] = [];
   applied.push(...(await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR })));
   for (const manifest of manifests) {
     // A plugin may own no schema at all (the artifacts tools read core's own
     // table). An empty migrationsDir is that statement, not a missing path.
     if (!manifest.migrationsDir || manifest.migrationsDir.trim() === '') continue;
-    applied.push(
-      ...(await migrate(pool, {
+    try {
+      applied.push(
+        ...(await migrate(pool, {
+          schema: manifest.schema,
+          dir: manifest.migrationsDir,
+        })),
+      );
+    } catch (err) {
+      if (!optional.has(manifest.name)) throw err;
+      opts.onProblem?.({
+        name: manifest.name,
         schema: manifest.schema,
-        dir: manifest.migrationsDir,
-      })),
-    );
+        message: `its migrations could not be applied: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+    }
   }
   return applied;
 }

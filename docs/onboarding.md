@@ -166,9 +166,10 @@ questions from the record and the profile, and asks the first unanswered one.
 
 These are not the wizard, but the wizard cannot be honest without them.
 
-- **Only platform plugins ship.** The release list drops `tools/finance`. The
-  Money block and finance watchers are the owner's own plugin, installed like
-  any other, never in the tarball.
+- **Only platform plugins ship.** The release list carries no domain plugin.
+  The Money block and finance watchers are the owner's own plugin — `finance`
+  lives in the `buddi-plugins` repository, is installed like any other, and is
+  never in the tarball.
 - **No ghost accounts.** The legacy accounts named after `ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are seeded only when that
   variable is actually set. A fresh install has zero accounts until the owner

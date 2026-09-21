@@ -4,6 +4,15 @@
  * than an empty panel.
  */
 
+/** Why an agent is listed but cannot run: a plugin it was granted is absent. */
+export interface AgentHoldBack {
+  reason: 'missing-plugin';
+  /** The tool families nothing here provides, in declaration order. */
+  families: string[];
+  /** One sentence, the server's own words, printed verbatim. */
+  message: string;
+}
+
 export interface ChatAgent {
   id: string;
   handle: string;
@@ -11,6 +20,12 @@ export interface ChatAgent {
   description: string;
   available: boolean;
   unavailableReason?: string;
+  /**
+   * Set when a tool family the agent was granted comes from a plugin this
+   * installation does not have. Greyed exactly like an agent with no account;
+   * the door it links to is Settings → Plugins rather than Model accounts.
+   */
+  heldBack?: AgentHoldBack;
   roles: string[];
   provider: string;
   model: string;

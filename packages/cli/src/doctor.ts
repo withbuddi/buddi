@@ -447,6 +447,12 @@ export interface AgentEngineFact {
   /** Why it cannot run here. Present only when `available` is false. */
   reason?: string;
   isDefault: boolean;
+  /**
+   * True when it is held back for a tool family no installed plugin provides.
+   * A state of the installation, not a broken agent: the file is right and the
+   * plugin is missing, so it is a warning even when it is the default one.
+   */
+  heldBack?: boolean;
   /** Which half of the search path it came from. */
   source?: string;
 }
@@ -471,7 +477,8 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
     const key = `${agent.provider}|${agent.model}`;
     const group = groups.get(key) ?? { provider: agent.provider, model: agent.model, count: 0 };
     group.count += 1;
-    if (!agent.available && group.reason === undefined) group.reason = agent.reason;
+    // Held back has its own sentence below; it is not a credential problem.
+    if (!agent.available && agent.heldBack !== true && group.reason === undefined) group.reason = agent.reason;
     groups.set(key, group);
   }
 
@@ -481,20 +488,37 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
   );
   const detail = `${agents.length} agent${agents.length === 1 ? '' : 's'} — ${parts.join(', ')}`;
 
+  /*
+   * Held back is its own sentence, and never a failure.
+   *
+   * An agent granting `finance.*` on an installation without the finance
+   * plugin is *correctly written*: what is missing is an install, which the
+   * owner does from one page. A failed doctor would say the installation is
+   * broken when the only honest thing to report is that one plugin is absent —
+   * and the gateway starts perfectly well either way (docs/install.md §7).
+   */
+  const held = agents.filter((a) => a.heldBack === true);
+  const heldNote =
+    held.length === 0
+      ? ''
+      : `; ${held.map((a) => `@${a.handle}`).join(', ')} held back until the plugin they grant is installed` +
+        `${held.map((a) => a.reason).find((r) => r !== undefined) === undefined ? '' : ` (${held.map((a) => a.reason).find((r) => r !== undefined)})`}`;
+
   const fallback = agents.find((a) => a.isDefault);
-  if (fallback && !fallback.available) {
+  if (fallback && !fallback.available && fallback.heldBack !== true) {
     return {
       status: 'fail',
-      detail: `${detail}; the default agent @${fallback.handle} cannot run`,
+      detail: `${detail}${heldNote}; the default agent @${fallback.handle} cannot run`,
     };
   }
-  const blocked = agents.filter((a) => !a.available);
+  const blocked = agents.filter((a) => !a.available && a.heldBack !== true);
   if (blocked.length > 0) {
     return {
       status: 'warn',
-      detail: `${detail}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
+      detail: `${detail}${heldNote}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
     };
   }
+  if (held.length > 0) return { status: 'warn', detail: `${detail}${heldNote}` };
   return { status: 'ok', detail };
 }
 
@@ -507,9 +531,22 @@ export interface PluginFacts {
   /** The record file the names came from — printed whether or not it has any. */
   record: string;
   /** Every installed plugin whose entry point imported and validated. */
-  loaded: ReadonlyArray<{ name: string; version: string }>;
+  loaded: ReadonlyArray<{ name: string; version: string; source?: string }>;
   /** Every one that is in the record and did not, and the sentence saying why. */
   problems: ReadonlyArray<{ name: string; message: string }>;
+  /**
+   * Plugins whose files no longer hash to what was approved.
+   *
+   * A warning, not a failure: the plugin still loads and still works, and the
+   * owner may have rebuilt it themselves. What it is not is what they agreed
+   * to, and a plugin runs with everything buddi can do — so it is named.
+   */
+  changed?: ReadonlyArray<{ name: string; message: string }>;
+}
+
+/** `finance@1.2.3 (npm …)`, or just the version when nothing recorded a source. */
+function named(plugin: { name: string; version: string; source?: string }): string {
+  return `${plugin.name}@${plugin.version}${plugin.source === undefined ? '' : ` (${plugin.source})`}`;
 }
 
 /**
@@ -524,6 +561,7 @@ export interface PluginFacts {
  */
 export function checkPlugins(facts: PluginFacts): ProbeResult {
   const total = facts.loaded.length + facts.problems.length;
+  const changed = facts.changed ?? [];
   if (total === 0) {
     return {
       status: 'ok',
@@ -531,25 +569,25 @@ export function checkPlugins(facts: PluginFacts): ProbeResult {
     };
   }
   const installed = `${total} installed`;
+  const working = facts.loaded.map(named).join(', ');
+  if (facts.problems.length === 0 && changed.length === 0) {
+    return { status: 'ok', detail: `${installed}, all loaded: ${working}` };
+  }
   if (facts.problems.length === 0) {
     return {
-      status: 'ok',
-      detail: `${installed}, all loaded: ${facts.loaded
-        .map((p) => `${p.name}@${p.version}`)
-        .join(', ')}`,
+      status: 'warn',
+      detail:
+        `${installed}, all loaded: ${working}. ` +
+        `${changed.map((c) => c.message).join(' ')}`,
     };
   }
-  const broken = facts.problems
-    .map((p) => `${p.name} (${p.message})`)
-    .join('; ');
-  const working =
-    facts.loaded.length === 0
-      ? ''
-      : `; loaded: ${facts.loaded.map((p) => `${p.name}@${p.version}`).join(', ')}`;
+  const broken = facts.problems.map((p) => `${p.name} (${p.message})`).join('; ');
   return {
     status: 'fail',
     detail:
-      `${installed}, ${facts.problems.length} did not load — ${broken}${working}. ` +
+      `${installed}, ${facts.problems.length} did not load — ${broken}` +
+      `${facts.loaded.length === 0 ? '' : `; loaded: ${working}`}` +
+      `${changed.length === 0 ? '' : `. ${changed.map((c) => c.message).join(' ')}`}. ` +
       'Its tools are absent from every agent: `buddi plugins list`, then rebuild it or ' +
       '`buddi plugins uninstall <name>`',
   };

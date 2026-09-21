@@ -31,7 +31,7 @@ import { agentRoute, settingsRoute } from '../routes';
 import type { Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar } from '../ui';
-import { MODEL_ACCOUNTS_LABEL, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
+import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
@@ -470,6 +470,9 @@ export function ChatPage({
    * coordinator, and one member without an account is not the room being shut.
    */
   const blocked = !group && agent && !agent.available ? cannotRunSentence(agent) : null;
+  // Which door that sentence opens: Plugins when a plugin is what is missing,
+  // Model accounts otherwise.
+  const blockedFix = cannotRunFix(group ? null : agent);
 
   const thinking = agent && switchedFor === agent.id ? thinkingNow : (agent?.thinking ?? null);
   /**
@@ -962,7 +965,7 @@ export function ChatPage({
           <div className="wb-composer-blocked" data-testid="composer-blocked">
             <Notice tone="warning" role="status">
               {blocked}{' '}
-              <a href={settingsRoute('accounts')}>{MODEL_ACCOUNTS_LABEL}</a>
+              <a href={settingsRoute(blockedFix.section)}>{blockedFix.label}</a>
             </Notice>
           </div>
         ) : conversation?.question ? (

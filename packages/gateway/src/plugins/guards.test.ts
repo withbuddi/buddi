@@ -21,11 +21,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { REPO_ROOT, builtInManifests, installedManifests } from '../agents/catalog.js';
+import {
+  REPO_ROOT,
+  builtInManifests,
+  createToolRegistry,
+  installedManifests,
+} from '../agents/catalog.js';
 import { builtInSchemas, InstallRefusal, planInstall } from './install.js';
 import {
+  adoptPlugins,
   builtInPluginNames,
   builtInToolNames,
+  externalManifests,
+  loadInstalledPlugins,
   manifestProblem,
   perRunManifests,
   resetAdoptedPlugins,
@@ -206,18 +214,31 @@ describe('a new built-in plugin cannot slip past the guards', () => {
   });
 
   /**
-   * And every plugin package in the tree. This is the `web` case exactly: a
-   * package under `packages/tools/`, compiled in, whose name and schema the
-   * guards had never heard of — and whose schema `db:migrate` walks.
+   * And every plugin package the gateway compiles in. This is the `web` case
+   * exactly: a package under `packages/tools/`, compiled in, whose name and
+   * schema the guards had never heard of — and whose schema `db:migrate`
+   * walks.
+   *
+   * "Compiled in" is read off the gateway's own dependencies rather than off
+   * the directory listing, because a package under `packages/tools/` is not
+   * proof of it: a domain plugin is installed, not compiled in — `finance`
+   * left this tree for its own repository and arrives the way the case below
+   * arrives.
    */
-  it('knows every plugin package under packages/tools', async () => {
+  it('knows every plugin package the gateway depends on', async () => {
     const dirs = readdirSync(TOOLS_DIR, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
     expect(dirs.length).toBeGreaterThan(0);
+    const gatewayPkg = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'packages', 'gateway', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    const compiledIn = new Set(Object.keys(gatewayPkg.dependencies ?? {}));
+    const nameOf = (dir: string): string =>
+      (JSON.parse(readFileSync(path.join(TOOLS_DIR, dir, 'package.json'), 'utf8')) as { name: string }).name;
 
-    for (const dir of dirs) {
+    for (const dir of dirs.filter((d) => compiledIn.has(nameOf(d)))) {
       const entry = path.join(TOOLS_DIR, dir, 'dist', 'index.js');
       expect(existsSync(entry), `packages/tools/${dir} is not built — run \`pnpm -r build\``).toBe(
         true,
@@ -245,6 +266,21 @@ describe('a new built-in plugin cannot slip past the guards', () => {
   });
 
   /**
+   * And the other direction, which is the whole point of the change: finance
+   * is not in this tree at all — it lives in the `buddi-plugins` repository —
+   * so its name is free for an installed plugin, which is exactly what the
+   * owner installs when they run `buddi plugins install <path>/finance`.
+   */
+  it('does not claim finance, which is installed rather than compiled in', () => {
+    expect(builtInPluginNames().has('finance')).toBe(false);
+    expect(builtInSchemas().has('finance')).toBe(false);
+    const gatewayPkg = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'packages', 'gateway', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    expect(Object.keys(gatewayPkg.dependencies ?? {})).not.toContain('@buddi/tool-finance');
+  });
+
+  /**
    * The root `pnpm db:migrate` reads its own plugin list, and it had the same
    * disease: it named four packages and web was the fifth. It walks the
    * directory now, and this says so.
@@ -253,5 +289,54 @@ describe('a new built-in plugin cannot slip past the guards', () => {
     const script = readFileSync(path.join(REPO_ROOT, 'scripts', 'migrate.mjs'), 'utf8');
     expect(script).toMatch(/readdir\(toolsDir/);
     expect(script).not.toMatch(/for \(const name of \[/);
+  });
+});
+
+/**
+ * A directory source, loaded exactly as the gateway loads one at start.
+ *
+ * Finance was the first plugin to make the whole trip: it used to be compiled
+ * in, and an existing checkout's agents still grant `finance.*`. It is not in
+ * this tree any more, so the trip is walked here with the fixture package this
+ * repository ships for the purpose — the family arrives through
+ * `externalManifests` rather than through the composition root, which is the
+ * property that matters and is true of any installed plugin.
+ */
+describe('a plugin installed rather than compiled in', () => {
+  it('loads from a directory source and registers its family', async () => {
+    const env = isolatedEnv();
+    const dir = path.join(GATEWAY_SRC, '__fixtures__', 'test-plugin');
+    const entry = path.join(dir, 'index.js');
+    expect(existsSync(entry)).toBe(true);
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version: string };
+    writeFileSync(
+      env.BUDDI_PLUGINS_FILE as string,
+      JSON.stringify({
+        version: 2,
+        plugins: [
+          {
+            name: 'testplug',
+            version: pkg.version,
+            source: { kind: 'directory', path: dir },
+            entry,
+            installedAt: '2026-01-01T00:00:00.000Z',
+            schema: 'buddi_fixture_testplug',
+          },
+        ],
+      }),
+    );
+
+    const loaded = await loadInstalledPlugins(env);
+    expect(loaded.problems).toEqual([]);
+    expect(loaded.loaded.map((p) => p.manifest.name)).toEqual(['testplug']);
+
+    adoptPlugins(env, loaded);
+    expect(externalManifests(env).map((m) => m.name)).toContain('testplug');
+    const registry = createToolRegistry(env);
+    expect(registry.manifests().map((m) => m.name)).toContain('testplug');
+    expect(registry.list().some((t) => t.name.startsWith('testplug.'))).toBe(true);
+    // And the built-in set is still without it: the same process that loaded
+    // it as a plugin does not also ship it.
+    expect(builtInManifests(env).map((m) => m.name)).not.toContain('testplug');
   });
 });

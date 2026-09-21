@@ -1,0 +1,21 @@
+{
+  "name": "buddi-plugin-fixture-marker",
+  "version": "1.0.0",
+  "description": "A fixture plugin that records the moment its code first ran.",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "buddi-plugin"
+  ],
+  "buddi": {
+    "name": "fixture-marker",
+    "manifest": "manifest",
+    "core": "^0.1.0"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "@buddi/core": "*"
+  }
+}

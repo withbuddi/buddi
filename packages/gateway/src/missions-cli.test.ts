@@ -4,9 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { ToolRegistry, loadAgentCatalog } from '@buddi/core';
 import { parseMissionsArgs } from './missions-cli.js';
 import {
-  DAILY_CHECK_PROMPT,
-  FRIDAY_RECAP_PROMPT,
-} from '@buddi/tool-finance';
+  LEDGER_CHECK_PROMPT,
+  LEDGER_RECAP_PROMPT,
+  fixturePluginManifest,
+} from './__fixtures__/plugin-manifest.js';
+import { installedManifests } from './agents/catalog.js';
 import { planDefaultMissions } from './missions/defaults.js';
 import { findingOf, renderFinding, sentinelWakeMission } from './missions/sentinel-wake.js';
 import { DEFAULT_TIMEZONE, recapMissionId, timezoneFromEnv } from './missions/recap.js';
@@ -30,7 +32,18 @@ const catalog = loadAgentCatalog({
   registry: new ToolRegistry(),
   env: {},
 });
-const plan = planDefaultMissions(catalog);
+/*
+ * The plugin here is a fixture, not a built-in.
+ *
+ * Finance used to stand in for one, until it became a plugin like any other and
+ * moved out of this tree entirely. What the planner owes is a property of *a*
+ * manifest that suggests missions — the richest shape anybody ships: a recap, a
+ * daily check and a disabled placeholder — so the fixture suggests exactly that
+ * and is handed to the planner the way an installed plugin's manifest reaches
+ * it at runtime. Nothing in this file asserts which plugins this build has.
+ */
+const manifests = [...installedManifests({}), fixturePluginManifest];
+const plan = planDefaultMissions(catalog, manifests);
 const entry = (id: string) => plan.entries.find((e) => e.mission.id === id);
 
 describe('parseMissionsArgs', () => {
@@ -105,7 +118,7 @@ describe('parseMissionsArgs', () => {
 
 describe('the recap mission', () => {
   it('comes from the plugin that knows what a recap is', () => {
-    expect(recapMissionId()).toBe('friday-recap');
+    expect(recapMissionId(manifests)).toBe('friday-recap');
     expect(entry('friday-recap')?.mission).toMatchObject({
       id: 'friday-recap',
       agentId: MISSION_AGENT,
@@ -116,7 +129,7 @@ describe('the recap mission', () => {
 
   it('asks for every section of the recap', () => {
     for (const needle of ['net worth', '14 days', '60-day projection', 'safety floor', '1500']) {
-      expect(FRIDAY_RECAP_PROMPT).toContain(needle);
+      expect(LEDGER_RECAP_PROMPT).toContain(needle);
     }
   });
 
@@ -169,7 +182,7 @@ describe('the default missions', () => {
     expect(daily?.cron).toBe('0 8 * * *');
     expect(daily?.misfirePolicy).toBe('coalesce');
     for (const needle of ['projection', 'next 3 days', 'unmatched', 'mission.silent', '7 days']) {
-      expect(DAILY_CHECK_PROMPT).toContain(needle);
+      expect(LEDGER_CHECK_PROMPT).toContain(needle);
     }
   });
 
@@ -183,7 +196,7 @@ describe('a wake payload', () => {
     const finding = findingOf({
       finding: {
         key: 'k',
-        sentinelId: 'finance.cashflow',
+        sentinelId: 'ledger.cashflow',
         severity: 'urgent',
         title: 'Floor breaks',
         detail: 'on 2026-10-02',
@@ -192,7 +205,7 @@ describe('a wake payload', () => {
     });
     expect(finding?.key).toBe('k');
     const rendered = renderFinding(finding!);
-    expect(rendered).toContain('finance.cashflow');
+    expect(rendered).toContain('ledger.cashflow');
     expect(rendered).toContain('Floor breaks');
     expect(rendered).toContain('"minimum":120');
   });
