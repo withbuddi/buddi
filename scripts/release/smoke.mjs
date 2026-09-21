@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Real isolated npm install + managed cluster. Never opens a browser or installs a service. */
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir, unlink, stat, copyFile, cp, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, writeFile, mkdir, unlink, stat, copyFile, cp, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -13,6 +13,7 @@ import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dashboardReady, reloadLaunchAgent } from '../../packages/install/dist/environment.js';
+import { startRegistry } from './registry.mjs';
 
 const exec = promisify(execFile);
 const archive = process.argv[2];
@@ -55,6 +56,10 @@ let pid;
 /* The second installation the backup is restored into. Stopped like the first. */
 const restored = path.join(testRoot, 'restored data');
 let pidB;
+/* The registry the upgrade section serves. Declared here so the `finally`
+ * below can close it: an http server still listening keeps this process
+ * alive long after the last assertion has passed. */
+let registry;
 
 /**
  * Stop the fixture even when this script is killed.
@@ -1021,6 +1026,391 @@ try {
     [], 'the terminal path drops the schema too when asked to purge',
   );
 
+  /* ================================================================ *
+   * Upgrading: a newer buddi, published on a registry of the smoke's own.
+   *
+   * The upgrade path is one `npm install buddi@<version> --registry <r>`
+   * run by the supervisor against the installation it is running from, so
+   * the only honest way to test it is to be that registry. `registry.mjs`
+   * serves two packages and nothing is fetched from the network: every
+   * `buddi` version below is the tarball under test with its version
+   * rewritten, and the Postgres binaries are the copy already sitting in
+   * this smoke's own node_modules, packed back into a tarball.
+   *
+   * Three upgrades are run against it, in the order an owner meets them:
+   * the one that works, the one whose install cannot succeed, and the one
+   * whose migration throws under the new code. The last leaves the
+   * installation in `upgrade-failed`, which is where the recovery sentence
+   * the doctor prints has to be true.
+   * ================================================================ */
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  /** Wait for a pid to be gone, the way the sections above do it. */
+  const reaped = async victim => {
+    for (let i = 0; i < 300; i++) {
+      try { process.kill(victim, 0); } catch { return; }
+      await pause(100);
+    }
+    throw new Error(`pid ${victim} did not exit`);
+  };
+  // The supervisor has to be restarted to learn the registry, so it goes
+  // down here and everything below runs against its replacement.
+  process.kill(pid, 'SIGTERM');
+  await reaped(pid);
+  pid = undefined;
+
+  const releases = path.join(testRoot, 'releases');
+  await mkdir(releases, { recursive: true });
+  const installedPackage = path.join(testRoot, 'node_modules/buddi/package.json');
+  const baseVersion = JSON.parse(await readFile(installedPackage, 'utf8')).version;
+  /** 0.1.0 plus n patch releases. The smoke never invents a major or a minor. */
+  const bumped = n => {
+    const [major, minor, patch] = baseVersion.split('-')[0].split('.').map(Number);
+    return `${major}.${minor}.${patch + n}`;
+  };
+  const nextVersion = bumped(1), unpublishedVersion = bumped(2), unMigratableVersion = bumped(3);
+  /*
+   * Every release below is *this* tarball, unpacked and packed again with a
+   * different version in its manifest. Two tarballs from one tree, as the
+   * contract asks, and with no second `pnpm -r build` between them there is
+   * nothing but the version (and, for the last one, one planted migration)
+   * that can differ between what is installed and what replaces it.
+   *
+   * `COPYFILE_DISABLE` keeps macOS from writing AppleDouble members into the
+   * archive, which npm would unpack as stray `._` files.
+   */
+  const packing = { ...env, COPYFILE_DISABLE: '1' };
+  const buildRelease = async (version, plant) => {
+    const dir = path.join(releases, version);
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await exec('tar', ['-xzf', archive, '-C', dir], { env: packing, timeout: 300_000 });
+    const manifestFile = path.join(dir, 'package/package.json');
+    const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+    manifest.version = version;
+    await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+    /*
+     * Every `@buddi/*` manifest in the tarball moves with it. The product
+     * version is the `buddi` package's, but this repository releases the
+     * workspace in lockstep and the gateway reads `@buddi/core`'s version for
+     * the one it puts on `/api/session`, which is what the dashboard watches
+     * for to know the upgrade is over.
+     */
+    const manifests = ['cli', 'core', 'gateway', 'install', 'runtime', 'web',
+      'tools/artifacts', 'tools/browser', 'tools/email', 'tools/host', 'tools/memory', 'tools/web']
+      .map(inner => path.join(dir, 'package/packages', inner, 'package.json'));
+    // And the copies npm made of them when the release was assembled with
+    // `--install-links`: `<root>/node_modules/@buddi/*` is what a `require`
+    // inside the installation actually resolves to, not `packages/*`.
+    const bundled = path.join(dir, 'package/node_modules/@buddi');
+    for (const scoped of await readdir(bundled).catch(() => [])) {
+      manifests.push(path.join(bundled, scoped, 'package.json'));
+    }
+    for (const innerFile of manifests) {
+      const pkg = JSON.parse(await readFile(innerFile, 'utf8').catch(() => 'null'));
+      if (pkg === null) continue;
+      await writeFile(innerFile, `${JSON.stringify({ ...pkg, version }, null, 2)}\n`);
+    }
+    if (plant) await plant(path.join(dir, 'package'));
+    const file = path.join(releases, `buddi-${version}.tgz`);
+    await exec('tar', ['-czf', file, '-C', dir, 'package'], { env: packing, timeout: 300_000 });
+    return { file, manifest };
+  };
+
+  registry = await startRegistry();
+  /*
+   * The binaries, first and not optionally.
+   *
+   * `@embedded-postgres/<platform>-<arch>` is an optional dependency of
+   * `buddi` resolved from whatever registry the install is pointed at. A
+   * registry that serves only `buddi` therefore installs a tree with the
+   * binaries pruned out of it, and the upgraded supervisor dies on a cluster
+   * it cannot start. The copy this smoke installed at the top is packed back
+   * into a tarball and served from here: same bytes, no network.
+   */
+  const binaryPackage = `@embedded-postgres/${process.platform}-${process.arch}`;
+  const binaryDir = path.join(testRoot, 'node_modules', binaryPackage);
+  const binaryManifest = JSON.parse(await readFile(path.join(binaryDir, 'package.json'), 'utf8')
+    .catch(() => { throw new Error(`${binaryPackage} is not in the smoke tree; the first install did not bring the Postgres binaries`); }));
+  const binaryPacked = await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', releases],
+    { cwd: binaryDir, env: packing, timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
+  await registry.publish(binaryPackage, binaryManifest.version,
+    path.join(releases, JSON.parse(binaryPacked.stdout)[0].filename), { manifest: binaryManifest });
+
+  const next = await buildRelease(nextVersion);
+  await registry.publish('buddi', nextVersion, next.file, { manifest: next.manifest });
+
+  /*
+   * A tick that is seconds rather than an hour, and a "once a day" gate that
+   * is seconds rather than a day: the two knobs the supervisor reads so that
+   * the switch can be watched doing something and then watched doing nothing.
+   */
+  const upgradeEnv = { ...env, BUDDI_NPM_REGISTRY: registry.url, BUDDI_UPGRADE_TICK_MS: '400', BUDDI_UPGRADE_CHECK_INTERVAL_MS: '1200' };
+  const cliU = async args => (await exec(process.execPath, [entry, ...args], { env: upgradeEnv, cwd: testRoot, timeout: 600_000 })).stdout;
+  await cliU(startArgs);
+  const onRegistry = JSON.parse(await cliU(['service', 'status'])); pid = onRegistry.supervisorPid;
+  assert.equal(onRegistry.current, baseVersion, '/status names the version it is running');
+  assert.equal(onRegistry.upgrading, false);
+
+  /* 1. The check, on. */
+  const checked = (await socketCall(socketA, '/version/check', 'POST')).body;
+  assert.equal(checked.current, baseVersion);
+  assert.equal(checked.latest, nextVersion, 'the check read the registry the installation was pointed at');
+  assert.equal(checked.updateAvailable, true);
+  assert.equal(checked.checkEnabled, true);
+  assert.equal(checked.error, undefined);
+  assert.match(checked.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+  // The tick is a real timer, so it is watched rather than asserted about:
+  // with the switch on it asks again on its own within a few seconds.
+  let ticked = checked;
+  for (let i = 0; i < 60; i++) {
+    await pause(400);
+    ticked = (await socketCall(socketA, '/version')).body;
+    if (ticked.checkedAt !== checked.checkedAt) break;
+  }
+  assert.notEqual(ticked.checkedAt, checked.checkedAt, 'the daily tick runs the check while the switch is on');
+
+  /* 2. The check, off: the same timer, and nothing happens. */
+  const switchedOff = (await socketCall(socketA, '/version/check', 'PUT', { enabled: false })).body;
+  assert.equal(switchedOff.checkEnabled, false);
+  assert.equal(switchedOff.updateAvailable, true, 'turning the check off does not unlearn what it found');
+  await pause(6000);
+  const stillOff = (await socketCall(socketA, '/version')).body;
+  assert.equal(stillOff.checkEnabled, false);
+  assert.equal(stillOff.checkedAt, switchedOff.checkedAt, 'the switch off stops the tick asking');
+  assert.equal((await socketCall(socketA, '/version/check', 'PUT', { enabled: 'sometimes' })).status, 400);
+
+  /* 3. The upgrade, through the socket the dashboard and the CLI both use. */
+  assert.equal((await socketCall(socketA, '/upgrade', 'POST', { version: 'latest' })).status, 400,
+    'a tag is not a version: everything downstream records and compares this');
+  const accepted = await socketCall(socketA, '/upgrade', 'POST', {});
+  assert.equal(accepted.status, 202, JSON.stringify(accepted.body));
+  const upgradeId = accepted.body.job.id;
+  assert.equal(accepted.body.job.kind, 'upgrade');
+  // One lever, held by one thing at a time.
+  assert.equal((await socketCall(socketA, '/upgrade', 'POST', {})).status, 409);
+  assert.equal((await socketCall(socketA, '/backup', 'POST', {})).status, 409);
+  assert.equal((await socketCall(socketA, '/restore', 'POST', { name: 'nothing.tar.gz' })).status, 409);
+  assert.equal((await socketCall(socketA, '/start', 'POST')).status, 409);
+  /*
+   * Following an upgrade means watching the socket go away.
+   *
+   * `restarting` is set and the process is gone within the same tick, so it
+   * is not something a client can be asked to observe: what a client sees is
+   * the phases up to `installing` and then a socket that stops answering,
+   * which is the hand-over. The verdict comes from the history afterwards.
+   */
+  const seen = [];
+  let handedOver = false;
+  for (let i = 0; i < 2400; i++) {
+    let reply;
+    try { reply = await socketCall(socketA, `/jobs/${upgradeId}`); }
+    catch { handedOver = true; break; }
+    if (reply.status === 200) {
+      for (const phase of reply.body.phases) if (!seen.includes(phase)) seen.push(phase);
+      assert.notEqual(reply.body.phase, 'failed', `the upgrade failed: ${reply.body.error ?? ''}`);
+    }
+    await pause(250);
+  }
+  assert.equal(handedOver, true, `the supervisor never handed over; phases were ${seen.join(' → ')}`);
+  assert.ok(isSubsequence(['backup', 'stopping', 'installing'], seen), `the upgrade ran its phases in order: ${seen.join(' → ')}`);
+  let upgraded;
+  for (let i = 0; i < 600; i++) {
+    await pause(500);
+    try {
+      upgraded = JSON.parse(await cliU(['service', 'status']));
+      if (upgraded.current === nextVersion && upgraded.phase === 'ready' && upgraded.gateway === 'running') break;
+    } catch { /* the successor has not taken the socket yet */ }
+  }
+  assert.equal(upgraded.current, nextVersion, 'the new supervisor is running the new code');
+  assert.equal(upgraded.phase, 'ready');
+  assert.equal(upgraded.gateway, 'running');
+  assert.notEqual(upgraded.supervisorPid, pid, 'a different process finished the upgrade');
+  pid = upgraded.supervisorPid;
+  const afterUpgrade = (await socketCall(socketA, '/version')).body;
+  assert.equal(afterUpgrade.current, nextVersion);
+  const done = afterUpgrade.history[afterUpgrade.history.length - 1];
+  assert.equal(done.outcome, 'done', done.error ?? '');
+  assert.equal(done.from, baseVersion);
+  assert.equal(done.to, nextVersion);
+  assert.match(done.backup, /^buddi-backup-\d{8}-\d{6}\.tar\.gz(\.age)?$/, 'the history names the archive taken first');
+  assert.ok((await stat(path.join(data, 'backups', done.backup))).size > 0, 'and that archive is on disk');
+  const upgradeArchive = done.backup;
+
+  /* 4. What the owner has afterwards: their data, on the new version. */
+  const onNew = await signIn(cliU);
+  const session = await (await onNew.get('/api/session')).json();
+  assert.equal(session.version, nextVersion, 'the dashboard reports the version it is running');
+  const versionApi = await (await onNew.get('/api/version')).json();
+  assert.equal(versionApi.current, nextVersion);
+  assert.equal(versionApi.supervised, true);
+  assert.equal(versionApi.checkout, false);
+  assert.equal(versionApi.updateAvailable, false, 'nothing is newer than what was just installed');
+  assert.equal(versionApi.history[versionApi.history.length - 1].to, nextVersion);
+  const rosterAfterUpgrade = await (await onNew.get('/api/agents')).json();
+  assert.ok(rosterAfterUpgrade.agents.some(agent => agent.handle === 'smoke'), 'the owner\'s agent stillUp the upgrade');
+  assert.deepEqual(
+    (await ask(connection, `select role from core.messages where conversation_id = $1 order by created_at`, [conversation.id])).map(row => row.role),
+    ['user', 'assistant'], 'the conversation stillUp the upgrade');
+  assert.deepEqual(await ask(connection, 'select value from public.smoke_preservation'), [{ value: 'keep across restarts' }]);
+  assert.equal((await (await onNew.get('/api/owner')).json()).preferredName, 'Smoke Owner', 'and the settings did');
+
+  /* 5. Asked again, there is nothing newer. */
+  const rechecked = (await socketCall(socketA, '/version/check', 'POST')).body;
+  assert.equal(rechecked.latest, nextVersion);
+  assert.equal(rechecked.updateAvailable, false, 'a second check finds nothing newer');
+  const said = await cliU(['version']);
+  assert.match(said, new RegExp(`^buddi ${nextVersion.replace(/\./g, '\\.')}$`, 'm'));
+  assert.match(said, /This is the latest version\./);
+
+  /* 6. An install that cannot succeed.
+   *
+   * The version asked for is one the registry does not have, which is what an
+   * owner reaches by typing a number, and what a registry that lost a
+   * publish looks like. npm refuses it while resolving, before it touches the
+   * tree, and that is the whole reason this is the failure the smoke uses: a
+   * tarball whose bytes do not match its `dist.integrity` fails *after* npm
+   * has begun replacing the installed package, and leaves nothing behind that
+   * can be started again (see the gaps in the contract). `latest` still names
+   * the installed version, so nothing but this explicit request goes near it.
+   */
+  const doomedInstall = await socketCall(socketA, '/upgrade', 'POST', { version: unpublishedVersion });
+  assert.equal(doomedInstall.status, 202, JSON.stringify(doomedInstall.body));
+  const failedInstall = await awaitJob(socketA, doomedInstall.body.job.id, 900);
+  assert.equal(failedInstall.phase, 'failed');
+  assert.ok(isSubsequence(['backup', 'stopping', 'installing'], failedInstall.phases), failedInstall.phases.join(' → '));
+  assert.equal(failedInstall.phases.includes('restarting'), false, 'an install that failed never reached the hand-over');
+  assert.match(failedInstall.error, /npm install/, 'the job carries npm\'s own account of it');
+  let stillUp;
+  for (let i = 0; i < 300; i++) {
+    await pause(500);
+    stillUp = JSON.parse(await cliU(['service', 'status']));
+    if (stillUp.gateway === 'running') break;
+  }
+  assert.equal(stillUp.gateway, 'running', 'buddi is running again after an install that failed');
+  assert.equal(stillUp.current, nextVersion, 'on the version it was already on');
+  assert.equal(stillUp.supervisorPid, pid, 'and in the same process: nothing handed over');
+  const afterFailure = (await socketCall(socketA, '/version')).body;
+  const failedEntry = afterFailure.history[afterFailure.history.length - 1];
+  assert.equal(failedEntry.outcome, 'failed');
+  assert.equal(failedEntry.step, 'installing', 'the history says which step failed');
+  assert.equal(failedEntry.to, unpublishedVersion);
+  assert.ok(failedEntry.backup, 'the backup it took first is named even though nothing was replaced');
+  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, nextVersion,
+    'and the installed package was not touched');
+  assert.equal((await (await (await signIn(cliU)).get('/api/version')).json()).current, nextVersion,
+    'the dashboard is up and answering after a failed install');
+
+  /* 7. A migration that throws under the new code.
+   *
+   * This is the failure the whole design is shaped around: the install
+   * worked, the code was replaced, the hand-over happened, and the step that
+   * cannot be undone is the one that broke. The new supervisor has to write
+   * the outcome down, leave the phase where the next start can see it, and
+   * refuse to start a gateway over a half-migrated schema. */
+  const unMigratable = await buildRelease(unMigratableVersion, async pkg => {
+    // Into both copies, for the reason the manifests are rewritten in both:
+    // `packages/core` is the source the release was assembled from and
+    // `node_modules/@buddi/core` is the one `CORE_MIGRATIONS_DIR` resolves to.
+    for (const home of ['packages/core/migrations', 'node_modules/@buddi/core/migrations']) {
+      await writeFile(path.join(pkg, home, '030_smoke_fail.sql'),
+        '-- Planted by scripts/release/smoke.mjs: a migration that cannot apply.\n'
+        + 'select buddi_smoke_no_such_function();\n');
+    }
+  });
+  await registry.publish('buddi', unMigratableVersion, unMigratable.file, { manifest: unMigratable.manifest, tag: false });
+  const doomedMigration = await socketCall(socketA, '/upgrade', 'POST', { version: unMigratableVersion });
+  assert.equal(doomedMigration.status, 202, JSON.stringify(doomedMigration.body));
+  for (let i = 0; i < 2400; i++) {
+    try { await socketCall(socketA, `/jobs/${doomedMigration.body.job.id}`); }
+    catch { break; }
+    await pause(250);
+  }
+  let broken;
+  for (let i = 0; i < 600; i++) {
+    await pause(500);
+    try {
+      broken = JSON.parse(await cliU(['service', 'status']));
+      if (broken.phase === 'upgrade-failed') break;
+    } catch { /* the successor has not taken the socket yet */ }
+  }
+  assert.equal(broken.phase, 'upgrade-failed', 'the phase on disk is the one the next start knows how to read');
+  assert.equal(broken.current, unMigratableVersion, 'the new code is what is installed');
+  assert.equal(broken.gateway, 'stopped');
+  assert.equal(broken.gatewayPid, null, 'no gateway was started over a schema it cannot serve');
+  pid = broken.supervisorPid;
+  const wrecked = JSON.parse(await readFile(path.join(data, 'upgrade.json'), 'utf8'));
+  const migrationEntry = wrecked.history[wrecked.history.length - 1];
+  assert.equal(migrationEntry.outcome, 'failed');
+  assert.equal(migrationEntry.step, 'migrating');
+  assert.equal(migrationEntry.from, nextVersion);
+  assert.equal(migrationEntry.to, unMigratableVersion);
+  assert.match(migrationEntry.error, /030_smoke_fail\.sql/, 'the history names the migration that threw');
+  assert.ok(migrationEntry.backup, 'and the archive taken before any of it');
+  // The one sentence an owner has in this state, from the one command that
+  // still works. The dashboard is deliberately not there to be asked.
+  const doctored = await cliU(['doctor']);
+  assert.match(doctored, new RegExp(`Version: ${unMigratableVersion.replace(/\./g, '\\.')}`));
+  assert.match(doctored, new RegExp(`Upgrade to ${unMigratableVersion.replace(/\./g, '\\.')} failed while migrating`));
+  assert.ok(doctored.includes(migrationEntry.backup), 'the recovery sentence names the archive');
+  assert.ok(doctored.includes(`npm install -g buddi@${nextVersion}`), 'and the command that puts the old code back');
+  assert.ok(doctored.includes(`buddi backup restore ${migrationEntry.backup}`), 'and the command that puts the data back');
+
+  /* 8. The recovery the sentence describes, done.
+   *
+   * Reinstalling is the same npm call the upgrade makes, aimed backwards, and
+   * into this smoke's own prefix rather than any global one. */
+  process.kill(pid, 'SIGTERM');
+  await reaped(pid);
+  pid = undefined;
+  await exec('npm', ['install', '--prefix', testRoot, `buddi@${nextVersion}`, '--registry', registry.url,
+    '--ignore-scripts', '--no-audit', '--no-fund'], { env, timeout: 900_000 });
+  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, nextVersion, 'the previous version is installed again');
+  await cliU(startArgs);
+  const back = JSON.parse(await cliU(['service', 'status'])); pid = back.supervisorPid;
+  assert.equal(back.current, nextVersion);
+  assert.equal(back.phase, 'ready', 'the installation opens again on the code that can open it');
+  assert.equal(back.gateway, 'running');
+  /*
+   * And the archive. The gateway is stopped for it, the way an owner would:
+   * a restore swaps the private directories under whatever is reading them.
+   *
+   * Twice, because the interesting half is the refusal. A restore over rows
+   * that are still there needs the database name typed back, and nothing
+   * running from a script can type it — so the first run has to change
+   * nothing, and the second runs against a database emptied the way the
+   * failure this archive exists for would have emptied it.
+   */
+  await cliU(['service', 'stop']);
+  const backupCli = { ...cliEnv, BUDDI_DATA_DIR: data };
+  const restoreCli = async args => {
+    try {
+      const ran = await exec(process.execPath, [buddiCli, ...args], { env: backupCli, cwd: testRoot, timeout: 900_000, maxBuffer: 32 * 1024 * 1024 });
+      return { code: 0, out: `${ran.stdout}${ran.stderr}` };
+    } catch (error) { return { code: error.code ?? 1, out: `${error.stdout ?? ''}${error.stderr ?? ''}` }; }
+  };
+  const refusedRecovery = await restoreCli(['backup', 'restore', upgradeArchive, '--yes']);
+  assert.equal(refusedRecovery.code, 1, refusedRecovery.out);
+  assert.match(refusedRecovery.out, /not the database name/, 'a restore over live rows is refused without the name typed back');
+  assert.deepEqual(
+    (await ask(connection, `select role from core.messages where conversation_id = $1`, [conversation.id])).map(row => row.role).sort(),
+    ['assistant', 'user'], 'and it changed nothing');
+  const tables = await ask(connection, `select n.nspname as schema, c.relname as name from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')`);
+  await ask(connection, `truncate ${tables.map(row => `"${row.schema}"."${row.name}"`).join(', ')} cascade`);
+  const recoveredRestore = await restoreCli(['backup', 'restore', upgradeArchive, '--yes']);
+  assert.equal(recoveredRestore.code, 0, recoveredRestore.out);
+  assert.deepEqual(
+    (await ask(connection, `select role from core.messages where conversation_id = $1 order by created_at`, [conversation.id])).map(row => row.role),
+    ['user', 'assistant'], 'the backup the upgrade took first brought the conversation back');
+  assert.equal((await ask(connection, `select 1 from core.artifacts where sha256 = $1`, [artifactSha])).length, 1,
+    'and the artifact row');
+  await cliU(['service', 'start']);
+  const recoveredSession = await signIn(cliU);
+  assert.equal((await (await recoveredSession.get('/api/session')).json()).version, nextVersion);
+  assert.ok((await (await recoveredSession.get('/api/agents')).json()).agents.some(agent => agent.handle === 'smoke'),
+    'and the dashboard is back, on the version that was reinstalled, with the owner\'s agent');
+
   console.log('PASS: clean npm install, no scripts, private Postgres, install-specific readiness, authenticated dashboard, replay/CSRF rejection, owner-only 0600 control socket, dashboard service view agreeing with the CLI, idempotent start, gateway/supervisor crash recovery, password rotation, migration-phase restart, leftover postmaster restarted rather than adopted, first-run API through to a loaded first agent, the local-AI probe, the handover conversation on the record and the Telegram token gate, unfinished setup refusing to call itself done'
     + ', encrypted backup and verify with no external binary, a flipped byte caught by the envelope, a wrong passphrase refused in plain words by verify and by restore, the passphrase replaced and verify passing again'
     + ', a second installation restored from the upload before its first question — agents, conversation, artifact bytes, memory, setting and account checklist all back, phases in order'
@@ -1028,6 +1418,8 @@ try {
     + ', a plugin staged from a tarball with nothing of it imported, an approval refused for a hash that was not the one shown, approved and only then imported, a dependency\'s install script named and never run'
     + ', its tool registered after a restart and held by an agent, its migration applied to its own schema, doctor clean and then naming it changed on disk, a package that throws at import refused and an installed one that stops importing reported with the gateway still answering'
     + ', uninstall keeping the schema and purge dropping it, and the same two steps from the terminal'
+    + ', a version check against a registry of the smoke\'s own, the daily tick running and then stopped by the switch, an upgrade through the control socket with the hand-over to a new supervisor, the data intact on the new version and nothing newer afterwards'
+    + ', an install that cannot succeed leaving buddi running on the version it was on with the history naming the step, and a migration that throws under the new code recorded as upgrade-failed with no gateway started, the doctor\'s recovery sentence, the previous version reinstalled and the backup it took first restored through the CLI'
     + (serviceTest ? ', LaunchAgent lifecycle.' : ', database death ends the supervisor.'));
 } catch (error) {
   // Print only logs owned by this isolated fixture, never the live installation.
@@ -1039,6 +1431,9 @@ try {
   }
   throw error;
 } finally {
+  // An http server still listening would hold this process open after the
+  // last assertion, so the registry is closed before anything else.
+  await registry?.close().catch(() => {});
   if (serviceTest) {
     await exec('launchctl', ['bootout', launchTarget]).catch(() => {});
     // Only the LaunchAgent created for this exact random test directory.
