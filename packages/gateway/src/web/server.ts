@@ -2115,10 +2115,6 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 202, {
         conversationId: sent.conversationId,
         runId: sent.runId,
-        // Present only when the conversation the page was in had ended and this
-        // message opened a new one. The page follows the id either way; the
-        // note is what stops the empty thread reading as amnesia.
-        ...(sent.boundary ? { boundary: sent.boundary } : {}),
       });
     }
 

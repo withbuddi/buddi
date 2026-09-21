@@ -1005,12 +1005,6 @@ export const chatApi = {
     post<{
       conversationId: string;
       runId: string;
-      /**
-       * The thread the page was in had ended (idle, or too long), and this
-       * message opened a new one. `note` is the line the owner reads; the page
-       * follows `conversationId` either way.
-       */
-      boundary?: { note: string; previousConversationId: string };
     }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
   answerQuestion: (id: string, body: { answer: string; optionId?: string }) =>
     post<{ conversationId: string; runId: string }>(
