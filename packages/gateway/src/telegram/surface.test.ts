@@ -1560,7 +1560,7 @@ describe('TelegramSurface agents', () => {
       expect(sent.map((s) => s.body.text).join('\n')).not.toContain('New conversation');
     });
 
-    it('starts a fresh one for a message the next morning, and says so once', async () => {
+    it('starts a fresh one for a message the next morning, and says nothing about it', async () => {
       const db = midThread(withOwner(new FakeDb()), NOW, 14 * 60);
       const { surface, run, sent } = surfaceWith(db, undefined, { now: () => NOW });
       await surface.processUpdates([message(321, OWNER, OWNER, 'any new mail?')]);
@@ -1569,11 +1569,10 @@ describe('TelegramSurface agents', () => {
       expect(run.mock.calls[0]?.[0].conversationId).toBe('conv-2');
       expect(db.chatConversations.get(`${OWNER}::finance-advisor`)).toBe('conv-2');
       const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
-      expect(final?.body.text).toContain(
-        '(New conversation — we last spoke 14 hours ago. What I remember about you carries over.)',
-      );
-      // Said once, above the answer — not instead of it.
+      // The answer, and only the answer: no parenthesised preamble above it.
       expect(final?.body.text).toContain('reply');
+      expect(final?.body.text).not.toContain('New conversation');
+      expect(final?.body.text).not.toMatch(/^\(/);
     });
 
     it('starts a fresh one when the transcript has grown past its budget', async () => {
@@ -1585,7 +1584,9 @@ describe('TelegramSurface agents', () => {
       await surface.drain();
 
       expect(run.mock.calls[0]?.[0].conversationId).toBe('conv-2');
-      expect(sent.filter((s) => s.method === 'editMessageText').at(-1)?.body.text).toContain(
+      // The agent's own context has whatever the boundary carried across; the
+      // owner gets the answer with nothing bolted on top of it.
+      expect(sent.filter((s) => s.method === 'editMessageText').at(-1)?.body.text).not.toContain(
         'the last one had grown long',
       );
     });
