@@ -231,4 +231,66 @@ suite('a checkout serve start migrates what is installed', () => {
       await pool.query("delete from core.migrations where filename = '999_from_the_future.sql'");
     }
   }, 60_000);
+
+  /**
+   * The stray: a file applied from a branch that never merged, still in the
+   * ledger, sorting inside the range this build ships. Nothing newer than this
+   * build made it, so the start says so once and carries on.
+   */
+  it('leaves a stray core migration in the ledger and still starts', async () => {
+    await installFixture();
+    await pool.query(
+      "insert into core.migrations (schema, filename) values ('core', '015_session_grants.sql')",
+    );
+    try {
+      const outcome = await start();
+
+      expect(outcome.reached).toBe('wiring');
+      expect(logs).toContain(
+        'migrate: core/015_session_grants.sql is in the ledger but not in this release; leaving it',
+      );
+      // Said once, and the start got as far as the plugin's own migrations.
+      expect(logs.filter((line) => line.includes('015_session_grants.sql'))).toHaveLength(1);
+      expect(await appliedFilenames(SCHEMA)).toEqual(['001_test.sql']);
+    } finally {
+      await pool.query("delete from core.migrations where filename = '015_session_grants.sql'");
+    }
+  }, 60_000);
+
+  it("leaves a stray in an installed plugin's schema and still starts", async () => {
+    await installFixture();
+    await pool.query('insert into core.migrations (schema, filename) values ($1, $2)', [
+      SCHEMA,
+      '000_stray.sql',
+    ]);
+    try {
+      const outcome = await start();
+
+      expect(outcome.reached).toBe('wiring');
+      expect(logs).toContain(
+        `migrate: ${SCHEMA}/000_stray.sql is in the ledger but not in this release; leaving it`,
+      );
+      expect(await appliedFilenames(SCHEMA)).toEqual(['000_stray.sql', '001_test.sql']);
+    } finally {
+      await pool.query('delete from core.migrations where schema = $1', [SCHEMA]);
+    }
+  }, 60_000);
+
+  it("refuses when an installed plugin's schema has a file after the newest shipped", async () => {
+    await installFixture();
+    await pool.query('insert into core.migrations (schema, filename) values ($1, $2)', [
+      SCHEMA,
+      '999_from_the_future.sql',
+    ]);
+    try {
+      const outcome = await start();
+
+      expect(outcome.reached).toBe('refused');
+      expect(outcome.error).toBe('process.exit(1)');
+      expect(logs.some((line) => /newer than this release/.test(line))).toBe(true);
+      expect(logs.some((line) => line.includes('leaving it'))).toBe(false);
+    } finally {
+      await pool.query('delete from core.migrations where schema = $1', [SCHEMA]);
+    }
+  }, 60_000);
 });
