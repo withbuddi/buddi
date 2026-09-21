@@ -33,13 +33,37 @@ export interface Observation {
 }
 
 export const COMMAND_NAMES = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close'] as const;
-export type CommandName = (typeof COMMAND_NAMES)[number] | 'screenshot';
+/**
+ * `screencast.start`/`screencast.stop` and `input` are the owner's own hand on
+ * the page rather than anything a model may ask for, which is why they are not
+ * in `COMMAND_NAMES`: that list is what an agent's tool can name.
+ */
+export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
+export type CommandName = (typeof COMMAND_NAMES)[number] | (typeof HAND_COMMANDS)[number] | 'screenshot';
 
 export interface Command {
   id: string;
   name: CommandName;
   session: string;
   args: Record<string, unknown>;
+  /**
+   * This command is the owner driving the page themselves from the dashboard.
+   *
+   * The rule it turns off is the one that refuses to type into a tab the owner
+   * is looking at, and that rule exists to keep an agent out of the owner's
+   * hands: when the hands are theirs there is nothing to protect them from.
+   */
+  owner?: boolean;
+}
+
+/** One screencast frame on its way to the gateway, outside the command/result pairing. */
+export interface FrameMessage {
+  type: 'frame';
+  session: string;
+  data: string;
+  metadata: Record<string, number>;
+  /** Chrome's own frame id, passed through as it came, because the ack has to match it. */
+  sessionId: string | number;
 }
 
 export interface CommandResult {
@@ -284,7 +308,11 @@ export class Protocol {
       return;
     }
     const args = message['args'];
-    const command: Command = { id, name, session, args: args && typeof args === 'object' ? args as Record<string, unknown> : {} };
+    const command: Command = {
+      id, name, session,
+      args: args && typeof args === 'object' ? args as Record<string, unknown> : {},
+      owner: message['owner'] === true,
+    };
     const cancel = new Cancellation();
     this.#running.set(id, cancel);
     try {
@@ -307,7 +335,9 @@ export class Protocol {
 }
 
 function isCommandName(name: string): name is CommandName {
-  return name === 'screenshot' || (COMMAND_NAMES as readonly string[]).includes(name);
+  return name === 'screenshot'
+    || (COMMAND_NAMES as readonly string[]).includes(name)
+    || (HAND_COMMANDS as readonly string[]).includes(name);
 }
 
 /** The gateway shows this to the owner, so it has to read like a sentence and never like a stack. */
