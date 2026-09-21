@@ -115,6 +115,91 @@ async function followUpgrade(ctx: InstallContext, id: string): Promise<number> {
   }
 }
 
+/** One line from the terminal, for the one question a restore has to ask. */
+async function prompt(question: string): Promise<string> {
+  const readline = await import('node:readline/promises');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try { return (await rl.question(question)).trim(); }
+  finally { rl.close(); }
+}
+
+/**
+ * `buddi backup restore <archive>`, in a packaged installation.
+ *
+ * This is the command the recovery sentence names, so it has to be the command
+ * that works: an owner whose upgrade failed while migrating is told to
+ * reinstall the previous version and run this, and a binary that answers
+ * "not supported in packaged installs" leaves them with a backup and no way
+ * to use it.
+ *
+ * It is the supervisor's restore rather than the engine's, for the reason the
+ * dashboard's is: the supervisor owns the database and the gateway child, so
+ * it is the only process that can stop the gateway, put the archive back and
+ * start it again — and it writes the recovery row that keeps the restored
+ * installation's loops asleep until the owner has been through the checklist.
+ * With no supervisor answering, the arguments go on to the checkout CLI, which
+ * runs the engine against `DATABASE_URL` directly.
+ *
+ * The typed-back confirmation is the terminal's half of the guard (see
+ * `checkRestoreGuard`): the supervisor decides whether one is needed, this
+ * asks for it, and a run with nowhere to ask prints the refusal and stops.
+ */
+async function restoreThroughSupervisor(ctx: InstallContext, rest: string[]): Promise<number> {
+  const named = rest.find(arg => !arg.startsWith('-'));
+  if (named === undefined) throw new Error('Name the backup to restore: buddi backup restore <archive>.');
+  const backups = path.join(ctx.data, 'backups');
+  const resolved = path.resolve(named);
+  if (named.includes(path.sep) && path.dirname(resolved) !== backups) {
+    throw new Error(`A packaged restore reads its archives from ${backups}. Copy that file there and name it, or restore it from the dashboard.`);
+  }
+  const name = path.basename(named);
+  const flag = (option: string): string | undefined => {
+    const at = rest.indexOf(`--${option}`);
+    return at === -1 ? undefined : rest[at + 1];
+  };
+  // The vault holds the passphrase of an archive this installation encrypted;
+  // `--passphrase` is for one that came from another machine.
+  let passphrase = flag('passphrase');
+  if (passphrase === undefined && name.endsWith('.age')) {
+    passphrase = (await ask<{ passphrase: string }>(ctx, 'GET', '/passphrase').catch(() => undefined))?.passphrase;
+  }
+  const body = (confirm?: string): Record<string, unknown> => ({
+    name,
+    ...(passphrase === undefined ? {} : { passphrase }),
+    ...(confirm === undefined ? {} : { confirm }),
+  });
+  let started: { job: { id: string } };
+  try {
+    started = await ask<{ job: { id: string } }>(ctx, 'POST', '/restore', body());
+  } catch (error) {
+    const guard = /Type (\S+) to confirm\.$/.exec((error as Error).message);
+    if (!guard || process.stdin.isTTY !== true) { console.error(`buddi: ${(error as Error).message}`); return 1; }
+    const typed = await prompt(`${(error as Error).message}\n> `);
+    if (typed === '') { console.error('buddi: nothing was typed, so nothing was restored.'); return 1; }
+    started = await ask<{ job: { id: string } }>(ctx, 'POST', '/restore', body(typed));
+  }
+  console.log(`Restoring ${name}. The gateway is stopped for it and started again afterwards.`);
+  let last = '';
+  for (;;) {
+    const job = await ask<{ phase: string; detail?: string; error?: string; finishedAt?: string }>(ctx, 'GET', `/jobs/${started.job.id}`);
+    if (job.phase !== last) {
+      last = job.phase;
+      console.log(`  ${job.phase}${job.detail === undefined ? '' : ` — ${job.detail}`}`);
+    }
+    if (job.finishedAt !== undefined) {
+      if (job.phase === 'done') { console.log('The backup is back. Run buddi doctor, then open the dashboard: it opens in recovery.'); return 0; }
+      console.error(`buddi: the restore did not finish: ${job.error ?? 'no reason given'}`);
+      // `rolled-back` is the engine saying it put the installation back as it
+      // was; anything else did not get that far, and the archive is still there.
+      console.error(job.phase === 'rolled-back'
+        ? 'Nothing was changed: the installation was put back as it was.'
+        : 'Inspect logs/supervisor.log before trying again.');
+      return 1;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 async function launchService(ctx: InstallContext, temporary: boolean): Promise<void> {
   await mkdir(path.join(ctx.data, 'logs'), { recursive: true, mode: 0o700 });
   if (!temporary && process.platform === 'darwin') {
@@ -235,7 +320,13 @@ async function run(): Promise<void> {
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }
-  if (['init', 'db', 'backup', 'migrate', 'serve'].includes(args[0] as string) || args[0] === 'service') {
+  if (args[0] === 'backup' && args[1] === 'restore') {
+    // The supervisor if there is one, the engine below if there is not. See
+    // `restoreThroughSupervisor`; this is the command the recovery sentence
+    // in upgrade.ts tells an owner to run.
+    const supervised = await control(ctx).then(() => true, () => false);
+    if (supervised) { process.exitCode = await restoreThroughSupervisor(ctx, args.slice(2)); return; }
+  } else if (['init', 'db', 'backup', 'migrate', 'serve'].includes(args[0] as string) || args[0] === 'service') {
     throw new Error('This checkout-oriented command is not yet supported in packaged installs. Run buddi; use service status|start|stop|restart for the gateway.');
   }
   if (ctx.state?.database === 'managed') {

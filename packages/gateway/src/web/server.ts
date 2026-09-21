@@ -676,7 +676,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             // What this gateway is running. The page keeps it across an
             // upgrade so that "it came back" can be told from "it is still
             // the old one" without a second route.
-            version: await currentVersion(),
+            version: await currentVersion(deps.env ?? process.env),
           });
         case '/api/overview':
           return sendJson(

@@ -128,6 +128,26 @@ it('forwards every verb to the supervisor and says the two things the page needs
   ]);
 });
 
+it('reports the installed buddi package as the version, not the workspace\'s', async () => {
+  /*
+   * The dashboard's wait-and-reload loop watches `/api/session`'s version, so
+   * it has to be the number a release moves: the published `buddi` package's.
+   * Reporting `@buddi/core`'s left the page waiting for ever on a release that
+   * bumped only the product version, which every release is free to do.
+   */
+  const { socket } = await fakeSupervisor();
+  const root = await mkdtemp(path.join(tmpdir(), 'buddi-install-root-'));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'buddi', version: '9.9.9' }), 'utf8');
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket, BUDDI_INSTALL_ROOT: root });
+  expect((await open(app)).session.version).toBe('9.9.9');
+
+  // Anything but that package at that path is not an answer: a checkout says
+  // what a checkout says.
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'something-else', version: '9.9.9' }), 'utf8');
+  const other = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket, BUDDI_INSTALL_ROOT: root });
+  expect((await open(other)).session.version).not.toBe('9.9.9');
+});
+
 it('refuses a switch that is not a boolean, and never asks the supervisor', async () => {
   const { socket, seen } = await fakeSupervisor();
   const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket });

@@ -8,7 +8,9 @@
  * fetches, installs or restarts anything. In a developer checkout there is no
  * supervisor and no upgrade to offer: the version is reported (the workspace's
  * own, plus `git describe` when a checkout still has its `.git`) and the page
- * is told to run `git pull` in a terminal instead.
+ * is told to run `git pull` in a terminal instead. Packaged, the version is
+ * the installed `buddi` package's, which is the product version and the one
+ * the supervisor reports as well — see `currentVersion` below.
  *
  * `<data>/upgrade.json` is read directly from disk as a fallback, for the one
  * moment the socket cannot answer: an upgrade takes the supervisor down and
@@ -105,13 +107,40 @@ function describe(workspaceRoot: string): Promise<string | null> {
 }
 
 /**
+ * The version of the installed `buddi` package, when this is one.
+ *
+ * `BUDDI_INSTALL_ROOT` is written by `@buddi/install`'s `environment()` and
+ * inherited by the gateway child, so in a packaged installation the product
+ * version is one small file away — and it is the number that moves when a
+ * release is published. The workspace manifests under it need not move with
+ * it, which is the whole reason this is read instead of `@buddi/core`'s: the
+ * dashboard's wait-and-reload loop watches `/api/session`'s version, and an
+ * upgrade that bumped only the published package would leave it waiting for a
+ * number that never changes.
+ */
+function installedVersion(env: NodeJS.ProcessEnv): string | undefined {
+  const root = env.BUDDI_INSTALL_ROOT?.trim();
+  if (!root) return undefined;
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown };
+    // Only that package's version, never whatever else happens to sit there.
+    if (pkg.name !== 'buddi' || typeof pkg.version !== 'string' || pkg.version === '') return undefined;
+    return pkg.version;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * What this gateway is running, said the way a person would.
  *
- * `0.1.0 (v0.1.0-3-gabc1234-dirty)` in a checkout, `0.1.0` everywhere else.
- * Never throws: a version is a label on a page, and no page is worth failing
- * because `git` is missing.
+ * The installed `buddi` package's version in a packaged installation,
+ * `0.1.0 (v0.1.0-3-gabc1234-dirty)` in a checkout. Never throws: a version is
+ * a label on a page, and no page is worth failing because `git` is missing.
  */
-export async function currentVersion(): Promise<string> {
+export async function currentVersion(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const installed = installedVersion(env);
+  if (installed !== undefined) return installed;
   try {
     const core = corePackage();
     const version = core.version ?? '0.0.0';
@@ -215,7 +244,7 @@ export async function versionRoute(deps: VersionDeps): Promise<RouteReply> {
     return {
       status: 200,
       body: {
-        current: await currentVersion(),
+        current: await currentVersion(deps.env),
         checkEnabled: false,
         updateAvailable: false,
         history: [],

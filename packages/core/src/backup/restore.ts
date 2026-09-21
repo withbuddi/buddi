@@ -412,13 +412,18 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       didNot.push(`the restore failed: ${why}`);
-      progress({ phase: PHASE.rolledBack, detail: why });
       // The files first, and always: every directory this run replaced is put
       // back from the copy parked beside it, which is the installation's own
       // last state rather than the snapshot's copy of it.
       await undoSwaps(effects);
       if (snapshotStage !== null) {
         try {
+          // Still `database`, because that is what this is: the snapshot going
+          // back in, table by table. `rolled-back` is announced at the bottom,
+          // after it has happened — every client treats that phase as terminal
+          // and looks at the database the moment it sees it, and between the
+          // drop and the reload there is no database to look at.
+          progress({ phase: PHASE.database, detail: `putting the pre-restore snapshot back into "${database}"` });
           await loadDatabase(pool, snapshotStage, {
             ...(opts.coreMigrationsDir ? { coreMigrationsDir: opts.coreMigrationsDir } : {}),
             ...(opts.pluginMigrations ? { pluginMigrations: opts.pluginMigrations } : {}),
@@ -437,6 +442,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
         // an empty one. An empty, freshly migrated database is a state buddi
         // can start in; this one is not.
         try {
+          progress({ phase: PHASE.database, detail: `leaving "${database}" at a clean schema` });
           await migrate(pool, {
             schema: CORE_SCHEMA,
             dir: opts.coreMigrationsDir ?? CORE_MIGRATIONS_DIR,
@@ -453,6 +459,10 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
           next.push('there was no snapshot to roll back to; restore from another archive');
         }
       }
+      // Last, and only now: the files are back and the snapshot is loaded, so
+      // a client that reads this phase as "it is over, look at the database"
+      // is right. See the comment above the reload.
+      progress({ phase: PHASE.rolledBack, detail: why });
       return stop(manifest);
     }
 

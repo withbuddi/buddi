@@ -1,5 +1,6 @@
 import { lstat, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { request, type Server } from 'node:http';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -173,6 +174,31 @@ describe('the supervisor', () => {
     const { socket } = await serve();
     expect((await call(socket, '/version')).status).toBe(404);
     expect((await call(socket, '/upgrade', 'POST')).status).toBe(404);
+  });
+
+  test('lets go of a connection that is still open so a handed-over supervisor can exit', async () => {
+    /*
+     * The leak this is about: after an upgrade the old supervisor closed its
+     * control socket and stayed alive, holding no lock and no gateway. Both
+     * the dashboard and the release smoke poll `/jobs/:id` right up to the
+     * hand-over, and `close()` waits for a connection with a request on it
+     * rather than ending it — so one poller caught mid-request keeps the
+     * listener, and therefore the event loop, open for good.
+     */
+    const { socket } = await serve();
+    const server = servers[servers.length - 1]!;
+    const client = connect(socket);
+    await new Promise<void>((resolve, reject) => { client.once('connect', resolve); client.once('error', reject); });
+    // Half a request: exactly what a poller that was interrupted looks like.
+    client.write('GET /status HTTP/1.1\r\nHost: localhost\r\n');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const closed = new Promise(resolve => server.close(() => resolve('closed')));
+    const waited = new Promise(resolve => setTimeout(() => resolve('still open'), 250));
+    expect(await Promise.race([closed, waited])).toBe('still open');
+    server.closeAllConnections();
+    expect(await closed).toBe('closed');
+    client.destroy();
   });
 
   test('gateway restart backoff is exponential and bounded', () => {
