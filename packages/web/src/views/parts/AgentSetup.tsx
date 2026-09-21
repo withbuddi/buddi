@@ -114,6 +114,8 @@ function Agent({
         </Notice>
       ) : null}
 
+      <Identity agent={agent} onSaved={onSaved} />
+
       <Section title="Runs on">
         {accounts ? (
           <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
@@ -239,6 +241,112 @@ function Agent({
         )}
       </Section>
     </Stack>
+  );
+}
+
+/**
+ * The front matter the runtime actually reads, edited in place.
+ *
+ * Everything here is a field of `agent.md`, and the server validates the whole
+ * file exactly as the loader would before it writes a byte — the same code
+ * `platform.update_agent` runs, so a handle two agents would answer to is
+ * refused here in the loader's own words rather than discovered at the next
+ * restart. What is deliberately absent is `default`: which agent a chat with
+ * no agent named lands on is a fact about the installation, recorded from the
+ * picker at the head of the Agents page, not a flag inside one persona.
+ */
+function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }): JSX.Element {
+  const [name, setName] = useState(agent.name);
+  const [handle, setHandle] = useState(agent.handle);
+  const [description, setDescription] = useState(agent.description);
+  const [tools, setTools] = useState(agent.tools.join('\n'));
+  const [roles, setRoles] = useState((agent.roles ?? []).join(', '));
+  const [avatar, setAvatar] = useState(agent.avatar ?? '');
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const list = (text: string, separator: RegExp): string[] =>
+    text.split(separator).map((t) => t.trim()).filter((t) => t !== '');
+  const nextTools = list(tools, /[\n,]/);
+  const nextRoles = list(roles, /[\n,]/);
+  const same = (a: readonly string[], b: readonly string[]): boolean => a.join(',') === b.join(',');
+  const dirty =
+    name.trim() !== agent.name ||
+    handle.trim().replace(/^@/, '') !== agent.handle ||
+    description.trim() !== agent.description ||
+    avatar.trim() !== (agent.avatar ?? '') ||
+    !same(nextTools, agent.tools) ||
+    !same(nextRoles, agent.roles ?? []);
+
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    setSaved(null);
+    try {
+      const result = await api.updateAgentFile(agent.id, {
+        name: name.trim(),
+        handle: handle.trim().replace(/^@/, ''),
+        description: description.trim(),
+        tools: nextTools,
+        roles: nextRoles,
+        ...(avatar.trim() === '' ? {} : { avatar: avatar.trim() }),
+      });
+      setSaved(result.message);
+      onSaved();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Who it is" aside={<span className="muted mono">{agent.id}</span>}>
+      {agent.isExample ? (
+        <Notice tone="warning">
+          This agent ships with buddi, so its file is read-only here. Ask Agent Father to make it yours,
+          then these fields can change.
+        </Notice>
+      ) : null}
+      <ErrorBanner message={failure} />
+      {saved ? <Notice tone="good" role="status">{saved}</Notice> : null}
+      <Toolbar valign="end">
+        <Field label="Name" hint="What it is called, everywhere.">
+          <input value={name} disabled={busy || agent.isExample} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Handle" hint="What you type to reach it. One handle, one agent.">
+          <input value={handle} disabled={busy || agent.isExample} onChange={(e) => setHandle(e.target.value)} />
+        </Field>
+        <Field label="Face" hint="An emoji. Left empty, its initials are drawn.">
+          <input value={avatar} disabled={busy || agent.isExample} onChange={(e) => setAvatar(e.target.value)} />
+        </Field>
+        <Field label="Roles" hint="Capabilities it answers for, comma separated.">
+          <input value={roles} disabled={busy || agent.isExample} onChange={(e) => setRoles(e.target.value)} />
+        </Field>
+      </Toolbar>
+      <Field label="Description" hint="One or two sentences. Its colleagues read this.">
+        <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />
+      </Field>
+      <Field label="Tools" hint="One grant per line. A name or a family glob, e.g. web.*. Saving replaces the grant.">
+        <textarea rows={4} className="mono" value={tools} disabled={busy || agent.isExample} onChange={(e) => setTools(e.target.value)} />
+      </Field>
+      <p className="ui-card-meta">
+        Its persona — the body of the file below the front matter — is not edited here. Ask the agent that
+        makes agents to rewrite it, or edit <span className="mono">agent.md</span> directly.
+      </p>
+      {!agent.isExample ? (
+        <Toolbar>
+          <span className={dirty ? 'warning' : 'muted'}>
+            {dirty ? 'Not saved yet.' : 'Saved. Applies to new runs.'}
+          </span>
+          <span className="ui-toolbar-spacer" />
+          <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>
+            Save who it is
+          </Button>
+        </Toolbar>
+      ) : null}
+    </Section>
   );
 }
 

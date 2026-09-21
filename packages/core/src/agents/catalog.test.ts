@@ -469,11 +469,22 @@ describe('loadAgentCatalog', () => {
     expect(() => catalog.resolve('tax-wizard')).toThrow(/finance-advisor/);
   });
 
-  it('refuses two defaults', () => {
+  /*
+   * Two files claiming the default used to take the whole installation down.
+   * It is a *disagreement*, and the record settles it — so the catalog loads,
+   * somebody answers, and the dashboard is told what to offer a fix for.
+   */
+  it('loads when two files claim the default, and says so', () => {
     const second = CONCIERGE.replace('tools: []', 'tools: []\ndefault: true');
-    expect(() => load({ 'finance-advisor': FINANCE, concierge: second })).toThrow(
-      /exactly one agent may be default/,
-    );
+    const catalog = load({ 'finance-advisor': FINANCE, concierge: second }, { ANTHROPIC_API_KEY: 'k' });
+    expect(catalog.list()).toHaveLength(2);
+    expect(catalog.defaultProblem).toMatchObject({
+      code: 'multiple-defaults',
+      agents: ['concierge', 'finance-advisor'],
+    });
+    // Nobody wins on the file flag, so the first runnable agent answers.
+    expect(catalog.defaultAgent().id).toBe('concierge');
+    expect(catalog.list().filter((a) => a.isDefault).map((a) => a.id)).toEqual(['concierge']);
   });
 
   it('refuses an agent file whose id is not its directory', () => {
@@ -553,10 +564,78 @@ describe('loadAgentCatalog', () => {
     });
   });
 
-  it('reports a missing default only when one is asked for', () => {
-    const catalog = load({ concierge: CONCIERGE });
+  it('lands on the first runnable agent when no file claims the default', () => {
+    const catalog = load({ concierge: CONCIERGE }, { ANTHROPIC_API_KEY: 'k' });
     expect(catalog.list()).toHaveLength(1);
-    expect(() => catalog.defaultAgent()).toThrow(/default: true/);
+    expect(catalog.defaultAgent().id).toBe('concierge');
+    expect(catalog.defaultProblem).toMatchObject({ code: 'no-default-agent', agents: [] });
+  });
+
+  /*
+   * The resolution order, which is the whole of this change: the record the
+   * installation holds, then the single file flag, then whoever can answer.
+   */
+  describe('the recorded default', () => {
+    const recorded = (defaultAgentId: string, files: Record<string, string>) =>
+      loadAgentCatalog({
+        dir: catalogDir(files),
+        registry: registryOf(),
+        env: { ANTHROPIC_API_KEY: 'k' },
+        defaultAgentId,
+      });
+
+    it('wins over a file that declares default: true', () => {
+      const catalog = recorded('concierge', { 'finance-advisor': FINANCE, concierge: CONCIERGE });
+      expect(catalog.defaultAgent().id).toBe('concierge');
+      // The file that lost the claim must stop saying it has it.
+      expect(catalog.list().find((a) => a.id === 'finance-advisor')?.isDefault).toBe(false);
+      expect(catalog.defaultProblem).toBeUndefined();
+    });
+
+    it('takes a handle as well as an id', () => {
+      expect(recorded('@buddi', { 'finance-advisor': FINANCE, concierge: CONCIERGE }).defaultAgent().id)
+        .toBe('concierge');
+    });
+
+    it('is ignored when it names nobody, and the file flag decides', () => {
+      const catalog = recorded('ghost', { 'finance-advisor': FINANCE, concierge: CONCIERGE });
+      expect(catalog.defaultAgent().id).toBe('finance-advisor');
+    });
+
+    it('is ignored when the agent it names cannot run and another one can', () => {
+      // Held back: it grants a family no plugin here provides, so it can never
+      // take a turn — and the record must not send every chat at it.
+      const ghost = agentFile(
+        ['id: ghost', 'handle: ghost', 'name: Ghost', 'description: d', 'tools: [ghost.*]'].join('\n'),
+      );
+      const catalog = recorded('ghost', { 'finance-advisor': FINANCE, ghost });
+      expect(catalog.get('ghost')?.available).toBe(false);
+      expect(catalog.defaultAgent().id).toBe('finance-advisor');
+    });
+
+    it('keeps the choice when nobody can run: there is nothing better to fall back to', () => {
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ 'finance-advisor': FINANCE, concierge: CONCIERGE }),
+        registry: registryOf(),
+        env: {}, // no credential: every agent is unavailable
+        defaultAgentId: 'concierge',
+      });
+      expect(catalog.defaultAgent().id).toBe('concierge');
+    });
+
+    it('settles a tree whose files claim it twice', () => {
+      const second = CONCIERGE.replace('tools: []', 'tools: []\ndefault: true');
+      const catalog = recorded('finance-advisor', { 'finance-advisor': FINANCE, concierge: second });
+      expect(catalog.defaultAgent().id).toBe('finance-advisor');
+      // Still reported: the owner's files disagree, and the picker says so.
+      expect(catalog.defaultProblem?.code).toBe('multiple-defaults');
+    });
+
+    it('silences "nobody claims it" once the installation has answered', () => {
+      const catalog = recorded('concierge', { concierge: CONCIERGE });
+      expect(catalog.defaultAgent().id).toBe('concierge');
+      expect(catalog.defaultProblem).toBeUndefined();
+    });
   });
 
   it('refuses a missing agents directory', () => {

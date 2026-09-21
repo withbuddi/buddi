@@ -555,7 +555,15 @@ export interface AgentEngineFact {
  * second provider still has four agents that work, and taking the whole report
  * down over the fifth would be a lie about the state of the installation.
  */
-export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
+export function checkAgents(
+  agents: readonly AgentEngineFact[],
+  /**
+   * What the *files* say about the default, when they disagree. The record is
+   * what decides (see the catalog), so this is a warning and never a failure:
+   * the installation has somewhere to land, and the owner has a picker.
+   */
+  defaultProblem?: { code: string; message: string },
+): ProbeResult {
   if (agents.length === 0) {
     return { status: 'fail', detail: 'no agents are installed under agents/' };
   }
@@ -574,7 +582,12 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
     (g) =>
       `${g.count} ${g.provider} (${g.model}${g.reason === undefined ? '' : `, unavailable: ${g.reason}`})`,
   );
-  const detail = `${agents.length} agent${agents.length === 1 ? '' : 's'} — ${parts.join(', ')}`;
+  // The default is named in every row: "which one answers when I name nobody"
+  // is the first thing an owner reads this for.
+  const chosen = agents.find((a) => a.isDefault);
+  const detail =
+    `${agents.length} agent${agents.length === 1 ? '' : 's'} — ${parts.join(', ')}` +
+    `${chosen === undefined ? '; no default agent' : `; default @${chosen.handle}`}`;
 
   /*
    * Held back is its own sentence, and never a failure.
@@ -605,6 +618,9 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
       status: 'warn',
       detail: `${detail}${heldNote}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
     };
+  }
+  if (defaultProblem !== undefined) {
+    return { status: 'warn', detail: `${detail}${heldNote}; ${defaultProblem.message}` };
   }
   if (held.length > 0) return { status: 'warn', detail: `${detail}${heldNote}` };
   return { status: 'ok', detail };

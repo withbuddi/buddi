@@ -377,8 +377,10 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
     async agents(): Promise<ProbeResult> {
       await secrets();
       let facts: AgentEngineFact[];
+      let defaultProblem: { code: string; message: string } | undefined;
       try {
         const catalog = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+        defaultProblem = catalog.defaultProblem;
         facts = catalog.list().flatMap((summary) => {
           const agent = catalog.get(summary.id);
           if (!agent) return [];
@@ -401,7 +403,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
           detail: `agent catalog will not load: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-      return checkAgents(facts);
+      return checkAgents(facts, defaultProblem);
     },
 
     /**

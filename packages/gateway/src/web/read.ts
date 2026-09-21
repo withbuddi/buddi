@@ -768,6 +768,12 @@ export interface AgentView {
   maxTurns: number;
   language: string;
   tools: string[];
+  /** Capabilities it answers for, in declaration order. A front-matter field. */
+  roles: string[];
+  /** An emoji, or an image file name inside the agent's folder. */
+  avatar?: string;
+  /** Its own colour, `#rrggbb`. */
+  accent?: string;
   skills: Array<{ name: string; provenance: string; file: string }>;
   /** Who it may hand work to: its allowlist, restricted to agents that exist. */
   delegates: string[];
@@ -807,6 +813,9 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
         maxTurns: agent.maxTurns,
         language: agent.language,
         tools: agent.tools,
+        roles: [...agent.roles],
+        ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+        ...(agent.accent === undefined ? {} : { accent: agent.accent }),
         skills: agent.skills.map((s) => ({
           name: s.name,
           provenance: s.provenance,

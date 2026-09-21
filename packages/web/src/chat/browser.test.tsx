@@ -145,8 +145,15 @@ describe('conversation browser canvas', () => {
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
     expect(await screen.findByRole('tab', { name: 'Approval' })).toBeInTheDocument();
     // The panel says the step has not happened.
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Browser' }), { button: 0 });
-    await waitFor(() => expect(screen.getByTestId('browser-view')).toBeInTheDocument());
+    //
+    // The tab strip is still settling while the approval and the browser state
+    // arrive, so the press is retried rather than fired once at whatever node
+    // happened to be there: a click that lands between two renders is a flake,
+    // not a failure of what this test is about.
+    await waitFor(() => {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Browser' }), { button: 0 });
+      expect(screen.getByTestId('browser-view')).toBeInTheDocument();
+    });
     expect(within(screen.getByTestId('browser-view')).getByText('Awaiting approval')).toBeInTheDocument();
     // And its row goes to the envelope, not to the panel.
     fireEvent.click(screen.getByRole('button', { name: /Browser · Act/ }));

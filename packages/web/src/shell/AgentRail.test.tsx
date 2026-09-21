@@ -84,6 +84,24 @@ function railOf(agents: ChatAgent[], defaultAgentId: string | null): void {
 }
 
 /*
+ * The handle is the other half of the name: it is the word the owner types to
+ * reach this agent, so it belongs on the title line rather than replacing the
+ * second line, which still says when they last spoke or why they cannot.
+ */
+describe('the handle', () => {
+  it('draws @handle beside the name, and keeps the second line', () => {
+    railOf(
+      [agent({ id: 'ledger', name: 'Ledger', handle: 'books', description: 'Keeps the books.' })],
+      'ledger',
+    );
+    const face = screen.getByTestId('agent-face-ledger');
+    expect(face.textContent).toContain('Ledger');
+    expect(face.textContent).toContain('@books');
+    expect(face.textContent).toContain('Keeps the books.');
+  });
+});
+
+/*
  * A fresh installation has one assistant and the agent that makes agents. The
  * second is a settings door, not a colleague, so there is nobody to group —
  * and offering a room that cannot be filled is worse than not offering one.

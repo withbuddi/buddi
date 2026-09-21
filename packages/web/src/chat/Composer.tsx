@@ -97,8 +97,37 @@ export const Composer = forwardRef<ComposerHandle, {
    * already holds; the composer never asks for it.
    */
   history?: string[];
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history }, ref) {
-  const [text, setText] = useState('');
+  /**
+   * Which thread this box belongs to: the conversation id, or the agent id
+   * while there is no conversation yet.
+   *
+   * A half-typed message is the owner's, and switching agents to check
+   * something should not cost it. So the text is kept per thread in this
+   * browser and comes back when that thread opens again — and a new chat,
+   * being a different key, opens empty while the old draft stays where it was
+   * typed. Only the text: an attachment is an upload, not a draft.
+   */
+  threadKey?: string | null;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey }, ref) {
+  /*
+   * Where this thread's draft is kept, and the function that reads it.
+   *
+   * Every read and every write is wrapped: a private window, blocked site
+   * data and a browser that simply refuses all throw, and none of them may be
+   * the reason somebody cannot type. The box is seeded from it while
+   * rendering, so a restored draft is there the first time it is painted.
+   */
+  const storageKey = threadKey ? `buddi.draft.${threadKey}` : null;
+  const readDraft = (key: string | null): string => {
+    if (!key) return '';
+    try {
+      return window.localStorage.getItem(key) ?? '';
+    } catch {
+      return '';
+    }
+  };
+
+  const [text, setText] = useState(() => readDraft(storageKey));
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [focused, setFocused] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -124,6 +153,7 @@ export const Composer = forwardRef<ComposerHandle, {
     const caret = node ? node.selectionStart : text.length;
     const next = `${text.slice(0, mentionAt.start)}@${handle} ${text.slice(caret)}`;
     setText(next);
+    if (recalled < 0) remember(next);
     setMentionAt(null);
     window.requestAnimationFrame(() => {
       if (!node) return;
@@ -146,7 +176,45 @@ export const Composer = forwardRef<ComposerHandle, {
    */
   const past = history ?? [];
   const [recalled, setRecalled] = useState(-1);
-  const stashed = useRef('');
+  const stashed = useRef(text);
+
+  /*
+   * Opening another thread: this box belongs to that one now, so it shows what
+   * was left there — nothing, most of the time.
+   *
+   * Read while rendering rather than in an effect, so that the box is right
+   * the first time it is painted and a mount that restores nothing costs no
+   * extra render at all. React re-runs this render with the new state before
+   * committing anything, which is what makes a plain assignment here correct.
+   */
+  const loadedFor = useRef<string | null>(storageKey);
+  if (loadedFor.current !== storageKey) {
+    loadedFor.current = storageKey;
+    const saved = readDraft(storageKey);
+    stashed.current = saved;
+    if (saved !== text) {
+      setText(saved);
+      setRecalled(-1);
+      setMentionAt(null);
+    }
+  }
+
+  /*
+   * Keep this thread's draft, or forget it when there is nothing left to keep.
+   *
+   * What is kept is exactly `stashed` — the owner's own line, never a recalled
+   * one — which is why Down and Escape hand back the text that is on disk.
+   */
+  const remember = (value: string): void => {
+    stashed.current = value;
+    if (!storageKey) return;
+    try {
+      if (value === '') window.localStorage.removeItem(storageKey);
+      else window.localStorage.setItem(storageKey, value);
+    } catch {
+      // A browser that will not remember is a browser that forgets. Typing works.
+    }
+  };
 
   /** Replace what is in the box and leave the caret at the end of it. */
   const put = (next: string): void => {
@@ -248,6 +316,8 @@ export const Composer = forwardRef<ComposerHandle, {
     if (!draft || draft.at === lastDraft.current) return;
     lastDraft.current = draft.at;
     setText((current) => (current.trim() === '' ? draft.text : current));
+    // An offered line the box accepted is now this thread's draft too.
+    if (recalled < 0 && text.trim() === '') remember(draft.text);
     const node = area.current;
     if (node) {
       node.focus();
@@ -275,7 +345,8 @@ export const Composer = forwardRef<ComposerHandle, {
     onSend(text.trim(), ready);
     attachments.forEach(release);
     setRecalled(-1);
-    stashed.current = '';
+    // Sent is not drafted: the thread's draft is dropped, here and on disk.
+    remember('');
     setText('');
     setAttachments([]);
     window.requestAnimationFrame(resize);
@@ -376,6 +447,9 @@ export const Composer = forwardRef<ComposerHandle, {
           placeholder={running ? `${agentName} is working…` : `Message ${agentName}`}
           onChange={(event) => {
             setText(event.target.value);
+            // While walking back through what was said, what is in the box is
+            // not the draft — the draft is what the walk stashed.
+            if (recalled < 0) remember(event.target.value);
             trackMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
             resize();
           }}
