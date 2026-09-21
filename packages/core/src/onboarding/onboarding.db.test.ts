@@ -188,6 +188,9 @@ suite('onboarding (postgres)', () => {
       preferredName: null,
       timezone: null,
       language: null,
+      // `about` joined the profile with migration 022; an empty installation
+      // has nothing to say in it either.
+      about: null,
       displayName: null,
     });
   });
