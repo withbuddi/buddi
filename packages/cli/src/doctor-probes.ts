@@ -382,6 +382,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
               model: agent.model,
               available: agent.availability.ok,
               ...(agent.availability.ok ? {} : { reason: agent.availability.problem.message }),
+              ...(agent.heldBack === undefined ? {} : { heldBack: true }),
               isDefault: agent.isDefault,
             },
           ];

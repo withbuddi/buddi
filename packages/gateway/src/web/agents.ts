@@ -30,6 +30,7 @@ import {
   updateAgentFrontmatter,
   PROVIDER_KINDS,
   type AgentCatalog,
+  type AgentHoldBack,
   type CatalogAgent,
   type EnginePatch,
   type ProviderKind,
@@ -58,6 +59,8 @@ export interface AgentEngineView {
   credentialEnv: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. */
+  heldBack?: AgentHoldBack;
   /** True while the running surfaces still hold an older catalog. */
   restartRequired: boolean;
 }
@@ -105,7 +108,9 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     provider: agent.provider.kind, model: agent.model, maxTurns: agent.maxTurns, language: agent.language,
     thinking: thinkingOnDisk(agent),
     credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
-    available: agent.available, unavailableReason: agent.unavailableReason, restartRequired: false,
+    available: agent.available, unavailableReason: agent.unavailableReason,
+    ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
+    restartRequired: false,
   };
   let provider = agent.provider.kind;
   let model = agent.model;
@@ -149,8 +154,15 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     thinking: thinkingOnDisk(agent),
     credentialKind,
     credentialEnv,
-    available: resolution.ok,
-    ...(resolution.ok ? {} : { unavailableReason: resolution.problem.message }),
+    /*
+     * A held-back agent is unavailable whatever its credential says: the
+     * plugin it was granted is not here, and re-resolving the provider from
+     * the file cannot change that.
+     */
+    available: resolution.ok && agent.heldBack === undefined,
+    ...(agent.heldBack !== undefined
+      ? { unavailableReason: agent.heldBack.message, heldBack: agent.heldBack }
+      : resolution.ok ? {} : { unavailableReason: resolution.problem.message }),
     restartRequired,
   };
 }

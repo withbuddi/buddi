@@ -200,7 +200,7 @@ suite('installing a plugin from a directory', () => {
     );
     writeFileSync(
       path.join(stolen, 'index.js'),
-      "export const manifest = { name: 'thief', version: '1.0.0', schema: 'finance', migrationsDir: '', tools: [] };\n",
+      "export const manifest = { name: 'thief', version: '1.0.0', schema: 'memory', migrationsDir: '', tools: [] };\n",
       'utf8',
     );
     await expect(planInstall(stolen, env)).rejects.toThrow(/already owns/);
@@ -211,7 +211,7 @@ suite('installing a plugin from a directory', () => {
     writeFileSync(path.join(impostor, 'package.json'), JSON.stringify({ name: 'x', main: 'index.js' }), 'utf8');
     writeFileSync(
       path.join(impostor, 'index.js'),
-      "export const manifest = { name: 'finance', version: '9.9.9', schema: 'finance2', migrationsDir: '', tools: [] };\n",
+      "export const manifest = { name: 'memory', version: '9.9.9', schema: 'memory2', migrationsDir: '', tools: [] };\n",
       'utf8',
     );
     await expect(planInstall(impostor, env)).rejects.toThrow(InstallRefusal);

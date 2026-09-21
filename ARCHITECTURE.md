@@ -289,8 +289,8 @@ And around the contract:
 
 ## Plugin lifecycle (install, propose, uninstall)
 
-Five plugins are compiled into this build — `finance`, `email`, `memory`, `artifacts`,
-`web` — alongside the gateway's own tool families, which own no schema (the canvas,
+Six plugins are compiled into this build — `email`, `memory`, `artifacts`, `web`,
+`browser`, `host` — alongside the gateway's own tool families, which own no schema (the canvas,
 reminders and schedules, the owner profile, the `platform.*` family, delegation, and the
 per-run families that close over one run's sink: the mission decision, the pending
 question, the offered actions). Both lists are **derived from the registry, never

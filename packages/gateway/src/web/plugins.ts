@@ -19,7 +19,11 @@
  * Origin and CSRF gate as the rest of `server.ts`.
  */
 import { randomUUID } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
+import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { Pool } from 'pg';
 import {
   contributionOf,
@@ -28,10 +32,17 @@ import {
   type InstalledPlugin,
   type PluginManifest,
 } from '@buddi/core';
-import { agentSearchPath, AGENTS_DIR, installedManifests } from '../agents/catalog.js';
+import { agentSearchPath, AGENTS_DIR, builtInManifests, installedManifests } from '../agents/catalog.js';
+import { CANVAS_PLUGIN } from '../agents/canvas.js';
+import { AGENT_PLUGIN } from '../agents/delegation.js';
+import { OWNER_PLUGIN } from '../agents/owner-tools.js';
+import { PLATFORM_PLUGIN } from '../agents/platform.js';
+import { REMINDER_PLUGIN, SCHEDULE_PLUGIN } from '../missions/reminders.js';
+import { SYSTEM_PLUGIN } from '../system-context.js';
 import * as engine from '../plugins/index.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
 import { RECORD_ITSELF } from '../plugins/load.js';
+import { incomingRoot } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 
 /** A refusal in the shape the router sends. Same contract as `backups.ts`. */
@@ -127,6 +138,8 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     /** The package's own lifecycle scripts, which also run as somebody else. */
     scripts: staged.scripts,
     ...(staged.previous === undefined ? {} : { previous: staged.previous }),
+    /** What the file was called on the owner's machine, for an upload. */
+    ...(staged.uploadedName === undefined ? {} : { uploadedName: staged.uploadedName }),
     ...(staged.plan === undefined ? {} : { plan: staged.plan }),
     state: staged.state,
   };
@@ -216,6 +229,48 @@ function contributionSummary(manifest: PluginManifest | undefined): {
 }
 
 /**
+ * The families that are buddi itself rather than plugins.
+ *
+ * Every one of these is registered by the same `buildRegistry` as the plugins
+ * beside them, which is what keeps the collision guards honest, but none of
+ * them is a thing an owner installed or could uninstall: `platform` is the
+ * dashboard's own tools, `owner` is the first-run questions, `system` is the
+ * clock and the machine, `canvas` is what a run may draw, `agent` is
+ * delegation, and `reminder`/`schedule` are the clock's two halves. Listing
+ * them on the Plugins page would be listing the program.
+ */
+const INTERNAL_FAMILIES: ReadonlySet<string> = new Set([
+  SYSTEM_PLUGIN,
+  PLATFORM_PLUGIN,
+  OWNER_PLUGIN,
+  CANVAS_PLUGIN,
+  AGENT_PLUGIN,
+  REMINDER_PLUGIN,
+  SCHEDULE_PLUGIN,
+]);
+
+/**
+ * The plugins compiled into this gateway.
+ *
+ * They have no record, no source and no version of their own to update: they
+ * are what this build ships. The page shows them so that "what can this buddi
+ * do" is one list rather than two, and so an owner about to install something
+ * called `web` can see why it will be refused.
+ */
+function builtInView(env: NodeJS.ProcessEnv): Array<Record<string, unknown>> {
+  return builtInManifests(env)
+    .filter((manifest) => !INTERNAL_FAMILIES.has(manifest.name))
+    .map((manifest) => ({
+      name: manifest.name,
+      version: manifest.version,
+      contribution: contributionSummary(manifest),
+      ...(manifest.description === undefined || manifest.description.trim() === ''
+        ? {}
+        : { description: manifest.description }),
+    }));
+}
+
+/**
  * The agents a plugin proposes, and where the owner's copy stands.
  *
  * The same `driftFor` the install plan uses, so "you have not accepted this
@@ -289,6 +344,12 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
   } catch (err) {
     deps.log(`web: reading installed manifests failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  let builtIn: Array<Record<string, unknown>> = [];
+  try {
+    builtIn = builtInView(env);
+  } catch (err) {
+    deps.log(`web: reading the built-in manifests failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const failures = new Map<string, string>();
   try {
     for (const row of api.pluginLoadReport(env)) failures.set(row.name, row.error);
@@ -338,6 +399,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
     status: 200,
     body: {
       trust: api.TRUST_SENTENCE,
+      builtIn,
       installed,
       staged,
       restartNeeded,
@@ -371,6 +433,113 @@ export function stageRoute(deps: PluginsDeps, body: Record<string, unknown>): Ro
     return { status: 400, body: { error: err instanceof Error ? err.message : String(err) } };
   }
   return runStaging(deps, 'stage', (onPhase) => api.stagePlugin(spec, { env: deps.env, onPhase }));
+}
+
+/* ------------------------------------------------------------------ *
+ * Uploading a tarball
+ * ------------------------------------------------------------------ */
+
+/**
+ * The largest plugin tarball the dashboard will accept.
+ *
+ * A published plugin is a few hundred kilobytes; this is the size at which the
+ * answer is "that is not a plugin" rather than "wait a little longer".
+ */
+export const MAX_PLUGIN_TARBALL_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The name an upload is stored under: ours, with the owner's inside it.
+ *
+ * The browser's filename is never a path — it is reduced to a basename, then
+ * to a conservative charset, and it has to end in `.tgz` or there is nothing
+ * here worth writing to disk. The random prefix is what makes the result
+ * unique, so two uploads of `weather-1.0.0.tgz` are two files.
+ */
+export function incomingTarballName(claimed: string | undefined): { stored: string; label: string } | undefined {
+  const base = path.basename((claimed ?? '').trim()).replace(/[^A-Za-z0-9._@+-]/g, '-');
+  if (base.startsWith('.') || base.length > 128) return undefined;
+  if (!/\.tgz$/i.test(base)) return undefined;
+  return { stored: `${randomUUID().replace(/-/g, '').slice(0, 16)}-${base}`, label: base };
+}
+
+/**
+ * Stream an uploaded tarball into `<data>/plugins/incoming/`, 0600.
+ *
+ * The same shape as the backup upload in `backups.ts`, and for the same
+ * reasons: the bytes are written before anything reads them, the file is only
+ * readable by the user buddi runs as, and the size cap is enforced as the
+ * stream arrives rather than after a request has already filled the disk.
+ * Nothing the page sent becomes a path.
+ */
+export async function receivePluginUpload(
+  deps: PluginsDeps,
+  req: IncomingMessage,
+  claimedName: string | undefined,
+): Promise<{ path: string; uploadedName: string } | RouteReply> {
+  const named = incomingTarballName(claimedName);
+  if (!named) {
+    return {
+      status: 400,
+      body: { error: 'Send the packed plugin as a .tgz, with its filename in the X-Filename header.' },
+    };
+  }
+  const dir = incomingRoot(deps.env);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const target = path.join(dir, named.stored);
+  let bytes = 0;
+  let tooBig = false;
+  req.on('data', (chunk: Buffer) => {
+    bytes += chunk.length;
+    if (bytes > MAX_PLUGIN_TARBALL_BYTES && !tooBig) {
+      tooBig = true;
+      req.destroy(new Error('that file is larger than buddi accepts'));
+    }
+  });
+  try {
+    await pipeline(req, createWriteStream(target, { mode: 0o600 }));
+  } catch (err) {
+    await rm(target, { force: true }).catch(() => {});
+    return {
+      status: tooBig ? 413 : 400,
+      body: {
+        error: tooBig
+          ? 'That file is too large.'
+          : `The upload did not finish: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  }
+  if (bytes === 0) {
+    await rm(target, { force: true }).catch(() => {});
+    return { status: 400, body: { error: 'That upload was empty.' } };
+  }
+  return { path: target, uploadedName: named.label };
+}
+
+/**
+ * Stage an uploaded tarball, exactly as a path the owner typed is staged.
+ *
+ * The only difference is what happens to the file afterwards: staging copies
+ * the tarball into the stage, so the upload itself has no reason to exist once
+ * the job has finished either way, and a tarball sitting in the data directory
+ * is a package nobody approved. The name it had on the owner's machine travels
+ * on the staged card instead, because `source.path` is a path of buddi's own
+ * choosing that will be gone by the time they read it.
+ */
+export function uploadRoute(
+  deps: PluginsDeps,
+  upload: { path: string; uploadedName: string },
+): RouteReply {
+  const api = engineOf(deps);
+  return runStaging(deps, 'stage', async (onPhase) => {
+    try {
+      return await api.stagePlugin(
+        { kind: 'tarball', path: upload.path },
+        { env: deps.env, onPhase, uploadedName: upload.uploadedName },
+      );
+    } finally {
+      await rm(upload.path, { force: true }).catch(() => {});
+    }
+  });
 }
 
 /**

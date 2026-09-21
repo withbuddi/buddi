@@ -21,11 +21,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest } from '@buddi/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { REPO_ROOT, builtInManifests, installedManifests } from '../agents/catalog.js';
+import {
+  REPO_ROOT,
+  builtInManifests,
+  createToolRegistry,
+  installedManifests,
+} from '../agents/catalog.js';
 import { builtInSchemas, InstallRefusal, planInstall } from './install.js';
 import {
+  adoptPlugins,
   builtInPluginNames,
   builtInToolNames,
+  externalManifests,
+  loadInstalledPlugins,
   manifestProblem,
   perRunManifests,
   resetAdoptedPlugins,
@@ -206,18 +214,30 @@ describe('a new built-in plugin cannot slip past the guards', () => {
   });
 
   /**
-   * And every plugin package in the tree. This is the `web` case exactly: a
-   * package under `packages/tools/`, compiled in, whose name and schema the
-   * guards had never heard of — and whose schema `db:migrate` walks.
+   * And every plugin package the gateway compiles in. This is the `web` case
+   * exactly: a package under `packages/tools/`, compiled in, whose name and
+   * schema the guards had never heard of — and whose schema `db:migrate`
+   * walks.
+   *
+   * "Compiled in" is read off the gateway's own dependencies rather than off
+   * the directory listing, because a package under `packages/tools/` is no
+   * longer proof of it: `finance` lives there and is installed like any other
+   * plugin, which is the case below.
    */
-  it('knows every plugin package under packages/tools', async () => {
+  it('knows every plugin package the gateway depends on', async () => {
     const dirs = readdirSync(TOOLS_DIR, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
     expect(dirs.length).toBeGreaterThan(0);
+    const gatewayPkg = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'packages', 'gateway', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    const compiledIn = new Set(Object.keys(gatewayPkg.dependencies ?? {}));
+    const nameOf = (dir: string): string =>
+      (JSON.parse(readFileSync(path.join(TOOLS_DIR, dir, 'package.json'), 'utf8')) as { name: string }).name;
 
-    for (const dir of dirs) {
+    for (const dir of dirs.filter((d) => compiledIn.has(nameOf(d)))) {
       const entry = path.join(TOOLS_DIR, dir, 'dist', 'index.js');
       expect(existsSync(entry), `packages/tools/${dir} is not built — run \`pnpm -r build\``).toBe(
         true,
@@ -245,6 +265,21 @@ describe('a new built-in plugin cannot slip past the guards', () => {
   });
 
   /**
+   * And the other direction, which is the whole point of the change: finance
+   * is a package in this tree that the gateway does *not* compile in, so its
+   * name is free for an installed plugin — which is exactly what the owner
+   * installs when they run `buddi plugins install packages/tools/finance`.
+   */
+  it('does not claim finance, which is installed rather than compiled in', () => {
+    expect(builtInPluginNames().has('finance')).toBe(false);
+    expect(builtInSchemas().has('finance')).toBe(false);
+    const gatewayPkg = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, 'packages', 'gateway', 'package.json'), 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    expect(Object.keys(gatewayPkg.dependencies ?? {})).not.toContain('@buddi/tool-finance');
+  });
+
+  /**
    * The root `pnpm db:migrate` reads its own plugin list, and it had the same
    * disease: it named four packages and web was the fifth. It walks the
    * directory now, and this says so.
@@ -253,5 +288,52 @@ describe('a new built-in plugin cannot slip past the guards', () => {
     const script = readFileSync(path.join(REPO_ROOT, 'scripts', 'migrate.mjs'), 'utf8');
     expect(script).toMatch(/readdir\(toolsDir/);
     expect(script).not.toMatch(/for \(const name of \[/);
+  });
+});
+
+/**
+ * Finance is the first plugin to make the whole trip: it used to be compiled
+ * in, and an existing checkout's agents still grant `finance.*`. The way back
+ * for them is `buddi plugins install packages/tools/finance`, which records a
+ * directory source — so this is that record, loaded exactly as the gateway
+ * loads it at start, with the family arriving through `externalManifests`
+ * rather than through the composition root.
+ */
+describe('finance, now installed rather than compiled in', () => {
+  it('loads from a directory source and registers its family', async () => {
+    const env = isolatedEnv();
+    const dir = path.join(TOOLS_DIR, 'finance');
+    const entry = path.join(dir, 'dist', 'index.js');
+    expect(existsSync(entry), 'packages/tools/finance is not built — run `pnpm -r build`').toBe(true);
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version: string };
+    writeFileSync(
+      env.BUDDI_PLUGINS_FILE as string,
+      JSON.stringify({
+        version: 2,
+        plugins: [
+          {
+            name: 'finance',
+            version: pkg.version,
+            source: { kind: 'directory', path: dir },
+            entry,
+            installedAt: '2026-01-01T00:00:00.000Z',
+            schema: 'finance',
+          },
+        ],
+      }),
+    );
+
+    const loaded = await loadInstalledPlugins(env);
+    expect(loaded.problems).toEqual([]);
+    expect(loaded.loaded.map((p) => p.manifest.name)).toEqual(['finance']);
+
+    adoptPlugins(env, loaded);
+    expect(externalManifests(env).map((m) => m.name)).toContain('finance');
+    const registry = createToolRegistry(env);
+    expect(registry.manifests().map((m) => m.name)).toContain('finance');
+    expect(registry.list().some((t) => t.name.startsWith('finance.'))).toBe(true);
+    // And the built-in set is still without it: the same process that loaded
+    // it as a plugin does not also ship it.
+    expect(builtInManifests(env).map((m) => m.name)).not.toContain('finance');
   });
 });

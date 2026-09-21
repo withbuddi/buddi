@@ -26,6 +26,7 @@ import {
   pendingDigestItems,
   toActionRecord,
   type AgentCatalog,
+  type AgentHoldBack,
   type ActionRecord,
   type Job,
   type JobState,
@@ -771,6 +772,12 @@ export interface AgentView {
   /** True when the file is a shipped example, which the dashboard will not edit. */
   isExample: boolean;
   /**
+   * Set when a tool family this agent was granted is not installed here: the
+   * agent is listed, greyed and cannot run until the plugin is installed.
+   * `tools` is empty while it is set.
+   */
+  heldBack?: AgentHoldBack;
+  /**
    * The provider, named — kind, model and *which environment variable* holds
    * the credential. Never the credential: the dashboard reports the
    * authorization decision, it does not disclose the secret behind it.
@@ -805,6 +812,7 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
         })),
         delegates: safeDelegates(agent.id, path.dirname(path.dirname(agent.file))).filter((id) => catalog.get(id) !== undefined),
         isExample: agent.source === 'example',
+        ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
         provider: {
           kind: agent.provider.kind,
           model: agent.provider.model,

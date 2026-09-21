@@ -46,7 +46,7 @@ import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
 import { npmSpecText, parsePluginSpec, type PluginSpec } from './spec.js';
-import { stagingRoot } from './paths.js';
+import { incomingRoot, stagingRoot } from './paths.js';
 import { assertRegularTree, treeHash, TreeRefusal } from './tree.js';
 
 const run = promisify(execFile);
@@ -120,6 +120,17 @@ export interface StagedPlugin {
   claims: PluginClaims;
   /** The installed record this would replace, when this stage came from `update`. */
   previous?: { name: string; version: string };
+  /**
+   * The name the file had on the owner's machine, when this stage came from an
+   * upload rather than from a path they typed.
+   *
+   * `source.path` is where *buddi* put the bytes — a name of its own choosing
+   * under `<data>/plugins/incoming`, deleted as soon as staging copied it — so
+   * without this the card would identify an uploaded package by a path that no
+   * longer exists and that the owner has never seen. It is a label and nothing
+   * reads it back: it never becomes a path.
+   */
+  uploadedName?: string;
   state: 'staged' | 'approved' | 'planned';
   approvedAt?: string;
   approvedIntegrity?: string;
@@ -155,6 +166,8 @@ export interface StageOptions {
   now?: () => Date;
   /** Skip the dependency install. Only the fixtures that have none use it. */
   skipDependencies?: boolean;
+  /** The filename an uploaded tarball had on the owner's machine. A label. */
+  uploadedName?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -223,6 +236,40 @@ export function sweepStages(
       rejectStaged(staged.id, env);
       swept.push(staged.id);
     }
+  }
+  return swept;
+}
+
+/**
+ * Remove uploaded tarballs nobody staged. Called once at gateway start, beside
+ * the stage sweep.
+ *
+ * An upload is deleted as soon as staging has copied it, so anything still
+ * here is a request that died between the bytes arriving and the stage being
+ * written — a gateway that was killed mid-upload, mostly. Same day-long grace
+ * as a stage, for the same reason: it is somebody's file.
+ */
+export function sweepIncoming(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { olderThanMs?: number; now?: Date } = {},
+): string[] {
+  const root = incomingRoot(env);
+  if (!existsSync(root)) return [];
+  const ttl = opts.olderThanMs ?? STAGE_TTL_MS;
+  const now = (opts.now ?? new Date()).getTime();
+  const swept: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(root, entry.name);
+    let age: number;
+    try {
+      age = now - statSync(file).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (!Number.isFinite(age) || age <= ttl) continue;
+    rmSync(file, { force: true });
+    swept.push(entry.name);
   }
   return swept;
 }
@@ -582,6 +629,7 @@ export async function stagePlugin(
       dependencies: scanDependencies(packageDir),
       claims: readClaims(packageDir),
       ...(opts.previous === undefined ? {} : { previous: opts.previous }),
+      ...(opts.uploadedName === undefined ? {} : { uploadedName: opts.uploadedName }),
       state: 'staged',
     };
     writeStaged(staged);

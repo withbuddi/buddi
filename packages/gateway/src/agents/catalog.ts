@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import {
   loadAgentCatalog,
   migrationNotice,
+  pluginsFilePath,
+  readPluginsFile,
   resolveAgentSearchPath,
   reminderLimitsFromEnv,
   ToolRegistry,
@@ -30,7 +32,6 @@ import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
 import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
-import { optionalFinanceManifest } from '../plugins/optional-finance.js';
 import { createCanvasManifest } from './canvas.js';
 import { createSystemManifest } from '../system-context.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
@@ -116,11 +117,11 @@ export function builtInManifests(env: NodeJS.ProcessEnv = process.env): PluginMa
 function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest[]): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(createSystemManifest());
-  // Finance is the last domain plugin that is still compiled in, and only
-  // where the workspace has it: the release stages no `tools/finance`, so in a
-  // packaged install this is `undefined` and no `finance.*` family exists.
-  // See `plugins/optional-finance.ts`.
-  if (optionalFinanceManifest) registry.register(optionalFinanceManifest);
+  // Nothing domain-specific is compiled in any more. Finance was the last one,
+  // and it is now installed like any other plugin (`buddi plugins install
+  // packages/tools/finance` in a checkout), which is why an agent that grants
+  // `finance.*` needs that install before it will load. See
+  // docs/install-foundation.md.
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
@@ -181,7 +182,7 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
  *
  * The compiled-in ones that own a schema of their own, then whatever the owner
  * installed. Same standing: a plugin that arrived through `buddi plugins
- * install` owns a schema and suggests missions exactly as `finance` does.
+ * install` owns a schema and suggests missions exactly as a compiled-in one does.
  *
  * Derived from the registry, not listed: this was a hand-written four, and a
  * built-in plugin that shipped afterwards would have been left out of the
@@ -305,13 +306,39 @@ export function withHeldBackExamples(catalog: AgentCatalog): AgentCatalog {
   };
 }
 
+/**
+ * Which plugin provides a tool family, for the held-back sentence.
+ *
+ * A family is a plugin's name — `finance.*` comes from the plugin called
+ * `finance` — so the question is only whether this installation has heard of
+ * it: a plugin in the owner's record that has not loaded yet (a restart
+ * pending, an entry point that threw), or one compiled into this build. If it
+ * has, the sentence names it; if it has not, core says "a plugin providing the
+ * finance tools", which is the honest answer and still points at the page.
+ *
+ * Everything here is wrapped: producing a *sentence* may never be the thing
+ * that stops a catalog loading, which is the whole point of this path.
+ */
+export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (family: string) => string | undefined {
+  const known = new Set<string>();
+  try {
+    for (const manifest of builtInManifests(env)) known.add(manifest.name);
+  } catch { /* a build that cannot list itself still loads agents */ }
+  try {
+    const file = pluginsFilePath({ ownerRoot: agentSearchPath(env).ownerRoot, env });
+    for (const entry of readPluginsFile(file).plugins) known.add(entry.name);
+  } catch { /* no record, or an unreadable one: the family is the answer */ }
+  return (family) => (known.has(family) ? family : undefined);
+}
+
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   const env = opts.env ?? process.env;
   const registry = opts.registry ?? createToolRegistry(env);
+  const pluginForFamily = pluginNameForFamily(env);
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -326,6 +353,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     registry,
     env,
     providerSelection: opts.providerSelection,
+    pluginForFamily,
   });
   assertNoDelegationToWriters(catalog);
   return withHeldBackExamples(catalog);

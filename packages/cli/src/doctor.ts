@@ -447,6 +447,12 @@ export interface AgentEngineFact {
   /** Why it cannot run here. Present only when `available` is false. */
   reason?: string;
   isDefault: boolean;
+  /**
+   * True when it is held back for a tool family no installed plugin provides.
+   * A state of the installation, not a broken agent: the file is right and the
+   * plugin is missing, so it is a warning even when it is the default one.
+   */
+  heldBack?: boolean;
   /** Which half of the search path it came from. */
   source?: string;
 }
@@ -471,7 +477,8 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
     const key = `${agent.provider}|${agent.model}`;
     const group = groups.get(key) ?? { provider: agent.provider, model: agent.model, count: 0 };
     group.count += 1;
-    if (!agent.available && group.reason === undefined) group.reason = agent.reason;
+    // Held back has its own sentence below; it is not a credential problem.
+    if (!agent.available && agent.heldBack !== true && group.reason === undefined) group.reason = agent.reason;
     groups.set(key, group);
   }
 
@@ -481,20 +488,37 @@ export function checkAgents(agents: readonly AgentEngineFact[]): ProbeResult {
   );
   const detail = `${agents.length} agent${agents.length === 1 ? '' : 's'} — ${parts.join(', ')}`;
 
+  /*
+   * Held back is its own sentence, and never a failure.
+   *
+   * An agent granting `finance.*` on an installation without the finance
+   * plugin is *correctly written*: what is missing is an install, which the
+   * owner does from one page. A failed doctor would say the installation is
+   * broken when the only honest thing to report is that one plugin is absent —
+   * and the gateway starts perfectly well either way (docs/install.md §7).
+   */
+  const held = agents.filter((a) => a.heldBack === true);
+  const heldNote =
+    held.length === 0
+      ? ''
+      : `; ${held.map((a) => `@${a.handle}`).join(', ')} held back until the plugin they grant is installed` +
+        `${held.map((a) => a.reason).find((r) => r !== undefined) === undefined ? '' : ` (${held.map((a) => a.reason).find((r) => r !== undefined)})`}`;
+
   const fallback = agents.find((a) => a.isDefault);
-  if (fallback && !fallback.available) {
+  if (fallback && !fallback.available && fallback.heldBack !== true) {
     return {
       status: 'fail',
-      detail: `${detail}; the default agent @${fallback.handle} cannot run`,
+      detail: `${detail}${heldNote}; the default agent @${fallback.handle} cannot run`,
     };
   }
-  const blocked = agents.filter((a) => !a.available);
+  const blocked = agents.filter((a) => !a.available && a.heldBack !== true);
   if (blocked.length > 0) {
     return {
       status: 'warn',
-      detail: `${detail}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
+      detail: `${detail}${heldNote}; ${blocked.map((a) => `@${a.handle}`).join(', ')} cannot run here`,
     };
   }
+  if (held.length > 0) return { status: 'warn', detail: `${detail}${heldNote}` };
   return { status: 'ok', detail };
 }
 

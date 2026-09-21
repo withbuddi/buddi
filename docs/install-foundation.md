@@ -11,13 +11,33 @@ published to npm. The full contract remains [install.md](install.md).
   copied. Per-platform Postgres binaries are pinned optional dependencies.
 - **Platform plugins only.** The staged package list is core, runtime, gateway,
   cli, install and the platform tools (artifacts, browser, host, email, memory,
-  web). `tools/finance` is not staged: money is one owner's domain, not
-  something every installation should claim a `finance.*` family for, and it is
-  installed like any other plugin. The gateway therefore resolves that manifest
-  optionally (`packages/gateway/src/plugins/optional-finance.ts`): a checkout
-  registers it exactly as before, a packaged install has no such module and no
-  such family, and an agent file granting `finance.*` is refused by the loader
-  with the same sentence it uses for any other missing plugin.
+  web). `tools/finance` is not staged and is no longer compiled in anywhere:
+  money is one owner's domain, not something every installation should claim a
+  `finance.*` family for, so it is installed like any other plugin. A gateway
+  that has not been given it — packaged or checkout — has no `finance.*`
+  family, and an agent file granting one is refused with the same sentence core
+  uses for any other tool no installed plugin provides — fail-closed, and for
+  the whole catalog, which is what the note below is about.
+
+  **Migrating a checkout whose agents grant `finance.*`.** Finance used to be
+  registered by the composition root wherever the workspace had it, so in a
+  checkout it was simply there. It is not any more. Before the next restart,
+  run `buddi plugins install packages/tools/finance` — a directory source, so
+  it stages the package you already have, imports it once for the plan, and
+  records it; nothing is fetched and no hash has to be typed back. The
+  `finance` schema and everything in it are untouched by this: the plugin
+  claims the schema it already owns. `buddi plugins install` builds no agent
+  catalog, so it still works in a checkout that is already in the state below.
+
+  Do it before the restart, because the catalog is fail-closed and it is closed
+  for the whole catalog, not for one agent: a grant naming a tool nobody
+  registered raises `agent "credit-coach" declares tool "finance.*", which
+  matches no registered tool …`, and `loadAgentCatalog` refuses to produce a
+  catalog at all. A gateway in that state does not start, and `buddi doctor`'s
+  model-credential row fails with the same sentence, so "the rest of buddi
+  keeps running" is not what happens — the whole installation waits until
+  either the plugin is installed or the grant is taken off those agent files.
+  Installing it and restarting brings them back unchanged.
 - The packaged `buddi` launcher initializes a platform data directory, an
   installation-specific vault and a private SCRAM-authenticated Postgres cluster.
   The application database role is not a superuser; the administrator credential

@@ -47,7 +47,7 @@ import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
-import { sweepStages } from './plugins/stage.js';
+import { sweepIncoming, sweepStages } from './plugins/stage.js';
 import { sweepPluginDirs } from './plugins/paths.js';
 
 export { REPO_ROOT };
@@ -212,6 +212,11 @@ export async function createWiringAsync(
   try {
     const swept = sweepStages(env);
     if (swept.length > 0) console.error(`swept ${swept.length} abandoned plugin stage(s)`);
+    // And tarballs uploaded from the dashboard that never became a stage: the
+    // upload is deleted as soon as staging has copied it, so anything left is
+    // from a gateway that died between the two.
+    const uploads = sweepIncoming(env);
+    if (uploads.length > 0) console.error(`swept ${uploads.length} uploaded plugin tarball(s) nobody staged`);
     /*
      * And what a half-finished install left: the `<name>.previous-…` an upgrade
      * moves aside, and a package directory no record mentions, which is what a
