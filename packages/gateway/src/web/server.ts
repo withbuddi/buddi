@@ -422,6 +422,14 @@ export function createWebApp(deps: WebServerDeps): Server {
         ...deps.chat,
       })
     : undefined;
+  /*
+   * Anything the owner said to a run that did not survive the restart.
+   *
+   * Not awaited: it is a query and a promotion per stranded conversation, and
+   * the dashboard must come up whether or not the database is quick about it.
+   * Failures are the recovery's own business and land in the log.
+   */
+  void chat?.recoverPendingInput().catch((err) => log(`web chat: recovering queued input failed: ${err instanceof Error ? err.message : String(err)}`));
   const streams = new StreamBudget();
   const permissionScopes = (tool: string): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval
     ? { permissionScopes: ['conversation', 'always'] } : {};
@@ -2208,6 +2216,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 202, {
         conversationId: sent.conversationId,
         runId: sent.runId,
+        // The agent was already working and took this as an interjection. The
+        // page draws it as added while working rather than as a turn of its
+        // own, and keeps its own copy under the pending row's id until the
+        // transcript carries the words.
+        ...(sent.queued ? { queued: true } : {}),
+        ...(sent.pendingId ? { pendingId: sent.pendingId } : {}),
       });
     }
 

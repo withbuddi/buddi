@@ -58,6 +58,14 @@ import {
   answerQuestion,
   APPROVAL_RESUME_SPEAKER,
   OPENING_TURN_SPEAKER,
+  OWNER_INTERJECTION_SPEAKER,
+  conversationsWithPendingInput,
+  leasePendingInput,
+  markDelivered,
+  promotePendingInput,
+  queuePendingInput,
+  releaseLease,
+  waitingPendingInput,
   ToolRegistry,
   type AgentAvailability,
   type AgentCatalog,
@@ -78,6 +86,8 @@ import {
   projectTranscript,
   runAgent,
   type AttachmentRef,
+  type Interjection,
+  type InterjectionSource,
   type RunAgentOptions,
   type RuntimeProvider,
 } from '@buddi/runtime';
@@ -512,9 +522,13 @@ export async function readChatTranscript(
 
   // Untaken, unexpired, this conversation's. A chip the owner clicks goes
   // through the same claim-once take the Telegram tap does.
-  const [open, question] = await Promise.all([
+  const [open, question, waiting] = await Promise.all([
     listOpenOffers(pool, { now, conversationId, limit: 10 }).catch(() => []),
     openQuestion(pool, { now, conversationId }).catch(() => null),
+    // What the owner has said that no turn carries yet. It is not in
+    // `core.messages` — it cannot be, mid-tool-call — so the reader joins it
+    // on at the end, by its own id, marked for what it is.
+    waitingPendingInput(pool, conversationId).catch(() => []),
   ]);
   const vitals = await readVitals(pool, conversationId);
   // The size limit is this conversation's model's, not a constant: the header
@@ -541,7 +555,7 @@ export async function readChatTranscript(
     agentId: String(conversation.agent_id),
     ...(conversation.group_id ? { groupId: String(conversation.group_id) } : {}),
     startedAt: new Date(conversation.created_at).toISOString(),
-    messages: parsed.map((m) => ({
+    messages: [...parsed.map((m) => ({
       id: m.id,
       role: m.role,
       at: m.at,
@@ -552,6 +566,16 @@ export async function readChatTranscript(
             .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
+    // Said while the agent was working, and still waiting for it. Drawn as
+    // the owner's turn, because it is one — with the marker that says it went
+    // in mid-run, which it keeps until a run takes it into a turn.
+    ...waiting.map((row) => ({
+      id: row.id,
+      role: 'user',
+      at: row.receivedAt.toISOString(),
+      blocks: [{ type: 'text' as const, text: row.text }],
+      speaker: OWNER_INTERJECTION_SPEAKER,
+    }))],
     ...(await runsOf(pool, conversationId)),
   };
 }
@@ -909,6 +933,101 @@ function groupKey(groupId: string): string {
   return `group:${groupId}`;
 }
 
+/**
+ * The run in flight for one conversation, as everything outside it sees it.
+ *
+ * Three things and nothing else: which run it is, how to abandon it, and where
+ * to put a word the owner gets in while it works.
+ */
+/** One turn this surface runs: what opens it, and what it belongs to. */
+interface RunTurn {
+  agent: CatalogAgent;
+  conversationId: string;
+  runId: string;
+  text: string;
+  files: ArtifactRow[];
+  resume?: RunAgentOptions['resume'];
+  /** Set for a run inside a room: which group, which request, and whose voice. */
+  group?: RoomTurn;
+  /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
+  opening?: boolean;
+  /** The chip the owner clicked, when this turn is a taken offer. */
+  offer?: { id: string; label: string };
+  /**
+   * The owner's words are already a row in `core.messages`: they were typed
+   * during the previous run, stored at once, and never picked up by it. The
+   * run is given them as its turn and writes nothing new.
+   */
+  promoted?: boolean;
+}
+
+interface LiveRun {
+  runId: string;
+  cancel: () => void;
+  interjections: LivePendingInput;
+}
+
+/**
+ * The run's window onto `core.pending_input`, for one conversation.
+ *
+ * Deliberately thin: the states live in the table, and this is the four
+ * statements a run needs — take under lease, say the model saw them, hand
+ * them back when it did not, and shut the window when the run is over. It
+ * holds nothing in memory that matters, so losing this object (a restart)
+ * loses a window and never a message: the rows are still there, in a state
+ * that says nobody has answered them.
+ */
+class LivePendingInput implements InterjectionSource {
+  #closed = false;
+
+  constructor(
+    private readonly pool: Pool,
+    private readonly conversationId: string,
+    private readonly runId: string,
+    private readonly log: (line: string) => void,
+  ) {}
+
+  /** Can this run still be given something? */
+  get open(): boolean {
+    return !this.#closed;
+  }
+
+  close(): void {
+    this.#closed = true;
+  }
+
+  async lease(): Promise<readonly Interjection[]> {
+    if (this.#closed) return [];
+    try {
+      const rows = await leasePendingInput(this.pool, this.conversationId, this.runId);
+      return rows.map((row) => ({ id: row.id, text: row.text }));
+    } catch (err) {
+      // A queue that cannot be read must not fail the turn the owner is
+      // waiting on: the rows stay pending and go out as the next turn.
+      this.log(`web chat: reading queued input for ${this.conversationId} failed: ${message(err)}`);
+      return [];
+    }
+  }
+
+  async deliver(items: readonly Interjection[], messageId?: string): Promise<void> {
+    const ids = items.map((item) => item.id).filter((id): id is string => typeof id === 'string');
+    try {
+      await markDelivered(this.pool, ids, messageId ?? null);
+    } catch (err) {
+      this.log(`web chat: marking queued input delivered failed: ${message(err)}`);
+    }
+  }
+
+  async release(items: readonly Interjection[]): Promise<void> {
+    const ids = items.map((item) => item.id).filter((id): id is string => typeof id === 'string');
+    try {
+      await releaseLease(this.pool, ids);
+    } catch (err) {
+      this.log(`web chat: releasing queued input failed: ${message(err)}`);
+    }
+  }
+}
+
 /** A run inside a room: which group, which request, whose voice, and what opens it. */
 interface RoomTurn {
   row: GroupRow;
@@ -957,8 +1076,32 @@ export type SendResult =
       ok: true;
       conversationId: string;
       runId: string;
+      /**
+       * The message was handed to a run that is *already going*, not to a new
+       * one: it is in the transcript, marked as added while working, and the
+       * run picks it up between two tool calls. `runId` is that run's, so a
+       * page that is watching one stream keeps watching it.
+       */
+      queued?: true;
+      /**
+       * The `core.pending_input` row this message is, while it waits. The
+       * page keeps its optimistic bubble under this id and lets it go when
+       * the transcript it reads next carries the words — pending, delivered
+       * inside a tool-results turn, or promoted into a turn of their own.
+       */
+      pendingId?: string;
     }
   | { ok: false; status: number; error: string };
+
+/**
+ * Why a file cannot ride along mid-run.
+ *
+ * A turn's attachments are hydrated and capped when the run is built; there is
+ * no honest way to add one to a request that has already been sent. So it is
+ * refused in a sentence rather than queued into a surprise, and the owner
+ * sends it the moment the answer lands.
+ */
+export const FILES_DURING_RUN = 'Send files once the agent has answered.';
 
 /**
  * The web surface's run queue.
@@ -975,7 +1118,7 @@ export class WebChat {
   /** One send at a time per group decides its conversation and opens its request. */
   readonly #groupLocks = new Map<string, Promise<void>>();
   readonly #queues = new Map<string, Promise<void>>();
-  readonly #running = new Map<string, { runId: string; cancel: () => void }>();
+  readonly #running = new Map<string, LiveRun>();
   readonly #log: (line: string) => void;
 
   constructor(deps: WebChatDeps) {
@@ -1048,6 +1191,45 @@ export class WebChat {
           status: 409,
           error: `that conversation belongs to ${owner}, not to ${agent.id}`,
         };
+      }
+      /*
+       * The agent is working, and the owner has one more thing to say.
+       *
+       * It is not a second run and it is not a refusal: the words go to the
+       * run that is already going, which takes them between two tool calls,
+       * and they are written into the transcript here and now so the thread
+       * shows them landing rather than swallowing them for forty seconds.
+       * Decided before the lifetime rule below, because a conversation with a
+       * run in flight is by definition the one being spoken to.
+       */
+      const live = this.#running.get(conversationId);
+      if (live && live.interjections.open) {
+        // Files are hydrated and capped when the run is built; there is no
+        // honest way to add one to a request already in flight.
+        if (attachmentIds.length > 0) return { ok: false, status: 409, error: FILES_DURING_RUN };
+        // Durable before it is acknowledged, and in a table of its own: a row
+        // in `core.messages` written here would land between a `tool_use` and
+        // its result, which is a transcript no provider will replay.
+        const queued = await queuePendingInput(this.#deps.pool, {
+          conversationId,
+          runId: live.runId,
+          text,
+          now: this.#deps.now(),
+        });
+        const still = this.#running.get(conversationId);
+        if (still && still.runId === live.runId && still.interjections.open) {
+          await this.#event(conversationId, 'chat.message.appended', {
+            role: 'user',
+            runId: live.runId,
+            queued: true,
+            pendingId: queued.id,
+          });
+          return { ok: true, conversationId, runId: live.runId, queued: true, pendingId: queued.id };
+        }
+        // The run ended between the two. Nothing is lost and nothing is said
+        // twice: what is waiting becomes the next turn, here and now.
+        const started = await this.#promoteAndRun(conversationId, agent);
+        if (started) return { ok: true, conversationId, runId: started };
       }
       /*
        * The page opens on this agent's most recent conversation, which is the
@@ -1414,7 +1596,15 @@ export class WebChat {
   }
 
   async drain(): Promise<void> {
-    await Promise.all([...this.#queues.values()]);
+    // Until it stays drained. A run that ends holding interjections chains the
+    // next turn onto the same queue while this is waiting, and a single pass
+    // would return with that turn still to come.
+    for (;;) {
+      const waiting = [...this.#queues.values()];
+      await Promise.all(waiting);
+      const after = [...this.#queues.values()];
+      if (after.length === waiting.length && after.every((p, i) => p === waiting[i])) return;
+    }
   }
 
   /** Serialize per conversation, exactly as Telegram serializes per chat. */
@@ -1433,21 +1623,104 @@ export class WebChat {
     return this.#deps.catalog.get(wanted) ?? this.#deps.catalog.byHandle(wanted.replace(/^@/, ''));
   }
 
+  /**
+   * One turn, from the outside: the run, and then whatever the owner said
+   * while it was going and it never picked up.
+   *
+   * The queue lives out here rather than inside the run because it outlives
+   * it by exactly one step — a line that arrives after the model's last word
+   * is not lost, it is the next turn.
+   */
+  async #run(turn: RunTurn): Promise<'ran' | 'suspended' | 'failed'> {
+    const interjections = new LivePendingInput(this.#deps.pool, turn.conversationId, turn.runId, this.#log);
+    try {
+      return await this.#turn(turn, interjections);
+    } finally {
+      // The window shuts first, so nothing can be handed to a run that is no
+      // longer there to take it, and only then is what is left promoted.
+      interjections.close();
+      await this.#afterRun(turn);
+    }
+  }
+
+  /**
+   * What the run never heard, sent as the next turn.
+   *
+   * In order, joined into one owner turn: two half-thoughts typed thirty
+   * seconds apart are one thing the owner wanted to say, and answering them
+   * as two runs answers the first one twice. The join and the canonical row
+   * are one transaction in core, so a promotion either happened or did not —
+   * and only when it happened is the next run told its turn is already
+   * stored.
+   */
+  async #afterRun(turn: RunTurn): Promise<void> {
+    // A room is spoken to as a room; nothing queues onto a group run.
+    if (turn.group) return;
+    await this.#promoteAndRun(turn.conversationId, turn.agent);
+  }
+
+  /**
+   * Promote whatever is waiting in this conversation and answer it.
+   *
+   * Returns the id of the run it started, or null when there was nothing
+   * waiting. A failed promotion starts nothing and says so in the log: the
+   * rows stay exactly as they were, which is what lets the next send — or the
+   * next start — pick them up instead of losing or duplicating them.
+   */
+  async #promoteAndRun(conversationId: string, agent: CatalogAgent): Promise<string | null> {
+    let promoted: Awaited<ReturnType<typeof promotePendingInput>> = null;
+    try {
+      promoted = await promotePendingInput(this.#deps.pool, conversationId);
+    } catch (err) {
+      this.#log(`web chat: promoting queued input for ${conversationId} failed, it stays queued: ${message(err)}`);
+      return null;
+    }
+    if (!promoted) return null;
+    const runId = randomUUID();
+    this.#enqueue(conversationId, async () => {
+      await this.#run({
+        agent, conversationId, runId, text: promoted!.text, files: [], promoted: true,
+      });
+    });
+    return runId;
+  }
+
+  /**
+   * What the owner said to a run this process no longer has.
+   *
+   * A restart loses every live run and every window onto the queue; the rows
+   * do not go anywhere. Without this they would sit in the table for ever,
+   * marked as waiting on a run that cannot come back. So at start, anything
+   * still waiting becomes the next turn of its conversation — the same
+   * promotion a run ending would have done, minus the run.
+   */
+  async recoverPendingInput(): Promise<number> {
+    let conversations: string[];
+    try {
+      conversations = await conversationsWithPendingInput(this.#deps.pool);
+    } catch (err) {
+      this.#log(`web chat: looking for queued input failed: ${message(err)}`);
+      return 0;
+    }
+    let recovered = 0;
+    for (const conversationId of conversations) {
+      // A live run owns its own queue; this is only about the orphans.
+      if (this.#running.has(conversationId)) continue;
+      if (await conversationGroup(this.#deps.pool, conversationId).catch(() => null)) continue;
+      const agentId = await conversationAgent(this.#deps.pool, conversationId).catch(() => null);
+      const agent = agentId ? this.#resolve(agentId) : undefined;
+      if (!agent) {
+        this.#log(`web chat: queued input in ${conversationId} has no agent to answer it`);
+        continue;
+      }
+      if (await this.#promoteAndRun(conversationId, agent)) recovered += 1;
+    }
+    if (recovered > 0) this.#log(`web chat: ${recovered} conversation(s) had something the owner said before the restart; answering it now`);
+    return recovered;
+  }
+
   /** One turn: the user message, the run, and whatever stopped it. */
-  async #run(turn: {
-    agent: CatalogAgent;
-    conversationId: string;
-    runId: string;
-    text: string;
-    files: ArtifactRow[];
-    resume?: RunAgentOptions['resume'];
-    /** Set for a run inside a room: which group, which request, and whose voice. */
-    group?: RoomTurn;
-    /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
-    opening?: boolean;
-    /** The chip the owner clicked, when this turn is a taken offer. */
-    offer?: { id: string; label: string };
-  }): Promise<'ran' | 'suspended' | 'failed'> {
+  async #turn(turn: RunTurn, interjections: LivePendingInput): Promise<'ran' | 'suspended' | 'failed'> {
     const deps = this.#deps;
     const { agent, conversationId, runId } = turn;
     let toolsCalled = 0;
@@ -1563,6 +1836,11 @@ export class WebChat {
       surface: WEB_SURFACE,
       runId,
       ...(turn.resume ? { resume: turn.resume } : { userMessage }),
+      ...(turn.promoted ? { openingPersisted: true } : {}),
+      // Where anything the owner says while this run works arrives. The loop
+      // drains it between tool calls; whatever is left when the run ends comes
+      // back here and goes out as the next turn.
+      interjections,
       ...(turn.opening
         ? { openingSpeaker: OPENING_TURN_SPEAKER }
         // A taken chip is the owner's turn, stamped with the label they clicked
@@ -1604,6 +1882,7 @@ export class WebChat {
     const result = await this.#cancellable(
       conversationId,
       runId,
+      interjections,
       async (signal) => runAgent({ ...options, ctx: { ...options.ctx, signal } }),
       () => {
         cancelled = true;
@@ -1792,12 +2071,13 @@ export class WebChat {
   async #cancellable<T>(
     conversationId: string,
     runId: string,
+    interjections: LivePendingInput,
     work: (signal: AbortSignal) => Promise<T>,
     onCancel: () => void,
     onError: (err: unknown) => void,
   ): Promise<T | undefined> {
     const controller = new AbortController();
-    this.#running.set(conversationId, { runId, cancel: () => {
+    this.#running.set(conversationId, { runId, interjections, cancel: () => {
       if (controller.signal.aborted) return;
       onCancel();
       controller.abort(new Error('The owner cancelled this run.'));

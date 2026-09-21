@@ -1827,6 +1827,18 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   font-weight: var(--weight-medium);
 }
 
+/*
+ * A turn the owner typed while the agent was working: their bubble, their
+ * column, with one faint line above it saying when it went in. Quiet on
+ * purpose — it is a fact about the timing, not about the message.
+ */
+.wb-msg-added {
+  align-self: flex-end;
+  font-size: var(--text-2xs);
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
+}
+
 /* ------------------------------------------------------------------ *
  * The properties panel: what an agent is, and what it may do to you.
  *

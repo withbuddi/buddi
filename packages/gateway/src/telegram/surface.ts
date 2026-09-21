@@ -44,7 +44,7 @@ import {
   type RenderedOffers,
   type Reminder,
 } from '@buddi/core';
-import { createConversation } from '@buddi/runtime';
+import { InterjectionQueue, createConversation, type InterjectionSource } from '@buddi/runtime';
 import {
   MAX_CALLBACK_DATA_BYTES,
   MAX_MESSAGE_CHARS,
@@ -510,6 +510,12 @@ export interface RunRequest {
    * interview is decided here.
    */
   systemSuffix?: string;
+  /**
+   * Where this run hears about a message the owner sends while it works. The
+   * runtime drains it between tool calls; a runner that ignores it simply
+   * answers the first message, which is what this surface did before.
+   */
+  interjections?: InterjectionSource;
 }
 
 /**
@@ -1307,6 +1313,17 @@ export class TelegramSurface {
   readonly #log: (line: string) => void;
   /** One promise chain per chat: runs never interleave within a chat. */
   readonly #queues = new Map<string, Promise<void>>();
+  /**
+   * The run in flight for a chat, and where a second message goes.
+   *
+   * A chat serializes on `#queues`, so before this a message typed while the
+   * agent worked simply waited its turn and then started a run of its own —
+   * two runs and two replies for one thought. Now it reaches the run that is
+   * already going, which takes it between two tool calls.
+   */
+  readonly #interjections = new Map<string, InterjectionQueue>();
+  /** How many pieces of work this chat still has to get through. */
+  readonly #waiting = new Map<string, number>();
   /** Pairing attempt timestamps per user id, for the hourly limit. */
   readonly #pairingAttempts = new Map<string, number[]>();
   /** When each identity's `last_seen_at` was last written. */
@@ -1501,6 +1518,32 @@ export class TelegramSurface {
       return;
     }
 
+    /*
+     * The agent is working and the owner has added something. It joins that
+     * run rather than queueing behind it: one thought, one answer.
+     *
+     * Only a plain sentence to whoever is working. A command is its own
+     * thing, and `@handle …` is addressed to somebody else — folding either
+     * into the run in flight would answer a question nobody asked it.
+     *
+     * Decided on the *normalised* text, the way `handleText` decides
+     * everything else: in a group Telegram writes `@buddi_bot /reset`, and a
+     * check against the raw string sees no slash and would push a command
+     * into the agent's context as though it were a sentence.
+     */
+    const normalized = stripBotMention(text, this.#opts.botUsername).trim();
+    const live = this.#interjections.get(chatId);
+    if (
+      live
+      && (this.#waiting.get(chatId) ?? 0) <= 1
+      && !normalized.startsWith('/')
+      && parseMention(normalized, this.#opts.botUsername) === undefined
+      && live.push({ text: normalized })
+    ) {
+      this.#log(`telegram: chat ${chatId} added to the run in flight`);
+      return;
+    }
+
     this.enqueue(chatId, () => this.handleText(chatId, userId, text));
   }
 
@@ -1611,9 +1654,22 @@ export class TelegramSurface {
   /** Serialize per chat. */
   enqueue(chatId: string, work: () => Promise<void>): Promise<void> {
     const previous = this.#queues.get(chatId) ?? Promise.resolve();
-    const next = previous.then(work).catch((err) => {
-      this.#log(`telegram: chat ${chatId} failed: ${message(err)}`);
-    });
+    // How much this chat still has to get through, the run in flight
+    // included. It is what decides whether a new message can join that run:
+    // with something already waiting behind it — a switch, a command, a
+    // mention — the owner's next sentence belongs after that, not inside the
+    // turn it would overtake.
+    this.#waiting.set(chatId, (this.#waiting.get(chatId) ?? 0) + 1);
+    const next = previous
+      .then(work)
+      .catch((err) => {
+        this.#log(`telegram: chat ${chatId} failed: ${message(err)}`);
+      })
+      .finally(() => {
+        const left = (this.#waiting.get(chatId) ?? 1) - 1;
+        if (left <= 0) this.#waiting.delete(chatId);
+        else this.#waiting.set(chatId, left);
+      });
     this.#queues.set(chatId, next);
     return next;
   }
@@ -2044,44 +2100,72 @@ export class TelegramSurface {
     // run, not out of what the owner is shown: the note is prepended after.
     let askedOwner = false;
 
-    await this.#withBubble(
-      chatId,
-      async (progress) => {
-        const produced = await this.#opts.run({
-          conversationId,
-          chatId,
-          agent,
-          text: prompt,
-          ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
-          onToolCall: (name) => progress.noteToolCall(name),
-        });
-        const reply = replyText(produced);
-        askedOwner = turnAskedOwner(
-          typeof produced === 'string' ? undefined : produced.askedOwner,
-          reply,
+    // Where a message typed while this run works arrives. It is registered
+    // before the first model call and closed after the last, so the window in
+    // which the owner can get a word in is exactly the window in which the
+    // agent is working.
+    const interjections = new InterjectionQueue();
+    this.#interjections.set(chatId, interjections);
+    try {
+      await this.#withBubble(
+        chatId,
+        async (progress) => {
+          const produced = await this.#opts.run({
+            conversationId,
+            chatId,
+            agent,
+            text: prompt,
+            interjections,
+            ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
+            onToolCall: (name) => progress.noteToolCall(name),
+          });
+          const reply = replyText(produced);
+          askedOwner = turnAskedOwner(
+            typeof produced === 'string' ? undefined : produced.askedOwner,
+            reply,
+          );
+          // Only what this turn itself has to say. A conversation boundary is
+          // not announced: the owner did not ask which transcript their answer
+          // was composed in, memory carries over regardless, and a size rollover
+          // that had work in flight has already written the carry-over note into
+          // the new conversation for the agent to read.
+          const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
+          // The offers this turn stored, drawn the way Telegram's own profile
+          // says they are drawn — buttons here, words on a surface without any.
+          // Nothing offered is the normal case, and then this is the identity.
+          return {
+            ...renderOffers(
+            TELEGRAM_SURFACE,
+            note ? `${note}\n\n${reply}` : reply,
+            typeof produced === 'string' ? [] : (produced.offers ?? []),
+            ),
+            ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
+          };
+        },
+        label,
+        carried ? readingText(label) : undefined,
+        { agentId: agent.id, conversationId, prompt },
         );
-        // Only what this turn itself has to say. A conversation boundary is
-        // not announced: the owner did not ask which transcript their answer
-        // was composed in, memory carries over regardless, and a size rollover
-        // that had work in flight has already written the carry-over note into
-        // the new conversation for the agent to read.
-        const note = typeof opts.note === 'function' ? opts.note(askedOwner) : opts.note;
-        // The offers this turn stored, drawn the way Telegram's own profile
-        // says they are drawn — buttons here, words on a surface without any.
-        // Nothing offered is the normal case, and then this is the identity.
-        return {
-          ...renderOffers(
-          TELEGRAM_SURFACE,
-          note ? `${note}\n\n${reply}` : reply,
-          typeof produced === 'string' ? [] : (produced.offers ?? []),
-          ),
-          ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
-        };
-      },
-      label,
-      carried ? readingText(label) : undefined,
-      { agentId: agent.id, conversationId, prompt },
-    );
+    } finally {
+      /*
+       * However the turn ended — answered, thrown, cancelled — the window
+       * closes with it and what it was holding becomes the next turn.
+       *
+       * In the `finally`, because the case that matters is the one that does
+       * not reach the end of this function: a run that throws had no chance
+       * to take the owner's message, and Telegram has no durable copy of it.
+       * Promoting it after the `try` would lose exactly the message the owner
+       * sent because the agent was taking too long.
+       */
+      const left = interjections.close();
+      if (this.#interjections.get(chatId) === interjections) this.#interjections.delete(chatId);
+      const added = left.map((item) => item.text.trim()).filter((line) => line !== '').join('\n\n');
+      // Onto the back of the chat's chain, not into this call: it is a turn
+      // of its own now, and it takes its place behind anything the owner sent
+      // in between rather than jumping the queue from inside the turn before
+      // it.
+      if (added !== '') this.enqueue(chatId, () => this.#runFor(chatId, agent, added, { carry: false }).then(() => undefined));
+    }
 
     return { askedOwner };
   }

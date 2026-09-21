@@ -88,6 +88,12 @@ export async function runSentinels(
   manifests: PluginManifest[],
   now: Date,
   timezone: string,
+  /**
+   * Who answers for a role, from the host's live roster. Omitted — a test, or
+   * a host with no catalog — every role is unheld, which is a valid answer:
+   * findings name no agent and fall to the wake mission's agent.
+   */
+  agentForRole: (role: string) => string | undefined = () => undefined,
 ): Promise<SentinelOutcome[]> {
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
@@ -105,7 +111,7 @@ export async function runSentinels(
       outcomes.push({ sentinelId: sentinel.id, ran: false, findings: 0, fired: 0, resolved: 0 });
       continue;
     }
-    outcomes.push(await runOne(pool, sentinel, now, timezone));
+    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole));
   }
   return outcomes;
 }
@@ -115,10 +121,11 @@ async function runOne(
   sentinel: Sentinel,
   now: Date,
   timezone: string,
+  agentForRole: (role: string) => string | undefined,
 ): Promise<SentinelOutcome> {
   let findings: Finding[];
   try {
-    findings = await sentinel.run({ db: pool, now: () => now, timezone });
+    findings = await sentinel.run({ db: pool, now: () => now, timezone, agentForRole });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordRun(pool, sentinel.id, now, message);
