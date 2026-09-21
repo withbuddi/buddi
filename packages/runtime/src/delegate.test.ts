@@ -194,6 +194,7 @@ describe('agent.delegate', () => {
       handle: 'credo',
       name: 'Credit Coach',
       conversationId: 'conv-1',
+      runId: expect.any(String),
       text: 'Pay 200 before the 18th.',
     });
     // A real, separate conversation owned by the target agent.
@@ -335,5 +336,49 @@ describe('agent.delegate', () => {
     expect(out.ok === false && out.message).toContain('provider exploded');
     const finished = db.events.find((e) => e.kind === 'delegation.finished');
     expect(finished?.payload).toMatchObject({ ok: false, error: 'provider exploded' });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Where the work went, said before it is done
+ * ------------------------------------------------------------------ */
+
+/**
+ * A delegation is a run the owner cannot see: it happens in somebody else's
+ * conversation, and the only thing the caller's transcript holds is one tool
+ * row that stays open for a minute. So the ids are written the moment the
+ * colleague's conversation exists — before the nested run takes a turn — and
+ * carry the tool-use id of the call that asked, which is what ties them to
+ * that row.
+ */
+describe('delegation.started', () => {
+  it('names the conversation, the agent and the run, before the answer exists', async () => {
+    const { db, registry, ctx } = harness();
+    const out = await registry.invoke(DELEGATE_TOOL, task, { ...ctx, toolUseId: 'toolu_42' });
+    expect(out.ok).toBe(true);
+
+    const started = db.events.find((e) => e.kind === 'delegation.started');
+    expect(started?.payload).toMatchObject({
+      from: 'finance-advisor',
+      to: 'credit-coach',
+      agentId: 'credit-coach',
+      conversationId: 'conv-1',
+      toolUseId: 'toolu_42',
+    });
+    expect(typeof started?.payload.runId).toBe('string');
+    // The caller's conversation carries it, because that is where the tool row
+    // the panel is drawing lives.
+    expect(started?.conversation_id).toBe('conv-caller');
+    // And it was written before the nested run recorded anything of its own —
+    // which is the whole point: the panel finds the conversation while the
+    // colleague is still working, not once it has answered.
+    expect(db.kinds().indexOf('delegation.started')).toBeLessThan(db.kinds().indexOf('run.started'));
+  });
+
+  it('carries the same run id the nested run was given', async () => {
+    const { db, registry, ctx, captured } = harness();
+    await registry.invoke(DELEGATE_TOOL, task, { ...ctx, toolUseId: 'toolu_7' });
+    const started = db.events.find((e) => e.kind === 'delegation.started');
+    expect(captured[0]?.runId).toBe(started?.payload.runId);
   });
 });

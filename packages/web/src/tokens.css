@@ -57,6 +57,9 @@
   --weight-semibold: 650;
 
   /* ---- spacing scale ---- */
+  /* A hairline gap: two lines that belong to one label, where even 4px reads
+     as a break. Below the scale on purpose — it is the exception. */
+  --space-0: 2px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

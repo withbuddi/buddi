@@ -15,7 +15,7 @@
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { approvalIdOf, labelFor } from '../canvas/renderables';
+import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import { Markdown, MarkdownAgents } from './markdown';
@@ -195,6 +195,11 @@ export function MessageList({
               </div>
             ) : null}
             {(message.blocks ?? []).map((block, blockIndex) => {
+              // A run of delegations that were all refused is one piece of
+              // news, not four. See `refusedRun`.
+              const run = refusedRun(message.blocks ?? [], blockIndex, messages);
+              if (run === 'inside') return null;
+              if (run) return <RefusedDelegations key={blockIndex} refusals={run.refusals} />;
               if (block.type === 'thinking') {
                 if (plain || block.text.trim() === '') return null;
                 return <Thought key={blockIndex} text={block.text} />;
@@ -275,6 +280,112 @@ export function MessageList({
   );
 }
 
+/** One refused delegation: who was asked, and what the refusal said. */
+export interface Refusal {
+  /** The id the model passed, which is the colleague it meant to ask. */
+  target: string;
+  /** The refusal, verbatim. */
+  message: string;
+}
+
+/** `(allowed: ledger, postman)` out of a refusal, when it carries one. */
+export function allowedIn(message: string): string | null {
+  return /\(allowed: ([^)]*)\)/.exec(message)?.[1]?.trim() || null;
+}
+
+/**
+ * The runtime's word for "you may not ask that agent". The prefix, not a
+ * guess: `createDelegateTool` writes every authorization refusal with it.
+ */
+export const REFUSAL_PREFIX = 'delegation refused:';
+
+/**
+ * Is this block the head of a run of refused delegations?
+ *
+ * A model that has guessed a colleague's id guesses several, one after the
+ * other, in the same turn. Four red rows saying the same thing is the tool
+ * reporting itself rather than the turn reporting the work, so a run of two
+ * or more collapses into one row that names every id it tried and the list it
+ * was given.
+ *
+ * Only *refusals* — a delegation the installation would not allow. A
+ * delegation that was allowed and then failed is news about the work: the
+ * colleague threw, the provider was unreachable, the nested run ran out of
+ * turns. Folding those into "delegation refused 3 times" would hide three
+ * different errors behind a sentence that is not true of any of them, so
+ * anything that is not a refusal keeps its own row.
+ *
+ * Returns `'inside'` for the blocks the head already speaks for.
+ */
+export function refusedRun(
+  blocks: readonly ChatBlock[],
+  index: number,
+  messages: ChatMessage[],
+): { refusals: Refusal[] } | 'inside' | null {
+  const refusalAt = (at: number): Refusal | null => {
+    const block = blocks[at];
+    if (!block || block.type !== 'tool_use' || block.name !== DELEGATE_TOOL) return null;
+    const result = findResult(messages, block.id);
+    if (!result || result.ok !== false) return null;
+    const message = typeof result.error === 'string' ? result.error : String(result.error ?? '');
+    if (!message.trimStart().startsWith(REFUSAL_PREFIX)) return null;
+    const input = (block.input ?? {}) as Record<string, unknown>;
+    return {
+      target: typeof input['agent'] === 'string' && input['agent'] !== '' ? input['agent'] : 'a colleague',
+      message,
+    };
+  };
+
+  if (!refusalAt(index)) return null;
+  if (refusalAt(index - 1)) return 'inside';
+  const refusals: Refusal[] = [];
+  for (let at = index; ; at += 1) {
+    const refusal = refusalAt(at);
+    if (!refusal) break;
+    refusals.push(refusal);
+  }
+  return refusals.length < 2 ? null : { refusals };
+}
+
+/**
+ * The collapsed row: how many were refused, who was asked, and — folded — the
+ * individual rows exactly as they would have been drawn.
+ */
+function RefusedDelegations({ refusals }: { refusals: Refusal[] }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const allowed = refusals.map((refusal) => allowedIn(refusal.message)).find((list) => list !== null) ?? null;
+  const named = refusals.map((refusal) => refusal.target);
+  const shown = named.slice(0, 3);
+  const summary =
+    `Delegation refused ${refusals.length} times: ${shown.join(', ')}${named.length > shown.length ? ', …' : ''}` +
+    (allowed ? ` (allowed: ${allowed})` : '');
+  return (
+    <div className="wb-refusals" data-testid="delegation-refusals" data-open={open || undefined}>
+      <button type="button" className="wb-tool" data-ok={false} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="wb-tool-mark" data-ok="false" aria-hidden="true" />
+        <span className="wb-tool-label">{summary}</span>
+        <ArrowIcon />
+      </button>
+      {open ? (
+        <div className="wb-refusals-list">
+          {refusals.map((refusal, index) => (
+            <div className="wb-refusal" key={index}>
+              <span className="wb-tool" data-static="true" data-ok={false}>
+                <span className="wb-tool-mark" data-ok="false" aria-hidden="true" />
+                <span className="wb-tool-label">{labelFor(DELEGATE_TOOL)} · {refusal.target}</span>
+                <span className="wb-tool-elapsed">refused</span>
+              </span>
+              {/* What it actually said. Opened, the owner wants the reason,
+                  not four copies of the word "refused". */}
+              <p className="wb-refusal-why">{refusal.message}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function secondsBetween(from: number | null, to: number): number | null {
   if (from === null) return null;
   return Math.max(0, Math.round((to - from) / 1000));
@@ -285,7 +396,7 @@ function secondsBetween(from: number | null, to: number): number | null {
  * there is nothing else to show — "Thinking", with the clock — and it folds
  * the moment the answer starts. After the fact it is a quiet row that opens.
  */
-function Thought({ text, live = false, seconds = null }: { text: string; live?: boolean; seconds?: number | null }): JSX.Element {
+export function Thought({ text, live = false, seconds = null }: { text: string; live?: boolean; seconds?: number | null }): JSX.Element {
   const [open, setOpen] = useState(false);
   const label = live
     ? `Thinking${seconds !== null && seconds > 0 ? ` · ${seconds}s` : ''}`
@@ -368,7 +479,7 @@ function stringify(value: unknown): string {
   }
 }
 
-function ToolRow({
+export function ToolRow({
   label,
   tool,
   ok,

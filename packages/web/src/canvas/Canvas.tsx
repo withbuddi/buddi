@@ -29,6 +29,8 @@ import { RenderView } from './registry';
 import type { Renderable, RendererName, ViewDescriptor } from './types';
 import { Profile, type ProfileProps } from './views/Profile';
 import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
+import { DelegateView, type DelegateViewProps } from './views/DelegateView';
+import type { ChatAgent } from '../chat/types';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -65,6 +67,7 @@ export function Canvas({
   agentName,
   maxTabs,
   browserPanel,
+  agents,
   onClose,
 }: {
   renderables: Renderable[];
@@ -82,6 +85,12 @@ export function Canvas({
   maxTabs?: number;
   /** Live host state supplied by the page, never by tool-result props. */
   browserPanel?: ReactNode;
+  /**
+   * The roster, for the one panel that draws another agent: a delegation.
+   * Supplied by the page — a name and a face are the page's to give, never a
+   * tool result's.
+   */
+  agents?: readonly ChatAgent[];
   onClose?: (id: string) => void;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
@@ -157,6 +166,8 @@ export function Canvas({
                 />
               ) : item.source === 'artifact' ? (
                 <ArtifactView {...(item.props as ArtifactViewProps)} />
+              ) : item.source === 'delegate' ? (
+                <DelegateView {...(item.props as DelegateViewProps)} agents={agents ?? []} />
               ) : (
                 <RenderView
                   renderer={item.renderer}

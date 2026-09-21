@@ -54,6 +54,13 @@
  *    Old evidence is invalidated and a fresh observation is mandatory. Pause,
  *    expiry and Stop still apply; explicit reset and idle rollover do not adopt
  *    control, and no host execution permission follows the task.
+ *  - **What a browser session learned survives.** A session's observations are
+ *    what pushes a transcript past the size limit in the first place, so the
+ *    conversation after one starts with a single carried note — the task, the
+ *    pages visited by URL and title, and the agent's last words — written as
+ *    nobody speaking and drawn as a grey line, not a bubble. Page *content*
+ *    never crosses: it is untrusted evidence gathered under the old request.
+ *    See `browser-handoff.ts`.
  *  - **Pending approvals survive.** An action records the conversation that
  *    proposed it and the run resumes *that* conversation when the owner
  *    decides, whichever conversation the chat has moved on to. A boundary can

@@ -1,6 +1,18 @@
 /** Load something, poll it if asked, and say how it went. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api';
+
+/**
+ * How many polls in a row may fail before the page stops asking.
+ *
+ * A poll that keeps failing is usually the gateway being restarted or a
+ * conversation that no longer exists, and a page left open on it would ask
+ * every two seconds until the laptop closed. Each failure also doubles the
+ * wait, so a gateway that comes back within a few seconds is found again
+ * without a thundering herd, and one that does not is left alone. A single
+ * success resets both counters.
+ */
+export const POLL_ERROR_LIMIT = 5;
 
 export function useAsync<T>(
   load: () => Promise<T>,
@@ -11,19 +23,25 @@ export function useAsync<T>(
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
+  /** Consecutive failures. Reset by any success; see `POLL_ERROR_LIMIT`. */
+  const [failures, setFailures] = useState(0);
+  const latest = useRef(load);
+  latest.current = load;
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    load()
+    latest.current()
       .then((value) => {
         if (cancelled) return;
         setData(value);
         setError(null);
+        setFailures(0);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setError(err instanceof ApiError ? err.message : String(err));
+        setFailures((n) => n + 1);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -36,9 +54,12 @@ export function useAsync<T>(
 
   useEffect(() => {
     if (!pollMs) return undefined;
-    const handle = window.setInterval(() => setTick((n) => n + 1), pollMs);
-    return () => window.clearInterval(handle);
-  }, [pollMs]);
+    if (failures >= POLL_ERROR_LIMIT) return undefined;
+    const handle = window.setTimeout(() => setTick((n) => n + 1), pollMs * 2 ** failures);
+    return () => window.clearTimeout(handle);
+  }, [pollMs, failures, tick]);
 
-  return { data, error, loading, reload: () => setTick((n) => n + 1) };
+  // A reload the caller asked for is a fresh start: it clears the backoff, so
+  // a button the owner presses is never quietly ignored.
+  return { data, error, loading, reload: () => { setFailures(0); setTick((n) => n + 1); } };
 }
