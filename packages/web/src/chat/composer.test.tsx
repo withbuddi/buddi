@@ -266,3 +266,91 @@ describe('the thinking switch', () => {
   });
 });
 
+
+/**
+ * Up recalls what the owner already said, the way a shell does.
+ *
+ * The arrows belong to the caret first: a recall only happens from the first
+ * line and only while the box holds nothing of the owner's own, so a long
+ * message being edited never jumps out from under them.
+ */
+describe('the composer history', () => {
+  const said = ['the newest thing', 'the one before'];
+  const draw = (history?: string[]) =>
+    render(
+      <Composer
+        disabled={false}
+        running={false}
+        onSend={() => {}}
+        onStop={() => {}}
+        agentName="Ada"
+        {...(history ? { history } : {})}
+      />,
+    );
+
+  const field = (): HTMLTextAreaElement => screen.getByLabelText(/Message Ada/) as HTMLTextAreaElement;
+
+  it('walks back through the owner\'s messages and forward again to the draft', () => {
+    draw(said);
+    const box = field();
+
+    // The draft the owner was in the middle of… except there isn't one yet.
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('the newest thing');
+    // The caret waits at the end, where the next keystroke belongs.
+    expect(box.selectionStart).toBe('the newest thing'.length);
+
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('the one before');
+
+    // Nothing older than the oldest.
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('the one before');
+
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect(box.value).toBe('the newest thing');
+
+    // Past the newest is the empty box the walk started from.
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect(box.value).toBe('');
+  });
+
+  it('keeps the owner\'s own half-typed line — Up is a caret key then', () => {
+    draw(said);
+    const box = field();
+    fireEvent.change(box, { target: { value: 'half a thought' } });
+
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    // A box with the owner's own words in it keeps them: Up is a caret key.
+    expect(box.value).toBe('half a thought');
+  });
+
+  it('restores the draft on Escape', () => {
+    draw(said);
+    const box = field();
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('the newest thing');
+
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(box.value).toBe('');
+  });
+
+  it('leaves the arrows alone when the caret is on a second line', () => {
+    draw(said);
+    const box = field();
+    fireEvent.change(box, { target: { value: 'first\nsecond' } });
+    box.setSelectionRange('first\nsecond'.length, 'first\nsecond'.length);
+
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('first\nsecond');
+  });
+
+  it('does nothing at all when nothing has been said yet', () => {
+    draw([]);
+    const box = field();
+    fireEvent.keyDown(box, { key: 'ArrowUp' });
+    expect(box.value).toBe('');
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect(box.value).toBe('');
+  });
+});
