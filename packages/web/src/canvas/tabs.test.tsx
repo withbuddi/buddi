@@ -251,6 +251,18 @@ describe('the split itself', () => {
     expect(hidden.map((item) => item.id)).toEqual(['r1']);
   });
 
+  /*
+   * A screen an agent is driving right now holds the strip: the page marks it
+   * pinned while the session lives and clears the mark when it ends, and a
+   * long run cannot push it behind the menu in between.
+   */
+  it('holds a pinned panel on the strip, and lets go once it is history', () => {
+    const live = [fake(0, { source: 'browser', pinned: true }), fake(1), fake(2), fake(3)];
+    expect(splitTabs(live, 'r3', 2).shown.map((item) => item.id)).toEqual(['r0', 'r3']);
+    const ended = live.map((item) => (item.id === 'r0' ? { ...item, pinned: false } : item));
+    expect(splitTabs(ended, 'r3', 2).shown.map((item) => item.id)).toEqual(['r2', 'r3']);
+  });
+
   it('keeps the strip in the order the conversation made things', () => {
     const items = [fake(0), fake(1), fake(2), fake(3)];
     expect(splitTabs(items, 'r0', 3).shown.map((item) => item.id)).toEqual(['r0', 'r2', 'r3']);

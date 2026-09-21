@@ -90,6 +90,37 @@ describe('browser dashboard endpoints', () => {
     expect((await fetch(`${origin}/api/browser/screenshot?sessionId=${a.session.id}&v=1`, { headers })).status).toBe(404);
     expect(manager.status().sessions).toHaveLength(1); expect(manager.status().session?.agentId).toBe('b');
   });
+  /*
+   * What the canvas needs to draw a session it did not start: whose
+   * conversation is driving, what is on the screen, and how far in the run is.
+   * All of it read from the service's own status — no tool result is trusted
+   * to say any of it, and the plugin's tool contract is untouched.
+   */
+  it('names the driving conversation, the page on screen and the steps taken', async () => {
+    const manager = new BrowserManager(() => ({
+      start: async () => {}, perform: async () => {}, close: async () => {},
+      screenshot: async () => Buffer.from('picture'),
+      observe: async () => ({ id: 'o1', title: 'Statements', url: 'https://example.com/statements', tree: 'Fixture', tabs: [], capturedAt: new Date().toISOString() }),
+    }));
+    const { origin } = await setup(true, manager);
+    const headers = await session(origin);
+    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), {
+      ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
+      ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
+    } as ToolContext);
+    const status = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as {
+      session: { agentId: string; conversationId: string; steps: number; maxSteps: number };
+      page: { url: string; title: string; id: string };
+      hasScreenshot: boolean;
+    };
+    expect(status.session).toMatchObject({ agentId: 'keeper', conversationId: 'c1', steps: 1 });
+    expect(status.session.maxSteps).toBeGreaterThan(0);
+    expect(status.page).toMatchObject({ url: 'https://example.com/statements', title: 'Statements', id: 'o1' });
+    expect(status.hasScreenshot).toBe(true);
+    // Another conversation asking gets nothing of this one's.
+    const other = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c2`, { headers })).json() as { session?: unknown };
+    expect(other.session).toBeUndefined();
+  });
   it('binds canvas screenshots and controls to the session they display', async () => {
     const { origin, browser } = await setup();
     const headers = await session(origin);

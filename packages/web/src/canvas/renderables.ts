@@ -102,13 +102,24 @@ export interface RenderableInput {
   descriptors: ViewDescriptor[];
   /** Approvals known to be awaiting a decision, by the tool-use id that gated. */
   awaiting?: Map<string, string>;
+  /**
+   * Tools whose results a live platform panel is already drawing, by name.
+   *
+   * A browser session is the case this exists for: while one is alive, the
+   * canvas holds a single panel showing the screen and every step taken on it,
+   * and a tab per call would bury that panel under a dozen copies of itself.
+   * The *names* come from the page, which knows what its panel covers; this
+   * file still knows none. A call stopped on a gate is never folded — a
+   * decision waiting on the owner outranks any panel.
+   */
+  folded?: ReadonlySet<string>;
 }
 
 /**
  * The canvas contents for a conversation, oldest first, capped at the last
  * few. `canvas.clear` empties what came before it and nothing after.
  */
-export function renderablesFrom({ messages, descriptors, awaiting }: RenderableInput): Renderable[] {
+export function renderablesFrom({ messages, descriptors, awaiting, folded }: RenderableInput): Renderable[] {
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
   const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
   let collected: Renderable[] = [];
@@ -184,6 +195,10 @@ export function renderablesFrom({ messages, descriptors, awaiting }: RenderableI
         });
         continue;
       }
+
+      // A live panel already draws this call, success or failure alike: its
+      // step list is where the action and its reason are read.
+      if (folded?.has(tool)) continue;
 
       if (block.ok === false) {
         collected.push({
