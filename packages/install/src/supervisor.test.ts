@@ -17,16 +17,17 @@ const STATUS: SupervisorStatus = {
 };
 
 /** The only client shape there is: a request on the socket, never on a port. */
-function call(socket: string, route: string, method = 'GET', headers: Record<string, string> = { host: 'localhost' }): Promise<{ status: number; body: unknown }> {
+function call(socket: string, route: string, method = 'GET', headers: Record<string, string> = { host: 'localhost' }, body?: unknown): Promise<{ status: number; body: unknown }> {
+  const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: socket, path: route, method, headers }, res => {
+    const req = request({ socketPath: socket, path: route, method, headers: { ...headers, ...(payload === undefined ? {} : { 'content-type': 'application/json' }) } }, res => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: text === '' ? null : JSON.parse(text) }));
     });
     req.once('error', reject);
-    req.end();
+    req.end(payload);
   });
 }
 
@@ -91,6 +92,48 @@ describe('the supervisor', () => {
     servers.push(server);
     await expect(listenOnSocket(server, socket)).rejects.toThrow(/not a socket/);
     expect(await readFile(socket, 'utf8')).toBe('not a socket');
+  });
+
+  test('serves the version and upgrade verbs, and nothing else about them', async () => {
+    const data = await mkdtemp(path.join(tmpdir(), 'buddi-supervisor-'));
+    const socket = supervisorSocket(data);
+    const view = { current: '0.1.0', latest: '0.1.1', checkEnabled: true, updateAvailable: true, history: [] };
+    const job = { id: '11111111-1111-4111-8111-111111111111', kind: 'upgrade', phase: 'backup', phases: ['starting', 'backup'], startedAt: 'now' };
+    const upgrade = {
+      view: vi.fn(async () => view),
+      check: vi.fn(async () => view),
+      setCheckEnabled: vi.fn(async (enabled: boolean) => ({ ...view, checkEnabled: enabled })),
+      start: vi.fn(() => job),
+      job: vi.fn((id: string) => (id === job.id ? job : undefined)),
+      busy: vi.fn(() => false),
+      tick: vi.fn(async () => {}),
+      current: '0.1.0',
+    };
+    const server = controlSocket({ status: () => STATUS, action: async () => {}, upgrade: upgrade as never });
+    servers.push(server);
+    await listenOnSocket(server, socket);
+
+    expect(await call(socket, '/version')).toEqual({ status: 200, body: view });
+    expect(await call(socket, '/version/check', 'POST')).toEqual({ status: 200, body: view });
+    expect((await call(socket, '/version/check', 'PUT', { host: 'localhost' }, { enabled: false })).body).toMatchObject({ checkEnabled: false });
+    // The switch is a boolean, and nothing else is accepted for it.
+    expect((await call(socket, '/version/check', 'PUT', { host: 'localhost' }, { enabled: 'yes' })).status).toBe(400);
+    expect(await call(socket, '/upgrade', 'POST', { host: 'localhost' }, { version: '0.1.1' })).toEqual({ status: 202, body: { job } });
+    expect(upgrade.start).toHaveBeenCalledWith('0.1.1');
+    // One job route for both stores, so a client polls what it was handed.
+    expect((await call(socket, `/jobs/${job.id}`)).body).toEqual(job);
+    expect((await call(socket, '/version', 'DELETE')).status).toBe(404);
+
+    // While an upgrade runs, the gateway levers belong to it.
+    upgrade.busy.mockReturnValue(true);
+    expect(await call(socket, '/restart', 'POST')).toEqual({ status: 409, body: { error: 'An upgrade is running.' } });
+    expect((await call(socket, '/upgrade', 'POST', { host: 'localhost' }, {})).status).toBe(202);
+  });
+
+  test('has no version verbs at all when the supervisor has no installation', async () => {
+    const { socket } = await serve();
+    expect((await call(socket, '/version')).status).toBe(404);
+    expect((await call(socket, '/upgrade', 'POST')).status).toBe(404);
   });
 
   test('gateway restart backoff is exponential and bounded', () => {

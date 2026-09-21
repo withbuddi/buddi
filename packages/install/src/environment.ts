@@ -25,6 +25,12 @@ export interface InstallationState {
   webPort: number;
   dbPort: number;
   phase?: string;
+  /**
+   * The upgrade that is half done, while `phase` is `upgrading` or
+   * `upgrade-failed`. Written by the supervisor that installed the new code
+   * and read by the one that finishes the job. See `upgrade.ts`.
+   */
+  upgrade?: { from: string; to: string; backup?: string; startedAt: string };
 }
 
 /** The install root, its data directory, the mutated environment and the state. */
@@ -78,6 +84,19 @@ export async function dashboardReady(port: number, token: string, request: Ready
   if (response.status !== 200) return false;
   const body = await response.json() as { proof?: string };
   return body.proof === createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
+}
+
+/**
+ * The LaunchAgent this installation installs, named after its data directory
+ * so two installations never share a job. Written by `launcher.ts` and read by
+ * `upgrade.ts`, which has to know whether launchd will restart the supervisor.
+ */
+export function launchAgentLabel(data: string): string {
+  return `com.buddi.install.${createHash('sha256').update(data).digest('hex').slice(0, 12)}`;
+}
+
+export function launchAgentPlist(data: string, home: string = os.homedir()): string {
+  return path.join(home, 'Library/LaunchAgents', `${launchAgentLabel(data)}.plist`);
 }
 
 /** `launchctl`, as the caller runs it. Only its rejection is inspected. */
