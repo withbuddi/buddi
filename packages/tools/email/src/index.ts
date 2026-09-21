@@ -212,9 +212,13 @@ export {
   TRIAGE_AGENT_ID,
 } from './sources/inbox-poll.js';
 export {
-  currentAccount,
+  ACCOUNT_SECRET_PREFIX,
   ensureGmailAccount,
+  findAccount,
+  lastSyncByAccount,
+  listAccounts,
   resolveAuth,
+  secretNameFor,
   GMAIL_IMAP_HOST,
   GMAIL_IMAP_PORT,
   GMAIL_SECRET_NAME,
@@ -233,6 +237,12 @@ export * from './mail.js';
 export * from './rows.js';
 export * from './types.js';
 export {
+  accountOf,
+  accountScope,
+  identityFor,
+  ownAddresses,
+  requireOneAccount,
+  type AccountScope,
   categoryLabel,
   CATEGORIES,
   isKnownCategory,

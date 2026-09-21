@@ -32,11 +32,18 @@ import {
 } from '../policies/store.js';
 import { senderVerdicts } from '../policies/learn.js';
 import type { GatedToolDefinition } from '../types.js';
-import { UUID } from './shared.js';
+import { ACCOUNT_ARG, UUID, accountScope, requireOneAccount } from './shared.js';
 
 /** The shape every policy tool hands back. */
 export interface PolicyView {
   id: string;
+  /**
+   * The mailbox this rule belongs to, or null for one that covers all of them.
+   * A policy belongs to an account (docs/email.md §2 and §5): "ignore this
+   * newsletter" is a statement about one inbox, and the same sender may be
+   * worth reading on another.
+   */
+  accountId: string | null;
   scope: string;
   matcher: string;
   action: string;
@@ -56,6 +63,7 @@ export function viewOf(
 ): PolicyView {
   return {
     id: policy.id,
+    accountId: policy.accountId,
     scope: policy.scope,
     matcher: policy.matcher,
     action: policy.action,
@@ -71,6 +79,7 @@ export function viewOf(
 }
 
 const listInput = z.object({
+  account: ACCOUNT_ARG.optional(),
   includeRevoked: z
     .boolean()
     .optional()
@@ -84,11 +93,15 @@ export const listPolicies: ToolDefinition<z.infer<typeof listInput>, unknown> = 
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
+    // Scoped like every other read tool: a named account sees its own rules and
+    // the installation-wide ones, and saying nothing sees them all.
+    const scope = await accountScope(ctx.db, input.account);
     const { rows } = await ctx.db.query(
       `select ${POLICY_COLUMNS} from email.policies
         where ($1::bool or revoked_at is null)
+          and (account_id is null or account_id = any($2::uuid[]))
         order by created_at desc, id desc`,
-      [input.includeRevoked ?? false],
+      [input.includeRevoked ?? false, scope.ids],
     );
     const stats = await policyStats(ctx.db);
     const all = rows.map(toPolicy);
@@ -106,6 +119,7 @@ export const listPolicies: ToolDefinition<z.infer<typeof listInput>, unknown> = 
 };
 
 const setInput = z.object({
+  account: ACCOUNT_ARG.optional(),
   scope: z
     .enum(POLICY_SCOPES)
     .describe(
@@ -140,6 +154,8 @@ const setInput = z.object({
 type SetInput = z.infer<typeof setInput>;
 
 export interface PolicyEnvelope {
+  accountId: string;
+  account: string;
   scope: string;
   matcher: string;
   action: string;
@@ -160,7 +176,7 @@ function paramsOf(input: SetInput): Record<string, unknown> {
 }
 
 /** The sentence the owner approves. It names the matcher and the action. */
-export function renderPolicyPreview(input: SetInput, verdicts: number): string {
+export function renderPolicyPreview(input: SetInput, verdicts: number, account?: string): string {
   const matcher = normalizeMatcher(input.scope, input.matcher) || input.matcher;
   const what: Record<string, string> = {
     ignore: 'file it with no triage run and say nothing',
@@ -180,7 +196,7 @@ export function renderPolicyPreview(input: SetInput, verdicts: number): string {
           ? `mail from the list ${matcher}`
           : `the thread ${matcher}`;
   const lines = [
-    `From now on, ${subject} will ${what[input.action] ?? input.action}.`,
+    `From now on, ${subject}${account ? ` arriving at ${account}` : ''} will ${what[input.action] ?? input.action}.`,
     'This decides every future message that matches, with no model run and nothing to approve each time.',
   ];
   if (verdicts > 0) {
@@ -201,16 +217,21 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
 
   async describe(input, _ctx: ToolContext): Promise<EffectDescription & { envelope: PolicyEnvelope }> {
     const matcher = normalizeMatcher(input.scope, input.matcher);
+    // Which mailbox this rule is about is part of the sentence being approved:
+    // "ignore this sender" reads differently for work mail than for personal.
+    const account = await requireOneAccount(_ctx.db, input.account);
     const verdicts =
       input.scope === 'sender' ? (await senderVerdicts(_ctx.db, matcher, 20)).length : 0;
     return {
       envelope: {
+        accountId: account.id,
+        account: account.address,
         scope: input.scope,
         matcher,
         action: input.action,
         params: paramsOf(input),
       },
-      preview: renderPolicyPreview(input, verdicts),
+      preview: renderPolicyPreview(input, verdicts, account.address),
     };
   },
 
@@ -222,9 +243,11 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
       params: paramsOf(input),
     });
     if (refusal) throw new PolicyRefusal(refusal);
+    const account = await requireOneAccount(ctx.db, input.account);
     const policy = await createPolicy(
       ctx.db,
       {
+        accountId: account.id,
         scope: input.scope,
         matcher: input.matcher,
         action: input.action,

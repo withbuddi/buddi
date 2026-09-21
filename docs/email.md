@@ -1,9 +1,10 @@
 # Email: accounts, threads, policies, watchers
 
-Status: step 1 built on branch email-policies, 2026-09-21. The rest is still a
-specification for review; the current plugin had no document, and this is the
-one it should have had. What §13.1 asks for — policies, the gate, the backfill
-and the Learned list — is implemented, with two departures noted in §5.
+Status: steps 1 and 2 built on branch email-policies, 2026-09-21. The rest is
+still a specification for review; the current plugin had no document, and this
+is the one it should have had. What §13.1 asks for — policies, the gate, the
+backfill and the Learned list — is implemented, with two departures noted in
+§5, and §4's accounts are plural, added from the settings page.
 
 ## 1. The verdict on today
 
@@ -64,6 +65,14 @@ policies from the existing verdicts; 855 messages, a second's work.
   sync, the vault secret's name, remove. "Add an account" takes address,
   IMAP and SMTP hosts, and the app password, which goes to the vault under
   a name derived from the address. Gmail and common hosts are prefilled.
+  The secret's name is *derived*, never chosen: `EMAIL_` followed by the
+  address upper-cased with every non-alphanumeric character turned into an
+  underscore, so `owner@work.test` is kept as `EMAIL_OWNER_WORK_TEST`. The
+  same name appears on the page, in the `accounts` row, in the keychain and
+  in `buddi doctor`, which is what makes a missing secret a thing the owner
+  can look up rather than guess at. Removing an account removes its vault
+  entry with it, unless the row came from the `GMAIL_USER` seed, whose
+  secret is named by `.env` rather than by us.
 - Every read tool takes an optional `account`; absent means all accounts,
   and results carry the account. `send` and `draft_reply` take the account
   from the thread they answer; `draft_new` requires one.
