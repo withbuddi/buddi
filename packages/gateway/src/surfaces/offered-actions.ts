@@ -172,6 +172,38 @@ export const OFFER_POLICY_SUFFIX = [
 ].join(' ');
 
 /* ------------------------------------------------------------------ *
+ * A taken offer, in the transcript
+ * ------------------------------------------------------------------ */
+
+/**
+ * How the turn a chip started is stamped: `offer:<label>`.
+ *
+ * Taking a chip on the dashboard is not a background job — it is the owner
+ * taking a turn, with the sentence the agent wrote for them. So the turn is an
+ * ordinary user message and the transcript carries it as one. What the speaker
+ * adds is the *provenance*: the owner clicked "Send it", they did not type
+ * "send the reply I drafted to Dorothée". A reader that knows the marker draws
+ * the label they clicked and keeps the prompt as the title; a reader that does
+ * not draws the words the model was actually given, which is never wrong.
+ *
+ * The same shape as `OPENING_TURN_SPEAKER` and `APPROVAL_RESUME_SPEAKER`:
+ * trusted metadata written by the surface, never anything the model supplied.
+ */
+export const OFFER_TURN_SPEAKER_PREFIX = 'offer:';
+
+/** The speaker stamped on the turn a chip started. */
+export function offerTurnSpeaker(label: string): string {
+  return `${OFFER_TURN_SPEAKER_PREFIX}${label.trim()}`;
+}
+
+/** The label behind such a stamp, or null when the turn is an ordinary one. */
+export function offerTurnLabel(speaker: string | null | undefined): string | null {
+  if (typeof speaker !== 'string' || !speaker.startsWith(OFFER_TURN_SPEAKER_PREFIX)) return null;
+  const label = speaker.slice(OFFER_TURN_SPEAKER_PREFIX.length).trim();
+  return label === '' ? null : label;
+}
+
+/* ------------------------------------------------------------------ *
  * What a surface does with it
  * ------------------------------------------------------------------ */
 

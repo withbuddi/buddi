@@ -2045,7 +2045,30 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const offer = /^\/api\/offers\/([^/]+)\/take$/.exec(path);
     if (offer) {
-      return finish(res, await takeOfferFromWeb(writeDeps, decodeURIComponent(offer[1] as string)));
+      /*
+       * `conversationId` is the thread the page has open, and it decides one
+       * thing only: whether the take runs here, in front of the owner, or goes
+       * on the queue. It can never redirect a run — the turn is sent on the
+       * *offer's* conversation, with the *offer's* prompt, and a mismatch just
+       * means the owner is looking somewhere else.
+       */
+      return finish(
+        res,
+        await takeOfferFromWeb(writeDeps, decodeURIComponent(offer[1] as string), {
+          ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+          ...(chat
+            ? {
+                send: (input) =>
+                  chat.send({
+                    agentId: input.agentId,
+                    conversationId: input.conversationId,
+                    text: input.prompt,
+                    offer: input.offer,
+                  }),
+              }
+            : {}),
+        }),
+      );
     }
 
     const reminder = /^\/api\/reminders\/([^/]+)\/cancel$/.exec(path);
