@@ -72,7 +72,7 @@ import { getAction, inRecovery, isJobState, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, archiveGroup, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import {
@@ -323,6 +323,22 @@ function previewKind(mime: string, filename: string | null): 'image' | 'pdf' | '
 /** A group as the page draws it. */
 function groupView(group: GroupRow): { id: string; name: string; coordinator: string; members: string[]; contextCapChars: number; createdAt: string } {
   return { id: group.id, name: group.name, coordinator: group.coordinator, members: group.members, contextCapChars: group.contextCapChars, createdAt: group.createdAt.toISOString() };
+}
+
+/**
+ * Who may be put in a room, as core's membership check wants to see them.
+ *
+ * The rule lives in core and is applied identically by the route below and by
+ * `platform.update_group`: a loaded agent, one this machine can actually run,
+ * and never the maker — which is the settings door, not a colleague.
+ */
+function groupRoster(catalog: AgentCatalog): GroupCandidate[] {
+  return catalog.list().map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    roles: agent.roles,
+    available: agent.available && agent.heldBack === undefined,
+  }));
 }
 
 /** Every IANA zone this Node knows, for a picker. */
@@ -1204,6 +1220,50 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
+     * Changing a group the owner already has: its name, its coordinator, who
+     * is in it.
+     *
+     * PATCH, because what the body leaves out is left exactly as it was — a
+     * rename does not have to restate the membership. The rules are core's,
+     * one copy, so this route and `platform.update_group` refuse the same
+     * changes in the same words. The id never moves and the transcript is
+     * never touched: a member taken out of the room keeps every turn it spoke
+     * there.
+     */
+    if (method === 'PATCH') {
+      const groupEdit = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (!groupEdit) return sendEmpty(res, 405);
+      let patch: Record<string, unknown>;
+      try {
+        patch = await readJsonBody(req);
+      } catch {
+        return sendJson(res, 400, { error: 'request body must be JSON' });
+      }
+      if (patch.name !== undefined && typeof patch.name !== 'string') return sendJson(res, 400, { error: '`name` must be a string.' });
+      if (patch.coordinator !== undefined && typeof patch.coordinator !== 'string') return sendJson(res, 400, { error: '`coordinator` must be an agent id.' });
+      if (patch.members !== undefined && (!Array.isArray(patch.members) || patch.members.some((m) => typeof m !== 'string' || m.trim() === ''))) {
+        return sendJson(res, 400, { error: '`members` must be a list of agent ids.' });
+      }
+      try {
+        const group = await updateGroup(
+          deps.pool,
+          groupEdit[1]!,
+          {
+            ...(typeof patch.name === 'string' ? { name: patch.name } : {}),
+            ...(typeof patch.coordinator === 'string' ? { coordinator: patch.coordinator } : {}),
+            ...(Array.isArray(patch.members) ? { members: patch.members as string[] } : {}),
+          },
+          groupRoster(deps.catalog),
+        );
+        if (!group) return sendJson(res, 404, { error: 'no such group' });
+        return sendJson(res, 200, groupView(group));
+      } catch (error) {
+        if (error instanceof GroupRefusal) return sendJson(res, 400, { error: error.message });
+        throw error;
+      }
+    }
+
+    /*
      * The owner took a file back out of the composer. Only a web upload that no
      * message carries can go this way: a file already sent belongs to its
      * message, and a file a surface or an agent made is not the page's to drop.
@@ -1214,6 +1274,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (path === '/api/extension/pair') {
         const forgotten = await extension.unpair();
         return sendJson(res, forgotten.status, forgotten.body);
+      }
+      /*
+       * A group the owner is done with leaves the rail and takes no new
+       * requests — and keeps everything that was said in it. Archived, never
+       * deleted: the transcript is the record of work that was done, and no
+       * amount of tidying the roster is worth destroying it.
+       */
+      const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (groupGone) {
+        return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
       }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);

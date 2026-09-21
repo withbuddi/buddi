@@ -69,6 +69,142 @@ export async function createGroup(
   return (await getGroup(pool, id)) as GroupRow;
 }
 
+/**
+ * The role a group never contains.
+ *
+ * The maker is the door to the installation's settings, not a colleague: a
+ * "team" of the agent that makes agents and the one agent you have is not a
+ * team. The dashboard's roster says the same thing in its own words; this is
+ * the copy the server and the tools refuse on, so a group made through a tool
+ * cannot hold what a group made through the sheet could not.
+ */
+export const MAKER_ROLE = 'maker';
+
+/** An installed agent, as a membership check needs to see it. */
+export interface GroupCandidate {
+  id: string;
+  name?: string;
+  roles?: readonly string[];
+  /** False when this machine cannot run it. Absent means: as far as we know, yes. */
+  available?: boolean;
+}
+
+/** Who may be put in a room: loaded, runnable, and not the maker. */
+export function groupable(agent: GroupCandidate): boolean {
+  return agent.available !== false && !(agent.roles ?? []).includes(MAKER_ROLE);
+}
+
+/** What a caller asks to change. Anything left out stays exactly as it is. */
+export interface GroupChange {
+  name?: string;
+  coordinator?: string;
+  members?: string[];
+}
+
+/** The membership a change would leave behind. */
+export interface GroupShape {
+  name: string;
+  coordinator: string;
+  members: string[];
+}
+
+export type GroupRefusalCode =
+  | 'empty-name'
+  | 'coordinator-not-a-member'
+  | 'not-groupable'
+  | 'too-small';
+
+/**
+ * A change that cannot be made, said in one sentence.
+ *
+ * A typed refusal rather than a bare Error so the route can answer 400 with
+ * the same words the tool refuses with: one rule, two surfaces.
+ */
+export class GroupRefusal extends Error {
+  constructor(readonly code: GroupRefusalCode, message: string) {
+    super(message);
+    this.name = 'GroupRefusal';
+  }
+}
+
+export const MAX_GROUP_NAME = 80;
+
+/**
+ * What the group would become, or a refusal. Pure: no database, no catalog.
+ *
+ * The rules are the ones creation already applies, written once. The
+ * coordinator has to be one of the members — an edit that drops it would
+ * leave a room whose spokesman is not in it — every member has to be an agent
+ * this installation can actually put in a room, and a room needs somebody
+ * besides the coordinator to be a room at all.
+ */
+export function planGroupChange(
+  before: Pick<GroupRow, 'name' | 'coordinator' | 'members'>,
+  change: GroupChange,
+  roster?: readonly GroupCandidate[],
+): GroupShape {
+  const name = change.name === undefined ? before.name : change.name.trim();
+  if (name === '' || name.length > MAX_GROUP_NAME) {
+    throw new GroupRefusal('empty-name', `A group needs a name, up to ${MAX_GROUP_NAME} characters.`);
+  }
+  const coordinator = (change.coordinator ?? before.coordinator).trim();
+  const asked = (change.members ?? before.members).map((m) => m.trim()).filter((m) => m !== '');
+  const members = [...new Set(asked)];
+  if (!members.includes(coordinator)) {
+    throw new GroupRefusal('coordinator-not-a-member', 'The coordinator has to be one of the members.');
+  }
+  if (roster) {
+    const known = new Map(roster.map((a) => [a.id, a]));
+    const refused = members.filter((id) => {
+      const agent = known.get(id);
+      return agent === undefined || !groupable(agent);
+    });
+    if (refused.length > 0) {
+      throw new GroupRefusal(
+        'not-groupable',
+        `Not an agent this installation can put in a room: ${refused.join(', ')}.`,
+      );
+    }
+  }
+  if (members.length < 2) {
+    throw new GroupRefusal('too-small', 'A group needs at least one member besides the coordinator.');
+  }
+  return { name, coordinator, members };
+}
+
+/**
+ * Change a group the owner already has: its name, its coordinator, who is in
+ * it. The id never moves, and neither does the transcript — a member taken
+ * out of the room keeps every turn it ever spoke there, because the room is
+ * what was said, not who is in it today.
+ */
+export async function updateGroup(
+  pool: Queryable,
+  id: string,
+  change: GroupChange,
+  roster?: readonly GroupCandidate[],
+): Promise<GroupRow | null> {
+  const before = await getGroup(pool, id);
+  if (!before) return null;
+  const next = planGroupChange(before, change, roster);
+  await pool.query(
+    `update core.groups set name = $2, coordinator_agent_id = $3 where id = $1::uuid`,
+    [id, next.name, next.coordinator],
+  );
+  await pool.query(
+    `delete from core.group_members where group_id = $1::uuid and agent_id <> all($2::text[])`,
+    [id, next.members],
+  );
+  for (const [position, agentId] of next.members.entries()) {
+    await pool.query(
+      `insert into core.group_members (group_id, agent_id, position) values ($1::uuid, $2, $3)
+         on conflict (group_id, agent_id) do update set position = excluded.position`,
+      [id, agentId, position],
+    );
+  }
+  return await getGroup(pool, id);
+}
+
 /** A real UUID, not any 36 characters of hex and hyphens. */
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
