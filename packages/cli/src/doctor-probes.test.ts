@@ -188,3 +188,60 @@ describe('the plugins probe', () => {
     expect(row.detail).toContain('could not be checked against what you approved');
   });
 });
+
+/**
+ * An agent granting a plugin that is not installed.
+ *
+ * `buddi doctor` used to die here with the gateway: the catalog threw, and the
+ * agents row read "agent catalog will not load". Both are now the same answer
+ * — the agent is held back, everything else is reported, and the row warns.
+ */
+describe('the agents probe with a held-back agent', () => {
+  function withAgents(files: Record<string, string>): NodeJS.ProcessEnv {
+    const root = mkdtempSync(path.join(tmpdir(), 'buddi-doctor-agents-'));
+    const agents = path.join(root, 'agents');
+    for (const [id, text] of Object.entries(files)) {
+      mkdirSync(path.join(agents, id), { recursive: true });
+      writeFileSync(path.join(agents, id, 'agent.md'), text);
+    }
+    return {
+      BUDDI_AGENTS_DIR: agents,
+      BUDDI_SKILLS_DIR: path.join(root, 'skills'),
+      BUDDI_PLUGINS_FILE: path.join(root, 'plugins.json'),
+      BUDDI_DATA_DIR: path.join(root, 'data'),
+      BUDDI_VAULT: 'none',
+      ANTHROPIC_API_KEY: VAULT_KEY,
+    };
+  }
+
+  const agentMd = (id: string, handle: string, tools: string, extra = ''): string =>
+    `---\nid: ${id}\nhandle: ${handle}\nname: ${handle}\ndescription: A test agent.\ntools: [${tools}]\n${extra}---\n\nYou are a test agent.\n`;
+
+  it('warns and names the agent instead of failing the whole row', async () => {
+    const env = withAgents({
+      keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\n'),
+      credo: agentMd('credo', 'credo', 'finance.*'),
+    });
+    const probes = createProbes(env, { vault: undefined, http: recordHttp().http });
+    const row = await probes.agents();
+    await probes.close();
+
+    expect(row.status).toBe('warn');
+    expect(row.detail).not.toContain('agent catalog will not load');
+    expect(row.detail).toContain('@credo');
+    expect(row.detail).toContain('held back');
+    // The working agent is still counted and still fine.
+    expect(row.detail).toMatch(/\d+ agents/);
+  });
+
+  it('reports every other row normally, because the catalog loaded', async () => {
+    const env = withAgents({
+      keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\n'),
+      credo: agentMd('credo', 'credo', 'finance.*'),
+    });
+    const probes = createProbes(env, { vault: undefined, http: recordHttp().http });
+    const config = await probes.config!();
+    await probes.close();
+    expect(config.detail).not.toContain('will not load');
+  });
+});

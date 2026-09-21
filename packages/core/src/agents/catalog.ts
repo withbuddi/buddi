@@ -106,6 +106,11 @@ export interface AgentSummary {
   available: boolean;
   /** Why not, in one sentence. Present only when `available` is false. */
   unavailableReason?: string;
+  /**
+   * Set when a tool family this agent was granted is not installed here. The
+   * agent is listed and greyed rather than missing, and never runs.
+   */
+  heldBack?: AgentHoldBack;
   /** One sentence in the agent's own voice, for a surface that opens on it. */
   intro?: string;
   /** Up to three example requests a surface may offer as drafts. */
@@ -120,9 +125,14 @@ export interface AgentSummary {
  * Whether this installation can actually run the agent, as a result union — the
  * same shape `resolveProvider` uses, because it is that answer, kept.
  */
+export type AgentProblem =
+  | ProviderProblem
+  /** A granted tool family no loaded plugin provides. See `AgentHoldBack`. */
+  | { code: 'missing-plugin'; message: string };
+
 export type AgentAvailability =
   | { ok: true }
-  | { ok: false; problem: ProviderProblem };
+  | { ok: false; problem: AgentProblem };
 
 /** One colleague as an agent's prompt sees it. */
 export interface AgentRosterEntry {
@@ -142,7 +152,10 @@ export interface CatalogAgent extends AgentSummary {
   /** Where the file came from — quoted in errors, never in a prompt. */
   file: string;
   model: string;
-  /** Tool names resolved against the registry, in registry order. */
+  /**
+   * Tool names resolved against the registry, in registry order. Empty for a
+   * held-back agent: it is granted nothing until its plugin is installed.
+   */
   tools: string[];
   maxTurns: number;
   thinking?: ThinkingSetting;
@@ -229,6 +242,13 @@ export interface LoadAgentCatalogOptions {
   /** Installation-owned account metadata. Core never reads credentials or SQL. */
   providerSelection?: (agent: AgentFrontmatter) => { provider: ProviderRef; availability: AgentAvailability };
   /**
+   * Which plugin provides a tool family, for the held-back sentence. Core has
+   * no idea what is installable — the gateway reads the record and the
+   * built-ins — so an installation that can name the plugin says "the finance
+   * plugin" and one that cannot says "the finance tools".
+   */
+  pluginForFamily?: (family: string) => string | undefined;
+  /**
    * A single directory — the original shape, kept because most tests and every
    * ad-hoc caller means exactly one. A directory that cannot be read is an
    * error here, as it always was.
@@ -272,21 +292,60 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /**
- * Resolve the declared entries against the registry, preserving registry order
- * and de-duplicating overlaps. An entry matching nothing fails the load.
+ * A grant that only a *plugin* could satisfy: `family.something`, where the
+ * family is a plain identifier. `finance.*` and `finance.list_accounts` are
+ * both of this shape; `send_mail`, `finance`, `fin*.x` are not — nothing that
+ * could be installed would make them resolve, so they stay load errors.
  */
-export function resolveToolNames(
+const FAMILY_GRANT = /^([a-z][a-z0-9_-]*)\.(.+)$/;
+
+/** What a grant list resolved to, and which families nothing here provides. */
+export interface ToolGrantResolution {
+  /** Names resolved against the registry, in registry order. */
+  tools: string[];
+  /**
+   * Families the agent was granted that no loaded plugin provides, in
+   * declaration order. Non-empty means the agent is held back (see
+   * `AgentHoldBack`) rather than loaded with a narrower grant: an agent that
+   * silently lost half its tools would answer wrongly instead of not at all.
+   */
+  missingFamilies: string[];
+}
+
+/**
+ * Resolve the declared entries against the registry, preserving registry order
+ * and de-duplicating overlaps.
+ *
+ * Two kinds of failure, deliberately told apart:
+ *
+ *  - a grant naming a family *nothing registered here provides at all* is a
+ *    missing plugin. That is a state of the installation, not a mistake in the
+ *    file: `finance.*` is exactly right the moment the finance plugin is
+ *    installed. It is collected, and the caller holds the agent back.
+ *  - anything else — a tool name inside a family that *is* loaded, an entry
+ *    that is not family-shaped — is the owner's mistake and still throws. No
+ *    install would fix it, and a persona must never claim a tool that will
+ *    never exist.
+ */
+export function resolveToolGrants(
   declared: readonly string[],
   registry: ToolNameSource,
   agentId: string,
-): string[] {
+): ToolGrantResolution {
   const available = registry.list().map((t) => t.name);
+  const families = new Set(available.map((name) => name.split('.')[0]));
   const selected = new Set<string>();
+  const missingFamilies: string[] = [];
   for (const entry of declared) {
     const matches = entry.includes('*') || entry.includes('?')
       ? available.filter((name) => globToRegExp(entry).test(name))
       : available.filter((name) => name === entry);
     if (matches.length === 0) {
+      const family = FAMILY_GRANT.exec(entry.trim())?.[1];
+      if (family !== undefined && !families.has(family)) {
+        if (!missingFamilies.includes(family)) missingFamilies.push(family);
+        continue;
+      }
       throw new AgentCatalogError(
         'unresolvable-tool',
         `agent "${agentId}" declares tool "${entry}", which matches no registered tool ` +
@@ -295,7 +354,74 @@ export function resolveToolNames(
     }
     for (const name of matches) selected.add(name);
   }
-  return available.filter((name) => selected.has(name));
+  return { tools: available.filter((name) => selected.has(name)), missingFamilies };
+}
+
+/**
+ * The strict form: every entry must resolve, whatever the reason it did not.
+ *
+ * This is what a *proposed* grant is checked against (`platform.create_agent`),
+ * where "the plugin is not installed" is a refusal rather than a state to
+ * record: an agent is never written granting tools this machine does not have.
+ */
+export function resolveToolNames(
+  declared: readonly string[],
+  registry: ToolNameSource,
+  agentId: string,
+): string[] {
+  const available = registry.list().map((t) => t.name);
+  const { tools, missingFamilies } = resolveToolGrants(declared, registry, agentId);
+  if (missingFamilies.length > 0) {
+    const entry = declared.find((d) => missingFamilies.includes(FAMILY_GRANT.exec(d.trim())?.[1] ?? ''));
+    throw new AgentCatalogError(
+      'unresolvable-tool',
+      `agent "${agentId}" declares tool "${entry}", which matches no registered tool ` +
+        `(registered: ${available.join(', ') || 'none'})`,
+    );
+  }
+  return tools;
+}
+
+/**
+ * Why an agent is in the catalog but cannot take a turn: a tool family it was
+ * granted is not installed here.
+ *
+ * Not an error, and not a hidden agent. `finance.*` in a file is *correct*;
+ * the finance plugin simply is not installed yet. The agent is listed, greyed
+ * wherever it appears, says what is missing and where to fix it, and refuses
+ * to run — and every other agent loads. One uninstalled plugin taking the
+ * whole installation down is precisely what this replaces.
+ */
+export interface AgentHoldBack {
+  reason: 'missing-plugin';
+  /** The families nothing provides here, in declaration order. */
+  families: string[];
+  /** One sentence for a surface to print verbatim. */
+  message: string;
+}
+
+/**
+ * That sentence: "Needs the finance plugin."
+ *
+ * Names the plugin when the caller can map the family to one (`buddi plugins`
+ * knows), and the family itself otherwise — "needs a plugin providing the
+ * finance tools" is still something the owner can act on. It says what is
+ * missing and stops there: *where* it is fixed is the surface's to add, so the
+ * dashboard can make those words the link and the CLI can print a command.
+ */
+export function heldBackMessage(
+  families: readonly string[],
+  pluginForFamily?: (family: string) => string | undefined,
+): string {
+  const parts = families.map((family) => {
+    const plugin = pluginForFamily?.(family);
+    return plugin === undefined ? `a plugin providing the ${family} tools` : `the ${plugin} plugin`;
+  });
+  const list =
+    parts.length <= 1
+      ? (parts[0] ?? 'a plugin that is not installed')
+      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return `Needs ${list}.`;
 }
 
 const LANGUAGE_LINE: Record<AgentLanguage, string> = {
@@ -408,7 +534,25 @@ function buildAgent(
   opts: LoadAgentCatalogOptions,
   roster: readonly AgentRosterEntry[] = [],
 ): CatalogAgent {
-  const tools = resolveToolNames(frontmatter.tools, opts.registry, frontmatter.id);
+  const { tools: granted, missingFamilies } = resolveToolGrants(
+    frontmatter.tools,
+    opts.registry,
+    frontmatter.id,
+  );
+  /*
+   * A held-back agent holds *nothing*. Loading it with the half of its grant
+   * that did resolve would put a persona written around a balance in front of
+   * the owner with no way to read one — worse than saying so.
+   */
+  const heldBack: AgentHoldBack | undefined =
+    missingFamilies.length === 0
+      ? undefined
+      : {
+          reason: 'missing-plugin',
+          families: missingFamilies,
+          message: heldBackMessage(missingFamilies, opts.pluginForFamily),
+        };
+  const tools = heldBack === undefined ? granted : [];
   // The owner's zone, read from the env the caller passed — the catalog still
   // never reaches for `process.env` itself.
   const catalogTimezone = timezoneFromEnv(opts.env);
@@ -417,9 +561,16 @@ function buildAgent(
   const provider = selection?.provider ?? providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
   // Fail *soft* here and fail closed at run time: see the file header.
   const resolution = resolveProvider(provider, opts.env);
-  const availability: AgentAvailability = selection?.availability ?? (resolution.ok
-    ? { ok: true }
-    : { ok: false, problem: resolution.problem });
+  /*
+   * A missing plugin wins over a missing credential: it is the concrete,
+   * one-click fix, and an agent with neither should be sent to the door it can
+   * actually open first.
+   */
+  const availability: AgentAvailability = heldBack !== undefined
+    ? { ok: false, problem: { code: 'missing-plugin', message: heldBack.message } }
+    : (selection?.availability ?? (resolution.ok
+      ? { ok: true }
+      : { ok: false, problem: resolution.problem }));
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
   const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
   const section = skillsSection(skills);
@@ -442,6 +593,7 @@ function buildAgent(
     providerKind: provider.kind,
     available: availability.ok,
     ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
+    ...(heldBack === undefined ? {} : { heldBack }),
     ...(frontmatter.intro === undefined ? {} : { intro: frontmatter.intro }),
     ...(frontmatter.starters === undefined ? {} : { starters: [...frontmatter.starters] }),
     ...(frontmatter.avatar === undefined ? {} : { avatar: frontmatter.avatar }),
@@ -676,6 +828,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
         ...(a.availability.ok
           ? {}
           : { unavailableReason: a.availability.problem.message }),
+        ...(a.heldBack === undefined ? {} : { heldBack: a.heldBack }),
         ...(a.intro === undefined ? {} : { intro: a.intro }),
         ...(a.starters === undefined ? {} : { starters: [...a.starters] }),
         ...(a.avatar === undefined ? {} : { avatar: a.avatar }),

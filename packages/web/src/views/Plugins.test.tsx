@@ -25,6 +25,7 @@ vi.mock('../api', async (load) => {
       rejectStaged: vi.fn(),
       updatePlugin: vi.fn(),
       uninstallPlugin: vi.fn(),
+      uploadPlugin: vi.fn(),
       serviceAction: vi.fn(),
     },
   };
@@ -65,7 +66,12 @@ const PLAN = {
   agents: [],
 };
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  window.localStorage.clear();
+});
+
+const JOB = { id: 'job-1', kind: 'stage' as const, phase: 'fetching' as const, startedAt: new Date().toISOString() };
 
 describe('the plugins section', () => {
   it('shows the trust sentence word for word, above everything', async () => {
@@ -202,5 +208,90 @@ describe('the plugins section', () => {
     render(<Plugins />);
     fireEvent.click(await screen.findByRole('button', { name: 'Restart to load it' }));
     await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('restart'));
+  });
+  /**
+   * The three ways in are three different questions, and the page asks the
+   * one the owner chose: a package name, or a path on this machine.
+   */
+  it('asks a different question per mode, and stages what that mode means', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue({ ...JOB, phase: 'reading' });
+    render(<Plugins />);
+
+    expect(await screen.findByPlaceholderText('buddi-plugin-weather')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'A directory I built' }));
+    const field = screen.getByPlaceholderText('/home/you/code/buddi-plugin-weather');
+    expect(screen.queryByPlaceholderText('buddi-plugin-weather')).not.toBeInTheDocument();
+
+    fireEvent.change(field, { target: { value: '/home/you/code/weather' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read it first' }));
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('/home/you/code/weather'));
+
+    // A file is not typed, so that mode has no button of its own at all.
+    fireEvent.click(screen.getByRole('radio', { name: 'A file' }));
+    expect(screen.queryByRole('button', { name: 'Read it first' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose a file' })).toBeInTheDocument();
+  });
+
+  it('uploads a dropped .tgz, bytes and name, and follows the job', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.uploadPlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue({ ...JOB, phase: 'reading' });
+    render(<Plugins />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'A file' }));
+    const file = new File(['packed bytes'], 'buddi-plugin-weather-2.1.0.tgz');
+    fireEvent.drop(screen.getByRole('group', { name: 'A plugin file' }), {
+      dataTransfer: { files: [file] },
+    });
+
+    await waitFor(() => expect(api.uploadPlugin).toHaveBeenCalledTimes(1));
+    const sent = vi.mocked(api.uploadPlugin).mock.calls[0]![0];
+    // The file itself goes on the wire, bytes and name: nothing is read or
+    // re-wrapped in the page, which is what keeps a large one out of memory.
+    expect(sent).toBe(file);
+    expect(sent.name).toBe('buddi-plugin-weather-2.1.0.tgz');
+    expect(sent.size).toBe('packed bytes'.length);
+    // The zone says what it is holding, and the stage is being watched.
+    expect(await screen.findByText(/buddi-plugin-weather-2.1.0.tgz/)).toBeInTheDocument();
+    await waitFor(() => expect(api.pluginJob).toHaveBeenCalledWith('job-1'));
+  });
+
+  it('refuses anything that is not a .tgz without sending it anywhere', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    render(<Plugins />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'A file' }));
+    fireEvent.drop(screen.getByRole('group', { name: 'A plugin file' }), {
+      dataTransfer: { files: [new File(['zipped'], 'weather.zip')] },
+    });
+
+    expect(await screen.findByText(/weather.zip is not a .tgz/)).toBeInTheDocument();
+    expect(api.uploadPlugin).not.toHaveBeenCalled();
+    expect(api.stagePlugin).not.toHaveBeenCalled();
+  });
+
+  it('names what buddi already ships with, and what each of them adds', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        builtIn: [
+          {
+            name: 'memory',
+            version: '1.0.0',
+            contribution: { tools: 4, sentinels: 1, views: 0, agents: 0 },
+            description: 'What buddi remembers about you.',
+          },
+          { name: 'mail', version: '1.0.0', contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 } },
+        ],
+      }),
+    );
+    render(<Plugins />);
+
+    expect(await screen.findByText('Ships with buddi')).toBeInTheDocument();
+    expect(screen.getByText('1.0.0 \u00b7 4 tools, 1 watcher')).toBeInTheDocument();
+    expect(screen.getByText('1.0.0 \u00b7 1 tool')).toBeInTheDocument();
+    expect(screen.getByText('What buddi remembers about you.')).toBeInTheDocument();
   });
 });

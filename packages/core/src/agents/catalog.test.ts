@@ -12,6 +12,7 @@ import {
   generatedSection,
   injectToday,
   loadAgentCatalog,
+  resolveToolGrants,
   resolveToolNames,
   toDateString,
   UnknownAgentError,
@@ -292,8 +293,33 @@ describe('resolveToolNames', () => {
   });
 
   it('fails closed on an entry that matches nothing', () => {
+    // The strict form: a proposed grant is refused whatever the reason,
+    // including a plugin that is simply not installed yet.
     expect(() => resolveToolNames(['email.send'], registry, 'a')).toThrow(AgentCatalogError);
     expect(() => resolveToolNames(['email.*'], registry, 'a')).toThrow(/matches no registered tool/);
+  });
+});
+
+describe('resolveToolGrants', () => {
+  const registry = registryOf();
+
+  it('separates a missing plugin from a grant that can never resolve', () => {
+    expect(resolveToolGrants(['email.*', 'notes.search'], registry, 'a')).toEqual({
+      tools: ['notes.search'],
+      missingFamilies: ['email'],
+    });
+    // The family is here; the name is not. No install would fix that.
+    expect(() => resolveToolGrants(['finance.wire_money'], registry, 'a')).toThrow(
+      /matches no registered tool/,
+    );
+    // Not family-shaped at all.
+    expect(() => resolveToolGrants(['send_mail'], registry, 'a')).toThrow(AgentCatalogError);
+  });
+
+  it('reports each missing family once, in declaration order', () => {
+    expect(
+      resolveToolGrants(['mail.*', 'email.read', 'email.*', 'mail.send'], registry, 'a').missingFamilies,
+    ).toEqual(['mail', 'email']);
   });
 });
 
@@ -452,9 +478,77 @@ describe('loadAgentCatalog', () => {
     expect(() => load({ money: FINANCE })).toThrow(AgentCatalogError);
   });
 
-  it('refuses an agent granting a tool the registry does not have', () => {
-    const bad = agentFile('id: mailer\nhandle: mail\nname: M\ndescription: d\ntools: [email.send]');
+  it('refuses an agent granting a tool inside a family that IS installed', () => {
+    // `finance` is registered here, so `finance.wire_money` is not a missing
+    // plugin: it is a name that will never exist, whatever the owner installs.
+    const bad = agentFile('id: mailer\nhandle: mail\nname: M\ndescription: d\ntools: [finance.wire_money]');
     expect(() => load({ mailer: bad })).toThrow(/matches no registered tool/);
+  });
+
+  it('refuses a grant no install could ever satisfy', () => {
+    for (const grant of ['send_mail', 'finance', 'fin*.send']) {
+      const bad = agentFile(`id: mailer\nhandle: mail\nname: M\ndescription: d\ntools: [${grant}]`);
+      expect(() => load({ mailer: bad }), grant).toThrow(AgentCatalogError);
+    }
+  });
+
+  /*
+   * A family no plugin here provides is a *missing plugin*, not a broken file.
+   * `email.*` is exactly right the moment the email plugin is installed, so the
+   * agent is held back — listed, toolless, unrunnable, with the sentence — and
+   * every other agent loads. One uninstalled plugin never takes the
+   * installation down (docs/install.md §7).
+   */
+  describe('an agent granting a family nothing provides', () => {
+    const MAILER = agentFile(
+      'id: mailer\nhandle: mail\nname: Mailer\ndescription: Reads the post.\ntools: [email.*, notes.search]',
+    );
+
+    it('is held back rather than failing the whole catalog', () => {
+      const catalog = load({ mailer: MAILER, 'finance-advisor': FINANCE }, { ANTHROPIC_API_KEY: 'k' });
+      expect(catalog.list().map((a) => a.id).sort()).toEqual(['finance-advisor', 'mailer']);
+      // Every other agent is untouched: tools, availability, the lot.
+      const advisor = catalog.resolve('finance-advisor');
+      expect(advisor.heldBack).toBeUndefined();
+      expect(advisor.tools.length).toBeGreaterThan(0);
+      expect(advisor.availability.ok).toBe(true);
+    });
+
+    it('holds no tools at all — not even the half that resolved', () => {
+      const mailer = load({ mailer: MAILER }).resolve('mailer');
+      expect(mailer.tools).toEqual([]);
+      expect(mailer.definition(new Date()).tools).toEqual([]);
+      expect(mailer.heldBack).toEqual({
+        reason: 'missing-plugin',
+        families: ['email'],
+        message: 'Needs a plugin providing the email tools.',
+      });
+    });
+
+    it('cannot run, and says why in the same field every other refusal uses', () => {
+      const mailer = load({ mailer: MAILER }, { ANTHROPIC_API_KEY: 'k' }).resolve('mailer');
+      expect(mailer.available).toBe(false);
+      expect(mailer.availability.ok).toBe(false);
+      expect(mailer.availability.ok ? '' : mailer.availability.problem.code).toBe('missing-plugin');
+      expect(mailer.unavailableReason).toBe('Needs a plugin providing the email tools.');
+    });
+
+    it('names the plugin when the installation knows which one provides the family', () => {
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ mailer: MAILER }),
+        registry: registryOf(),
+        env: {},
+        pluginForFamily: (family) => (family === 'email' ? 'email' : undefined),
+      });
+      expect(catalog.resolve('mailer').heldBack?.message).toBe('Needs the email plugin.');
+    });
+
+    it('carries the sentence into the summary list the rosters read', () => {
+      const summary = load({ mailer: MAILER }).list().find((a) => a.id === 'mailer');
+      expect(summary?.available).toBe(false);
+      expect(summary?.heldBack?.families).toEqual(['email']);
+      expect(summary?.unavailableReason).toBe(summary?.heldBack?.message);
+    });
   });
 
   it('reports a missing default only when one is asked for', () => {

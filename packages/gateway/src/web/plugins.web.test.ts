@@ -9,7 +9,8 @@
  * only when the caller sent it, and a purge without the plugin's own name typed
  * back never reaches the engine at all.
  */
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
@@ -106,6 +107,18 @@ async function emptyRecord(): Promise<NodeJS.ProcessEnv> {
   const file = path.join(dir, 'plugins.json');
   await writeFile(file, JSON.stringify({ version: 2, plugins: [] }), 'utf8');
   return { BUDDI_PLUGINS_FILE: file };
+}
+
+/**
+ * The same, plus a data directory of this test's own.
+ *
+ * An upload writes bytes under `<data>/plugins/incoming`, and a test that left
+ * `BUDDI_DATA_DIR` unset would write them into the checkout's own data
+ * directory — the one a running installation uses.
+ */
+async function ownDataDir(): Promise<NodeJS.ProcessEnv> {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-plugin-data-'));
+  return { ...(await emptyRecord()), BUDDI_DATA_DIR: data };
 }
 
 it('shows the trust sentence and what is staged', async () => {
@@ -273,4 +286,101 @@ it('does not ask for a restart for a plugin that will not load', async () => {
   expect(body.restartNeeded).toBe(false);
   expect(body.installed[0].loaded).toBe(false);
   expect(body.installed[0].error).toMatch(/importing it threw/);
+});
+
+/**
+ * What this build ships, beside what the owner installed.
+ *
+ * The page draws one list of capabilities, so the built-in plugins are on the
+ * wire too — with no source and no version to update, because they are the
+ * program. The families that *are* the program (platform, the owner's
+ * first-run tools, the clock) are not plugins anybody installed and are not
+ * offered as though they were.
+ */
+it('lists the plugins compiled into this gateway', async () => {
+  const { origin, headers } = await dashboard(fakeEngine(), await emptyRecord());
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  const names = body.builtIn.map((p: { name: string }) => p.name);
+  expect(names).toEqual(expect.arrayContaining(['artifacts', 'browser', 'email', 'host', 'memory', 'web']));
+  // Finance is no longer one of them: it is installed like any other plugin.
+  expect(names).not.toContain('finance');
+  for (const internal of ['platform', 'owner', 'canvas', 'system', 'agent', 'reminder', 'schedule']) {
+    expect(names, `${internal} is buddi itself, not a plugin`).not.toContain(internal);
+  }
+  const web = body.builtIn.find((p: { name: string }) => p.name === 'web');
+  expect(typeof web.version).toBe('string');
+  expect(web.contribution.tools).toBeGreaterThan(0);
+  expect(Object.keys(web.contribution).sort()).toEqual(['agents', 'sentinels', 'tools', 'views']);
+  // The description is the manifest's own line, and absent when it has none.
+  for (const plugin of body.builtIn) {
+    if (plugin.description !== undefined) expect(typeof plugin.description).toBe('string');
+  }
+});
+
+/**
+ * A tarball the owner has on their own machine.
+ *
+ * The bytes are written under the data directory and then staged exactly like
+ * a `.tgz` path they could have typed, which is the property worth pinning
+ * down: nothing about the upload reaches the engine except a path buddi chose,
+ * and the name the file had travels beside it as a label.
+ */
+it('takes a tarball upload, stages it, and does not keep the file', async () => {
+  const seen: Array<[unknown, Record<string, unknown>]> = [];
+  const stagePlugin = vi.fn(async (spec: unknown, opts: Record<string, unknown>) => {
+    seen.push([spec, opts]);
+    return { ...STAGED, uploadedName: opts.uploadedName as string };
+  });
+  const env = await ownDataDir();
+  const { origin, headers } = await dashboard(fakeEngine({ stagePlugin: stagePlugin as never }), env);
+  const accepted = await fetch(`${origin}/api/plugins/upload`, {
+    method: 'POST',
+    headers: { ...headers, 'X-Filename': 'buddi-plugin-weather-2.1.0.tgz', 'Content-Type': 'application/octet-stream' },
+    body: new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0x00]),
+  });
+  expect(accepted.status).toBe(202);
+  const { job } = (await accepted.json()) as any;
+  await vi.waitFor(async () => {
+    const asked = await fetch(`${origin}/api/plugins/jobs/${job.id}`, { headers });
+    expect(((await asked.json()) as any).phase).toBe('done');
+  });
+
+  const [spec, opts] = seen[0]!;
+  expect((spec as { kind: string }).kind).toBe('tarball');
+  const written = (spec as { path: string }).path;
+  expect(path.dirname(written)).toBe(path.join(env.BUDDI_DATA_DIR as string, 'plugins', 'incoming'));
+  // The browser's name is inside the filename, never the whole of it.
+  expect(path.basename(written)).toMatch(/^[0-9a-f]{16}-buddi-plugin-weather-2\.1\.0\.tgz$/);
+  expect(opts.uploadedName).toBe('buddi-plugin-weather-2.1.0.tgz');
+  // Staging copied it, so the upload is gone.
+  await vi.waitFor(() => expect(existsSync(written)).toBe(false));
+  expect(await readdir(path.dirname(written))).toEqual([]);
+});
+
+it('keeps the uploaded filename on the staged card, which no path does', async () => {
+  const uploaded: StagedPlugin = {
+    ...STAGED,
+    source: { kind: 'tarball', path: '/data/plugins/incoming/abc-weather.tgz' },
+    uploadedName: 'weather.tgz',
+  };
+  const { origin, headers } = await dashboard(fakeEngine({ listStaged: vi.fn(() => [uploaded]) }), await emptyRecord());
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  expect(body.staged[0].uploadedName).toBe('weather.tgz');
+  expect(body.staged[0].dir).toBeUndefined();
+});
+
+it('refuses an upload that is not a .tgz before anything is written', async () => {
+  const engine = fakeEngine();
+  const env = await ownDataDir();
+  const { origin, headers } = await dashboard(engine, env);
+  for (const name of ['weather.zip', '../escape.tgz/x', '']) {
+    const refused = await fetch(`${origin}/api/plugins/upload`, {
+      method: 'POST',
+      headers: { ...headers, ...(name === '' ? {} : { 'X-Filename': name }) },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect(refused.status, name).toBe(400);
+  }
+  expect(engine.stagePlugin).not.toHaveBeenCalled();
+  expect(existsSync(path.join(env.BUDDI_DATA_DIR as string, 'plugins', 'incoming'))).toBe(false);
 });

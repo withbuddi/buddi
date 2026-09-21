@@ -662,7 +662,7 @@ describe('what a package may be called, and where it may be put', () => {
   it('folds a scoped name into one safe directory, and refuses the rest', () => {
     expect(pluginDirKey('weather')).toBe('weather');
     expect(pluginDirKey('@you/weather')).toBe('@you+weather');
-    expect(() => pluginDirKey('staging')).toThrow(/staged packages wait in/);
+    expect(() => pluginDirKey('staging')).toThrow(/no plugin may take it/);
     expect(() => pluginDirKey('../../etc/cron.d')).toThrow(/not a usable plugin name/);
     expect(() => pluginDirKey('Weather')).toThrow(/not a usable plugin name/);
     expect(() => installedPackageDir('../escape', env)).toThrow(/not a usable plugin name/);

@@ -8,6 +8,7 @@
  */
 import type { ViewDescriptor } from './canvas/types';
 import type {
+  AgentHoldBack,
   AgentsResponse,
   ChatConversation,
   ConversationListItem,
@@ -112,22 +113,33 @@ export function post<T>(path: string, body: unknown = {}): Promise<T> {
  * because a header may hold nothing but Latin-1, and because the server uses
  * only its suffix anyway; it never becomes a path.
  */
-export function sendArchive<T>(
+export function sendFile<T>(
   path: string,
   file: File,
-  fields: { passphrase?: string | undefined; confirm?: string | undefined },
+  fallbackName: string,
+  headers: Record<string, string> = {},
 ): Promise<T> {
-  const name = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'backup.tar.gz';
+  const name = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || fallbackName;
   return request<T>(`/api${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
       [CSRF_HEADER]: csrfToken(),
       'X-Filename': name,
-      ...(fields.passphrase ? { 'X-Backup-Passphrase': fields.passphrase } : {}),
-      ...(fields.confirm ? { 'X-Backup-Confirm': fields.confirm } : {}),
+      ...headers,
     },
     body: file,
+  });
+}
+
+export function sendArchive<T>(
+  path: string,
+  file: File,
+  fields: { passphrase?: string | undefined; confirm?: string | undefined },
+): Promise<T> {
+  return sendFile<T>(path, file, 'backup.tar.gz', {
+    ...(fields.passphrase ? { 'X-Backup-Passphrase': fields.passphrase } : {}),
+    ...(fields.confirm ? { 'X-Backup-Confirm': fields.confirm } : {}),
   });
 }
 
@@ -413,6 +425,8 @@ export interface AgentRow {
   delegates: string[];
   /** A shipped example: read-only until Agent Father makes a private copy. */
   isExample: boolean;
+  /** Set when a granted tool family is not installed here; `tools` is empty. */
+  heldBack?: AgentHoldBack;
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
 }
 
@@ -437,6 +451,8 @@ export interface AgentEngine {
   credentialEnv: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. */
+  heldBack?: AgentHoldBack;
   restartRequired: boolean;
 }
 
@@ -520,6 +536,8 @@ export interface AgentProfile {
   file: string;
   available: boolean;
   unavailableReason?: string;
+  /** Set when a granted tool family is not installed here. */
+  heldBack?: AgentHoldBack;
   roles: string[];
   engine: {
     provider: string;
@@ -799,6 +817,8 @@ export interface StagedPluginView {
    * this says what is on disk, and approving re-checks it.
    */
   stagedHash?: string;
+  /** The name of the file the owner uploaded, when this stage came from one. */
+  uploadedName?: string;
   dependencies: { count: number; withScripts: string[] };
   /** The package's own words about itself, from its buddi.md. Never checked. */
   claims: { schema?: string; hosts: string[]; text: string; missing: boolean };
@@ -810,10 +830,26 @@ export interface StagedPluginView {
   state: 'staged' | 'approved' | 'planned';
 }
 
+/**
+ * A plugin buddi ships with.
+ *
+ * Read-only on the page: nothing installed it and nothing can remove it. It is
+ * here so the list of tools an agent can reach has one place that names all of
+ * them, rather than only the ones the owner added.
+ */
+export interface BuiltInPluginView {
+  name: string;
+  version: string;
+  contribution: { tools: number; sentinels: number; views: number; agents: number };
+  description?: string;
+}
+
 export interface PluginsView {
   /** Shown above the install field, verbatim, and never paraphrased. */
   trust: string;
   installed: InstalledPluginView[];
+  /** Optional while the gateway that sends it is still landing. */
+  builtIn?: BuiltInPluginView[];
   staged: StagedPluginView[];
   restartNeeded: boolean;
   /** True in a developer checkout, where a restart is a command and not a button. */
@@ -1053,6 +1089,14 @@ export const api = {
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),
+  /**
+   * The same stage, from a .tgz on the owner's own machine.
+   *
+   * Sent as the body it is, like a backup archive: the gateway streams it to
+   * disk and stages it from there, so this answers with the same job as
+   * `stagePlugin` and is followed the same way.
+   */
+  uploadPlugin: (file: File) => sendFile<{ job: PluginJob }>('/plugins/upload', file, 'plugin.tgz'),
   pluginJob: (id: string) => get<PluginJob>(`/plugins/jobs/${encodeURIComponent(id)}`),
   /**
    * Approve a staged package.

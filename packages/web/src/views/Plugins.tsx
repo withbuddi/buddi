@@ -17,10 +17,11 @@
  * Loading a newly installed plugin needs a restart, which is the supervisor's
  * job. A checkout has no supervisor, so it gets the command instead.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ApiError,
   api,
+  type BuiltInPluginView,
   type InstalledPluginView,
   type PluginJob,
   type PluginPlan,
@@ -60,6 +61,52 @@ const PHASE_WORDS: Record<PluginJob['phase'], string> = {
 
 /** The one line a checkout gets instead of a restart button. */
 const CHECKOUT_RESTART = 'Restart buddi to load it. In a checkout, stop it and run: buddi serve';
+
+/** Where a plugin comes from. Three ways in, and they ask for different things. */
+type InstallMode = 'npm' | 'file' | 'directory';
+
+const MODES: Array<{ id: InstallMode; label: string }> = [
+  { id: 'npm', label: 'From npm' },
+  { id: 'file', label: 'A file' },
+  { id: 'directory', label: 'A directory I built' },
+];
+
+/** The last way in, so the developer path is not retyped every visit. */
+const MODE_KEY = 'buddi.plugins.install-mode';
+
+function rememberedMode(): InstallMode {
+  try {
+    const saved = window.localStorage.getItem(MODE_KEY);
+    if (MODES.some((mode) => mode.id === saved)) return saved as InstallMode;
+  } catch {
+    // Storage the browser refuses is not worth an error on this page.
+  }
+  return 'npm';
+}
+
+function rememberMode(mode: InstallMode): void {
+  try {
+    window.localStorage.setItem(MODE_KEY, mode);
+  } catch {
+    // Same: the choice just does not survive the visit.
+  }
+}
+
+/** The one thing a file has to be. */
+const PLUGIN_SUFFIX = '.tgz';
+
+/** What a plugin contributes, counted in words, leaving out what it has none of. */
+function contributionWords(c: { tools: number; sentinels: number; views: number; agents: number }): string {
+  const parts: string[] = [];
+  const add = (n: number, one: string, many: string): void => {
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  add(c.tools, 'tool', 'tools');
+  add(c.sentinels, 'watcher', 'watchers');
+  add(c.views, 'view', 'views');
+  add(c.agents, 'agent', 'agents');
+  return parts.length === 0 ? 'nothing on its own' : parts.join(', ');
+}
 
 /** A source, in one readable phrase. */
 function sourceWords(source: PluginSource): string {
@@ -187,6 +234,48 @@ export function Plugins(): JSX.Element {
           </Stack>
         )}
       </Panel>
+
+      {(data?.builtIn ?? []).length > 0 ? (
+        <Panel title="Ships with buddi">
+          <Stack divided>
+            {(data?.builtIn ?? []).map((plugin) => (
+              <Section key={plugin.name}>
+                <BuiltIn plugin={plugin} />
+              </Section>
+            ))}
+          </Stack>
+        </Panel>
+      ) : null}
+    </Stack>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * What was already here
+ * ------------------------------------------------------------------ */
+
+/**
+ * One plugin buddi ships with.
+ *
+ * Nothing to approve and nothing to remove, so it is a name, a version and
+ * what it contributes: the part of the tool list that came with the box.
+ */
+function BuiltIn({ plugin }: { plugin: BuiltInPluginView }): JSX.Element {
+  return (
+    <Stack gap="sm">
+      <KV
+        items={[
+          {
+            label: <span>{plugin.name}</span>,
+            value: (
+              <span>
+                {plugin.version} · {contributionWords(plugin.contribution)}
+              </span>
+            ),
+          },
+        ]}
+      />
+      {plugin.description ? <p className="ui-card-meta">{plugin.description}</p> : null}
     </Stack>
   );
 }
@@ -204,8 +293,24 @@ function Install({
   onStaged: (jobId: string) => void;
   onFailed: (message: string) => void;
 }): JSX.Element {
+  const [mode, setMode] = useState<InstallMode>(rememberedMode);
   const [spec, setSpec] = useState('');
   const [sending, setSending] = useState(false);
+  /** The file the zone is holding, and why it is holding none. */
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
+  const [over, setOver] = useState(false);
+  const picker = useRef<HTMLInputElement | null>(null);
+
+  const fail = (error: unknown): void =>
+    onFailed(error instanceof ApiError ? error.message : String(error));
+
+  const choose = (next: InstallMode): void => {
+    setMode(next);
+    rememberMode(next);
+    setRefused(null);
+  };
+
   const go = (): void => {
     setSending(true);
     api
@@ -214,27 +319,113 @@ function Install({
         onStaged(answer.job.id);
         setSpec('');
       })
-      .catch((error: unknown) => onFailed(error instanceof ApiError ? error.message : String(error)))
+      .catch(fail)
       .finally(() => setSending(false));
   };
+
+  /*
+   * A picked or dropped file is the whole act: there is nothing left to type,
+   * so the upload — and with it the read — starts here rather than behind a
+   * second click. A file that is not a .tgz never leaves the browser.
+   */
+  const take = (file: File | undefined): void => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(PLUGIN_SUFFIX)) {
+      setChosen(null);
+      setRefused(`${file.name} is not a ${PLUGIN_SUFFIX}. A packed plugin is the file npm pack writes.`);
+      return;
+    }
+    setRefused(null);
+    setChosen(file.name);
+    setSending(true);
+    api
+      .uploadPlugin(file)
+      .then((answer) => onStaged(answer.job.id))
+      .catch(fail)
+      .finally(() => setSending(false));
+  };
+
   return (
     <Stack gap="sm">
-      <Field
-        label="Install a plugin"
-        hint="A package name, a name@version, a path to a .tgz, or a directory you built yourself."
-      >
-        <input
-          type="text"
-          value={spec}
-          placeholder="buddi-plugin-weather"
-          onChange={(event) => setSpec(event.target.value)}
-        />
-      </Field>
-      <Toolbar align="end">
-        <Button variant="accent" disabled={busy || sending || spec.trim() === ''} onClick={go}>
-          Read it first
-        </Button>
-      </Toolbar>
+      <div className="plugin-modes" role="radiogroup" aria-label="Where it comes from">
+        {MODES.map((choice) => (
+          <button
+            key={choice.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === choice.id}
+            className="plugin-mode"
+            data-chosen={mode === choice.id ? 'true' : undefined}
+            onClick={() => choose(choice.id)}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'file' ? (
+        <div
+          className="plugin-drop"
+          role="group"
+          aria-label="A plugin file"
+          data-state={over ? 'over' : refused ? 'refused' : chosen ? 'chosen' : undefined}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setOver(false);
+            take(event.dataTransfer?.files?.[0]);
+          }}
+        >
+          <p className="ui-card-meta">
+            {refused ?? (chosen ? `${chosen} — reading it.` : `Drop a ${PLUGIN_SUFFIX} here, or choose one.`)}
+          </p>
+          <Toolbar align="end">
+            <Button variant="accent" disabled={busy || sending} onClick={() => picker.current?.click()}>
+              Choose a file
+            </Button>
+          </Toolbar>
+          <input
+            ref={picker}
+            type="file"
+            accept={PLUGIN_SUFFIX}
+            hidden
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(event) => {
+              take(event.target.files?.[0]);
+              // So picking the same file twice still counts as picking it.
+              event.target.value = '';
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          <Field
+            label={mode === 'npm' ? 'Install a plugin' : 'The directory it is in'}
+            hint={
+              mode === 'npm'
+                ? 'A package name, or a name@version.'
+                : 'The folder with its package.json, already built.'
+            }
+          >
+            <input
+              type="text"
+              value={spec}
+              placeholder={mode === 'npm' ? 'buddi-plugin-weather' : '/home/you/code/buddi-plugin-weather'}
+              onChange={(event) => setSpec(event.target.value)}
+            />
+          </Field>
+          <Toolbar align="end">
+            <Button variant="accent" disabled={busy || sending || spec.trim() === ''} onClick={go}>
+              Read it first
+            </Button>
+          </Toolbar>
+        </>
+      )}
     </Stack>
   );
 }
@@ -305,7 +496,12 @@ function Staged({
           <ErrorBanner message={failed} />
           <KV
             items={[
-              { label: 'From', value: sourceWords(staged.source) },
+              {
+                label: 'From',
+                value: staged.uploadedName
+                  ? `a file you chose · ${staged.uploadedName}`
+                  : sourceWords(staged.source),
+              },
               { label: 'Published by', value: staged.publisher ?? 'nobody npm will name' },
               {
                 label: 'Integrity',

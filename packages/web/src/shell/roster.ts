@@ -236,7 +236,19 @@ export function monogram(name: string | undefined): string {
  * appears greyed says the same thing: the rail's tooltip, its card on the
  * Agents page, its tile on Home, and the composer, which is replaced by it.
  */
-export function cannotRunSentence(agent: { name?: string; unavailableReason?: string }): string {
+export function cannotRunSentence(agent: {
+  name?: string;
+  unavailableReason?: string;
+  heldBack?: { message: string };
+}): string {
+  /*
+   * A held-back agent's sentence is already whole — "Needs the finance
+   * plugin." — and it is about the *installation*, not about this agent being
+   * broken. Prefixing "Scout cannot run:" onto it would read as a fault in the
+   * file the owner wrote, which is exactly what it is not.
+   */
+  const held = agent.heldBack?.message.trim();
+  if (held !== undefined && held !== '') return `${agent.name ?? 'This agent'} is held back. ${held}`;
   const reason = agent.unavailableReason?.trim();
   return reason && reason !== ''
     ? `${agent.name ?? 'This agent'} cannot run: ${reason}`
@@ -245,3 +257,20 @@ export function cannotRunSentence(agent: { name?: string; unavailableReason?: st
 
 /** Where that is fixed. The one place an account is added or enabled. */
 export const MODEL_ACCOUNTS_LABEL = 'Settings → Model accounts';
+
+/** And where a missing plugin is fixed: the one place a plugin is installed. */
+export const PLUGINS_LABEL = 'Install it in Settings → Plugins';
+
+/**
+ * Which settings section the greyed agent's link should open: the plugin page
+ * when a plugin is what is missing, the accounts page otherwise. One helper so
+ * the rail, the Agents page and the composer never disagree about the door.
+ */
+export function cannotRunFix(agent: { heldBack?: { message: string } } | null | undefined): {
+  section: 'plugins' | 'accounts';
+  label: string;
+} {
+  return agent?.heldBack
+    ? { section: 'plugins', label: PLUGINS_LABEL }
+    : { section: 'accounts', label: MODEL_ACCOUNTS_LABEL };
+}

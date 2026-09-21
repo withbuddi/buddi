@@ -156,10 +156,12 @@ import {
   approveRoute,
   listPlugins,
   pluginJobRoute,
+  receivePluginUpload,
   rejectRoute,
   stageRoute,
   uninstallRoute,
   updateRoute,
+  uploadRoute,
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
@@ -1066,6 +1068,19 @@ export function createWebApp(deps: WebServerDeps): Server {
       // file, and keeping a copy of it after saying no would be a surprise.
       if (out.status >= 400) await discardUpload(received.path);
       return reply(res, out);
+    }
+
+    /*
+     * A plugin tarball the owner has on their own machine, handed over the
+     * same way a backup archive is: raw bytes, the filename in a header, and
+     * `readJsonBody`'s 64 KB cap never in the way. What lands on disk is
+     * staged exactly like a `.tgz` path they could have typed, and the upload
+     * is deleted once staging has copied it.
+     */
+    if (path === '/api/plugins/upload') {
+      const received = await receivePluginUpload(pluginDeps(), req, first(req.headers['x-filename']));
+      if ('status' in received) return reply(res, received);
+      return reply(res, uploadRoute(pluginDeps(), received));
     }
 
     /*

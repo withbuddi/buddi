@@ -18,8 +18,18 @@ import path from 'node:path';
 import { resolveDataDir, type InstalledPlugin } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 
-/** The one directory under the plugins root that is not a plugin. */
+/** The directories under the plugins root that are not plugins. */
 export const STAGING_DIR = 'staging';
+/**
+ * Where an uploaded `.tgz` lands before it is staged.
+ *
+ * The dashboard can hand buddi a tarball the owner has on their own machine,
+ * and the bytes have to be somewhere on disk before anything reads them. They
+ * go here rather than into the staging directory because nothing has been
+ * staged yet: an upload is a file, and it is deleted the moment staging has
+ * copied it (or failed to).
+ */
+export const INCOMING_DIR = 'incoming';
 
 /** npm's rule, narrowed: lowercase, one optional scope, no path characters. */
 const NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
@@ -42,10 +52,11 @@ export function pluginDirKey(name: string): string {
     );
   }
   const key = trimmed.replace('/', '+');
-  if (key === STAGING_DIR) {
+  if (key === STAGING_DIR || key === INCOMING_DIR) {
     throw new InstallRefusal(
       'reserved-name',
-      `"${name}" is the name of the directory staged packages wait in, so no plugin may take it.`,
+      `"${name}" is the name of a directory buddi keeps under the plugins root (${STAGING_DIR}, ` +
+        `${INCOMING_DIR}), so no plugin may take it.`,
     );
   }
   return key;
@@ -59,6 +70,11 @@ export function pluginsRoot(env: NodeJS.ProcessEnv = process.env): string {
 /** `<data>/plugins/staging` — one directory per stage, named by its id. */
 export function stagingRoot(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(pluginsRoot(env), STAGING_DIR);
+}
+
+/** `<data>/plugins/incoming` — uploaded tarballs, until staging has copied them. */
+export function incomingRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(pluginsRoot(env), INCOMING_DIR);
 }
 
 /**
@@ -122,7 +138,7 @@ export function sweepPluginDirs(
   const keep = new Set(opts.known.map((name) => pluginDirKeyOrName(name)));
   const swept: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === STAGING_DIR) continue;
+    if (!entry.isDirectory() || entry.name === STAGING_DIR || entry.name === INCOMING_DIR) continue;
     const previous = /\.previous-\d+$/.test(entry.name);
     if (!previous && keep.has(entry.name)) continue;
     const dir = assertInsidePluginsRoot(path.join(root, entry.name), env);

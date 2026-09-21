@@ -6,7 +6,9 @@ import { parseMissionsArgs } from './missions-cli.js';
 import {
   DAILY_CHECK_PROMPT,
   FRIDAY_RECAP_PROMPT,
+  manifest as financeManifest,
 } from '@buddi/tool-finance';
+import { installedManifests } from './agents/catalog.js';
 import { planDefaultMissions } from './missions/defaults.js';
 import { findingOf, renderFinding, sentinelWakeMission } from './missions/sentinel-wake.js';
 import { DEFAULT_TIMEZONE, recapMissionId, timezoneFromEnv } from './missions/recap.js';
@@ -30,7 +32,18 @@ const catalog = loadAgentCatalog({
   registry: new ToolRegistry(),
   env: {},
 });
-const plan = planDefaultMissions(catalog);
+/*
+ * Finance is the fixture, not a built-in.
+ *
+ * It stopped being compiled in when it became a plugin like any other, and the
+ * missions it suggests are the richest set anybody ships — a recap, a daily
+ * check and a disabled placeholder — so it is handed to the planner here the
+ * way an installed plugin's manifest reaches it at runtime. Nothing in this
+ * file asserts that this build *has* finance; it asserts what the planner does
+ * with a manifest that suggests missions.
+ */
+const manifests = [...installedManifests({}), financeManifest];
+const plan = planDefaultMissions(catalog, manifests);
 const entry = (id: string) => plan.entries.find((e) => e.mission.id === id);
 
 describe('parseMissionsArgs', () => {
@@ -105,7 +118,7 @@ describe('parseMissionsArgs', () => {
 
 describe('the recap mission', () => {
   it('comes from the plugin that knows what a recap is', () => {
-    expect(recapMissionId()).toBe('friday-recap');
+    expect(recapMissionId(manifests)).toBe('friday-recap');
     expect(entry('friday-recap')?.mission).toMatchObject({
       id: 'friday-recap',
       agentId: MISSION_AGENT,
