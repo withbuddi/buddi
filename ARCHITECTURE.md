@@ -399,6 +399,19 @@ marker in the transcript says plainly that the message above was not answered an
 be unless the owner asks again — so the next turn's model cannot mistake a dead turn for a
 done one.
 
+**A message sent while the agent is working joins that run.** The composer used to refuse
+it, and Telegram answered it afterwards as a second run: both made the owner wait out a
+turn they could already see was going the wrong way. Now the message is stored at once —
+an ordinary owner turn, stamped `owner:interjection` so a transcript can say it was added
+while working — and handed to the run in flight, which takes it at the one point it can be
+taken safely: **between two tool calls, before the next model step, never inside a tool
+call**, framed as "the owner adds: …". What arrives after the model's last word is not
+lost and is not squeezed in either: it is the next turn, in order, joined into one owner
+turn. Stop keeps its meaning — it ends the run, and what was queued goes out as that next
+turn. Files are the exception, refused in a sentence rather than queued: a run's
+attachments are hydrated and capped when the request is built, and there is no honest way
+to add one to a call already sent.
+
 **Asking is a tool-dispatch boundary.** A successful tool marked `waitsForOwner`
 (currently `conversation.ask`) blocks all remaining calls in that run, including
 later calls in the same batch. The model may finish its question as text, with

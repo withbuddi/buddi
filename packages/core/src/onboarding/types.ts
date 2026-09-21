@@ -55,6 +55,18 @@ export const OPENING_TURN_SPEAKER = 'first-run:opening';
 export const APPROVAL_RESUME_SPEAKER = 'approval:resume';
 
 /**
+ * The speaker written on a turn the owner added while the agent was working.
+ *
+ * It is an ordinary owner turn — the model is given it, and it is theirs — but
+ * it did not open a run: they typed it mid-flight and the run picked it up
+ * between two tool calls. The marker exists so a transcript can say "added
+ * while working" rather than drawing a question that arrived halfway through
+ * as though it had started the turn. The same shape as the two above, and for
+ * the same reason: provenance for the readers, invisible to the model.
+ */
+export const OWNER_INTERJECTION_SPEAKER = 'owner:interjection';
+
+/**
  * What first run learned that is not a question: which conversation the owner
  * met their assistant in, and which account they chose while meeting it.
  *

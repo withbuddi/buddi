@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, OWNER_INTERJECTION_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -179,6 +179,112 @@ export interface RunAgentOptions {
    * (a browser following a stream) can find its own run in the log.
    */
   runId?: string;
+  /**
+   * What the owner said *while this run was working*.
+   *
+   * The loop drains it between tool calls and before the next model step —
+   * never inside a tool call, where a half-finished effect has no way to hear
+   * about a change of mind. Each queued line is appended to this run's context
+   * as an owner message and stored as an ordinary user turn, stamped
+   * `OWNER_INTERJECTION_SPEAKER` so a transcript can say it was added while
+   * working. Anything that arrives after the model's final answer is simply
+   * left in the source: the run is over, and the surface sends it as the next
+   * turn.
+   */
+  interjections?: InterjectionSource;
+  /**
+   * The opening turn is already a row in `core.messages`.
+   *
+   * One caller, and one reason: a surface that stored what the owner typed
+   * during the previous run so the thread could show it at once, and is now
+   * handing it to this run as its turn. The history load already carries it,
+   * so it is neither written a second time nor appended twice — and a turn
+   * the owner has already seen keeps the id and the position it had.
+   */
+  openingPersisted?: boolean;
+}
+
+/**
+ * One thing the owner added while the agent was working.
+ */
+export interface Interjection {
+  text: string;
+  /**
+   * The id of the row the surface wrote, when it wrote one. The loop never
+   * reads it; it rides along so that a surface getting its own line back
+   * undelivered knows which row it is about.
+   */
+  id?: string;
+  /**
+   * The surface has already written this turn to `core.messages` (with the
+   * interjection speaker on it), so the loop sends it and stores nothing.
+   * Absent means the loop owns the row, which is the ordinary case.
+   */
+  stored?: boolean;
+}
+
+/**
+ * Where a run hears about what the owner said while it worked.
+ *
+ * A pull, not a push: the loop asks at the one point where a new owner
+ * message can be taken safely, and a source that has nothing says so with an
+ * empty array. Whatever is handed over is *delivered* — a source must not
+ * return the same line twice.
+ */
+export interface InterjectionSource {
+  poll(): readonly Interjection[];
+}
+
+/**
+ * The queue a surface hands to a run and pushes into from outside it.
+ *
+ * Deliberately tiny and deliberately synchronous: push and poll are the only
+ * two operations, and neither awaits, so there is no window in which a line is
+ * both queued and delivered. `close` ends it — the run is over — and returns
+ * whatever was never picked up, which is what the surface then sends as the
+ * next turn.
+ */
+export class InterjectionQueue implements InterjectionSource {
+  #pending: Interjection[] = [];
+  #closed = false;
+
+  /** Is this run still able to take something? */
+  get open(): boolean {
+    return !this.#closed;
+  }
+
+  /** Queue one line. `false` means the run ended first and it was not taken. */
+  push(item: Interjection): boolean {
+    if (this.#closed) return false;
+    if (item.text.trim() === '') return false;
+    this.#pending.push(item);
+    return true;
+  }
+
+  poll(): readonly Interjection[] {
+    if (this.#pending.length === 0) return [];
+    const taken = this.#pending;
+    this.#pending = [];
+    return taken;
+  }
+
+  /** End it, and hand back everything the run never picked up, in order. */
+  close(): readonly Interjection[] {
+    this.#closed = true;
+    return this.poll();
+  }
+}
+
+/**
+ * How an interjection is put to the model: as the owner, adding something,
+ * mid-work. The framing is the whole point — without it a line arriving
+ * between two tool calls reads as a fresh question, and the model starts over
+ * instead of taking the correction into what it is already doing.
+ *
+ * What is *stored* is the owner's own words; only what is sent is framed.
+ */
+export function interjectionText(texts: readonly string[]): string {
+  return texts.map((text) => `the owner adds: ${text.trim()}`).join('\n\n');
 }
 
 /** One server-side search, stamped with the run that caused it. */
@@ -673,16 +779,20 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // owner speaking: it is stamped as such so no transcript draws it as theirs.
   const openingSpeaker =
     opts.transcript?.openingSpeaker ?? opts.openingSpeaker ?? (resume ? APPROVAL_RESUME_SPEAKER : undefined);
-  await persistMessage(pool, conversationId, 'user', userBlocks, openingSpeaker, [
-    ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
-    ...resumedProduced,
-  ]);
+  if (!opts.openingPersisted) {
+    await persistMessage(pool, conversationId, 'user', userBlocks, openingSpeaker, [
+      ...attachments.map((a) => ({ artifactId: a.artifactId, kind: 'uploaded' as const, agentId: null })),
+      ...resumedProduced,
+    ]);
+  }
   // Degrade what the provider cannot carry into a placeholder the model can
   // read and talk about. Only what is *sent* changes: the persisted turn above
   // still holds the artifact reference, so the same history sent to a provider
   // that accepts documents tomorrow still carries the real file.
+  // A turn the surface already stored is already *in* the history that was
+  // just loaded: appending it here would show the model the same words twice.
   const messages: NeutralMessage[] = degradeMessages(
-    [...replayed, { role: 'user', content: sentUserBlocks }],
+    opts.openingPersisted ? [...replayed] : [...replayed, { role: 'user', content: sentUserBlocks }],
     capabilities,
   );
   const ephemeralImages = new Set<ContentBlock>();
@@ -914,6 +1024,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     if (pendingActionId !== undefined) {
       stopped = 'awaiting-approval';
       break;
+    }
+
+    /*
+     * The one place the owner can get a word in.
+     *
+     * Every tool call of this turn has been dispatched and answered, and the
+     * next model step has not been built yet: a correction taken here reaches
+     * the model *before* it decides what to do next, and cannot arrive halfway
+     * through an effect. Anything queued after the model's last word is left
+     * where it is — the run is ending, and it belongs to the next turn.
+     */
+    const added = opts.interjections?.poll() ?? [];
+    const taken = added.filter((item) => item.text.trim() !== '');
+    if (taken.length > 0) {
+      messages.push({ role: 'user', content: [{ type: 'text', text: interjectionText(taken.map((item) => item.text)) }] });
+      for (const item of taken) {
+        if (item.stored) continue;
+        await persistMessage(pool, conversationId, 'user', [{ type: 'text', text: item.text.trim() }], OWNER_INTERJECTION_SPEAKER);
+      }
+      await appendEvent(
+        pool,
+        'run.interjected',
+        { count: taken.length, ...(opts.runId ? { runId: opts.runId } : {}) },
+        conversationId,
+      );
     }
   }
 

@@ -2208,6 +2208,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 202, {
         conversationId: sent.conversationId,
         runId: sent.runId,
+        // The agent was already working and took this as an interjection. The
+        // page draws it as added while working rather than as a turn of its own.
+        ...(sent.queued ? { queued: true } : {}),
       });
     }
 

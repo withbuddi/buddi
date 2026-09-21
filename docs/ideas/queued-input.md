@@ -1,6 +1,6 @@
 # Send while the agent works
 
-Status: Proposed
+Status: Accepted — branch `queued-input`
 Captured: 2026-09-21
 
 ## Problem / opportunity
@@ -27,17 +27,30 @@ should match it and go one further.
 - Same on Telegram: a second message during a run is an interjection, not
   a second run.
 
+## What was built
+
+- `runAgent` takes an `interjections` source and drains it between tool calls,
+  before the next model step — never inside a tool call. Each line is sent as
+  "the owner adds: …" and stored as an ordinary user turn stamped
+  `owner:interjection`.
+- `WebChat.send` on a live run stores the message, hands it to that run and
+  answers `{ ok: true, queued: true, runId }` with the *running* run's id. What
+  the run never picks up is promoted to the next turn: the rows are joined into
+  one owner turn, the marker cleared, and the turn re-timed to the end of the
+  thread rather than written a second time. Stop is unchanged, and what was
+  queued goes out after it. Attachments are refused in a sentence.
+- Telegram folds a plain second message into the run in flight, and only then:
+  a command, an `@handle` and anything sent while something else is already
+  waiting on that chat's chain keep their own turn.
+- The composer always sends, with Stop beside it; a message sent mid-run shows
+  in the thread at once under "added while working".
+
 ## Open questions
 
-- Where the interjection enters the loop safely: between tool calls, never
-  inside one.
 - Whether an interjection should be able to cancel a pending approval
-  ("no, don't") or only add context.
-
-## Next decision
-
-Build after the remote-hand latency fix lands. A day: runtime interjection
-point, queue on the conversation, composer and Telegram surfaces.
+  ("no, don't") or only add context. Still only context: a run that has
+  suspended on an approval is not draining anything, so what the owner says
+  becomes the next turn.
 
 ## Related work
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { CLI_SURFACE, SCHEDULED_SURFACE, TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
+import { CLI_SURFACE, OWNER_INTERJECTION_SPEAKER, SCHEDULED_SURFACE, TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
 import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
 import type {
   CompletionRequest,
@@ -9,6 +9,7 @@ import type {
 } from './anthropic.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
+  InterjectionQueue,
   composeSystem,
   createConversation,
   isPreamble,
@@ -22,7 +23,7 @@ import {
 
 /* ---------------- in-memory fake DB (only `query`) ---------------- */
 
-type MessageRow = { id: number; conversation_id: string; role: string; content: unknown };
+type MessageRow = { id: number; conversation_id: string; role: string; content: unknown; speaker?: string | null };
 type EventRow = { kind: string; conversation_id: string; payload: unknown };
 
 const ACTION_ID = '22222222-2222-2222-2222-222222222222';
@@ -47,6 +48,7 @@ class FakeDb implements Queryable {
         conversation_id: params[0],
         role: params[1],
         content: JSON.parse(params[2]),
+        speaker: (params[3] as string | undefined) ?? null,
       });
       return { rows: [] };
     }
@@ -1596,5 +1598,131 @@ describe("a run's answer is everything the model said, in order", () => {
         { text: '\nsecond\n', beforeToolCall: false },
       ]),
     ).toBe('first\n\nsecond');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * What the owner says while the agent is working
+ * ------------------------------------------------------------------ */
+
+/**
+ * The promise the interjection point makes is about *where*, not whether:
+ * between two tool calls, before the next model step, and never while an
+ * effect is half-done. These three tests are that promise, said three ways.
+ */
+describe('an interjection', () => {
+  /** Two tool calls and then an answer, so there is a gap to land in. */
+  const twoCalls = (): CompletionResponse[] => [
+    { model: 'fixture', content: [{ type: 'tool_use', id: 'a', name: 'demo.double', input: { n: 1 } }], stopReason: 'tool_use', usage },
+    { model: 'fixture', content: [{ type: 'tool_use', id: 'b', name: 'demo.double', input: { n: 2 } }], stopReason: 'tool_use', usage },
+    { model: 'fixture', content: [{ type: 'text', text: 'Done.' }], stopReason: 'end_turn', usage },
+  ];
+
+  it('reaches the model between two tool calls, and is stored as the owner speaking', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    const provider = scriptedProvider(twoCalls());
+    // Said while the first tool call is being answered.
+    queue.push({ text: 'in euros, not dollars' });
+
+    await runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'What did we spend?',
+      interjections: queue,
+    });
+
+    // The second model step carries it, framed as the owner adding to the run.
+    const second = provider.calls[1]!.messages;
+    const added = second.at(-1)!;
+    expect(added.role).toBe('user');
+    expect(JSON.stringify(added.content)).toContain('the owner adds: in euros, not dollars');
+    // And it is in the transcript as an ordinary user turn, marked.
+    const row = db.messages.find((m) => m.speaker === OWNER_INTERJECTION_SPEAKER);
+    expect(row).toBeDefined();
+    expect(row!.content).toEqual([{ type: 'text', text: 'in euros, not dollars' }]);
+    expect(db.eventKinds()).toContain('run.interjected');
+  });
+
+  it('is never delivered inside a tool call: the running tool sees nothing of it', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    const registry = new ToolRegistry();
+    /** What the model had been shown at the moment each tool ran. */
+    const seen: number[] = [];
+    const provider = scriptedProvider(twoCalls());
+    registry.register({
+      name: 'demo', version: '0.0.1', schema: 'demo', migrationsDir: '/tmp/demo',
+      tools: [{
+        name: 'demo.double', description: 'Doubles a number.', tier: 'auto', input: z.object({ n: z.number() }),
+        execute: async (input: { n: number }) => {
+          // The owner types mid-effect. It must not join this turn's results.
+          queue.push({ text: 'stop, wrong account' });
+          seen.push(db.messages.filter((m) => m.speaker === OWNER_INTERJECTION_SPEAKER).length);
+          return { doubled: input.n * 2 };
+        },
+      }],
+    });
+
+    await runAgent({
+      agent, provider, registry, ctx, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'Pay it',
+      interjections: queue,
+    });
+
+    // Nothing was written while the first tool was running…
+    expect(seen[0]).toBe(0);
+    // …and the tool_result turn is exactly the results, with no owner text
+    // spliced into it.
+    const results = provider.calls[1]!.messages.filter((m) => m.role === 'user');
+    const toolTurn = results.find((m) => m.content.some((b) => b.type === 'tool_result'))!;
+    expect(toolTurn.content.every((b) => b.type === 'tool_result')).toBe(true);
+  });
+
+  it('arriving after the answer is left for the next turn, not squeezed into this one', async () => {
+    const db = new FakeDb();
+    const queue = new InterjectionQueue();
+    const provider = scriptedProvider([
+      { model: 'fixture', content: [{ type: 'text', text: 'Done.' }], stopReason: 'end_turn', usage },
+    ]);
+
+    const result = await runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db,
+      conversationId: await createConversation(db, agent.id),
+      userMessage: 'What did we spend?',
+      interjections: queue,
+    });
+    // The model has said its last word; only now does the owner add something.
+    queue.push({ text: 'and last month?' });
+
+    expect(result.stopped).toBe('end_turn');
+    expect(db.messages.some((m) => m.speaker === OWNER_INTERJECTION_SPEAKER)).toBe(false);
+    // Still queued, for whoever sends the next turn.
+    expect(queue.close().map((i) => i.text)).toEqual(['and last month?']);
+  });
+
+  it('a turn the surface already stored is neither written again nor shown twice', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, agent.id);
+    // The surface wrote it when the owner typed it during the last run.
+    await db.query(
+      `insert into core.messages (conversation_id, role, content, speaker) values ($1, $2, $3::jsonb, $4)`,
+      [conversationId, 'user', JSON.stringify([{ type: 'text', text: 'and last month?' }]), null],
+    );
+    const before = db.messages.length;
+    const provider = scriptedProvider([
+      { model: 'fixture', content: [{ type: 'text', text: 'Here.' }], stopReason: 'end_turn', usage },
+    ]);
+
+    await runAgent({
+      agent, provider, registry: registryWithDouble(), ctx, pool: db,
+      conversationId, userMessage: 'and last month?', openingPersisted: true,
+    });
+
+    // One user turn, and it is the row that was already there.
+    expect(db.messages.filter((m) => m.role === 'user')).toHaveLength(before);
+    const sent = provider.calls[0]!.messages.filter((m) => m.role === 'user');
+    expect(sent).toHaveLength(1);
   });
 });

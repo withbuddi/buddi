@@ -38,6 +38,7 @@ import { QuestionPicker } from './QuestionPicker';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
+import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
 
 const MIN_WIDTH = 320;
@@ -621,6 +622,13 @@ export function ChatPage({
   const send = (text: string, attachments: UploadedAttachment[]): void => {
     if (!agentId) return;
     const attachmentIds = attachments.map((file) => file.artifactId);
+    /*
+     * Said while the agent is working: it goes into the run that is going,
+     * not into a queue of its own, so it is drawn where it will be answered —
+     * under the turn already in flight, marked for what it is — and it is
+     * added to what is on screen rather than replacing it.
+     */
+    const interjecting = running;
     // The optimistic turn carries its files too, so the thread does not show
     // bare words for a second and then grow a picture.
     const local: ChatMessage = {
@@ -633,8 +641,9 @@ export function ChatPage({
           type: 'attachment', artifactId: file.artifactId, filename: file.filename, mime: file.mime, kind: file.kind, sizeBytes: file.sizeBytes,
         })),
       ],
+      ...(interjecting ? { speaker: OWNER_INTERJECTION_SPEAKER } : {}),
     };
-    setOptimistic([local]);
+    setOptimistic((pending) => (interjecting ? [...pending, local] : [local]));
     setError(null);
     setNotice(null);
     setRunning(true);
