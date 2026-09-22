@@ -18,12 +18,19 @@ import {
   MAX_OFFER_LABEL,
   MAX_OFFER_PROMPT,
   OFFER_COLUMNS,
+  OFFER_DISMISSED_MESSAGE,
+  OFFER_FOLD_MS,
+  OFFER_LAPSED_MESSAGE,
   OFFER_TTL_MS,
   toOffer,
+  type LapseReason,
   type Offer,
   type OfferedAction,
   type TakeOfferResult,
 } from './types.js';
+
+/** The three ways a row stops being on the table, as one SQL fragment. */
+const LIVE = 'taken_at is null and dismissed_at is null and lapsed_at is null';
 
 /** A button label: one line, whatever the agent typed. */
 function clipLabel(value: string, max: number): string {
@@ -128,7 +135,7 @@ export async function listOpenOffers(
   opts: { now: Date; limit?: number; agentId?: string; conversationId?: string },
 ): Promise<Offer[]> {
   const params: unknown[] = [opts.now];
-  const where = ['taken_at is null', 'expires_at > $1'];
+  const where = [LIVE, 'expires_at > $1'];
   if (opts.agentId) {
     params.push(opts.agentId);
     where.push(`agent_id = $${params.length}`);
@@ -170,7 +177,7 @@ export async function takeOffer(pool: Queryable, input: TakeOfferInput): Promise
   const { rows } = await pool.query(
     `update core.offers
         set taken_at = $2, taken_via = $3
-      where id = $1 and taken_at is null and expires_at > $2
+      where id = $1 and ${LIVE} and expires_at > $2
       returning ${OFFER_COLUMNS}`,
     [input.id, input.now, input.via],
   );
@@ -186,6 +193,25 @@ export async function takeOffer(pool: Queryable, input: TakeOfferInput): Promise
       ok: false,
       reason: 'already-taken',
       message: 'Already on it.',
+      offer: existing,
+    };
+  }
+  // Dismissed and lapsed are refusals in their own right, and each is told the
+  // truth rather than folded into "expired": the owner said no to one, and
+  // nobody said anything at all about the other.
+  if (existing.dismissedAt !== null) {
+    return {
+      ok: false,
+      reason: 'dismissed',
+      message: OFFER_DISMISSED_MESSAGE,
+      offer: existing,
+    };
+  }
+  if (existing.lapsedAt !== null) {
+    return {
+      ok: false,
+      reason: 'lapsed',
+      message: OFFER_LAPSED_MESSAGE,
       offer: existing,
     };
   }
@@ -227,34 +253,182 @@ export async function recordOfferJob(
   await pool.query('update core.offers set taken_job_id = $2 where id = $1', [id, jobId]);
 }
 
+/* ------------------------------------------------------------------ *
+ * Saying no
+ * ------------------------------------------------------------------ */
+
 /**
- * Withdraw every offer still open in one conversation.
+ * The owner said no to one offer.
  *
- * An offer belongs to the turn that made it. In a live conversation the turn
- * ends the moment the owner says the next thing, so the buttons that turn drew
- * stop being an accurate picture of what is on the table — the owner may have
- * answered in words, asked for something else, or had a newer turn offer a new
- * set. Rather than leave a button that still fires hours later, the next turn
- * of the same conversation withdraws what the previous one offered.
+ * The other half of a button. Until now the only answers to an offer were
+ * "take it" and "wait a week", which is how an installation ends up holding 65
+ * of them: nothing the owner could do cleared one, so nothing did.
  *
- * Withdrawing is expiry, not deletion: the row stays for the record, and a tap
- * on the dead button gets the ordinary "that option has expired — just ask me
- * instead" rather than silence or a surprise run. Taken offers are untouched.
- *
- * Returns how many were withdrawn.
+ * It is recorded, not deleted — an offer the owner refused is a thing that
+ * happened, and it stays readable under the fold for a week. A taken offer is
+ * never dismissed: that one started a run, and hiding it would be a lie about
+ * what the installation is doing.
  */
-export async function withdrawOffers(
+export async function dismissOffer(
   pool: Queryable,
-  input: { conversationId: string; now: Date },
+  input: { id: string; now: Date },
+): Promise<Offer | null> {
+  const { rows } = await pool.query(
+    `update core.offers
+        set dismissed_at = $2
+      where id = $1 and taken_at is null and dismissed_at is null
+      returning ${OFFER_COLUMNS}`,
+    [input.id, input.now],
+  );
+  return rows[0] ? toOffer(rows[0]) : null;
+}
+
+/**
+ * The owner said no to all of them, or to one agent's.
+ *
+ * The honest bulk action: the owner looked at a list of things they are never
+ * going to do and cleared it. Scoped by agent on an agent's page, unscoped on
+ * Home, and the count it returns is the count the page's confirmation named.
+ */
+export async function dismissOffers(
+  pool: Queryable,
+  input: { now: Date; agentId?: string | undefined },
+): Promise<number> {
+  const params: unknown[] = [input.now];
+  const where = ['taken_at is null', 'dismissed_at is null', 'lapsed_at is null', 'expires_at > $1'];
+  if (input.agentId !== undefined && input.agentId !== '') {
+    params.push(input.agentId);
+    where.push(`agent_id = $${params.length}`);
+  }
+  const { rows } = await pool.query(
+    `update core.offers set dismissed_at = $1 where ${where.join(' and ')} returning id`,
+    params,
+  );
+  return rows.length;
+}
+
+/* ------------------------------------------------------------------ *
+ * Lapsing
+ * ------------------------------------------------------------------ */
+
+/**
+ * Mark one conversation's open offers as lapsed.
+ *
+ * Used where the installation *knows* the moment passed — a lifetime rollover,
+ * It replaces the older `withdrawOffers`, which pushed `expires_at` back to
+ * now: a tap on one of those was told the offer had expired, which was never
+ * quite true — the clock had nothing to do with it. Lapsing records what
+ * actually happened, and the tap is told that.
+ */
+export async function lapseConversationOffers(
+  pool: Queryable,
+  input: { conversationId: string; reason: LapseReason; now: Date },
 ): Promise<number> {
   const conversationId = (input.conversationId ?? '').trim();
   if (conversationId === '') return 0;
   const { rows } = await pool.query(
     `update core.offers
-        set expires_at = $2
-      where conversation_id = $1 and taken_at is null and expires_at > $2
+        set lapsed_at = $2, lapse_reason = $3
+      where conversation_id = $1 and ${LIVE} and expires_at > $2
       returning id`,
-    [conversationId, input.now],
+    [conversationId, input.now, input.reason],
   );
   return rows.length;
+}
+
+/**
+ * Find the offers whose moment has passed, and mark them.
+ *
+ * Three conditions, one statement, and no scheduler: this runs on every read
+ * of the live list and once more at gateway start, which is as often as it
+ * needs to and never in the background. It is cheap because it only ever looks
+ * at rows that are still live — a handful, by construction, once this works.
+ *
+ *  1. **The owner moved on.** A message of theirs in the offer's conversation,
+ *     written after the offer was. They answered in words; the buttons under
+ *     the previous turn describe a decision that is no longer the live one.
+ *  2. **The conversation ended.** Either its group was archived, or that agent
+ *     has started a newer conversation since — which is what a lifetime
+ *     rollover looks like from here, and what "the thread this belonged to is
+ *     not the thread any more" means in general.
+ *  3. **The agent was removed.** Only checked when the caller knows the roster
+ *     (`agentIds`): a reader that cannot name the installed agents must not
+ *     conclude that all of them are gone.
+ *
+ * Returns how many lapsed.
+ */
+export async function sweepLapsedOffers(
+  pool: Queryable,
+  input: { now: Date; agentIds?: readonly string[] | undefined },
+): Promise<number> {
+  const roster = input.agentIds === undefined ? null : [...input.agentIds];
+  const params: unknown[] = [input.now];
+  // Each condition names its own reason, and the CASE decides which is
+  // recorded when more than one holds. The order is the order of directness:
+  // an owner who typed the next message said the clearest thing.
+  let removed = 'false';
+  if (roster !== null) {
+    params.push(roster);
+    removed = `not (o.agent_id = any($${params.length}::text[]))`;
+  }
+  const movedOn = `exists (
+        select 1 from core.messages m
+         where m.conversation_id = o.conversation_id
+           and m.role = 'user'
+           and m.created_at > o.created_at)`;
+  const ended = `exists (
+        select 1 from core.conversations c
+          left join core.groups g on g.id = c.group_id
+         where c.id = o.conversation_id
+           and (g.archived_at is not null
+                or exists (select 1 from core.conversations n
+                            where n.agent_id = c.agent_id
+                              and n.created_at > o.created_at
+                              and n.id <> c.id)))`;
+  const { rows } = await pool.query(
+    `update core.offers o
+        set lapsed_at = $1,
+            lapse_reason = case
+              when ${movedOn} then 'owner-moved-on'
+              when ${ended} then 'rolled-over'
+              else 'agent-removed' end
+      where ${LIVE} and o.expires_at > $1
+        and (${movedOn} or ${ended} or ${removed})
+      returning o.id`,
+    params,
+  );
+  return rows.length;
+}
+
+/**
+ * What the fold holds: offers dismissed or lapsed within the last week.
+ *
+ * Older than that and they are gone from the read entirely — the row stays,
+ * but a list of everything the owner ever said no to is not a list anybody
+ * wants. Newest closing first, whichever way it closed.
+ */
+export async function listClosedOffers(
+  pool: Queryable,
+  opts: { now: Date; limit?: number; agentId?: string | undefined; foldMs?: number },
+): Promise<Offer[]> {
+  const since = new Date(opts.now.getTime() - (opts.foldMs ?? OFFER_FOLD_MS));
+  const params: unknown[] = [since];
+  const where = [
+    '(dismissed_at is not null or lapsed_at is not null)',
+    'taken_at is null',
+    'greatest(dismissed_at, lapsed_at) > $1',
+  ];
+  if (opts.agentId !== undefined && opts.agentId !== '') {
+    params.push(opts.agentId);
+    where.push(`agent_id = $${params.length}`);
+  }
+  params.push(Math.min(Math.max(1, Math.trunc(opts.limit ?? 20)), 100));
+  const { rows } = await pool.query(
+    `select ${OFFER_COLUMNS} from core.offers
+      where ${where.join(' and ')}
+      order by greatest(dismissed_at, lapsed_at) desc
+      limit $${params.length}`,
+    params,
+  );
+  return rows.map(toOffer);
 }

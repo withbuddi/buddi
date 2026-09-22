@@ -425,6 +425,17 @@ class FakeDb implements Queryable {
     }
     // Withdrawal: an offer of a conversation the owner has moved past expires
     // where it stands, so a tap gets "that option has expired" and no run.
+    if (text.startsWith('update core.offers set lapsed_at')) {
+      const lapsed = this.offers.filter(
+        (o) => o.conversation_id === params[0] && o.taken_at === null && o.lapsed_at == null
+          && o.dismissed_at == null && o.expires_at > params[1],
+      );
+      for (const offer of lapsed) {
+        offer.lapsed_at = params[1];
+        offer.lapse_reason = params[2];
+      }
+      return { rows: lapsed.map((o) => ({ id: o.id })) };
+    }
     if (text.startsWith('update core.offers set expires_at')) {
       const withdrawn = this.offers.filter(
         (o) => o.conversation_id === params[0] && o.taken_at === null && o.expires_at > params[1],
@@ -1696,7 +1707,7 @@ describe('TelegramSurface agents', () => {
       );
     });
 
-    it('withdraws what the ended conversation still had on the table', async () => {
+    it('lapses what the ended conversation still had on the table', async () => {
       const db = midThread(withOwner(new FakeDb()), NOW, 14 * 60);
       db.offers.push({
         id: 'offer-old',
@@ -1709,12 +1720,18 @@ describe('TelegramSurface agents', () => {
         taken_at: null,
         taken_via: null,
         taken_job_id: null,
+        dismissed_at: null,
+        lapsed_at: null,
+        lapse_reason: null,
       });
       const { surface } = surfaceWith(db, undefined, { now: () => NOW });
       await surface.processUpdates([message(323, OWNER, OWNER, 'morning')]);
       await surface.drain();
 
-      expect(db.offers[0]?.expires_at).toEqual(new Date(NOW));
+      // Not expired and not refused: the thread rolled over underneath it, and
+      // a tap afterwards is told that rather than something untrue.
+      expect(db.offers[0]?.lapsed_at).toEqual(new Date(NOW));
+      expect(db.offers[0]?.lapse_reason).toBe('rolled-over');
     });
 
     it('never lands between a question and the owner’s answer to it', async () => {
