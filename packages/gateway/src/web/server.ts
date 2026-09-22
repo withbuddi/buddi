@@ -784,6 +784,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       pool: deps.pool,
       registry: deps.registry,
       ctx: deps.ctx,
+      // Search reads its day boundaries in the owner's zone, not the server's.
+      timezone: deps.timezone,
       now: deps.now,
     });
     /** What the two Telegram routes need. The environment is the live one. */

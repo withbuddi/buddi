@@ -380,33 +380,68 @@ two runs drafting on one thread at once. So:
 least one of the two.
 
 - `query` is a case-insensitive **substring** of the subject, the sender or
-  the body — the same promise it always made. The subject and the sender ride
-  trigram GIN indexes (migration `012_search.sql`, `pg_trgm`), which accelerate
-  `ilike '%…%'` directly; pg_trgm's `%` similarity operator was not used,
-  because it would quietly turn the search into a fuzzy word match and an agent
-  looking for `@acme.` in an address would stop finding it.
-- Filters, each optional and each narrowing: `from` (a whole address, matched
-  exactly, or a bare domain, which also matches its subdomains), `since` and
-  `until` (YYYY-MM-DD, against `coalesce(internal_date, fetched_at)` — the
-  server's clock, never the sender's `Date` header, and `until` includes the
-  whole of the day named), `thread`, `direction`, and `hasAttachments`.
-- **The body scan is bounded.** `body_text` has no index and is not getting
-  one. When a filter narrows the search, the filters bound it; when nothing
-  does, a **90-day window** on the ordering clock does, and the answer says so
-  in a sentence rather than silently returning less.
-- Every hit carries its conversation, its direction, which mailbox it arrived
-  in, its date, and its snippet **fenced** as quoted mail.
+  the body — the same promise it always made. pg_trgm's `%` similarity
+  operator was not used: it would quietly turn the search into a fuzzy word
+  match, and an agent looking for `@acme.` in an address would stop finding it.
+- **The text search is a UNION, not an `OR`.** One arm is
+  `subject ilike … or from_addr ilike …`, which the trigram GIN indexes from
+  `012_search.sql` can serve as a BitmapOr; the other is `body_text ilike …`,
+  which is a scan. They have to be separate queries: Postgres can only serve an
+  `OR` from indexes when **every** arm has one, so the obvious three-column
+  disjunction never touched either index and the two GINs were write
+  amplification for no read. `union`, not `union all`, so a message matching in
+  both arms comes back once.
+- **Only the body arm is windowed.** Subjects and senders are searched over
+  everything the mailbox holds — that is what the index is for. The body scan
+  is bounded by the filters when one of them actually bounds it, and by a
+  **90-day window** otherwise, and the answer says which.
+  - Bounding filters are `since`, `thread` and `from`. `direction`,
+    `hasAttachments` and `until` **narrow without bounding**: `direction: in`
+    excludes a twentieth of a mailbox, and `until` alone *is* the older half of
+    the archive, so none of them turns the window off.
+  - With `until` and no `since`, the window is measured back from `until`, not
+    from today: asking for the old half of the archive and being told "the last
+    90 days" would find nothing while claiming to have looked.
+- Filters, each optional: `from` (a whole address, matched exactly, or a bare
+  domain, which also matches its subdomains and nothing else — `acme.com` never
+  matches `notacme.com`), `since` and `until` (YYYY-MM-DD, against
+  `coalesce(internal_date, fetched_at)` — the server's clock, never the
+  sender's `Date` header — with `until` including the whole of the day named),
+  `thread`, `direction`, and `hasAttachments`.
+- **Days are the owner's days.** Every boundary is read as
+  `date::timestamp at time zone <the owner's zone>`, not against the server's
+  `TimeZone`, which on the bundled Postgres is UTC — eight hours out in Los
+  Angeles and thirteen the other way in Auckland.
+- **Malformed input is a sentence, not a database error.** One
+  `validateFilters`, shared by the tool and the route, rejects a date that is
+  not a day (`2026-02-31` matches the pattern and is not one), a `thread` that
+  is not an id, a one-character `query`, and a range that cannot contain
+  anything. The route answers 400; the tool refuses.
+- A hit carries its conversation, its direction, which mailbox it arrived in,
+  its date — **the ordering clock, so the list is ordered by the value it
+  shows** — and its snippet, **fenced** as quoted mail for the tool and plain
+  for the page. A hit's columns are its own short list: `body_text`,
+  `attachments`, `flags`, `to_addrs` and `cc` are never selected, because a
+  hundred hits used to mean a hundred full message bodies read out of the table
+  to build a hundred snippets.
 
 `email.list_threads` takes `participant` (an address, whoever wrote — served
 by a GIN index over `threads.participants`) and the same `since`/`until`
-window, measured against `last_at`: the question "which conversations since
-March" is about the ones that are still alive, not about when they began.
+window in the same zone, measured against `last_at`: the question "which
+conversations since March" is about the ones that are still alive, not about
+when they began.
 
 The Mail page has a search field above the conversation list — text, from,
 since, until, with attachments — over `GET /api/email/search`. The route and
-the tool share **one query builder** (`packages/tools/email/src/search.ts`), so
-the owner and their agents asking the same question get the same answer. Each
-result links to the conversation it is in.
+the tool share **one query builder**
+(`packages/tools/email/src/search.ts`), so the owner and their agents asking
+the same question get the same answer. Each result links to the conversation
+it is in.
+
+Operational note: `012_search.sql` creates the `pg_trgm` extension (which needs
+CREATE on the database — pg_trgm is trusted, so not superuser) and builds two
+GIN indexes under an exclusive lock on `email.messages`. See
+docs/operations.md, "Mail search (migration 012)".
 
 ## 10. Attachments
 
@@ -417,19 +452,47 @@ the attachment by `index` or by `filename`. What comes back is saved through
 `saveArtifact`, so an invoice PDF becomes a file in the owner's library with a
 download link, and the finance advisor can read it.
 
+**The stored listing is a handle; the body structure is the fact.** `index`
+means a position in the row the caller was shown, so the pick happens against
+the stored listing — but the chosen attachment is then always re-resolved
+against a **fresh body structure** immediately before the download, matched on
+the part id first and on filename plus size as a fallback, never by position.
+A part id is a position in a MIME tree, the tree is the server's, and the fresh
+listing owes a months-old row no particular order. A part id that is not one
+(`/^[1-9]\d*(?:\.[1-9]\d*)*$/`) is not stored at ingest and is not sent.
+
+**Three layers of refusal**, each with its own sentence
+(`packages/tools/email/src/attachments/safety.ts`):
+
+1. **The name**, normalised once — basename only, NFC, control and bidi
+   characters removed, trailing dots and spaces stripped (Windows strips them
+   before executing, so `invoice.exe ` is `invoice.exe`), capped at 255 — and
+   then used for the check, the artifact row and the download header alike.
+   Refused for programs, scripts, installers, mountable images and
+   macro-carrying Office documents.
+2. **The declared type**, which the sender wrote, so it is a hint: the
+   executable mimes and the `vnd.ms-*.macroEnabled` family.
+3. **The first bytes**, once they are here and before anything is saved. PE
+   (`MZ`), ELF, Mach-O and fat binaries, shebang scripts, and a ZIP whose
+   *central directory* (read properly, not grepped for) names `vbaProject.bin`
+   or `META-INF/MANIFEST.MF`. This is the only layer that cannot be lied to by
+   renaming a file. The sniffed type is what gets stored, unless the sender
+   declared something more precise about the same bytes — a `.docx` really is
+   a ZIP.
+
+Also:
+
 - **Content-addressed.** A second call for the same bytes returns the same
   artifact; the artifact id is written back onto the message's listing, so the
-  page draws a link rather than a second Fetch.
+  page draws a link rather than a second Fetch. A row whose listing was empty
+  has the fresh listing written back with the mark, rather than losing it.
 - **Bounded at 25 MB**, refused on the declared size *before* the download and
   cut off on the stream if the server under-reported it.
-- **Executables are refused** — `.exe/.scr/.bat/.cmd/.js/.vbs` and friends by
-  name, `application/x-msdownload` and friends by type — with a sentence
-  saying why. Mail is where one arrives pretending to be an invoice.
 - **Mail that is no longer there is said plainly**: the mailbox was recreated
-  (UIDVALIDITY moved), or the message is gone, and if the body was purged under
-  retention the refusal says that buddi has no copy either.
-- Rows ingested before part ids were recorded re-read the body structure on
-  demand rather than refusing.
+  (UIDVALIDITY moved), the message is gone, or the attachment is no longer one
+  of its parts; and if the body was purged under retention the refusal says
+  buddi has no copy either. An **empty** attachment is called empty, which is
+  a different thing from missing.
 - On the Mail page, an opened message lists its attachments with a Fetch per
   row (`POST /api/email/messages/:id/attachments/:index/fetch`, the same
   session and CSRF gate as every other write, the owner as `createdBy`), and

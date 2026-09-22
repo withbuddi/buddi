@@ -439,8 +439,19 @@ suite('the draft editor routes', () => {
     const res = await send('GET', '/api/email/search?from=bank.test&hasAttachments=true');
     expect(res.status).toBe(200);
     expect(((await res.json()) as any).count).toBe(1);
-    // A date that is not one is refused before any SQL is built.
-    expect((await send('GET', '/api/email/search?since=last%20march')).status).toBe(400);
+    // Everything malformed is a 400 with a sentence, never a 500 from the
+    // database: `?thread=x` used to reach `$n::uuid` and come back blank.
+    for (const bad of [
+      'since=last%20march',
+      'since=2026-02-31',
+      'thread=x',
+      'q=a',
+      'direction=sideways',
+    ]) {
+      const res = await send('GET', `/api/email/search?${bad}`);
+      expect(res.status, bad).toBe(400);
+      expect(((await res.json()) as any).error, bad).toBeTruthy();
+    }
     // And a search that is neither a phrase nor a filter is not a search.
     expect((await send('GET', '/api/email/search')).status).toBe(400);
   });
@@ -486,6 +497,8 @@ suite('the draft editor routes', () => {
 
   it('refuses every new route without a session at all', async () => {
     const { draftId, threadId } = await seed();
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    const messageId = thread.messages[0].id as string;
     /*
      * A server with the loopback shortcut off. The suite's own server mints a
      * `local` session for anything arriving on 127.0.0.1 — the binding is the
@@ -513,6 +526,10 @@ suite('the draft editor routes', () => {
         ['PUT', `/api/email/drafts/${draftId}`],
         ['POST', `/api/email/drafts/${draftId}/discard`],
         ['POST', `/api/email/drafts/${draftId}/send`],
+        // Search reads the owner's mail and the fetch writes a file into
+        // their library; neither is more open than the rest.
+        ['GET', '/api/email/search?q=returned'],
+        ['POST', `/api/email/messages/${messageId}/attachments/0/fetch`],
       ] as const) {
         const res = await fetch(`${root}${routePath}`, {
           method,
@@ -528,17 +545,27 @@ suite('the draft editor routes', () => {
   });
 
   it('is behind the same session and CSRF gate as every other write', async () => {
-    const { draftId } = await seed();
+    const { draftId, threadId } = await seed();
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    const messageId = thread.messages[0].id as string;
     for (const [method, routePath] of [
       ['PUT', `/api/email/drafts/${draftId}`],
       ['POST', `/api/email/drafts/${draftId}/discard`],
       ['POST', `/api/email/drafts/${draftId}/send`],
+      // Fetching an attachment writes a file into the owner's library, so it
+      // is a write and is gated like one.
+      ['POST', `/api/email/messages/${messageId}/attachments/0/fetch`],
     ] as const) {
       expect((await send(method, routePath, {}, { csrf: null })).status).toBe(403);
       expect((await send(method, routePath, {}, { origin: 'https://elsewhere.test' })).status).toBe(403);
     }
-    // Still a live draft: none of those refusals changed anything.
+    // Still a live draft, and nothing was fetched: none of those refusals
+    // changed anything.
     const { rows } = await pool.query(`select status from email.drafts where id = $1`, [draftId]);
     expect(rows[0].status).toBe('draft');
+    const artifacts = await pool.query(
+      `select count(*)::int as n from core.artifacts where source_surface = 'email'`,
+    );
+    expect(artifacts.rows[0].n).toBe(0);
   });
 });

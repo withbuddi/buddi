@@ -16,10 +16,10 @@ import { isUnread, quoted, UNTRUSTED_NOTICE } from '../mail.js';
 import {
   buildSearch,
   narrows,
-  qualify,
+  toSearchRow,
+  validateFilters,
   windowNote,
   DATE_PATTERN,
-  WHEN,
 } from '../search.js';
 import { loadSettings, purgedBodyNote } from '../retention.js';
 import { MESSAGE_COLUMNS, toMessage } from '../rows.js';
@@ -232,7 +232,7 @@ const searchInput = z.object({
 export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
   name: 'email.search',
   description:
-    'Search ingested mail. Give `query` for a case-insensitive substring of the subject, the sender or the body, and narrow it with any of `from` (a whole address, or a bare domain which also matches its subdomains), `since` and `until` (YYYY-MM-DD, against when the mail was received), `thread` (one conversation), `direction` (`in` or `out`), and `hasAttachments`. `query` may be left out when at least one filter is given — `from: "acme.com", hasAttachments: true` is a search. Newest first, across every mailbox unless you name one with `account`. With a `query` and no filter at all only the last 90 days are searched, and the answer says so. Use it to find the earlier message a new one refers to.',
+    'Search ingested mail. Give `query` for a case-insensitive substring of the subject, the sender or the body, and narrow it with any of `from` (a whole address, or a bare domain which also matches its subdomains), `since` and `until` (YYYY-MM-DD, against when the mail was received, read in the owner\'s own timezone), `thread` (one conversation), `direction` (`in` or `out`), and `hasAttachments`. `query` may be left out when at least one filter is given — `from: "acme.com", hasAttachments: true` is a search. Newest first, across every mailbox unless you name one with `account`. Subjects and senders are always searched in full; with a `query` and nothing to bound it (`since`, `from` or `thread`) only the last 90 days of message *bodies* are read, and the answer says so. Use it to find the earlier message a new one refers to.',
   tier: 'auto',
   input: searchInput,
   async execute(input, ctx) {
@@ -254,15 +254,19 @@ export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
         'email.search needs either `query` or at least one filter (`from`, `since`, `until`, `thread`, `direction`, `hasAttachments`); use email.list_recent to see the newest mail.',
       );
     }
-    const built = buildSearch(scope.ids, filters, ctx.now());
-    const { rows } = await ctx.db.query(
-      `select ${qualify(MESSAGE_COLUMNS, 'm')} from email.messages m
-        where ${built.where}
-        order by ${WHEN} desc nulls last, m.uid desc
-        limit $${built.params.length + 1}`,
-      [...built.params, limit],
-    );
-    const messages = rows.map(toMessage).map((m) => ({
+    // Zod checks the shape; this checks the meaning — the same check the
+    // route makes, so a bad argument is a sentence rather than a 22P02 from
+    // inside the pool.
+    const wrong = validateFilters(filters);
+    if (wrong) throw new Error(`email.search: ${wrong}`);
+
+    const built = buildSearch(scope.ids, filters, {
+      now: ctx.now(),
+      timezone: ctx.timezone,
+      limit,
+    });
+    const { rows } = await ctx.db.query(built.text, built.params);
+    const messages = rows.map(toSearchRow).map((m) => ({
       id: m.id,
       account: scope.byId.get(m.accountId)?.address ?? null,
       // The conversation this belongs to, so a hit can be read in context
@@ -271,11 +275,12 @@ export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
       direction: m.direction,
       from: m.from,
       subject: m.subject,
+      // The clock the list is ordered by, so what is shown and what decides
+      // the order are the same value. See §9.
       date: m.date,
       // Fenced: a snippet is the sender's own words, and a search result is
       // read by a model. See `quoted` in mail.ts.
-      snippet: quoted(m.snippet ?? ''),
-      unread: isUnread(m.flags),
+      snippet: quoted(m.snippet),
       hasAttachments: m.hasAttachments,
     }));
     return {

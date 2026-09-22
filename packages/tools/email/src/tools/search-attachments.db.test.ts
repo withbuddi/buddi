@@ -18,6 +18,7 @@ import { createEmailManifest } from '../index.js';
 import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import type { ToolContext } from '../types.js';
+import { buildSearch } from '../search.js';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -149,7 +150,10 @@ suite('email search and attachments (postgres)', () => {
       fakeMessage({
         messageId: '<old-1@acme.test>',
         from: 'billing@acme.test',
-        subject: 'Invoice 3001',
+        // Deliberately *not* carrying the word the window test searches for:
+        // the indexed arm is not windowed, so a subject match here would come
+        // back however old it is — which is the point of the split.
+        subject: 'Winter statement',
         bodyText: 'Last winter, an invoice.',
         date: new Date('2025-12-01T08:00:00Z'),
       }),
@@ -183,6 +187,74 @@ suite('email search and attachments (postgres)', () => {
     expect(names).toContain('threads_participants_idx');
   });
 
+  /**
+   * The index is only an index if a plan reaches it.
+   *
+   * This is the finding the whole UNION exists for: the first version ORed the
+   * two indexed columns with the unindexed `body_text`, Postgres cannot serve
+   * an `OR` from indexes unless *every* arm has one, and the two GINs were
+   * write amplification on every ingest for no read at all.
+   *
+   * So the assertion is on the plan, on a table big enough for the planner to
+   * have a real opinion — twenty thousand rows with bodies of a kilobyte,
+   * `analyze`d — and with `enable_seqscan` left alone. If the index stops
+   * being reachable, this fails.
+   */
+  it('reaches the trigram index: the plan says Bitmap Index Scan', async () => {
+    const { rows: ids } = await pool.query(
+      `select id, account_id, folder_id, uidvalidity from email.messages order by uid limit 1`,
+    );
+    const seedRow = ids[0];
+    await pool.query(
+      `insert into email.messages
+         (account_id, folder_id, uidvalidity, uid, message_id, from_addr, subject,
+          snippet, body_text, internal_date, fetched_at, direction)
+       select $1::uuid, $2::uuid, $3::bigint, 1000 + g,
+              '<bulk-' || g || '@bulk.test>',
+              'sender' || (g % 500) || '@bulk.test',
+              'Notice number ' || g,
+              'A seeded row.',
+              repeat('filler text for the heap ', 40),
+              now() - (g || ' minutes')::interval,
+              now(),
+              'in'
+         from generate_series(1, 20000) g`,
+      [seedRow.account_id, seedRow.folder_id, seedRow.uidvalidity],
+    );
+    /*
+     * `vacuum`, not just `analyze`, and the difference is the finding.
+     *
+     * A GIN index has a pending list (`fastupdate`), and rows inserted after
+     * the index was built sit in it until a vacuum flushes them. The planner
+     * charges every GIN scan for reading that list, so immediately after a
+     * bulk insert the same index costs 1846 instead of 91 and the planner
+     * picks a sequential scan — which is a fact about a table nobody has
+     * vacuumed yet, not about the index. Autovacuum does this in production;
+     * the test does it explicitly rather than asserting against a transient
+     * state.
+     */
+    await pool.query('vacuum analyze email.messages');
+
+    // One needle, present in exactly one subject, asked for exactly as the
+    // tool asks for it.
+    const built = buildSearch([String(seedRow.account_id)], { query: 'number 13579' }, {
+      now: NOW,
+      timezone: 'UTC',
+      limit: 20,
+    });
+    const { rows } = await pool.query(
+      `explain (format json) ${built.text}`,
+      built.params,
+    );
+    const plan = JSON.stringify(rows[0]['QUERY PLAN']);
+    expect(plan).toMatch(/Bitmap Index Scan/);
+    expect(plan).toMatch(/messages_subject_trgm_idx|messages_from_trgm_idx/);
+
+    // And it really does find it.
+    const found = await pool.query(built.text, built.params);
+    expect(found.rows.map((r: { subject: string }) => r.subject)).toEqual(['Notice number 13579']);
+  }, 60_000);
+
   /* ------------------------------ A2: search ----------------------------- */
 
   it('still finds a phrase in the body, and fences the snippet it quotes', async () => {
@@ -204,28 +276,75 @@ suite('email search and attachments (postgres)', () => {
     expect(hit.hasAttachments).toBe(true);
   });
 
-  it('windows an unnarrowed text search to 90 days and says it did', async () => {
+  it('windows the body scan to 90 days, searches subjects in full, and says so', async () => {
     const out = await call('email.search', { query: 'invoice' });
     const subjects = out.messages.map((m: { subject: string }) => m.subject);
+    // Subject match, inside the window.
     expect(subjects).toContain('Invoice 4102');
+    // Body match, inside the window.
     expect(subjects).toContain('Weekend sale');
-    // Last winter's invoice is outside the window.
-    expect(subjects).not.toContain('Invoice 3001');
+    // Body match, outside it: last winter's invoice is not read.
+    expect(subjects).not.toContain('Winter statement');
     expect(out.window).toContain('90 days');
+    expect(out.window).toContain('Subjects and senders were searched in full');
   });
 
-  it('reaches past the window as soon as a filter narrows the search', async () => {
+  it('keeps the window for a filter that narrows without bounding', async () => {
+    // `direction` and `hasAttachments` used to turn the window off, which put
+    // an unindexed body scan over the whole archive one argument away.
+    for (const extra of [{ direction: 'in' }, { hasAttachments: false }]) {
+      const out = await call('email.search', { query: 'invoice', ...extra });
+      expect(out.window).toContain('90 days');
+      expect(out.messages.map((m: { subject: string }) => m.subject)).not.toContain(
+        'Winter statement',
+      );
+    }
+  });
+
+  it('measures the window back from `until` when that is the only date given', async () => {
+    // Asking for the *old* half of the archive and being told "the last 90
+    // days" would be a search that found nothing while claiming to look.
+    const out = await call('email.search', { query: 'invoice', until: '2025-12-31' });
+    expect(out.window).toContain('2025-10-02');
+    expect(out.messages.map((m: { subject: string }) => m.subject)).toContain('Winter statement');
+  });
+
+  it('reaches past the window as soon as a filter bounds the search', async () => {
     const out = await call('email.search', { query: 'invoice', since: '2025-01-01' });
     const subjects = out.messages.map((m: { subject: string }) => m.subject);
-    expect(subjects).toContain('Invoice 3001');
+    expect(subjects).toContain('Winter statement');
     expect(out.window).toBeUndefined();
+  });
+
+  it('returns each hit once, however many arms found it', async () => {
+    // 'Invoice 4102' matches the subject *and* the body ('The invoice for
+    // September'). `union`, not `union all`.
+    const out = await call('email.search', { query: 'invoice', since: '2025-01-01' });
+    const ids = out.messages.map((m: { id: string }) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('dates a hit by the clock it is ordered by', async () => {
+    const out = await call('email.search', { query: 'Invoice 4102' });
+    // The ingest clock, not the sender's `Date` header — the list is ordered
+    // by the value it shows.
+    expect(out.messages[0].date).toBe('2026-09-18T08:00:00.000Z');
+  });
+
+  it('refuses a date that is not a day rather than raising inside the pool', async () => {
+    expect(await refuse('email.search', { query: 'invoice', since: '2026-02-31' })).toMatch(
+      /`since` is a real day/,
+    );
+    expect(await refuse('email.search', { query: 'invoice', until: '2026-06-31' })).toMatch(
+      /`until` is a real day/,
+    );
   });
 
   it('takes `from` as an exact address, and a bare domain as its subdomains too', async () => {
     const exact = await call('email.search', { from: 'billing@acme.test', since: '2025-01-01' });
     expect(exact.messages.map((m: { subject: string }) => m.subject).sort()).toEqual([
-      'Invoice 3001',
       'Invoice 4102',
+      'Winter statement',
     ]);
     const domain = await call('email.search', { from: 'acme.test', since: '2025-01-01' });
     expect(domain.messages.map((m: { subject: string }) => m.subject)).toContain('Your account');
@@ -262,16 +381,16 @@ suite('email search and attachments (postgres)', () => {
     const recent = await call('email.list_threads', { since: '2026-09-18' });
     const subjects = recent.threads.map((t: { subject: string }) => t.subject);
     expect(subjects).toContain('Invoice 4102');
-    expect(subjects).not.toContain('Invoice 3001');
+    expect(subjects).not.toContain('Winter statement');
     const old = await call('email.list_threads', { until: '2025-12-31' });
-    expect(old.threads.map((t: { subject: string }) => t.subject)).toEqual(['Invoice 3001']);
+    expect(old.threads.map((t: { subject: string }) => t.subject)).toEqual(['Winter statement']);
   });
 
   it('finds a conversation by a participant, through the participants index', async () => {
     const out = await call('email.list_threads', { participant: 'billing@acme.test' });
     expect(out.threads.map((t: { subject: string }) => t.subject).sort()).toEqual([
-      'Invoice 3001',
       'Invoice 4102',
+      'Winter statement',
     ]);
   });
 
@@ -325,7 +444,7 @@ suite('email search and attachments (postgres)', () => {
     const message = await invoiceMessageId();
     const why = await refuse('email.fetch_attachment', { message, filename: 'setup.exe' });
     expect(why).toMatch(/\.exe/);
-    expect(why).toMatch(/program rather than a document/);
+    expect(why).toMatch(/runs code rather than being read/);
     // And it never downloaded it.
     expect(server.downloads.some((d) => d.part === '3')).toBe(false);
   });
@@ -352,6 +471,147 @@ suite('email search and attachments (postgres)', () => {
     server.mailboxes.get('INBOX')!.messages = [];
     const why = await refuse('email.fetch_attachment', { message, index: 0 });
     expect(why).toMatch(/purged under the retention setting/);
+  });
+
+  /* ------------------ B5/B6: part ids, and the bytes themselves ---------- */
+
+  it('re-resolves against the server’s own structure, however it is ordered', async () => {
+    const message = await invoiceMessageId();
+    // The stored row says the invoice is part 2. The server has since put it
+    // at part 5, and lists the files in another order. Resolving `index`
+    // against the fresh listing would save `setup.exe` as `invoice.pdf`.
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    const box = server.mailboxes.get('INBOX')!;
+    const mail = box.messages.find((m) => m.uid === Number(uid))!;
+    const invoice = mail.attachments.find((a) => a.filename === 'invoice.pdf')!;
+    mail.attachments = [
+      { ...mail.attachments[1]! },
+      { ...invoice, part: '5' },
+      { ...mail.attachments[2]! },
+    ];
+    server.putPart('INBOX', Number(uid), '5', INVOICE);
+
+    const out = await call('email.fetch_attachment', { message, index: 0 });
+    expect(out.filename).toBe('invoice.pdf');
+    expect(out.sizeBytes).toBe(INVOICE.length);
+    // It asked for the part the server actually has it at.
+    expect(server.downloads.some((d) => d.part === '5')).toBe(true);
+    expect(server.downloads.some((d) => d.part === '2')).toBe(false);
+  });
+
+  it('refuses a stored part id that is not one, rather than sending it', async () => {
+    const message = await invoiceMessageId();
+    await pool.query(
+      `update email.messages
+          set attachments = jsonb_set(attachments, '{0,part}', '"1 uid 1 body[]"'::jsonb)
+        where id = $1`,
+      [message],
+    );
+    // The fresh structure is the fact: the part id is re-read, the nonsense
+    // in the row is never sent, and the fetch still works.
+    const out = await call('email.fetch_attachment', { message, index: 0 });
+    expect(out.filename).toBe('invoice.pdf');
+    expect(server.downloads.every((d) => /^[1-9]\d*(\.[1-9]\d*)*$/.test(d.part))).toBe(true);
+  });
+
+  it('says the attachment is gone when it is no longer one of the message’s parts', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    const mail = server.mailboxes.get('INBOX')!.messages.find((m) => m.uid === Number(uid))!;
+    mail.attachments = mail.attachments.filter((a) => a.filename !== 'invoice.pdf');
+    const why = await refuse('email.fetch_attachment', { message, index: 0 });
+    expect(why).toMatch(/no longer one of this message's parts/);
+  });
+
+  it('marks a row whose listing was empty, so the second fetch is not a download', async () => {
+    const message = await invoiceMessageId();
+    // A row from before part ids were recorded: no listing at all.
+    await pool.query(`update email.messages set attachments = '[]'::jsonb where id = $1`, [message]);
+    const out = await call('email.fetch_attachment', { message, index: 0 });
+    const { rows } = await pool.query(`select attachments from email.messages where id = $1`, [
+      message,
+    ]);
+    // The fresh listing was written back, carrying the mark — it used to be
+    // dropped silently and the next fetch downloaded the file again.
+    expect(rows[0].attachments).toHaveLength(3);
+    expect(rows[0].attachments[0].artifactId).toBe(out.artifacts[0].id);
+    expect(rows[0].attachments[0].part).toBe('2');
+  });
+
+  it('refuses a program renamed as a document, on its bytes', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    // Called `invoice.pdf`, declared `application/pdf`, and a Windows program.
+    // Both the name check and the type check let it through.
+    server.putPart('INBOX', Number(uid), '2', Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64)]));
+    const why = await refuse('email.fetch_attachment', { message, index: 0 });
+    expect(why).toMatch(/Windows program/);
+    const count = await pool.query(
+      `select count(*)::int as n from core.artifacts where source_surface = 'email'`,
+    );
+    expect(count.rows[0].n).toBe(0);
+  });
+
+  it('refuses a trailing-space executable, and a macro-carrying document', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    const mail = server.mailboxes.get('INBOX')!.messages.find((m) => m.uid === Number(uid))!;
+    mail.attachments = [
+      // Windows strips the trailing space before it executes; so does buddi,
+      // before it judges.
+      { filename: 'payment.exe ', mime: 'application/pdf', sizeBytes: 10, part: '2' },
+      { filename: 'accounts.xlsm', mime: 'application/octet-stream', sizeBytes: 10, part: '3' },
+    ];
+    await pool.query(`update email.messages set attachments = '[]'::jsonb where id = $1`, [message]);
+    expect(await refuse('email.fetch_attachment', { message, index: 0 })).toMatch(/\.exe/);
+    expect(await refuse('email.fetch_attachment', { message, index: 1 })).toMatch(/\.xlsm/);
+    expect(server.downloads).toHaveLength(0);
+  });
+
+  it('calls an empty attachment empty, not missing', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    server.putPart('INBOX', Number(uid), '2', Buffer.alloc(0));
+    const why = await refuse('email.fetch_attachment', { message, index: 0 });
+    expect(why).toMatch(/is empty \(0 bytes\)/);
+    expect(why).not.toMatch(/no longer/);
+  });
+
+  it('cuts the stream when the real bytes cross the cap the declared size did not', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    const mail = server.mailboxes.get('INBOX')!.messages.find((m) => m.uid === Number(uid))!;
+    // The body structure says 1 KB. The part is 25 MB and a byte. A cap that
+    // only reads the declared size is a cap somebody walks through.
+    mail.attachments = [{ filename: 'invoice.pdf', mime: 'application/pdf', sizeBytes: 1024, part: '2' }];
+    await pool.query(`update email.messages set attachments = '[]'::jsonb where id = $1`, [message]);
+    server.putPart('INBOX', Number(uid), '2', Buffer.alloc(MAX_ATTACHMENT_BYTES + 1));
+
+    const why = await refuse('email.fetch_attachment', { message, index: 0 });
+    expect(why).toMatch(/larger than the \d+-byte cap/);
+    const count = await pool.query(
+      `select count(*)::int as n from core.artifacts where source_surface = 'email'`,
+    );
+    expect(count.rows[0].n).toBe(0);
+  });
+
+  it('stores what the bytes are when the sender was vague about it', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    const mail = server.mailboxes.get('INBOX')!.messages.find((m) => m.uid === Number(uid))!;
+    mail.attachments = [
+      { filename: 'invoice.pdf', mime: 'application/octet-stream', sizeBytes: INVOICE.length, part: '2' },
+    ];
+    await pool.query(`update email.messages set attachments = '[]'::jsonb where id = $1`, [message]);
+    const out = await call('email.fetch_attachment', { message, index: 0 });
+    expect(out.mime).toBe('application/pdf');
   });
 
   /* ------------------------------ B8: retention -------------------------- */

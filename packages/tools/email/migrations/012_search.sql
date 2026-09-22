@@ -19,53 +19,78 @@
 -- '%…%'` this plugin already does, so nothing that matched yesterday stops
 -- matching today — the meaning of the search does not move, only its cost.
 -- Full-text search over archives is named in §11 as later work, on purpose.
+--
+-- The query that uses these has to be written as a UNION of an indexed arm
+-- (subject/from) and a body arm, never as one `OR` across all three: Postgres
+-- can only serve an `OR` from indexes by building a BitmapOr over *every*
+-- arm, and `body_text` has none. See `packages/tools/email/src/search.ts`.
+--
+-- ## What an operator should know before running this
+--
+--  * **It needs the CREATE privilege on this database**, because it creates an
+--    extension. pg_trgm is *trusted* (PostgreSQL 13+), so superuser is not
+--    required — the role that owns the `email` schema is enough. If it refuses
+--    with a privilege error, either grant that role CREATE on the database, or
+--    have a superuser run `create extension pg_trgm;` once (in any schema:
+--    the check below finds it and qualifies the operator class accordingly)
+--    and then run the migration again. Nothing here is skippable: a mail
+--    search that silently degrades to a table scan on one installation and not
+--    another is worse than one that refuses to migrate and says why.
+--  * **The two GIN builds hold an exclusive lock on `email.messages`** for
+--    their duration. `create index concurrently` is not available: migrations
+--    run inside one transaction (`packages/core/src/db.ts`), and CIC cannot.
+--    On a fresh install this is instant; on a mailbox of several years it is
+--    seconds to a minute, during which the poller's inserts wait. Run the
+--    upgrade when no poll is mid-flight — `buddi service stop`, migrate,
+--    start — rather than discovering it as a stalled ingest.
+--
+-- Operational notes also in docs/operations.md, "Mail search (migration 012)".
 
--- The extension, and it is a requirement rather than a nicety. `create
--- extension if not exists` raises when the extension is not available on the
--- server, which is what we want: a mail search that silently degrades to a
--- table scan on every installation whose Postgres lacks contrib is worse than
--- one that refuses to migrate and says why. The bundled Postgres has it.
+-- The extension, and it is a requirement rather than a nicety.
 --
 -- No `with schema` clause, so it lands in the first schema of the migration's
 -- search_path — `email`, this plugin's own. That is deliberate twice over:
--- pg_trgm is a *trusted* extension, so installing it here needs only the
--- create right on a schema the plugin already owns rather than superuser or
--- the create right on `public` (which Postgres 15 stopped granting); and
--- dropping this plugin's schema takes its extension with it, which is the
--- property `index.ts` advertises — deleting the plugin leaves one schema to
--- drop. An installation that already has pg_trgm somewhere else keeps it:
--- `if not exists` is satisfied by any schema.
+-- pg_trgm is trusted, so installing it here needs only the create right on a
+-- schema the plugin already owns rather than the create right on `public`
+-- (which Postgres 15 stopped granting); and dropping this plugin's schema
+-- takes its extension with it, which is the property `index.ts` advertises.
+-- An installation that already has pg_trgm elsewhere keeps it: `if not
+-- exists` is satisfied by any schema, and the block below finds out which.
 create extension if not exists pg_trgm;
 
--- Said out loud all the same. `if not exists` is satisfied by an extension
--- installed into a schema this search_path cannot see, and the index
--- statements below would then fail with a message about an operator class
--- rather than about the extension. This is the sentence worth reading.
+-- The indexes, with the operator class qualified by wherever pg_trgm actually
+-- lives.
+--
+-- The first version of this migration raised when `gin_trgm_ops` was not
+-- visible on the search_path, which turned "a DBA installed pg_trgm into an
+-- extensions schema" — an ordinary, sensible thing to have done — into a
+-- refusal to upgrade. The extension is what matters; which schema holds it is
+-- the operator's business, so this discovers the namespace and names it.
 do $$
+declare
+  ns text;
 begin
-  if not exists (select 1 from pg_extension where extname = 'pg_trgm') then
+  select n.nspname into ns
+    from pg_extension e
+    join pg_namespace n on n.oid = e.extnamespace
+   where e.extname = 'pg_trgm';
+
+  if ns is null then
     raise exception
-      'pg_trgm is required for mail search and is not installed on this database';
+      'pg_trgm is required for mail search and is not installed on this database'
+      using hint = 'Grant this role CREATE on the database, or have a superuser run: create extension pg_trgm;';
   end if;
-  if not exists (
-    select 1
-      from pg_opclass c
-     where c.opcname = 'gin_trgm_ops'
-       and pg_catalog.pg_opclass_is_visible(c.oid)
-  ) then
-    raise exception
-      'pg_trgm is installed in a schema this migration cannot see; install it into email or public';
-  end if;
+
+  -- Subject and sender: the two columns a search names. GIN rather than GiST —
+  -- these are read far more often than they are written, one row at a time,
+  -- and GIN is the faster of the two to search.
+  execute format(
+    'create index if not exists messages_subject_trgm_idx on email.messages using gin (subject %I.gin_trgm_ops)',
+    ns);
+  execute format(
+    'create index if not exists messages_from_trgm_idx on email.messages using gin (from_addr %I.gin_trgm_ops)',
+    ns);
 end $$;
-
--- Subject and sender: the two columns a search names. GIN rather than GiST —
--- these are read far more often than they are written, one row at a time, and
--- GIN is the faster of the two to search.
-create index if not exists messages_subject_trgm_idx
-  on messages using gin (subject gin_trgm_ops);
-
-create index if not exists messages_from_trgm_idx
-  on messages using gin (from_addr gin_trgm_ops);
 
 -- The date window, per account, on the clock the rest of the plugin orders by:
 -- the server's own INTERNALDATE, falling back to when we fetched it. Never the

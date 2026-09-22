@@ -38,15 +38,14 @@ import {
   DRAFT_COLUMNS,
   LIVE_DRAFT_STATUSES,
   narrows,
-  qualify,
   toDraft,
+  toSearchRow,
+  validateFilters,
   windowNote,
-  DATE_PATTERN,
-  MESSAGE_COLUMNS,
-  toMessage,
   type AttachmentInfo,
   type DraftRecord,
   type SearchFilters,
+  type SearchRow,
   type ThreadRecord,
 } from '@buddi/tool-email';
 import type { ToolContext, ToolRegistry } from '@buddi/core';
@@ -70,6 +69,12 @@ export const MAX_DRAFT_BODY = 32_000;
 
 export interface EmailDraftsDeps {
   pool: Pool;
+  /**
+   * The owner's IANA zone. Search reads its day boundaries in it: "since
+   * 2026-03-01" is midnight where the owner lives, not midnight on the
+   * server, which on the bundled Postgres is UTC.
+   */
+  timezone: string;
   /** Needed only by Send: the registry that owns `email.send`. */
   registry?: ToolRegistry | undefined;
   /** The context a tool call runs with. Send needs it; nothing else does. */
@@ -577,14 +582,29 @@ export async function searchEmail(
     limit?: number | undefined;
   },
 ): Promise<RouteReply> {
-  for (const [name, value] of [['since', params.since], ['until', params.until]] as const) {
-    if (value !== undefined && value !== '' && !DATE_PATTERN.test(value)) {
-      return { status: 400, body: { error: `\`${name}\` is a date like 2026-03-01.` } };
-    }
-  }
-  if (params.direction !== undefined && params.direction !== '' &&
-      params.direction !== 'in' && params.direction !== 'out') {
-    return { status: 400, body: { error: '`direction` is `in` or `out`.' } };
+  const filters: SearchFilters = {
+    ...(params.q && params.q.trim() !== '' ? { query: params.q.trim() } : {}),
+    ...(params.from && params.from.trim() !== '' ? { from: params.from.trim() } : {}),
+    ...(params.since && params.since !== '' ? { since: params.since } : {}),
+    ...(params.until && params.until !== '' ? { until: params.until } : {}),
+    ...(params.thread && params.thread !== '' ? { thread: params.thread } : {}),
+    ...(params.direction && params.direction !== ''
+      ? { direction: params.direction as SearchFilters['direction'] }
+      : {}),
+    ...(params.hasAttachments !== undefined ? { hasAttachments: params.hasAttachments } : {}),
+  };
+  /*
+   * The same check the tool makes, from the same function. A malformed
+   * argument is a sentence the owner can read and act on; it used to be a
+   * `22P02` raised inside `pool.query` on its way to becoming a blank 500.
+   */
+  const wrong = validateFilters(filters);
+  if (wrong) return { status: 400, body: { error: wrong } };
+  if ((filters.query ?? '') === '' && !narrows(filters)) {
+    return {
+      status: 400,
+      body: { error: 'Type something to search for, or set one of the filters.' },
+    };
   }
 
   const accounts = await listAccounts(deps.pool, { enabledOnly: false });
@@ -593,34 +613,13 @@ export async function searchEmail(
   );
   if (ids.length === 0) return { status: 200, body: { messages: [], count: 0 } };
 
-  const filters: SearchFilters = {
-    ...(params.q && params.q.trim() !== '' ? { query: params.q.trim() } : {}),
-    ...(params.from && params.from.trim() !== '' ? { from: params.from.trim() } : {}),
-    ...(params.since ? { since: params.since } : {}),
-    ...(params.until ? { until: params.until } : {}),
-    ...(params.thread ? { thread: params.thread } : {}),
-    ...(params.direction === 'in' || params.direction === 'out'
-      ? { direction: params.direction }
-      : {}),
-    ...(params.hasAttachments !== undefined ? { hasAttachments: params.hasAttachments } : {}),
-  };
-  if ((filters.query ?? '') === '' && !narrows(filters)) {
-    return {
-      status: 400,
-      body: { error: 'Type something to search for, or set one of the filters.' },
-    };
-  }
-
-  const built = buildSearch(ids, filters, deps.now());
-  const limit = Math.min(Math.max(1, params.limit ?? SEARCH_LIMIT), 100);
-  const { rows } = await deps.pool.query(
-    `select ${qualify(MESSAGE_COLUMNS, 'm')} from email.messages m
-      where ${built.where}
-      order by coalesce(m.internal_date, m.fetched_at) desc nulls last, m.uid desc
-      limit $${built.params.length + 1}`,
-    [...built.params, limit],
-  );
-  const messages: EmailSearchHit[] = rows.map(toMessage).map((m) => ({
+  const built = buildSearch(ids, filters, {
+    now: deps.now(),
+    timezone: deps.timezone,
+    limit: Math.min(Math.max(1, params.limit ?? SEARCH_LIMIT), 100),
+  });
+  const { rows } = await deps.pool.query(built.text, built.params);
+  const messages: EmailSearchHit[] = rows.map(toSearchRow).map((m: SearchRow) => ({
     id: m.id,
     threadId: m.threadId,
     accountId: m.accountId,
