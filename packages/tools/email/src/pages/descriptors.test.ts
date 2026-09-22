@@ -87,6 +87,36 @@ describe('the mail pages, as contributions', () => {
     expect(written).toEqual(['email.fetch_attachment', 'email.send', 'email.set_settings']);
   });
 
+  /**
+   * The rule drawer asks for exactly one matcher, whatever the scope.
+   *
+   * `matcher` is typed and `thread` is picked, and each is shown only for the
+   * scopes it belongs to — so for every scope there must be exactly one of
+   * them on screen, and it must be the required one. A descriptor that hid
+   * both would be a form nobody can submit; one that showed both would be two
+   * answers to one question.
+   */
+  it('shows one matcher per scope, and it is the required one', () => {
+    const settings = (manifest.pages ?? []).find((page) => page.id === 'settings')!;
+    const section = (settings.body as any[]).find((c) => c.title === 'Policies');
+    const form = section.body.find((c: any) => c.kind === 'form' && c.drawer?.title === 'Add a rule');
+    const matchers = form.fields.filter((f: any) => f.name === 'matcher' || f.name === 'thread');
+    expect(matchers).toHaveLength(2);
+
+    const shows = (field: any, scope: string): boolean => {
+      const when = field.when;
+      if (!when) return true;
+      const value = { scope }[when.path as 'scope'];
+      const holds = when.in ? when.in.includes(value) : value === when.equals;
+      return when.not ? !holds : holds;
+    };
+    for (const scope of ['sender', 'domain', 'list-id', 'thread']) {
+      const visible = matchers.filter((field: any) => shows(field, scope));
+      expect(visible.map((f: any) => f.name), scope).toEqual([scope === 'thread' ? 'thread' : 'matcher']);
+      expect(visible[0].required, `${scope}: the one on screen is the required one`).toBe(true);
+    }
+  });
+
   it('refuses a page whose query was renamed on one side only', () => {
     const broken = copy(manifest.pages ?? []);
     const mail = broken.find((p) => p.id === 'mail');

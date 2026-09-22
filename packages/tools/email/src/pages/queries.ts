@@ -122,16 +122,32 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * How much of a body a page is given. The engine refuses an answer over a
- * megabyte, so a mail with a half-megabyte signature chain would otherwise
- * come back as "the email plugin could not answer message" — the one message
- * the owner opened, unreadable because it was long.
+ * How much of a body a page is given, **in bytes**.
+ *
+ * The engine refuses an answer over a megabyte, so a mail with a
+ * half-megabyte signature chain would otherwise come back as "the email
+ * plugin could not answer message" — the one message the owner opened,
+ * unreadable because it was long. Bytes rather than characters because that is
+ * what the cap downstream counts: 300k characters of Japanese is 900 KB on the
+ * wire and would sail past a limit written in UTF-16 units.
  */
-export const MAX_BODY_CHARS = 512 * 1024;
+export const MAX_BODY_BYTES = 512 * 1024;
+
+/** The sentence a cut body ends with. Said once, so a test can name it. */
+export const TRUNCATED_NOTE =
+  '… this message is too long to show in full; the rest is in your mailbox.';
 
 export function truncateBody(text: string): string {
-  if (text.length <= MAX_BODY_CHARS) return text;
-  return `${text.slice(0, MAX_BODY_CHARS)}\n\n… this message is too long to show in full; the rest is in your mailbox.`;
+  if (Buffer.byteLength(text, 'utf8') <= MAX_BODY_BYTES) return text;
+  /*
+   * Cut on a character boundary: slicing bytes can land in the middle of a
+   * multi-byte character, and the owner would read a replacement glyph at the
+   * end of every long message. Decoding the slice leaves that partial
+   * character as U+FFFD, which is exactly what is trimmed off here.
+   */
+  const bytes = Buffer.from(text, 'utf8').subarray(0, MAX_BODY_BYTES);
+  const whole = new TextDecoder('utf-8').decode(bytes).replace(/\uFFFD+$/, '');
+  return `${whole}\n\n${TRUNCATED_NOTE}`;
 }
 
 /** A draft as the editor and the draft list read it. Never a patch: all of it. */
@@ -196,7 +212,15 @@ export function threadsQuery(): PageQuery {
       const now = ctx.now();
       const accounts = await listAccounts(ctx.db, { enabledOnly: false });
       const ids = accounts.map((a) => a.id);
-      if (ids.length === 0) return { threads: [], items: [], count: 0 };
+      /*
+       * The search is read *first*, refusals and all. An installation with no
+       * mailbox yet is the likeliest place for an owner to press Search with
+       * an empty box, and "nothing happened" is the one answer that teaches
+       * them nothing: `searchHits` raises its refusal before it needs a single
+       * account id.
+       */
+      const hits = await searchHits(ctx, input, ids);
+      if (ids.length === 0) return { threads: [], ...hits };
 
       const threads = await listThreadRows(ctx.db, { accountIds: ids, limit: THREAD_LIST_LIMIT });
       const { rows } = await ctx.db.query(
@@ -219,7 +243,7 @@ export function threadsQuery(): PageQuery {
           when: relative(thread.lastAt, now),
           messageCount: thread.messageCount,
         })),
-        ...(await searchHits(ctx, input, ids)),
+        ...hits,
       };
     },
   };
@@ -259,6 +283,8 @@ async function searchHits(
    * A malformed filter is something the owner can read and fix.
    */
   if (wrong) throw new QueryRefusal(wrong);
+  // Every refusal is behind us; with no mailbox there is simply nothing here.
+  if (ids.length === 0) return { items: [], count: 0 };
 
   const now = ctx.now();
   const built = buildSearch(ids, filters, {
@@ -441,15 +467,18 @@ export function accountsQuery(): PageQuery {
           lastSync: synced.get(account.id)
             ? relative(synced.get(account.id) ?? null, now)
             : 'no mail has arrived yet',
+          /*
+           * Two facts about a mailbox, not one sentence to be parsed: whether
+           * buddi is reading it, and whether it came from `.env` rather than
+           * from the page. Each is its own pill, and the one worth catching an
+           * eye — a mailbox that is switched off — carries the tone.
+           */
           state: [
-            account.enabled ? 'on' : 'off',
-            account.addedVia === 'env' ? 'from .env' : '',
-          ]
-            .filter((word) => word !== '')
-            .join(' · '),
-          // A mailbox buddi is not reading is the one fact on this table worth
-          // catching an eye, so the cell is a pill and the pill is toned.
-          stateTone: account.enabled ? 'neutral' : 'warning',
+            account.enabled
+              ? { value: 'on', tone: 'neutral' }
+              : { value: 'off', tone: 'warning' },
+            ...(account.addedVia === 'env' ? [{ value: 'from .env', tone: 'neutral' }] : []),
+          ],
         })),
       };
     },

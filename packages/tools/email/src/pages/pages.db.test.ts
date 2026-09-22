@@ -34,7 +34,7 @@ import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { emailPageDescriptors } from './descriptors.js';
-import { MAX_BODY_CHARS } from './queries.js';
+import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
 import type { ImapClientFactory } from '../ports.js';
 import type { ToolContext } from '../types.js';
 
@@ -250,7 +250,12 @@ suite('the mail pages, over postgres', () => {
     expect(draft.toText).toContain('tdorothee@client.test');
 
     const accounts = await ask('accounts');
-    expect(accounts.accounts[0]).toMatchObject({ address: OWNER, state: 'on · from .env' });
+    // Two pills, each with its own words and tone, rather than one sentence.
+    expect(accounts.accounts[0]).toMatchObject({ address: OWNER });
+    expect(accounts.accounts[0].state).toEqual([
+      { value: 'on', tone: 'neutral' },
+      { value: 'from .env', tone: 'neutral' },
+    ]);
     expect(accounts.accounts[0].secretName).toBe(GMAIL_SECRET_NAME);
 
     /*
@@ -258,13 +263,19 @@ suite('the mail pages, over postgres', () => {
      * than making the whole answer fail its size cap: the one message the
      * owner opened must not be the one message that will not open.
      */
+    // Multi-byte on purpose: the cap counts bytes, and a cut must still land
+    // on a character rather than half of one.
     await pool.query(`update email.messages set body_text = $2 where id = $1::uuid`, [
       ids.messageId,
-      'x'.repeat(MAX_BODY_CHARS + 10),
+      '語'.repeat(MAX_BODY_BYTES),
     ]);
     const long = await ask('message', { id: ids.messageId });
-    expect(long.bodyText.length).toBeLessThan(MAX_BODY_CHARS + 200);
-    expect(long.bodyText).toContain('this message is too long to show in full');
+    expect(Buffer.byteLength(long.bodyText, 'utf8')).toBeLessThanOrEqual(
+      MAX_BODY_BYTES + Buffer.byteLength(`\n\n${TRUNCATED_NOTE}`, 'utf8'),
+    );
+    expect(long.bodyText).toContain(TRUNCATED_NOTE);
+    expect(long.bodyText).not.toContain('\uFFFD');
+    expect(long.bodyText.startsWith('語語語')).toBe(true);
 
     expect(await ask('watcher_settings')).toMatchObject({ waitingDays: 2, dateConfidence: 0.6 });
     await act('email.set_settings', { waitingDays: 5 });
@@ -510,6 +521,16 @@ suite('the mail pages, over postgres', () => {
     await expect(ask('threads', { searching: 'true' })).rejects.toThrow(
       'Type something to search for, or set one of the filters.',
     );
+    /*
+     * And with no mailbox at all: an installation on its first morning is the
+     * likeliest place to press Search with an empty box, and the refusal must
+     * not be swallowed by "there is nothing here anyway".
+     */
+    await pool.query('truncate email.accounts cascade');
+    await expect(ask('threads', { searching: 'true' })).rejects.toThrow(
+      'Type something to search for, or set one of the filters.',
+    );
+    expect(await ask('threads')).toMatchObject({ threads: [], items: [], count: 0 });
     // The list above it asks the same query with no parameters, and must not
     // be refused for a search nobody made.
     expect((await ask('threads')).items).toEqual([]);
