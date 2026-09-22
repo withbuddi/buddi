@@ -15,6 +15,7 @@ import {
   WEEKLY_DUE_MS,
   cadenceDue,
   createGoalManifest,
+  formatPace,
   formatValue,
   goalKey,
   renderGoalSet,
@@ -56,14 +57,28 @@ const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
   ...over,
 });
 
-const goodInput = {
+const goodInput: z.infer<typeof setShape> = {
   title: 'Debt down by 40k',
   metric: 'finance.total_debt',
-  target: { kind: 'delta' as const, value: -40_000 },
+  target: { kind: 'delta', value: -40_000 },
   deadline: '2027-03-22',
-  cadence: 'weekly' as const,
+  cadence: 'weekly',
   milestones: [-10_000, -20_000, -30_000],
 };
+
+/**
+ * `goal.set`'s own input shape, so a table of partial overrides types as the
+ * tool sees them rather than as one literal happened to be written.
+ */
+const setShape = z.object({
+  title: z.string(),
+  metric: z.string(),
+  params: z.record(z.unknown()).optional(),
+  target: z.object({ kind: z.enum(['absolute', 'delta']), value: z.number() }),
+  deadline: z.string(),
+  cadence: z.enum(['daily', 'weekly']),
+  milestones: z.array(z.number()).optional(),
+});
 
 /** The manifest, in a registry, so `invoke` decides the tier the way it will. */
 function registryWith(src: MetricSource): ToolRegistry {
@@ -102,7 +117,7 @@ describe('goal.metrics', () => {
 });
 
 describe('goal.set refuses before it ever becomes a card', () => {
-  const cases: [string, Partial<typeof goodInput>, Partial<ToolContext>, string, RegExp][] = [
+  const cases: [string, Partial<z.infer<typeof setShape>>, Partial<ToolContext>, string, RegExp][] = [
     [
       'a run with no agent id',
       {},
@@ -145,6 +160,48 @@ describe('goal.set refuses before it ever becomes a card', () => {
       'invalid-deadline',
       /is not an ISO date or datetime/,
     ],
+    [
+      'a target on the wrong side of the baseline',
+      { target: { kind: 'delta', value: 40_000 } },
+      {},
+      'wrong-direction',
+      /would be met the moment it was set/,
+    ],
+    [
+      'an absolute target above the baseline of a down metric',
+      { target: { kind: 'absolute', value: 90_000 }, milestones: [] },
+      {},
+      'wrong-direction',
+      /is not below today's/,
+    ],
+    [
+      'milestones with the wrong sign',
+      { milestones: [10_000, 20_000] },
+      {},
+      'wrong-direction',
+      /is not on the way from/,
+    ],
+    [
+      'milestones past the target',
+      { milestones: [-50_000] },
+      {},
+      'wrong-direction',
+      /is not on the way from/,
+    ],
+    [
+      'milestones out of order',
+      { milestones: [-20_000, -10_000] },
+      {},
+      'wrong-direction',
+      /in the order they will be crossed/,
+    ],
+    [
+      'parameters a metric never declared',
+      { params: { nonsense: 1 } },
+      {},
+      'invalid-params',
+      /refused those parameters/,
+    ],
   ];
 
   for (const [name, input, over, reason, message] of cases) {
@@ -170,6 +227,41 @@ describe('goal.set refuses before it ever becomes a card', () => {
     expect((result as { message?: string }).message ?? '').not.toMatch(/could not describe/);
   });
 
+  it('measures once: a re-description reuses the number the owner approved', async () => {
+    /*
+     * The executor re-describes before it dispatches and refuses anything that
+     * changed. If this measured again, a metric that moved by one between the
+     * card and the tap would void a perfectly good approval — which for an
+     * unread count is most of them.
+     */
+    let answer = 87_400;
+    const moving: MetricDefinition = { ...debt, measure: async () => ({ value: answer, currency: 'USD', asOf: NOW }) };
+    const tool = toolOf(source(moving), 'goal.set');
+    const first = await tool.describe?.(goodInput, ctx());
+
+    answer = 87_399;
+    const again = await tool.describe?.(goodInput, ctx({ approvedEffect: { envelope: first?.envelope } }));
+    expect(again?.envelope).toEqual(first?.envelope);
+
+    // With no approval in hand it measures, and the new number is the one.
+    const fresh = await tool.describe?.(goodInput, ctx());
+    expect((fresh?.envelope as GoalSetEnvelope).baseline.value).toBe(87_399);
+  });
+
+  it('keeps the reading‘s own asOf, which is not always today', async () => {
+    const friday = new Date('2026-09-18T21:00:00Z');
+    const statement: MetricDefinition = {
+      ...debt,
+      measure: async () => ({ value: 87_400, currency: 'USD', asOf: friday }),
+    };
+    const described = await toolOf(source(statement), 'goal.set').describe?.(goodInput, ctx());
+    const envelope = described?.envelope as GoalSetEnvelope;
+    expect(envelope.baseline.asOf).toBe(NOW.toISOString());
+    expect(envelope.baseline.readingAsOf).toBe(friday.toISOString());
+    // And the owner is told, because they are approving six months off it.
+    expect(described?.preview).toContain('(reading as of 2026-09-18)');
+  });
+
   it('the card is never shown for a metric that cannot be measured', async () => {
     const tool = toolOf(source(unmeasurable), 'goal.set');
     await expect(
@@ -185,7 +277,7 @@ describe('goal.set refuses before it ever becomes a card', () => {
       agentId: 'ledger',
       metric: 'finance.total_debt',
       target: { kind: 'delta', value: -40_000 },
-      baseline: { value: 87_400, currency: 'USD' },
+      baseline: { value: 87_400, currency: 'USD', readingAsOf: NOW.toISOString() },
       cadence: 'weekly',
       milestones: [-10_000, -20_000, -30_000],
     });
@@ -203,18 +295,53 @@ describe('the cards', () => {
     metric: 'finance.total_debt',
     params: {},
     target: { kind: 'delta', value: -40_000 },
-    baseline: { value: 87_400, currency: 'USD', asOf: '2026-09-22T13:00:00.000Z' },
+    baseline: {
+      value: 87_400,
+      currency: 'USD',
+      asOf: '2026-09-22T13:00:00.000Z',
+      readingAsOf: '2026-09-22T13:00:00.000Z',
+    },
     deadline: '2027-03-22T13:00:00.000Z',
     cadence: 'weekly',
     milestones: [-10_000],
   };
 
   it('says the §5 sentence, in the owner‘s money and the owner‘s day', () => {
-    const preview = renderGoalSet(envelope, 'currency', TZ);
+    const preview = renderGoalSet(envelope, 'currency', 'down', TZ);
     expect(preview).toContain(
-      'From $87,400 today to $47,400 by 2027-03-22: $1,547 per week, checked weekly, held by @ledger',
+      'From $87,400 today to $47,400 by 2027-03-22: $1,547 a week down, checked weekly, held by @ledger',
     );
     expect(preview).toContain('Milestones you will hear about, once each: $77,400.');
+  });
+
+  it('says which way the pace goes, because the number alone does not', () => {
+    const up = renderGoalSet(
+      {
+        ...envelope,
+        target: { kind: 'absolute', value: 40 },
+        baseline: { ...envelope.baseline, value: 0, currency: null },
+        milestones: [10],
+      },
+      'count',
+      'up',
+      TZ,
+    );
+    expect(up).toContain('a week up,');
+    expect(formatPace(-1_540, 'currency', 'down', 'USD')).toBe('$1,540 a week down');
+    expect(formatPace(12, 'count', 'up', null)).toBe('12 a week up');
+    expect(formatPace(null, 'count', 'up', null)).toBe('no time left');
+  });
+
+  it('says how old the number is, when it is not today‘s', () => {
+    const fresh = renderGoalSet(envelope, 'currency', 'down', TZ);
+    expect(fresh).not.toContain('reading as of');
+    const stale = renderGoalSet(
+      { ...envelope, baseline: { ...envelope.baseline, readingAsOf: '2026-09-18T21:00:00.000Z' } },
+      'currency',
+      'down',
+      TZ,
+    );
+    expect(stale).toContain('today (reading as of 2026-09-18) to');
   });
 
   it('renders the day in the owner‘s zone, not UTC', () => {
@@ -222,6 +349,7 @@ describe('the cards', () => {
     const preview = renderGoalSet(
       { ...envelope, deadline: '2027-03-23T01:00:00.000Z' },
       'currency',
+      'down',
       TZ,
     );
     expect(preview).toContain('by 2027-03-22');
@@ -233,6 +361,7 @@ describe('the cards', () => {
       id: 'g1',
       agentId: 'ledger',
       title: 'Debt down by 40k',
+      updatedAt: '2026-09-22T13:00:00.000Z',
       before: {
         target: { kind: 'delta', value: -40_000 },
         deadline: '2027-03-22T13:00:00.000Z',
@@ -246,7 +375,7 @@ describe('the cards', () => {
         milestones: [-10_000],
       },
     };
-    const preview = renderGoalUpdate(update, 'currency', TZ, 87_400);
+    const preview = renderGoalUpdate(update, 'currency', TZ, 87_400, 'USD');
     expect(preview).toContain('Target:    $47,400 → $57,400');
     expect(preview).not.toContain('Deadline');
     expect(preview).not.toContain('Cadence');
@@ -260,19 +389,53 @@ describe('the cards', () => {
       milestones: [],
     };
     const preview = renderGoalUpdate(
-      { tool: 'goal.update', id: 'g1', agentId: 'ledger', title: 'x', before: same, after: same },
+      {
+        tool: 'goal.update',
+        id: 'g1',
+        agentId: 'ledger',
+        title: 'x',
+        updatedAt: '2026-09-22T13:00:00.000Z',
+        before: same,
+        after: same,
+      },
       'currency',
       TZ,
       100,
     );
     expect(preview).toContain('(nothing changes)');
   });
+
+  it('renders an update card in the goal‘s own money, not in dollars', () => {
+    const euros: GoalUpdateEnvelope = {
+      tool: 'goal.update',
+      id: 'g1',
+      agentId: 'ledger',
+      title: 'Debt down by 40k',
+      updatedAt: '2026-09-22T13:00:00.000Z',
+      before: {
+        target: { kind: 'absolute', value: 40_000 },
+        deadline: '2027-03-22T13:00:00.000Z',
+        cadence: 'weekly',
+        milestones: [],
+      },
+      after: {
+        target: { kind: 'absolute', value: 50_000 },
+        deadline: '2027-03-22T13:00:00.000Z',
+        cadence: 'weekly',
+        milestones: [],
+      },
+    };
+    expect(renderGoalUpdate(euros, 'currency', TZ, 87_400, 'EUR')).toContain('€40,000 → €50,000');
+    // No currency at all prints the bare numbers rather than inventing dollars.
+    expect(renderGoalUpdate(euros, 'currency', TZ, 87_400, null)).toContain('40,000 → 50,000');
+  });
 });
 
 describe('formatValue', () => {
   const cases: [string, Parameters<typeof formatValue>, string][] = [
     ['money with the metric‘s currency', [87_400, 'currency', 'USD'], '$87,400'],
-    ['money with no currency falls back rather than lying', [1, 'currency', null], '$1'],
+    ['money with no currency prints the bare number rather than inventing a symbol', [1, 'currency', null], '1'],
+    ['money in the currency the metric answered', [40_000, 'currency', 'EUR'], '€40,000'],
     ['a count', [12, 'count', null], '12'],
     ['a percent', [12.34, 'percent', null], '12.3%'],
     ['minutes', [90.4, 'minutes', null], '90 min'],

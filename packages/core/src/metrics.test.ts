@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
-import { measureMetric, measureMetricResult, metricParamsSchema } from './metrics.js';
+import { checkMetricParams, measureMetric, measureMetricResult, metricParamsSchema } from './metrics.js';
 import type { MetricDefinition } from './metrics.js';
 import type { PluginManifest, ToolContext } from './tools.js';
 
@@ -205,6 +205,50 @@ describe('measureMetric', () => {
       expect((result as { note: string }).note).toMatch(note);
     });
   }
+
+  it('refuses parameters for a metric that declares none', async () => {
+    /*
+     * The empty case is the one that matters. A `measure` written defensively
+     * — reading an optional account, an optional agent id, "just in case" —
+     * would otherwise be handed whatever a *model* put in `goal.set`, and the
+     * goal row would keep it for six months.
+     */
+    const measure = vi.fn(async (_params: unknown) => reading);
+    const registry = new ToolRegistry();
+    registry.register(manifest([metric({ measure })]));
+    const c = ctx(fakePool().pool);
+
+    const bad = await measureMetricResult(registry, 'test.total', { agentId: 'somebody-else' }, c);
+    expect(bad).toMatchObject({ ok: false, reason: 'invalid-params' });
+    expect((bad as { note: string }).note).toMatch(/takes no parameters/);
+    expect(measure).not.toHaveBeenCalled();
+
+    // Nothing, an empty object and undefined are all "no parameters".
+    for (const params of [undefined, {}]) {
+      expect((await measureMetricResult(registry, 'test.total', params, c)).ok).toBe(true);
+    }
+    expect(measure).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers the same question ahead of time, for a card', () => {
+    const declares = metric({ params: z.object({ account: z.string() }) });
+    expect(checkMetricParams(declares, { account: 'a' })).toEqual({ ok: true, params: { account: 'a' } });
+    expect(checkMetricParams(declares, {})).toMatchObject({ ok: false });
+    expect(checkMetricParams(metric(), {})).toEqual({ ok: true, params: {} });
+    const none = checkMetricParams(metric(), { account: 'a' });
+    expect(none).toMatchObject({ ok: false });
+    expect((none as { message: string }).message).toMatch(/takes no parameters/);
+  });
+
+  it('hands `measure` what the schema made of the input, not the input', async () => {
+    const measure = vi.fn(async (_params: unknown) => reading);
+    const registry = new ToolRegistry();
+    registry.register(
+      manifest([metric({ params: z.object({ window: z.coerce.number().default(30) }), measure })]),
+    );
+    await measureMetric(registry, 'test.total', {}, ctx(fakePool().pool));
+    expect(measure.mock.calls[0]?.[0]).toEqual({ window: 30 });
+  });
 
   it('parses params and refuses what the metric did not declare', async () => {
     const measure = vi.fn(async (_params: unknown) => reading);

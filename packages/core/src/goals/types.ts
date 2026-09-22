@@ -25,6 +25,17 @@ export const MAX_GOAL_TITLE = 120;
 /** At most this many milestones. Each one is a wake. */
 export const MAX_MILESTONES = 8;
 
+/**
+ * The advisory-lock key `createGoal` takes before it counts.
+ *
+ * A constant, because the lock only means anything if every writer of
+ * `core.goals` asks for the *same* number. Arbitrary, stable, and namespaced
+ * by nothing but this comment: Postgres advisory locks share one global space,
+ * so the only thing that keeps them apart is that everybody writes the key
+ * down in one place. This is that place.
+ */
+export const GOALS_LOCK_KEY = 0x60a15;
+
 export const GOAL_STATES = ['open', 'met', 'missed', 'closed'] as const;
 export type GoalState = (typeof GOAL_STATES)[number];
 
@@ -46,6 +57,14 @@ export interface Goal {
   baseline: { value: number; asOf: Date };
   deadline: Date;
   cadence: GoalCadence;
+  /**
+   * The currency of the first reading, when the metric answered one.
+   *
+   * On the goal rather than on each check because a card rendering a target or
+   * a milestone has no check in its hand — and a euro debt shown in dollars is
+   * a worse answer than a bare number.
+   */
+  currency: string | null;
   /** On the target's own scale. Each fires once when crossed. */
   milestones: number[];
   createdAt: Date;
@@ -59,7 +78,14 @@ export interface Goal {
 export interface GoalCheck {
   id: string;
   goalId: string;
+  /** When buddi looked. */
   at: Date;
+  /**
+   * When the world was that way, as the metric said. Null when the check took
+   * no number, or when the reading did not say. `at` is buddi's clock; this is
+   * the data's, and for a metric reading Friday's statement they differ.
+   */
+  asOf: Date | null;
   /** Null when the metric could not answer; `note` says why. */
   value: number | null;
   currency: string | null;
@@ -81,6 +107,7 @@ export type GoalRow = {
   baseline_as_of: Date;
   deadline: Date;
   cadence: GoalCadence;
+  currency: string | null;
   milestones: unknown;
   state: GoalState;
   closed_at: Date | null;
@@ -93,6 +120,7 @@ export type GoalCheckRow = {
   id: string;
   goal_id: string;
   at: Date;
+  as_of: Date | null;
   value: string | number | null;
   currency: string | null;
   note: string | null;
@@ -103,10 +131,10 @@ export type GoalCheckRow = {
 
 export const GOAL_COLUMNS =
   'id, title, agent_id, metric, params, target_kind, target_value, baseline_value, baseline_as_of, ' +
-  'deadline, cadence, milestones, state, closed_at, closed_note, created_at, updated_at';
+  'deadline, cadence, currency, milestones, state, closed_at, closed_note, created_at, updated_at';
 
 export const GOAL_CHECK_COLUMNS =
-  'id, goal_id, at, value, currency, note, on_track, pace_needed, projected';
+  'id, goal_id, at, as_of, value, currency, note, on_track, pace_needed, projected';
 
 /**
  * `numeric` comes back from `pg` as a string — it is arbitrary precision, and
@@ -131,6 +159,7 @@ export function toGoal(row: GoalRow): Goal {
     baseline: { value: num(row.baseline_value) ?? 0, asOf: row.baseline_as_of },
     deadline: row.deadline,
     cadence: row.cadence,
+    currency: row.currency,
     milestones: Array.isArray(row.milestones) ? (row.milestones as number[]) : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -145,6 +174,7 @@ export function toGoalCheck(row: GoalCheckRow): GoalCheck {
     id: String(row.id),
     goalId: String(row.goal_id),
     at: row.at,
+    asOf: row.as_of,
     value: num(row.value),
     currency: row.currency,
     note: row.note,
@@ -161,6 +191,15 @@ export function toGoalCheck(row: GoalCheckRow): GoalCheck {
  * owner, never a defect: nothing in `createGoal` throws for one of these.
  */
 export type GoalRefusal = 'no-agent' | 'empty-title' | 'too-many';
+
+/**
+ * Why a change to a goal did not land.
+ *
+ * `changed` is the one that matters: an approval names the goal *as it was*
+ * when the card was drawn, and a goal that moved since is not the goal the
+ * owner agreed about.
+ */
+export type GoalUpdateRefusal = 'not-found' | 'changed';
 
 export type CreateGoalResult =
   | { ok: true; goal: Goal }

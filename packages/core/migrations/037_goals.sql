@@ -21,9 +21,12 @@
 -- not a made-up figure and not a missing row. A goal with seven days of those
 -- is a fact the holder is woken about.
 --
--- The 12-open-goal budget is not here: it is enforced inside the INSERT in
--- `packages/core/src/goals/store.ts`, the way the reminder budget is, so two
--- runs racing for the last slot produce one goal and one refusal.
+-- The 12-open-goal budget is not here: it is enforced in
+-- `packages/core/src/goals/store.ts`, as a count in the INSERT's own WHERE
+-- clause taken under a transaction-scoped advisory lock. The count alone is
+-- not enough — under READ COMMITTED two racing statements both see eleven and
+-- both commit — so the lock is what actually makes "one goal and one refusal"
+-- true, and the count is what decides which.
 
 create table if not exists core.goals (
   id uuid primary key default gen_random_uuid(),
@@ -49,6 +52,11 @@ create table if not exists core.goals (
   baseline_as_of timestamptz not null,
   deadline timestamptz not null,
   cadence text not null check (cadence in ('daily', 'weekly')),
+  -- The currency of the first reading, when the metric answers one. It belongs
+  -- to the *goal*, not to each check: a card that renders a target or a
+  -- milestone has no check in its hand, and guessing dollars for a euro debt
+  -- is worse than printing the bare number.
+  currency text null,
   -- Numbers on the same scale as the target: deltas when the target is a
   -- delta, absolutes when it is absolute. Each fires once when crossed.
   milestones jsonb not null default '[]'::jsonb,
@@ -57,7 +65,13 @@ create table if not exists core.goals (
   closed_at timestamptz null,
   closed_note text null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  -- Millisecond precision, deliberately: this column is the goal's *version*.
+  -- `goal.update` carries the `updated_at` its approval card was drawn from
+  -- into the UPDATE's WHERE clause, and that value makes a round trip through
+  -- JavaScript, whose Date has milliseconds and nothing finer. At the default
+  -- microsecond precision the comparison would never match and every approved
+  -- update would refuse itself.
+  updated_at timestamptz(3) not null default now()
 );
 
 -- The sentinel's query: every open goal, oldest first. Small table, but this
@@ -71,6 +85,11 @@ create table if not exists core.goal_checks (
   id uuid primary key default gen_random_uuid(),
   goal_id uuid not null references core.goals (id) on delete cascade,
   at timestamptz not null default now(),
+  -- What the metric said its number was true *of*, when it said so. `at` is
+  -- when buddi looked; this is when the world was that way, and they are not
+  -- the same thing for a metric reading last Friday's statement. Null when the
+  -- check took no number, or when the reading did not say.
+  as_of timestamptz null,
   -- Null means "not measurable at that moment"; `note` says why.
   value numeric null,
   currency text null,

@@ -263,6 +263,30 @@ suite('sentinels (postgres)', () => {
       expect(await pendingDigestItems(pool)).toHaveLength(1);
     });
 
+    it('keeps trying until the wake is actually queued', async () => {
+      /*
+       * The pre-`missions add-defaults` state: the finding is raised, there is
+       * nowhere to put the wake, and the row now exists. "Once" has to mean
+       * "once it has been queued" — otherwise a milestone raised in that
+       * window is demoted to a digest line for good.
+       */
+      const manifests = pluginWith(scripted('w', [[once]]));
+      const [first] = await runSentinels(pool, manifests, T0, 'UTC');
+      expect(first?.fired).toBe(0);
+      expect(await wakes()).toHaveLength(0);
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      expect((await getFinding(pool, once.key))?.cooldownUntil).toBeNull();
+
+      await wakeMission();
+      const [second] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(second?.fired).toBe(1);
+      expect(await wakes()).toHaveLength(1);
+
+      // And it is still only once: the third tick is inside the cooldown.
+      await runSentinels(pool, manifests, at(120_000), 'UTC');
+      expect(await wakes()).toHaveLength(1);
+    });
+
     it('is ignored on an urgent finding, which already wakes', async () => {
       await wakeMission();
       await runSentinels(pool, pluginWith(scripted('w', [[{ ...urgent, wake: true }]])), T0, 'UTC');
