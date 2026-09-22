@@ -16,17 +16,17 @@ GPT-5 and the o-series, common local models by name prefix, and 128k for a name
 it does not recognise — because no provider serves its window over the wire in
 a usable shape.
 
-The owner can override it **per account**, in a "Context window" field on the
-Providers page, stored as `core.provider_accounts.context_window_tokens`. Per
-account rather than per model, because two OpenAI-compatible accounts are two
-endpoints: an 8k laptop model and a 256k hosted one can both be
-"openai-compatible", and one number for both would overflow the small one every
-time. An agent with no binding is not unbudgeted — it is sized against the
-installation's default account. The legacy 80k constant is reached only when
-there is no model and no override to be had at all: an installation with no
-accounts yet, or a database that will not answer. It is a compatibility
-fallback and **not** a floor under a known model, because an owner who declares
-8,000 tokens means it.
+The owner can override it **per account**, in a "Context window" field in
+Settings → Model accounts, stored as
+`core.provider_accounts.context_window_tokens`. Per account rather than per
+model, because two OpenAI-compatible accounts are two endpoints: an 8k laptop
+model and a 256k hosted one can both be "openai-compatible", and one number for
+both would overflow the small one every time. An agent with no binding is not
+unbudgeted — it is sized against the installation's default account. The legacy
+80k constant is reached only when there is no model and no override to be had
+at all: an installation with no accounts yet, or a database that will not
+answer. It is a compatibility fallback and **not** a floor under a known model,
+because an owner who declares 8,000 tokens means it.
 
 The limit is **half the window** (`TRANSCRIPT_WINDOW_SHARE = 0.5`), counted in
 tokens: non-ASCII characters at one token each, the rest at 3.6 characters a

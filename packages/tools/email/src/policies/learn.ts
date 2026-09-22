@@ -1,7 +1,7 @@
 /**
  * Learning a policy from the owner's own history.
  *
- * docs/email.md §2: *«buddi proposes policies from the owner's own history and
+ * docs/specs/email.md §2: *«buddi proposes policies from the owner's own history and
  * the owner keeps or revokes them in one tap.»* The proposing happens here,
  * right after a triage run records its verdict, and it is deliberately timid:
  *
@@ -12,7 +12,7 @@
  *  - **Nothing applies itself.** A proposal is a row with `proposed = true`;
  *    the gate does not read it, and the settings page shows it under "Learned,
  *    proposed" with Keep and Revoke. Promo is no exception: until the Sent
- *    folder is synced (docs/email.md §13.3), "the owner never wrote back" is
+ *    folder is synced (docs/specs/email.md §13.3), "the owner never wrote back" is
  *    derived from drafts *buddi* sent, so a sender answered from a phone or
  *    from Gmail looks unanswered here. A rule learned from a half-known history
  *    may be suggested; it may not silence anybody by itself. The Learned list

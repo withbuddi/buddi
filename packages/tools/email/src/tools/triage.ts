@@ -86,7 +86,7 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
     if (!row) throw new Error('email.triage_record: insert returned no row');
 
     /*
-     * A decision is made once (docs/email.md §2). With this verdict recorded,
+     * A decision is made once (docs/specs/email.md §2). With this verdict recorded,
      * the sender may now have three consecutive consistent ones — which is what
      * a policy is learned from. `learnFromVerdict` writes at most one row and
      * usually writes none; everything it writes is a *proposal* the owner keeps

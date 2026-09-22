@@ -148,7 +148,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
     const original = await requireMessage(ctx.db, input.inReplyTo);
-    // docs/email.md §4: "`send` and `draft_reply` take the account from the
+    // docs/specs/email.md §4: "`send` and `draft_reply` take the account from the
     // thread they answer". There is no argument for it and there must not be
     // one — a reply leaves from the mailbox it arrived in, and an agent that
     // could choose otherwise could answer a client from the owner's private

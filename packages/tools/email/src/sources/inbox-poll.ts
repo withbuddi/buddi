@@ -310,7 +310,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       const log = ctx.log ?? ((line: string) => console.error(line));
       const env = opts.env ?? process.env;
 
-      // Accounts are plural (docs/email.md §2). Every enabled one is polled in
+      // Accounts are plural (docs/specs/email.md §2). Every enabled one is polled in
       // this pass, each with its own mailbox row and its own cursor — the
       // per-account logic below is unchanged, it simply runs once per account
       // now instead of once. No mailbox configured is still a valid, running
@@ -449,7 +449,7 @@ async function plantCursor(
 /**
  * The gate, and then the queue.
  *
- * docs/email.md §5. Every message that landed is put in front of the policy
+ * docs/specs/email.md §5. Every message that landed is put in front of the policy
  * table *before* anybody is woken, and what the gate decided is written to
  * `email.events` — every decision, including "nothing matched", because the
  * owner auditing the silence needs to be able to tell a message that was
@@ -605,7 +605,7 @@ function runAgentFor(decision: GateDecision, fallback: string): string {
 /**
  * The prompt, with what was decided about this sender before.
  *
- * docs/email.md §1's complaint was that a run *«judges it from zero, records a
+ * docs/specs/email.md §1's complaint was that a run *«judges it from zero, records a
  * verdict nothing reads back»*. The verdicts are read back here, along with the
  * sender's policy when there is one, so the run can be consistent with what was
  * decided rather than starting the argument again every week.
