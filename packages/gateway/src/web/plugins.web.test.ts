@@ -407,5 +407,5 @@ it('gates accepting a proposed agent on the session and the CSRF token', async (
   // With both, it reaches the route — and this server has no garden plugin.
   const reached = await fetch(url, { method: 'POST', headers: json(headers), body: '{}' });
   expect(reached.status).toBe(404);
-  expect((await reached.json()).error).toContain('gardener');
+  expect(((await reached.json()) as { error: string }).error).toContain('gardener');
 });
