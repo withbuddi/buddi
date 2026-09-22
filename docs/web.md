@@ -1,5 +1,7 @@
 # The web plugin
 
+Status: reference, 2026-09-15
+
 `@buddi/tool-web` gives an agent two things it did not have: the ability to
 search the live web, and the ability to read one page. It is a **capability**,
 like finance or email — not a property of one agent. Whichever of your agents

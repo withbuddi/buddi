@@ -1,5 +1,7 @@
 # Computer and browser control
 
+Status: reference, 2026-09-21
+
 ## Default: native computer control (2026-09-18)
 
 The owner clarified that the original OS-first design is the requirement.
@@ -231,6 +233,22 @@ switch canvas tabs without the browser's polling pulling you back. On smaller
 screens, use the chat's Canvas button. **Open full browser view** still opens the
 separate page. Closing or releasing the session removes its live canvas tab.
 
+**One tab, pinned, for as long as the session lives.** A browser session used to
+open a tab per `browser.act` — a row of "Browser · Act" cards, each showing one
+input and "Completed: yes", with the tab that mattered buried behind them. It
+now owns a single **Browser** tab, marked `pinned` while the session is alive:
+`splitTabs` in `packages/web/src/canvas/Canvas.tsx` holds it on the strip even
+when the strip is short, and it cannot be closed from the strip while it is
+live. The calls it covers do not open tabs of their own — the page passes their
+tool names as `folded` to `renderablesFrom`
+(`packages/web/src/canvas/renderables.ts`), so a dozen "Browser · Act" cards no
+longer bury the panel showing the screen. A call stopped on an approval is
+never folded: a decision waiting on the owner outranks any panel. When the
+session ends the mark is cleared and the tab becomes ordinary history, keeping
+its last screenshot. A failure is not pinned — it would crowd out the work —
+but the overflow menu carries its red dot, so the strip says a failure is back
+there before it is opened.
+
 ## Logins and controls
 
 The browser has its own persistent profile under
@@ -419,6 +437,14 @@ caption says *open this on the computer buddi runs on*.
 
 Take over is deliberately not a command: driving by hand needs a canvas, and
 that is what the button's link is for.
+
+Where it lives: `packages/gateway/src/telegram/browser-view.ts` (the photo, the
+throttle by observation id, the allow-list check, the button and the four
+commands), `browserTabUrl` in `packages/gateway/src/web/config.ts` (public
+origin, else loopback with the caption line), and `?tab=browser` on the chat
+route, honoured once by `ChatPage`. Panels other than the browser — tables,
+charts — keep their text rendering on Telegram; a photo of a canvas is still a
+later step.
 
 When access is stopped, the refusal the agent reads names the way back on the
 surface it is answering on — `/browser resume` on Telegram, the Settings page

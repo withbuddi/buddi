@@ -1,6 +1,6 @@
 # Files: uploads and agent outputs in one library
 
-Status: implementation contract, agreed 2026-09-20; first version built on branch `files`.
+Status: reference, 2026-09-20
 
 You sent Ledger a CSV last week and it produced a report. Today you want either
 file without remembering which conversation it was in. Files is the place to
