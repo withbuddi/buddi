@@ -512,6 +512,11 @@ suite('email threads (postgres + fake imap)', () => {
         return {
           listMailboxes: () => base.listMailboxes(),
           fetchSince: (name: string, uid: number, limit: number) => base.fetchSince(name, uid, limit),
+          // The two attachment methods the port gained in step 6b. This
+          // stub is about `open` and `fetchSince`; the rest is delegation.
+          listAttachments: (name: string, uid: number) => base.listAttachments(name, uid),
+          downloadAttachment: (name: string, uid: number, part: string, max: number) =>
+            base.downloadAttachment(name, uid, part, max),
           close: () => base.close(),
           async open(name: string) {
             if (name === 'INBOX' && server.mailbox('[Gmail]/Sent Mail').messages.length === 0) {
@@ -536,6 +541,11 @@ suite('email threads (postgres + fake imap)', () => {
         return {
           listMailboxes: () => base.listMailboxes(),
           fetchSince: (name: string, uid: number, limit: number) => base.fetchSince(name, uid, limit),
+          // The two attachment methods the port gained in step 6b. This
+          // stub is about `open` and `fetchSince`; the rest is delegation.
+          listAttachments: (name: string, uid: number) => base.listAttachments(name, uid),
+          downloadAttachment: (name: string, uid: number, part: string, max: number) =>
+            base.downloadAttachment(name, uid, part, max),
           close: () => base.close(),
           async open(name: string) {
             if (name === '[Gmail]/Sent Mail' && failSent) {

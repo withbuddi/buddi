@@ -102,6 +102,11 @@ export function collectAttachments(node: Record<string, any> | undefined): Attac
           null,
         mime: type || 'application/octet-stream',
         sizeBytes: Number(n.size ?? 0),
+        // The body part this file is, so a later fetch asks for it by name
+        // rather than parsing the message again. `imapflow` fills `part` on
+        // every node but the root of a single-part message, which carries no
+        // attachment anyway.
+        part: n.part ? String(n.part) : null,
       });
     }
     for (const child of children) walk(child);
@@ -244,6 +249,60 @@ class ImapFlowClient implements ImapClient {
       });
     }
     return out;
+  }
+
+  /**
+   * The attachment listing of one message, from its body structure alone.
+   *
+   * `fetch` with `bodyStructure` downloads no body — it is the same metadata
+   * ingest reads — so this is cheap, and it is the path for a message stored
+   * before part ids were recorded.
+   */
+  async listAttachments(mailbox: string, uid: number): Promise<AttachmentInfo[] | null> {
+    if (this.#open !== mailbox) await this.open(mailbox);
+    for await (const msg of this.client.fetch(
+      String(uid),
+      { uid: true, bodyStructure: true },
+      { uid: true },
+    )) {
+      if (Number(msg.uid) !== uid) continue;
+      return collectAttachments(msg.bodyStructure as Record<string, any>);
+    }
+    return null;
+  }
+
+  /**
+   * One attachment's bytes.
+   *
+   * `download()` issues `BODY.PEEK[<part>]` and decodes the transfer encoding,
+   * so what comes back is the file — and reading it still never sets `\Seen`.
+   * The cap is enforced **on the stream**: the declared size in a body
+   * structure is the server's claim about a part, and a 25 MB ceiling that
+   * trusts a claim is a ceiling somebody can walk through. Past it the
+   * iteration stops, which drops the connection's read, and the call throws.
+   */
+  async downloadAttachment(
+    mailbox: string,
+    uid: number,
+    part: string,
+    maxBytes: number,
+  ): Promise<Buffer | null> {
+    if (this.#open !== mailbox) await this.open(mailbox);
+    const downloaded = await this.client.download(String(uid), part, { uid: true });
+    const content = downloaded?.content ?? null;
+    if (!content) return null;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of content) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        throw new Error(
+          `attachment part ${part} of uid ${uid} is larger than the ${maxBytes}-byte cap`,
+        );
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   }
 
   async close(): Promise<void> {

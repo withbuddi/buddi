@@ -14,11 +14,32 @@
 /** One address as it travels: display name dropped, address lowercased. */
 export type Address = string;
 
-/** An attachment as ingest sees it. Bytes are not fetched in v1. */
+/**
+ * An attachment as ingest sees it. The bytes are never fetched at ingest —
+ * `email.fetch_attachment` pulls one on request (docs/specs/email.md §10).
+ */
 export interface AttachmentInfo {
   filename: string | null;
   mime: string;
   sizeBytes: number;
+  /**
+   * The IMAP body part id (`2`, `1.3`) this attachment is, as the body
+   * structure names it: what `downloadAttachment` fetches by.
+   *
+   * Optional, and it has to be. Rows ingested before this field existed hold
+   * a listing with no part id, and the mail they describe is still on the
+   * server — so a fetch of one of those re-reads the body structure
+   * (`listAttachments`) rather than refusing. A row written today has it.
+   */
+  part?: string | null;
+  /**
+   * The artifact this attachment became, once somebody fetched it.
+   *
+   * Recorded on the message row so the second fetch of the same file is a
+   * link rather than a download, and so the Mail page can say which
+   * attachments are already in the library.
+   */
+  artifactId?: string | null;
 }
 
 /** One message, as the IMAP port hands it over. Headers + text body only. */
@@ -101,6 +122,31 @@ export interface ImapClient {
    * Peek semantics: flags are reported, never changed.
    */
   fetchSince(mailbox: string, sinceUid: number, limit: number): Promise<FetchedMessage[]>;
+  /**
+   * The attachment listing of one message, read from its body structure.
+   *
+   * For a row ingested before part ids were recorded: the listing is what says
+   * which body part each file is. No body is downloaded. An empty array means
+   * the message carries no attachments; `null` means the message is not there
+   * — which is a different answer, and the one `email.fetch_attachment` turns
+   * into "this message is no longer on the server".
+   */
+  listAttachments(mailbox: string, uid: number): Promise<AttachmentInfo[] | null>;
+  /**
+   * One attachment's bytes, peeked.
+   *
+   * `part` is the body part id from `AttachmentInfo`. `maxBytes` is a hard
+   * ceiling: the stream is abandoned the moment it is exceeded and the call
+   * throws, because a server is free to under-report a part's size in the body
+   * structure and a cap that is only checked beforehand is not a cap. `null`
+   * when the message or the part is not there.
+   */
+  downloadAttachment(
+    mailbox: string,
+    uid: number,
+    part: string,
+    maxBytes: number,
+  ): Promise<Buffer | null>;
   close(): Promise<void>;
 }
 
