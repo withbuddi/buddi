@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import type { PluginManifest, Source } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
+import { emailSentinels } from './sentinels/index.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
 import { draftNew, draftReply } from './tools/drafts.js';
@@ -98,6 +99,9 @@ export function createEmailManifest(
       }),
     ],
     sources: createEmailSources(opts),
+    // The watchers (docs/specs/email.md §7). Two of the six, as step 4 asks:
+    // they read this plugin's own schema, decide nothing, and speak to nobody.
+    sentinels: emailSentinels,
   };
 }
 
@@ -280,6 +284,68 @@ export {
   INBOX,
   type EnvLike,
 } from './config.js';
+export {
+  createDateStatedSentinel,
+  createWaitingOnMeSentinel,
+  dateStated,
+  emailSentinels,
+  mailAgent,
+  waitingOnMe,
+  EVERY_12H,
+  EVERY_HOUR,
+  MAX_DATE_FINDINGS,
+  MAX_WAITING_FINDINGS,
+} from './sentinels/index.js';
+export {
+  clampConfidence,
+  findDates,
+  isConfident,
+  sentencesOf,
+  withoutQuotedLines,
+  BASE_CONFIDENCE,
+  DATE_WINDOW_DAYS,
+  DEFAULT_DATE_CONFIDENCE,
+  KEYWORD_BOOST,
+  MAX_CONFIDENCE,
+  MAX_DATE_CONFIDENCE,
+  MIN_DATE_CONFIDENCE,
+  type DateHit,
+  type FindDatesOptions,
+} from './dates.js';
+export {
+  recordDates,
+  remindersFor,
+  scanMessageDates,
+  skipDates,
+  statedDatesBetween,
+  unscannedMessages,
+  DATE_SCAN_BATCH,
+  type ScannableMessage,
+} from './dates-store.js';
+export {
+  clampWaitingDays,
+  dateFinding,
+  dateKey,
+  firstLineOf,
+  loadWatcherSettings,
+  setWatcherSettings,
+  severityForAge,
+  waitingFinding,
+  waitingKey,
+  DATE_CONFIDENCE_KEY,
+  DEFAULT_WAITING_DAYS,
+  DEFAULT_WATCHER_SETTINGS,
+  DETAIL_CHARS,
+  MAX_WAITING_DAYS,
+  MIN_WAITING_DAYS,
+  WAITING_DAYS_KEY,
+  WARNING_WAITING_DAYS,
+  type DateFinding,
+  type StatedDate,
+  type WaitingFinding,
+  type WaitingThread,
+  type WatcherSettings,
+} from './watchers.js';
 export { imapflowFactory } from './imap/imapflow-client.js';
 export { smtpFactory } from './smtp/nodemailer-client.js';
 export { FakeImapServer, fakeMessage, type FakeMailbox } from './imap/fake.js';

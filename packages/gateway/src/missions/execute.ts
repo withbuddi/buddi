@@ -92,7 +92,45 @@ export interface PreparedRun {
   commit?: () => Promise<void>;
 }
 
-export type PrepareRun = (mission: Mission) => Promise<PreparedRun | null>;
+/**
+ * `finding` is there for a wake run: the watcher that woke this mission knows
+ * things the mission's own prompt cannot, and a `prepare` that can see it can
+ * put them in front of the agent — the mail watchers hand over the conversation
+ * the finding is about (docs/specs/email.md §7).
+ */
+export type PrepareRun = (
+  mission: Mission,
+  finding?: FindingPayload | null,
+) => Promise<PreparedRun | null>;
+
+/**
+ * Several `prepare`s as one: every appendix that applies, in order, and every
+ * commit chained behind them. Nothing applying is still `null`, so the run's
+ * prompt is untouched.
+ */
+export function composePrepare(...prepares: readonly PrepareRun[]): PrepareRun {
+  return async (mission, finding) => {
+    const parts: string[] = [];
+    const commits: Array<() => Promise<void>> = [];
+    for (const prepare of prepares) {
+      const prepared = await prepare(mission, finding);
+      if (!prepared) continue;
+      if (prepared.appendix.trim() !== '') parts.push(prepared.appendix);
+      if (prepared.commit) commits.push(prepared.commit);
+    }
+    if (parts.length === 0 && commits.length === 0) return null;
+    return {
+      appendix: parts.join('\n\n'),
+      ...(commits.length === 0
+        ? {}
+        : {
+            commit: async () => {
+              for (const commit of commits) await commit();
+            },
+          }),
+    };
+  };
+}
 
 export interface MissionExecutorDeps {
   pool: Pool;
@@ -227,7 +265,7 @@ export function createMissionExecutor(
     const sink: DecisionSink = {};
     const registry = registryForRun(deps.registry, sink);
 
-    const prepared = deps.prepare ? await deps.prepare(mission) : null;
+    const prepared = deps.prepare ? await deps.prepare(mission, finding) : null;
     const userMessage = [
       mission.prompt,
       finding ? renderFinding(finding) : '',

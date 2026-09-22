@@ -322,6 +322,34 @@ suite('the dashboard API', () => {
     expect(await ok.json()).toEqual({ paused: true });
   });
 
+  /*
+   * The owner's switch on one watcher, and the two settings the mail watchers
+   * read. Both are the owner acting on their own installation: a session, the
+   * csrf pair, and no approval card in the way.
+   */
+  it('switches a watcher off and back on', async () => {
+    const client = await signedIn();
+    const off = await client.post('/api/sentinels/email.date-stated/enabled', { enabled: false });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ sentinelId: 'email.date-stated', enabled: false });
+
+    const on = await client.post('/api/sentinels/email.date-stated/enabled', { enabled: true });
+    expect(await on.json()).toEqual({ sentinelId: 'email.date-stated', enabled: true });
+
+    const bad = await client.post('/api/sentinels/email.date-stated/enabled', { enabled: 'yes' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('answers the mail watcher settings with the defaults when the plugin is not installed', async () => {
+    const client = await signedIn();
+    expect(await client.json<any>('/api/email/watchers')).toMatchObject({
+      waitingDays: 2,
+      dateConfidence: 0.6,
+      defaults: { waitingDays: 2, dateConfidence: 0.6 },
+      limits: { waitingDays: { min: 1, max: 60 } },
+    });
+  });
+
   it('still refuses the first-ever write from a browser with no session yet', async () => {
     // The mint happens in this response, so the page cannot have echoed its
     // csrf pair back yet — and a cross-site writer is exactly this client.

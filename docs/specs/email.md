@@ -1,6 +1,6 @@
 # Email: accounts, threads, policies, watchers
 
-Status: in progress, steps 1 to 3 of 5 built, 2026-09-21. Steps 4 and 5 remain specification.
+Status: in progress, steps 1 to 4 of 5 built, 2026-09-21. Step 5 remains specification.
 review; the current plugin had no document, and this is the one it should have
 had. What §13.1 asks for — policies, the gate, the backfill and the Learned
 list — is implemented, with three departures noted in §5; §4's accounts are
@@ -203,23 +203,57 @@ thread, from the Sent folder rather than from buddi's drafts.
 Each is a sentinel with a finding the agent verifies before speaking, all
 visible and switchable on the Watchers page:
 
-- `email.waiting-on-me`: a thread in `waiting-on-me` for more than N days
-  (default 2), from a sender the owner has replied to before.
+- `email.waiting-on-me` (**built**): a thread in `waiting-on-me` for more than
+  N days (`waitingDays`, default 2, on the Email settings page), from a sender
+  the owner has replied to before — read from the Sent folder, so an
+  installation with no Sent folder says nothing rather than reporting every
+  stranger. A live `ignore` policy on the sender or their domain, and a muted
+  thread, are the owner's decisions and silence it. One finding per thread per
+  cycle, keyed to the thread **and** the last inbound message, so a reply is a
+  new fact and the old one resolves; `info` at the setting, `urgent` at a week.
+  Twice a day.
 - `email.promised-reply`: the owner wrote "I'll get back to you" or asked
-  buddi to draft, and nothing was sent within N days.
-- `email.date-stated`: a message states a date within the next 14 days
-  (a deadline, an appointment, a due date), and no reminder exists for it.
+  buddi to draft, and nothing was sent within N days. *Not built.*
+- `email.date-stated` (**built**): a message states a date within the next 14
+  days (a deadline, an appointment, a due date), and no reminder exists for it.
+  The reading happens at **ingest**, on the body already in hand, and is stored
+  in `email.dates` (message, day, the phrase it was read from, a confidence);
+  the sentinel sweeps up what ingest missed, bounded, and raises one `info`
+  finding per message-date above `dateConfidence` (default 0.6) whose day is
+  still ahead. A pending reminder for that day on that thread silences it, and
+  so do a muted thread, an `ignore` policy on the sender, and quoted (`>`)
+  lines. The finding offers "set a reminder"; the agent creates it with
+  `reminder.set` after reading the message. What the parser does and refuses to
+  do — English and French absolute dates, slashed numbers and their ambiguity,
+  weekday-plus-time against the message's own INTERNALDATE, and no relative
+  words, no dotted numbers, no bare weekday — is documented in
+  `packages/tools/email/src/dates.ts` and pinned as a table in `dates.test.ts`.
 - `email.receipt-or-bill`: an order confirmation, receipt, invoice or bill
   arrived; the finding offers to hand it to the agent holding the
   `overview` role and to record it.
 - `email.suspicious-sender`: a first-time sender imitating a known one
   (display name matches, address does not), or a message asking for
-  credentials, a wire, or a gift card.
+  credentials, a wire, or a gift card. *Not built.*
 - `email.unanswered-by-them`: the owner wrote to someone N days ago and
-  nothing came back; a nudge, once.
+  nothing came back; a nudge, once. *Not built.*
+
+Four of the six remain: `promised-reply`, `receipt-or-bill`,
+`suspicious-sender` and `unanswered-by-them`. They are specification, not code
+switched off — nothing is registered for them.
 
 None of these send mail. A finding leads to a report, a draft, or a
-reminder, never to a send without the card.
+reminder, never to a send without the card. The wake run is given the
+conversation the finding is about — the same bounded, fenced block §6 gives a
+triage run — and with it the one instruction that makes a watcher safe:
+**verify, then report or draft, never send.**
+
+Both built watchers appear on the Watchers page with their last run and a
+switch (`core.sentinel_switches`; absent means on). A watcher that is off does
+not run, and resolves nothing: what it already found stays as it was, so
+switching it back on does not replay a week of news. `waitingDays` and
+`dateConfidence` are on the Email settings page in a small "Watchers" block,
+and are readable and writable from a chat through `email.get_settings` and
+`email.set_settings`.
 
 ## 8. Drafts and sending
 
@@ -271,6 +305,6 @@ Gmail instead of app passwords.
 2. Accounts plural, per-account identity, secrets in the vault from the
    page. **Built.**
 3. Threads and the Sent folder; the triage run receives the thread. **Built.**
-4. The first two sentinels: waiting-on-me and date-stated.
+4. The first two sentinels: waiting-on-me and date-stated. **Built.**
 5. Draft lifecycle with the editor; the remaining sentinels; search
    filters; attachments on request.
