@@ -346,11 +346,17 @@ export interface ThreadChoice {
 /** How many conversations the rule form offers. The most recent ones. */
 export const THREAD_CHOICES = 50;
 
-/** Exported for the settings route: the two lists, their counts, and the threads. */
-export async function policiesView(db: Parameters<typeof policyStats>[0], accountId?: string): Promise<{
+/**
+ * The two lists, and what each rule has done.
+ *
+ * Split from `policiesView` because the settings page wants exactly this and
+ * nothing else: the conversation picker is a second question, asked by the
+ * form that needs it, and running its window function on every settings load
+ * is work nobody was looking at.
+ */
+export async function policyLists(db: Parameters<typeof policyStats>[0]): Promise<{
   applied: PolicyView[];
   proposed: PolicyView[];
-  threads: ThreadChoice[];
 }> {
   const { rows } = await db.query(
     `select ${POLICY_COLUMNS} from email.policies where revoked_at is null
@@ -358,6 +364,25 @@ export async function policiesView(db: Parameters<typeof policyStats>[0], accoun
   );
   const stats = await policyStats(db);
   const all = rows.map(toPolicy);
+  return {
+    applied: all.filter((p) => !p.proposed).map((p) => viewOf(p, stats.get(p.id))),
+    proposed: all.filter((p) => p.proposed).map((p) => viewOf(p, stats.get(p.id))),
+  };
+}
+
+/**
+ * The conversations a `thread` rule may be about, newest first.
+ *
+ * Named by subject rather than by thread key, because a Message-ID off the
+ * wire is not something an owner has (`gate.ts`). Scoped to one mailbox when
+ * one is chosen: a conversation lives in exactly one of them, and offering a
+ * busy mailbox's threads for a rule meant for a quiet one is how a rule ends
+ * up about the wrong conversation.
+ */
+export async function threadChoices(
+  db: Parameters<typeof policyStats>[0],
+  accountId?: string,
+): Promise<ThreadChoice[]> {
   const { rows: threads } = accountId
     ? await db.query(
         `select id, account_id, subject, state, participants, last_at from email.threads
@@ -376,19 +401,23 @@ export async function policiesView(db: Parameters<typeof policyStats>[0], accoun
           order by last_at desc nulls last, id desc`,
         [THREAD_CHOICES],
       );
-  return {
-    applied: all.filter((p) => !p.proposed).map((p) => viewOf(p, stats.get(p.id))),
-    proposed: all.filter((p) => p.proposed).map((p) => viewOf(p, stats.get(p.id))),
-    threads: threads.map((row: Record<string, any>) => ({
-      id: String(row.id),
-      accountId: String(row.account_id),
-      subject: row.subject ?? '',
-      state: row.state,
-      participants: Array.isArray(row.participants) ? row.participants : [],
-      lastAt:
-        row.last_at instanceof Date ? row.last_at.toISOString() : (row.last_at ?? null),
-    })),
-  };
+  return threads.map((row: Record<string, any>) => ({
+    id: String(row.id),
+    accountId: String(row.account_id),
+    subject: row.subject ?? '',
+    state: row.state,
+    participants: Array.isArray(row.participants) ? row.participants : [],
+    lastAt: row.last_at instanceof Date ? row.last_at.toISOString() : (row.last_at ?? null),
+  }));
+}
+
+/** Both halves at once, for a caller that draws them together. */
+export async function policiesView(db: Parameters<typeof policyStats>[0], accountId?: string): Promise<{
+  applied: PolicyView[];
+  proposed: PolicyView[];
+  threads: ThreadChoice[];
+}> {
+  return { ...(await policyLists(db)), threads: await threadChoices(db, accountId) };
 }
 
 export { isUnimplementedAction };

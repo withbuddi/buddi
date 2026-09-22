@@ -198,7 +198,9 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 2. Port email: `queries` for threads, thread, message, drafts, accounts,
    policies, watcher settings; `ownerOnly` tools for add/remove account, set
    policy, bulk policies, save/discard/send draft, fetch attachment (thin over
-   the existing store functions); the two descriptors; then delete `Mail.tsx`,
+   the existing store functions; `email.send` and `email.fetch_attachment` are
+   *reused* agent tools and stay listed, since a page proposing a send is
+   proposing exactly what an agent would); the two descriptors; then delete `Mail.tsx`,
    the email parts of `Email.tsx`, the email routes in the gateway, the `Mail`
    rail entry and the `email` settings section. The only email names left in
    `packages/web` and `packages/gateway/src/web` are in tests of the generic
@@ -211,7 +213,10 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 - The Mail page and Settings → Email look and behave as today, from
   descriptors, with a URL per thread.
 - `grep -ri email packages/web/src --exclude-dir=__fixtures__` finds nothing
-  outside tests.
+  outside tests and the documented redirect table (`routes.ts`, which maps the
+  hashes the owner's bookmarks and Telegram's links still carry) — plus
+  `'email'` as a *field type* in the component set, which is a shape rather
+  than a plugin.
 - A second plugin (the synthetic one) gets a rail entry and a settings tab
   with no change to `packages/web`.
 - A descriptor with a typo fails plugin load with the path to the field.

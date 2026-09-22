@@ -39,8 +39,8 @@ import {
   LIVE_DRAFT_STATUSES,
   type DraftRecord,
 } from '../rows.js';
-import { policiesView } from '../tools/policies.js';
-import { loadWatcherSettings } from '../watchers.js';
+import { policyLists } from '../tools/policies.js';
+import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
 
@@ -61,6 +61,14 @@ const byId = z.object({ id: UUID }).strict();
 
 const searchParams = z
   .object({
+    /*
+     * Set by the search component and by nothing else. The list above the
+     * search asks this same query with no parameters at all, so without it
+     * "the owner pressed Search with every field empty" and "the page drew its
+     * list" are the same request — and the refusal that tells the owner what
+     * to do would have to be silence.
+     */
+    searching: z.enum(['true']).optional(),
     q: z.string().optional(),
     from: z.string().optional(),
     since: z.string().optional(),
@@ -113,10 +121,26 @@ export function formatBytes(bytes: number): string {
   return `${unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/**
+ * How much of a body a page is given. The engine refuses an answer over a
+ * megabyte, so a mail with a half-megabyte signature chain would otherwise
+ * come back as "the email plugin could not answer message" — the one message
+ * the owner opened, unreadable because it was long.
+ */
+export const MAX_BODY_CHARS = 512 * 1024;
+
+export function truncateBody(text: string): string {
+  if (text.length <= MAX_BODY_CHARS) return text;
+  return `${text.slice(0, MAX_BODY_CHARS)}\n\n… this message is too long to show in full; the rest is in your mailbox.`;
+}
+
 /** A draft as the editor and the draft list read it. Never a patch: all of it. */
 function draftRow(draft: DraftRecord, now: Date): Record<string, unknown> {
   const live =
     (LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status) && draft.sentActionId === null;
+  // Dispatched, never confirmed: the one state where nothing may be done to it
+  // until somebody has looked in the mailbox.
+  const unresolved = draft.sentActionId !== null && draft.sentAt === null;
   return {
     id: draft.id,
     subject: draft.subject === '' ? '(no subject)' : draft.subject,
@@ -131,11 +155,28 @@ function draftRow(draft: DraftRecord, now: Date): Record<string, unknown> {
     statusLine: draftStatusLine(draft, now),
     updatedAt: draft.updatedAt,
     live,
-    // Dispatched, never confirmed: the one state where nothing may be done to
-    // it until somebody has looked in the mailbox.
-    unresolved: draft.sentActionId !== null && draft.sentAt === null,
+    unresolved,
+    /*
+     * Ended, and *known* to have ended — which an unresolved draft is not. The
+     * page draws one sentence or the other, never both: "it is kept so you can
+     * read what was proposed" under "whether it went out is genuinely unknown"
+     * would be two answers to the one question the owner is asking.
+     */
+    notLive: !live && !unresolved,
+    notLiveLine: `This draft is ${draft.status} and cannot be edited or sent. It is kept so you can read what was proposed.`,
+    unresolvedLine: unresolvedLine(draft.sendError),
     sendError: draft.sendError,
   };
+}
+
+/** What a dispatch that never came back says, with the server's own words. */
+export function unresolvedLine(sendError: string | null): string {
+  const said = sendError ? ` The server said: ${sendError}` : '';
+  return (
+    'buddi handed this message to the mail server and never got an answer, so whether it went out is genuinely unknown. ' +
+    'Check the mailbox — the Sent folder and the recipient — before sending anything like it again. ' +
+    `Nothing here can be edited, discarded or sent until you have.${said}`
+  );
 }
 
 /**
@@ -190,6 +231,8 @@ async function searchHits(
   ids: string[],
 ): Promise<{ items: unknown[]; count: number; window?: string }> {
   const attachments = booleanFilter('hasAttachments', input.hasAttachments);
+  // See the note on `validateFilters` below: this sentence is written for the
+  // owner and does not reach them yet.
   if (!attachments.ok) throw new Error(attachments.message);
   const filters: SearchFilters = {
     ...(input.q && input.q.trim() !== '' ? { query: input.q.trim() } : {}),
@@ -201,10 +244,22 @@ async function searchHits(
     // messages that have none.
     ...(attachments.value === true ? { hasAttachments: true } : {}),
   };
-  if ((filters.query ?? '') === '' && !narrows(filters)) return { items: [], count: 0 };
+  if ((filters.query ?? '') === '' && !narrows(filters)) {
+    // A search with nothing in it is a question the owner can fix, so it is
+    // answered rather than ignored — but only when they actually searched.
+    if (input.searching === 'true') {
+      throw new Error('Type something to search for, or set one of the filters.');
+    }
+    return { items: [], count: 0 };
+  }
   const wrong = validateFilters(filters);
-  // The same sentence the route answered with, from the same function: a
-  // malformed filter is something the owner can read and fix.
+  /*
+   * The same refusal the route answered with, from the same function. Until
+   * a query can raise an owner-readable refusal of its own, the page draws the
+   * engine's sentence ("The email plugin could not answer threads.") and this
+   * one reaches the installation's log with the request's reference — which is
+   * a step down from the old 400 and is being fixed in the engine.
+   */
   if (wrong) throw new Error(wrong);
 
   const now = ctx.now();
@@ -340,6 +395,9 @@ export function messageQuery(): PageQuery {
       if (!row) throw new Error('No message here has that id.');
       const messageId = String(row.id);
       const purged = row.body_purged_at !== null;
+      const body = purged
+        ? 'The body of this message has been purged under your retention setting. Its headers are kept.'
+        : truncateBody(String(row.body_text ?? ''));
       return {
         id: messageId,
         from: row.from_addr,
@@ -350,9 +408,7 @@ export function messageQuery(): PageQuery {
         who: row.direction === 'out' ? 'you wrote' : 'they wrote',
         // Null once retention has purged it: the headers stay, the body does
         // not, and the page says so rather than drawing an empty message.
-        bodyText: purged
-          ? 'The body of this message has been purged under your retention setting. Its headers are kept.'
-          : (row.body_text ?? ''),
+        bodyText: body,
         purged,
         attachments: attachmentRows(messageId, row.attachments),
       };
@@ -400,7 +456,32 @@ export function policiesQuery(): PageQuery {
     params: noParams,
     async produce(_params, ctx: ToolContext) {
       const now = ctx.now();
-      const view = await policiesView(ctx.db);
+      /*
+       * A schema that is not there is not a failure of this page.
+       *
+       * `42P01` is `undefined_table`: the plugin's migrations have not run on
+       * this installation. The routes answered "no policies" for exactly that
+       * case, and a settings section that reads as broken because a table is
+       * missing sends the owner looking for a fault they do not have. Anything
+       * else is a real failure and is thrown: a pool that timed out must not
+       * be drawn as "no rules".
+       */
+      let view: Awaited<ReturnType<typeof policyLists>>;
+      try {
+        view = await policyLists(ctx.db);
+      } catch (error) {
+        if (undefinedTable(error)) {
+          return {
+            applied: [],
+            proposed: [],
+            appliedCount: 0,
+            proposedCount: 0,
+            savedRuns: 0,
+            unavailable: true,
+          };
+        }
+        throw error;
+      }
       const line = (policy: (typeof view.applied)[number]): Record<string, unknown> => ({
         id: policy.id,
         // The row's own Keep and Revoke send this, and the bulk actions send
@@ -417,6 +498,7 @@ export function policiesQuery(): PageQuery {
         appliedCount: view.applied.length,
         proposedCount: view.proposed.length,
         savedRuns,
+        unavailable: false,
       };
     },
   };
@@ -428,7 +510,19 @@ export function watcherSettingsQuery(): PageQuery {
     name: 'watcher_settings',
     params: noParams,
     async produce(_params, ctx: ToolContext) {
-      return loadWatcherSettings(ctx.db);
+      try {
+        return await loadWatcherSettings(ctx.db);
+      } catch (error) {
+        /*
+         * The same two branches the route had, and the reason for the second
+         * one is the whole point: with the plugin not installed there is no
+         * `email.settings` table and the defaults *are* the answer, but a pool
+         * that timed out would otherwise make this page show `2 / 0.6` as
+         * though the owner had read his own settings back.
+         */
+        if (undefinedTable(error)) return DEFAULT_WATCHER_SETTINGS;
+        throw error;
+      }
     },
     result: z
       .object({
@@ -440,6 +534,11 @@ export function watcherSettingsQuery(): PageQuery {
       })
       .strict(),
   };
+}
+
+/** `42P01`: the plugin's own tables are not there. Not a failure of the page. */
+function undefinedTable(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === '42P01';
 }
 
 /** Every read the two mail pages make. */

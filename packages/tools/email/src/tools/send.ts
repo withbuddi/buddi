@@ -236,7 +236,7 @@ export async function buildEnvelope(
    * into `refused` with this sentence in it — the action is marked as never
    * having been attempted, which is the truth.
    */
-  const refusal = sendRefusalFor(draft);
+  const refusal = sendRefusalFor(draft, ctx.actionId ?? null);
   if (refusal) throw new Error(refusal);
   const account = await sendingAccount(ctx, draft);
   const original = draft.inReplyTo ? await findMessage(ctx.db, draft.inReplyTo) : null;

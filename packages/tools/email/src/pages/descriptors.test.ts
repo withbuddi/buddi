@@ -64,6 +64,28 @@ describe('the mail pages, as contributions', () => {
     expect(listed.has('email.fetch_attachment')).toBe(true);
   });
 
+  /**
+   * Which page writes a model can also make, said out loud.
+   *
+   * Everything the port added is `ownerOnly`, and the two reused tools are
+   * agent tools by design. `email.set_settings` is the one that is neither: a
+   * legitimate agent tool ("keep bodies for 30 days", "wait a week before you
+   * nudge") that the Watchers form also submits to. It was owner-only before
+   * only because it was reached through a route, which is not a property of
+   * the tool. This test is the statement that the exception is deliberate —
+   * if a page ever writes through a *second* listed tool, it fails.
+   */
+  it('makes exactly one page write through a tool a model may also call', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+    const listed = new Set(registry.list().map((t) => t.name));
+    const written = registry
+      .pageTools('email')
+      .filter((name) => listed.has(name))
+      .sort();
+    expect(written).toEqual(['email.fetch_attachment', 'email.send', 'email.set_settings']);
+  });
+
   it('refuses a page whose query was renamed on one side only', () => {
     const broken = copy(manifest.pages ?? []);
     const mail = broken.find((p) => p.id === 'mail');

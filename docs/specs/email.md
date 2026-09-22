@@ -85,8 +85,9 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
 
 ## 4. Accounts
 
-- Settings → Email lists accounts: address, host, folders synced, last
-  sync, the vault secret's name, remove. It is a **page descriptor this
+- Settings → Email lists accounts: address, the name the owner gave it, the
+  addresses it also receives as, host, last sync, the vault secret's name,
+  whether it is on and where it came from, and remove. It is a **page descriptor this
   plugin contributes** (docs/specs/plugin-pages.md), not a screen compiled
   into the dashboard: a table over the `accounts` query, with
   `email.remove_account` on each row and a drawer that writes through
@@ -395,9 +396,15 @@ this installation does not ship. Five numbers are on the Email settings page in
 a small "Watchers" block, saved together — `waitingDays` (2), `dateConfidence`
 (0.6), `promisedDays` (3), `receiptConfidence` (0.7) and `nudgeDays` (5) — and
 all five are readable and writable from a chat through `email.get_settings` and
-`email.set_settings`. Each is bounded, and a value outside its bounds — or one
-that is not a number at all — is a 400 that says what the bounds are rather
-than a number quietly clamped or coerced into range; an unset one reads as its
+`email.set_settings`. That form is the **one write on either page that is not
+`ownerOnly`**, and deliberately: how long a conversation may wait on the owner
+is a preference an agent may reasonably be asked to change, and the old
+route was owner-only because it was a route rather than because the tool is.
+Everything else the two pages write through — accounts, rules, drafts — is a
+tool no model is ever shown. Each setting is bounded, and a value outside its
+bounds — or one that is not a number at all — is refused with a sentence that
+says what the bounds are ("The waiting window is a whole number of days between
+1 and 30.") rather than a number quietly clamped or coerced into range; an unset one reads as its
 default. Two rules keep a bound from being a trapdoor: `receiptConfidence`
 stops at **0.95**, which is the highest score the classifier can produce, so
 there is no threshold the page offers that silently switches the watcher off;
