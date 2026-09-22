@@ -107,9 +107,12 @@ All paths relative to the workspace; every result says the path it acted on.
   `{ name, since? }`, `developer.stop` `{ name }`: long-lived processes (a dev
   server, a test watcher) owned by the agent, killed when the workspace
   changes, the agent is removed, or buddi stops. At most 4 per agent. Same
-  gating as `run`, spawned the same way. A row is identified by its pid *and*
-  its start time, so a recycled pid after a reboot is a stale row rather than
-  a signal sent to a stranger.
+  gating as `run`, and spawned the same way down to the program: resolved to
+  an absolute file on the workspace's captured PATH, argv, no shell. A row is
+  identified by its pid *and* its start time, so a recycled pid after a reboot
+  is a stale row rather than a signal sent to a stranger. A process name
+  belongs to one agent at a time across the installation, because a preview is
+  asked for by name alone.
 - `developer.git` `{ action: status | diff | log | branch | commit | stash,
   … }`: read actions auto; a branch create is gated in `ask` and auto
   otherwise, and creates with `switch -c … HEAD`, which moves a ref and
@@ -158,37 +161,52 @@ A command runs with no card only when all of this holds:
    program's own grammar, and its operands are of the kind that program takes.
    A flag that is not in the table is gated **by name**, and `--flag=value`,
    `--flag value`, `-fvalue`, `-f=value` and `-abc` are all read as the flags
-   they are, so a spelling is not a way past the table.
+   they are, so a spelling is not a way past the table. A flag's value has to
+   *be* what the table says it is: a `<word>` carries no path separator at
+   all; a `<glob>` may carry one — it filters what is already being searched
+   and cannot add a root — but may not climb with `..` or begin with `/`; a
+   `<n>` is digits; a `<re>` is a pattern and is never resolved as a path. An
+   operand that begins with a dash is refused even after `--`, because `--`
+   stops *this* parser reading it as a flag and says nothing about the
+   program.
 3. **Every path — operand or flag value — resolves inside the workspace**: not
-   absolute, no `..`, no `~`, no symlink component.
+   absolute, no `..`, no `~`, no symlink component, and resolved against **the
+   directory the command will run in** (`cwd`, itself resolved inside the
+   workspace) rather than the workspace root, since that is what the program
+   will read it against.
 
-The list, with what each program may be given:
+The list, exactly as the code has it — and it is stricter than a summary of it
+would be, so it is written out per program:
 
-| Program | Flags | Operands |
-| --- | --- | --- |
-| `node` | `--test` | a file (one is required; `node` alone is a REPL) |
-| `npm`/`pnpm`/`yarn`/`bun` | none | `run\|test\|build\|lint\|typecheck`, then one script name |
-| `python`/`python3` | `-m` | a module from `pytest\|unittest\|mypy\|ruff\|black`, whose own grammar reads the rest |
-| `pytest` | `-q -x -v -k <expr> --maxfail=<n> -p <word>` | paths |
-| `go` | `-v -run <re>` | `test\|build\|vet\|fmt`, then `./...` or paths |
-| `cargo` | `-v --release -run <re>` | `test\|build\|check\|clippy\|fmt` |
-| `make` | none | bare targets (no `VAR=`) |
-| `tsc` | `-p <path> --project <path> --noEmit` | paths |
-| `vitest`/`jest` | `-t <name>` | optional `run`, then paths |
-| `eslint`/`prettier`/`ruff`/`black`/`mypy` | `--check --fix --write` | paths |
-| `ls` | `-l -a` | paths |
-| `cat` | none | paths |
-| `head`/`tail` | `-n <n> -c <n>` | paths |
-| `wc` | `-l -c -w` | paths |
-| `grep` | `-n -i -r -E -F -w -c -l --include=<glob>` | a pattern, then paths |
-| `rg` | `-n -i -w -l -c -g <glob> -t <type> --no-follow` | a pattern, then paths |
-| `find` | an expression: `-name -iname -type -maxdepth -mindepth -path -newer -size -not -o -a` | a path |
-| `diff` | `-u -r` | paths |
-| `sort` | `-n -r -u` | paths |
-| `uniq` | `-c` | paths |
-| `echo` | none | any words |
-| `pwd` | none | none |
-| `which` | none | one word |
+| Program | Subcommand | Flags | Operands |
+| --- | --- | --- | --- |
+| `node` | — | `--test` | files; at least one, unless `--test` |
+| `npm` `pnpm` `yarn` `bun` | one of `run test build lint typecheck`, required | none at all | at most one script name (`[a-z0-9:_.-]+`) |
+| `python` `python3` | — | `-m <word>`, and it must be the **first** word | the module, one of `pytest unittest mypy ruff black`; everything after it is read by that module's own row |
+| `pytest` | — | `-q -x -v -k <word> --maxfail=<n> -p <word>` | paths |
+| `unittest` | — | none | bare words |
+| `go` | one of `test build vet fmt`, required | `-v -run <re>` | `./...`, `pkg/...` or paths |
+| `cargo` | one of `test build check clippy fmt`, required | `-v --release -run <re>` | bare words |
+| `make` | — | none at all | bare targets (`[A-Za-z0-9:_.-]+`; no `VAR=`) |
+| `tsc` | — | `-p <path> --project <path> --noEmit` | paths |
+| `vitest` `jest` | optional `run` | `-t <word>` | paths |
+| `eslint` | — | `--fix` | paths |
+| `prettier` | — | `--check --write` | paths |
+| `ruff` | optional `check` or `format` | `--check --fix` | paths |
+| `black` `mypy` | — | `--check` | paths |
+| `ls` | — | `-l -a` | paths |
+| `cat` | — | none | paths |
+| `head` `tail` | — | `-n <n> -c <n>` | paths |
+| `wc` | — | `-l -c -w` | paths |
+| `grep` | — | `-n -i -r -E -F -w -c -l --include=<glob>` | a pattern, then paths |
+| `rg` | — | `-n -i -w -l -c -g <glob> -t <word> --no-follow` | a pattern, then paths |
+| `find` | — | an expression: `-name <glob> -iname <glob> -type <word> -maxdepth <n> -mindepth <n> -path <glob> -newer <path> -size <word> -not -o -a` | a path |
+| `diff` | — | `-u -r` | paths |
+| `sort` | — | `-n -r -u` | paths |
+| `uniq` | — | `-c` | paths |
+| `echo` | — | none | any words |
+| `pwd` | — | none | none |
+| `which` | — | none | one bare word |
 
 Everything else asks, and the card names the program. The old parser survives
 for one job: putting a *name* on that card ("npm install installs packages
