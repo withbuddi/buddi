@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import type { PluginManifest, Source, Vault } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
+import { emailMetrics } from './metrics.js';
 import { emailSentinels } from './sentinels/index.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
@@ -130,6 +131,9 @@ export function createEmailManifest(
     pages: emailPages(),
     queries: emailQueries(),
     sources: createEmailSources(opts),
+    // The numbers a goal can watch: unread mail, and what is waiting on the
+    // owner. Read-only, and measured on core's schedule (`metrics.ts`).
+    metrics: emailMetrics,
     // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
     sentinels: emailSentinels,
@@ -144,6 +148,7 @@ export const emailSources: Source[] = manifest.sources ?? [];
 
 export default manifest;
 
+export { emailMetrics, inboxUnread, waitingOnMe as waitingOnMeMetric } from './metrics.js';
 export { listRecent, readMessage, search } from './tools/read.js';
 // --- email step 6b: search and attachments ---
 export {

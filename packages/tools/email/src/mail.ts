@@ -296,6 +296,15 @@ export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
   };
 }
 
+/**
+ * The same question as `isUnread`, asked of the stored row in SQL.
+ *
+ * One definition of "unread" for the whole plugin: `email.list_recent` filters
+ * with it and `email.inbox_unread` counts with it, so a listing and a goal can
+ * never be counting two different things.
+ */
+export const UNREAD_SQL = `not (flags @> '["\\\\Seen"]'::jsonb)`;
+
 /** True when the mailbox has not marked the message `\Seen`. */
 export function isUnread(flags: readonly string[]): boolean {
   return !flags.some((f) => f.toLowerCase() === '\\seen');
