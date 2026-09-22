@@ -37,7 +37,15 @@ export interface FetchedMessage {
   to: Address[];
   cc: Address[];
   subject: string;
+  /** The `Date` header, exactly as the sender wrote it. Never trusted for ordering. */
   date: Date | null;
+  /**
+   * IMAP INTERNALDATE: when the server itself received or created the
+   * message. The sender cannot write it, which is why thread ordering is
+   * built on this and not on `date` — see `threads.ts`. Null only for a fake
+   * or a server that genuinely omits it; `fetched_at` is the fallback.
+   */
+  internalDate: Date | null;
   bodyText: string;
   hasAttachments: boolean;
   attachments: AttachmentInfo[];

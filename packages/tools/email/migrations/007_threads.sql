@@ -29,8 +29,11 @@
 --     judgement here, and it is made conservatively — see the backfill.
 --
 --  3. `messages.direction`: `in` for mail that arrived, `out` for what the
---     owner sent. Derived at ingest from whether the From is the account's own
---     address or one of its aliases, and backfilled the same way below.
+--     owner sent. Derived at ingest from the folder a message landed in, not
+--     from its From header (sender-controlled). Every row already stored
+--     came through INBOX, the only folder ever polled before this migration,
+--     so the backfill below leaves them all `in` — nothing is inferred from
+--     `From`.
 --
 -- The thread-scope policy matcher moves with all this. A `thread` policy used
 -- to name a `thread_key` — a string the sender writes — and now names the
@@ -84,7 +87,11 @@ create table if not exists threads (
   subject text not null default '',
   -- Every address that has written or been written to in this conversation,
   -- the owner's own included. Searchable by participant (docs/email.md §9).
+  -- Capped at `participants_cap()` (50): see the function below.
   participants jsonb not null default '[]'::jsonb,
+  -- How many more distinct participants have written into this conversation
+  -- than the cap keeps. Zero for every ordinary thread.
+  participants_overflow integer not null default 0,
   first_at timestamptz null,
   last_at timestamptz null,
   -- Who the conversation is waiting on. `waiting-on-me` and `waiting-on-them`
@@ -96,6 +103,13 @@ create table if not exists threads (
   policy_id uuid null references policies (id) on delete set null,
   message_count integer not null default 0,
   last_direction text not null default 'in' check (last_direction in ('in', 'out')),
+  -- The folder and uid of the message that decided `last_direction` and
+  -- `last_at`. Not shown anywhere; it exists only so that two messages
+  -- landing with the *same* ordering clock (see `internal_date` below) have a
+  -- deterministic winner — folder, then uid — instead of whichever one this
+  -- poll happened to process last.
+  last_folder_id uuid null references folders (id) on delete set null,
+  last_uid bigint null,
   created_at timestamptz not null default now(),
   unique (account_id, thread_key)
 );
@@ -106,10 +120,18 @@ create index if not exists threads_last_at_idx on threads (last_at desc nulls la
 alter table messages add column if not exists thread_id uuid null
   references threads (id) on delete set null;
 
--- `in` is the right default for every row already stored: only INBOX was ever
--- polled, so everything here arrived. The backfill below corrects the few that
--- are the owner's own mail, and ingest sets it explicitly from now on.
+-- `in` is the right answer for every row already stored: only INBOX was ever
+-- polled, so everything here arrived through it, and that is the only
+-- evidence trusted for direction. Ingest sets it explicitly from the folder a
+-- message lands in from now on.
 alter table messages add column if not exists direction text not null default 'in';
+
+-- IMAP INTERNALDATE: the server's own record of when it received the
+-- message, as opposed to `date` (the `Date` header, which the sender writes
+-- and which `threads.ts` never trusts for ordering — see there). Null only
+-- for a row from before this column existed, or a server that genuinely
+-- omits it; `fetched_at` is the fallback ordering clock either way.
+alter table messages add column if not exists internal_date timestamptz null;
 
 do $$
 begin
@@ -122,12 +144,60 @@ $$;
 create index if not exists messages_thread_id_idx on messages (thread_id);
 create index if not exists messages_direction_idx on messages (account_id, direction);
 
--- The union of two participant lists, sorted, without duplicates. A function
--- rather than an inline sub-select because `on conflict do update` is where it
--- is used, and that clause is no place for a subquery.
+-- How many distinct participants a thread is allowed to hold. Nothing stops a
+-- sender who knows a thread key from repeatedly attaching arbitrary To/Cc
+-- lists — `docs/email.md` never promised that address to be honest — and an
+-- unbounded jsonb column is an unbounded row and an ever more expensive
+-- upsert. Names past the cap are still counted, in `participants_overflow`,
+-- just not stored: the owner sees "and N more" rather than either an
+-- unbounded row or a silently dropped fact.
+create or replace function participants_cap() returns integer as $$
+  select 50;
+$$ language sql immutable;
+
+-- The union of two participant lists, sorted, without duplicates, capped. A
+-- function rather than an inline sub-select because `on conflict do update`
+-- is where it is used, and that clause is no place for a subquery.
 create or replace function merge_participants(a jsonb, b jsonb) returns jsonb as $$
-  select coalesce(jsonb_agg(distinct value order by value), '[]'::jsonb)
-    from jsonb_array_elements(coalesce(a, '[]'::jsonb) || coalesce(b, '[]'::jsonb));
+  select coalesce(jsonb_agg(value order by value), '[]'::jsonb)
+    from (
+      select distinct value
+        from jsonb_array_elements(coalesce(a, '[]'::jsonb) || coalesce(b, '[]'::jsonb)) as e(value)
+       order by value
+       limit email.participants_cap()
+    ) capped;
+$$ language sql immutable;
+
+-- How many distinct participants two lists hold together, uncapped — what
+-- `participants_overflow` is derived from.
+create or replace function merge_participants_count(a jsonb, b jsonb) returns integer as $$
+  select count(distinct value)::int
+    from jsonb_array_elements(coalesce(a, '[]'::jsonb) || coalesce(b, '[]'::jsonb)) as e(value);
+$$ language sql immutable;
+
+-- Does the newly arrived message decide who wrote last? By the ordering
+-- clock (`threads.ts`'s `at`, built from INTERNALDATE with a `fetched_at`
+-- fallback — never the sender's `Date` header). When two messages carry the
+-- exact same clock value, the winner is decided by folder then uid, always
+-- the same way for the same two messages, rather than by whichever one this
+-- particular poll happened to write last.
+create or replace function newer_wins(
+  new_at timestamptz, old_at timestamptz,
+  new_folder uuid, old_folder uuid,
+  new_uid bigint, old_uid bigint
+) returns boolean as $$
+  select case
+    when new_at is null then false
+    when old_at is null then true
+    when new_at > old_at then true
+    when new_at < old_at then false
+    when old_folder is null then true
+    when new_folder is null then false
+    when new_folder::text <> old_folder::text then new_folder::text > old_folder::text
+    when old_uid is null then true
+    when new_uid is null then false
+    else new_uid > old_uid
+  end;
 $$ language sql immutable;
 
 -- 3 ---------------------------------------------------------------- backfill
@@ -135,33 +205,6 @@ $$ language sql immutable;
 -- A function rather than a `do` block, for the same reason `004` made its seed
 -- one: the test suite calls the code the migration called, on fixtures of its
 -- own, instead of a copy of it that can drift.
-
-/*
- * `out` is mail the owner sent: the From is the account's own address, or one
- * of the aliases it receives (and therefore sends) as. Nothing else is
- * evidence — a From header is a string anybody can write, and this is why the
- * *folder* is what decides direction at ingest from now on.
- */
-create or replace function backfill_message_direction() returns integer as $$
-declare
-  touched integer;
-begin
-  with fixed as (
-    update email.messages m
-       set direction = 'out'
-      from email.accounts a
-     where a.id = m.account_id
-       and m.direction <> 'out'
-       and (
-         email.address_of(m.from_addr) = lower(a.address)
-         or email.address_of(m.from_addr) = any (select lower(x) from unnest(a.aliases) as x)
-       )
-    returning 1
-  )
-  select count(*)::int into touched from fixed;
-  return touched;
-end;
-$$ language plpgsql;
 
 /*
  * Build the threads from the messages that are already stored.
@@ -184,7 +227,13 @@ create or replace function backfill_threads(seeded_at timestamptz default now())
 declare
   inserted integer;
 begin
-  perform email.backfill_message_direction();
+  -- Direction is not guessed from `From` here: every row already stored came
+  -- through INBOX (the only folder ever polled before this migration) and the
+  -- column defaults to `in`, which is already the right answer for it. A From
+  -- header is a string the sender writes, and inferring `out` from it would
+  -- let a spoofed or alias-addressed inbound message claim "the owner wrote
+  -- last." Direction for new mail is set at ingest from the folder it landed
+  -- in, not from a header.
 
   with msgs as (
     select m.id,
@@ -196,7 +245,16 @@ begin
            m.cc,
            m.direction,
            m.uid,
-           coalesce(m.date, m.fetched_at) as at
+           m.folder_id,
+           -- The ordering clock. Preferred: INTERNALDATE, when this row has
+           -- one. For everything backfilled here, it never will — the column
+           -- did not exist when these rows were stored — so this one-time
+           -- migration falls back to the header `date` before `fetched_at`:
+           -- unlike live ingest (`threads.ts`), there is no sender actively
+           -- trying to game a backfill of mail already sitting in the
+           -- database, and `date` is the only signal that carries these
+           -- rows' real chronology at all.
+           coalesce(m.internal_date, m.date, m.fetched_at) as at
       from email.messages m
   ),
   parts as (
@@ -213,14 +271,18 @@ begin
      group by g.account_id, g.tkey
   ),
   rolled as (
+    -- Ties on `at` are broken deterministically — folder, then uid — rather
+    -- than by whatever order the rows happened to come out of the table in.
     select account_id,
            tkey,
-           (array_agg(subject order by at asc, uid asc))[1] as subject,
+           (array_agg(subject order by at asc, folder_id asc, uid asc))[1] as subject,
            min(at) as first_at,
            max(at) as last_at,
            count(*)::int as message_count,
-           (array_agg(direction order by at desc, uid desc))[1] as last_direction,
-           (array_agg(email.address_of(from_addr) order by at desc, uid desc))[1] as last_sender
+           (array_agg(direction order by at desc, folder_id desc, uid desc))[1] as last_direction,
+           (array_agg(email.address_of(from_addr) order by at desc, folder_id desc, uid desc))[1] as last_sender,
+           (array_agg(folder_id order by at desc, folder_id desc, uid desc))[1] as last_folder_id,
+           (array_agg(uid order by at desc, folder_id desc, uid desc))[1] as last_uid
       from msgs
      group by account_id, tkey
   ),
@@ -233,6 +295,8 @@ begin
          r.last_at,
          r.message_count,
          r.last_direction,
+         r.last_folder_id,
+         r.last_uid,
          case
            when r.message_count = 1
             and r.last_direction = 'in'
@@ -255,9 +319,9 @@ begin
   written as (
     insert into email.threads
       (account_id, thread_key, subject, participants, first_at, last_at,
-       message_count, last_direction, state, created_at)
+       message_count, last_direction, last_folder_id, last_uid, state, created_at)
     select account_id, thread_key, subject, participants, first_at, last_at,
-           message_count, last_direction, state, seeded_at
+           message_count, last_direction, last_folder_id, last_uid, state, seeded_at
       from rebuilt
     -- Idempotent: a thread that already exists keeps what ingest has been
     -- maintaining, which is newer than anything this function could rebuild.
@@ -288,18 +352,69 @@ select backfill_threads();
 -- so it is re-pointed at the thread it was always about; one that names a
 -- conversation this installation does not hold is left exactly as it is, where
 -- it matches nothing and is visible on the settings page.
-update policies p
-   set matcher = t.id::text
-  from threads t
- where p.scope = 'thread'
-   and p.revoked_at is null
-   and lower(p.matcher) = lower(t.thread_key)
-   and (p.account_id is null or p.account_id = t.account_id);
+--
+-- A *global* thread policy (`account_id is null`) is the one case a plain
+-- rename cannot handle: `thread_key` is only unique per account, so the same
+-- root Message-ID can be the key of a thread in two different accounts, and a
+-- thread's id is account-local — one global row cannot name both. Renaming it
+-- in place would leave Postgres to pick one of the matching threads
+-- arbitrarily and silently narrow "every account" down to whichever thread
+-- won the join. Instead, expand: for every live global thread policy, insert
+-- one account-scoped copy — same action, params, origin, proposed flag and
+-- history — per thread it currently matches, already pointed at that thread's
+-- id, and revoke the global row. The revoked row stays as the record that a
+-- global rule once existed; its effect now lives in the per-account rows.
+--
+-- A function, for the same reason `backfill_threads` is one: the test suite
+-- exercises the migration's own code on fixtures of its own, rather than a
+-- copy that can drift.
+create or replace function expand_global_thread_policies() returns integer as $$
+declare
+  expanded integer;
+begin
+  with inserted as (
+    insert into email.policies
+      (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at)
+    select t.account_id, 'thread', t.id::text, p.action, p.params, p.origin, p.proposed, p.created_from,
+           p.created_at
+      from email.policies p
+      join email.threads t on lower(t.thread_key) = lower(p.matcher)
+     where p.scope = 'thread'
+       and p.revoked_at is null
+       and p.account_id is null
+    on conflict do nothing
+    returning 1
+  )
+  select count(*)::int into expanded from inserted;
 
-update threads t
-   set policy_id = p.id
-  from policies p
- where p.scope = 'thread'
-   and p.revoked_at is null
-   and p.matcher = t.id::text
-   and t.policy_id is null;
+  update email.policies p
+     set revoked_at = now()
+   where p.scope = 'thread'
+     and p.revoked_at is null
+     and p.account_id is null
+     and exists (select 1 from email.threads t where lower(t.thread_key) = lower(p.matcher));
+
+  -- What remains after the expansion above is already account-scoped:
+  -- re-point it at the thread it was always about.
+  update email.policies p
+     set matcher = t.id::text
+    from email.threads t
+   where p.scope = 'thread'
+     and p.revoked_at is null
+     and lower(p.matcher) = lower(t.thread_key)
+     and p.account_id = t.account_id;
+
+  update email.threads t
+     set policy_id = p.id
+    from email.policies p
+   where p.scope = 'thread'
+     and p.revoked_at is null
+     and p.matcher = t.id::text
+     and p.account_id = t.account_id
+     and t.policy_id is null;
+
+  return expanded;
+end;
+$$ language plpgsql;
+
+select expand_global_thread_policies();
