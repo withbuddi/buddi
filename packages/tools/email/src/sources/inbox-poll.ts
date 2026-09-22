@@ -224,17 +224,30 @@ async function foldersOf(db: Pool, accountId: string): Promise<FolderRecord[]> {
 }
 
 /**
- * Find out what folders this account has, once.
+ * Find out what folders this account has, once — and *record* that it is done.
  *
  * Once per account, not once per poll: a LIST is cheap but it is not free, and
- * the folders of a mailbox do not move. The trigger is the table itself —
- * an account that has been listed has a row per folder, and one that has only
- * the INBOX row (or none) has never been listed. Whatever the server returns
- * is written down; exactly two rows are marked synced, INBOX and Sent
- * (`folders.ts` decides which one that is).
+ * the folders of a mailbox do not move. The trigger is
+ * `accounts.folders_discovered_at` (migration 008), which is the fact itself
+ * rather than a proxy for it. The shape of the `folders` table used to be the
+ * proxy — "more than one row means this account has been listed" — and it read
+ * the wrong thing: an account whose INBOX row was written while the *Sent*
+ * insert failed has two rows the moment any other folder is recorded, so it
+ * looked discovered forever and never got the Sent row. Its threads would then
+ * never hear the owner's side, silently, for good.
+ *
+ * So the stamp is written only when every folder the plan named was persisted,
+ * Sent included. A pass that lost one of them leaves it null and the next poll
+ * tries again; INBOX is polled either way, which is why a Sent insert that
+ * fails is logged and walked past rather than thrown.
  *
  * A server with no Sent folder is a running state, not a failure: the inbox is
  * polled as it always was, thread state simply never hears the owner's side.
+ * It also leaves the stamp null, deliberately — one LIST per poll is the price
+ * of ever noticing a Sent folder the owner creates later.
+ *
+ * Whatever the server returns is written down; exactly two rows are marked
+ * synced, INBOX and Sent (`folders.ts` decides which one that is).
  */
 async function discoverFolders(
   db: Pool,
@@ -243,8 +256,7 @@ async function discoverFolders(
   timeoutMs: number,
   log: (line: string) => void,
 ): Promise<FolderRecord[]> {
-  const known = await foldersOf(db, account.id);
-  if (known.length > 1) return known;
+  if (account.foldersDiscoveredAt !== null) return foldersOf(db, account.id);
 
   const listing = await withDeadline('list', timeoutMs, client.listMailboxes());
   const plan = planFolders(listing);
@@ -253,6 +265,8 @@ async function discoverFolders(
   if (!plan.some((f) => f.kind === 'inbox')) {
     plan.unshift({ name: INBOX, kind: 'inbox', synced: true });
   }
+  let lost = 0;
+  let sentPersisted = false;
   for (const folder of plan) {
     const listed = listing.find((candidate) => candidate.name === folder.name);
     const boundary = folder.kind === 'sent' && listed?.status
@@ -263,8 +277,10 @@ async function discoverFolders(
       : undefined;
     try {
       await ensureFolder(db, account, folder.name, folder.kind, folder.synced, boundary);
+      if (folder.kind === 'sent') sentPersisted = true;
     } catch (err) {
       if (folder.kind === 'inbox') throw err;
+      lost += 1;
       log(
         `email.inbox-poll: could not record discovered folder ${account.address}/${folder.name}: ` +
           `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
@@ -272,9 +288,30 @@ async function discoverFolders(
     }
   }
   const sent = plan.find((f) => f.kind === 'sent');
+  // Discovery is complete only when the whole plan landed *and* it included a
+  // Sent folder. Anything less stays null: the next poll lists again, which is
+  // how a Sent row lost to a transient error — or a Sent folder the owner
+  // creates after buddi first looked — is ever picked up.
+  const complete = lost === 0 && sentPersisted;
+  if (complete) {
+    try {
+      await db.query(`update email.accounts set folders_discovered_at = now() where id = $1`, [
+        account.id,
+      ]);
+    } catch (err) {
+      // The folders are recorded; only the stamp is missing, so the next poll
+      // repeats a listing it has already written down. Harmless, and said out
+      // loud rather than retried in a loop nobody is watching.
+      log(
+        `email.inbox-poll: could not record discovery for ${account.address}: ` +
+          `${err instanceof Error ? err.message : String(err)}; it will be listed again next poll`,
+      );
+    }
+  }
   log(
     `email.inbox-poll: ${account.address} has ${plan.length} folder(s); ` +
-      (sent ? `Sent is ${sent.name}` : 'no Sent folder was found, so only the inbox is synced'),
+      (sent ? `Sent is ${sent.name}` : 'no Sent folder was found, so only the inbox is synced') +
+      (complete ? '' : '; discovery is incomplete and will be retried next poll'),
   );
   return foldersOf(db, account.id);
 }

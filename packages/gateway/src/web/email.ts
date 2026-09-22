@@ -230,6 +230,9 @@ export async function testLogin(deps: EmailWebDeps, account: NewEmailAccount): P
     displayName: account.displayName ?? null,
     enabled: true,
     addedVia: 'page',
+    // Nothing has been discovered for a mailbox that is only being tested: it
+    // has no row yet, and this candidate never reaches the poll.
+    foldersDiscoveredAt: null,
     createdAt: null,
   };
   let client: Awaited<ReturnType<ImapClientFactory>> | null = null;

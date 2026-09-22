@@ -67,11 +67,15 @@ New:
   are counted per account: three promos in the personal mailbox say nothing
   about the work one.
 - `folders` (built): discovered per account, once, from the server's own LIST.
+  Completion is recorded on the account (`accounts.folders_discovered_at`),
+  not inferred from how many folder rows there are: a pass that lost the Sent
+  row to a transient error leaves it null and the next poll lists again.
   **INBOX and Sent are synced**, each with its own UIDVALIDITY and cursor;
   every other folder is recorded and polled on request (§11). Sent is
   recognised by its SPECIAL-USE `\Sent` attribute, then by Gmail's
   `[Gmail]/Sent Mail`, then by name; an account with no Sent folder keeps
-  working and simply never hears the owner's side. Labels applied through IMAP
+  working and simply never hears the owner's side — and keeps being listed, so
+  a Sent folder created later is found. Labels applied through IMAP
   flags or Gmail labels remain future work — the port is peek-only (§5).
 - `attachments`: name, type, size, and, when fetched, the artifact id.
 - `events`: what the policy engine did to each message (skipped a run,
