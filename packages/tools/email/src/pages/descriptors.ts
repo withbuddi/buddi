@@ -299,6 +299,8 @@ const mail: PageDescriptor = {
       rows: 'items',
       count: 'count',
       note: 'window',
+      // Clear, as the old form had: a search is a thing you finish with.
+      reset: true,
       results: {
         title: { path: 'subject' },
         sub: { path: 'line' },
@@ -335,7 +337,11 @@ const mail: PageDescriptor = {
               // Both facts: where the conversation stands, and whether a reply is
               // waiting on the owner. One in place of the other hid the state of
               // every conversation an agent had drafted for.
-              pills: [{ value: { path: 'state' } }, { value: { path: 'draftPill' } }],
+              pills: [
+            { value: { path: 'state' } },
+            // The reply waiting on the owner is the one to catch an eye.
+            { value: { path: 'draftPill' }, tone: 'accent' },
+          ],
               to: { page: 'mail', item: { path: 'id' } },
             },
             empty: 'No conversations yet. buddi builds them as mail arrives.',
@@ -688,8 +694,8 @@ const settings: PageDescriptor = {
             { key: 'host', label: 'Host' },
             { key: 'lastSync', label: 'Last sync' },
             { key: 'secretName', label: 'Password kept as' },
-            // A mailbox buddi is not reading is worth catching an eye.
-            { key: 'state', label: 'State', pill: { tone: { path: 'stateTone' } } },
+            // An array of `{ value, tone }`: one pill per fact about the row.
+            { key: 'state', label: 'State', pill: {} },
           ],
           actions: [
             {

@@ -94,8 +94,12 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
   `email.add_account`. "Add an account" takes address and app password, and
   the hosts only when they differ from the ones `email.add_account` works
   out from the address — Gmail and the common providers are known to it,
-  and anything else falls back to `imap.`/`smtp.` on its own domain. The
-  password goes to the vault under a name derived from the address.
+  and anything else falls back to `imap.`/`smtp.` on its own domain. Not
+  ported, on purpose: the old form *showed* those hosts in the fields as the
+  address was typed, and a page descriptor carries no such logic; the
+  inference happens in the tool, and the owner sees the result in the table
+  after it is added. The password goes to the vault under a name derived from
+  the address.
   The secret's name is *derived*, never chosen: `EMAIL_`, the address
   upper-cased with every non-alphanumeric character turned into an
   underscore, then eight hex digits of the address's SHA-256 — so
@@ -668,7 +672,10 @@ Also:
 - On the Mail page, an opened message lists its attachments with a Fetch per
   row — `email.fetch_attachment` through the page's act route, the same
   session and CSRF gate as every other write, the owner as `createdBy` — and
-  a file already here carries its download link.
+  a file already here carries its download link in place of the button. The
+  heading is always "Attachments": a title that changes with the count is not
+  something a descriptor can say, and one file under a plural heading is a
+  smaller oddity than a component set that grows to fix it.
 
 **Retention does not touch them.** The body of a message is purged on the
 owner's window; the artifact a fetch produced is the owner's own file, in their
