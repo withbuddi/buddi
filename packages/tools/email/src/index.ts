@@ -13,7 +13,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest, Source } from '@buddi/core';
+import type { PluginManifest, Source, Vault } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailSentinels } from './sentinels/index.js';
@@ -30,6 +30,7 @@ import { createSendTool } from './tools/send.js';
 import { listPolicies, revokeEmailPolicy, setPolicy } from './tools/policies.js';
 import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
+import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
 import type { EnvLike } from './config.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
 
@@ -50,6 +51,12 @@ export interface EmailPluginOptions {
    * at poll/send time — never at import, and never by the adapters themselves.
    */
   env?: EnvLike;
+  /**
+   * Where a mailbox's password is kept. Defaults to this machine's vault,
+   * resolved lazily inside `email.add_account` — never at import. Injected by
+   * a test, so adding an account never touches the owner's keychain.
+   */
+  vault?: Vault;
 }
 
 /**
@@ -108,7 +115,20 @@ export function createEmailManifest(
         ...(opts.env ? { env: opts.env } : {}),
       }),
       // --- end step 6b ---
+      /*
+       * What the owner's own screens write through (docs/specs/plugin-pages.md).
+       * Every one of them is `ownerOnly`: the registry never lists them to a
+       * model, and `invoke` refuses them for anyone but the owner's own path.
+       */
+      ...emailPageTools({
+        connect: opts.connect ?? imapflowFactory,
+        ...(opts.vault ? { vault: opts.vault } : {}),
+        ...(opts.env ? { env: opts.env } : {}),
+      }),
     ],
+    // The Mail place and the Email settings tab, and the reads they make.
+    pages: emailPages(),
+    queries: emailQueries(),
     sources: createEmailSources(opts),
     // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
@@ -409,6 +429,29 @@ export {
   type WaitingThread,
   type WatcherSettings,
 } from './watchers.js';
+export {
+  emailPages,
+  emailPageTools,
+  emailQueries,
+  addressesOf,
+  attachmentRows,
+  conflictSentence,
+  draftStatusLine,
+  hostsFor,
+  originWord,
+  policyLine,
+  readNewAccount,
+  relative,
+  AccountRefusal,
+  DraftRefusal,
+  KNOWN_HOSTS,
+  MAX_DRAFT_BODY,
+  RuleRefusal,
+  SEARCH_LIMIT,
+  THREAD_LIST_LIMIT,
+  THREAD_MESSAGE_LIMIT,
+  type MailHosts,
+} from './pages/index.js';
 export { imapflowFactory } from './imap/imapflow-client.js';
 export { smtpFactory } from './smtp/nodemailer-client.js';
 export { FakeImapServer, fakeMessage, type FakeMailbox } from './imap/fake.js';

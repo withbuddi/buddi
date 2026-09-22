@@ -1,7 +1,7 @@
 /**
- * Settings: the installation, section by section. Model accounts, the mailboxes
- * it reads and sends as, the computer and browser the agents may drive, the
- * watchers that check, and the system itself. Nothing here is a page an owner visits daily, which is why it is
+ * Settings: the installation, section by section. Model accounts, the computer
+ * and browser the agents may drive, the watchers that check, the system itself
+ * — and, after them, a tab for each screen an installed plugin contributes. Nothing here is a page an owner visits daily, which is why it is
  * behind the gear and not on the rail's first screen.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,7 +14,6 @@ import { usePluginPages } from '../pages/usePages';
 import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
-import { Email } from './Email';
 import { Providers } from './Providers';
 import { Watchers } from './Watchers';
 import { You } from './You';
@@ -68,7 +67,6 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       {section === 'you' ? <You embedded /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}
-      {section === 'email' ? <Email embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
       {section === 'backup' ? <Backup /> : null}

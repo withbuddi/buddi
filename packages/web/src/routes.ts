@@ -13,18 +13,6 @@ export const ACTIVITY_ROUTE = '#/activity';
 export const SETTINGS_ROUTE = '#/settings';
 export const FILES_ROUTE = '#/files';
 /**
- * Mail: the conversations and the drafts waiting on them.
- *
- * A place of its own rather than a block on the settings page. Everything under
- * Settings → Email is configuration — accounts, rules, watcher switches — read
- * once and then rarely; this is a working surface with a message list, an
- * editor and an approval card that dispatches mail, opened daily. It also needs
- * what a settings section cannot give it: a URL per conversation, so a draft is
- * something the owner can link to and come back to.
- */
-export const MAIL_ROUTE = '#/email';
-
-/**
  * First run. Not a place on the rail: the wizard takes the whole window, and
  * the shell is what it hands the owner at the end.
  */
@@ -123,21 +111,6 @@ export function transcriptRoute(conversationId: string): string {
   return `${ACTIVITY_ROUTE}/conversations/${encodeURIComponent(conversationId)}`;
 }
 
-/** One conversation, by id: `#/email/<threadId>`. */
-export function mailRoute(threadId?: string | null): string {
-  return threadId ? `${MAIL_ROUTE}/${encodeURIComponent(threadId)}` : MAIL_ROUTE;
-}
-
-export function parseMailRoute(hash: string): { threadId?: string } | null {
-  const match = /^#\/email(?:\/([^/?]+))?(?:\?.*)?$/.exec(hash);
-  if (!match) return null;
-  try {
-    return match[1] ? { threadId: decodeURIComponent(match[1]) } : {};
-  } catch {
-    return null;
-  }
-}
-
 /* ------------------------------------------------------------------ *
  * Plugin pages
  *
@@ -207,7 +180,6 @@ export const PLACES = [
   { route: AGENTS_ROUTE, label: 'Agents' },
   { route: ACTIVITY_ROUTE, label: 'Activity' },
   { route: FILES_ROUTE, label: 'Files' },
-  { route: MAIL_ROUTE, label: 'Mail' },
   { route: SETTINGS_ROUTE, label: 'Settings' },
 ] as const;
 
@@ -216,7 +188,6 @@ export const SETTINGS_SECTIONS = [
   { id: 'you', label: 'You' },
   { id: 'memory', label: 'Memory' },
   { id: 'accounts', label: 'Model accounts' },
-  { id: 'email', label: 'Email' },
   { id: 'computer', label: 'Computer & browser' },
   { id: 'watchers', label: 'Watchers' },
   { id: 'backup', label: 'Backup' },
@@ -230,10 +201,29 @@ export const BACKUP_ROUTE = settingsRoute('backup');
 /**
  * The old monitoring hashes, and where each now lives. A conversation link
  * keeps its id; everything else is a page whose content moved.
+ *
+ * The mail hashes are here for a different reason: the Mail place and the
+ * Email settings section are no longer compiled in at all — they are a
+ * plugin's own pages now (`docs/specs/plugin-pages.md`) — and the routes they
+ * used to answer to are in bookmarks, in the owner's history, and in every
+ * "open in buddi" link Telegram has ever sent. So `#/email/<threadId>` is
+ * still a conversation, and it still lands on the same one; it simply lands on
+ * the page the email plugin contributes. This is the only place in
+ * `packages/web` that names a plugin, and it names it as a *string from the
+ * past* rather than as something the dashboard knows about.
  */
 export function legacyRedirect(hash: string): string | null {
   const conversation = /^#\/conversations\/(.+)$/.exec(hash);
   if (conversation) return transcriptRoute(decodeURIComponent(conversation[1]!));
+  const mail = /^#\/email(?:\/([^/?]+))?(?:\?.*)?$/.exec(hash);
+  if (mail) {
+    try {
+      return pluginPageRoute('email', 'mail', mail[1] ? decodeURIComponent(mail[1]) : null);
+    } catch {
+      return pluginPageRoute('email', 'mail');
+    }
+  }
+  if (hash === '#/settings/email') return pluginSettingsRoute('email', 'settings');
   const map: Record<string, string> = {
     '#/overview': HOME_ROUTE,
     '#/approvals': HOME_ROUTE,
@@ -258,7 +248,6 @@ export function placeOf(hash: string): string {
   if (hash.startsWith(AGENTS_ROUTE)) return AGENTS_ROUTE;
   if (hash.startsWith(ACTIVITY_ROUTE)) return ACTIVITY_ROUTE;
   if (hash.startsWith(FILES_ROUTE)) return FILES_ROUTE;
-  if (hash.startsWith(MAIL_ROUTE)) return MAIL_ROUTE;
   if (hash.startsWith(SETTINGS_ROUTE)) return SETTINGS_ROUTE;
   // A plugin place: its own route *is* its place, so the rail marks the entry
   // the descriptor put there without core knowing what it is.
