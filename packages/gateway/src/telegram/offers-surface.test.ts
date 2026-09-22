@@ -377,7 +377,9 @@ describe('a tap on an offered action', () => {
     expect(runs).toBe(0);
     expect(db.offers[0]?.takenAt).toBeNull();
     expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBe(OFFER_LAPSED_MESSAGE);
-    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(OFFER_LAPSED_MESSAGE);
+    const chatMessages = sent.filter((s) => s.method === 'sendMessage');
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0]?.body.text).toBe(OFFER_LAPSED_MESSAGE);
     expect(OFFER_LAPSED_MESSAGE).toBe('That offer has lapsed.');
     // Nothing is edited away: the message stays as it was written.
     expect(sent.some((s) => s.method === 'editMessageReplyMarkup')).toBe(false);

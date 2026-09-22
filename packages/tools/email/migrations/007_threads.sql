@@ -265,7 +265,10 @@ begin
            -- one. Legacy rows fall back to the header date only within one
            -- day of fetched_at; an already-stored hostile far-future Date
            -- must not pin a thread's state for years.
-           coalesce(m.internal_date, least(m.date, m.fetched_at + interval '1 day'), m.fetched_at) as at,
+           coalesce(
+             m.internal_date,
+             least(coalesce(m.date, m.fetched_at), m.fetched_at + interval '1 day')
+           ) as at,
            m.uidvalidity
       from email.messages m
   ),
@@ -391,12 +394,15 @@ declare
   expanded integer;
   target record;
   winner record;
+  winner_id uuid;
 begin
   expanded := 0;
-  -- Reconcile one account/thread at a time. An account-scoped decision is
-  -- more specific than a global one; among equally specific decisions the
-  -- newest is the gate's winner. Losers are revoked before the winner is
-  -- pointed at the UUID, so the live-policy unique index is never crossed.
+  -- Reconcile one account/thread at a time. This is the gate's exact choice:
+  -- proposals do not decide anything, and the newest applied row wins by
+  -- created_at then id whether it is global or account-scoped. Only when no
+  -- applied decision exists is a proposal migrated. Losers are revoked before
+  -- the winner is pointed at the UUID, so the live-policy unique index is
+  -- never crossed and a proposal can never displace an applied decision.
   for target in
     select distinct t.id, t.account_id, t.thread_key
       from email.threads t
@@ -405,19 +411,49 @@ begin
        and (lower(p.matcher) = lower(t.thread_key) or p.matcher = t.id::text)
        and (p.account_id is null or p.account_id = t.account_id)
   loop
+    winner_id := null;
     select p.* into winner
       from email.policies p
      where p.scope = 'thread' and p.revoked_at is null
+       and p.proposed = false
        and (lower(p.matcher) = lower(target.thread_key) or p.matcher = target.id::text)
        and (p.account_id is null or p.account_id = target.account_id)
-     order by (p.account_id is not null) desc, p.created_at desc, p.id desc
+     order by p.created_at desc, p.id desc
      limit 1;
+    winner_id := winner.id;
 
+    -- Proposals still need their old thread_key translated when there is no
+    -- applied decision for this thread. They are considered in their own pass
+    -- because the gate deliberately excludes them.
+    if winner_id is null then
+      select p.* into winner
+        from email.policies p
+       where p.scope = 'thread' and p.revoked_at is null
+         and p.proposed = true
+         and (lower(p.matcher) = lower(target.thread_key) or p.matcher = target.id::text)
+         and (p.account_id is null or p.account_id = target.account_id)
+       order by p.created_at desc, p.id desc
+       limit 1;
+      winner_id := winner.id;
+    end if;
+
+    -- Everything else this thread matched loses its live row, proposals
+    -- included. `policies_live_idx` (004) allows one live policy per
+    -- (account, scope, matcher), and the winner is about to take that slot
+    -- with the thread's UUID, so a proposal cannot be re-pointed at the same
+    -- thread and stay live beside it. Revoking it is also the honest reading
+    -- of docs/specs/email.md §3 — "a proposal is applied only when the owner
+    -- keeps it": once an applied decision holds the conversation there is
+    -- nothing left for the owner to keep, so the proposal is redundant with
+    -- the winner rather than a pending choice. The row itself is kept as the
+    -- record that it was once proposed, the way revocation always is. A
+    -- proposal is only *migrated* — re-pointed and left proposed — on a thread
+    -- with no applied decision at all, which is the pass above.
     update email.policies p set revoked_at = now()
      where p.scope = 'thread' and p.revoked_at is null
        and p.account_id = target.account_id
        and (lower(p.matcher) = lower(target.thread_key) or p.matcher = target.id::text)
-       and p.id <> winner.id;
+       and p.id <> winner_id;
 
     if winner.account_id is null then
       insert into email.policies
@@ -427,7 +463,7 @@ begin
          winner.origin, winner.proposed, winner.created_from, winner.created_at);
       expanded := expanded + 1;
     elsif winner.matcher <> target.id::text then
-      update email.policies set matcher = target.id::text where id = winner.id;
+      update email.policies set matcher = target.id::text where id = winner_id;
       expanded := expanded + 1;
     end if;
   end loop;
@@ -438,14 +474,33 @@ begin
    where p.scope = 'thread' and p.revoked_at is null and p.account_id is null
      and exists (select 1 from email.threads t where lower(t.thread_key) = lower(p.matcher));
 
+  -- Repair every pointer, not only null ones. A rerun or a partially applied
+  -- migration may leave a thread pointing at a row just revoked above. The
+  -- correlated lookup also clears a pointer when no applied UUID policy
+  -- remains; proposals never become the thread's effective decision.
   update email.threads t
-     set policy_id = p.id
-    from email.policies p
-   where p.scope = 'thread'
-     and p.revoked_at is null
-     and p.matcher = t.id::text
-     and p.account_id = t.account_id
-     and t.policy_id is null;
+     set policy_id = (
+       select p.id
+         from email.policies p
+        where p.scope = 'thread'
+          and p.revoked_at is null
+          and p.proposed = false
+          and p.matcher = t.id::text
+          and p.account_id = t.account_id
+        order by p.created_at desc, p.id desc
+        limit 1
+     )
+   where t.policy_id is distinct from (
+       select p.id
+         from email.policies p
+        where p.scope = 'thread'
+          and p.revoked_at is null
+          and p.proposed = false
+          and p.matcher = t.id::text
+          and p.account_id = t.account_id
+        order by p.created_at desc, p.id desc
+        limit 1
+     );
 
   return expanded;
 end;

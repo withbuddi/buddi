@@ -32,7 +32,7 @@ interface ImapFlowLike {
   connect(): Promise<void>;
   logout(): Promise<void>;
   mailboxOpen(path: string, opts?: { readOnly?: boolean }): Promise<Record<string, unknown>>;
-  list(): Promise<Array<Record<string, unknown>>>;
+  list(options?: Record<string, unknown>): Promise<Array<Record<string, any>>>;
   fetch(
     range: string | Record<string, unknown>,
     query: Record<string, unknown>,
@@ -152,11 +152,20 @@ class ImapFlowClient implements ImapClient {
    * `folders.ts` is what decides what they mean.
    */
   async listMailboxes(): Promise<MailboxInfo[]> {
-    const listing = await this.client.list();
+    const listing = await this.client.list({
+      statusQuery: { uidValidity: true, uidNext: true, messages: true },
+    });
     return listing.map((box) => ({
       name: String(box.path ?? box.name ?? ''),
       specialUse: typeof box.specialUse === 'string' ? box.specialUse : null,
       flags: [...(box.flags instanceof Set ? box.flags : new Set<string>())].map(String),
+      status: box.status && box.status.uidValidity !== undefined && box.status.uidNext !== undefined
+        ? {
+            uidValidity: Number(box.status.uidValidity),
+            uidNext: Number(box.status.uidNext),
+            exists: Number(box.status.messages ?? 0),
+          }
+        : undefined,
     })).filter((box) => box.name !== '');
   }
 
