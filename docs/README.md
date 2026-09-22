@@ -13,7 +13,8 @@ order of what comes next.
 
 - [Install](install.md), [packaged install foundation](install-foundation.md),
   [first run](onboarding.md), [operations](operations.md)
-- [Provider accounts](providers.md), [Claude OAuth experiment](anthropic-oauth.md)
+- [Provider accounts](providers.md), [Claude OAuth experiment](anthropic-oauth.md),
+  [Codex ChatGPT accounts](codex-accounts.md) (behind `BUDDI_CODEX_EXPERIMENT`)
 - [Conversations](conversations.md)
 - [Computer and browser control](browser.md), [computer use (historical)](computer-use.md)
 - [Groups](groups.md), [Files](files.md), [Host execution](host-execution.md)
@@ -24,7 +25,8 @@ order of what comes next.
 
 - [Email](specs/email.md) — steps 1 and 2 built, step 3 in progress.
 - [Developer](specs/developer.md), [Messengers](specs/messengers.md),
-  [Learning](specs/learning.md) — accepted, not started.
+  [Learning](specs/learning.md), [Owner secrets](specs/owner-secrets.md) —
+  accepted, not started.
 
 ## Ideas (proposals only)
 

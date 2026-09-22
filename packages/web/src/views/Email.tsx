@@ -7,7 +7,7 @@
  *
  * ## Accounts
  *
- * Accounts are plural (docs/email.md §2), and this is where they stop being an
+ * Accounts are plural (docs/specs/email.md §2), and this is where they stop being an
  * environment variable. The list says, for each one, the address, the host, the
  * vault entry holding its password and when mail last landed — four facts that
  * between them answer "why has this mailbox gone quiet", which was previously a
@@ -39,7 +39,7 @@
  * off. Nothing learned is ever applied without being kept first: the Sent
  * folder is synced from the day buddi arrived, so "you never wrote back" is
  * still only as old as this installation, and a half-known history does not
- * get to silence anyone (docs/email.md §3). The Learned list is where a
+ * get to silence anyone (docs/specs/email.md §3). The Learned list is where a
  * proposal becomes a rule.
  *
  * One rule is not typed but *picked*: "One conversation". A thread is named in

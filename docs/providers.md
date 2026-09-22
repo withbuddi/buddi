@@ -2,7 +2,8 @@
 
 Status: reference, 2026-09-21
 
-Open `#/providers` in the owner dashboard. Each account is an independent named
+Open **Settings → Model accounts** in the owner dashboard (`#/providers` still
+redirects there). Each account is an independent named
 connection, not a global preference. Add multiple accounts for the same provider,
 then use `#/agents` to explicitly select an account and model for each agent.
 
@@ -22,7 +23,7 @@ Supported connections:
 - [Experimental Claude OAuth accounts](anthropic-oauth.md), with browser consent,
   code paste, and coordinated vault-backed token refresh. Requires migration 020
   and `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT=1`.
-- [Experimental Codex ChatGPT accounts](ideas/codex-app-server-experiment.md), with
+- [Experimental Codex ChatGPT accounts](codex-accounts.md), with
   native device sign-in. Requires the pinned Codex client and
   `BUDDI_CODEX_EXPERIMENT=1`.
 
@@ -106,8 +107,41 @@ These operations are not exposed as agent tools.
 `buddi agents set <handle> --account <id> --model <model>` changes a binding;
 `--model` alone changes the model on its current account. `--provider` is refused after
 migration because it is ambiguous. `buddi agents test <handle>` uses the assigned account.
-Restart other running processes after a standalone CLI edit, or refresh the Providers
-page. Dashboard edits take effect in its shared serving process immediately.
+Restart other running processes after a standalone CLI edit, or refresh Settings →
+Model accounts. Dashboard edits take effect in its shared serving process immediately.
 
 The account/domain layer is portable. OAuth and native-client credentials are
 resolved server-side; agent tools never receive the credential envelopes.
+
+## Subscription support: what "complete" means
+
+Subscription sign-in exists only behind flags — [Claude
+OAuth](anthropic-oauth.md) and [Codex ChatGPT accounts](codex-accounts.md).
+This is the checklist a subscription backend must pass before it is described
+as supported rather than experimental:
+
+- **Isolated identity.** A distinct account backend and auth identity, with
+  isolated credentials and sessions. Signing in or out of one account must not
+  affect another, or the owner's own CLI login.
+- **The whole lifecycle in the dashboard.** Start, cancel, reconnect and sign
+  out, with bounded polling, stale-login protection, cleanup after a restart,
+  and explicit guidance when the native client is missing.
+- **No credential anywhere it does not belong.** Not in SQL plaintext, not in
+  URLs or logs, not in chat, tools or browser storage. Native credential
+  storage is an explicit decision, never a quiet bypass of the vault's
+  guarantees.
+- **Native tool calls go through buddi.** Every tool call from a native runtime
+  passes buddi's existing grants and approvals. No native shell, file, browser
+  or computer backdoor, proven with adversarial tests before use.
+- **Semantics preserved.** Conversation and tool-result semantics, images,
+  cancellation and approval resume all survive. A model or tool capability the
+  native runtime lacks is reported explicitly, never silently dropped.
+- **Status only when the provider supplies it.** Token expiry, subscription
+  renewal, usage reset and last-check are four different things and are not
+  inferred from one another. A generic 429 does not prove subscription
+  exhaustion, and `Retry-After` is not a guaranteed reset time.
+- **Serialized refresh.** Per-account refresh serialization; a disabled or
+  removed account can neither refresh nor run.
+- **Tested on every surface.** Dashboard, Telegram, CLI, delegates and
+  scheduled runs. Owner-assisted real sign-in only after the harness passes,
+  and no automatic paid test requests.

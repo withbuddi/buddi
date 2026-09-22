@@ -1,7 +1,7 @@
 /**
  * The policy gate: what happens to a message before anybody is woken.
  *
- * docs/email.md §5. This file is the *decision* and nothing else — a pure
+ * docs/specs/email.md §5. This file is the *decision* and nothing else — a pure
  * function over the policy rows and one message header, with no database, no
  * clock and no model. That split is deliberate: the gate is the thing that
  * decides a message is not worth a run, and a decision nobody can test without
@@ -17,7 +17,7 @@
  *
  *  - It never reads a *proposed* policy. Everything learned is a proposal on
  *    the settings page until the owner keeps it — promo included. Nothing
- *    learned applies itself while the Sent folder is unsynced (docs/email.md
+ *    learned applies itself while the Sent folder is unsynced (docs/specs/email.md
  *    §3): "never replied" cannot be known from mail buddi has not read.
  *  - It never reads a revoked one. Revocation keeps the row as a record; it
  *    does not keep its effect.

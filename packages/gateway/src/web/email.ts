@@ -7,7 +7,7 @@
  * translates JSON into the email plugin's own policy functions — so they are
  * kept apart below, in that order, the way the page stacks them.
  *
- * ## Accounts (docs/email.md §2)
+ * ## Accounts (docs/specs/email.md §2)
  *
  * "Secrets live in the vault, one name per account, entered on the settings
  * page, never in `.env`." This is that route, and it is shaped exactly like the
@@ -37,7 +37,7 @@
  * password left behind in the keychain after the mailbox it opened was removed
  * is a secret nobody is responsible for any more.
  *
- * ## Policies (docs/email.md §5)
+ * ## Policies (docs/specs/email.md §5)
  *
  * Three routes and nothing clever: read the two lists, write or keep one rule,
  * take one back. The rules themselves live in the email plugin — this file

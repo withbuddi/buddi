@@ -1,6 +1,6 @@
 -- Accounts are plural (applied with search_path = email, public).
 --
--- docs/email.md §2: "Accounts are plural, and a reply leaves from the account
+-- docs/specs/email.md §2: "Accounts are plural, and a reply leaves from the account
 -- it answers." The schema has always had an `accounts` table with a unique
 -- address; what it lacked was everything that makes a *second* row meaningful:
 -- an identity beyond the address, a way to turn one off without deleting its

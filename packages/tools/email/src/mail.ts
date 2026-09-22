@@ -333,7 +333,7 @@ export interface SenderHistory {
 /**
  * What the sender's history adds to the prompt, or nothing.
  *
- * docs/email.md §1's complaint, answered: *«a model run judges it from zero, records
+ * docs/specs/email.md §1's complaint, answered: *«a model run judges it from zero, records
  * a verdict nothing reads back»*. This is the reading back. It is history, not
  * instruction: the run is told what was decided before so it can be consistent
  * with it or say why it is not, and the block says so in as many words, because
