@@ -44,8 +44,12 @@ export type ValueRef = { path: string } | { const: string | number | boolean | n
 /** How a number should read. Not a unit system — just the shape of the digits. */
 export type Unit = 'number' | 'currency' | 'percent' | 'text' | 'date';
 
-/** Semantic state, deliberately separate from the accent. */
-export type Tone = 'good' | 'warning' | 'critical' | 'neutral';
+/**
+ * Semantic state. `accent` is the odd one out and earns its place: a draft
+ * waiting on the owner is not good, bad or neutral — it is *the thing on this
+ * screen*, and the dashboard already has one colour that means exactly that.
+ */
+export type Tone = 'good' | 'warning' | 'critical' | 'neutral' | 'accent';
 
 /** A horizontal rule on a chart: a floor, a target, a limit. */
 export interface ReferenceLine {
@@ -193,7 +197,7 @@ export const valueRefSchema = z.union([
 ]);
 
 export const unitSchema = z.enum(['number', 'currency', 'percent', 'text', 'date']);
-export const toneSchema = z.enum(['good', 'warning', 'critical', 'neutral']);
+export const toneSchema = z.enum(['good', 'warning', 'critical', 'neutral', 'accent']);
 const columnTypeSchema = z.enum(['text', 'number', 'currency', 'date', 'percent']);
 
 const referenceLineSchema = z

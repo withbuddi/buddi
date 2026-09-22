@@ -397,6 +397,8 @@ export type Component =
       note?: string;
       /** Ask again on every change, with no button. For a picker, not a search box. */
       auto?: true;
+      /** Offer a Clear beside it: empties every field and asks again. */
+      reset?: true;
     })
   | (ComponentCommon & {
       kind: 'list-detail';
@@ -691,6 +693,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         count: viewPathSchema.optional(),
         note: viewPathSchema.optional(),
         auto: z.literal(true).optional(),
+        reset: z.literal(true).optional(),
       })
       .strict(),
     z
@@ -780,6 +783,22 @@ export const pageDescriptorSchema = z
  */
 export const PAGE_LIMITS = { depth: 12, nodes: 400, bytes: 64 * 1024 } as const;
 
+/**
+ * Where a component may stand: the keys that hold one.
+ *
+ * Depth is about *screens inside screens*, so only a node that has a `kind`
+ * **and** sits in one of these counts. A `{ kind: 'weird' }` the owner happens
+ * to be comparing against in `when: { in: [...] }` is data that looks like a
+ * component and must not make the page a level deeper.
+ */
+const COMPONENT_POSITIONS = new Set(['body', 'detail', 'list', 'action', 'actions', 'bulk']);
+
+/**
+ * …and where one may not: everything under these keys is values, however much
+ * it looks like a tree.
+ */
+const NOT_COMPONENTS = new Set(['equals', 'in', 'args', 'params', 'labels', 'options']);
+
 /** Refuse a descriptor that is too deep, too big, or not a tree at all. */
 function checkShape(raw: unknown, plugin: string, named: string): void {
   /*
@@ -792,15 +811,17 @@ function checkShape(raw: unknown, plugin: string, named: string): void {
    */
   const ancestors = new Set<object>();
   let nodes = 0;
-  type Step = { enter: unknown; depth: number } | { leave: object };
-  const stack: Step[] = [{ enter: raw, depth: 0 }];
+  type Step =
+    | { enter: unknown; depth: number; at: string; data: boolean }
+    | { leave: object };
+  const stack: Step[] = [{ enter: raw, depth: 0, at: '(root)', data: false }];
   while (stack.length > 0) {
     const step = stack.pop() as Step;
     if ('leave' in step) {
       ancestors.delete(step.leave);
       continue;
     }
-    const { enter: value, depth } = step;
+    const { enter: value, depth, at, data } = step;
     if (typeof value !== 'object' || value === null) continue;
     if (ancestors.has(value)) {
       throw new Error(`plugin ${plugin}: page descriptor ${named} contains itself; a descriptor is a tree`);
@@ -809,15 +830,27 @@ function checkShape(raw: unknown, plugin: string, named: string): void {
     if (nodes > PAGE_LIMITS.nodes) {
       throw new Error(`plugin ${plugin}: page descriptor ${named} has more than ${PAGE_LIMITS.nodes} nodes`);
     }
-    // A component is a node with a `kind`; only those count as nesting.
-    const deeper = typeof (value as { kind?: unknown }).kind === 'string' ? depth + 1 : depth;
+    /*
+     * A component is a node with a `kind` standing where a component may
+     * stand. Anything under a data key — the values a `when` compares
+     * against, a tool's arguments, a group's labels — is data, and nothing
+     * below it counts however deep it goes.
+     */
+    const isComponent =
+      !data && typeof (value as { kind?: unknown }).kind === 'string' && COMPONENT_POSITIONS.has(at);
+    const deeper = isComponent ? depth + 1 : depth;
     if (deeper > PAGE_LIMITS.depth) {
       throw new Error(`plugin ${plugin}: page descriptor ${named} nests components deeper than ${PAGE_LIMITS.depth}`);
     }
     ancestors.add(value);
     stack.push({ leave: value });
-    for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) {
-      stack.push({ enter: child, depth: deeper });
+    if (Array.isArray(value)) {
+      // An array stands where its key stands: `body[0]` is a `body` position.
+      for (const child of value) stack.push({ enter: child, depth: deeper, at, data });
+      continue;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      stack.push({ enter: child, depth: deeper, at: key, data: data || NOT_COMPONENTS.has(key) });
     }
   }
   const size = JSON.stringify(raw)?.length ?? 0;

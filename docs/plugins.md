@@ -696,7 +696,7 @@ means, the page knows how to draw a line, and this says which is which.
 - **Say what happened.** `ToolRef.done` is the sentence shown after a write
   worked — a string, or a `ValueRef` read out of the tool's own result. A
   gated tool says it once the approval has executed, because that is when it
-  is true. A write that *failed* leaves its sentence on the page and re-reads
+  is true, and the `ValueRef` then reads what *that execution* returned. A write that *failed* leaves its sentence on the page and re-reads
   the component's query underneath it, so a save refused because the draft
   moved on shows the refusal and the draft as it now stands.
 - **A query may refuse in words.** Throw `QueryRefusal` from `produce` and the
@@ -707,8 +707,9 @@ means, the page knows how to draw a line, and this says which is which.
   over the rows they may act on, and a `BulkAction` with `all: true` is about
   every one of them when nothing is ticked. `{count}` in a label or a
   confirmation is that number, `{one|many}` is the word that goes with it, and
-  a `RowAction`'s label and confirmation may carry `{field}` placeholders read
-  from the row ("Remove {address}?"). A `RowAction.when` offers the action only
+  a `RowAction`'s — or a `button`'s — label, confirmation and `done` may carry
+  `{field}` placeholders read from the row it stands in ("Remove {address}?",
+  "Fetch what {from} sent"). A `RowAction.when` offers the action only
   on the rows where it holds — Fetch, until there is a file.
 - **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
   may itself be a path, `ListItem.pills` draws several, and a table column with
@@ -717,10 +718,15 @@ means, the page knows how to draw a line, and this says which is which.
 - **A link to a settings page is a tab.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
   a place of its own: the owner lands on Settings with that tab open.
+- **A tone is one of five.** `good`, `warning`, `critical`, `neutral` — and
+  `accent`, for the thing this screen is *about*: a draft waiting on the
+  owner is not good or bad. A figure never takes the accent; a pill and a
+  notice may.
 - **The rest of the set, in one line each.** `list-detail` has
   `selection: 'route' | 'local'` — `local` for a second level inside a detail
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
-  (both paths) and `auto: true` for a picker with no button. `editor` takes
+  (both paths), `auto: true` for a picker with no button and `reset: true`
+  for a Clear beside it. `editor` takes
   `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
   `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
   `placement: 'leading'` (left of the toolbar, with a spacer after it). A
@@ -917,6 +923,13 @@ answer of more than 2,000 rows in any array or 1 MB of JSON is refused with a
 502 naming the query. What the browser is told about any failure is one
 sentence — "The `<plugin>` plugin could not answer `<query>`." — with a
 reference; the detail goes to the installation's log.
+
+`owner` and `room` are ids nothing may be called: they are what the ledger
+writes for the owner themselves and for a group's own voice. An installation
+that already has an agent by one of those names still starts — the file is
+read, said out loud in the log, and listed on the Agents page as held back
+with nothing granted — but it is in no roster, answers to no handle, is
+nobody's delegate and can never be the default.
 
 A tool the owner may run from a page but no model should ever see carries
 `ownerOnly: true` (§2.1): the registry leaves it out of the list every provider

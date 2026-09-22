@@ -96,12 +96,18 @@ function useScope(): PageScope {
 }
 
 /** A tone the descriptor asked for, as a tone the primitives know. */
-function noticeTone(tone: Tone | undefined): 'good' | 'warning' | 'critical' | undefined {
+function noticeTone(tone: Tone | undefined): 'good' | 'warning' | 'critical' | 'accent' | undefined {
   return tone === undefined || tone === 'neutral' ? undefined : tone;
 }
 
-function pillTone(tone: Tone | undefined): 'good' | 'warning' | 'critical' | undefined {
+function pillTone(tone: Tone | undefined): 'good' | 'warning' | 'critical' | 'accent' | undefined {
   return noticeTone(tone);
+}
+
+/** A figure has no accent: a number is good, bad, or just a number. */
+function statTone(tone: Tone | undefined): 'good' | 'warning' | 'critical' | undefined {
+  const drawn = noticeTone(tone);
+  return drawn === 'accent' ? undefined : drawn;
 }
 
 /**
@@ -238,7 +244,7 @@ interface ActState {
   done: string | null;
   approvalId: string | null;
   /** Decided: apply what the pending action's `then` asked for, or let it go. */
-  settle: (outcome?: { decision: 'approve' | 'reject'; state?: string }) => void;
+  settle: (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }) => void;
   run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<void>;
 }
 
@@ -313,7 +319,7 @@ function useAct(): ActState {
     }
   };
 
-  const settle = (outcome?: { decision: 'approve' | 'reject'; state?: string }): void => {
+  const settle = (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }): void => {
     /*
      * Nothing was decided — the decision call itself failed — so nothing is
      * settled: the card stays, and so does what it was going to do next. The
@@ -330,8 +336,9 @@ function useAct(): ActState {
     // Approved *and* executed is the only outcome in which the thing the
     // action was about has actually happened. Anything else just refreshes.
     if (held && outcome.decision === 'approve' && outcome.state === 'succeeded') {
-      // Only now is the sentence true: the effect has happened.
-      setDone(saidDone(held.ref, undefined));
+      // Only now is the sentence true: the effect has happened — and it is
+      // read out of what the approval's own execution returned.
+      setDone(saidDone(held.ref, outcome.result));
       apply(held.then, undefined, held.onDone);
       return;
     }
@@ -414,7 +421,7 @@ function ApprovalById({
   onDecided,
 }: {
   id: string;
-  onDecided?: (outcome?: { decision: 'approve' | 'reject'; state?: string }) => void;
+  onDecided?: (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }) => void;
 }): JSX.Element {
   const scope = useScope();
   const action = useAsync<ApprovalRow>(() => api.approval(id), [id, scope.version]);
@@ -765,7 +772,7 @@ function StatsPiece({ component, data }: { component: Of<'stats'>; data: unknown
               key={index}
               label={item.label}
               value={fmtValue(readRef(query.data, item.value), item.unit ?? 'text', null)}
-              tone={noticeTone(item.tone)}
+              tone={statTone(item.tone)}
             />
           ))}
         </Stats>
@@ -1255,11 +1262,34 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
             if (component.auto) ask(next);
           }}
         />
-        {component.auto ? null : (
+        {component.auto && !component.reset ? null : (
           <Toolbar align="end">
-            <Button variant="accent" disabled={!ready} onClick={() => ask(values)}>
-              Search
-            </Button>
+            {component.reset ? (
+              <Button
+                onClick={() => {
+                  /*
+                   * Clear means *cleared*: the fields, the parameters the
+                   * query reads them from, and the results underneath. A
+                   * picker that asks on every change asks again with nothing;
+                   * a search box goes back to having been asked nothing.
+                   */
+                  const empty = initialValues(component.fields, null);
+                  setValues(empty);
+                  if (component.auto) ask(empty);
+                  else {
+                    scope.setParams(Object.fromEntries(component.fields.map((field) => [field.name, null])));
+                    setAsked(false);
+                  }
+                }}
+              >
+                Clear
+              </Button>
+            ) : null}
+            {component.auto ? null : (
+              <Button variant="accent" disabled={!ready} onClick={() => ask(values)}>
+                Search
+              </Button>
+            )}
           </Toolbar>
         )}
         <ErrorBanner message={query.error} />
@@ -1427,6 +1457,8 @@ function ButtonPiece({ component, data }: { component: Of<'button'>; data: unkno
           args={resolveArgs(component.action.args, { data, row: data, scope })}
           disabled={act.busy}
           running={act.running === component.action.tool}
+          /* Inside a `repeat` the data *is* the row, so "Fetch {name}" works. */
+          row={data}
           onRun={(ref, args) => void act.run(ref, args)}
         />
       </Toolbar>

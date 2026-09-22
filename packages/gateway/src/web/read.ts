@@ -31,6 +31,7 @@ import {
   toActionRecord,
   type AgentCatalog,
   type AgentHoldBack,
+  type CatalogAgent,
   type ActionRecord,
   type Job,
   type JobState,
@@ -854,12 +855,24 @@ function safeDelegates(agentId: string, agentsDir: string): string[] {
 }
 
 export function readAgents(catalog: AgentCatalog): AgentView[] {
-  return catalog.list().flatMap((summary) => {
-    const agent = catalog.get(summary.id);
-    if (!agent) return [];
-    const credential = agent.provider.credential as { kind?: string; env?: string };
-    return [
-      {
+  /*
+   * The agents, and then the files that were read and refused — an agent
+   * claiming a reserved id. They are in no roster and answer to no handle, so
+   * the page is the only place they appear; without this the owner's file
+   * would simply have vanished.
+   */
+  return [
+    ...catalog.list().flatMap((summary) => {
+      const agent = catalog.get(summary.id);
+      return agent ? [agentView(catalog, agent)] : [];
+    }),
+    ...(catalog.refused?.() ?? []).map((agent) => agentView(catalog, agent)),
+  ];
+}
+
+function agentView(catalog: AgentCatalog, agent: CatalogAgent): AgentView {
+  const credential = agent.provider.credential as { kind?: string; env?: string };
+  return {
         id: agent.id,
         handle: agent.handle,
         name: agent.name,
@@ -886,9 +899,7 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
           credentialKind: credential?.kind ?? 'unknown',
           credentialEnv: agent.provider.accountId ?? credential?.env ?? 'unknown',
         },
-      },
-    ];
-  });
+  };
 }
 
 /* ------------------------------------------------------------------ *

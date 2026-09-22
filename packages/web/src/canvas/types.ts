@@ -25,7 +25,7 @@ export type ValueRef = { path: string } | { const: string | number | boolean | n
 
 export type Unit = 'number' | 'currency' | 'percent' | 'text' | 'date';
 
-export type Tone = 'good' | 'warning' | 'critical' | 'neutral';
+export type Tone = 'good' | 'warning' | 'critical' | 'neutral' | 'accent';
 
 export interface ReferenceLine {
   value: ValueRef;

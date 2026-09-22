@@ -111,7 +111,7 @@ type Component =
   | { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] }
   | { kind: 'detail'; query: QueryRef; fields: Array<{ label: string; value: ValueRef; unit?: Unit }>; body: Component[] }
   | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string } }
-  | { kind: 'search'; fields: Field[]; query: QueryRef; rows: string; results: ListItem; to?: RouteRef; count?: string; note?: string; auto?: true }
+  | { kind: 'search'; fields: Field[]; query: QueryRef; rows: string; results: ListItem; to?: RouteRef; count?: string; note?: string; auto?: true; reset?: true }
   | { kind: 'list-detail'; list: Component & { kind: 'list' }; param: string; selection?: 'route' | 'local'; detail: Component[] }
   /** The same sub-tree once per row, with that row as its data. */
   | { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] }
@@ -232,4 +232,7 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 - The act route invokes only the tools a plugin's own pages name
   (`registry.pageTools`), at 60 writes a minute per session.
 - `owner` and `room` are reserved agent ids, so nothing can become a second
-  principal behind the id a page's writes are recorded under.
+  principal behind the id a page's writes are recorded under. An installation
+  that already had an agent by one of those names still boots: the file is
+  held back and shown on the Agents page, out of every roster, handle map,
+  delegation list and default.

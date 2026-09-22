@@ -189,6 +189,7 @@ export type Component =
       count?: string;
       note?: string;
       auto?: true;
+      reset?: true;
     })
   | (ComponentCommon & {
       kind: 'list-detail';

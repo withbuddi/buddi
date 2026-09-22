@@ -258,6 +258,20 @@ export interface AgentCatalog {
   byHandle(handle: string): CatalogAgent | undefined;
   list(): AgentSummary[];
   /**
+   * Files that were read and deliberately *not* loaded: an agent claiming an
+   * id this installation reserves (`owner`, `room`).
+   *
+   * They are not agents. They are in no roster, answer to no handle, are
+   * nobody's delegate and can never be the default — the Agents page reads
+   * this so the owner can see why one of their files went quiet, and nothing
+   * else reads it at all.
+   *
+   * Optional in the interface because a catalog that is not the loader — the
+   * stand-ins a dozen suites build — has nothing to refuse, and because a
+   * reader must treat "no such list" and "an empty one" the same way.
+   */
+  refused?(): CatalogAgent[];
+  /**
    * The agent a chat that names nobody lands on, resolved in this order:
    *
    *  1. the installation's recorded choice (`defaultAgentId`), when it names a
@@ -966,11 +980,20 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
 
   const sharedSkills = [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
   const files = [...byId.values()].sort((a, b) => a.frontmatter.id.localeCompare(b.frontmatter.id));
+  /*
+   * A file the loader refused — an agent claiming a reserved id — is not an
+   * agent and takes part in nothing: not the roster, not the handle map, not
+   * the duplicate-handle check (its handle is synthetic, invented from the
+   * directory name, and must not be able to collide with a real one), not the
+   * delegation lists and not the default. It is kept only to be shown.
+   */
+  const loadable = files.filter((entry) => entry.heldBack === undefined);
+  const refusedFiles = files.filter((entry) => entry.heldBack !== undefined);
 
   // Handles are checked *after* overriding: an example agent replaced by a
   // private one of the same id never collides with the file that replaced it.
   const seenHandles = new Map<string, string>();
-  for (const { frontmatter } of files) {
+  for (const { frontmatter } of loadable) {
     const key = frontmatter.handle.toLowerCase();
     const taken = seenHandles.get(key);
     if (taken !== undefined) {
@@ -982,7 +1005,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     seenHandles.set(key, frontmatter.id);
   }
 
-  const roster: AgentRosterEntry[] = files.map(({ frontmatter }) => ({
+  const roster: AgentRosterEntry[] = loadable.map(({ frontmatter }) => ({
     id: frontmatter.id,
     handle: frontmatter.handle,
     name: frontmatter.name,
@@ -994,12 +1017,21 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   const byHandle = new Map<string, CatalogAgent>();
   const claimed: Array<{ id: string; order: number }> = [];
 
-  for (const { frontmatter, body, file, source, order, heldBack } of files) {
-    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster, heldBack);
+  for (const { frontmatter, body, file, source, order } of loadable) {
+    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster);
     agents.set(agent.id, agent);
     byHandle.set(agent.handle.toLowerCase(), agent);
     if (agent.isDefault) claimed.push({ id: agent.id, order });
   }
+
+  /*
+   * The refused ones are built last and kept apart: they are drawn on the
+   * Agents page and nowhere else. Building them with an empty roster is the
+   * point — a file that cannot run is nobody's colleague.
+   */
+  const refused = refusedFiles.map(({ frontmatter, body, file, source, heldBack }) =>
+    buildAgent(frontmatter, body, file, source, sharedSkills, opts, [], heldBack),
+  );
 
   /*
    * Two directories may both ship a `default: true` — the example agent does,
@@ -1074,6 +1106,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     ...(defaultProblem === undefined ? {} : { defaultProblem }),
     get: (id) => agents.get(id),
     byHandle: (handle) => byHandle.get(handle.trim().replace(/^@/, '').toLowerCase()),
+    refused: () => [...refused],
     list: () =>
       [...agents.values()].map((a) => ({
         id: a.id,
