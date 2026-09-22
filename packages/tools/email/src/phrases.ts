@@ -183,6 +183,13 @@ export const GENERIC_NAMES: readonly string[] = [
  *  6. **sort the tokens**, which is what makes `MEYER, Jean-Paul` and
  *     `Jean-Paul Meyer` one name — the comma-first form every corporate
  *     directory produces.
+ *
+ * Step 6 has a known and accepted cost: `May Lee` and `Lee May` are one name
+ * here. Two real correspondents whose names are each other's reverse is rarer
+ * than a corporate address book, and the two failures are not symmetric — the
+ * collision costs a warning the agent reads the thread about, while dropping
+ * the sort costs *silence* about the comma form, which is exactly the form an
+ * impostor would copy. It is stated in docs/specs/email.md §7 as a limit.
  */
 export function nameKey(text: string): string {
   let out = (text ?? '')
@@ -245,7 +252,10 @@ export interface PhraseHit {
  * about the *sentence* the phrase sits in rather than about the whole message
  * — `classifyAsk` needs exactly that.
  */
-function firstMatch(text: string, patterns: readonly RegExp[]): (PhraseHit & { at: number }) | null {
+function firstMatch(
+  text: string,
+  patterns: readonly RegExp[],
+): (PhraseHit & { at: number; length: number }) | null {
   const source = nfc(text);
   const folded = fold(source);
   let best: { index: number; length: number } | null = null;
@@ -261,6 +271,7 @@ function firstMatch(text: string, patterns: readonly RegExp[]): (PhraseHit & { a
   return {
     phrase: source.slice(best.index, best.index + best.length).trim(),
     at: best.index,
+    length: best.length,
   };
 }
 
@@ -412,8 +423,8 @@ export const CURRENCIES: ReadonlyArray<{ re: RegExp; code: 'EUR' | 'USD' | 'GBP'
 export const TOTAL_WINDOW = 40;
 
 /**
- * The largest total this will report, which is `email.receipts.amount`'s own
- * range (`numeric(14,2)`).
+ * The largest total this will report: `email.receipts.amount` is
+ * `numeric(14,2)`, which is twelve digits before the point and two after.
  *
  * A string of digits longer than that is an order number, a VAT id or a
  * malformed table, not money — and reading it as money would make the *insert*
@@ -421,7 +432,7 @@ export const TOTAL_WINDOW = 40;
  * the whole message its reading. So an absurd number is "no amount", quietly,
  * which is what it is.
  */
-export const MAX_AMOUNT = 9_999_999_999.99;
+export const MAX_AMOUNT = 999_999_999_999.99;
 
 const TOTAL_WORD = /\b(?:total|montant|amount due|balance|net a payer|a payer)\b/giu;
 /**
@@ -564,24 +575,19 @@ export const MAX_ASK_CONFIDENCE = 0.95;
 export const BOILERPLATE_CEILING = 0.8;
 
 /**
- * The three asks, with what each is worth before urgency, and whether the
- * phrase is somebody **demanding the thing** or merely naming it.
+ * The three asks, with what each is worth before urgency.
  *
  * The order is the order of how little else they could mean. Nobody legitimate
  * asks by mail for a gift card; a wire instruction arriving unasked is at
  * least unusual; a password prompt is the shape every real service's mail also
- * has — which is the point of `demand`.
+ * has.
  *
- * ## Why `demand` exists
- *
- * "Reset your password" is in every real password-reset mail ever sent, and
- * the boilerplate of that genre is "if this wasn't you, contact us
- * immediately". Scored like a request *for* the password, the owner resetting
- * his own password produced an urgent wake, hourly, for a week — in the one
- * watcher an `ignore` policy may not silence. So a phrase that only names the
- * credential is capped at `BOILERPLATE_CEILING` and can never be more than a
- * notice; only a phrase in which somebody asks to be *given* it, or to be paid,
- * can wake anybody.
+ * `demand` here marks the phrases that are a request **in themselves** —
+ * "send me your password" is somebody asking, whatever surrounds it. The
+ * nouns are not: `wire transfer` and `gift card` are the vocabulary of the
+ * receipts and dispatch notices these very words arrive in, so whether *they*
+ * are a demand is decided by `REQUEST_AROUND` below, in the noun's own
+ * sentence.
  *
  * Deliberately absent: **"click here"**, **"verify"** on its own, **"account"**
  * — they are in every newsletter footer, and a watcher that cried at them would
@@ -593,16 +599,17 @@ export const ASK_PATTERNS: ReadonlyArray<{
   demand: boolean;
   re: RegExp;
 }> = [
-  { kind: 'gift-card', weight: 0.8, demand: true, re: /\bgift cards?\b/u },
-  { kind: 'gift-card', weight: 0.8, demand: true, re: /\bcartes? cadeaux?\b/u },
-  { kind: 'gift-card', weight: 0.8, demand: true, re: /\b(?:itunes|google play|amazon) cards?\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bwire transfer\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bbank transfer\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bvirement (?:bancaire|urgent|immediat)\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bchange (?:of|our) bank (?:details|account)\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bnouvelles? coordonnees bancaires\b/u },
-  { kind: 'wire', weight: 0.7, demand: true, re: /\bnouvel iban\b/u },
-  // Somebody asking to be given the credential. This is the phishing half.
+  { kind: 'gift-card', weight: 0.8, demand: false, re: /\bgift cards?\b/u },
+  { kind: 'gift-card', weight: 0.8, demand: false, re: /\bcartes? cadeaux?\b/u },
+  { kind: 'gift-card', weight: 0.8, demand: false, re: /\b(?:itunes|google play|amazon) cards?\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bwire transfers?\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bbank transfers?\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bvirements? (?:bancaires?|urgents?|immediats?)\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bchange (?:of|our) bank (?:details|account)\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bnouvelles? coordonnees bancaires\b/u },
+  { kind: 'wire', weight: 0.7, demand: false, re: /\bnouvel iban\b/u },
+  // Somebody asking to be given the credential. This is the phishing half,
+  // and these are requests in themselves rather than nouns.
   { kind: 'credentials', weight: 0.6, demand: true, re: /\bsend (?:me |us )?(?:your |the )?password\b/u },
   { kind: 'credentials', weight: 0.6, demand: true, re: /\breply with your (?:password|code|credentials)\b/u },
   { kind: 'credentials', weight: 0.6, demand: true, re: /\bshare your (?:password|credentials|login)\b/u },
@@ -615,6 +622,56 @@ export const ASK_PATTERNS: ReadonlyArray<{
   { kind: 'credentials', weight: 0.6, demand: false, re: /\bidentifiants? de connexion\b/u },
   { kind: 'credentials', weight: 0.6, demand: false, re: /\bverifiez votre compte\b/u },
 ];
+
+/**
+ * Somebody asking for the thing, as opposed to telling you about it.
+ *
+ * This is the rule that separates *«Your wire transfer was processed»* — which
+ * is a receipt, and which scored 0.95 and woke the owner urgently — from
+ * *«please wire it to the new account today»*, which is the fraud. A noun is
+ * never a demand on its own: it has to sit in a sentence that asks. Three
+ * shapes, English and French:
+ *
+ *  - **a verb of giving or paying**: send, buy, purchase, transfer, wire, pay,
+ *    forward, envoyer, acheter, virer, payer, régler, transférer, in any
+ *    person or as an imperative;
+ *  - **an asking construction**: can you, could you, would you, please,
+ *    pourriez-vous, pouvez-vous, merci de, veuillez, j'ai besoin, I need;
+ *  - **a direction**: `to`/`vers`/`sur` immediately after the noun, which is
+ *    what a wiring *instruction* looks like when the verb is somewhere else.
+ *
+ * All three are tested against the **noun's own sentence**, the same slice
+ * `URGENCY` is tested against, so a dispatch notice with a "please contact us"
+ * three paragraphs down is still a dispatch notice.
+ */
+export const REQUEST_AROUND: readonly RegExp[] = [
+  /\b(?:send|sends|sending|sent me|buy|buys|buying|purchase|purchases|purchasing|transfer|transfers|transferring|wire|wires|wiring|pay|pays|paying|forward|forwards|remit|remits)\b/u,
+  /\b(?:envoyer|envoyez|envoie|acheter|achetez|achete|virer|virez|payer|payez|reglez|regler|transferer|transferez)\b/u,
+  /\b(?:can you|could you|would you|please|kindly|i need you to|i need|we need you to)\b/u,
+  /\b(?:pourriez-?vous|pouvez-?vous|merci de|veuillez|j'ai besoin)\b/u,
+];
+
+/**
+ * `wire transfer **to** the new account` — an instruction with no verb of its
+ * own. Only `to`, `vers` and `sur`: a bare `a` would read *«le virement a été
+ * traité»* — the receipt — as an instruction, since the fold takes `à` to `a`.
+ */
+const DIRECTED_AT = /^\s*(?:to|vers|sur)\b/u;
+
+/**
+ * Is the sentence this noun sits in one that asks for it?
+ *
+ * **The noun is cut out of the sentence first**, and that is not a detail:
+ * `wire transfer` contains `transfer` and `gift card` sits beside `card`, so a
+ * search for a verb of paying over the whole sentence finds the noun's own
+ * words and calls every dispatch notice a demand. What is left after the cut
+ * is what somebody wrote *around* the thing.
+ */
+export function isRequest(sentence: string, nounStart: number, nounEnd: number): boolean {
+  if (DIRECTED_AT.test(sentence.slice(nounEnd))) return true;
+  const around = `${sentence.slice(0, nounStart)} ${sentence.slice(nounEnd)}`;
+  return REQUEST_AROUND.some((re) => new RegExp(re.source, 'iu').test(around));
+}
 
 /**
  * The words that turn an ask into an emergency — **in its own sentence**.
@@ -639,25 +696,43 @@ export interface AskReading {
  *
  * Read over the message's own lines only: a phishing mail quoted back into a
  * "look at this" forward is a conversation about a fraud, not one.
+ *
+ * Two questions are asked of the sentence the phrase sits in, and neither of
+ * the whole message: **is somebody asking for this** (`isRequest`), which is
+ * what lets the reading pass `BOILERPLATE_CEILING` at all, and **is somebody
+ * insisting** (`URGENCY`), which is what takes it over the urgent line. A
+ * mention with neither is a notice, which is what a receipt should be.
  */
 export function classifyAsk(text: string | null | undefined): AskReading | null {
   const own = nfc(ownText(text));
   if (own.trim() === '') return null;
   const folded = fold(own);
-  let best: { kind: AskKind; weight: number; phrase: string; demand: boolean; at: number } | null =
-    null;
+  let best: {
+    kind: AskKind;
+    weight: number;
+    phrase: string;
+    demand: boolean;
+    at: number;
+    length: number;
+  } | null = null;
   for (const { kind, weight, demand, re } of ASK_PATTERNS) {
     const hit = firstMatch(own, [re]);
     if (hit === null) continue;
     if (best !== null && weight <= best.weight) continue;
-    best = { kind, weight, phrase: hit.phrase, demand, at: hit.at };
+    best = { kind, weight, phrase: hit.phrase, demand, at: hit.at, length: hit.length };
   }
   if (best === null) return null;
+
+  const sentence = sentenceAround(folded, best.at);
+  const nounStart = best.at - sentenceStart(folded, best.at);
+  // A phrase that is a request in itself needs nothing around it; a noun does.
+  const demanded =
+    best.demand || isRequest(sentence, nounStart, nounStart + best.length);
   // The urgency has to be about *this*: in the sentence the ask is in, not
   // three paragraphs down in a signature or a link-expiry notice.
-  const urgent = new RegExp(URGENCY.source, 'iu').test(sentenceAround(folded, best.at));
+  const urgent = new RegExp(URGENCY.source, 'iu').test(sentence);
   const raw = round2(best.weight + (urgent ? URGENCY_BOOST : 0));
-  const ceiling = best.demand ? MAX_ASK_CONFIDENCE : BOILERPLATE_CEILING;
+  const ceiling = demanded ? MAX_ASK_CONFIDENCE : BOILERPLATE_CEILING;
   return {
     kind: best.kind,
     confidence: Math.min(ceiling, raw),

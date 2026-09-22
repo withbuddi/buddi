@@ -99,8 +99,22 @@ export async function unscannedReceipts(
  * Stamp, in one statement, the mail that fell out of the window unread.
  *
  * This is what keeps the sweep's backlog finite. It is bounded per tick so a
- * mailbox with a decade of history does not lock the table for a minute, and
- * it is the only place a message is stamped without being read.
+ * mailbox with a decade of history does not lock the table for a minute.
+ *
+ * It carries **the same `ignore` predicate the scan does**, and that is the
+ * point of it being here rather than left to the caller's choice of cutoff. A
+ * stamp is permanent; an `ignore` rule is one tap from being revoked. A bulk
+ * stamp blind to the policy would mean that whether a silenced sender's mail
+ * could ever be read again depended on whether this statement happened to run
+ * before the owner changed his mind — and it runs every hour. With the
+ * predicate, a silenced message is simply not stamped while the rule lives;
+ * revoke the rule and the next tick either reads it, if it is still inside the
+ * window, or stamps it here like everything else.
+ *
+ * The cost, stated plainly: mail from a sender who is silenced for ever stays
+ * unstamped for ever, and sits in the partial index. That is the same state it
+ * is in inside the window today, and it buys the owner the right to change his
+ * mind about a rule without that having been decided for him by a sweep.
  */
 export async function stampOldReceipts(
   db: Db,
@@ -111,11 +125,12 @@ export async function stampOldReceipts(
   const { rowCount } = await db.query(
     `update email.messages set receipts_scanned_at = $2
       where id in (
-        select id from email.messages
-         where receipts_scanned_at is null
-           and direction = 'in'
-           and coalesce(internal_date, fetched_at) < $1::timestamptz
-         order by fetched_at asc, id asc
+        select m.id from email.messages m
+         where m.receipts_scanned_at is null
+           and m.direction = 'in'
+           and coalesce(m.internal_date, m.fetched_at) < $1::timestamptz
+           and not ${ignoredSql('m')}
+         order by m.fetched_at asc, m.id asc
          limit $3
       )`,
     [before, now, limit],

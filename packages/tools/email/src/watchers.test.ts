@@ -325,13 +325,16 @@ describe('email.receipt-or-bill', () => {
   });
 
   it('carries ids and numbers, and says what to do in the prose', () => {
+    // No currency code: a three-letter string is the shape of the text this
+    // rule exists to keep out, and the prose says €120.50 in the owner's own
+    // terms rather than making a consumer look up a code.
     expect(receiptFinding(HIT).data).toEqual({
       messageId: 'm-11',
       threadId: 't-3',
       confidence: 0.95,
       amount: 120.5,
-      currency: 'EUR',
     });
+    expect(receiptFinding(HIT).detail).toContain('€120.50');
     // The two actions §7 asks for are in the detail, in the owner's language,
     // rather than as tokens a model has to be taught.
     expect(receiptFinding(HIT).detail).toContain('hand it to whoever keeps the overview');

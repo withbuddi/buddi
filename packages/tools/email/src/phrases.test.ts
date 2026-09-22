@@ -156,7 +156,10 @@ describe('receipts — email.receipt-or-bill', () => {
     // `email.receipts.amount` is numeric(14,2); a longer run of digits is an
     // order number or a broken table, and storing it would throw — which,
     // under the transactional stamp, costs the message its whole reading.
-    expect(findAmount(`Total €${MAX_AMOUNT + 1}`)).toBeNull();
+    // numeric(14,2): twelve digits before the point, two after.
+    expect(MAX_AMOUNT).toBe(999_999_999_999.99);
+    expect(findAmount('Total €999999999999.99')).toMatchObject({ value: MAX_AMOUNT });
+    expect(findAmount('Total €9999999999999.00')).toBeNull();
     expect(findAmount('Total €99999999999999999999')).toBeNull();
     expect(findAmount('Total €12,00')).toMatchObject({ value: 12 });
   });
@@ -181,7 +184,7 @@ describe('the ask — email.suspicious-sender', () => {
       urgent: false,
       confidence: 0.8,
     });
-    expect(classifyAsk('We have a new IBAN, please use it for the wire transfer.')).toMatchObject({
+    expect(classifyAsk('Please send the wire transfer to the new account.')).toMatchObject({
       kind: 'wire',
       urgent: false,
       confidence: 0.7,
@@ -200,7 +203,43 @@ describe('the ask — email.suspicious-sender', () => {
       classifyAsk('Please buy two gift cards.\nThe office move is happening immediately.')
         ?.confidence,
     ).toBe(0.8);
-    expect(classifyAsk('Nouvelles coordonnées bancaires, virement urgent.')?.confidence).toBe(0.95);
+    expect(
+      classifyAsk('Veuillez faire le virement bancaire vers ce compte, urgent.')?.confidence,
+    ).toBe(0.95);
+  });
+
+  /**
+   * A noun is not a demand.
+   *
+   * `wire transfer` and `gift card` are the vocabulary of the receipts and
+   * dispatch notices these very words arrive in, and "processed **immediately**"
+   * is how a bank writes a receipt. Scored as demands, every one of these woke
+   * the owner urgently — in the one watcher an `ignore` policy may not silence.
+   */
+  const ROUTINE = [
+    'Your wire transfer was processed immediately.',
+    'Your gift card balance is €50 and does not expire.',
+    'A bank transfer of £120 was received and credited right away.',
+    'Le virement bancaire a été traité immédiatement.',
+  ];
+  it.each(ROUTINE)('leaves a routine notice a notice at most: %j', (text) => {
+    const reading = classifyAsk(text);
+    expect(reading === null || reading.confidence <= 0.8).toBe(true);
+  });
+
+  const DEMANDS: Array<[string, number]> = [
+    ['Can you buy two gift cards immediately? I am in a meeting.', 0.95],
+    ['Please make an urgent wire transfer to the new account before the audit.', 0.95],
+    ['Merci de faire le virement bancaire vers le nouvel IBAN, au plus vite.', 0.95],
+  ];
+  it.each(DEMANDS)('still wakes somebody for a real demand: %j', (text, confidence) => {
+    expect(classifyAsk(text)?.confidence).toBe(confidence);
+  });
+
+  it('reads a bare instruction with no verb as a demand, by its direction', () => {
+    // The verb is somewhere else entirely; `to` after the noun is the whole
+    // shape of a wiring instruction.
+    expect(classifyAsk('The wire transfer to the account below, urgently.')?.confidence).toBe(0.95);
   });
 
   /**

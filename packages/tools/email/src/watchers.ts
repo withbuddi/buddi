@@ -598,8 +598,8 @@ export interface ReceiptFinding {
     messageId: string;
     threadId: string | null;
     confidence: number;
+    /** The total, as a number. The currency is in the prose: see `money`. */
     amount: number | null;
-    currency: string | null;
   };
 }
 
@@ -608,10 +608,17 @@ const CURRENCY_SIGNS: Record<string, string> = { EUR: '€', USD: '$', GBP: '£'
 /**
  * The amount as *we* write it, from a number and a code we chose.
  *
- * Deliberately not the sender's own string. The number was parsed out of the
- * message and the sign comes from a table of three, so this is the one piece
- * of the finding that is about the message and is nonetheless ours — which is
- * why it is the piece that may go in `data`.
+ * Deliberately not the sender's own string: the number was parsed out of the
+ * message and the sign comes from a table of three.
+ *
+ * It is written into the **title and the detail**, and only there. `data` is
+ * ids and numbers, and a currency code is neither — it is a three-letter
+ * string, which is the shape of the sender-controlled text the whole rule
+ * exists to keep out. Encoding it as a small integer was the alternative and
+ * it is worse: a number whose meaning lives in a table the consumer has to be
+ * taught is not "a number", it is a token in disguise. So `data.amount` is the
+ * quantity and the prose says what it is denominated in — which is also how
+ * the owner would say it.
  */
 export function money(amount: number | null, currency: string | null): string | null {
   if (amount === null || currency === null) return null;
@@ -646,7 +653,6 @@ export function receiptFinding(hit: ReceiptHit): ReceiptFinding {
       threadId: hit.threadId,
       confidence: hit.confidence,
       amount: hit.amount,
-      currency: hit.currency,
     },
   };
 }

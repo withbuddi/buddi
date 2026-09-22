@@ -119,17 +119,21 @@ suite('email watchers, step 6 (postgres)', () => {
     direction?: 'in' | 'out';
     /** Default true: only the two sweeping watchers want an unread body. */
     scanned?: boolean;
+    /** Chosen only where the ordering of two messages is what is under test. */
+    uid?: number;
+    fetchedAt?: Date;
   }): Promise<{ messageId: string; threadId: string }> {
     const direction = over.direction ?? 'in';
     const scanned = over.scanned ?? true;
-    const messageUid = uid++;
+    const messageUid = over.uid ?? uid++;
     const { rows } = await pool.query(
       `insert into email.messages
          (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs, cc,
           subject, date, internal_date, snippet, body_text, direction, list_id,
-          triage_enqueued_at, dates_scanned_at, receipts_scanned_at, suspicion_scanned_at)
+          triage_enqueued_at, dates_scanned_at, receipts_scanned_at, suspicion_scanned_at,
+          fetched_at)
        values ($1, $2, 1, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $10, '', $11, $12, $13,
-               now(), $14, $14, $14)
+               now(), $14, $14, $14, coalesce($15::timestamptz, now()))
        returning id`,
       [
         accountId,
@@ -146,6 +150,7 @@ suite('email watchers, step 6 (postgres)', () => {
         direction,
         over.listId ?? null,
         scanned ? NOW : null,
+        over.fetchedAt ?? null,
       ],
     );
     const messageId = String(rows[0].id);
@@ -317,6 +322,119 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(new Set(stillTrueKeys(result)).size).toBe(26);
     });
 
+    it('orders by the instant, so a newer draft is inside the cap', async () => {
+      /*
+       * Twenty-five promises all made *yesterday*, and a draft written an hour
+       * ago. Every one of them floors to the same whole number of days, so the
+       * old `ageDays` sort left the cap falling wherever the rows happened to
+       * arrive — and the newest thing in the mailbox could be the one it cut.
+       */
+      for (let i = 0; i < 25; i++) {
+        await write({
+          from: 'owner@example.test',
+          to: 'client@work.test',
+          subject: `Matter ${i}`,
+          threadKey: `<tie-${i}@work.test>`,
+          at: new Date(NOW.getTime() - 4 * 86_400_000 - (i + 1) * 60_000),
+          body: "I'll send the figures.",
+          direction: 'out',
+        });
+      }
+      const { threadId } = await write({
+        from: 'client@work.test',
+        to: 'owner@example.test',
+        subject: 'The newest thing here',
+        threadKey: '<tie-draft@work.test>',
+        at: daysBefore(5),
+        body: 'Could you send the quote?',
+      });
+      const draft = await pool.query(
+        `insert into email.drafts
+           (account_id, thread_id, to_addrs, subject, body_text, status, created_by_agent, updated_at)
+         values ($1, $2, $3::jsonb, 'Re: the quote', 'Here it is.', 'draft', 'mailer', $4)
+         returning id`,
+        [
+          accountId,
+          threadId,
+          JSON.stringify(['client@work.test']),
+          new Date(NOW.getTime() - 4 * 86_400_000 + 3_600_000),
+        ],
+      );
+      const findings = await raise(promisedReply, ctx());
+      expect(findings).toHaveLength(20);
+      // Same severity, same floored age as the promises — and first, because
+      // it is newer by the clock.
+      expect(findings[0]!.key).toBe(
+        `email.promised-reply:${threadId}:draft:${String(draft.rows[0].id)}`,
+      );
+    });
+
+    it('does not report a promise a same-second reply may have followed', async () => {
+      /*
+       * INTERNALDATE has second resolution, and `messages.id` is a random
+       * uuid: the tie-break used to be a coin. Same folder, same second, and
+       * the UID — which the server assigns in arrival order — settles it.
+       */
+      const at = daysBefore(6);
+      const { threadId } = await write({
+        from: 'owner@example.test',
+        to: 'client@work.test',
+        subject: 'The quote',
+        threadKey: '<same-second@work.test>',
+        at,
+        body: "I'll send the figures tomorrow.",
+        direction: 'out',
+        uid: 500,
+      });
+      expect(await raise(promisedReply, ctx())).toHaveLength(1);
+
+      // A second outbound message, the same second, with a higher UID: the
+      // server saw it after, so the promise was kept.
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_id, thread_key, from_addr,
+            to_addrs, subject, internal_date, fetched_at, body_text, direction)
+         values ($1, $2, 1, 501, '<after@example.test>', $3, '<same-second@work.test>',
+                 'owner@example.test', $4::jsonb, 'Re: The quote', $5, $5, 'Here they are.', 'out')`,
+        [accountId, sentFolderId, threadId, JSON.stringify(['client@work.test']), at],
+      );
+      expect(await raise(promisedReply, ctx())).toEqual([]);
+    });
+
+    it('stays quiet when the same second is in two folders and cannot be read', async () => {
+      /*
+       * INBOX and Sent number their messages independently, so a UID says
+       * nothing across them. With `fetched_at` equal too, nothing in this
+       * database can separate the two — and the tie resolves as "it followed",
+       * which silences the watcher rather than making it speak on a coin-flip.
+       */
+      const at = daysBefore(6);
+      const { threadId } = await write({
+        from: 'owner@example.test',
+        to: 'client@work.test',
+        subject: 'The quote',
+        threadKey: '<cross-folder@work.test>',
+        at,
+        body: "I'll send the figures tomorrow.",
+        direction: 'out',
+        uid: 600,
+        fetchedAt: at,
+      });
+      expect(await raise(promisedReply, ctx())).toHaveLength(1);
+
+      // The owner's own message, the same second, filed in INBOX — a UID of
+      // 1, which under a naive (instant, uid) rule would read as "before".
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_id, thread_key, from_addr,
+            to_addrs, subject, internal_date, fetched_at, body_text, direction)
+         values ($1, $2, 1, 1, '<crossed@example.test>', $3, '<cross-folder@work.test>',
+                 'owner@example.test', $4::jsonb, 'Re: The quote', $5, $5, 'Here they are.', 'out')`,
+        [accountId, folderId, threadId, JSON.stringify(['client@work.test']), at],
+      );
+      expect(await raise(promisedReply, ctx())).toEqual([]);
+    });
+
     it('chases a draft that has no conversation yet', async () => {
       // `drafts.thread_id` is nullable; an inner join dropped exactly the
       // newest drafts, which is the wrong half to lose.
@@ -424,7 +542,14 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(findings[0]!.key).toBe(`email.receipt-or-bill:${messageId}`);
       expect(findings[0]!.severity).toBe('info');
       expect(findings[0]!.title).toContain('€120.50');
-      expect(findings[0]!.data).toMatchObject({ threadId, amount: 120.5, currency: 'EUR' });
+      // ids and numbers: the currency lives in the prose, not in `data`.
+      expect(findings[0]!.data).toEqual({
+        messageId,
+        threadId,
+        confidence: 0.95,
+        amount: 120.5,
+      });
+      expect(findings[0]!.detail).toContain('€120.50');
       expect(findings[0]!.detail).toContain('hand it to whoever keeps the overview');
 
       const { rows } = await pool.query(
@@ -492,6 +617,31 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(await raise(receiptOrBill, ctx())).toHaveLength(1);
     });
 
+    it('leaves a silenced sender unstamped even once the mail is old', async () => {
+      /*
+       * The bulk stamp runs every hour, and a stamp is permanent. Blind to the
+       * policy, whether a silenced sender's mail could ever be read again
+       * would depend on whether that statement happened to run before the
+       * owner changed his mind about the rule.
+       */
+      await ignorePolicy('billing@insurer.test');
+      await arriving({ ageDays: 40 });
+      expect(await raise(receiptOrBill, ctx())).toEqual([]);
+      const still = await pool.query(
+        `select count(*)::int as n from email.messages where receipts_scanned_at is null`,
+      );
+      expect(still.rows[0].n).toBe(1);
+
+      // Revoke it, and the next tick stamps it like everything else — it is
+      // out of the window, so there is nothing to read, only to settle.
+      await pool.query('delete from email.policies');
+      expect(await raise(receiptOrBill, ctx())).toEqual([]);
+      const settled = await pool.query(
+        `select count(*)::int as n from email.messages where receipts_scanned_at is null`,
+      );
+      expect(settled.rows[0].n).toBe(0);
+    });
+
     it('never stamps a message whose reading could not be stored', async () => {
       /*
        * The one state from which the fact can never be recovered: stamped as
@@ -519,7 +669,8 @@ suite('email watchers, step 6 (postgres)', () => {
       await arriving({ body: 'Invoice total €99999999999999999999,00' });
       const findings = await raise(receiptOrBill, ctx());
       expect(findings).toHaveLength(1);
-      expect(findings[0]!.data).toMatchObject({ amount: null, currency: null });
+      expect(findings[0]!.data).toMatchObject({ amount: null });
+      expect(findings[0]!.title).toBe(`A receipt or bill arrived: ${quoted('Invoice 2026-114')}`);
     });
 
     it('silences a stored reading when a policy arrives after the scan', async () => {
@@ -1085,24 +1236,36 @@ suite('email watchers, step 6 (postgres)', () => {
         });
       }
 
-      // One tick raises twenty and names twenty-five as still true.
-      const result = await receiptOrBill.run(ctx());
-      expect(findingsOf(result)).toHaveLength(20);
-      expect(new Set(stillTrueKeys(result)).size).toBe(25);
-
       /*
-       * Through core, twice. The second tick must resolve nothing: the five
-       * past the cap are still true, and a run that let them resolve would
-       * hand them back as news on the next one, forever. Asserting it after
-       * the facts are *open* is the whole point — a resolve can only happen to
-       * a finding that exists.
+       * Open all twenty-five *first*, so what follows is a statement about
+       * resolution rather than about findings that were never raised. A cap of
+       * twenty can only fail to resolve five facts if those five exist, and
+       * the assertion that matters — "the tail is not resolved" — is empty
+       * against a store where the tail was never opened.
        */
-      const first = await runSentinels(pool, manifests, NOW, 'UTC');
-      expect(first[0]).toMatchObject({ findings: 20, fired: 20, resolved: 0 });
-      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(20);
-      const second = await runSentinels(pool, manifests, new Date(NOW.getTime() + 2 * 3_600_000), 'UTC');
-      expect(second[0]).toMatchObject({ findings: 20, resolved: 0 });
-      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(20);
+      const openAll = { ...receiptOrBill, run: receiptOrBill.run };
+      const everything = await openAll.run(ctx());
+      expect(new Set(stillTrueKeys(everything)).size).toBe(25);
+      for (const key of stillTrueKeys(everything)) {
+        await pool.query(
+          `insert into core.sentinel_findings
+             (key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at)
+           values ($1, 'email.receipt-or-bill', 'info', 'opened by hand', '', '{}'::jsonb, $2, $2)
+           on conflict (key) do nothing`,
+          [key, NOW],
+        );
+      }
+      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(25);
+
+      // Now the capped run. It raises twenty and resolves none of the five.
+      const capped = await runSentinels(pool, manifests, NOW, 'UTC');
+      expect(capped[0]).toMatchObject({ findings: 20, resolved: 0 });
+      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(25);
+
+      // And again, an hour later: still nothing resolved, still all open.
+      const again = await runSentinels(pool, manifests, new Date(NOW.getTime() + 2 * 3_600_000), 'UTC');
+      expect(again[0]).toMatchObject({ findings: 20, resolved: 0 });
+      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(25);
     });
   });
 });

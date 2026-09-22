@@ -37,6 +37,7 @@ import {
   type PromisedDraft,
   type PromisedReply,
 } from '../watchers.js';
+import { cameAfter } from './order.js';
 import { mailAgent } from './waiting-on-me.js';
 
 /** Twice a day. A promise is measured in days; more often would say the same. */
@@ -81,19 +82,18 @@ const PROMISES_SQL = `
        and t.state <> 'muted'
        and coalesce(m.internal_date, m.fetched_at) <= $1::timestamptz - make_interval(days => $2::int)
        and coalesce(m.internal_date, m.fetched_at) >= $1::timestamptz - make_interval(days => $3::int)
-       -- "Something followed" compares (instant, row id) as one value rather
-       -- than the instant alone: INTERNALDATE has second resolution and two
-       -- messages sent in the same second would otherwise each be the other's
-       -- follower, or neither, depending on nothing.
+       -- "Something followed" is the comparison in order.ts, not a bare
+       -- instant: INTERNALDATE has second resolution, and the row id that used
+       -- to break the tie is a random uuid with no chronology in it at all.
        and not exists (
          select 1 from email.messages later
           where later.thread_id = m.thread_id
             and later.direction = 'out'
-            and (coalesce(later.internal_date, later.fetched_at), later.id)
-                > (coalesce(m.internal_date, m.fetched_at), m.id)
+            and later.id <> m.id
+            and ${cameAfter('later', 'm')}
        )
   )
-  select id, thread_id, subject, body_text, to_addrs,
+  select id, thread_id, subject, body_text, to_addrs, at,
          floor(extract(epoch from ($1::timestamptz - at)) / 86400.0)::int as age_days
     from rows
    where not ${IGNORED_RECIPIENT}
@@ -121,7 +121,7 @@ const DRAFTS_SQL = `
        and d.updated_at <= $1::timestamptz - make_interval(days => $2::int)
        and d.updated_at >= $1::timestamptz - make_interval(days => $3::int)
   )
-  select id, thread_id, subject, to_addrs, created_by_agent,
+  select id, thread_id, subject, to_addrs, created_by_agent, at,
          floor(extract(epoch from ($1::timestamptz - at)) / 86400.0)::int as age_days
     from rows
    where not ${IGNORED_RECIPIENT}
@@ -168,7 +168,22 @@ export function createPromisedReplySentinel(): Sentinel {
        * ordered urgent-first and newest-first, and the cap is applied to the
        * one ordered list.
        */
-      const shaped: Array<ReturnType<typeof promisedFinding>> = [];
+      /**
+       * A finding with the instant it is about, which is the ordering key.
+       *
+       * `ageDays` is floored to whole days, so everything promised in the same
+       * 24 hours sorted equal and the cap fell wherever the rows happened to
+       * arrive — a draft written this morning could lose to a promise made
+       * yesterday evening. The timestamp separates them; the id makes the
+       * order total, so two rows sharing an instant do not swap between ticks.
+       */
+      type Ordered = { finding: ReturnType<typeof promisedFinding>; at: number; id: string };
+      const shaped: Ordered[] = [];
+      const instant = (raw: unknown): number => {
+        const at = raw instanceof Date ? raw : new Date(String(raw));
+        const ms = at.getTime();
+        return Number.isFinite(ms) ? ms : 0;
+      };
       for (const row of promises.rows as Array<Record<string, any>>) {
         // The judgement is `phrases.ts`'s, over the owner's own words, and it
         // is made here rather than in SQL because a regular expression in a
@@ -183,7 +198,11 @@ export function createPromisedReplySentinel(): Sentinel {
           phrase: promise.phrase,
           ageDays: Math.max(0, Number(row.age_days ?? 0)),
         };
-        shaped.push(promisedFinding(shapedPromise));
+        shaped.push({
+          finding: promisedFinding(shapedPromise),
+          at: instant(row.at),
+          id: String(row.id),
+        });
       }
       for (const row of drafts.rows as Array<Record<string, any>>) {
         const shapedDraft: PromisedDraft = {
@@ -194,15 +213,26 @@ export function createPromisedReplySentinel(): Sentinel {
           agent: row.created_by_agent ?? 'an agent',
           ageDays: Math.max(0, Number(row.age_days ?? 0)),
         };
-        shaped.push(promisedDraftFinding(shapedDraft));
+        shaped.push({
+          finding: promisedDraftFinding(shapedDraft),
+          at: instant(row.at),
+          id: String(row.id),
+        });
       }
-      // Urgent first, then newest — the same order `email.waiting-on-me`
-      // reports in, and for the same reason: what the cap truncates should be
-      // the least pressing thing, and what it truncates must not be mistaken
-      // for something that was dealt with (which `keys` below prevents).
+      /*
+       * Urgent first, then newest by the actual instant, then by id — one
+       * ordered list with drafts and promises interleaved, not two halves
+       * concatenated. The same order `email.waiting-on-me` reports in, and for
+       * the same reason: what the cap truncates should be the least pressing
+       * thing, and what it truncates must not be mistaken for something that
+       * was dealt with (which `keys` below prevents).
+       */
       shaped.sort((a, b) => {
-        if (a.severity !== b.severity) return a.severity === 'urgent' ? -1 : 1;
-        return a.data.ageDays - b.data.ageDays;
+        if (a.finding.severity !== b.finding.severity) {
+          return a.finding.severity === 'urgent' ? -1 : 1;
+        }
+        if (a.at !== b.at) return b.at - a.at;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
 
       /*
@@ -212,7 +242,7 @@ export function createPromisedReplySentinel(): Sentinel {
        */
       const keys: string[] = [];
       const findings: Finding[] = [];
-      for (const finding of shaped) {
+      for (const { finding } of shaped) {
         keys.push(finding.key);
         if (findings.length >= MAX_PROMISED_FINDINGS) continue;
         findings.push({ ...finding, ...(agentId ? { agentId } : {}) });
