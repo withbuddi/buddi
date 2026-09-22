@@ -41,12 +41,14 @@ next. Checked against the code and `git log` on 2026-09-21.
   summary every run gets for free.
 - [The web plugin](web.md) — search and read-one-page as a capability.
 - [Writing a plugin](plugins.md) — the contract for anything an agent can do.
+- [Email](specs/email.md) — all six steps: policies and the gate, accounts,
+  threads and Sent, six watchers with a switch each, the draft lifecycle with
+  owner choices on the approval card, a Mail page with search, attachments
+  on request.
 
 ## In progress
 
-- [Email](specs/email.md) — 4 of 5 steps built (policies and the gate;
-  accounts plural; threads and the Sent folder; the first two watchers with a
-  switch each); step 5 (draft lifecycle, alias choice on approval) remains.
+Nothing at the moment; the next item below is the developer plugin.
 
 ## Next, in order
 
