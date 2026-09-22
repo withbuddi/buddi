@@ -402,6 +402,10 @@ least one of the two.
   - With `until` and no `since`, the window is measured back from `until`, not
     from today: asking for the old half of the archive and being told "the last
     90 days" would find nothing while claiming to have looked.
+  - The anchor is the owner's **calendar day in their own zone**, like every
+    other boundary in the query. At 20:00 in New York it is already tomorrow in
+    UTC, and a window taken from the UTC date would start a day off from the
+    dates beside it.
 - Filters, each optional: `from` (a whole address, matched exactly, or a bare
   domain, which also matches its subdomains and nothing else — `acme.com` never
   matches `notacme.com`), `since` and `until` (YYYY-MM-DD, against
@@ -415,8 +419,11 @@ least one of the two.
 - **Malformed input is a sentence, not a database error.** One
   `validateFilters`, shared by the tool and the route, rejects a date that is
   not a day (`2026-02-31` matches the pattern and is not one), a `thread` that
-  is not an id, a one-character `query`, and a range that cannot contain
-  anything. The route answers 400; the tool refuses.
+  is not an id, a one-character `query`, a range that cannot contain anything,
+  and a `hasAttachments` that is not a boolean — `?hasAttachments=yes` is a
+  refusal, not a silently dropped filter, because a search that quietly ignores
+  half of what it was asked is worse than one that says it did not understand.
+  The route answers 400; the tool refuses.
 - A hit carries its conversation, its direction, which mailbox it arrived in,
   its date — **the ordering clock, so the list is ordered by the value it
   shows** — and its snippet, **fenced** as quoted mail for the tool and plain
@@ -473,12 +480,23 @@ listing owes a months-old row no particular order. A part id that is not one
 2. **The declared type**, which the sender wrote, so it is a hint: the
    executable mimes and the `vnd.ms-*.macroEnabled` family.
 3. **The first bytes**, once they are here and before anything is saved. PE
-   (`MZ`), ELF, Mach-O and fat binaries, shebang scripts, and a ZIP whose
-   *central directory* (read properly, not grepped for) names `vbaProject.bin`
-   or `META-INF/MANIFEST.MF`. This is the only layer that cannot be lied to by
-   renaming a file. The sniffed type is what gets stored, unless the sender
-   declared something more precise about the same bytes — a `.docx` really is
-   a ZIP.
+   (`MZ`), ELF, Mach-O and fat binaries, and shebang scripts. This is the only
+   layer that cannot be lied to by renaming a file. The sniffed type is what
+   gets stored, unless the sender declared something more precise about the
+   same bytes — a `.docx` really is a ZIP.
+4. **Inside the archive**, whenever there is a reason to look: the declared
+   type is a ZIP family, the extension is a ZIP container (`.zip .jar .docx
+   .xlsx .pptx .docm .xlsm .pptm .apk .odt .ods` …), or an end-of-directory
+   record sits anywhere it legally could. Not "byte 0 is `PK`" — a preamble
+   before the archive is legal, and used to skip the inspection entirely.
+   The central directory is parsed rather than grepped for (a `.docx` may
+   perfectly well *contain* the text `vbaProject.bin` in a compressed part),
+   its offset and size are checked to land inside the buffer with the
+   central-directory signature actually there (so a fake end record planted in
+   a comment does not win), and every loop is bounded by the buffer. Refused
+   when it names `vbaProject.bin` or `META-INF/MANIFEST.MF` — **and refused
+   when it cannot be read at all**: ZIP64, a truncated index, a malformed one.
+   "I could not see inside it" is not "there was nothing in it".
 
 Also:
 

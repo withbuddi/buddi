@@ -439,6 +439,9 @@ suite('the draft editor routes', () => {
     const res = await send('GET', '/api/email/search?from=bank.test&hasAttachments=true');
     expect(res.status).toBe(200);
     expect(((await res.json()) as any).count).toBe(1);
+    // And the other way round: the one message here has an attachment.
+    const without = await send('GET', '/api/email/search?from=bank.test&hasAttachments=false');
+    expect(((await without.json()) as any).count).toBe(0);
     // Everything malformed is a 400 with a sentence, never a 500 from the
     // database: `?thread=x` used to reach `$n::uuid` and come back blank.
     for (const bad of [
@@ -447,6 +450,11 @@ suite('the draft editor routes', () => {
       'thread=x',
       'q=a',
       'direction=sideways',
+      // A value that is not a boolean is a refusal, not a quietly dropped
+      // filter: the owner asked for something and would have been shown a
+      // search that had not applied it.
+      'hasAttachments=yes',
+      'hasAttachments=1',
     ]) {
       const res = await send('GET', `/api/email/search?${bad}`);
       expect(res.status, bad).toBe(400);

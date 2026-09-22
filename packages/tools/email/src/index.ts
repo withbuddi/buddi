@@ -127,6 +127,7 @@ export default manifest;
 export { listRecent, readMessage, search } from './tools/read.js';
 // --- email step 6b: search and attachments ---
 export {
+  booleanFilter,
   bounded,
   buildSearch,
   isCalendarDate,
@@ -161,11 +162,14 @@ export {
   bytesRefusal,
   declaredRefusal,
   extensionOf,
+  inspectZip,
   isPartId,
+  looksLikeZip,
   mimeToStore,
   safeFilename,
   sniffMime,
   zipEntryNames,
+  type ZipInspection,
   MAX_FILENAME,
   PART_PATTERN,
   REFUSED_EXTENSIONS,

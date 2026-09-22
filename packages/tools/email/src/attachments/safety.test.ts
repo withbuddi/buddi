@@ -8,7 +8,9 @@ import {
   bytesRefusal,
   declaredRefusal,
   extensionOf,
+  inspectZip,
   isPartId,
+  looksLikeZip,
   mimeToStore,
   safeFilename,
   sniffMime,
@@ -16,8 +18,17 @@ import {
   MAX_FILENAME,
 } from './safety.js';
 
-/** A minimal but real ZIP holding one entry with the given name. */
-function zipWith(name: string): Buffer {
+/**
+ * A minimal but real ZIP holding one entry with the given name.
+ *
+ * `preamble` prepends bytes before the archive, which is legal (a
+ * self-extracting stub does it) and is the shape that used to walk past a
+ * check that only looked at byte 0. `comment` goes in the EOCD comment field.
+ */
+function zipWith(
+  name: string,
+  opts: { preamble?: number; comment?: Buffer } = {},
+): Buffer {
   const nameBytes = Buffer.from(name, 'utf8');
   const local = Buffer.alloc(30 + nameBytes.length);
   local.writeUInt32LE(0x04034b50, 0);
@@ -29,13 +40,30 @@ function zipWith(name: string): Buffer {
   central.writeUInt16LE(nameBytes.length, 28);
   nameBytes.copy(central, 46);
 
-  const eocd = Buffer.alloc(22);
+  const comment = opts.comment ?? Buffer.alloc(0);
+  const eocd = Buffer.alloc(22 + comment.length);
   eocd.writeUInt32LE(0x06054b50, 0);
   eocd.writeUInt16LE(1, 8); // entries on this disk
   eocd.writeUInt16LE(1, 10); // entries total
   eocd.writeUInt32LE(central.length, 12);
-  eocd.writeUInt32LE(local.length, 16); // central directory offset
-  return Buffer.concat([local, central, eocd]);
+  // Relative to the start of the archive, which is after any preamble.
+  eocd.writeUInt32LE(local.length, 16);
+  eocd.writeUInt16LE(comment.length, 20);
+  comment.copy(eocd, 22);
+
+  const head = opts.preamble ? Buffer.alloc(opts.preamble, 0x41) : Buffer.alloc(0);
+  return Buffer.concat([head, local, central, eocd]);
+}
+
+/** An EOCD claiming ZIP64: the 32-bit fields saturate. */
+function zip64(): Buffer {
+  const zip = zipWith('word/vbaProject.bin');
+  const eocd = zip.length - 22;
+  zip.writeUInt16LE(0xffff, eocd + 8);
+  zip.writeUInt16LE(0xffff, eocd + 10);
+  zip.writeUInt32LE(0xffffffff, eocd + 12);
+  zip.writeUInt32LE(0xffffffff, eocd + 16);
+  return zip;
 }
 
 describe('safeFilename', () => {
@@ -154,17 +182,77 @@ describe('bytesRefusal', () => {
   });
 });
 
-describe('zipEntryNames', () => {
+describe('inspectZip', () => {
   it('reads the central directory rather than searching the whole buffer', () => {
     // A document that merely *mentions* the string must not be refused.
     const zip = zipWith('word/document.xml');
-    const withText = Buffer.concat([Buffer.from('vbaProject.bin'), zip]);
     expect(zipEntryNames(zip)).toEqual(['word/document.xml']);
-    expect(bytesRefusal(withText)).toBeNull();
+    expect(bytesRefusal(zip)).toBeNull();
   });
 
-  it('answers nothing for something that is not a zip', () => {
+  it('reads an archive that has something in front of it', () => {
+    // The bypass: the inspection used to run only when byte 0 was `PK`, so a
+    // hundred bytes of padding skipped it entirely.
+    const padded = zipWith('word/vbaProject.bin', { preamble: 100 });
+    expect(sniffMime(padded)).toBeNull();
+    expect(inspectZip(padded)).toEqual({ kind: 'entries', names: ['word/vbaProject.bin'] });
+    expect(bytesRefusal(padded)).toMatch(/macros/);
+  });
+
+  it('is not fooled by a fake end-of-directory signature in the comment', () => {
+    const comment = Buffer.alloc(40);
+    comment.writeUInt32LE(0x06054b50, 4);
+    const zip = zipWith('word/document.xml', { comment });
+    // The fake candidate is tried first, fails validation, and the real
+    // record further back is used.
+    expect(inspectZip(zip)).toEqual({ kind: 'entries', names: ['word/document.xml'] });
+    expect(bytesRefusal(zip)).toBeNull();
+  });
+
+  it('refuses a ZIP64 archive as one it cannot look inside', () => {
+    const found = inspectZip(zip64());
+    expect(found.kind).toBe('uninspectable');
+    expect(bytesRefusal(zip64())).toMatch(/ZIP64/);
+  });
+
+  it('refuses a truncated archive rather than throwing or passing', () => {
+    const zip = zipWith('word/vbaProject.bin');
+    // Cut the central directory in half, leaving the end record intact.
+    const cut = Buffer.concat([zip.subarray(0, 40), zip.subarray(zip.length - 22)]);
+    expect(() => inspectZip(cut)).not.toThrow();
+    expect(inspectZip(cut).kind).toBe('uninspectable');
+    expect(bytesRefusal(cut)).toMatch(/cannot look inside/);
+  });
+
+  it('refuses an archive whose index claims more entries than it holds', () => {
+    const zip = zipWith('word/document.xml');
+    zip.writeUInt16LE(500, zip.length - 22 + 10);
+    expect(() => inspectZip(zip)).not.toThrow();
+    expect(inspectZip(zip).kind).toBe('uninspectable');
+  });
+
+  it('looks inside anything that claims to be a zip container', () => {
+    const padded = zipWith('META-INF/MANIFEST.MF', { preamble: 8 });
+    // By declared type and by extension alike, even without the signature
+    // being where a sniffer would look for it.
+    expect(bytesRefusal(padded, { mime: 'application/zip' })).toMatch(/Java archive/);
+    expect(bytesRefusal(padded, { filename: 'report.docx' })).toMatch(/Java archive/);
+  });
+
+  it('spots an end record wherever it legally sits, not just at byte 0', () => {
+    expect(looksLikeZip(zipWith('a.txt', { preamble: 100 }))).toBe(true);
+    expect(looksLikeZip(Buffer.from('an ordinary sentence'))).toBe(false);
+  });
+
+  it('answers nothing for something that is not a zip at all', () => {
     expect(zipEntryNames(Buffer.from('not a zip'))).toEqual([]);
+    expect(inspectZip(Buffer.from('not a zip'))).toEqual({ kind: 'not-zip' });
+    expect(bytesRefusal(Buffer.from('%PDF-1.7'), { filename: 'x.docx' })).toBeNull();
+  });
+
+  it('refuses a zip with no end record at all', () => {
+    const headerOnly = zipWith('a.txt').subarray(0, 30);
+    expect(inspectZip(headerOnly).kind).toBe('uninspectable');
   });
 });
 

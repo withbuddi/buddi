@@ -37,6 +37,7 @@ import {
   DraftWriteConflict,
   DRAFT_COLUMNS,
   LIVE_DRAFT_STATUSES,
+  booleanFilter,
   narrows,
   toDraft,
   toSearchRow,
@@ -577,11 +578,14 @@ export async function searchEmail(
     until?: string | undefined;
     thread?: string | undefined;
     direction?: string | undefined;
-    hasAttachments?: boolean | undefined;
+    /** Raw, as it came off the query string: `true`, `false`, or a refusal. */
+    hasAttachments?: string | undefined;
     accountId?: string | undefined;
     limit?: number | undefined;
   },
 ): Promise<RouteReply> {
+  const attachments = booleanFilter('hasAttachments', params.hasAttachments);
+  if (!attachments.ok) return { status: 400, body: { error: attachments.message } };
   const filters: SearchFilters = {
     ...(params.q && params.q.trim() !== '' ? { query: params.q.trim() } : {}),
     ...(params.from && params.from.trim() !== '' ? { from: params.from.trim() } : {}),
@@ -591,7 +595,7 @@ export async function searchEmail(
     ...(params.direction && params.direction !== ''
       ? { direction: params.direction as SearchFilters['direction'] }
       : {}),
-    ...(params.hasAttachments !== undefined ? { hasAttachments: params.hasAttachments } : {}),
+    ...(attachments.value !== undefined ? { hasAttachments: attachments.value } : {}),
   };
   /*
    * The same check the tool makes, from the same function. A malformed

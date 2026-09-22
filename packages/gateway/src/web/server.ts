@@ -1123,7 +1123,9 @@ export function createWebApp(deps: WebServerDeps): Server {
          * agents ask the same question of the same table.
          */
         case '/api/email/search': {
-          const has = q.get('hasAttachments');
+          // Every value goes through as it arrived: `searchEmail` validates
+          // them with the same function the tool uses, so a malformed one is
+          // a sentence rather than something quietly dropped.
           const view = await searchEmail(draftDeps(), {
             q: q.get('q') ?? undefined,
             from: q.get('from') ?? undefined,
@@ -1131,7 +1133,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             until: q.get('until') ?? undefined,
             thread: q.get('thread') ?? undefined,
             direction: q.get('direction') ?? undefined,
-            ...(has === 'true' || has === 'false' ? { hasAttachments: has === 'true' } : {}),
+            hasAttachments: q.get('hasAttachments') ?? undefined,
             ...(q.get('account') ? { accountId: (q.get('account') as string).trim() } : {}),
           });
           return sendJson(res, view.status, view.body);
