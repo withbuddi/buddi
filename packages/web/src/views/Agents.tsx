@@ -232,7 +232,7 @@ function AgentPage({
       </Tabs>
       {tab === 'conversations' ? <AgentConversations agentId={agentId} navigate={navigate} /> : null}
       {tab === 'missions' ? <Missions timezone={timezone} embedded agentId={agentId} /> : null}
-      {tab === 'offers' ? <Offers embedded agentId={agentId} /> : null}
+      {tab === 'offers' ? <Offers embedded agentId={agentId} agentName={name} /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded agentId={agentId} /> : null}
       {tab === 'setup' ? <AgentSetup agentId={agentId} /> : null}
     </div>

@@ -10,14 +10,19 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import {
+  dismissOffer,
+  dismissOffers,
   getOffer,
+  lapseConversationOffers,
+  listClosedOffers,
   listOpenOffers,
   offerActions,
   recordOfferJob,
   releaseOffer,
+  sweepLapsedOffers,
   takeOffer,
-  withdrawOffers,
 } from './store.js';
+import { OFFER_FOLD_MS, OFFER_TTL_MS } from './types.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -51,6 +56,7 @@ suite('offers (postgres)', () => {
 
   beforeEach(async () => {
     await pool.query('truncate core.offers cascade');
+    await pool.query('truncate core.conversations cascade');
   });
 
   const two = () =>
@@ -159,12 +165,11 @@ suite('offers (postgres)', () => {
 
   /**
    * An offer made in a live conversation belongs to the turn that made it. The
-   * conversation's next turn withdraws what the last one left on the table, so
-   * a button cannot still fire an hour and three subjects later — and a tap on
-   * the dead one gets the ordinary "expired", never silence and never a
-   * surprise run.
+   * conversation's next turn lapses what the last one left on the table, so a
+   * button cannot still fire an hour and three subjects later — and a tap on
+   * the dead one is told it lapsed, never silence and never a surprise run.
    */
-  it('withdraws a conversation’s open offers, and a later tap is refused as expired', async () => {
+  it('lapses a conversation’s open offers, and a later tap is told so', async () => {
     const { rows } = await pool.query(
       `insert into core.conversations (agent_id) values ('mail-triage') returning id`,
     );
@@ -178,8 +183,8 @@ suite('offers (postgres)', () => {
       ],
       now: NOW,
     });
-    // One of them was taken before the turn moved on; withdrawing must not
-    // touch it, and must not un-take it.
+    // One of them was taken before the turn moved on; lapsing must not touch
+    // it, and must not un-take it.
     const takenId = stored[1]?.id as string;
     await takeOffer(pool, { id: takenId, via: 'telegram', now: NOW });
 
@@ -187,7 +192,9 @@ suite('offers (postgres)', () => {
       await listOpenOffers(pool, { now: later(1000), conversationId }),
     ).toHaveLength(1);
 
-    expect(await withdrawOffers(pool, { conversationId, now: later(1000) })).toBe(1);
+    expect(
+      await lapseConversationOffers(pool, { conversationId, reason: 'owner-moved-on', now: later(1000) }),
+    ).toBe(1);
     expect(await listOpenOffers(pool, { now: later(1000), conversationId })).toEqual([]);
 
     const late = await takeOffer(pool, {
@@ -195,8 +202,8 @@ suite('offers (postgres)', () => {
       via: 'web',
       now: later(2000),
     });
-    expect(late).toMatchObject({ ok: false, reason: 'expired' });
-    // Withdrawn, not deleted: the row is still there for the record.
+    expect(late).toMatchObject({ ok: false, reason: 'lapsed' });
+    // Lapsed, not deleted: the row is still there for the record.
     expect((await getOffer(pool, stored[0]?.id as string))?.takenAt).toBeNull();
     expect((await getOffer(pool, takenId))?.takenVia).toBe('telegram');
 
@@ -206,7 +213,9 @@ suite('offers (postgres)', () => {
       actions: [{ label: 'Remind me', prompt: 'remind me tomorrow' }],
       now: NOW,
     });
-    expect(await withdrawOffers(pool, { conversationId, now: later(3000) })).toBe(0);
+    expect(
+      await lapseConversationOffers(pool, { conversationId, reason: 'owner-moved-on', now: later(3000) }),
+    ).toBe(0);
     expect((await getOffer(pool, elsewhere[0]?.id as string))?.takenAt).toBeNull();
     expect(await listOpenOffers(pool, { now: later(3000) })).toHaveLength(1);
   });
@@ -215,5 +224,207 @@ suite('offers (postgres)', () => {
     const [first] = await two();
     const taken = await takeOffer(pool, { id: first?.id as string, via: 'web', now: NOW });
     expect(taken.ok && taken.offer.agentId).toBe('mail-triage');
+  });
+});
+
+suite('saying no to an offer (postgres)', () => {
+  let admin: Pool;
+  let pool: Pool;
+  const DB = `buddi_offers_no_test_${process.pid}`;
+
+  beforeAll(async () => {
+    admin = createPool(databaseUrl as string);
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+    const url = new URL(databaseUrl as string);
+    url.pathname = `/${DB}`;
+    pool = createPool(url.toString());
+    await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    if (admin) {
+      await admin.query(`drop database if exists ${DB}`);
+      await admin.end();
+    }
+  });
+
+  beforeEach(async () => {
+    await pool.query('truncate core.offers cascade');
+    await pool.query('truncate core.conversations cascade');
+  });
+
+  const conversation = async (agentId = 'mail-triage', at: Date = NOW): Promise<string> => {
+    const { rows } = await pool.query(
+      'insert into core.conversations (agent_id, created_at) values ($1, $2) returning id',
+      [agentId, at],
+    );
+    return String(rows[0].id);
+  };
+
+  const ownerSaid = async (conversationId: string, at: Date): Promise<void> => {
+    await pool.query(
+      `insert into core.messages (conversation_id, role, content, created_at)
+       values ($1::uuid, 'user', $2::jsonb, $3)`,
+      [conversationId, JSON.stringify([{ type: 'text', text: 'never mind' }]), at],
+    );
+  };
+
+  const offerIn = async (
+    conversationId: string | null,
+    agentId = 'mail-triage',
+    label = 'Send it',
+  ): Promise<string> => {
+    const [stored] = await offerActions(pool, {
+      agentId,
+      conversationId,
+      actions: [{ label, prompt: 'send the reply I drafted' }],
+      now: NOW,
+    });
+    return stored?.id as string;
+  };
+
+  /**
+   * The whole point. 65 offers piled up on the owner's installation because
+   * there was no answer but yes; dismissing is the answer he did not have.
+   */
+  it('takes a dismissed offer off the table everywhere, and refuses a later tap', async () => {
+    const id = await offerIn(null);
+    expect(await listOpenOffers(pool, { now: NOW })).toHaveLength(1);
+
+    const dismissed = await dismissOffer(pool, { id, now: later(1000) });
+    expect(dismissed?.dismissedAt).not.toBeNull();
+    expect(await listOpenOffers(pool, { now: later(2000) })).toEqual([]);
+
+    const late = await takeOffer(pool, { id, via: 'telegram', now: later(2000) });
+    expect(late).toMatchObject({ ok: false, reason: 'dismissed' });
+    // Recorded, not deleted: the row and its prompt are still there.
+    expect((await getOffer(pool, id))?.label).toBe('Send it');
+  });
+
+  it('never dismisses one that is already running', async () => {
+    const id = await offerIn(null);
+    await takeOffer(pool, { id, via: 'web', now: NOW });
+    expect(await dismissOffer(pool, { id, now: later(1000) })).toBeNull();
+    expect((await getOffer(pool, id))?.dismissedAt).toBeNull();
+  });
+
+  it('clears the whole list, or one agent\'s', async () => {
+    await offerIn(null, 'mail-triage', 'One');
+    await offerIn(null, 'mail-triage', 'Two');
+    await offerIn(null, 'ledger', 'Three');
+
+    expect(await dismissOffers(pool, { now: later(1000), agentId: 'ledger' })).toBe(1);
+    expect((await listOpenOffers(pool, { now: later(1000) })).map((o) => o.agentId)).toEqual([
+      'mail-triage',
+      'mail-triage',
+    ]);
+    expect(await dismissOffers(pool, { now: later(2000) })).toBe(2);
+    expect(await listOpenOffers(pool, { now: later(2000) })).toEqual([]);
+    // Nothing left to clear, and asking again is not an error.
+    expect(await dismissOffers(pool, { now: later(3000) })).toBe(0);
+  });
+
+  /* ---------------- the three ways a moment passes ---------------- */
+
+  it('lapses an offer when the owner answered in words instead', async () => {
+    const conv = await conversation();
+    const id = await offerIn(conv);
+    await ownerSaid(conv, later(60_000));
+
+    expect(await sweepLapsedOffers(pool, { now: later(120_000) })).toBe(1);
+    const row = await getOffer(pool, id);
+    expect(row?.lapseReason).toBe('owner-moved-on');
+    expect(await listOpenOffers(pool, { now: later(120_000) })).toEqual([]);
+    expect(await takeOffer(pool, { id, via: 'telegram', now: later(120_000) })).toMatchObject({
+      ok: false,
+      reason: 'lapsed',
+    });
+  });
+
+  it('lapses an offer whose conversation rolled over, and one whose group was archived', async () => {
+    const conv = await conversation('mail-triage', NOW);
+    const id = await offerIn(conv);
+    // A rollover is a newer conversation for the same agent, which is exactly
+    // what the lifetime rule makes when a thread ends.
+    await conversation('mail-triage', later(60_000));
+
+    expect(await sweepLapsedOffers(pool, { now: later(120_000) })).toBe(1);
+    expect((await getOffer(pool, id))?.lapseReason).toBe('rolled-over');
+
+    // Archived, by the group the conversation belongs to.
+    const { rows } = await pool.query(
+      `insert into core.groups (name, coordinator_agent_id, archived_at) values ('done', 'ledger', $1) returning id`,
+      [later(60_000)],
+    );
+    const archived = await conversation('ledger', NOW);
+    await pool.query('update core.conversations set group_id = $2 where id = $1', [archived, rows[0].id]);
+    const inArchive = await offerIn(archived, 'ledger');
+    expect(await sweepLapsedOffers(pool, { now: later(120_000) })).toBe(1);
+    expect((await getOffer(pool, inArchive))?.lapseReason).toBe('rolled-over');
+  });
+
+  it('lapses an offer whose agent was removed, and only when the roster is known', async () => {
+    const id = await offerIn(null, 'departed');
+    // A caller that cannot name the installed agents concludes nothing.
+    expect(await sweepLapsedOffers(pool, { now: later(1000) })).toBe(0);
+    expect(await sweepLapsedOffers(pool, { now: later(1000), agentIds: ['departed', 'ledger'] })).toBe(0);
+
+    expect(await sweepLapsedOffers(pool, { now: later(1000), agentIds: ['ledger'] })).toBe(1);
+    expect((await getOffer(pool, id))?.lapseReason).toBe('agent-removed');
+  });
+
+  it('lapses a conversation’s offers outright when the thread is known to have ended', async () => {
+    const conv = await conversation();
+    const id = await offerIn(conv);
+    expect(await lapseConversationOffers(pool, { conversationId: conv, reason: 'rolled-over', now: later(1000) })).toBe(1);
+    expect((await getOffer(pool, id))?.lapseReason).toBe('rolled-over');
+    // Nothing left live to lapse twice.
+    expect(await lapseConversationOffers(pool, { conversationId: conv, reason: 'rolled-over', now: later(2000) })).toBe(0);
+  });
+
+  /* ---------------- the fold ---------------- */
+
+  it('keeps the dismissed and the lapsed readable for a week, then stops', async () => {
+    const dismissed = await offerIn(null);
+    const conv = await conversation();
+    const lapsed = await offerIn(conv);
+    await ownerSaid(conv, later(60_000));
+    await dismissOffer(pool, { id: dismissed, now: later(60_000) });
+    await sweepLapsedOffers(pool, { now: later(120_000) });
+
+    const fold = await listClosedOffers(pool, { now: later(120_000) });
+    expect(fold.map((o) => o.id).sort()).toEqual([dismissed, lapsed].sort());
+
+    // A week later they are gone from the read — the rows are not.
+    expect(await listClosedOffers(pool, { now: later(OFFER_FOLD_MS + 120_000) })).toEqual([]);
+    expect(await getOffer(pool, dismissed)).not.toBeNull();
+  });
+
+  /**
+   * A week was too long: an offer is the tail of a conversation, and the facts
+   * behind it are stale long before the button is.
+   */
+  it('gives a new offer 48 hours, and leaves what was already written alone', async () => {
+    expect(OFFER_TTL_MS).toBe(48 * 60 * 60_000);
+    const [fresh] = await offerActions(pool, {
+      agentId: 'mail-triage',
+      actions: [{ label: 'Send it', prompt: 'send it' }],
+      now: NOW,
+    });
+    expect(new Date(fresh?.expiresAt as string).getTime() - NOW.getTime()).toBe(48 * 60 * 60_000);
+
+    // A row written before the change keeps the week it was promised: nothing
+    // backfills, and the migration says so.
+    const [old] = await offerActions(pool, {
+      agentId: 'mail-triage',
+      actions: [{ label: 'Remind me', prompt: 'remind me' }],
+      now: NOW,
+      ttlMs: 7 * 24 * 60 * 60_000,
+    });
+    expect((await listOpenOffers(pool, { now: later(72 * 60 * 60_000) })).map((o) => o.id)).toEqual([
+      old?.id,
+    ]);
   });
 });

@@ -17,7 +17,9 @@ import {
   listMissions,
   listOccurrences,
   listPendingActions,
+  listClosedOffers,
   listOpenOffers,
+  sweepLapsedOffers,
   listReminders,
   countJobsByState,
   isPaused,
@@ -33,6 +35,7 @@ import {
   type ToolContext,
   type ToolRegistry,
   type HomeBlock,
+  type Offer,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
@@ -639,15 +642,39 @@ export async function readReminders(pool: Pool, limit = 100): Promise<unknown[]>
  * ------------------------------------------------------------------ */
 
 /**
- * What an agent has offered the owner and nobody has taken yet.
+ * What an agent has offered the owner and nobody has taken yet — plus, under
+ * the fold, what was refused or went stale in the last week.
  *
  * The dashboard draws these as chips. Same rows Telegram draws as buttons —
  * there is one store, not a per-surface copy, so an offer taken on the phone
  * is gone from the dashboard on its next poll.
+ *
+ * The read is also where an offer lapses. A sweep runs first, marking the ones
+ * whose moment has passed — the owner typed the next message, the conversation
+ * rolled over, the agent was removed — so the list below is what is genuinely
+ * on the table rather than everything ever offered. Doing it here rather than
+ * on a timer means there is no scheduler to get wrong and nothing to run on an
+ * installation nobody is looking at; the gateway sweeps once at start so
+ * Telegram sees the same truth without waiting for a dashboard visit.
+ *
+ * A sweep that fails is logged by the caller's error handling and never fails
+ * the read: a list of offers is worth more than a list of nothing.
  */
-export async function readOffers(pool: Pool, now: Date, limit = 20): Promise<unknown[]> {
+export async function readOffers(
+  pool: Pool,
+  now: Date,
+  limit = 20,
+  opts: { agentIds?: readonly string[] | undefined } = {},
+): Promise<{ offers: unknown[]; closed: unknown[] }> {
+  await sweepLapsedOffers(pool, { now, ...(opts.agentIds ? { agentIds: opts.agentIds } : {}) })
+    .catch(() => 0);
   const offers = await listOpenOffers(pool, { now, limit });
-  return offers.map((o) => ({
+  const closed = await listClosedOffers(pool, { now, limit });
+  return { offers: offers.map(offerView), closed: closed.map(offerView) };
+}
+
+function offerView(o: Offer): unknown {
+  return {
     id: o.id,
     agentId: o.agentId,
     conversationId: o.conversationId,
@@ -657,7 +684,10 @@ export async function readOffers(pool: Pool, now: Date, limit = 20): Promise<unk
     prompt: o.prompt,
     createdAt: o.createdAt,
     expiresAt: o.expiresAt,
-  }));
+    dismissedAt: o.dismissedAt,
+    lapsedAt: o.lapsedAt,
+    lapseReason: o.lapseReason,
+  };
 }
 
 /* ------------------------------------------------------------------ *

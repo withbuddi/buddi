@@ -354,6 +354,27 @@ export interface OfferRow {
   prompt: string;
   createdAt: string;
   expiresAt: string;
+  /** When the owner said no to it. Only ever set on a row under the fold. */
+  dismissedAt?: string | null;
+  /** When its moment passed without anybody deciding. Also fold-only. */
+  lapsedAt?: string | null;
+  /** Which of the three lapse conditions fired. */
+  lapseReason?: 'owner-moved-on' | 'rolled-over' | 'agent-removed' | null;
+}
+
+/** What a lapse is called on the page, in the owner's words. */
+export function lapseSentence(row: OfferRow): string {
+  if (row.dismissedAt) return 'You said no to this one.';
+  switch (row.lapseReason) {
+    case 'owner-moved-on':
+      return 'The conversation moved on.';
+    case 'rolled-over':
+      return 'That conversation ended.';
+    case 'agent-removed':
+      return 'That agent is no longer here.';
+    default:
+      return 'It lapsed.';
+  }
 }
 
 export interface ReminderRow {
@@ -1166,7 +1187,14 @@ export const api = {
     get<{ action: ApprovalRow }>(`/approvals/${encodeURIComponent(id)}`).then(
       (body) => body.action,
     ),
-  offers: () => get<{ offers: OfferRow[] }>('/offers'),
+  /** What is on the table, and under `closed` what was refused or lapsed this week. */
+  offers: () => get<{ offers: OfferRow[]; closed: OfferRow[] }>('/offers'),
+  /** The owner said no to one. Starts nothing; the row stays for the record. */
+  dismissOffer: (id: string) =>
+    post<{ id: string; dismissedAt: string }>(`/offers/${encodeURIComponent(id)}/dismiss`, {}),
+  /** The owner cleared the list — everything, or one agent's. */
+  dismissOffers: (agentId?: string) =>
+    post<{ dismissed: number }>('/offers/dismiss-all', agentId ? { agentId } : {}),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),

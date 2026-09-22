@@ -49,16 +49,16 @@
  *
  * ## An offer belongs to the turn that made it
  *
- * See `withdrawOffers` in core. The conversation's next turn withdraws what the
- * previous turn offered, so a button cannot still fire hours and three subjects
- * later; the tap then gets the ordinary "that option has expired" instead.
+ * The conversation's next turn lapses what the previous turn offered, so a
+ * button cannot still fire hours and three subjects later; the tap is then told
+ * the offer has lapsed, which is what actually happened.
  */
 import {
   MAX_OFFERS,
   MAX_OFFER_LABEL,
   MAX_OFFER_PROMPT,
+  lapseConversationOffers,
   offerActions,
-  withdrawOffers,
   type Offer,
   type OfferedAction,
   type PluginManifest,
@@ -212,7 +212,10 @@ export function offerTurnLabel(speaker: string | null | undefined): string | nul
  *
  * Called at the start of every interactive turn, before the run: by the time
  * the owner has said the next thing, the previous turn's buttons describe a
- * decision that is no longer the live one.
+ * decision that is no longer the live one. That is a lapse and it is recorded
+ * as one — the owner moved on — so a tap that arrives afterwards is told the
+ * offer has lapsed, and the dashboard's fold can still show what was on the
+ * table before they typed.
  *
  * Never allowed to fail a turn — a conversation that cannot reach the offers
  * table is a conversation that still gets its answer.
@@ -224,9 +227,9 @@ export async function withdrawTurnOffers(
   log?: (line: string) => void,
 ): Promise<number> {
   try {
-    return await withdrawOffers(pool, { conversationId, now });
+    return await lapseConversationOffers(pool, { conversationId, reason: 'owner-moved-on', now });
   } catch (err) {
-    log?.(`offers: withdrawing the previous turn's offers failed: ${errorText(err)}`);
+    log?.(`offers: lapsing the previous turn's offers failed: ${errorText(err)}`);
     return 0;
   }
 }

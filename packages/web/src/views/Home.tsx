@@ -6,7 +6,7 @@
  * an approval decides in place, a face opens a conversation, a mission opens
  * the agent that runs it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConversationSummary, type HomeBlock, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
@@ -31,6 +31,7 @@ import {
   useAsync,
 } from '../ui';
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
+import { DismissAll } from './parts/DismissOffers';
 
 export function Home({
   timezone,
@@ -63,7 +64,9 @@ export function Home({
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
   const allOffers: OfferRow[] = offers.data?.offers ?? [];
-  const onOffer = allOffers.slice(0, 8);
+  // Six, not eight and not all of them: a row of chips is read at a glance or
+  // not at all, and the rest are one click away on a page built to hold them.
+  const onOffer = allOffers.slice(0, HOME_OFFERS);
   const moreOffers = allOffers.length - onOffer.length;
 
   return (
@@ -147,13 +150,24 @@ export function Home({
       </Section>
 
       {onOffer.length > 0 ? (
-        <Section title="On offer" aside={moreOffers > 0 ? <a href={`${AGENTS_ROUTE}?tab=offers`} onClick={go(`${AGENTS_ROUTE}?tab=offers`)}>{moreOffers} more</a> : null}>
+        <Section
+          title="On offer"
+          aside={
+            <span className="ui-row">
+              {moreOffers > 0 ? <a href={`${AGENTS_ROUTE}?tab=offers`} onClick={go(`${AGENTS_ROUTE}?tab=offers`)}>{moreOffers} more</a> : null}
+              <DismissAll count={allOffers.length} onDone={() => offers.reload()} />
+            </span>
+          }
+        >
           <div className="home-offers">
             {onOffer.map((offer) => (
-              <a key={offer.id} className="home-offer" href={agentRoute(offer.agentId, 'offers')} onClick={go(agentRoute(offer.agentId, 'offers'))} title={offer.prompt}>
-                <AgentAvatar agents={agents} id={offer.agentId} size="sm" />
-                <span>{offer.label}</span>
-              </a>
+              <OfferChip
+                key={offer.id}
+                offer={offer}
+                agents={agents}
+                open={go(agentRoute(offer.agentId, 'offers'))}
+                onDismissed={() => offers.reload()}
+              />
             ))}
           </div>
         </Section>
@@ -219,6 +233,83 @@ export function Home({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/** How many chips Home draws before it stops and says "N more". */
+export const HOME_OFFERS = 6;
+
+/** How long a thumb has to stay down for a touch to mean "not this one". */
+export const LONG_PRESS_MS = 500;
+
+/**
+ * One chip: the offer, and the way out of it.
+ *
+ * The × appears on hover and on focus, so it is reachable with a keyboard and
+ * invisible until it is wanted. A touch has neither, so a long press does the
+ * same thing — the gesture a phone already uses for "I mean this one, not the
+ * ordinary tap". A press that turns into a scroll or a short tap opens the
+ * offer as it always did.
+ */
+function OfferChip({
+  offer,
+  agents,
+  open,
+  onDismissed,
+}: {
+  offer: OfferRow;
+  agents: ChatAgent[];
+  open: (e: { preventDefault: () => void }) => void;
+  onDismissed: () => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressed = useRef(false);
+
+  const dismiss = (): void => {
+    if (busy) return;
+    setBusy(true);
+    void api.dismissOffer(offer.id).then(onDismissed).finally(() => setBusy(false));
+  };
+  const cancelPress = (): void => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+
+  return (
+    <span className="home-offer-chip">
+      <a
+        className="home-offer"
+        href={agentRoute(offer.agentId, 'offers')}
+        onClick={(e) => {
+          // The long press already did something; the tap that ends it must
+          // not also navigate.
+          if (pressed.current) { pressed.current = false; e.preventDefault(); return; }
+          open(e);
+        }}
+        title={offer.prompt}
+        onTouchStart={() => {
+          pressed.current = false;
+          cancelPress();
+          timer.current = setTimeout(() => { pressed.current = true; dismiss(); }, LONG_PRESS_MS);
+        }}
+        onTouchEnd={cancelPress}
+        onTouchMove={cancelPress}
+        onTouchCancel={cancelPress}
+      >
+        <AgentAvatar agents={agents} id={offer.agentId} size="sm" />
+        <span>{offer.label}</span>
+      </a>
+      <button
+        type="button"
+        className="home-offer-x"
+        aria-label={`Dismiss ${offer.label}`}
+        disabled={busy}
+        onClick={dismiss}
+      >
+        ×
+      </button>
+    </span>
   );
 }
 

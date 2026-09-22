@@ -193,11 +193,13 @@ describe('storing what a turn offered', () => {
     expect(lines.join(' ')).toMatch(/unreachable/);
   });
 
-  it('withdraws the previous turn’s offers, and survives a store that is down', async () => {
+  it('lapses the previous turn’s offers, and survives a store that is down', async () => {
     const db = new FakeDb();
     db.rows = [{ id: 'a' }, { id: 'b' }];
     expect(await withdrawTurnOffers(db, 'conv-1', NOW)).toBe(2);
-    expect(db.sql[0]).toMatch(/^update core\.offers set expires_at/);
+    // Lapsed, with the reason the owner would recognise: they said the next
+    // thing instead of tapping. Never a row that is already taken.
+    expect(db.sql[0]).toMatch(/^update core\.offers set lapsed_at/);
     expect(db.sql[0]).toMatch(/taken_at is null/);
 
     db.fail = true;
@@ -218,6 +220,9 @@ describe('how one set of offers reaches two different surfaces', () => {
       takenAt: null,
       takenVia: null,
       takenJobId: null,
+      dismissedAt: null,
+      lapsedAt: null,
+      lapseReason: null,
     },
   ];
 
