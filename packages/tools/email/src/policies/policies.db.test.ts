@@ -168,11 +168,40 @@ suite('email policies (postgres + fake imap)', () => {
         matcher: 'news@shop.test',
         action: 'ignore',
         origin: 'learned',
-        proposed: false,
+        // Proposed, not applied: only INBOX is synced, so "never wrote back"
+        // is an inference (docs/email.md §3). The owner keeps it on the page.
+        proposed: true,
       });
       // It says which verdicts it was learned from.
       expect(policies[0]!.createdFrom).toHaveLength(3);
       expect(policies[0]!.createdFrom[0]).toHaveProperty('messageId');
+    });
+
+    it('seeds a proposal, never a rule, from three low verdicts that are not promo', async () => {
+      // The review's case: three `service-notice`/`personal` verdicts, all
+      // low. The streak is real, so it is worth suggesting; it is not
+      // marketing, and nothing here has read the owner's Sent folder, so it
+      // decides nothing until they say so.
+      for (const category of ['service-notice', 'personal', 'other']) {
+        await verdict(await storeMessage({ from: 'quiet@service.test' }), category, 'low');
+      }
+      expect(await seedLearnedIgnorePolicies(pool, NOW)).toBe(1);
+
+      const [policy] = await loadPolicies(pool, accountId);
+      expect(policy).toMatchObject({
+        scope: 'sender',
+        matcher: 'quiet@service.test',
+        action: 'ignore',
+        origin: 'learned',
+        proposed: true,
+      });
+
+      // And a proposal decides nothing: the next message still starts a run.
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'quiet@service.test', messageId: '<q1@x>' }));
+      const ctx = sourceContext();
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(ctx);
+      expect(ctx.runs).toHaveLength(1);
     });
 
     it('counts the run from the newest verdict back, so one dissent resets it', async () => {
@@ -321,10 +350,81 @@ suite('email policies (postgres + fake imap)', () => {
     });
   });
 
+  /* ----------------------------------------------------- the ledger's honesty */
+
+  describe('what an event is allowed to claim', () => {
+    it('writes the triage row, the event and the stamp together for an ignore', async () => {
+      await createPolicy(
+        pool,
+        { accountId, scope: 'sender', matcher: 'news@shop.test', action: 'ignore', origin: 'owner' },
+        NOW,
+      );
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'news@shop.test', messageId: '<i1@x>' }));
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(
+        sourceContext(),
+      );
+
+      const { rows } = await pool.query(
+        `select e.action, e.status, m.triage_enqueued_at is not null as stamped,
+                (select count(*)::int from email.triage t where t.message_id = m.id) as triaged
+           from email.events e join email.messages m on m.id = e.message_id`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ action: 'ignore', status: 'done', stamped: true, triaged: 1 });
+    });
+
+    it('leaves a failed enqueue as `failed`, unstamped, and never doubled', async () => {
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'human@people.test', messageId: '<f1@x>' }));
+      const source = createInboxPollSource({
+        connect: server.factory(),
+        env: ENV,
+        backfill: FULL_SYNC,
+      });
+
+      const broken = sourceContext();
+      broken.enqueueRun = async () => {
+        throw new Error('the queue is down');
+      };
+      await expect(source.poll(broken)).rejects.toThrow(/queue is down/);
+
+      const failed = await pool.query(
+        `select e.action, e.status, e.detail, m.triage_enqueued_at
+           from email.events e join email.messages m on m.id = e.message_id`,
+      );
+      expect(failed.rows).toHaveLength(1);
+      expect(failed.rows[0]).toMatchObject({ action: 'none', status: 'failed' });
+      expect(failed.rows[0].detail).toMatch(/could not be queued/);
+      // Unstamped, so the message is still owed a run.
+      expect(failed.rows[0].triage_enqueued_at).toBeNull();
+
+      // The next poll picks the same message up again and updates that one
+      // row rather than writing a second decision about one message.
+      const again = sourceContext();
+      const retry = new FakeImapServer();
+      const retrySource = createInboxPollSource({
+        connect: retry.factory(),
+        env: ENV,
+        backfill: FULL_SYNC,
+      });
+      await retrySource.poll(again);
+      expect(again.runs).toHaveLength(1);
+
+      const after = await pool.query(
+        `select e.status, m.triage_enqueued_at is not null as stamped,
+                count(*) over ()::int as events
+           from email.events e join email.messages m on m.id = e.message_id`,
+      );
+      expect(after.rows).toHaveLength(1);
+      expect(after.rows[0]).toMatchObject({ status: 'done', stamped: true });
+    });
+  });
+
   /* ------------------------------------------------------------- the learning */
 
   describe('learning after three verdicts', () => {
-    it('applies an ignore once the third promo verdict is recorded', async () => {
+    it('proposes an ignore once the third promo verdict is recorded, and applies nothing', async () => {
       const ids = [
         await storeMessage({ from: 'news@shop.test', at: '2026-09-01T09:00:00Z' }),
         await storeMessage({ from: 'news@shop.test', at: '2026-09-02T09:00:00Z' }),
@@ -345,11 +445,64 @@ suite('email policies (postgres + fake imap)', () => {
         { messageId: ids[2]!, category: 'promo', urgency: 'low', summary: 'ad' },
         ctx,
       )) as { learnedPolicy?: { action: string; proposed: boolean } };
-      expect(third.learnedPolicy).toMatchObject({ action: 'ignore', proposed: false });
+      expect(third.learnedPolicy).toMatchObject({ action: 'ignore', proposed: true });
 
       const policies = await loadPolicies(pool, accountId);
       expect(policies).toHaveLength(1);
-      expect(policies[0]).toMatchObject({ origin: 'learned', proposed: false, action: 'ignore' });
+      expect(policies[0]).toMatchObject({ origin: 'learned', proposed: true, action: 'ignore' });
+
+      // Nothing applied itself: the fourth message from them still runs.
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'news@shop.test', messageId: '<n4@x>' }));
+      const poll = sourceContext();
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(poll);
+      expect(poll.runs).toHaveLength(1);
+    });
+
+    it('never counts another mailbox\u2019s verdicts', async () => {
+      // Two promos here, one there. Neither account has three, and the
+      // learning must not add them up: a work rule learned from personal mail
+      // is a rule about mail that never arrived at work.
+      const { rows } = await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+         values ('other@example.test', 'imap.example.test', 993, 'smtp.example.test', 465,
+                 'app-password', 'EMAIL_OTHER_EXAMPLE_TEST_00000000', 'page')
+         returning id`,
+      );
+      const otherAccount = String(rows[0].id);
+      const { rows: mb } = await pool.query(
+        `insert into email.mailboxes (account_id, name) values ($1, 'INBOX') returning id`,
+        [otherAccount],
+      );
+      const otherMailbox = String(mb[0].id);
+
+      const ctx = toolContext();
+      for (const at of ['2026-09-01T09:00:00Z', '2026-09-02T09:00:00Z']) {
+        const id = await storeMessage({ from: 'news@shop.test', at });
+        await triageRecord.execute(
+          { messageId: id, category: 'promo', urgency: 'low', summary: 'ad' },
+          ctx,
+        );
+      }
+      const { rows: far } = await pool.query(
+        `insert into email.messages
+           (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr,
+            to_addrs, subject, date, snippet, body_text, triage_enqueued_at)
+         values ($1, $2, 1, 9001, '<far@example.test>', '<far@example.test>', 'news@shop.test',
+                 '["other@example.test"]'::jsonb, 'Subject', '2026-09-03T09:00:00Z', '', '', now())
+         returning id`,
+        [otherAccount, otherMailbox],
+      );
+      await triageRecord.execute(
+        { messageId: String(far[0].id), category: 'promo', urgency: 'low', summary: 'ad' },
+        ctx,
+      );
+
+      // Three promos from that sender exist on this installation; no account
+      // has three, so nothing is learned anywhere.
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+      expect(await loadPolicies(pool, otherAccount)).toHaveLength(0);
     });
 
     it('only proposes, never applies, when the pattern is not promo', async () => {

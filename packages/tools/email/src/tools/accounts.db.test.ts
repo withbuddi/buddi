@@ -239,8 +239,12 @@ suite('email accounts, plural (postgres)', () => {
   it('takes the account from the message a reply answers, and never from an argument', async () => {
     const draft = await call('email.draft_reply', { inReplyTo: ids.workId, bodyText: 'Here it is.' });
     expect(draft.account).toBe(WORK);
-    // The alias the original was addressed to, not the account's own address.
-    expect(draft.from).toBe(WORK_ALIAS);
+    // The account's own address, even though the original names the alias in
+    // its To line. `To` and `Cc` are written by whoever sent the message:
+    // delivery happens through Bcc, forwarding and catch-alls, so an alias
+    // appearing there says who typed it, not who it reached. The owner picks
+    // an alias on the approval card, where the envelope lists them.
+    expect(draft.from).toBe(WORK);
     const { rows } = await pool.query(
       `select a.address from email.drafts d join email.accounts a on a.id = d.account_id where d.id = $1`,
       [draft.id],
@@ -250,11 +254,16 @@ suite('email accounts, plural (postgres)', () => {
     expect(Object.keys((draftReply.input as unknown as z.ZodObject<z.ZodRawShape>).shape)).not.toContain('account');
   });
 
-  it('sends from the account the draft carries, under the alias it was addressed to', async () => {
+  it('sends from the account the draft carries, and offers its aliases as the owner’s choice', async () => {
     const draft = await call('email.draft_reply', { inReplyTo: ids.workId, bodyText: 'Here it is.' });
     const approvedEffect = await sendTool.describe({ draftId: draft.id }, ctx);
-    expect(approvedEffect.envelope).toMatchObject({ accountAddress: WORK, from: WORK_ALIAS });
-    expect(approvedEffect.preview).toContain(`Send mail as ${WORK_ALIAS} (from the ${WORK} mailbox)`);
+    // The default identity is the account's address, and the alternatives are
+    // in the envelope the approval is bound to — so the card can offer them
+    // and the owner reads what will actually be on the wire.
+    expect(approvedEffect.envelope).toMatchObject({ accountAddress: WORK, from: WORK });
+    expect(approvedEffect.envelope.fromChoices).toEqual([WORK, WORK_ALIAS]);
+    expect(approvedEffect.preview).toContain(`Send mail as ${WORK}`);
+    expect(approvedEffect.preview).toContain(`or, if you choose it here, as ${WORK_ALIAS}`);
 
     const before = smtp.sent.length;
     await sendTool.execute(
@@ -262,16 +271,18 @@ suite('email accounts, plural (postgres)', () => {
       { ...ctx, actionId: '77777777-7777-4777-8777-777777777777', approvedEffect },
     );
     expect(smtp.sent).toHaveLength(before + 1);
-    expect(smtp.sent[before]).toMatchObject({ from: WORK_ALIAS, to: ['tdorothee@client.test'] });
+    expect(smtp.sent[before]).toMatchObject({ from: WORK, to: ['tdorothee@client.test'] });
   });
 
-  it('replies from the personal account under its own address when no alias was reached', async () => {
+  it('replies from the personal account under its own address, with nothing else to choose', async () => {
     const draft = await call('email.draft_reply', { inReplyTo: ids.personalId, bodyText: 'Noted.' });
     expect(draft).toMatchObject({ account: PERSONAL, from: PERSONAL });
     const { envelope, preview } = await sendTool.describe({ draftId: draft.id }, ctx);
     expect(envelope.from).toBe(PERSONAL);
+    expect(envelope.fromChoices).toEqual([PERSONAL]);
     expect(preview).toContain(`Send mail as ${PERSONAL}`);
     expect(preview).not.toContain('mailbox)');
+    expect(preview).not.toContain('if you choose it here');
   });
 
   it('makes a new message name its mailbox, because it has no thread to take one from', async () => {
@@ -382,6 +393,32 @@ suite('email accounts, plural (postgres)', () => {
         `select a.address from email.mailboxes m join email.accounts a on a.id = m.account_id`,
       );
       expect(rows.map((r: any) => r.address)).toEqual([PERSONAL]);
+    });
+
+    it('will not let two accounts share one vault entry', async () => {
+      // The schema, not the caller, is what makes this impossible: a shared
+      // name means adding the second mailbox overwrites the first's password
+      // and removing either deletes the other's.
+      await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+         values ('a-b@example.test', 'imap.example.test', 993, 'smtp.example.test', 465,
+                 'app-password', $1, 'page')`,
+        [secretNameFor('a-b@example.test')],
+      );
+      await expect(
+        pool.query(
+          `insert into email.accounts
+             (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+           values ('a.b@example.test', 'imap.example.test', 993, 'smtp.example.test', 465,
+                   'app-password', $1, 'page')`,
+          [secretNameFor('a-b@example.test')],
+        ),
+      ).rejects.toThrow(/accounts_secret_name_idx|duplicate key/);
+
+      // And the names the two addresses actually derive are different, so the
+      // constraint is never in the owner's way.
+      expect(secretNameFor('a.b@example.test')).not.toBe(secretNameFor('a-b@example.test'));
     });
   });
 });

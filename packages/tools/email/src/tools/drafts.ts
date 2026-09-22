@@ -176,9 +176,11 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
       db: ctx.db,
       accountId: account.id,
       accountAddress: account.address,
-      // The alias the original was addressed to, when it was one — otherwise
-      // the account's own address.
-      from: identityFor(account, [...original.to, ...original.cc]),
+      // The account's own address. Never an alias picked off the original's
+      // To or Cc — those are headers the sender wrote (see `identityChoices`);
+      // the owner chooses an alias on the approval card, where the envelope
+      // lists them.
+      from: identityFor(account),
       inReplyTo: original.id,
       to: audience.to,
       cc: audience.cc,

@@ -31,6 +31,7 @@ import {
   toPolicy,
 } from '../policies/store.js';
 import { senderVerdicts } from '../policies/learn.js';
+import { normalizeAddress } from '../mail.js';
 import type { GatedToolDefinition } from '../types.js';
 import { ACCOUNT_ARG, UUID, accountScope, requireOneAccount } from './shared.js';
 
@@ -149,6 +150,13 @@ const setInput = z.object({
     .describe('For draft: what the reply should say, in one line.'),
   note: z.string().min(1).optional().describe('For notify: the line the owner gets.'),
   label: z.string().min(1).optional().describe('For label: the label to apply.'),
+  sender: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'For thread and list-id: the address this conversation or list is with. A thread key and a List-Id are headers the sender writes, so an `ignore` on one only ever silences the sender recorded here — without it, the rule cannot silence anything on its own.',
+    ),
 });
 
 type SetInput = z.infer<typeof setInput>;
@@ -171,6 +179,11 @@ function paramsOf(input: SetInput): Record<string, unknown> {
   if (input.action === 'ignore') {
     params.category = 'promo';
     params.urgency = 'low';
+  }
+  // The sender a thread or list rule was created about. See `gate.ts`: an
+  // `ignore` carried by one of those scopes fires for this address alone.
+  if (input.sender && (input.scope === 'thread' || input.scope === 'list-id')) {
+    params.sender = normalizeAddress(input.sender);
   }
   return params;
 }
@@ -202,6 +215,13 @@ export function renderPolicyPreview(input: SetInput, verdicts: number, account?:
   if (verdicts > 0) {
     lines.push(`${verdicts} earlier message${verdicts === 1 ? '' : 's'} from this sender ${verdicts === 1 ? 'has' : 'have'} been triaged.`);
   }
+  if (input.action === 'ignore' && (input.scope === 'thread' || input.scope === 'list-id')) {
+    lines.push(
+      input.sender
+        ? `A ${input.scope} is named by a header the sender writes, so this silences ${normalizeAddress(input.sender)} alone; anyone else quoting it is triaged as usual.`
+        : `A ${input.scope} is named by a header the sender writes, so with no address recorded this silences nothing on its own — it applies only to a sender you already have a rule about.`,
+    );
+  }
   if (input.action === 'ignore') {
     lines.push('You can take it back in one tap under Settings → Email → Policies.');
   }
@@ -221,7 +241,9 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
     // "ignore this sender" reads differently for work mail than for personal.
     const account = await requireOneAccount(_ctx.db, input.account);
     const verdicts =
-      input.scope === 'sender' ? (await senderVerdicts(_ctx.db, matcher, 20)).length : 0;
+      input.scope === 'sender'
+        ? (await senderVerdicts(_ctx.db, account.id, matcher, 20)).length
+        : 0;
     return {
       envelope: {
         accountId: account.id,

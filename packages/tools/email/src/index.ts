@@ -239,6 +239,7 @@ export * from './types.js';
 export {
   accountOf,
   accountScope,
+  identityChoices,
   identityFor,
   ownAddresses,
   requireOneAccount,

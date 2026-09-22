@@ -11,7 +11,7 @@
 --  * `policies` — the decision. Scoped (thread, sender, list-id, domain), with
 --    an action, its parameters, where it came from, and whether it has been
 --    revoked. `origin = learned` with `proposed = true` is a *suggestion*: the
---    gate ignores it until the owner keeps it.
+--    gate ignores it until the owner keeps it, and everything learned is one.
 --  * `events` — what the gate did to each message. The owner can audit the
 --    silence: "no run happened for this message, and here is the policy that
 --    is why". One row per gate decision, including the decisions that matched
@@ -110,8 +110,14 @@ $$ language sql immutable;
  * reply — it is the owner deciding not to answer, which argues *for* the
  * policy, not against it.
  *
- * These apply at once rather than being proposed: §3's one exception. They are
- * listed on the settings page with one-tap revoke, which is the safeguard.
+ * **Every seed is `proposed = true`.** It cannot be otherwise while only INBOX
+ * is polled (docs/email.md §3): the owner's Sent folder is not read, so a
+ * sender answered from a phone, from Gmail or from any other client looks here
+ * like a sender who was never answered, and a backfill that applied itself
+ * would silence people the owner has been talking to for years. The seeds are
+ * listed under "Learned, proposed" on the settings page and the owner applies
+ * them there, one tap each. When step 3 syncs Sent and reply history becomes a
+ * fact rather than an inference, this can be revisited.
  */
 create or replace function seed_learned_ignore_policies(seeded_at timestamptz default now())
   returns integer as $$
@@ -196,7 +202,8 @@ begin
            'ignore',
            jsonb_build_object('category', 'promo', 'urgency', 'low'),
            'learned',
-           false,
+           -- Proposed, never applied. See the note above.
+           true,
            created_from,
            seeded_at
       from seeds

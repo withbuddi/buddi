@@ -36,8 +36,18 @@
  *    like to do. These decide nothing. Keep turns one on; Revoke says no.
  *
  * Revoke is on both lists on purpose: a rule that is on must be one tap from
- * off, and "one tap to undo" is what earns the right to apply a learned ignore
- * without asking first (docs/email.md §3).
+ * off. Nothing learned is ever applied without being kept first — until the
+ * Sent folder is synced, "you never wrote back" is an inference from the mail
+ * buddi itself sent, and an inference does not get to silence anyone
+ * (docs/email.md §3). The Learned list is where a proposal becomes a rule.
+ *
+ * ## Writing one
+ *
+ * **Add a rule** is the owner's own path to the same table the tools write to,
+ * with no approval card in the way — they are the one acting. It asks for the
+ * mailbox as plainly as for the matcher: a rule with no mailbox decides for
+ * every mailbox, so that has to be the "for every mailbox" box, ticked, and
+ * never a field somebody left empty.
  */
 import { useState } from 'react';
 import { ApiError, api, type EmailAccountView, type EmailPolicy } from '../api';
@@ -242,9 +252,33 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
       .finally(() => setPolicyBusy(null));
   };
 
+  /*
+   * The new-rule form. `allAccounts` is a tick, not a default: the route
+   * refuses a policy that names neither one mailbox nor all of them.
+   */
+  const [rule, setRule] = useState<RuleForm>(EMPTY_RULE);
+  const setRuleField = (patch: Partial<RuleForm>): void =>
+    setRule((current) => ({ ...current, ...patch }));
+
   const applied = policies.data?.applied ?? [];
   const proposed = policies.data?.proposed ?? [];
   const saved = applied.reduce((n, p) => n + p.runsSaved, 0);
+
+  const ruleReady =
+    rule.matcher.trim() !== '' && (rule.allAccounts || rule.accountId !== '');
+
+  const addRule = (): void => {
+    setPolicyBusy('new');
+    setPolicyFailed(null);
+    void api
+      .setEmailPolicy(ruleBodyOf(rule))
+      .then(() => {
+        setRule(EMPTY_RULE);
+        policies.reload();
+      })
+      .catch((err: unknown) => setPolicyFailed(err instanceof Error ? err.message : String(err)))
+      .finally(() => setPolicyBusy(null));
+  };
 
   return (
     <PageFrame embedded={embedded} title="Email">
@@ -433,6 +467,103 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
             {saved > 0 ? ` So far they have saved ${saved} triage run${saved === 1 ? '' : 's'}.` : ''}
           </Notice>
 
+          <Panel title="Add a rule">
+            <Stack divided>
+              <Section>
+                <Stack gap="sm">
+                  <Field label="About">
+                    <select
+                      aria-label="What the rule is about"
+                      value={rule.scope}
+                      onChange={(event) => setRuleField({ scope: event.target.value })}
+                    >
+                      <option value="sender">One sender</option>
+                      <option value="domain">Everyone at a domain</option>
+                      <option value="list-id">One mailing list</option>
+                      <option value="thread">One conversation</option>
+                    </select>
+                  </Field>
+                  <Field label={MATCHER_LABEL[rule.scope] ?? 'Matcher'}>
+                    <input
+                      type="text"
+                      value={rule.matcher}
+                      placeholder={MATCHER_HINT[rule.scope] ?? ''}
+                      onChange={(event) => setRuleField({ matcher: event.target.value })}
+                    />
+                  </Field>
+                  <Field label="Then">
+                    <select
+                      aria-label="What happens"
+                      value={rule.action}
+                      onChange={(event) => setRuleField({ action: event.target.value })}
+                    >
+                      <option value="ignore">File it, with no triage run</option>
+                      <option value="notify">Send me one line</option>
+                      <option value="draft">Draft a reply</option>
+                      <option value="wake">Triage it as usual</option>
+                    </select>
+                  </Field>
+                  {rule.action === 'ignore' && (rule.scope === 'thread' || rule.scope === 'list-id') ? (
+                    <Field
+                      label="From this address"
+                      hint="A conversation and a list are named by headers their sender writes, so silence here applies to one address. Without it, this rule silences nothing on its own."
+                    >
+                      <input
+                        type="text"
+                        value={rule.sender}
+                        placeholder="them@example.com"
+                        onChange={(event) => setRuleField({ sender: event.target.value })}
+                      />
+                    </Field>
+                  ) : null}
+                </Stack>
+              </Section>
+              <Section title="Which mailbox">
+                <Stack gap="sm">
+                  <Field label="Mailbox">
+                    <select
+                      aria-label="Which mailbox"
+                      value={rule.accountId}
+                      disabled={rule.allAccounts}
+                      onChange={(event) => setRuleField({ accountId: event.target.value })}
+                    >
+                      <option value="">Choose one…</option>
+                      {accounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.displayName ? `${account.displayName} — ` : ''}
+                          {account.address}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <label className="backup-check">
+                    <input
+                      type="checkbox"
+                      checked={rule.allAccounts}
+                      onChange={(event) =>
+                        setRuleField({ allAccounts: event.target.checked, accountId: '' })
+                      }
+                    />
+                    <span>For every mailbox</span>
+                  </label>
+                  <p className="ui-card-meta">
+                    The same sender can matter in one inbox and not in another, so a rule says which
+                    one it is about — unless you tick the box, and then it says all of them.
+                  </p>
+                  <Toolbar align="end">
+                    <Button
+                      variant="accent"
+                      disabled={policyBusy === 'new' || !ruleReady}
+                      onClick={addRule}
+                    >
+                      Add the rule
+                    </Button>
+                  </Toolbar>
+                </Stack>
+              </Section>
+            </Stack>
+          </Panel>
+
           <Panel title="Policies" flush>
             {!policies.data ? (
               <Empty>Loading…</Empty>
@@ -524,4 +655,72 @@ export function toneFor(action: string): Tone | undefined {
   if (action === 'notify' || action === 'draft') return 'accent';
   if (action === 'hand-to-agent') return 'good';
   return undefined;
+}
+
+/** What the new-rule form holds while it is being filled in. Strings, as typed. */
+export interface RuleForm {
+  scope: string;
+  matcher: string;
+  action: string;
+  /** The address a thread or list rule silences. Empty for the other scopes. */
+  sender: string;
+  accountId: string;
+  /** Ticked, never defaulted: this is what writes a rule with no mailbox. */
+  allAccounts: boolean;
+}
+
+export const EMPTY_RULE: RuleForm = {
+  scope: 'sender',
+  matcher: '',
+  action: 'ignore',
+  sender: '',
+  accountId: '',
+  allAccounts: false,
+};
+
+export const MATCHER_LABEL: Record<string, string> = {
+  sender: 'Their address',
+  domain: 'The domain',
+  'list-id': 'The list id',
+  thread: 'The conversation key',
+};
+
+/** `Them <THEM@x.test>` -> `them@x.test`. The server normalises too; this is
+ * so what the page sends is what the page showed. */
+export function bareAddress(raw: string): string {
+  const trimmed = raw.trim();
+  const angled = /<([^>]+)>/.exec(trimmed);
+  return (angled?.[1] ?? trimmed).trim().toLowerCase();
+}
+
+export const MATCHER_HINT: Record<string, string> = {
+  sender: 'news@shop.example',
+  domain: 'shop.example',
+  'list-id': 'weekly.shop.example',
+  thread: '<thread-root@example.com>',
+};
+
+/**
+ * The request body a filled-in rule makes. Exported so a test can read it.
+ *
+ * The mailbox is sent as one of two mutually exclusive things — `accountId` or
+ * `allAccounts: true` — because that is how the route reads it, and an omitted
+ * account is no longer a silent "all of them".
+ */
+export function ruleBodyOf(rule: RuleForm): {
+  scope: string;
+  matcher: string;
+  action: string;
+  sender?: string;
+  accountId?: string;
+  allAccounts?: boolean;
+} {
+  const sender = bareAddress(rule.sender);
+  return {
+    scope: rule.scope,
+    matcher: rule.matcher.trim(),
+    action: rule.action,
+    ...(sender !== '' && (rule.scope === 'thread' || rule.scope === 'list-id') ? { sender } : {}),
+    ...(rule.allAccounts ? { allAccounts: true } : { accountId: rule.accountId }),
+  };
 }

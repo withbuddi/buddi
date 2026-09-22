@@ -131,11 +131,56 @@ suite('the mail policy routes', () => {
     expect(await res.json()).toEqual({ applied: [], proposed: [] });
   });
 
+  it('refuses a rule that says nothing about which mailbox it is for', async () => {
+    // A rule with no account decides for every account (`gate.ts`), and that
+    // has to be a choice: the form's "for every mailbox" box, not a blank.
+    const res = await send('POST', '/api/email/policies', {
+      scope: 'sender',
+      matcher: 'news@shop.test',
+      action: 'ignore',
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as PoliciesBody).error).toMatch(/which mailbox/i);
+    const { rows } = await pool.query(`select count(*)::int as n from email.policies`);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('writes a rule for one named mailbox, and refuses one that is not the owner’s', async () => {
+    const { rows } = await pool.query(
+      `insert into email.accounts
+         (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+       values ('owner@work.test', 'imap.work.test', 993, 'smtp.work.test', 465,
+               'app-password', 'EMAIL_OWNER_WORK_TEST_00000001', 'page')
+       on conflict (address) do update set imap_host = excluded.imap_host
+       returning id`,
+    );
+    const accountId = String(rows[0].id);
+
+    const stranger = await send('POST', '/api/email/policies', {
+      scope: 'sender',
+      matcher: 'news@shop.test',
+      action: 'ignore',
+      accountId: '00000000-0000-0000-0000-000000000000',
+    });
+    expect(stranger.status).toBe(400);
+
+    const res = await send('POST', '/api/email/policies', {
+      scope: 'sender',
+      matcher: 'news@shop.test',
+      action: 'ignore',
+      accountId,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PoliciesBody;
+    expect(body.applied[0]).toMatchObject({ accountId, matcher: 'news@shop.test' });
+  });
+
   it('writes a rule and answers with both lists', async () => {
     const res = await send('POST', '/api/email/policies', {
       scope: 'sender',
       matcher: 'News <News@Shop.test>',
       action: 'ignore',
+      allAccounts: true,
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as PoliciesBody;

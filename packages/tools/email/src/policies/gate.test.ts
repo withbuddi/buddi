@@ -86,11 +86,21 @@ describe('what is live', () => {
 });
 
 describe('matching', () => {
-  it('matches a sender by mailbox, so a plus-tag or a capital cannot walk past it', () => {
+  it('matches a sender by the exact address — a capital or a display name, nothing more', () => {
     const p = policy({ scope: 'sender', matcher: 'jane@gmail.com' });
-    expect(matches(p, { threadKey: null, from: 'Jane <JANE+news@gmail.com>' })).toBe(true);
-    expect(matches(p, { threadKey: null, from: 'j.a.n.e@googlemail.com' })).toBe(true);
+    expect(matches(p, { threadKey: null, from: 'Jane <JANE@gmail.com>' })).toBe(true);
     expect(matches(p, { threadKey: null, from: 'jane@other.test' })).toBe(false);
+  });
+
+  it('does not treat a plus-tag or a Gmail dot as the same sender', () => {
+    // `mailboxKey` collapses both, for every domain, and exists to answer "is
+    // this the owner?". Plenty of providers route `sales+legal@` to a
+    // different person than `sales@`, and a rule about one must not silence
+    // the other. Two separately stored policies matching one message would
+    // also let the newest-wins tie-break pick a rule nobody meant.
+    const p = policy({ scope: 'sender', matcher: 'jane@gmail.com' });
+    expect(matches(p, { threadKey: null, from: 'jane+news@gmail.com' })).toBe(false);
+    expect(matches(p, { threadKey: null, from: 'j.a.n.e@googlemail.com' })).toBe(false);
   });
 
   it('matches a domain on the sender, with or without the @', () => {
@@ -164,5 +174,63 @@ describe('validation at creation', () => {
     expect(
       refusalFor({ scope: 'sender', matcher: 'a@b.test', action: 'hand-to-agent', params: { agentId: 'finance' } }),
     ).toBeNull();
+  });
+});
+
+/*
+ * The rule that keeps a sender-written header from producing silence.
+ * `gate.ts` states it in full; these are the four cases it has.
+ */
+describe('a thread or a list may not silence a message on its own', () => {
+  const muted = { threadKey: '<root@example.test>', from: 'stranger@elsewhere.test', listId: '<weekly.example.com>' };
+
+  it('ignores nothing when a forged thread key is all there is', () => {
+    const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action: 'ignore' });
+    const decision = applyPolicies(muted, [thread]);
+    expect(decision.action).toBe('none');
+    expect(decision.policy).toBeNull();
+  });
+
+  it('ignores nothing when a public List-Id is all there is', () => {
+    const list = policy({ scope: 'list-id', matcher: 'weekly.example.com', action: 'ignore' });
+    expect(applyPolicies(muted, [list]).action).toBe('none');
+  });
+
+  it('applies when the policy recorded the sender and this is that sender', () => {
+    const thread = policy({
+      scope: 'thread',
+      matcher: '<root@example.test>',
+      action: 'ignore',
+      params: { sender: 'Them <THEM@example.test>' },
+    });
+    expect(applyPolicies({ ...muted, from: 'them@example.test' }, [thread]).action).toBe('ignore');
+    // And for anybody else quoting the same thread, it is not there at all.
+    expect(applyPolicies(muted, [thread]).action).toBe('none');
+  });
+
+  it('applies when the sender independently matches a sender or domain policy', () => {
+    const list = policy({ scope: 'list-id', matcher: 'weekly.example.com', action: 'ignore' });
+    const domain = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
+    const decision = applyPolicies(muted, [list, domain]);
+    expect(decision.action).toBe('ignore');
+    expect(decision.policy?.id).toBe(list.id);
+  });
+
+  it('leaves every other action alone — only silence is bound to the sender', () => {
+    for (const action of ['notify', 'draft', 'wake'] as PolicyAction[]) {
+      const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action });
+      expect(applyPolicies(muted, [thread]).action).toBe(action);
+    }
+  });
+
+  it('falls through to the next scope rather than swallowing the message', () => {
+    const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action: 'ignore' });
+    const domainWake = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
+    // The domain rule corroborates the sender *and* is what decides: the
+    // thread ignore applies once a sender rule exists, so use a header with no
+    // sender or domain rule to see the fall-through on its own.
+    const alone = applyPolicies({ ...muted, listId: null }, [thread]);
+    expect(alone.action).toBe('none');
+    expect(applyPolicies({ ...muted, listId: null }, [thread, domainWake]).action).toBe('ignore');
   });
 });

@@ -215,14 +215,37 @@ export async function revokePolicy(db: Db, id: string, now: Date): Promise<Polic
   return rows[0] ? toPolicy(rows[0]) : null;
 }
 
+/**
+ * How far the gate got with this message.
+ *
+ * An event is a claim about what happened, so it may not be written before the
+ * thing it claims has happened:
+ *
+ *  - `done` — the action was carried out. For `ignore` that is the triage row
+ *    and the stamp, written in the same transaction as the event itself, so
+ *    either all three are there or none is.
+ *  - `pending` — a run is being enqueued. Written first on purpose: the
+ *    enqueue is another component's, outside this transaction, and a crash
+ *    mid-enqueue must leave a row that says "we were in the middle of this"
+ *    rather than one that says the message was handled.
+ *  - `failed` — the enqueue threw. The message stays unstamped, so the next
+ *    poll tries again; the row is *updated*, never added to, so a retry never
+ *    turns one message into two events.
+ */
+export const EVENT_STATUSES = ['pending', 'done', 'failed'] as const;
+export type EventStatus = (typeof EVENT_STATUSES)[number];
+
 export interface GateEvent {
   id: string;
   messageId: string;
   policyId: string | null;
   action: string;
   detail: string;
+  status: EventStatus;
   at: string | null;
 }
+
+export const EVENT_COLUMNS = 'id, message_id, policy_id, action, detail, status, at';
 
 export function toEvent(row: Record<string, any>): GateEvent {
   return {
@@ -231,25 +254,60 @@ export function toEvent(row: Record<string, any>): GateEvent {
     policyId: row.policy_id === null || row.policy_id === undefined ? null : String(row.policy_id),
     action: row.action,
     detail: row.detail ?? '',
+    status: (row.status ?? 'done') as EventStatus,
     at: iso(row.at),
   };
 }
 
-/** Record what the gate did. One row per decision, including `none`. */
+/**
+ * Record what the gate did. One row per *message*, including `none`.
+ *
+ * Upsert rather than insert: a message the poll picks up again because it was
+ * never stamped is the same decision being made again, not a second decision,
+ * and an audit log that grows a row per retry is one nobody can count from.
+ */
 export async function recordEvent(
   db: Db,
-  input: { messageId: string; policyId: string | null; action: string; detail: string },
+  input: {
+    messageId: string;
+    policyId: string | null;
+    action: string;
+    detail: string;
+    status?: EventStatus;
+  },
   now: Date,
 ): Promise<GateEvent> {
   const { rows } = await db.query(
-    `insert into email.events (message_id, policy_id, action, detail, at)
-     values ($1, $2, $3, $4, $5)
-     returning id, message_id, policy_id, action, detail, at`,
-    [input.messageId, input.policyId, input.action, input.detail, now],
+    `insert into email.events (message_id, policy_id, action, detail, status, at)
+     values ($1, $2, $3, $4, $5, $6)
+     on conflict (message_id) do update
+       set policy_id = excluded.policy_id,
+           action = excluded.action,
+           detail = excluded.detail,
+           status = excluded.status,
+           at = excluded.at
+     returning ${EVENT_COLUMNS}`,
+    [input.messageId, input.policyId, input.action, input.detail, input.status ?? 'done', now],
   );
   const row = rows[0];
   if (!row) throw new Error('recordEvent: insert returned no row');
   return toEvent(row);
+}
+
+/** Close an event the enqueue has now finished with, one way or the other. */
+export async function settleEvent(
+  db: Db,
+  messageId: string,
+  status: EventStatus,
+  detail?: string,
+): Promise<void> {
+  await db.query(
+    `update email.events
+        set status = $2,
+            detail = coalesce($3, detail)
+      where message_id = $1`,
+    [messageId, status, detail ?? null],
+  );
 }
 
 /**
@@ -264,7 +322,7 @@ export async function policyStats(
 ): Promise<Map<string, { runsSaved: number; decisions: number; lastAt: string | null }>> {
   const { rows } = await db.query(
     `select policy_id,
-            count(*) filter (where action = 'ignore')::int as runs_saved,
+            count(*) filter (where action = 'ignore' and status = 'done')::int as runs_saved,
             count(*)::int as decisions,
             max(at) as last_at
        from email.events
