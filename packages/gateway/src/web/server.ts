@@ -72,14 +72,16 @@ import {
   deleteEmailPolicy,
   listEmailAccounts,
   readEmailPolicies,
+  readEmailWatchers,
   removeEmailAccount,
   writeEmailPolicy,
+  writeEmailWatchers,
   type EmailWebDeps,
 } from './email.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, inRecovery, isJobState, snoozeFinding } from '@buddi/core';
+import { getAction, inRecovery, isJobState, setSentinelEnabled, snoozeFinding } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
@@ -1078,6 +1080,14 @@ export function createWebApp(deps: WebServerDeps): Server {
          * Settings → Email → Policies: the standing decisions about incoming
          * mail, and the ones proposed from the owner's own history. A read.
          */
+        /*
+         * Settings → Email → Watchers: the two settings §7's watchers read.
+         * A read; the counterpart writes them below.
+         */
+        case '/api/email/watchers': {
+          const view = await readEmailWatchers(deps.pool);
+          return sendJson(res, view.status, view.body);
+        }
         case '/api/email/policies': {
           const accountId = q.get('account');
           const view = await readEmailPolicies(deps.pool, accountId && accountId !== '' ? accountId : undefined);
@@ -1620,6 +1630,33 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 200, { key: finding.key, snoozedAt: finding.snoozedAt ? finding.snoozedAt.toISOString() : null });
     }
 
+    /*
+     * A watcher, switched off or back on. Off means it does not run: it raises
+     * nothing and resolves nothing, so what it already found stays as it was.
+     *
+     * The id has to name a watcher this installation actually ships. The store
+     * itself takes any id on purpose (a plugin mid-reinstall must not lose the
+     * owner's decision), but the route is the outside world: an unknown id
+     * there is a typo or a probe, and answering 200 to it would write a row
+     * nothing will ever read and tell the caller it had switched something off.
+     */
+    const sentinelEnabled = /^\/api\/sentinels\/([^/]+)\/enabled$/.exec(path);
+    if (sentinelEnabled) {
+      if (typeof body.enabled !== 'boolean') {
+        return sendJson(res, 400, { error: '`enabled` must be true or false' });
+      }
+      const sentinelId = decodeURIComponent(sentinelEnabled[1] as string);
+      const installed = deps.registry
+        .manifests()
+        .flatMap((m) => m.sentinels ?? [])
+        .some((s) => s.id === sentinelId);
+      if (!installed) {
+        return sendJson(res, 400, { error: `no watcher is installed with the id ${sentinelId}` });
+      }
+      const state = await setSentinelEnabled(deps.pool, sentinelId, body.enabled, deps.now());
+      return sendJson(res, 200, { sentinelId: state.sentinelId, enabled: state.enabled });
+    }
+
     if (path === '/api/pause') {
       const paused = body.paused;
       if (typeof paused !== 'boolean') {
@@ -2094,6 +2131,16 @@ export function createWebApp(deps: WebServerDeps): Server {
      * page's, exactly: there is no "all proposed" flag here, because the list
      * the page is showing can be older than the table.
      */
+    /*
+     * The two watcher settings. The owner's own preference over this plugin's
+     * rows: no card, no approval, and refused rather than clamped when it is
+     * not a number the watchers could mean anything by.
+     */
+    if (path === '/api/email/watchers') {
+      const reply = await writeEmailWatchers(deps.pool, body, deps.now());
+      return sendJson(res, reply.status, reply.body);
+    }
+
     if (path === '/api/email/policies/bulk') {
       const reply = await bulkEmailPolicies(deps.pool, body, deps.now());
       return sendJson(res, reply.status, reply.body);

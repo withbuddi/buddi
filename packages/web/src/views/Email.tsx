@@ -77,6 +77,7 @@ import {
   type EmailAccountView,
   type EmailPolicy,
   type EmailThreadChoice,
+  type EmailWatcherSettings,
 } from '../api';
 import { fmtRelative } from '../format';
 import {
@@ -774,6 +775,7 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
           />
           </Stack>
         </Section>
+        <WatchersBlock />
       </Stack>
       {sheet === 'account' ? (
         <Sheet title="Add an account" onClose={() => setSheet(null)}>
@@ -786,6 +788,114 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
         </Sheet>
       ) : null}
     </PageFrame>
+  );
+}
+
+
+/**
+ * The two numbers the mail watchers read (docs/specs/email.md §7).
+ *
+ * Small on purpose: the watchers themselves live on the Watchers page, with
+ * their switches and their last run, and this is only what *mail* watching
+ * needs told — how long is too long to leave somebody waiting, and how sure a
+ * date has to look before it is worth a word. Both are saved together, because
+ * two fields and two buttons would be two decisions where there is one.
+ */
+export function WatchersBlock(): JSX.Element {
+  const settings = useAsync(() => api.emailWatchers(), []);
+  const [days, setDays] = useState<string | null>(null);
+  const [confidence, setConfidence] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const current: EmailWatcherSettings | undefined = settings.data;
+  const daysValue = days ?? (current ? String(current.waitingDays) : '');
+  const confidenceValue = confidence ?? (current ? String(current.dateConfidence) : '');
+  const dirty =
+    current !== undefined &&
+    (daysValue !== String(current.waitingDays) || confidenceValue !== String(current.dateConfidence));
+
+  const save = (): void => {
+    setBusy(true);
+    setFailed(null);
+    setSaved(false);
+    api
+      .setEmailWatchers({ waitingDays: Number(daysValue), dateConfidence: Number(confidenceValue) })
+      .then(() => {
+        setSaved(true);
+        setDays(null);
+        setConfidence(null);
+      })
+      .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => {
+        setBusy(false);
+        settings.reload();
+      });
+  };
+
+  return (
+    <Section title="Watchers">
+      <Stack gap="lg">
+        <ErrorBanner message={settings.error ?? failed} />
+        <Notice>
+          Two watchers read your mail without a model: one reports a conversation that has been waiting on
+          you, the other a date stated in a message with no reminder for it. Neither ever sends anything —
+          they wake an agent, which reads the thread before it says a word.
+        </Notice>
+        <Panel>
+          <Stack gap="sm">
+            <Field
+              label="Waiting longer than"
+              hint={
+                current
+                  ? `Days before a conversation waiting on you is reported. ${current.defaults.waitingDays} by default; a week or more is always urgent.`
+                  : 'Days before a conversation waiting on you is reported.'
+              }
+            >
+              <input
+                type="number"
+                inputMode="numeric"
+                min={current?.limits.waitingDays.min ?? 1}
+                max={current?.limits.waitingDays.max ?? 60}
+                value={daysValue}
+                disabled={!current || busy}
+                onChange={(event) => { setDays(event.target.value); setSaved(false); }}
+              />
+            </Field>
+            <Field
+              label="Date confidence"
+              hint={
+                current
+                  ? `How sure the date reader must be before it says anything, between ${current.limits.dateConfidence.min} and ${current.limits.dateConfidence.max}. ${current.defaults.dateConfidence} by default: a date with "deadline" beside it scores about 0.8, a bare "9/8" scores 0.3.`
+                  : 'How sure the date reader must be before it says anything.'
+              }
+            >
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.05"
+                min={current?.limits.dateConfidence.min ?? 0.1}
+                max={current?.limits.dateConfidence.max ?? 0.99}
+                value={confidenceValue}
+                disabled={!current || busy}
+                onChange={(event) => { setConfidence(event.target.value); setSaved(false); }}
+              />
+            </Field>
+            {saved ? (
+              <Notice tone="good" role="status">
+                Saved. The watchers use it on their next run.
+              </Notice>
+            ) : null}
+            <Toolbar align="end">
+              <Button variant="accent" disabled={!dirty || busy} onClick={save}>
+                Save
+              </Button>
+            </Toolbar>
+          </Stack>
+        </Panel>
+      </Stack>
+    </Section>
   );
 }
 

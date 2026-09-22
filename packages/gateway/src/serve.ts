@@ -66,6 +66,7 @@ import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
 import {
+  composePrepare,
   createMissionExecutor,
   type MissionExecutorDeps,
   type MissionRunControl,
@@ -75,6 +76,7 @@ import { withNudgeBudget } from './missions/getting-started.js';
 import { createDeadLetterWatch } from './missions/dead-letter.js';
 import { createInlineMissionRunner, type InlineMissionDeps } from './missions/inline.js';
 import { createDigestPrepare } from './missions/recap.js';
+import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
@@ -585,7 +587,9 @@ export async function main(): Promise<void> {
       createMissionExecutor({
         ...missionDeps,
         deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
-        prepare: createDigestPrepare(pool, { now }),
+        // Two, composed: the weekly digest on the recap, and the conversation
+        // a mail watcher's finding is about on a wake run (docs/specs/email.md §7).
+        prepare: composePrepare(createDigestPrepare(pool, { now }), createMailWatcherPrepare(pool)),
         askApproval,
       }),
       {

@@ -14,7 +14,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { api, type EmailPoliciesView, type EmailPolicy } from '../api';
+import { ApiError, api, type EmailPoliciesView, type EmailPolicy } from '../api';
 import {
   Email,
   EMPTY_RULE,
@@ -39,6 +39,8 @@ vi.mock('../api', async (load) => {
       revokeEmailPolicy: vi.fn(),
       setEmailPolicy: vi.fn(),
       bulkEmailPolicies: vi.fn(),
+      emailWatchers: vi.fn(),
+      setEmailWatchers: vi.fn(),
     },
   };
 });
@@ -86,6 +88,14 @@ const THREAD = {
   lastAt: '2026-09-20T09:00:00Z',
 };
 
+/** The watcher settings, as the page reads them. */
+const WATCHERS = {
+  waitingDays: 2,
+  dateConfidence: 0.6,
+  defaults: { waitingDays: 2, dateConfidence: 0.6 },
+  limits: { waitingDays: { min: 1, max: 60 }, dateConfidence: { min: 0.1, max: 0.99 } },
+};
+
 const VIEW: EmailPoliciesView = {
   applied: [policy()],
   proposed: [
@@ -102,6 +112,8 @@ beforeEach(() => {
   vi.mocked(api.keepEmailPolicy).mockResolvedValue(VIEW);
   vi.mocked(api.revokeEmailPolicy).mockResolvedValue(VIEW);
   vi.mocked(api.bulkEmailPolicies).mockResolvedValue({ ...VIEW, kept: 0, revoked: 0, missing: 0 });
+  vi.mocked(api.emailWatchers).mockResolvedValue(WATCHERS);
+  vi.mocked(api.setEmailWatchers).mockResolvedValue({ ...WATCHERS, waitingDays: 4 });
 });
 
 /** Open a drawer by the button on the right of its section header. */
@@ -628,5 +640,58 @@ describe('Settings → Email → the drawers', () => {
     // Written and gone: the drawer opens empty next time.
     await openDrawer('Add a rule');
     expect(screen.getByLabelText('Their address')).toHaveValue('');
+  });
+});
+
+describe('Settings → Email → Watchers', () => {
+  /**
+   * The Watchers block's own Save, found through its heading rather than by
+   * being the first Save on the page — which it is today, and would stop being
+   * the day another section grows one.
+   */
+  async function watchersSave(): Promise<HTMLElement> {
+    const heading = await screen.findByText('Watchers');
+    const block = heading.closest('section');
+    expect(block, 'the Watchers block is a section of its own').not.toBeNull();
+    return within(block as HTMLElement).getByRole('button', { name: 'Save' });
+  }
+
+  it('shows the two settings the mail watchers read, with their defaults said out loud', async () => {
+    render(<Email />);
+    expect(await screen.findByText('Watchers')).toBeInTheDocument();
+    const days = await screen.findByLabelText('Waiting longer than');
+    const confidence = screen.getByLabelText('Date confidence');
+    expect(days).toHaveValue(2);
+    expect(confidence).toHaveValue(0.6);
+    expect(screen.getByText(/2 by default; a week or more is always urgent/)).toBeInTheDocument();
+    // Neither watcher ever sends anything, and the page says so.
+    expect(screen.getByText(/Neither ever sends anything/)).toBeInTheDocument();
+  });
+
+  it('saves nothing until something is changed, then saves both together', async () => {
+    render(<Email />);
+    const save = await watchersSave();
+    expect(save).toBeDisabled();
+
+    fireEvent.change(await screen.findByLabelText('Waiting longer than'), { target: { value: '4' } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(api.setEmailWatchers).toHaveBeenCalledWith({ waitingDays: 4, dateConfidence: 0.6 }),
+    );
+    expect(await screen.findByText(/Saved\. The watchers use it on their next run\./)).toBeInTheDocument();
+  });
+
+  it("says what the server refused, in the server's words", async () => {
+    vi.mocked(api.setEmailWatchers).mockRejectedValue(
+      new ApiError(400, 'The waiting window is a whole number of days between 1 and 60.'),
+    );
+    render(<Email />);
+    fireEvent.change(await screen.findByLabelText('Date confidence'), { target: { value: '0.9' } });
+    fireEvent.click(await watchersSave());
+    expect(
+      await screen.findByText('The waiting window is a whole number of days between 1 and 60.'),
+    ).toBeInTheDocument();
   });
 });

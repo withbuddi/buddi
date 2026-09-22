@@ -26,6 +26,8 @@ import {
   nextAfter,
   OPENING_TURN_SPEAKER,
   pendingDigestItems,
+  sentinelIsEnabled,
+  sentinelSwitches,
   toActionRecord,
   type AgentCatalog,
   type AgentHoldBack,
@@ -695,7 +697,13 @@ function offerView(o: Offer): unknown {
  * ------------------------------------------------------------------ */
 
 export interface SentinelsView {
-  installed: Array<{ id: string; description: string; every: number }>;
+  installed: Array<{
+    id: string;
+    description: string;
+    every: number;
+    /** False when the owner has switched this watcher off on the page. */
+    enabled: boolean;
+  }>;
   runs: Array<{ sentinelId: string; lastRunAt: string; lastError: string | null }>;
   open: SentinelFindingView[];
   resolved: SentinelFindingView[];
@@ -729,10 +737,18 @@ export async function readSentinels(
   registry: ToolRegistry,
   limit = 50,
 ): Promise<SentinelsView> {
+  // The owner's switches. Absent means on, so a fresh installation shows every
+  // watcher on with no rows behind it.
+  const switches = await sentinelSwitches(pool);
   const installed = registry
     .manifests()
     .flatMap((m) => m.sentinels ?? [])
-    .map((s) => ({ id: s.id, description: s.description, every: s.every }));
+    .map((s) => ({
+      id: s.id,
+      description: s.description,
+      every: s.every,
+      enabled: sentinelIsEnabled(switches, s.id),
+    }));
 
   const { rows: runs } = await pool.query(
     `select sentinel_id, last_run_at, last_error from core.sentinel_runs order by sentinel_id`,
