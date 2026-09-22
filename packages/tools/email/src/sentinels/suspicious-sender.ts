@@ -33,8 +33,8 @@ import {
   SUSPICION_SCAN_BATCH,
   asksSince,
   lookAlikesSince,
-  recordSuspicion,
   scanMessageAsk,
+  stampOldSuspicions,
   unscannedSuspicions,
   type SuspectMessage,
 } from '../suspicions-store.js';
@@ -61,20 +61,33 @@ export function createSuspiciousSenderSentinel(): Sentinel {
     every: EVERY_HOUR,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const now = ctx.now();
+      const since = new Date(now.getTime() - SUSPICION_WINDOW_DAYS * 86_400_000);
 
-      // Catch-up: read the bodies nothing has read. Every inbound message,
-      // silenced senders included — see the module note.
-      for (const message of await unscannedSuspicions(ctx.db, SUSPICION_SCAN_BATCH)) {
+      // Catch-up: read the bodies nothing has read, inside the window only.
+      // Every inbound message, silenced senders included — see the module
+      // note. What ages out unread is stamped in one bounded statement.
+      await stampOldSuspicions(ctx.db, since, now);
+      let failed = 0;
+      let firstError = '';
+      for (const message of await unscannedSuspicions(ctx.db, since, SUSPICION_SCAN_BATCH)) {
         try {
           await scanMessageAsk(ctx.db, message, now);
-        } catch {
-          await recordSuspicion(ctx.db, message.id, null, now).catch(() => {});
+        } catch (err) {
+          // Unstamped on purpose: the reading and the stamp are one statement,
+          // so a body that could not be stored is read again rather than
+          // marked read with nothing behind it.
+          failed += 1;
+          if (firstError === '') firstError = err instanceof Error ? err.message : String(err);
         }
       }
+      if (failed > 0) {
+        console.warn(
+          `email.suspicious-sender: ${failed} message(s) could not be read this tick: ${firstError}`,
+        );
+      }
 
-      const since = new Date(now.getTime() - SUSPICION_WINDOW_DAYS * 86_400_000);
       const [lookAlikes, asks] = await Promise.all([
-        lookAlikesSince(ctx.db, since),
+        lookAlikesSince(ctx.db, since, now),
         asksSince(ctx.db, since),
       ]);
 
@@ -98,9 +111,11 @@ export function createSuspiciousSenderSentinel(): Sentinel {
       }
       for (const row of asks) {
         const existing = suspects.get(row.messageId) ?? shape(row);
+        // The phrase stays in `email.suspicions`: this finding quotes the
+        // message exactly once, and that quote is the fenced first line.
         suspects.set(row.messageId, {
           ...existing,
-          ask: { kind: row.kind, confidence: row.confidence, phrase: row.phrase },
+          ask: { kind: row.kind, confidence: row.confidence },
         });
       }
 

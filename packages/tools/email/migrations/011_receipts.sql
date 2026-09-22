@@ -55,14 +55,6 @@ create table if not exists receipts (
 -- found: "not a receipt" is a result, not an omission.
 alter table messages add column if not exists receipts_scanned_at timestamptz null;
 
--- Inbound only, in the predicate as well as in the query: the owner's own
--- outbound mail is never a receipt he was sent, and an index carrying it would
--- be mostly rows the sweep skips. `fetched_at` is the order the sweep asks
--- for, exactly, so it walks this index rather than sorting the mailbox.
-create index if not exists messages_receipts_unscanned_idx
-  on messages (fetched_at, id)
-  where receipts_scanned_at is null and direction = 'in';
-
 /* ------------------------------------------------------------------ *
  * The ask: credentials, a wire, a gift card
  * ------------------------------------------------------------------ */
@@ -85,10 +77,6 @@ create table if not exists suspicions (
 
 alter table messages add column if not exists suspicion_scanned_at timestamptz null;
 
-create index if not exists messages_suspicion_unscanned_idx
-  on messages (fetched_at, id)
-  where suspicion_scanned_at is null and direction = 'in';
-
 /* ------------------------------------------------------------------ *
  * Names, for the look-alike test
  * ------------------------------------------------------------------ */
@@ -101,20 +89,70 @@ create or replace function display_name_of(raw text) returns text as $$
   select trim(both '"' from trim(coalesce(substring(coalesce(raw, '') from '^(.*?)\s*<'), '')));
 $$ language sql immutable;
 
--- Two display names compared the way a person compares them: case, accents and
--- punctuation are not the difference between `Jean-Paul MEYER` and
--- `jean paul meyer`. The TypeScript side has the same function (`nameKey` in
--- `phrases.ts`), and the DB suite holds the two to the same answers.
+-- Two display names compared the way a person compares them.
 --
--- `translate` rather than `unaccent`: the extension is not installed on every
--- Postgres an owner might point us at, and a watcher that exists only where a
--- contrib package does is not a watcher.
+-- This is `nameKey` in `packages/tools/email/src/phrases.ts`, step for step,
+-- and `step6.db.test.ts` pins the two against a table of names: the look-alike
+-- test asks one side of the question in SQL and the other in TypeScript, and a
+-- pair that disagreed would mean a name that evades the test silently rather
+-- than mismatching loudly.
+--
+--  1. NFKD, which takes accents apart and folds the compatibility forms;
+--  2. drop the combining marks — removed, never replaced by a space, or
+--     `Ríos` becomes `ri os` and matches nothing it should;
+--  3. lower, which also brings Cyrillic and Greek down to the case below;
+--  4. the letters no decomposition touches (æ, œ, ß, þ, ð, ø, đ, ł, ı) and the
+--     homoglyph table — Cyrillic and Greek letters drawn as Latin ones, which
+--     is the whole of what makes this test worth running against somebody who
+--     is trying;
+--  5. everything that is not a letter or a digit becomes a space;
+--  6. sort the tokens, so `MEYER, Jean-Paul` is `Jean-Paul Meyer`.
+--
+-- `translate` and `replace` rather than `unaccent`: the extension is not
+-- installed on every Postgres an owner might point us at, and a watcher that
+-- exists only where a contrib package does is not a watcher.
 create or replace function name_key(raw text) returns text as $$
-  select trim(regexp_replace(
-    translate(lower(coalesce(raw, '')),
-              'àáâãäåçèéêëìíîïñòóôõöùúûüýÿ',
-              'aaaaaaceeeeiiiinooooouuuuyy'),
-    '[^a-z0-9]+', ' ', 'g'));
+  select coalesce(
+    (select string_agg(token, ' ' order by token)
+       from unnest(
+         string_to_array(
+           trim(
+             regexp_replace(
+               translate(
+                 replace(replace(replace(replace(
+                   lower(regexp_replace(normalize(coalesce(raw, ''), NFKD), '[\u0300-\u036f]', '', 'g')),
+                   'æ', 'ae'), 'œ', 'oe'), 'ß', 'ss'), 'þ', 'th'),
+                 -- The 1:1 letters, then the Cyrillic and Greek homoglyphs.
+                 -- Both strings are `LETTER_FOLDINGS` + `CONFUSABLES` from
+                 -- `phrases.ts`, in that order, character for character.
+                 'ðøđłıавекмнорстухіјѕһԁԛɡαβεηικνορστυχμγ',
+                 'dodliabekmhopctyxijshdqgabenikvopotuxuy'),
+               '[^a-z0-9]+', ' ', 'g')),
+           ' ')
+       ) as token
+      where token <> ''),
+    '');
+$$ language sql immutable;
+
+-- Display names too generic to identify anybody: `phrases.ts`'s
+-- `GENERIC_NAMES`, and the same list. `Support` is a name the owner writes to
+-- at a dozen addresses, so "same name, another address" says nothing about it.
+-- The list is of name *keys*, so already normalised and token-sorted.
+create or replace function generic_name(key text) returns boolean as $$
+  select key = any (array[
+    'admin', 'billing', 'client service', 'contact', 'hello', 'hr', 'info',
+    'no reply', 'notifications', 'payments', 'sales', 'security', 'support', 'team'
+  ]);
+$$ language sql immutable;
+
+-- Is this display name worth comparing at all? Empty is not a name — an
+-- impostor with no display name is imitating nothing — and neither is a
+-- generic one. `discriminatingName` in `phrases.ts` is the same test.
+-- Qualified, and it has to be: a function body resolves its own names against
+-- the *caller's* `search_path`, not the one the migration was applied under,
+-- and the sentinels query from `public`.
+create or replace function discriminating_name(raw text) returns boolean as $$
+  select email.name_key(raw) <> '' and not email.generic_name(email.name_key(raw));
 $$ language sql immutable;
 
 /* ------------------------------------------------------------------ *
@@ -123,17 +161,42 @@ $$ language sql immutable;
 
 -- On an existing installation every message ever fetched is unscanned. The
 -- receipt window is a fortnight and the ask window a week; reading a decade of
--- mail 200 rows an hour to classify messages neither watcher will ever report
--- is work for nothing. Anything older than thirty days is stamped as read with
--- no rows, so both sweeps start near the present and empty in a few ticks.
+-- mail to classify messages neither watcher will ever report is work for
+-- nothing. Anything older than thirty days is stamped **as read**, with no
+-- rows, so both sweeps start near the present.
+--
+-- `not exists (… is not null)` makes this a no-op on a replay. Without it, a
+-- migration run a second time a year later would stamp a year of mail that the
+-- watchers had been reading perfectly well, and stamp it for ever: the guard
+-- says "only when nothing has ever been stamped", which is true exactly once.
 update messages
    set receipts_scanned_at = now()
  where receipts_scanned_at is null
    and direction = 'in'
-   and coalesce(internal_date, fetched_at) < now() - interval '30 days';
+   and coalesce(internal_date, fetched_at) < now() - interval '30 days'
+   and not exists (select 1 from messages m2 where m2.receipts_scanned_at is not null);
 
 update messages
    set suspicion_scanned_at = now()
  where suspicion_scanned_at is null
    and direction = 'in'
-   and coalesce(internal_date, fetched_at) < now() - interval '30 days';
+   and coalesce(internal_date, fetched_at) < now() - interval '30 days'
+   and not exists (select 1 from messages m2 where m2.suspicion_scanned_at is not null);
+
+/* ------------------------------------------------------------------ *
+ * The sweeps' own indexes
+ * ------------------------------------------------------------------ */
+
+-- Created **after** the backfill, deliberately: the update above touches most
+-- of the rows these indexes would cover, and building them first means
+-- maintaining them through that write for nothing. Inbound only, in the
+-- predicate as well as in the query — the owner's own outbound mail is never a
+-- receipt he was sent — and `(fetched_at, id)` is the sweeps' `order by`,
+-- exactly, so they walk the index rather than sorting the mailbox.
+create index if not exists messages_receipts_unscanned_idx
+  on messages (fetched_at, id)
+  where receipts_scanned_at is null and direction = 'in';
+
+create index if not exists messages_suspicion_unscanned_idx
+  on messages (fetched_at, id)
+  where suspicion_scanned_at is null and direction = 'in';

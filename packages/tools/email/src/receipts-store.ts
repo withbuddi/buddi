@@ -10,9 +10,14 @@
  * receipt is worth a finding for a fortnight and nothing about it is urgent, so
  * the hourly sweep is early enough, and the poll path stays as narrow as it is.
  *
- * A message from a sender the owner has a live `ignore` policy about is stamped
- * without being read, and a policy that arrives *after* a scan silences what is
- * already stored. §7's watchers are not a way around the gate.
+ * A message from a sender the owner has a live `ignore` policy about is not
+ * read, and — a change from how dates does it — is **not stamped either**. A
+ * stamp is permanent, and an `ignore` policy is not: the owner revokes rules
+ * from the Learned list, and a stamped message would stay unread for ever
+ * afterwards. Leaving it unstamped costs nothing, because the sweep's own
+ * query excludes it, so it never takes a slot in the batch; revoke the policy
+ * and the next tick reads it. A policy that arrives *after* a scan still
+ * silences what is already stored, in `receiptsSince`.
  */
 import type { Pool, PoolClient } from 'pg';
 import { classifyReceipt, firstLines, type ReceiptReading } from './phrases.js';
@@ -21,6 +26,9 @@ type Db = Pool | PoolClient;
 
 /** How many unscanned messages one sentinel tick reads. */
 export const RECEIPT_SCAN_BATCH = 200;
+
+/** How many out-of-window messages one tick stamps without reading. */
+export const RECEIPT_STAMP_BATCH = 2000;
 
 /** How many lines of the body the classifier is shown. §7's "the first lines". */
 export const RECEIPT_BODY_LINES = 12;
@@ -31,8 +39,6 @@ export interface ScannableReceipt {
   subject: string;
   from: string;
   bodyText: string | null;
-  /** True when a live `ignore` policy covers this sender, in this account. */
-  ignored: boolean;
 }
 
 /** The live-ignore predicate the gate uses, as a fragment over an alias. */
@@ -51,39 +57,81 @@ export function ignoredSql(alias: string): string {
   )`;
 }
 
-/** Messages nothing has read for receipts yet, oldest fetched first, bounded. */
+/**
+ * Messages nothing has read for receipts yet, oldest first, bounded twice.
+ *
+ * `since` is the second bound and it is the one that matters: the watcher only
+ * ever reports mail from the last fortnight, so reading anything older is work
+ * for a finding that cannot be raised. Without it a mailbox that takes in more
+ * than `RECEIPT_SCAN_BATCH` messages an hour never reaches today's mail at all
+ * — the sweep walks the backlog oldest-first for ever and the watcher is
+ * silent about exactly the mail it exists for. What falls out of the window
+ * unread is stamped in bulk by `stampOldReceipts`.
+ *
+ * Senders under a live `ignore` are excluded here rather than stamped: see the
+ * module note.
+ */
 export async function unscannedReceipts(
   db: Db,
+  since: Date,
   limit = RECEIPT_SCAN_BATCH,
 ): Promise<ScannableReceipt[]> {
   const { rows } = await db.query(
-    `select m.id, m.subject, m.from_addr, m.body_text, ${ignoredSql('m')} as ignored
+    `select m.id, m.subject, m.from_addr, m.body_text
        from email.messages m
       where m.receipts_scanned_at is null
         and m.direction = 'in'
+        and coalesce(m.internal_date, m.fetched_at) >= $1::timestamptz
+        and not ${ignoredSql('m')}
       order by m.fetched_at asc, m.id asc
-      limit $1`,
-    [limit],
+      limit $2`,
+    [since, limit],
   );
   return rows.map((row: Record<string, any>) => ({
     id: String(row.id),
     subject: row.subject ?? '',
     from: row.from_addr ?? '',
     bodyText: row.body_text ?? null,
-    ignored: row.ignored === true,
   }));
 }
 
-/** Stamp a message as read without reading it. See the module note. */
-export async function skipReceipt(db: Db, messageId: string, now: Date): Promise<void> {
-  await db.query(`update email.messages set receipts_scanned_at = $2 where id = $1::uuid`, [
-    messageId,
-    now,
-  ]);
+/**
+ * Stamp, in one statement, the mail that fell out of the window unread.
+ *
+ * This is what keeps the sweep's backlog finite. It is bounded per tick so a
+ * mailbox with a decade of history does not lock the table for a minute, and
+ * it is the only place a message is stamped without being read.
+ */
+export async function stampOldReceipts(
+  db: Db,
+  before: Date,
+  now: Date,
+  limit = RECEIPT_STAMP_BATCH,
+): Promise<number> {
+  const { rowCount } = await db.query(
+    `update email.messages set receipts_scanned_at = $2
+      where id in (
+        select id from email.messages
+         where receipts_scanned_at is null
+           and direction = 'in'
+           and coalesce(internal_date, fetched_at) < $1::timestamptz
+         order by fetched_at asc, id asc
+         limit $3
+      )`,
+    [before, now, limit],
+  );
+  return rowCount ?? 0;
 }
 
 /**
- * Store one reading and stamp the message. `null` stamps and stores nothing.
+ * Store one reading **and** stamp the message, in a single statement.
+ *
+ * The two used to be two statements, and the order made the failure silent: a
+ * reading that threw on insert — an amount out of `numeric(14,2)`, a lost
+ * connection — left the message stamped as read with nothing stored, which is
+ * the one state from which the fact can never be recovered. A data-modifying
+ * CTE makes them one statement, so either both happen or neither does and the
+ * message is read again next tick.
  *
  * Idempotent: a forced rescan keeps the better confidence rather than adding a
  * second row, exactly as `recordDates` does.
@@ -94,26 +142,35 @@ export async function recordReceipt(
   reading: ReceiptReading | null,
   now: Date,
 ): Promise<void> {
-  if (reading !== null) {
-    await db.query(
-      `insert into email.receipts (message_id, confidence, phrase, amount, currency, found_at)
+  if (reading === null) {
+    await db.query(`update email.messages set receipts_scanned_at = $2 where id = $1::uuid`, [
+      messageId,
+      now,
+    ]);
+    return;
+  }
+  await db.query(
+    `with stored as (
+       insert into email.receipts (message_id, confidence, phrase, amount, currency, found_at)
        values ($1::uuid, $2, $3, $4, $5, $6)
        on conflict (message_id) do update
           set confidence = greatest(email.receipts.confidence, excluded.confidence),
               phrase = excluded.phrase,
               amount = excluded.amount,
-              currency = excluded.currency`,
-      [
-        messageId,
-        reading.confidence,
-        reading.phrase,
-        reading.amount === null ? null : reading.amount.value,
-        reading.amount === null ? null : reading.amount.currency,
-        now,
-      ],
-    );
-  }
-  await skipReceipt(db, messageId, now);
+              currency = excluded.currency
+       returning message_id
+     )
+     update email.messages set receipts_scanned_at = $6
+      where id = (select message_id from stored)`,
+    [
+      messageId,
+      reading.confidence,
+      reading.phrase,
+      reading.amount === null ? null : reading.amount.value,
+      reading.amount === null ? null : reading.amount.currency,
+      now,
+    ],
+  );
 }
 
 /** Read one message and keep the result. The classifier's only caller. */

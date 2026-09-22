@@ -20,6 +20,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createPool,
   findingsOf,
+  openFindings,
   runMigrations,
   runSentinels,
   setSentinelEnabled,
@@ -33,6 +34,7 @@ import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { manifest } from '../index.js';
 import { quoted } from '../mail.js';
 import { joinThread, setThreadState } from '../threads.js';
+import { nameKey, discriminatingName } from '../phrases.js';
 import { setWatcherSettings } from '../watchers.js';
 import {
   promisedReply,
@@ -271,6 +273,66 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(await raise(promisedReply, ctx())).toEqual([]);
     });
 
+    it('still reports at a setting of 30 and of 31, rather than going silent', async () => {
+      /*
+       * The bug: the setting went to 60 and the history window was pinned at
+       * 30, so `promisedDays = 31` reported nothing at all — a number the
+       * settings page offers, saved without complaint, switching the watcher
+       * off. The window is computed from the setting now.
+       */
+      await promised({ ageDays: 33, subject: 'Thirty-three days' });
+      await setWatcherSettings(pool, { promisedDays: 30 }, NOW);
+      expect(await raise(promisedReply, ctx())).toHaveLength(1);
+      await setWatcherSettings(pool, { promisedDays: 31 }, NOW);
+      expect(await raise(promisedReply, ctx())).toHaveLength(1);
+      // And the ceiling still exists: a week above the setting, no more.
+      await setWatcherSettings(pool, { promisedDays: 1 }, NOW);
+      expect(await raise(promisedReply, ctx())).toEqual([]);
+    });
+
+    it('raises the oldest urgent promises first, so drafts are never starved', async () => {
+      // Twenty-five three-day notices, and one nine-day draft. The draft used
+      // to be appended after the promises and never made the cap at all.
+      for (let i = 0; i < 25; i++) await promised({ ageDays: 4, subject: `Matter ${i}` });
+      const { threadId } = await write({
+        from: 'client@work.test',
+        to: 'owner@example.test',
+        subject: 'The starved draft',
+        threadKey: '<starved@work.test>',
+        at: daysBefore(12),
+        body: 'Could you send the quote?',
+      });
+      await pool.query(
+        `insert into email.drafts
+           (account_id, thread_id, to_addrs, subject, body_text, status, created_by_agent, updated_at)
+         values ($1, $2, $3::jsonb, 'Re: the quote', 'Here it is.', 'draft', 'mailer', $4)`,
+        [accountId, threadId, JSON.stringify(['client@work.test']), daysBefore(9)],
+      );
+      const result = await promisedReply.run(ctx());
+      const findings = findingsOf(result);
+      expect(findings).toHaveLength(20);
+      expect(findings[0]!.severity).toBe('urgent');
+      expect(findings[0]!.title).toContain('drafted and not sent');
+      // And every truncated promise is still named, so none of them resolves.
+      expect(new Set(stillTrueKeys(result)).size).toBe(26);
+    });
+
+    it('chases a draft that has no conversation yet', async () => {
+      // `drafts.thread_id` is nullable; an inner join dropped exactly the
+      // newest drafts, which is the wrong half to lose.
+      const draft = await pool.query(
+        `insert into email.drafts
+           (account_id, to_addrs, subject, body_text, status, created_by_agent, updated_at)
+         values ($1, $2::jsonb, 'A new message', 'Here it is.', 'draft', 'mailer', $3)
+         returning id`,
+        [accountId, JSON.stringify(['client@work.test']), daysBefore(8)],
+      );
+      const findings = await raise(promisedReply, ctx());
+      expect(findings.map((f) => f.key)).toEqual([
+        `email.promised-reply:none:draft:${String(draft.rows[0].id)}`,
+      ]);
+    });
+
     it('respects a muted conversation', async () => {
       const { threadId } = await promised();
       await setThreadState(pool, threadId, 'muted');
@@ -362,12 +424,8 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(findings[0]!.key).toBe(`email.receipt-or-bill:${messageId}`);
       expect(findings[0]!.severity).toBe('info');
       expect(findings[0]!.title).toContain('€120.50');
-      expect(findings[0]!.data).toMatchObject({
-        threadId,
-        amount: 120.5,
-        currency: 'EUR',
-        suggestedActions: ['hand-to-overview', 'record'],
-      });
+      expect(findings[0]!.data).toMatchObject({ threadId, amount: 120.5, currency: 'EUR' });
+      expect(findings[0]!.detail).toContain('hand it to whoever keeps the overview');
 
       const { rows } = await pool.query(
         `select r.confidence, r.amount, r.currency, m.receipts_scanned_at is not null as scanned
@@ -396,24 +454,72 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(await raise(receiptOrBill, ctx())).toHaveLength(1);
     });
 
-    it('says nothing about a receipt older than the fortnight', async () => {
+    it('stamps mail older than the fortnight without reading it', async () => {
+      /*
+       * The catch-up used to read every unscanned inbound message ever, oldest
+       * first: on a mailbox taking in more than a batch an hour, the sweep
+       * walks a decade of backlog for ever and this watcher is silent about
+       * exactly the fortnight it exists for. Out-of-window mail is stamped in
+       * one statement instead — it could never have raised a finding.
+       */
       await arriving({ ageDays: 20 });
-      expect(await raise(receiptOrBill, ctx())).toEqual([]);
-      // It was still read and kept: the window is the alerting one, not the
-      // reading one, exactly as it is for dates.
-      const { rows } = await pool.query(`select count(*)::int as n from email.receipts`);
-      expect(rows[0].n).toBe(1);
-    });
-
-    it('stamps a silenced sender without reading them', async () => {
-      await ignorePolicy('billing@insurer.test');
-      await arriving();
       expect(await raise(receiptOrBill, ctx())).toEqual([]);
       const { rows } = await pool.query(
         `select (select count(*)::int from email.receipts) as receipts,
                 (select count(*)::int from email.messages where receipts_scanned_at is null) as unscanned`,
       );
       expect(rows[0]).toEqual({ receipts: 0, unscanned: 0 });
+    });
+
+    it('leaves a silenced sender unread and unstamped, so revoking the rule re-reads them', async () => {
+      /*
+       * A stamp is permanent and an `ignore` policy is not — the Learned list
+       * revokes rules in one tap. Stamping a skipped message meant the owner
+       * changing his mind changed nothing, for ever. The sweep's own query
+       * excludes the sender instead, so the message takes no slot in the batch
+       * and is read the moment the rule goes.
+       */
+      await ignorePolicy('billing@insurer.test');
+      await arriving();
+      expect(await raise(receiptOrBill, ctx())).toEqual([]);
+      const before = await pool.query(
+        `select (select count(*)::int from email.receipts) as receipts,
+                (select count(*)::int from email.messages where receipts_scanned_at is null) as unscanned`,
+      );
+      expect(before.rows[0]).toEqual({ receipts: 0, unscanned: 1 });
+
+      await pool.query('delete from email.policies');
+      expect(await raise(receiptOrBill, ctx())).toHaveLength(1);
+    });
+
+    it('never stamps a message whose reading could not be stored', async () => {
+      /*
+       * The one state from which the fact can never be recovered: stamped as
+       * read with nothing stored. The reading and the stamp are one statement
+       * now, so a failed insert leaves the message to be read again.
+       */
+      await arriving();
+      await pool.query(
+        `alter table email.receipts add constraint tmp_refuse check (confidence < 0) not valid`,
+      );
+      expect(await raise(receiptOrBill, ctx())).toEqual([]);
+      const { rows } = await pool.query(
+        `select (select count(*)::int from email.receipts) as receipts,
+                (select count(*)::int from email.messages where receipts_scanned_at is null) as unscanned`,
+      );
+      expect(rows[0]).toEqual({ receipts: 0, unscanned: 1 });
+
+      await pool.query(`alter table email.receipts drop constraint tmp_refuse`);
+      expect(await raise(receiptOrBill, ctx())).toHaveLength(1);
+    });
+
+    it('reads a total the column cannot hold as no total at all', async () => {
+      // An order number read as money would make the insert throw, which under
+      // the transactional stamp costs the message its whole reading.
+      await arriving({ body: 'Invoice total €99999999999999999999,00' });
+      const findings = await raise(receiptOrBill, ctx());
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.data).toMatchObject({ amount: null, currency: null });
     });
 
     it('silences a stored reading when a policy arrives after the scan', async () => {
@@ -497,7 +603,12 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(findings).toHaveLength(1);
       expect(findings[0]!.key).toBe(`email.suspicious-sender:${messageId}`);
       expect(findings[0]!.severity).toBe('urgent');
-      expect(findings[0]!.data).toMatchObject({ tests: ['look-alike'] });
+      expect(Object.keys(findings[0]!.data as object).sort()).toEqual([
+        'confidence',
+        'messageId',
+        'threadId',
+      ]);
+      expect(findings[0]!.detail).toContain('display name');
       expect(findings[0]!.detail).toContain('Do not reply to it');
     });
 
@@ -521,7 +632,8 @@ suite('email watchers, step 6 (postgres)', () => {
       const noted = await raise(suspiciousSender, ctx());
       expect(noted).toHaveLength(1);
       expect(noted[0]!.severity).toBe('info');
-      expect(noted[0]!.data).toMatchObject({ tests: ['ask'], confidence: 0.7 });
+      expect(noted[0]!.data).toMatchObject({ confidence: 0.7 });
+      expect(noted[0]!.detail).toContain('asks for a transfer');
 
       await pool.query(
         `update email.suspicions set confidence = 0.95, urgent = true where message_id = $1::uuid`,
@@ -535,7 +647,8 @@ suite('email watchers, step 6 (postgres)', () => {
       await fromImpostor({ body: 'Please make an urgent wire transfer today.' });
       const findings = await raise(suspiciousSender, ctx());
       expect(findings).toHaveLength(1);
-      expect(findings[0]!.data).toMatchObject({ tests: ['look-alike', 'ask'] });
+      expect(findings[0]!.detail).toContain('display name');
+      expect(findings[0]!.detail).toContain('asks for a transfer');
       expect(findings[0]!.severity).toBe('urgent');
     });
 
@@ -575,6 +688,147 @@ suite('email watchers, step 6 (postgres)', () => {
         ctx({ agentForRole: (role) => (role === 'mail' ? 'mailer' : undefined) }),
       );
       expect(findings[0]!.agentId).toBe('mailer');
+    });
+
+    /**
+     * The two halves of this test are written twice — once in SQL and once in
+     * TypeScript — and a pair that disagreed would mean a name that evades the
+     * test silently rather than mismatching loudly. The comments in
+     * `phrases.ts` and in `011_receipts.sql` both claim this suite holds them
+     * together; this is that suite.
+     */
+    describe('the name key is one algorithm in two languages', () => {
+      const NAMES = [
+        '',
+        'x',
+        'Ana Rios',
+        '"Ana Ríos"',
+        'Ri\u0301os',
+        'MEYER, Jean-Paul',
+        'Jean-Paul Meyer',
+        "O'Neil, Ana",
+        'L\u2019Or\u00e9al',
+        'S\u00f8ren Kj\u00e6r',
+        'Soren Kjaer',
+        'Stra\u00dfe',
+        '\u0410na Ri\u043es',
+        'SUPPORT',
+        'Service Client',
+        '   ',
+        '\u0141ukasz \u0110uri\u0107',
+      ];
+
+      it.each(NAMES)('agrees with email.name_key on %j', async (name) => {
+        const { rows } = await pool.query<{ key: string; ok: boolean }>(
+          `select email.name_key($1) as key, email.discriminating_name($1) as ok`,
+          [name],
+        );
+        expect(rows[0]!.key).toBe(nameKey(name));
+        expect(rows[0]!.ok).toBe(discriminatingName(name));
+      });
+    });
+
+    it('says nothing about a display name that identifies nobody', async () => {
+      // The owner writes to his bank's support desk. Every other support desk
+      // on earth then wears "a name you know" at "another address".
+      await write({
+        from: 'owner@example.test',
+        to: '"Support" <support@bank.test>',
+        subject: 'A question',
+        threadKey: '<support-bank@bank.test>',
+        at: daysBefore(20),
+        body: 'Thanks.',
+        direction: 'out',
+      });
+      await fromImpostor({ from: '"Support" <support@shop.test>' });
+      expect(await raise(suspiciousSender, ctx())).toEqual([]);
+    });
+
+    it('sees through an accent and a homoglyph', async () => {
+      await write({
+        from: 'owner@example.test',
+        to: '"S\u00f8ren Kj\u00e6r" <soren@supplier.test>',
+        subject: 'The order',
+        threadKey: '<known-soren@supplier.test>',
+        at: daysBefore(20),
+        body: 'Thanks.',
+        direction: 'out',
+      });
+      // Written without the Scandinavian letters, at a domain he never writes to.
+      await fromImpostor({ from: '"Soren Kjaer" <s.kjaer@supplier-invoices.test>' });
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(1);
+    });
+
+    it("never turns the owner's own name at his own alias into a fraud", async () => {
+      await pool.query(`update email.accounts set aliases = $2 where id = $1::uuid`, [
+        accountId,
+        ['owner+work@example.test'],
+      ]);
+      // He writes to himself, under his own name.
+      await write({
+        from: 'owner@example.test',
+        to: '"Amen Owner" <owner+work@example.test>',
+        subject: 'A note to self',
+        threadKey: '<self@example.test>',
+        at: daysBefore(20),
+        body: 'Remember this.',
+        direction: 'out',
+      });
+      // And anybody else called that, at any address, is now a look-alike —
+      // which is a warning about himself.
+      await fromImpostor({ from: '"Amen Owner" <amen@elsewhere.test>' });
+      expect(await raise(suspiciousSender, ctx())).toEqual([]);
+    });
+
+    it('forgets a name he has not written to in two years', async () => {
+      await write({
+        from: 'owner@example.test',
+        to: '"Ana Rios" <ana.rios@old.test>',
+        subject: 'Long ago',
+        threadKey: '<ancient@old.test>',
+        at: daysBefore(900),
+        body: 'Thanks.',
+        direction: 'out',
+      });
+      await fromImpostor({ from: '"Ana Rios" <a.rios@supplier-invoices.test>' });
+      expect(await raise(suspiciousSender, ctx())).toEqual([]);
+    });
+
+    it('never stamps a body whose reading could not be stored', async () => {
+      await fromImpostor({ body: 'Please make an urgent wire transfer today.' });
+      await pool.query(
+        `alter table email.suspicions add constraint tmp_refuse check (confidence < 0) not valid`,
+      );
+      expect(await raise(suspiciousSender, ctx())).toEqual([]);
+      const blocked = await pool.query(
+        `select count(*)::int as n from email.messages where suspicion_scanned_at is null`,
+      );
+      expect(blocked.rows[0].n).toBe(1);
+      await pool.query(`alter table email.suspicions drop constraint tmp_refuse`);
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(1);
+    });
+
+    it('stamps mail older than the window without reading it', async () => {
+      await fromImpostor({ ageDays: 20, body: 'Please buy two gift cards immediately.' });
+      expect(await raise(suspiciousSender, ctx())).toEqual([]);
+      const { rows } = await pool.query(
+        `select (select count(*)::int from email.suspicions) as asks,
+                (select count(*)::int from email.messages where suspicion_scanned_at is null) as unscanned`,
+      );
+      expect(rows[0]).toEqual({ asks: 0, unscanned: 0 });
+    });
+
+    it('leaves a real password-reset mail a notice, not a wake', async () => {
+      // The failure this watcher could not afford: the owner resets his own
+      // password and is woken about it hourly for a week, by the one watcher
+      // an ignore policy may not silence.
+      await fromImpostor({
+        from: '"Accounts" <no-reply@bank.test>',
+        body: 'You asked to reset your password. If this was not you, contact us immediately.',
+      });
+      const findings = await raise(suspiciousSender, ctx());
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.severity).toBe('info');
     });
   });
 
@@ -630,6 +884,11 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(findings[0]!.severity).toBe('info');
       expect(findings[0]!.detail).toContain(quoted('Could you send the report this week?'));
       expect(findings[0]!.detail).toContain('Never send it.');
+      expect(Object.keys(findings[0]!.data as object).sort()).toEqual([
+        'ageDays',
+        'messageId',
+        'threadId',
+      ]);
     });
 
     it('says nothing inside the window, and nothing once the owner widens it', async () => {
@@ -722,6 +981,56 @@ suite('email watchers, step 6 (postgres)', () => {
       await asked({ ageDays: 45 });
       expect(await raise(unansweredByThem, ctx())).toEqual([]);
     });
+
+    it('still reports at a setting of 30 and of 31, rather than going silent', async () => {
+      await asked({ ageDays: 33, subject: 'Thirty-three days' });
+      await setWatcherSettings(pool, { nudgeDays: 30 }, NOW);
+      expect(await raise(unansweredByThem, ctx())).toHaveLength(1);
+      await setWatcherSettings(pool, { nudgeDays: 31 }, NOW);
+      expect(await raise(unansweredByThem, ctx())).toHaveLength(1);
+      // And the ceiling still exists: a small setting keeps the thirty-day
+      // floor, and a question older than that is history rather than a nudge.
+      await setWatcherSettings(pool, { nudgeDays: 1 }, NOW);
+      expect(await raise(unansweredByThem, ctx())).toEqual([]);
+    });
+
+    it('reports a question to B on a thread C started', async () => {
+      /*
+       * "Not a reply to *their* message" used to be "not a reply to anybody":
+       * an introduction from C, then the owner's original question to B, and
+       * the finding was silently dropped. A three-party thread is the ordinary
+       * shape of work.
+       */
+      const intro = await write({
+        from: 'carla@intro.test',
+        to: 'owner@example.test',
+        subject: 'Introducing you two',
+        threadKey: '<three-party@intro.test>',
+        at: daysBefore(20),
+        body: 'Meet Bruno.',
+      });
+      const { rows } = await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_id, thread_key, from_addr,
+            to_addrs, subject, internal_date, body_text, direction)
+         values ($1, $2, 1, 9300, '<toB@example.test>', $3, '<three-party@intro.test>',
+                 'owner@example.test', $4::jsonb, 'Re: Introducing you two', $5,
+                 'Bruno, could you send me the deck?', 'out')
+         returning id`,
+        [
+          accountId,
+          sentFolderId,
+          intro.threadId,
+          JSON.stringify(['bruno@work.test']),
+          daysBefore(8),
+        ],
+      );
+      const findings = await raise(unansweredByThem, ctx());
+      expect(findings.map((f) => f.key)).toEqual([
+        `email.unanswered-by-them:${intro.threadId}:${String(rows[0].id)}`,
+      ]);
+      expect(findings[0]!.title).toContain(quoted('bruno@work.test'));
+    });
   });
 
   /* ------------------------------------------------- through core, switched */
@@ -763,6 +1072,7 @@ suite('email watchers, step 6 (postgres)', () => {
     });
 
     it('names every receipt its cap left out rather than letting them resolve', async () => {
+      const manifests = [{ ...manifest, sentinels: [receiptOrBill] }];
       for (let i = 0; i < 25; i++) {
         await write({
           from: `billing${i}@insurer.test`,
@@ -774,9 +1084,25 @@ suite('email watchers, step 6 (postgres)', () => {
           scanned: false,
         });
       }
+
+      // One tick raises twenty and names twenty-five as still true.
       const result = await receiptOrBill.run(ctx());
       expect(findingsOf(result)).toHaveLength(20);
       expect(new Set(stillTrueKeys(result)).size).toBe(25);
+
+      /*
+       * Through core, twice. The second tick must resolve nothing: the five
+       * past the cap are still true, and a run that let them resolve would
+       * hand them back as news on the next one, forever. Asserting it after
+       * the facts are *open* is the whole point — a resolve can only happen to
+       * a finding that exists.
+       */
+      const first = await runSentinels(pool, manifests, NOW, 'UTC');
+      expect(first[0]).toMatchObject({ findings: 20, fired: 20, resolved: 0 });
+      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(20);
+      const second = await runSentinels(pool, manifests, new Date(NOW.getTime() + 2 * 3_600_000), 'UTC');
+      expect(second[0]).toMatchObject({ findings: 20, resolved: 0 });
+      expect(await openFindings(pool, 'email.receipt-or-bill')).toHaveLength(20);
     });
   });
 });

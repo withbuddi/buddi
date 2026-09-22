@@ -32,6 +32,7 @@ import { looksUnreplyable } from '../mail.js';
 import { findQuestion } from '../phrases.js';
 import {
   NUDGE_WINDOW_DAYS,
+  historyWindowDays,
   loadWatcherSettings,
   nudgeFinding,
   type UnansweredAsk,
@@ -62,13 +63,28 @@ const UNANSWERED_SQL = `
        and t.state <> 'muted'
        and coalesce(m.internal_date, m.fetched_at) <= $1::timestamptz - make_interval(days => $2::int)
        and coalesce(m.internal_date, m.fetched_at) >= $1::timestamptz - make_interval(days => $3::int)
-       -- Not a reply to their message: nothing of theirs came before it.
+       /*
+        * Not a reply to *their* message.
+        *
+        * "Their" is the point, and it used to be missing: any earlier inbound
+        * on the conversation suppressed the finding, so an introduction from C
+        * that the owner then answered with an original question to B was
+        * silently dropped — a three-party thread is the ordinary shape of
+        * work, not an edge case. The earlier message only makes this a reply
+        * when it came from somebody this message is addressed to.
+        */
        and not exists (
          select 1 from email.messages prev
+         cross join lateral (
+           select jsonb_array_elements_text(m.to_addrs) as addr
+           union all
+           select jsonb_array_elements_text(m.cc) as addr
+         ) p
           where prev.thread_id = m.thread_id
             and prev.direction = 'in'
-            and coalesce(prev.internal_date, prev.fetched_at)
-                < coalesce(m.internal_date, m.fetched_at)
+            and (coalesce(prev.internal_date, prev.fetched_at), prev.id)
+                < (coalesce(m.internal_date, m.fetched_at), m.id)
+            and email.address_of(prev.from_addr) = email.address_of(p.addr)
        )
        -- Nothing came back from anybody he addressed it to.
        and not exists (
@@ -80,8 +96,9 @@ const UNANSWERED_SQL = `
          ) a
           where inb.thread_id = m.thread_id
             and inb.direction = 'in'
-            and coalesce(inb.internal_date, inb.fetched_at)
-                > coalesce(m.internal_date, m.fetched_at)
+            -- (instant, row id) as one value: see promised-reply.ts.
+            and (coalesce(inb.internal_date, inb.fetched_at), inb.id)
+                > (coalesce(m.internal_date, m.fetched_at), m.id)
             and email.address_of(inb.from_addr) = email.address_of(a.addr)
        )
        -- He has not already been back in touch.
@@ -89,8 +106,8 @@ const UNANSWERED_SQL = `
          select 1 from email.messages later
           where later.thread_id = m.thread_id
             and later.direction = 'out'
-            and coalesce(later.internal_date, later.fetched_at)
-                > coalesce(m.internal_date, m.fetched_at)
+            and (coalesce(later.internal_date, later.fetched_at), later.id)
+                > (coalesce(m.internal_date, m.fetched_at), m.id)
        )
        -- Not a broadcast: a conversation any message of which carries a
        -- List-Id is a mailing list, and nobody there owes him an answer.
@@ -137,10 +154,12 @@ export function createUnansweredByThemSentinel(): Sentinel {
     every: EVERY_DAY,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.db);
+      // The window contains the setting: a `nudgeDays` of 45 against a fixed
+      // thirty-day ceiling reported nothing at all. See `historyWindowDays`.
       const { rows } = await ctx.db.query(UNANSWERED_SQL, [
         ctx.now(),
         settings.nudgeDays,
-        NUDGE_WINDOW_DAYS,
+        historyWindowDays(settings.nudgeDays, NUDGE_WINDOW_DAYS),
       ]);
       const agentId = mailAgent(ctx);
 

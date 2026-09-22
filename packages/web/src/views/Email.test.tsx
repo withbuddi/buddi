@@ -106,7 +106,7 @@ const WATCHERS = {
     waitingDays: { min: 1, max: 60 },
     dateConfidence: { min: 0.1, max: 0.99 },
     promisedDays: { min: 1, max: 60 },
-    receiptConfidence: { min: 0.1, max: 0.99 },
+    receiptConfidence: { min: 0.1, max: 0.95 },
     nudgeDays: { min: 1, max: 60 },
   },
 };

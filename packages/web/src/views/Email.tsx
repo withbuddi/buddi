@@ -855,7 +855,7 @@ const WATCHER_FIELDS: ReadonlyArray<{
     step: '0.05',
     mode: 'decimal',
     hint: (s) =>
-      `How sure the classifier must be before a message is called a receipt or a bill, between ${s.limits.receiptConfidence.min} and ${s.limits.receiptConfidence.max}. ${s.defaults.receiptConfidence} by default: "Invoice" in the subject with a total beside it scores about 0.95.`,
+      `How sure the classifier must be before a message is called a receipt or a bill, between ${s.limits.receiptConfidence.min} and ${s.limits.receiptConfidence.max}. ${s.defaults.receiptConfidence} by default: "Invoice" in the subject with a total beside it scores ${s.limits.receiptConfidence.max}, which is as sure as it ever gets.`,
   },
   {
     key: 'nudgeDays',

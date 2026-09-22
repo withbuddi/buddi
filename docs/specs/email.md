@@ -279,26 +279,51 @@ visible and switchable on the Watchers page:
   to whoever holds the `overview` role (falling back to `mail`) and record it.
   Hourly, with the bounded catch-up dates has: bodies are classified once and
   stamped (`messages.receipts_scanned_at`, migration `011_receipts.sql`), the
-  reading kept in `email.receipts`, and everything older than thirty days
-  stamped unread at migration time so a decade of mail does not become a
-  decade of sweeping.
+  reading kept in `email.receipts`. Two bounds keep the sweep honest. Mail
+  older than the fortnight is **stamped as read without being read** — it could
+  never raise a finding, and reading it oldest-first for ever is how a busy
+  mailbox ends up silent about exactly the fortnight this watcher exists for —
+  and migration `011` does the same for everything older than thirty days on
+  the day it is applied, once, so a decade of history does not become a decade
+  of sweeping. The reading and the stamp are one statement, so a message whose
+  reading cannot be stored is read again rather than marked read with nothing
+  behind it.
   Its limits: it reads vocabulary, not documents. A receipt with no receipt
   word in it — a bank's "your statement is ready" — is invisible to it, and a
-  mail *about* an invoice reads like one. A muted thread and an `ignore` policy
-  silence it, before the scan and after it.
+  mail *about* an invoice reads like one. A muted thread silences it, and a
+  sender under a live `ignore` is neither read nor stamped — so revoking the
+  rule lets the message be read after all, which a permanent stamp would have
+  made impossible.
 - `email.suspicious-sender` (**built**): two tests over inbound mail of the last
   seven days, and one finding per message, keyed to the message, whose detail
-  says which of them fired. **(a)** the display name is, case- and
-  accent-insensitively, one the owner writes to — read from the Sent folder's
-  To and Cc — at a different address, on a domain no address of that name has
-  ever been written to. It is computed in SQL on every tick rather than stamped,
+  says which of them fired. **(a)** the display name is one the owner writes to — read from
+  the Sent folder's To and Cc of the last two years — at a different address,
+  on a domain no address of that name has ever been written to. Two names are
+  compared through one algorithm written twice, in
+  `packages/tools/email/src/phrases.ts` and as `email.name_key` in migration
+  `011`, with the DB suite holding the two to the same answers: NFKD, combining
+  marks dropped, lowercased, the letters no decomposition touches (`ø`, `æ`,
+  `ß`) folded, Cyrillic and Greek homoglyphs mapped onto the Latin letters they
+  are drawn as, punctuation collapsed and the tokens **sorted** — so `MEYER,
+  Jean-Paul` is `Jean-Paul Meyer`, `Søren Kjær` is `Soren Kjaer`, and an
+  `Аna` with a Cyrillic А is `Ana`. A name has to identify somebody: the
+  owner's own address and aliases are excluded, and so is a pinned list of
+  generic display names (`Support`, `Billing`, `Notifications`…), which he
+  writes to at a dozen addresses and which would otherwise make every second
+  shop an urgent warning. It is computed in SQL on every tick rather than stamped,
   so a correspondent first written to this morning is protective this afternoon;
   it is `urgent`, because a name worn by the wrong address is never innocent by
   accident. **(b)** the body asks for credentials (0.6), a wire (0.7) or a gift
   card (0.8), from a pinned bilingual table, with a quarter added for
-  "urgently" and its French — so §7's *«a password reset "urgently"»* scores
-  0.85 and wakes somebody while a plain one does not. Above 0.8 is `urgent`,
-  the rest `info`. The body is read once and stamped
+  "urgently" and its French **when the urgency is in the same sentence as the
+  ask**. Above 0.8 is `urgent`, the rest `info` — and a phrase that only
+  *names* a credential rather than asking to be given it (`reset your
+  password`, `verify your account`, the vocabulary of every real reset mail)
+  is capped below that line and can never be more than a notice. Only somebody
+  asking to be sent the thing, or to be paid, wakes anybody: §7's *«a password
+  reset "urgently"»* is the phishing sentence, not the transactional one, and
+  the difference is the difference between this watcher being kept and being
+  switched off in its first week. The body is read once and stamped
   (`messages.suspicion_scanned_at`), the reading kept in `email.suspicions`.
   **An `ignore` policy does not silence this one**, and that is the whole point:
   an impostor sends from a domain the owner has very likely silenced, and a
@@ -306,8 +331,9 @@ visible and switchable on the Watchers page:
   for. Only a muted conversation does. The finding never quotes the body beyond
   a single fenced first line, and it tells the agent to describe the message and
   reply to nothing.
-  Its limits: (a) says nothing about a name the owner has never written to, and
-  nothing about a display name the impostor did not bother to copy; (b) is a
+  Its limits: (a) says nothing about a name the owner has never written to, one
+  he last wrote to more than two years ago, one too generic to identify
+  anybody, or a display name the impostor did not bother to copy; (b) is a
   phrase table, so it is blind to a fraud that asks for nothing in the first
   message — which is most of them.
 - `email.unanswered-by-them` (**built**): the owner wrote to somebody in the
@@ -317,7 +343,10 @@ visible and switchable on the Watchers page:
   come back from anybody he addressed it to. `nudgeDays`, default 5, because
   people are allowed a working week. `info`, once, keyed to the thread and the
   message that asked; the detail offers a draft with `email.draft_reply` and
-  says in as many words never to send it. Daily.
+  says in as many words never to send it. Daily. "Not a reply to *their*
+  message" means the earlier inbound came from somebody this message is
+  addressed to — an introduction from a third party, then an original question
+  to a second, is the ordinary shape of work and is reported.
   Excluded: no-reply addresses, any conversation carrying a `List-Id`, muted
   threads, a live `ignore` on the recipient, and anything the owner has already
   nudged — which is any later outbound message on the thread, whatever it says.
@@ -354,9 +383,16 @@ this installation does not ship. Five numbers are on the Email settings page in
 a small "Watchers" block, saved together — `waitingDays` (2), `dateConfidence`
 (0.6), `promisedDays` (3), `receiptConfidence` (0.7) and `nudgeDays` (5) — and
 all five are readable and writable from a chat through `email.get_settings` and
-`email.set_settings`. Each is bounded, and a value outside its bounds is a 400
-that says what the bounds are rather than a number quietly clamped into range;
-an unset one reads as its default.
+`email.set_settings`. Each is bounded, and a value outside its bounds — or one
+that is not a number at all — is a 400 that says what the bounds are rather
+than a number quietly clamped or coerced into range; an unset one reads as its
+default. Two rules keep a bound from being a trapdoor: `receiptConfidence`
+stops at **0.95**, which is the highest score the classifier can produce, so
+there is no threshold the page offers that silently switches the watcher off;
+and a *days* setting is a floor, never a ceiling — the history window each
+watcher reads is computed from its setting with a week of room above it, so
+`promisedDays: 31` reports a week of news rather than the nothing a
+thirty-day window would have returned.
 
 ## 8. Drafts and sending
 
