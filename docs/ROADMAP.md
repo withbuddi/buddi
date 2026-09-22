@@ -41,6 +41,9 @@ next. Checked against the code and `git log` on 2026-09-21.
   summary every run gets for free.
 - [The web plugin](web.md) — search and read-one-page as a capability.
 - [Writing a plugin](plugins.md) — the contract for anything an agent can do.
+- [Developer](specs/developer.md) — an agent that works in a workspace: modes chosen
+  once, a run list of plain commands, hardened git, previews on their own
+  origin. Lives in buddi-plugins.
 - [Plugin pages](specs/plugin-pages.md) — a plugin's screens as data: rail
   entries and settings tabs from descriptors, reads as queries, writes as
   tools; the email screens are the proof.
@@ -55,19 +58,18 @@ Nothing at the moment; the next item below is the developer plugin.
 
 ## Next, in order
 
-1. [Developer](specs/developer.md) — an agent that works in a workspace.
-2. [Goals](specs/goals.md) — a target with a clock: metrics from plugins,
+1. [Goals](specs/goals.md) — a target with a clock: metrics from plugins,
    deterministic checks, the holding agent woken when the owner drifts.
-3. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-4. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
-5. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
+2. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+3. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
+4. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
-6. macOS app — a packaged desktop app around the existing service.
-7. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+5. macOS app — a packaged desktop app around the existing service.
+6. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
-8. Drive and Dropbox — the provider APIs for backup, after the folder target
+7. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
-9. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+8. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
 
 Small, whenever a slot opens:
 
