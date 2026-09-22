@@ -55,9 +55,11 @@ it reads the plugin's own workspace record for this agent:
 
 - no workspace for this agent, or a path that resolves outside it: `gated`,
   with the reason naming the rule;
-- a command matching §5: `gated`, whatever the mode, with the rule named;
-- otherwise the mode decides — `ask` gates everything, `edit` gates commands
-  and lets reads and writes through as `auto`, `run` lets commands through too.
+- `ask` gates every write and every command; `edit` gates every command and
+  lets reads and writes through as `auto`;
+- `run` lets a command through as `auto` **only when §5's allowlist admits
+  it** — the program, its flags and its operands — and gates everything else,
+  naming the program and the flag that decided.
 
 The `reason` is one sentence and it is appended to the approval's preview, so
 the card the owner reads says which rule matched (§5). The mode is read from
@@ -110,17 +112,22 @@ All paths relative to the workspace; every result says the path it acted on.
   a signal sent to a stranger.
 - `developer.git` `{ action: status | diff | log | branch | commit | stash,
   … }`: read actions auto; a branch create is gated in `ask` and auto
-  otherwise; **`commit` is auto only in `run` mode** — `git add` runs a
-  repository's own clean filters and `commit` its own hooks, and both are code
-  in files an agent can write, so a commit is running code and belongs where
-  running code is already what the mode means. `push`, `reset`, `checkout` of
-  another branch and anything that rewrites history are not offered. Git runs
-  with its own configuration disabled (`GIT_CONFIG_NOSYSTEM`,
+  otherwise, and creates with `switch -c … HEAD`, which moves a ref and
+  leaves the working tree alone; **`commit` is auto only in `run` mode** —
+  `git add` runs a repository's own clean filters and `commit` its own hooks,
+  both of them code in files an agent can write. In `run` mode a commit
+  therefore runs the repository's own filters, exactly as its scripts run its
+  own code, and that is the same sentence §5 ends on. `stash` offers `push`
+  and `list`; `pop` and `apply` are a merge, a merge runs the repository's own
+  merge drivers, and so they are not offered. `push`, `reset`, `checkout` of
+  another branch and anything that rewrites history are not offered either.
+  Git runs with its own configuration disabled (`GIT_CONFIG_NOSYSTEM`,
   `GIT_CONFIG_GLOBAL=/dev/null`, an empty `core.hooksPath`, no pager, no
-  signing program, no `core.sshCommand`, `--no-ext-diff`), from the absolute
-  binary found on the workspace's PATH, and only when the workspace **is** the
-  repository root — otherwise a pathspec or an `add --all` would reach the
-  owner's unrelated work. Every pathspec is scoped to the workspace.
+  signing program of any kind, no `core.sshCommand`, `--no-ext-diff`,
+  `--no-textconv`, `--no-show-signature`), from the absolute binary found on
+  the workspace's PATH, and only when the workspace **is** the repository root
+  — otherwise a pathspec or an `add --all` would reach the owner's unrelated
+  work. Every pathspec is scoped to the workspace.
 - `developer.preview` `{ name }`: names a running process for the canvas. It
   returns no URL: previews are served on a second origin with a credential of
   their own, and the dashboard's link route is what makes a link (§12).
@@ -129,46 +136,72 @@ All paths relative to the workspace; every result says the path it acted on.
 
 ## 5. What runs without a card in `run` mode
 
-**An allowlist, not a denylist.** The first version of this plugin gated a
-list of dangerous spellings and let everything else through. Two adversarial
-reviews executed the bypasses — `env curl …`, `cat $HOME/.ssh/id_ed25519`,
-`echo x >>~/.zshenv`, `npx …`, `node -e …`, `find . -exec curl`,
-`git -c foo=bar push` — and the lesson is not that the list was short. A
-lexical denylist over a string that a shell is about to re-interpret cannot
-establish that a program will not read outside the workspace or use the
-network. So the question changed: not "is this one of the bad ones" but "is
-this one of the few commands the owner meant".
+**An allowlist of programs *and their flags*, not a denylist.** Two earlier
+shapes failed. The first gated a list of dangerous spellings and let the rest
+through: reviews executed `env curl …`, `cat $HOME/.ssh/id_ed25519`,
+`echo x >>~/.zshenv`, `npx …`, `node -e …`. The second allowed a list of
+programs and asked of each argument "does this look like a path": verification
+walked through it with `node --import=data:text/javascript,…`, `make -C /tmp`,
+`grep -f /etc/passwd`, `sort -o /tmp/out`, `find -files0-from`, `rg -L`,
+`grep -R`, `find -L`. Every one is a listed program reading or writing
+somewhere it should not, through a flag nobody had enumerated. "Which program"
+is not the question. "Which program, with which flags" is.
 
-A command runs with no card only when all three hold:
+A command runs with no card only when all of this holds:
 
 1. **It is plain.** Words and quotes, and no character a shell reads as more
    than text: no `$`, backtick, `~`, `|`, `;`, `&`, `<`, `>`, `(`, `)`, `{`,
-   `}`, glob character or newline. Anything else is gated with the reason
-   "not a plain command".
-2. **Its program is on the run list**, with a subcommand the list allows:
-   `node <file|--test>`; `npm|pnpm|yarn|bun run|test|build|lint|typecheck`
-   (never `install`, `exec`, `dlx`, `npx`, `x`); `python|python3 -m` with
-   `pytest|unittest|mypy|ruff|black`, and `pytest`; `go test|build|vet|fmt`;
-   `cargo test|build|check|clippy|fmt`; `make <targets>` (no `VAR=`); `tsc`,
-   `vitest`, `jest`, `eslint`, `prettier`, `ruff`, `black`, `mypy`; `ls`,
-   `cat`, `head`, `tail`, `wc`, `grep`, `rg` (no `--pre`, no `--search-zip`),
-   `find` (no `-exec`, `-execdir`, `-ok`, `-delete`, `-fprint*`), `diff`,
-   `sort`, `uniq`, `echo`, `pwd`, `which`. A program named by path rather
-   than by name is on no list.
-3. **Every argument that looks like a path resolves inside the workspace** —
-   not absolute, no `..`, no `~`, no symlink component.
+   `}`, `[`, `]`, newline or backslash. (`*` and `?` are text here, because
+   nothing expands them: there is no shell, and a glob reaches the program as
+   the characters it is.) Anything else is gated with "not a plain command".
+2. **Its program is on the run list**, and every flag it is given is in that
+   program's own grammar, and its operands are of the kind that program takes.
+   A flag that is not in the table is gated **by name**, and `--flag=value`,
+   `--flag value`, `-fvalue`, `-f=value` and `-abc` are all read as the flags
+   they are, so a spelling is not a way past the table.
+3. **Every path — operand or flag value — resolves inside the workspace**: not
+   absolute, no `..`, no `~`, no symlink component.
+
+The list, with what each program may be given:
+
+| Program | Flags | Operands |
+| --- | --- | --- |
+| `node` | `--test` | a file (one is required; `node` alone is a REPL) |
+| `npm`/`pnpm`/`yarn`/`bun` | none | `run\|test\|build\|lint\|typecheck`, then one script name |
+| `python`/`python3` | `-m` | a module from `pytest\|unittest\|mypy\|ruff\|black`, whose own grammar reads the rest |
+| `pytest` | `-q -x -v -k <expr> --maxfail=<n> -p <word>` | paths |
+| `go` | `-v -run <re>` | `test\|build\|vet\|fmt`, then `./...` or paths |
+| `cargo` | `-v --release -run <re>` | `test\|build\|check\|clippy\|fmt` |
+| `make` | none | bare targets (no `VAR=`) |
+| `tsc` | `-p <path> --project <path> --noEmit` | paths |
+| `vitest`/`jest` | `-t <name>` | optional `run`, then paths |
+| `eslint`/`prettier`/`ruff`/`black`/`mypy` | `--check --fix --write` | paths |
+| `ls` | `-l -a` | paths |
+| `cat` | none | paths |
+| `head`/`tail` | `-n <n> -c <n>` | paths |
+| `wc` | `-l -c -w` | paths |
+| `grep` | `-n -i -r -E -F -w -c -l --include=<glob>` | a pattern, then paths |
+| `rg` | `-n -i -w -l -c -g <glob> -t <type> --no-follow` | a pattern, then paths |
+| `find` | an expression: `-name -iname -type -maxdepth -mindepth -path -newer -size -not -o -a` | a path |
+| `diff` | `-u -r` | paths |
+| `sort` | `-n -r -u` | paths |
+| `uniq` | `-c` | paths |
+| `echo` | none | any words |
+| `pwd` | none | none |
+| `which` | none | one word |
 
 Everything else asks, and the card names the program. The old parser survives
-for one job only: putting a *name* on that card ("npm install installs
-packages this machine did not have") rather than "it is not on the run list".
+for one job: putting a *name* on that card ("npm install installs packages
+this machine did not have") rather than "npm install is not on the run list".
 Nothing is allowed because that parser did not recognise it.
 
 **What `run` mode therefore means.** `npm test` and `make` run a project's own
-scripts, as the owner's user, with the owner's toolchain. The list bounds
-which programs start; it says nothing about what a `package.json` does once
-one of them is running. An owner choosing `run` is choosing to let this
-project's own code run, which is exactly the choice they would make by typing
-`npm test` themselves.
+scripts, as the owner's user, with the owner's toolchain, and in `run` mode a
+commit runs the repository's own clean filters for the same reason. The list
+bounds which program starts and with what; it says nothing about what a
+`package.json` does once one of them is running. An owner choosing `run` is
+choosing to let this project's own code run, which is exactly the choice they
+make by typing `npm test` themselves.
 
 ## 6. The result the owner reviews
 
@@ -205,13 +238,26 @@ Three residuals follow, and they are stated rather than implied:
 - **A project's own scripts.** In `run` mode `npm test` starts, and what that
   script then does is the project's business, not this plugin's. The run list
   bounds which programs start and nothing after that.
-- **Symlinks.** Path resolution walks component by component and refuses any
-  symbolic link inside the workspace — a link is a way out whatever it points
-  at today, and resolving it would only say where it pointed a moment ago. A
-  workspace that genuinely contains links needs them replaced with the real
-  files. The final open uses `O_NOFOLLOW` and writes go through a temp file
-  and a `rename`, which closes the window between the check and the syscall;
-  what is left is the ordinary race any unprivileged program has.
+- **Symlinks, and the window after the check.** Path resolution walks
+  component by component and refuses any symbolic link inside the workspace —
+  a link is a way out whatever it points at today, and resolving it would only
+  say where it pointed a moment ago. A workspace that genuinely contains links
+  needs them replaced with the real files. The final open uses `O_NOFOLLOW`;
+  after it, the components are walked again and the open descriptor's
+  `(dev, ino)` is compared with the path that was validated, so a directory
+  swapped for a link in between is a refusal rather than a read of somebody
+  else's file. Writes go to a temp file in the same directory and are
+  `rename`d over, which never follows a link at the destination. What is left
+  is the window between that confirmation and the read or write on the
+  descriptor: it cannot be closed from user space without holding every
+  directory open for the whole operation, and it is the ordinary race any
+  unprivileged program has.
+- **The preview's check and the proxy's connect.** A preview port is verified
+  against the process's own pid — its identity being the pair (pid, start
+  time) — on every proxied request. Between that answer and the gateway's
+  connect, the process could in principle exit and the port be taken by
+  another. The window is microseconds and the alternative is holding the
+  socket open across the check, which the proxy is not shaped to do.
 - **The owner's toolchain.** The PATH is captured once, from the owner's login
   shell, at the moment they approve the workspace, and shown on that card.
   Anything already on it is trusted the way the owner trusts it.
