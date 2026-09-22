@@ -24,7 +24,7 @@ import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
 import { readPath, readRef } from '../canvas/resolve';
-import { pluginPageRoute, pluginSettingsRoute } from '../routes';
+import { chatRoute, pluginPageRoute, pluginSettingsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
@@ -135,6 +135,16 @@ export function holds(data: unknown, condition: Visibility | undefined): boolean
  * engine works out which hash that is.
  */
 function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
+  /*
+   * The one link that leaves the plugin: an agent's chat. `chat` is a value
+   * read out of the data — an agent id a query answered — so what a descriptor
+   * says is "the holder", not a URL. An id the data does not carry is no link
+   * at all rather than a route to nowhere.
+   */
+  if ('chat' in to) {
+    const agentId = readRef(data, to.chat);
+    return agentId === null || agentId === undefined ? '' : chatRoute(String(agentId));
+  }
   const target = scope.pages.find((page) => page.id === to.page);
   if (target?.place === 'settings') return pluginSettingsRoute(scope.plugin, to.page);
   const item = to.item === undefined ? null : readRef(data, to.item);

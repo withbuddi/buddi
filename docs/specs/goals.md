@@ -1,7 +1,8 @@
 # Goals: a target with a clock, that buddi keeps
 
-Status: step 1 built 2026-09-22 (metrics, tables, tools, sentinel, docs).
-Steps 2 and 3 not started. Core feature, agent-neutral: any
+Status: step 1 built 2026-09-22 (metrics, tables, tools, sentinel, docs);
+step 2 built 2026-09-22 (Home block, Goals page, chat view, Telegram parity).
+Step 3 not started. Core feature, agent-neutral: any
 agent with a metric can hold a goal, and the finance plugin is only the first
 plugin to declare one.
 
@@ -226,9 +227,10 @@ that loop — a failed `recordCheck` on another goal — loses the wake while th
 state change is already committed, and the next tick no longer walks the goal,
 so the wake is never raised. The digest still carries the fact and the goal
 reads correctly everywhere it is shown; making the two atomic needs the finding
-write to move inside the per-goal step, which is step 2's business.
+write to move inside the per-goal step. Step 2 did not do it: that is a change
+to core's `runSentinels` rather than to where a goal shows, and the gap stands.
 
-## 7. Where it shows
+## 7. Where it shows — **built**
 
 - **Home**: a "Goals" block from core: each open goal, progress, pace, on
   track or not, in the holder's words for the title only.
@@ -239,6 +241,65 @@ write to move inside the per-goal step, which is step 2's business.
 - **The holder's chat**: `goal.set`'s card, and `goal.status` drawn with a
   view descriptor (`keyvalue` plus a `timeseries` of the checks).
 - **Telegram**: the wakes reach it like any finding.
+
+As built, all four live in `packages/gateway/src/missions/goals-page.ts`, on
+the `goal` manifest beside the tools — `home`, `pages`, `queries`, `views` —
+because a goal has no schema of its own and this is only a surface onto core's
+rows. Nothing on any of these surfaces measures: every number is read out of
+`core.goals` and `core.goal_checks` as the sentinel left them, so opening a tab
+is never a second, slower, unrecorded check.
+
+Eight deviations, each one a thing the engine decides rather than a choice:
+
+1. **One descriptor per tool, so `goal.status` draws a timeseries and not
+   also a `keyvalue`.** The canvas keys renderables by tool name
+   (`renderablesFrom` builds one `byTool` map), so a tool has exactly one
+   descriptor. The timeseries is the one that says something the chat does
+   not — the figures are already in `goal.status`'s own prose.
+2. **`goal.status` grew a `chart` key, present only when the answer is one
+   goal.** That is what the descriptor maps: `chart.points` (the measured
+   checks, oldest first), `chart.target` as a reference line, and
+   `chart.events` — every milestone on the day it was crossed, plus the
+   deadline. With no id, or with several goals, there is no `chart`, the
+   points resolve to none and the tab stays quiet rather than drawing the
+   first goal's history under the title of all of them.
+3. **The chart's `unit` is `number`, not `currency`.** A `TimeseriesMap.unit`
+   is a fixed enum, not a path, and one descriptor covers every metric in the
+   installation; declaring `currency` would draw an unread-mail count in
+   dollars, because the web's money formatter falls back to USD when no code
+   is given. The goal's own currency is in `chart.label`, already formatted by
+   the process that knows it.
+4. **A page may now link to one agent's chat.** `RouteRef` gained
+   `{ chat: ValueRef }` — an agent id read out of the data, never a URL — and
+   §7's "a link to the holder's chat" was not otherwise expressible: a
+   `RouteRef` could only name a page of the same plugin. The grammar, the
+   browser's mirror of it and `docs/plugins.md` §2.5b all say so.
+5. **The link sits inside the `detail` that names the holder**, not beside the
+   stats: a component is handed the data of the nearest query *above* it, and
+   inside a list-detail's detail that is the page's own, which is nothing.
+6. **The Home block is `null` when no goal is open**, not only when there are
+   none at all: a block exists to say something, and a met-and-closed goal is
+   history, which lives on the page.
+7. **The row's fourth verdict.** §7 names on track, off track and "not
+   measured since"; a goal with fewer than two measured checks has no
+   projection, and that is neither on track nor off it, so it reads "no
+   projection yet". The row is toned `good` on track and `critical` only on
+   two misses running — the same threshold the sentinel interrupts at.
+8. **Telegram parity needed no new step.** A goal finding already becomes a
+   pending `sentinel-wake` occurrence carrying the finding as its payload; the
+   mission executor reads it with `findingOf`, runs it **as the goal's
+   holder** (a finding's own `agentId` overrides the mission's), and appends
+   `renderFinding`'s fenced block to the prompt. What the holder then says
+   with `mission.report` goes wherever its surface sends it. The test is
+   `goals.db.test.ts`, "reaches Telegram the way any finding does".
+
+The Goals page is a **rail** page, so it introduces no new place: the table in
+`docs/plugins.md` §2.5a is unchanged and `plugin-places.test.ts` still holds.
+Its one write is `goal.owner_close` — the same store call `goal.close` makes,
+without the holder check, because the owner is not an agent: a goal exists
+because they approved it, and stopping one is theirs to do on any screen. It
+is `ownerOnly`, so no model is listed it and `invoke` answers "unknown tool" to
+anybody but the owner's own path.
 
 ## 8. Example, end to end
 
@@ -281,7 +342,13 @@ stated as such).
    `packages/gateway/src/missions/goals.ts`, beside the reminder and schedule
    manifests, for the same reason they do: nothing there owns a schema, and
    `createGoalManifest` takes the registry because a goal watches a metric.
-2. Home block, Goals page, chat view, Telegram parity. (1 day)
+2. Home block, Goals page, chat view, Telegram parity. (1 day) — **built**.
+   All four are `packages/gateway/src/missions/goals-page.ts`, contributed on
+   the same manifest as the tools; §7 lists the deviations. The known gap in
+   §6 — the sentinel settling a goal in the same tick it returns the finding,
+   with the finding written only after the loop — is **not** closed here: it
+   is a change to core's `runSentinels`, not to where a goal shows, and it
+   stands as written.
 3. Metrics in finance (`total_debt`, `card_balance`, `cash_available`) and
    email (`inbox_unread`, `waiting_on_me`); the developer plugin's
    `failing_tests` when it lands. (half a day, in buddi-plugins for finance)
