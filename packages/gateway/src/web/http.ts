@@ -35,11 +35,7 @@ export interface CookieOptions {
   httpOnly?: boolean;
   maxAgeSeconds?: number;
   secure?: boolean;
-  /**
-   * `Strict` by default. The preview origin's cookie is `Lax`, and that is
-   * the one exception: the owner arrives there by following a link from the
-   * dashboard, and `Strict` drops the cookie on exactly that navigation.
-   */
+  /** `Strict` by default, and nothing here has yet needed anything else. */
   sameSite?: 'Strict' | 'Lax';
   /** `/` by default. A preview scopes its cookie to its own subtree. */
   path?: string;

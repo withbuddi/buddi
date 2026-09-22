@@ -90,12 +90,36 @@ describe('the panel', () => {
     const frame = screen.getByTitle('web');
     expect(frame.tagName).toBe('IFRAME');
     expect(frame).toHaveAttribute('src', TICKETED);
-    // No `sandbox`: the frame is cross-origin already, and `allow-same-origin`
-    // on a same-origin frame was the hole this whole arrangement closes.
-    expect(frame).not.toHaveAttribute('sandbox');
+    // Cross-origin *and* sandboxed: the origin keeps the app away from the
+    // dashboard's cookies and API, the sandbox keeps it from navigating the
+    // top window or opening tabs nobody asked for.
+    expect(frame).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-forms allow-same-origin allow-modals allow-downloads',
+    );
     // An app that refuses framing shows an empty box; the link is the answer.
     expect(screen.getByRole('link', { name: 'Open in a tab' })).toHaveAttribute('href', TICKETED);
     expect(screen.getByText('ready in 412 ms')).toBeInTheDocument();
+  });
+
+  it('opens a tab on a fresh ticket, never on the one the frame already spent', async () => {
+    const link = vi
+      .spyOn(api, 'previewLink')
+      .mockResolvedValueOnce({ url: TICKETED })
+      .mockResolvedValueOnce({ url: `${TICKETED}2` });
+    const tab = { location: '' as unknown as Location, close: vi.fn() };
+    const open = vi.fn(() => tab as unknown as Window);
+    vi.stubGlobal('open', open);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null }} />);
+    await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
+
+    screen.getByRole('link', { name: 'Open in a tab' }).click();
+    // The blank tab is opened before the request, or the browser calls it a
+    // pop-up and blocks it.
+    expect(open).toHaveBeenCalledWith('', '_blank', 'noopener');
+    await waitFor(() => expect(tab.location).toBe(`${TICKETED}2`));
+    expect(link).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
   });
 
   it('says so when the link cannot be had, and frames nothing', async () => {

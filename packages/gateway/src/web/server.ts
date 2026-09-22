@@ -387,6 +387,13 @@ export function previewAppOf(server: Server): PreviewApp | undefined {
 /** The query parameter carrying a one-time ticket. */
 export const TICKET_PARAM = 't';
 
+/** How many doors along from `dashboard + 1` a preview port is looked for. */
+export const PREVIEW_PORT_ATTEMPTS = 10;
+
+/** How many preview links one session may mint in a minute. */
+export const PREVIEW_LINK_LIMIT = 10;
+export const PREVIEW_LINK_WINDOW_MS = 60_000;
+
 export function createWebApp(deps: WebServerDeps): Server {
   const sessions = new SessionStore(deps.sessionTtlMs ?? {});
   const spent = new SpentTickets();
@@ -436,6 +443,15 @@ export function createWebApp(deps: WebServerDeps): Server {
    * and nothing of it is served here.
    */
   const previewTickets = new PreviewTickets(deps.now);
+  /*
+   * How often one session may ask for a preview link.
+   *
+   * Minting is cheap but it is not free — each one is a live credential held
+   * in this process — and the store above is bounded, so an unbounded caller
+   * would be evicting other people's tickets rather than filling memory. Ten
+   * a minute is more panels than a dashboard has.
+   */
+  const previewLinks = new RateLimiter(PREVIEW_LINK_LIMIT, PREVIEW_LINK_WINDOW_MS);
   const previews: PreviewApp = new PreviewApp({
     registry: deps.registry,
     ctx: deps.ctx,
@@ -828,6 +844,10 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (port === null) {
           return sendJson(res, 503, { error: 'Previews are not being served: the preview port could not be bound.' });
         }
+        if (previewLinks.blocked(session.id, now)) {
+          return sendJson(res, 429, { error: 'Too many preview links just now. Try again in a minute.' });
+        }
+        previewLinks.fail(session.id, now);
         const ticket = previewTickets.mintTicket(previewApi.plugin, previewApi.name);
         return sendJson(res, 200, {
           url: `http://127.0.0.1:${port}/preview/${previewApi.plugin}/${previewApi.name}/?ticket=${ticket}`,
@@ -2462,45 +2482,79 @@ export async function startWebServer(
   const port = address?.port ?? deps.config.port;
   const previews = previewAppOf(server);
   const previewPort = previews ? await listenForPreviews(previews.server, port, deps) : null;
+  /*
+   * Publish it. Plugins are loaded into this process and a plugin with
+   * `previews` needs the number to build a URL of its own — the developer
+   * plugin's `tailscale serve` target is the case in hand, and it used to
+   * guess "the dashboard plus one", which is wrong the moment that port was
+   * taken. The environment is the gateway's own (`serve` passes `process.env`),
+   * and `ToolContext.previewPort` reads the same value.
+   */
+  if (previewPort !== null) publishPreviewPort(deps.env ?? process.env, previewPort);
   return {
     server,
     port,
     previewPort,
     url: webUrl({ host: deps.config.host, port }),
     chat: webChatOf(server),
-    close: () =>
-      new Promise<void>((resolve) => {
-        previews?.server.closeAllConnections?.();
-        previews?.server.close();
-        server.close(() => resolve());
-        server.closeAllConnections?.();
-      }),
+    close: async () => {
+      // Both listeners, both awaited. A preview socket still open is a port
+      // still held, and the next thing to want it — the next test, the
+      // gateway coming back up — finds it taken.
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          if (!previews || previewPort === null) return resolve();
+          previews.server.closeAllConnections?.();
+          previews.server.close(() => resolve());
+        }),
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections?.();
+        }),
+      ]);
+    },
   };
 }
 
 /**
  * Bind the preview listener, on loopback, beside the dashboard.
  *
- * The port is the dashboard's plus one — which is a guess, and guesses are
- * wrong sometimes — or whatever `BUDDI_PREVIEW_PORT` says. An ephemeral
- * dashboard port (`0`, which is every test) takes an ephemeral preview port,
- * and a port already in use falls back to an ephemeral one with a line in the
- * log rather than taking the dashboard down with it: a gateway that will not
- * start because a *preview* port is busy is a bad trade.
+ * The port is the dashboard's plus one — so an owner who knows where their
+ * dashboard is knows where its previews are — or whatever
+ * `BUDDI_PREVIEW_PORT` says. A port already in use is tried again a few doors
+ * along with a line in the log, rather than taking the dashboard down: a
+ * gateway that will not start because a *preview* port is busy is a bad trade.
+ * An ephemeral dashboard (`port: 0`, which is every test) gets an ephemeral
+ * preview port, because "plus one" means nothing when the OS chose the one.
  */
+/**
+ * Ports this process has published into an environment.
+ *
+ * Read back by `listenForPreviews` so that our own publication is never
+ * mistaken for the owner *configuring* a port: a second gateway in the same
+ * process would otherwise find `BUDDI_PREVIEW_PORT` set to the first one's
+ * port, fail to bind it, and serve no previews at all.
+ */
+const PUBLISHED_PREVIEW_PORTS = new Set<number>();
+
+function publishPreviewPort(env: NodeJS.ProcessEnv, port: number): void {
+  PUBLISHED_PREVIEW_PORTS.add(port);
+  env.BUDDI_PREVIEW_PORT = String(port);
+}
+
 async function listenForPreviews(
   server: Server,
   dashboardPort: number,
   deps: Omit<WebServerDeps, 'token'>,
 ): Promise<number | null> {
   const log = deps.log ?? ((line: string) => console.error(line));
-  const configured = Number((deps.env ?? process.env).BUDDI_PREVIEW_PORT ?? '');
-  const wanted = Number.isInteger(configured) && configured >= 0 && configured <= 65535
-    ? configured
-    : deps.config.port === 0 ? 0 : dashboardPort + 1;
+  const raw = (deps.env ?? process.env).BUDDI_PREVIEW_PORT?.trim();
+  const asked = raw === undefined || raw === '' ? null : Number(raw);
+  // Our own echo is not a request. See `PUBLISHED_PREVIEW_PORTS`.
+  const configured = asked !== null && PUBLISHED_PREVIEW_PORTS.has(asked) ? null : asked;
   const bind = (port: number): Promise<number | null> =>
     new Promise((resolve) => {
-      const onError = (err: NodeJS.ErrnoException): void => resolve(null);
+      const onError = (): void => resolve(null);
       server.once('error', onError);
       server.listen(port, '127.0.0.1', () => {
         server.removeListener('error', onError);
@@ -2508,13 +2562,26 @@ async function listenForPreviews(
         resolve(address?.port ?? port);
       });
     });
-  const bound = await bind(wanted);
-  if (bound !== null) return bound;
-  const fallback = wanted === 0 ? null : await bind(0);
-  if (fallback === null) {
-    log(`web: previews are not being served — port ${wanted} could not be bound`);
+
+  if (configured !== null && Number.isInteger(configured) && configured >= 0 && configured <= 65535) {
+    const bound = await bind(configured);
+    if (bound !== null) return bound;
+    log(`web: BUDDI_PREVIEW_PORT ${configured} could not be bound; previews are not being served`);
     return null;
   }
-  log(`web: port ${wanted} is in use; previews are on ${fallback} instead`);
-  return fallback;
+  if (deps.config.port === 0) return bind(0);
+
+  for (let offset = 1; offset <= PREVIEW_PORT_ATTEMPTS; offset += 1) {
+    const port = dashboardPort + offset;
+    if (port > 65535) break;
+    const bound = await bind(port);
+    if (bound === null) {
+      log(`web: port ${port} is in use; trying the next one for previews`);
+      continue;
+    }
+    if (offset > 1) log(`web: previews are on ${bound}, not ${dashboardPort + 1}, which was taken`);
+    return bound;
+  }
+  log(`web: no free port near ${dashboardPort + 1}; previews are not being served`);
+  return null;
 }

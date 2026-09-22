@@ -200,7 +200,10 @@ gets a preview, two ways, both ending when the process stops:
   and the owner allowed it on Settings → Developer, the plugin adds
   `tailscale serve --https=<port> http://127.0.0.1:<previewPort>` when the
   process starts and removes it when it stops, giving a clean
-  `https://<host>:<port>` guarded by the tailnet alone. It is the plugin's to
+  `https://<host>:<port>` guarded by the tailnet alone. `<previewPort>` is
+  `ctx.previewPort` (or `BUDDI_PREVIEW_PORT`), never "the dashboard plus one":
+  the gateway steps along when that port is taken, and a route built on the
+  guess points at nothing. It is the plugin's to
   add and to take away — the gateway publishes only the dashboard — and it is
   off by default; the sentence on the page says what it exposes.
 
