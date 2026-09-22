@@ -11,7 +11,7 @@
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import type { ReactNode } from 'react';
-import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE } from '../routes';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, MAIL_ROUTE } from '../routes';
 import { nextTheme, themeLabel, type ThemeChoice } from '../theme';
 
 export function Rail({
@@ -141,6 +141,13 @@ const ICONS: Record<string, JSX.Element> = {
   [ACTIVITY_ROUTE]: (
     <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
       <path d="M2.8 10.5h3.4l2-5.2 3.4 9.8 2.2-4.6h3.4" />
+    </svg>
+  ),
+  // Mail: an envelope, the flap drawn as the fold.
+  [MAIL_ROUTE]: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <rect x="3" y="5" width="14" height="10.5" rx="1.4" />
+      <path d="M3.4 6 10 11l6.6-5" />
     </svg>
   ),
   [SETTINGS_ROUTE]: (

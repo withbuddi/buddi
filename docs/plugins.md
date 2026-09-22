@@ -703,6 +703,38 @@ something it worked out that no single tool result covers. Precedence in the
 page is: an explicit `canvas.show` in the run, else a declared descriptor for the
 tool, else `structured`.
 
+### 2.5a Where a plugin appears in the dashboard
+
+Every place a plugin can put something in front of the owner, and the field
+that puts it there. There is no other way in: nothing in `packages/web` knows a
+plugin by name, and a plugin ships no page code.
+
+| Place | What appears | Comes from |
+| --- | --- | --- |
+| Home, "Needs you" | An urgent finding, until it resolves or is snoozed | a sentinel's `urgent` finding (§2.3) |
+| Home, blocks | A read-only card in your own units (a balance, a count, a date) | `home` (`HomeContribution[]`) |
+| Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
+| Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
+| Approval card, everywhere | The envelope your gated tool described, and any `choices` it declared | a gated tool's `describe` (§2.1) |
+| Watchers | One row per sentinel: description, cadence, last run, on/off switch | `sentinels` (§2.3); the switch is core's |
+| Agents, "Proposed" | An agent or skill you suggest, awaiting the owner's approval | `agents`, `skills` (§2.6) |
+| Plugins | Your name, version, source, provenance, the hosts you reach, what you proposed | the manifest itself, `network` |
+| Weekly recap | A finding that did not wake anyone, read out once | any `info` finding (§2.3) |
+
+Not available to a plugin today, on purpose:
+
+- **A page of its own, or a rail entry.** The Mail page and the Settings →
+  Email section are compiled into the dashboard, not contributed by the email
+  plugin; the email plugin is a plugin for its tools, watchers and data, and a
+  built-in for its screens. A plugin that needs its own screen will get it
+  through the developer spec's proxy (`docs/specs/developer.md`): the plugin
+  serves its own app, buddi proxies it behind the dashboard's session, and the
+  rail links to it. Until that lands, a plugin's settings are tools
+  (`email.get_settings`/`set_settings` are the pattern), reachable from a chat.
+- **A settings section.** Same answer, same reason.
+- **Code in the page.** No plugin JavaScript ever runs in the dashboard; a
+  view descriptor is data the page interprets.
+
 
 ---
 
