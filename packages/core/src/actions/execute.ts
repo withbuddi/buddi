@@ -49,6 +49,23 @@ export interface ExecutableTool {
   timeoutMs?: number | undefined;
   execute(input: any, ctx: ToolContext): Promise<unknown>;
   describe?(input: any, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  /**
+   * Take exclusive hold of whatever this effect is about, immediately before
+   * the ledger row is written — the last moment at which "nothing has
+   * happened" is still true.
+   *
+   * It exists because `describe` cannot close a race it does not hold a lock
+   * over: between the executor's re-description and the tool's own first write
+   * there is a window in which the owner can edit the row the envelope was
+   * built from, and a check that read the row a moment earlier would send the
+   * old text. A tool whose subject can be edited by anyone else does its guard
+   * here, as one conditional statement, and throws when it matches nothing.
+   *
+   * A throw settles the approval `refused` and writes **no effect attempt**,
+   * which is the honest record: the claim is what decides whether anything is
+   * attempted at all, so a claim that failed means nothing was.
+   */
+  claim?(input: any, ctx: ToolContext): Promise<void>;
 }
 
 export interface ToolLookup {
@@ -168,15 +185,30 @@ export async function executeApproved(
   // whatever the caller happened to be holding. `actionId` is the idempotency
   // key — this is the only place a tool can get one, and a tool that cannot
   // prove it has not already run refuses without it.
+  // What the owner picked, already validated against the declared menu at
+  // decision time. An action decided before choices existed, or by a surface
+  // that never asked, resolves every key to its declared default here, so a
+  // tool reading `ctx.choices` never has to tell the two cases apart.
+  //
+  // Guarded, although the args hash above already covers a swapped menu: the
+  // approval is claimed into `executing` by now, and an unguarded throw here
+  // would strand it there for good rather than settling it.
+  let ownerChoices: Readonly<Record<string, string>>;
+  try {
+    ownerChoices = Object.freeze(resolveOwnerChoices(action.choices, action.ownerChoices ?? {}));
+  } catch (err) {
+    return settleWithoutDispatch(pool, action, 'effect-changed', {
+      message: `the recorded choices no longer match what was offered: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+
   const ctx: ToolContext = {
     ...input.ctx,
     actionId: action.id,
     approvedEffect: { envelope: structuredClone(action.envelope) },
-    // What the owner picked, already validated against the declared menu at
-    // decision time. An action decided before choices existed, or by a surface
-    // that never asked, resolves every key to its declared default here, so a
-    // tool reading `ctx.choices` never has to tell the two cases apart.
-    choices: Object.freeze(resolveOwnerChoices(action.choices, action.ownerChoices ?? {})),
+    choices: ownerChoices,
     ...(action.agentId ? { agentId: action.agentId } : {}),
     ...(action.conversationId ? { conversationId: action.conversationId } : {}),
     ...(action.jobId ? { jobId: action.jobId } : {}),
@@ -210,6 +242,22 @@ export async function executeApproved(
     return settleWithoutDispatch(pool, action, 'effect-changed', {
       message: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  /*
+   * The tool's own claim, if it has one — after the re-description and before
+   * the ledger row, because a lost claim means nothing was attempted and must
+   * not leave an attempt behind saying otherwise.
+   */
+  if (tool.claim) {
+    try {
+      ctx.signal?.throwIfAborted();
+      await tool.claim(parsed.data, ctx);
+    } catch (err) {
+      return settleWithoutDispatch(pool, action, 'effect-changed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // 3. Intent before dispatch: the ledger row exists before anything leaves.

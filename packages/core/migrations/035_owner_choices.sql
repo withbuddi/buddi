@@ -38,13 +38,15 @@ alter table core.approvals add column if not exists owner_choices jsonb null;
 -- `refused` is the second. It is terminal, it carries the reason in `outcome`,
 -- and it is only ever reached before a single byte leaves the machine — there
 -- is no effect-attempt row under it, because nothing was attempted.
-do $$
-begin
-  if exists (select 1 from pg_constraint where conname = 'approvals_state_check') then
-    alter table core.approvals drop constraint approvals_state_check;
-  end if;
-  alter table core.approvals add constraint approvals_state_check
-    check (state in ('pending', 'approved', 'rejected', 'expired', 'executing',
-                     'succeeded', 'failed', 'refused', 'unknown'));
-end
-$$;
+--
+-- Qualified, and `if exists`. `conname` is unique per schema rather than
+-- globally, so an unqualified lookup can be satisfied by some other schema's
+-- constraint of the same name while `core.approvals` has none — and then a bare
+-- `drop constraint` aborts the whole migration on a constraint that was never
+-- there. `alter table … drop constraint if exists` says exactly what is meant
+-- about exactly one table and needs no guard at all.
+alter table core.approvals drop constraint if exists approvals_state_check;
+
+alter table core.approvals add constraint approvals_state_check
+  check (state in ('pending', 'approved', 'rejected', 'expired', 'executing',
+                   'succeeded', 'failed', 'refused', 'unknown'));

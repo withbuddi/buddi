@@ -22,9 +22,16 @@
 -- what every stored row without `sent_at` already was.
 alter table drafts add column if not exists status text not null default 'draft';
 
+-- Scoped to this table and this table only. `conname` is unique per *schema*
+-- in Postgres, not globally, so an unqualified existence test can be satisfied
+-- by another schema's constraint of the same name and leave this one unmade.
 do $$
 begin
-  if not exists (select 1 from pg_constraint where conname = 'drafts_status_check') then
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'drafts_status_check'
+       and conrelid = 'email.drafts'::regclass
+  ) then
     alter table drafts add constraint drafts_status_check
       check (status in ('draft', 'edited', 'sent', 'discarded', 'lapsed'));
   end if;
@@ -68,12 +75,40 @@ update drafts d
    and d.thread_id is null
    and m.thread_id is not null;
 
--- The one query the lifecycle adds: "does this conversation already have a live
--- draft?" — asked by `draft_reply` before it writes and by the thread view
--- before it draws. Partial, because a thread accumulates sent drafts forever
--- and none of them is an answer to that question.
-create index if not exists drafts_live_thread_idx on drafts (thread_id)
-  where status in ('draft', 'edited');
+-- "Does this conversation already have a live draft?" — asked by `draft_reply`
+-- before it writes and by the thread view before it draws.
+--
+-- **Unique**, and that is the whole point: `draft_reply` reads, decides and
+-- writes, and two runs on one thread can both read "no live draft" and both
+-- insert. The index is what makes "one conversation, one live draft" a fact
+-- about the database rather than a hope about scheduling; the insert path
+-- catches the unique violation and retries as an update of the winner.
+-- Partial, because a thread accumulates sent drafts forever and none of them
+-- is an answer to the question.
+--
+-- Before it can be built, any duplicate a pre-index installation accumulated
+-- has to go. Deterministically: the newest `updated_at` (ties broken by `id`,
+-- which never moves) is the live one and the rest are discarded — the same
+-- thing the owner would have done, and nothing is deleted.
+with ranked as (
+  select id,
+         row_number() over (
+           partition by thread_id
+           order by updated_at desc nulls last, id desc
+         ) as rank
+    from drafts
+   where thread_id is not null
+     and status in ('draft', 'edited')
+)
+update drafts d
+   set status = 'discarded', discarded_at = now(), updated_at = now()
+  from ranked
+ where d.id = ranked.id and ranked.rank > 1;
+
+drop index if exists drafts_live_thread_idx;
+
+create unique index if not exists drafts_live_thread_idx on drafts (thread_id)
+  where thread_id is not null and status in ('draft', 'edited');
 
 -- The lapse sweep's own read: live drafts by age, across every thread.
 create index if not exists drafts_live_updated_idx on drafts (updated_at)

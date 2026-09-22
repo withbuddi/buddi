@@ -82,6 +82,7 @@ import {
   discardEmailDraft,
   readEmailDraft,
   readEmailDrafts,
+  readEmailMessage,
   readEmailThread,
   readEmailThreads,
   sendEmailDraft,
@@ -1331,6 +1332,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       const draft = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (draft) {
         const view = await readEmailDraft(draftDeps(), draft[1] as string);
+        return sendJson(res, view.status, view.body);
+      }
+      /*
+       * One message's body, fetched when the owner opens it. The thread route
+       * ships snippets: twenty full bodies for a list of one-line rows is a
+       * page weight nobody reads.
+       */
+      const message = /^\/api\/email\/messages\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (message) {
+        const view = await readEmailMessage(draftDeps(), message[1] as string);
         return sendJson(res, view.status, view.body);
       }
 

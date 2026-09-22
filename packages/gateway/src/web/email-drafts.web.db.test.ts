@@ -218,7 +218,7 @@ suite('the draft editor routes', () => {
   it('makes a save the owner’s words, on a new artifact version', async () => {
     const { draftId } = await seed();
     const before = await send('GET', `/api/email/drafts/${draftId}`);
-    const wasArtifact = ((await before.json()) as any).draft.id;
+    const draftIdBack = ((await before.json()) as any).draft.id;
     const { rows: pre } = await pool.query(`select artifact_id from email.drafts where id = $1`, [draftId]);
 
     const res = await send('PUT', `/api/email/drafts/${draftId}`, {
@@ -230,7 +230,7 @@ suite('the draft editor routes', () => {
     });
     expect(res.status).toBe(200);
     const saved = ((await res.json()) as any).draft;
-    expect(saved).toMatchObject({ id: wasArtifact, status: 'edited', editedBy: 'owner', live: true });
+    expect(saved).toMatchObject({ id: draftIdBack, status: 'edited', editedBy: 'owner', live: true });
     expect(saved.bodyText).toBe('Actually, I have already paid it.');
 
     const { rows: post } = await pool.query(`select artifact_id from email.drafts where id = $1`, [draftId]);
@@ -281,6 +281,132 @@ suite('the draft editor routes', () => {
     await send('POST', `/api/email/drafts/${draftId}/discard`, {});
     const res = await send('POST', `/api/email/drafts/${draftId}/send`, {});
     expect(res.status).toBe(409);
+  });
+
+  it('refuses a save made against a version that has since moved, and says what is there', async () => {
+    const { draftId } = await seed();
+    const loaded = ((await (await send('GET', `/api/email/drafts/${draftId}`)).json()) as any).draft;
+
+    // Somebody else rewrote it while the editor was open.
+    await pool.query(
+      `update email.drafts set body_text = 'Rewritten elsewhere.', updated_at = $2 where id = $1`,
+      [draftId, new Date(NOW.getTime() + 1000)],
+    );
+
+    const res = await send('PUT', `/api/email/drafts/${draftId}`, {
+      to: ['alerts@bank.test'],
+      cc: [],
+      bcc: [],
+      subject: 'Re: Direct debit returned',
+      bodyText: 'Stale text from a page left open.',
+      updatedAt: loaded.updatedAt,
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as any;
+    expect(body.error).toMatch(/changed while you had it open/i);
+    // The answer carries what is actually stored, so the editor redraws from
+    // it rather than asking again and guessing.
+    expect(body.draft.bodyText).toBe('Rewritten elsewhere.');
+
+    const { rows } = await pool.query(`select body_text from email.drafts where id = $1`, [draftId]);
+    expect(rows[0].body_text).toBe('Rewritten elsewhere.');
+  });
+
+  it('refuses every act on a draft a dispatch is holding, and says why', async () => {
+    const { draftId, threadId } = await seed();
+    await pool.query(`update email.drafts set sent_action_id = $2 where id = $1`, [
+      draftId,
+      '77777777-7777-4777-8777-777777777777',
+    ]);
+
+    // The page has to be able to see it: an editable-looking draft that may
+    // already be on the wire is how the same letter gets sent twice.
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    expect(thread.drafts[0]).toMatchObject({ live: false, unresolved: true });
+
+    expect((await send('PUT', `/api/email/drafts/${draftId}`, { bodyText: 'nope' })).status).toBe(409);
+    expect((await send('POST', `/api/email/drafts/${draftId}/discard`, {})).status).toBe(409);
+    const sendAgain = await send('POST', `/api/email/drafts/${draftId}/send`, {});
+    expect(sendAgain.status).toBe(409);
+    expect(((await sendAgain.json()) as any).error).toMatch(/never confirmed/i);
+  });
+
+  it('ships snippets with the thread and the body only when a message is opened', async () => {
+    const { threadId } = await seed();
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    // Twenty full bodies for a list of one-line rows is a page weight nobody
+    // reads; the list carries what it draws.
+    expect(thread.messages[0].snippet).toBeTruthy();
+    expect(thread.messages[0].bodyText).toBeUndefined();
+
+    const one = await send('GET', `/api/email/messages/${thread.messages[0].id}`);
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as any).message).toMatchObject({
+      from: 'alerts@bank.test',
+      bodyText: 'Your direct debit was returned unpaid.',
+      purged: false,
+    });
+    expect((await send('GET', '/api/email/messages/00000000-0000-4000-8000-000000000000')).status).toBe(404);
+  });
+
+  it('measures the body cap in bytes, not in characters', async () => {
+    const { draftId } = await seed();
+    // 20k characters of three-byte text: well under a 32k character cap and
+    // well over a 32k byte one. The owner should read the sentence about
+    // drafts, not the one about request sizes.
+    const long = '\u4e2d'.repeat(20_000);
+    const res = await send('PUT', `/api/email/drafts/${draftId}`, {
+      to: ['alerts@bank.test'],
+      cc: [],
+      bcc: [],
+      subject: 'Long',
+      bodyText: long,
+    });
+    expect([413, 400]).toContain(res.status);
+    expect(((await res.json()) as any).error).toMatch(/too long to keep as a draft|body/i);
+  });
+
+  it('refuses every new route without a session at all', async () => {
+    const { draftId, threadId } = await seed();
+    /*
+     * A server with the loopback shortcut off. The suite's own server mints a
+     * `local` session for anything arriving on 127.0.0.1 — the binding is the
+     * credential there — so the unauthenticated case can only be asked of a
+     * server that is not open, which is what a remote one is.
+     */
+    const gated = await startWebServer({
+      pool,
+      registry,
+      catalog: emptyCatalog(),
+      ctx,
+      timezone: 'UTC',
+      now: () => NOW,
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      token: TOKEN,
+      openAccess: false,
+      log: () => {},
+    });
+    try {
+      const root = `http://127.0.0.1:${gated.port}`;
+      for (const [method, routePath] of [
+        ['GET', '/api/email/threads'],
+        ['GET', `/api/email/threads/${threadId}`],
+        ['GET', `/api/email/drafts/${draftId}`],
+        ['PUT', `/api/email/drafts/${draftId}`],
+        ['POST', `/api/email/drafts/${draftId}/discard`],
+        ['POST', `/api/email/drafts/${draftId}/send`],
+      ] as const) {
+        const res = await fetch(`${root}${routePath}`, {
+          method,
+          redirect: 'manual',
+          headers: { 'content-type': 'application/json', origin: root },
+          ...(method === 'GET' ? {} : { body: '{}' }),
+        });
+        expect(res.status, routePath).toBe(401);
+      }
+    } finally {
+      await gated.close();
+    }
   });
 
   it('is behind the same session and CSRF gate as every other write', async () => {

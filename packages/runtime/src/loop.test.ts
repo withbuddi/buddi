@@ -11,6 +11,7 @@ import type {
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
   InterjectionQueue,
+  approvalOutcomeText,
   composeSystem,
   createConversation,
   isPreamble,
@@ -1825,5 +1826,28 @@ describe('an interjection', () => {
     expect(db.messages.filter((m) => m.role === 'user')).toHaveLength(before);
     const sent = provider.calls[0]!.messages.filter((m) => m.role === 'user');
     expect(sent).toHaveLength(1);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * What the agent is told when its approval settled
+ * ------------------------------------------------------------------ */
+
+describe('the deferred tool result', () => {
+  const resume = (state: string, error?: string) =>
+    approvalOutcomeText({ actionId: 'a1', state, ...(error ? { error } : {}) } as never);
+
+  it('says plainly that a refused effect was never dispatched', () => {
+    // The whole reason `refused` exists beside `failed`: an agent that read it
+    // as a half-success would go looking for an effect that is not there — or
+    // warn the owner about one.
+    const text = resume('refused', 'the draft was edited since you approved it');
+    expect(text).toContain('Nothing was dispatched');
+    expect(text).toContain('the draft was edited since you approved it');
+  });
+
+  it('still tells the difference between that and an unknown one', () => {
+    expect(resume('unknown')).toContain('dispatched and never confirmed');
+    expect(resume('rejected')).toContain('The owner rejected it');
   });
 });

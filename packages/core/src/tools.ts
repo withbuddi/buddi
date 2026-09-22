@@ -215,6 +215,23 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    */
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
   /**
+   * Take exclusive hold of what this effect is about, immediately before the
+   * effect ledger row is written — the last moment at which "nothing has
+   * happened" is still true.
+   *
+   * Only for a `gated` tool whose subject somebody else can edit while the
+   * owner is deciding. `describe` cannot close that race: it reads, and between
+   * that read and the tool's first write the row can move. So the guard goes
+   * here, as one conditional statement over the thing itself — `email.send`
+   * claims the draft row on the artifact version the envelope names — and it
+   * throws when the statement matches nothing.
+   *
+   * A throw settles the approval `refused` and records **no effect attempt**:
+   * the claim is what decides whether anything is attempted, so a lost claim
+   * means nothing was.
+   */
+  claim?(input: I, ctx: ToolContext): Promise<void>;
+  /**
    * How long the Executor waits for this tool before recording the attempt as
    * `unknown` (never as failed, and never auto-retried). Defaults to
    * `DEFAULT_EFFECT_TIMEOUT_MS`.

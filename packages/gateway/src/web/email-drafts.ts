@@ -33,6 +33,7 @@ import {
   normalizeAddresses,
   threadMessages,
   updateDraftRow,
+  DraftWriteConflict,
   DRAFT_COLUMNS,
   LIVE_DRAFT_STATUSES,
   toDraft,
@@ -50,11 +51,11 @@ export const THREAD_MESSAGE_LIMIT = 20;
 export const THREAD_LIST_LIMIT = 30;
 
 /**
- * A body longer than this is not a draft, it is a file.
- *
- * Comfortably inside the JSON body cap the route already enforces, so the
- * refusal the owner reads is this sentence about a draft rather than a generic
- * "request body too large" about bytes.
+ * A body longer than this is not a draft, it is a file. In **bytes**, measured
+ * with `Buffer.byteLength`, because that is the unit the transport counts in:
+ * a cap in UTF-16 units lets 32k characters of non-ASCII text sail past this
+ * check and hit the 64 KiB body cap instead, where the owner reads a sentence
+ * about request sizes rather than one about drafts.
  */
 export const MAX_DRAFT_BODY = 32_000;
 
@@ -88,6 +89,19 @@ export interface EmailDraftView {
   sentAt: string | null;
   /** True while the draft can still be edited, discarded or sent. */
   live: boolean;
+  /**
+   * The approved action that holds this draft, when one does.
+   *
+   * With `sentAt` still null it is the one state in this table that means "a
+   * message was dispatched and never confirmed". The page has to say so: an
+   * editable-looking draft that may already be on the wire is how the same
+   * letter gets sent twice.
+   */
+  sentActionId: string | null;
+  /** What the failed dispatch said, when one failed. */
+  sendError: string | null;
+  /** Dispatched, never confirmed: nothing may be done to it until someone looks. */
+  unresolved: boolean;
 }
 
 export function draftRouteView(draft: DraftRecord): EmailDraftView {
@@ -107,7 +121,14 @@ export function draftRouteView(draft: DraftRecord): EmailDraftView {
     updatedAt: draft.updatedAt,
     createdAt: draft.createdAt,
     sentAt: draft.sentAt,
-    live: (LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status),
+    // Live *and* unclaimed. A draft a dispatch is holding is not editable, not
+    // discardable and not sendable, whatever its status still says.
+    live:
+      (LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status) &&
+      draft.sentActionId === null,
+    sentActionId: draft.sentActionId,
+    sendError: draft.sendError,
+    unresolved: draft.sentActionId !== null && draft.sentAt === null,
   };
 }
 
@@ -190,7 +211,13 @@ export async function readEmailThread(
 ): Promise<RouteReply> {
   const thread = await findThread(deps.pool, threadId);
   if (!thread) return { status: 404, body: { error: 'No conversation here has that id.' } };
-  const messages = await threadMessages(deps.pool, thread.id, THREAD_MESSAGE_LIMIT);
+  // Headers and snippets only. `threadMessages` selects the bodies because the
+  // triage prompt needs them; shipping twenty of them to a page that draws one
+  // line each is a page weight nobody reads. A body arrives when the owner
+  // opens that message, through `readEmailMessage` below.
+  const messages = (await threadMessages(deps.pool, thread.id, THREAD_MESSAGE_LIMIT)).map(
+    ({ bodyText: _body, ...rest }) => rest,
+  );
   const drafts = await listDraftsForThread(deps.pool, thread.id);
   const live = drafts.filter((d) => (LIVE_DRAFT_STATUSES as readonly string[]).includes(d.status));
   return {
@@ -204,6 +231,48 @@ export async function readEmailThread(
       older: drafts
         .filter((d) => !(LIVE_DRAFT_STATUSES as readonly string[]).includes(d.status))
         .map(draftRouteView),
+    },
+  };
+}
+
+/**
+ * One message's body, on request.
+ *
+ * The other half of not shipping twenty bodies: the thread view draws snippets,
+ * and opening a message fetches exactly the one being read. Scoped to a message
+ * that belongs to an account this installation has, so an id from nowhere
+ * cannot read a row.
+ */
+export async function readEmailMessage(
+  deps: EmailDraftsDeps,
+  messageId: string,
+): Promise<RouteReply> {
+  const { rows } = await deps.pool.query(
+    `select m.id, m.from_addr, m.to_addrs, m.cc, m.subject, m.date, m.direction,
+            m.body_text, m.body_purged_at
+       from email.messages m
+       join email.accounts a on a.id = m.account_id
+      where m.id = $1::uuid`,
+    [messageId],
+  );
+  const row = rows[0];
+  if (!row) return { status: 404, body: { error: 'No message here has that id.' } };
+  return {
+    status: 200,
+    body: {
+      message: {
+        id: String(row.id),
+        from: row.from_addr,
+        to: Array.isArray(row.to_addrs) ? row.to_addrs : [],
+        cc: Array.isArray(row.cc) ? row.cc : [],
+        subject: row.subject ?? '',
+        date: row.date instanceof Date ? row.date.toISOString() : row.date,
+        direction: row.direction === 'out' ? 'out' : 'in',
+        // Null once retention has purged it: the headers stay, the body does
+        // not, and the page says so rather than drawing an empty message.
+        bodyText: row.body_purged_at ? null : (row.body_text ?? ''),
+        purged: row.body_purged_at !== null,
+      },
     },
   };
 }
@@ -249,6 +318,12 @@ export async function writeEmailDraft(
   const input = (body ?? {}) as Record<string, unknown>;
   const draft = await findDraftRow(deps.pool, id);
   if (!draft) return { status: 404, body: { error: 'No draft here has that id.' } };
+  if (draft.sentActionId !== null) {
+    return {
+      status: 409,
+      body: { error: 'This draft is being sent right now and cannot be changed.' },
+    };
+  }
   if (!(LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status)) {
     return {
       status: 409,
@@ -256,12 +331,19 @@ export async function writeEmailDraft(
     };
   }
 
+  // The version the editor loaded. Without it a page left open while an agent
+  // rewrote the draft saves the stale text that is still on screen over the
+  // new words — and the editor shows exactly that stale text, so nothing about
+  // the screen would say anything was lost.
+  const expectedUpdatedAt =
+    typeof input.updatedAt === 'string' && input.updatedAt.trim() !== '' ? input.updatedAt : null;
+
   const subject = typeof input.subject === 'string' ? input.subject : draft.subject;
   const bodyText = typeof input.bodyText === 'string' ? input.bodyText : draft.bodyText;
   if (bodyText.trim() === '') {
     return { status: 400, body: { error: 'A draft needs a body. Discard it instead of emptying it.' } };
   }
-  if (bodyText.length > MAX_DRAFT_BODY) {
+  if (Buffer.byteLength(bodyText, 'utf8') > MAX_DRAFT_BODY) {
     return { status: 413, body: { error: 'That body is too long to keep as a draft.' } };
   }
 
@@ -279,21 +361,53 @@ export async function writeEmailDraft(
     return { status: 400, body: { error: 'A draft needs at least one recipient.' } };
   }
 
-  const saved = await updateDraftRow({
-    db: deps.pool,
-    draftId: draft.id,
-    to,
-    cc,
-    bcc,
-    subject,
-    bodyText,
-    // The owner. This is what `edited_by` is for, and what an agent must not
-    // write over without reading first.
-    editedBy: 'owner',
-    byOwner: true,
-    now: deps.now(),
-  });
-  return { status: 200, body: { draft: draftRouteView(saved) } };
+  try {
+    const saved = await updateDraftRow({
+      db: deps.pool,
+      draftId: draft.id,
+      to,
+      cc,
+      bcc,
+      subject,
+      bodyText,
+      // The owner. This is what `edited_by` is for, and what an agent must not
+      // write over without reading first.
+      editedBy: 'owner',
+      byOwner: true,
+      expectedUpdatedAt,
+      now: deps.now(),
+    });
+    return { status: 200, body: { draft: draftRouteView(saved) } };
+  } catch (err) {
+    if (err instanceof DraftWriteConflict) {
+      // 409 with what is actually there, so the editor can redraw rather than
+      // ask again and guess.
+      return {
+        status: 409,
+        body: {
+          error: conflictSentence(err),
+          ...(err.current ? { draft: draftRouteView(err.current) } : {}),
+        },
+      };
+    }
+    throw err;
+  }
+}
+
+/** The 409, in the owner's terms. Each reason is a different race they lost. */
+function conflictSentence(conflict: DraftWriteConflict): string {
+  switch (conflict.reason) {
+    case 'stale':
+      return 'This draft changed while you had it open. What is here now is shown below — your text was not saved over it.';
+    case 'claimed':
+      return 'This draft is being sent right now and cannot be changed.';
+    case 'not-live':
+      return `This draft is ${conflict.current?.status ?? 'no longer live'}; only a live draft can be edited.`;
+    case 'missing':
+      return 'That draft no longer exists.';
+    default:
+      return conflict.message;
+  }
 }
 
 /** The owner saying no. The row stays, under "Older drafts". */
@@ -325,6 +439,18 @@ export async function discardEmailDraft(deps: EmailDraftsDeps, id: string): Prom
 export async function sendEmailDraft(deps: EmailDraftsDeps, id: string): Promise<RouteReply> {
   const draft = await findDraftRow(deps.pool, id);
   if (!draft) return { status: 404, body: { error: 'No draft here has that id.' } };
+  if (draft.sentActionId !== null) {
+    // Claimed, and `sent_at` null means the dispatch never came back. Proposing
+    // a second send is how the same letter goes out twice.
+    return {
+      status: 409,
+      body: {
+        error: draft.sentAt
+          ? 'This draft has already been sent.'
+          : 'This draft was already dispatched and never confirmed. Check the mailbox before sending anything again.',
+      },
+    };
+  }
   if (!(LIVE_DRAFT_STATUSES as readonly string[]).includes(draft.status)) {
     return {
       status: 409,

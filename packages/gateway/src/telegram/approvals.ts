@@ -148,6 +148,17 @@ export function approvalKeyboard(
    * `choiceOverflowLine` says where the rest are, rather than showing four of
    * seven aliases as though they were all of them.
    */
+  // The standing-permission row, when this tool offers one. Kept out of both
+  // branches below rather than written twice: nothing declares choices *and*
+  // a reusable approval today, and the day something does, the capability must
+  // not vanish because the keyboard took the other branch.
+  const scopes = host
+    ? [[
+        { text: 'Auto: conversation', callback_data: approvalCallbackData(actionId, 'conversation') },
+        { text: 'Always: this agent', callback_data: approvalCallbackData(actionId, 'always') },
+      ]]
+    : [];
+
   if (choice) {
     const options =
       choice.options.length <= MAX_CHOICE_BUTTONS ? choice.options : [choice.default];
@@ -160,6 +171,7 @@ export function approvalKeyboard(
           },
         ]),
         [{ text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') }],
+        ...scopes,
       ],
     };
   }
@@ -169,10 +181,7 @@ export function approvalKeyboard(
         { text: host ? '✅ Allow once' : '✅ Approve', callback_data: approvalCallbackData(actionId, 'approve') },
         { text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') },
       ],
-      ...(host ? [[
-        { text: 'Auto: conversation', callback_data: approvalCallbackData(actionId, 'conversation') },
-        { text: 'Always: this agent', callback_data: approvalCallbackData(actionId, 'always') },
-      ]] : []),
+      ...scopes,
     ],
   };
 }
@@ -211,9 +220,14 @@ export function decidedText(action: ActionRecord, state: ApprovalState, detail?:
         ? `Approved and done — ${action.tool}`
         : state === 'failed'
           ? `Approved, but it failed — ${action.tool}`
-          : state === 'unknown'
-            ? `Approved, outcome unknown — ${action.tool}`
-            : `Approved — ${action.tool}`;
+          // Refused before dispatch: nothing was attempted, so this must not
+          // fall through to "Approved". The tool's own sentence arrives in
+          // `detail` and says what changed.
+          : state === 'refused'
+            ? `Not sent — ${action.tool} was refused`
+            : state === 'unknown'
+              ? `Approved, outcome unknown — ${action.tool}`
+              : `Approved — ${action.tool}`;
   return [head, '', action.preview, ...(detail ? ['', detail] : []), '', `Action ${action.id}`].join(
     '\n',
   );
@@ -340,16 +354,31 @@ export class TelegramApprovals {
 
     /*
      * The tapped option, resolved into a value here rather than carried as one.
-     * The index is looked up in the action's own declared list; an index past
-     * the end resolves to nothing, and the decision then takes the declared
-     * default exactly as a keyboard with no options would.
+     * The index is looked up in the action's own declared list.
+     *
+     * An index that does not resolve is **refused outright**, never quietly
+     * degraded into a plain approve. `o7` on a two-option action, an option tap
+     * on an action that declares no choices, a tap on an action that no longer
+     * exists: each of those means the keyboard the owner was looking at is not
+     * the action this payload names, and approving the default because the
+     * lookup came back empty would be authorizing something they did not tap.
+     * Nothing moves and the owner is told to look at the message again.
      */
     let ownerChoices: Record<string, string> | undefined;
     if (parsed.optionIndex !== undefined) {
       const action = await getAction(pool, parsed.actionId);
       const choice = action ? keyboardChoice(action) : undefined;
       const value = choice?.options[parsed.optionIndex];
-      if (choice && value !== undefined) ownerChoices = { [choice.key]: value };
+      if (!action || !choice || value === undefined) {
+        this.#log(
+          `telegram: option callback ${query.data} does not resolve against action ${parsed.actionId}; refusing`,
+        );
+        await api
+          .answerCallbackQuery(query.id, 'That button no longer matches this request. Open it again.')
+          .catch(() => {});
+        return;
+      }
+      ownerChoices = { [choice.key]: value };
     }
 
     const decision = await decideApproval(pool, {
