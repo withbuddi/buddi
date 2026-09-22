@@ -18,7 +18,7 @@
 --     message: a message the poll picks up again because it was never stamped
 --     is the same decision being made again, not a second one, so the retry
 --     updates the row instead of adding to it.
---  3. **Nothing learned applies itself.** docs/email.md §3: only INBOX is
+--  3. **Nothing learned applies itself.** docs/specs/email.md §3: only INBOX is
 --     polled, so "the owner never wrote back" is inferred from drafts buddi
 --     itself sent and not from the owner's Sent folder. Any learned ignore an
 --     earlier build applied on that inference becomes a proposal again, listed
@@ -150,7 +150,7 @@ begin
            'ignore',
            jsonb_build_object('category', 'promo', 'urgency', 'low'),
            'learned',
-           -- Proposed, always. Sent is not synced; see 004 and docs/email.md §3.
+           -- Proposed, always. Sent is not synced; see 004 and docs/specs/email.md §3.
            true,
            created_from,
            seeded_at

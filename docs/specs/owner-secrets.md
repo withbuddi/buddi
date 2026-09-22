@@ -1,6 +1,6 @@
 # Secrets the agent can use but never see
 
-Status: Proposed
+Status: spec, accepted, not started
 Captured: 2026-09-21
 
 ## Problem / opportunity
@@ -40,4 +40,4 @@ Design note reviewed by two reviewers before code. Two days to build.
 ## Related work
 
 - `packages/core/src/vault`, `packages/extension/src/commands.ts`
-  (`fill` refuses password fields today), `docs/browser.md`.
+  (`fill` refuses password fields today), [browser.md](../browser.md).

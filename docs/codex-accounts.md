@@ -1,10 +1,14 @@
-# Codex App Server experiment
+# Codex ChatGPT accounts
 
-Status: idea, experiment behind `BUDDI_CODEX_EXPERIMENT=1`, as it stood 2026-09-19
+Status: reference (flag-gated), 2026-09-21
 
-Branch: `experiment/codex-app-server`. Existing accounts and live bindings are unchanged.
+Codex ChatGPT accounts are built and live behind `BUDDI_CODEX_EXPERIMENT=1`; they
+are off unless the flag is set. This page is the reference for what the adapter
+does, what it deliberately refuses, and what is still missing. Existing accounts
+and live bindings are unchanged by turning the flag on. See
+[providers.md](providers.md) for the account model all provider accounts share.
 
-## Current result
+## What is built
 
 The protocol prototype implements Buddi's `RuntimeProvider` interface. Installed
 `codex-cli 0.155.0` has been tested against a loopback fake Responses server, without
@@ -23,11 +27,11 @@ tool round trip pass against the actual binary.
 - Configured child environments exclude ambient provider keys and use a distinct
   native profile. This is not a proven operating-system sandbox.
 
-## Try the experiment
+## Turning it on
 
 Set `BUDDI_CODEX_EXPERIMENT=1` on the gateway/CLI host, apply core migration 019,
 build, and restart the service. The current development host has this enabled.
-In Provider accounts, add **Codex — ChatGPT subscription (experimental)**, click
+In Settings → Model accounts, add **Codex — ChatGPT subscription (experimental)**, click
 **Connect ChatGPT**, and complete the displayed device authorization yourself.
 Then assign the account/model to an agent and send a test chat. Existing accounts
 are never reassigned automatically. All surfaces use the same account resolver.
@@ -154,7 +158,7 @@ unchanged. The inbound loopback server exists only in tests.
 - Installed schema generated with
   `codex app-server generate-ts --out <temporary-directory> --experimental`.
 
-Keep this experiment opt-in and separate from main until owner acceptance. Before
-switching a running installation back to main, reassign agents away from Codex
-accounts and remove those experimental accounts. There is no automatic migration
-of a native subscription into an API-key provider.
+The flag stays opt-in: the pinned-binary contract above is verified for one Codex
+version and nothing else. Before turning the flag off on a running installation,
+reassign agents away from Codex accounts and remove those accounts. There is no
+automatic migration of a native subscription into an API-key provider.

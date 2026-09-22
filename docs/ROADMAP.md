@@ -23,6 +23,17 @@ next. Checked against the code and `git log` on 2026-09-21.
   default, headed Playwright as an explicit alternative, the pinned Browser
   canvas tab, and Telegram parity (screenshots and take-over). [Computer
   use](computer-use.md) is the historical survey this superseded.
+- ["Your browser", the Chrome extension](browser.md#optional-your-browser-the-chrome-extension)
+  — the third browser mode: agents work in the owner's own signed-in Chrome,
+  paired with a six-digit code (`packages/extension`).
+- [The remote hand](browser.md#the-remote-hand-driving-from-the-dashboard) —
+  clicking, typing and scrolling the live page from the dashboard, and the same
+  screen from Telegram.
+- [Signing in through Tailscale](operations.md) — the dashboard on the tailnet
+  without a ticket, off until an owner names the login that may sign in.
+- The memory plugin (`packages/tools/memory`) — what the agents remember about
+  the owner, scoped per agent; the contract is
+  [writing a plugin](plugins.md).
 - [Groups](groups.md) — a team of agents in one persistent conversation.
 - [Files](files.md) — uploads and agent outputs in one library.
 - [Host execution](host-execution.md) — `host.exec` and friends.
@@ -41,7 +52,7 @@ next. Checked against the code and `git log` on 2026-09-21.
 1. [Developer](specs/developer.md) — an agent that works in a workspace.
 2. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
 3. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
-4. [Owner secrets](ideas/owner-secrets.md) — site passwords the agent can fill
+4. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
 5. macOS app — a packaged desktop app around the existing service.
 6. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
@@ -54,8 +65,14 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 - [Reusable Codex adapter](ideas/reusable-codex-adapter.md) — extract the
   Codex App Server integration into a package other projects can consume,
-  once the [experiment](ideas/codex-app-server-experiment.md) is stable and a
+  once the [experiment](codex-accounts.md) is stable and a
   second consumer exists.
 - Remote/headless browser display — a browser on a remote host with no
   desktop session; not the first delivery of [browser.md](browser.md).
 - [buddi as an MCP server](ideas/mcp.md) — parked, not pursued.
+- Long-running browser context compaction and no-progress recovery — a browser
+  session that runs for hours needs its transcript compacted and a way out of a
+  loop that is making no progress.
+- Cross-platform encrypted-Postgres credential storage — decide and migrate how
+  the database credential is stored where there is no macOS keychain, rather
+  than leaning on the file vault by default ([providers.md](providers.md)).

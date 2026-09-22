@@ -1,6 +1,6 @@
 -- Policies, the gate's ledger, and the backfill (search_path = email, public).
 --
--- docs/email.md §3 and §5. The principle underneath: **a decision is made
+-- docs/specs/email.md §3 and §5. The principle underneath: **a decision is made
 -- once**. A verdict the owner (or the model, three times running) reached about
 -- a sender becomes a row here, and the next message from that sender is handled
 -- by the row instead of by a model run. Nothing in this file decides anything;
@@ -97,7 +97,7 @@ $$ language sql immutable;
 
 /*
  * Seed learned `ignore` policies from the verdicts this installation already
- * holds (docs/email.md §3).
+ * holds (docs/specs/email.md §3).
  *
  * The rule, exactly: a sender whose **three most recent verdicts running** are
  * all `promo` or all urgency `low`, and to whom the owner has **never sent
@@ -111,7 +111,7 @@ $$ language sql immutable;
  * policy, not against it.
  *
  * **Every seed is `proposed = true`.** It cannot be otherwise while only INBOX
- * is polled (docs/email.md §3): the owner's Sent folder is not read, so a
+ * is polled (docs/specs/email.md §3): the owner's Sent folder is not read, so a
  * sender answered from a phone, from Gmail or from any other client looks here
  * like a sender who was never answered, and a backfill that applied itself
  * would silence people the owner has been talking to for years. The seeds are

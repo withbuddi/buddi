@@ -11,10 +11,12 @@ into the matching page under [`docs/`](../) and this file is deleted.
 | Idea | Status | Summary |
 | --- | --- | --- |
 | [Reusable Codex adapter](reusable-codex-adapter.md) | Proposed | Extract the backend integration into a package other projects can consume. |
-| [Codex App Server experiment](codex-app-server-experiment.md) | Idea | Background for the reusable-adapter idea: the experiment behind `BUDDI_CODEX_EXPERIMENT`, as it stood 2026-09-19. |
 | [Voice](voice.md) | Proposed | Voice notes on Telegram, press-to-talk and read-aloud on the dashboard. |
-| [Owner secrets](owner-secrets.md) | Proposed | Site passwords the agent can fill but never see. |
 | [buddi as an MCP server](mcp.md) | Idea, parked | Expose buddi's own agents over MCP; parked, not pursued. |
+
+Moved on: [owner secrets](../specs/owner-secrets.md) was accepted and is now a
+spec; the Codex App Server experiment shipped behind `BUDDI_CODEX_EXPERIMENT` and
+is now reference at [codex-accounts.md](../codex-accounts.md).
 
 ## How to use this folder
 

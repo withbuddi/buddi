@@ -1,7 +1,7 @@
 /**
  * Learning a policy from the owner's own history.
  *
- * docs/email.md §2: *«buddi proposes policies from the owner's own history and
+ * docs/specs/email.md §2: *«buddi proposes policies from the owner's own history and
  * the owner keeps or revokes them in one tap.»* The proposing happens here,
  * right after a triage run records its verdict, and it is deliberately timid:
  *
@@ -211,7 +211,7 @@ export interface OwnerReplies {
 /**
  * How often the owner writes back to this address, and how quickly.
  *
- * docs/email.md §6 asks a triage run to be told *«how many times the owner
+ * docs/specs/email.md §6 asks a triage run to be told *«how many times the owner
  * replied and how fast»*. "How fast" is measured the only way that means
  * anything: inside a thread, from their message to the owner's next one. A
  * reply with nothing before it in the thread is counted as a reply and left
