@@ -1,0 +1,707 @@
+/**
+ * The two mail screens, as data (`docs/specs/plugin-pages.md`).
+ *
+ * `Mail.tsx` and `Email.tsx` used to be compiled into the dashboard; this is
+ * what is left of them — a tree of generic components, a query per read and a
+ * tool per write. Nothing in `packages/web` knows any of the words below.
+ *
+ * Two shapes are worth reading twice, because they are the whole of what the
+ * old pages did:
+ *
+ *  - **A conversation is a list-detail with a URL per item.** `#/p/email/mail`
+ *    is the list; `#/p/email/mail/<threadId>` is one conversation, which is
+ *    what makes a draft something the owner can link to, come back to, and
+ *    reach with the browser's own Back. The old `#/email/<id>` still lands
+ *    here (`packages/web/src/routes.ts`).
+ *  - **Send does not send.** The editor's Send is `email.send`, gated, exactly
+ *    as an agent would call it: the page draws the approval card in place,
+ *    with the identity select on it, and nothing here reaches SMTP.
+ */
+import type { Component, Field, PageDescriptor, QueryRef } from '@buddi/core';
+import {
+  MAX_DATE_CONFIDENCE,
+  MAX_NUDGE_DAYS,
+  MAX_PROMISED_DAYS,
+  MAX_RECEIPT_CONFIDENCE,
+  MAX_WAITING_DAYS,
+  MIN_DATE_CONFIDENCE,
+  MIN_NUDGE_DAYS,
+  MIN_PROMISED_DAYS,
+  MIN_RECEIPT_CONFIDENCE,
+  MIN_WAITING_DAYS,
+  DEFAULT_DATE_CONFIDENCE,
+  DEFAULT_NUDGE_DAYS,
+  DEFAULT_PROMISED_DAYS,
+  DEFAULT_RECEIPT_CONFIDENCE,
+  DEFAULT_WAITING_DAYS,
+} from '../watchers.js';
+
+/** The conversation this page is showing, as a page parameter. */
+const THREAD = 'thread';
+
+/**
+ * One read of the open conversation.
+ *
+ * A function rather than a shared constant: a descriptor is a *tree*, and the
+ * same object in two places is refused at `register()` — rightly, since a
+ * shared node is a cycle waiting to be written.
+ */
+const thread = (): QueryRef => ({ query: 'thread', params: { id: { param: THREAD } } });
+
+/** One read of a message, by whichever row is asking. */
+const message = (): QueryRef => ({ query: 'message', params: { id: { path: 'id' } } });
+
+/* ------------------------------------------------------------------ *
+ * Mail: the conversations, and the drafts waiting on them
+ * ------------------------------------------------------------------ */
+
+/**
+ * One message: a line saying who wrote it and when, and its body behind a
+ * fold.
+ *
+ * The body is *not* shipped with the thread — twenty bodies for a list of
+ * one-line rows is a page weight nobody reads — so opening a message is what
+ * fetches it (`expand`), exactly as the old route did.
+ */
+const messages: Component = {
+  kind: 'repeat',
+  title: 'Messages',
+  query: thread(),
+  rows: 'messages',
+  key: 'id',
+  body: [
+    {
+      kind: 'expand',
+      // The fold carries the row's own words: who wrote it, when, and what it
+      // opens with — the line the old list drew, on the thing that opens it.
+      label: { path: 'summary' },
+      query: message(),
+      body: [
+        {
+          kind: 'detail',
+          query: message(),
+          fields: [
+            { label: 'From', value: { path: 'from' } },
+            { label: 'To', value: { path: 'to' } },
+            { label: 'Sent', value: { path: 'date' }, unit: 'date' },
+            { label: 'Body', value: { path: 'bodyText' } },
+          ],
+          body: [],
+        },
+        /*
+         * The bytes were never downloaded at ingest — what is stored is a
+         * listing — so each row is a Fetch, and what a fetch produced is a
+         * file in the owner's library, linked underneath.
+         */
+        {
+          kind: 'list',
+          title: 'Attachments',
+          query: message(),
+          rows: 'attachments',
+          key: 'filename',
+          item: {
+            title: { path: 'filename' },
+            sub: { path: 'detail' },
+            pill: { value: { path: 'held' } },
+          },
+          actions: [
+            {
+              tool: 'email.fetch_attachment',
+              label: 'Fetch',
+              busy: 'Fetching…',
+              args: { message: { row: 'messageId' }, index: { row: 'index' } },
+            },
+          ],
+          empty: 'Nothing was attached to this message.',
+        },
+        {
+          kind: 'repeat',
+          query: message(),
+          rows: 'attachments',
+          key: 'filename',
+          body: [
+            {
+              kind: 'artifact',
+              when: { path: 'artifactId', equals: null, not: true },
+              path: 'artifactId',
+              label: 'Download the file',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/** The fields of the editor. All of them, because a save writes all of them. */
+const draftFields: Field[] = [
+  { name: 'to', label: 'To', type: 'text', from: 'toText', required: true },
+  { name: 'cc', label: 'Cc', type: 'text', from: 'ccText' },
+  {
+    name: 'bcc',
+    label: 'Bcc',
+    type: 'text',
+    from: 'bccText',
+    hint: 'Shown in full on the approval card before anything is sent.',
+  },
+  { name: 'subject', label: 'Subject', type: 'text', from: 'rawSubject' },
+  { name: 'bodyText', label: 'Body', type: 'textarea', from: 'bodyText', required: true },
+];
+
+/**
+ * One live draft, editable — and one that was dispatched and never confirmed,
+ * which is not the same thing at all.
+ *
+ * A draft a send is holding may already be on the wire, so it is drawn as a
+ * critical notice with every action taken away: a second Send is how the same
+ * letter goes out twice.
+ */
+const drafts: Component = {
+  kind: 'repeat',
+  title: 'Drafts',
+  query: thread(),
+  rows: 'drafts',
+  key: 'id',
+  body: [
+    {
+      kind: 'notice',
+      tone: 'critical',
+      title: 'This was dispatched and never confirmed',
+      text:
+        'buddi handed this message to the mail server and never got an answer, so whether it went out is genuinely unknown. Check the mailbox — the Sent folder and the recipient — before sending anything like it again. Nothing here can be edited, discarded or sent until you have.',
+      when: { path: 'unresolved', equals: true },
+    },
+    {
+      kind: 'notice',
+      text: 'This draft can no longer be edited or sent. It is kept so you can read what was proposed.',
+      when: { path: 'live', equals: false },
+    },
+    {
+      kind: 'editor',
+      query: { query: 'draft', params: { id: { path: 'id' } } },
+      // A stamp, not a clock: the save carries the `updated_at` this editor
+      // loaded, and a save that lost a race is refused rather than allowed to
+      // overwrite what is stored.
+      version: 'updatedAt',
+      readOnlyWhen: { path: 'live', equals: false },
+      fields: draftFields,
+      save: {
+        tool: 'email.save_draft',
+        label: 'Save',
+        busy: 'Saving…',
+        args: {
+          draftId: { path: 'id' },
+          to: { field: 'to' },
+          cc: { field: 'cc' },
+          bcc: { field: 'bcc' },
+          subject: { field: 'subject' },
+          bodyText: { field: 'bodyText' },
+          version: { field: 'version' },
+        },
+      },
+      actions: [
+        {
+          tool: 'email.discard_draft',
+          label: 'Discard',
+          tone: 'danger',
+          placement: 'leading',
+          busy: 'Discarding…',
+          confirm: 'Discard this draft? It is kept, so you can still read what was proposed.',
+          args: { draftId: { path: 'id' } },
+        },
+        {
+          // Gated, and the page draws the approval card in place — identity
+          // select and all. Nothing on this page reaches SMTP.
+          tool: 'email.send',
+          label: 'Send',
+          tone: 'accent',
+          busy: 'Proposing…',
+          args: { draftId: { path: 'id' } },
+        },
+      ],
+      footnote:
+        'Send does not send: it puts the whole envelope in front of you to approve, and that card is where you choose which of your addresses it leaves from. Save first if you have edited anything — the card is bound to what is stored.',
+    },
+  ],
+};
+
+const mail: PageDescriptor = {
+  id: 'mail',
+  title: 'Mail',
+  place: 'rail',
+  icon: 'mail',
+  order: 10,
+  body: [
+    {
+      kind: 'notice',
+      text:
+        'What buddi has read, newest first. A conversation with a reply waiting on it carries a "draft" pill — open it to read, edit, discard or send what was written. Accounts, rules and watcher settings are under Settings → Email.',
+    },
+    /*
+     * Four filters and a phrase, and not one more (docs/specs/email.md §9):
+     * from, since, until and "has attachments" are the ones that answer a
+     * question an owner actually has in front of a mailbox. It searches on
+     * submit rather than on every keystroke — a substring search over bodies
+     * is not free.
+     */
+    {
+      kind: 'search',
+      title: 'Search',
+      fields: [
+        {
+          name: 'q',
+          label: 'Text',
+          type: 'text',
+          required: true,
+          hint: 'A word in the subject, the sender or the body.',
+        },
+        { name: 'from', label: 'From', type: 'text', hint: 'An address, or a domain like acme.com.' },
+        { name: 'since', label: 'Since', type: 'date' },
+        { name: 'until', label: 'Until', type: 'date' },
+        { name: 'hasAttachments', label: 'With attachments', type: 'checkbox' },
+      ],
+      query: {
+        query: 'threads',
+        params: {
+          q: { param: 'q' },
+          from: { param: 'from' },
+          since: { param: 'since' },
+          until: { param: 'until' },
+          hasAttachments: { param: 'hasAttachments' },
+        },
+      },
+      rows: 'items',
+      count: 'count',
+      note: 'window',
+      results: {
+        title: { path: 'subject' },
+        sub: { path: 'line' },
+        meta: [{ path: 'attachment' }, { path: 'when' }],
+        pill: { value: { path: 'who' } },
+        to: { page: 'mail', item: { path: 'threadId' } },
+      },
+      empty: 'Nothing here matches that.',
+    },
+    {
+      kind: 'list-detail',
+      param: THREAD,
+      list: {
+        kind: 'list',
+        title: 'Conversations',
+        query: { query: 'threads' },
+        rows: 'threads',
+        key: 'id',
+        item: {
+          title: { path: 'subject' },
+          sub: { path: 'participants' },
+          meta: [{ path: 'when' }],
+          pill: { value: { path: 'pill' } },
+          to: { page: 'mail', item: { path: 'id' } },
+        },
+        empty: 'No conversations yet. buddi builds them as mail arrives.',
+      },
+      detail: [
+        /*
+         * The parts of a conversation are siblings rather than one nested
+         * tree: a descriptor may be twelve levels deep, and a message's
+         * attachments are already six of them below this line.
+         */
+        {
+          kind: 'detail',
+          title: 'Conversation',
+          query: thread(),
+          fields: [
+            { label: 'Subject', value: { path: 'subject' } },
+            { label: 'State', value: { path: 'state' } },
+            { label: 'With', value: { path: 'participants' } },
+            { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
+            { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
+          ],
+          body: [],
+        },
+        {
+          kind: 'notice',
+          text: 'No messages have been synced for this conversation yet.',
+          when: { path: 'hasMessages', equals: false },
+        },
+        messages,
+        {
+          kind: 'notice',
+          text:
+            'No draft is waiting here. Ask an agent to draft a reply and it will appear under the conversation.',
+          when: { path: 'hasDraft', equals: false },
+        },
+        drafts,
+        {
+          kind: 'expand',
+          label: 'Older drafts',
+          when: { path: 'hasOlder', equals: true },
+          query: thread(),
+          body: [
+            {
+              kind: 'list',
+              query: { query: 'thread', params: { id: { path: 'id' } } },
+              rows: 'older',
+              key: 'id',
+              item: {
+                title: { path: 'subject' },
+                sub: { path: 'statusLine' },
+                pill: { value: { path: 'status' } },
+              },
+              empty: 'Nothing has ended on this conversation yet.',
+            },
+          ],
+        },
+      ],
+      empty: 'Choose a conversation to read it here.',
+    },
+    { kind: 'link', label: 'Mailboxes and rules', to: { page: 'settings' } },
+  ],
+};
+
+/* ------------------------------------------------------------------ *
+ * Settings → Email: the mailboxes, and the standing decisions
+ * ------------------------------------------------------------------ */
+
+/**
+ * Add an account.
+ *
+ * The least that can work: the address and the app password. The hosts are
+ * *optional* and are filled in from the address's domain by
+ * `email.add_account` — the old form did that as the address was typed, and a
+ * page descriptor carries no such logic, so it moved to the one place that can
+ * still apply it. The sentence under the password is never paraphrased.
+ */
+const addAccount: Component = {
+  kind: 'form',
+  drawer: { title: 'Add an account', button: 'Add an account' },
+  fields: [
+    {
+      name: 'address',
+      label: 'Address',
+      type: 'email',
+      required: true,
+      hint: "Its hosts are worked out from this address; set them below only if your provider's are different.",
+    },
+    {
+      name: 'password',
+      label: 'App password',
+      type: 'secret',
+      required: true,
+      hint: 'The password goes to your keychain, never to a file. Most providers want a password made for this, not the one you sign in with.',
+    },
+    { name: 'displayName', label: 'Name for it', type: 'text', hint: 'Optional. What you call this mailbox.' },
+    {
+      name: 'aliases',
+      label: 'Also receives as',
+      type: 'text',
+      hint: 'Optional, separated by commas. A reply leaves from the alias the message was addressed to.',
+    },
+    { name: 'imapHost', label: 'IMAP host', type: 'text', hint: 'Optional.' },
+    { name: 'imapPort', label: 'IMAP port', type: 'number', min: 1, max: 65_535 },
+    { name: 'smtpHost', label: 'SMTP host', type: 'text', hint: 'Optional.' },
+    { name: 'smtpPort', label: 'SMTP port', type: 'number', min: 1, max: 65_535 },
+  ],
+  submit: {
+    tool: 'email.add_account',
+    label: 'Add the account',
+    tone: 'accent',
+    busy: 'Opening the mailbox…',
+    then: 'close',
+    args: {
+      address: { field: 'address' },
+      password: { field: 'password' },
+      displayName: { field: 'displayName' },
+      aliases: { field: 'aliases' },
+      imapHost: { field: 'imapHost' },
+      imapPort: { field: 'imapPort' },
+      smtpHost: { field: 'smtpHost' },
+      smtpPort: { field: 'smtpPort' },
+    },
+  },
+};
+
+/**
+ * Add a rule.
+ *
+ * The mailbox is named by its address, and "for every mailbox" is a tick: a
+ * rule with no mailbox decides for all of them, so that has to be something
+ * somebody chose rather than a field they left empty. A conversation is named
+ * by the id in its address on the Mail page, because a thread key is a
+ * Message-ID off the wire and not something an owner has.
+ */
+const addRule: Component = {
+  kind: 'form',
+  drawer: { title: 'Add a rule', button: 'Add a rule' },
+  fields: [
+    {
+      name: 'mailbox',
+      label: 'Mailbox',
+      type: 'email',
+      hint: 'The address of the mailbox this rule is about, as it appears under Mailboxes above.',
+      disabledWhen: { path: 'allAccounts', equals: true },
+    },
+    {
+      name: 'allAccounts',
+      label: 'For every mailbox',
+      type: 'checkbox',
+      hint: 'The same sender can matter in one inbox and not in another, so a rule says which one it is about — unless you tick this.',
+    },
+    {
+      name: 'scope',
+      label: 'About',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'sender', label: 'One sender' },
+        { value: 'domain', label: 'Everyone at a domain' },
+        { value: 'list-id', label: 'One mailing list' },
+        { value: 'thread', label: 'One conversation' },
+      ],
+    },
+    {
+      name: 'matcher',
+      label: 'Which',
+      type: 'text',
+      required: true,
+      hint: 'An address, a domain, a List-Id — or, for one conversation, the id in its address on the Mail page.',
+    },
+    {
+      name: 'action',
+      label: 'Then',
+      type: 'select',
+      required: true,
+      options: [
+        { value: 'ignore', label: 'File it, with no triage run' },
+        { value: 'notify', label: 'Send me one line' },
+        { value: 'draft', label: 'Draft a reply' },
+        { value: 'wake', label: 'Triage it as usual' },
+      ],
+    },
+    {
+      name: 'sender',
+      label: 'From this address',
+      type: 'text',
+      hint: 'For a conversation or a list: they are named by headers their sender writes, so silence here applies to one address. Without it, such a rule silences nothing on its own.',
+    },
+    { name: 'note', label: 'The line you get', type: 'text', hint: 'For "send me one line".' },
+    { name: 'instruction', label: 'What the reply should say', type: 'text', hint: 'For "draft a reply".' },
+  ],
+  submit: {
+    tool: 'email.add_rule',
+    label: 'Add the rule',
+    tone: 'accent',
+    then: 'close',
+    args: {
+      mailbox: { field: 'mailbox' },
+      allAccounts: { field: 'allAccounts' },
+      scope: { field: 'scope' },
+      matcher: { field: 'matcher' },
+      action: { field: 'action' },
+      sender: { field: 'sender' },
+      note: { field: 'note' },
+      instruction: { field: 'instruction' },
+    },
+  },
+};
+
+/** The five numbers the mail watchers read (docs/specs/email.md §7). */
+const watchers: Component = {
+  kind: 'form',
+  title: 'Watchers',
+  note: 'What mail watching needs told. The switches are on the Watchers page.',
+  initial: { query: 'watcher_settings' },
+  fields: [
+    {
+      name: 'waitingDays',
+      label: 'Waiting longer than',
+      type: 'number',
+      from: 'waitingDays',
+      min: MIN_WAITING_DAYS,
+      max: MAX_WAITING_DAYS,
+      step: 1,
+      hint: `Days before a conversation waiting on you is reported. ${DEFAULT_WAITING_DAYS} by default; a week or more is always urgent.`,
+    },
+    {
+      name: 'dateConfidence',
+      label: 'Date confidence',
+      type: 'number',
+      from: 'dateConfidence',
+      min: MIN_DATE_CONFIDENCE,
+      max: MAX_DATE_CONFIDENCE,
+      step: 0.05,
+      hint: `How sure the date reader must be before it says anything, between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}. ${DEFAULT_DATE_CONFIDENCE} by default: a date with "deadline" beside it scores about 0.8, a bare "9/8" scores 0.3.`,
+    },
+    {
+      name: 'promisedDays',
+      label: 'Unkept promise after',
+      type: 'number',
+      from: 'promisedDays',
+      min: MIN_PROMISED_DAYS,
+      max: MAX_PROMISED_DAYS,
+      step: 1,
+      hint: `Days before a promise of yours — or a draft written for you and never sent — is reported. ${DEFAULT_PROMISED_DAYS} by default; a week or more is always urgent.`,
+    },
+    {
+      name: 'receiptConfidence',
+      label: 'Receipt confidence',
+      type: 'number',
+      from: 'receiptConfidence',
+      min: MIN_RECEIPT_CONFIDENCE,
+      max: MAX_RECEIPT_CONFIDENCE,
+      step: 0.05,
+      hint: `How sure the classifier must be before a message is called a receipt or a bill, between ${MIN_RECEIPT_CONFIDENCE} and ${MAX_RECEIPT_CONFIDENCE}. ${DEFAULT_RECEIPT_CONFIDENCE} by default.`,
+    },
+    {
+      name: 'nudgeDays',
+      label: 'Nudge after',
+      type: 'number',
+      from: 'nudgeDays',
+      min: MIN_NUDGE_DAYS,
+      max: MAX_NUDGE_DAYS,
+      step: 1,
+      hint: `Days you wait for an answer before a nudge is offered. ${DEFAULT_NUDGE_DAYS} by default, and it is only ever offered: nothing here sends mail.`,
+    },
+  ],
+  submit: {
+    tool: 'email.set_settings',
+    label: 'Save',
+    tone: 'accent',
+    args: {
+      waitingDays: { field: 'waitingDays' },
+      dateConfidence: { field: 'dateConfidence' },
+      promisedDays: { field: 'promisedDays' },
+      receiptConfidence: { field: 'receiptConfidence' },
+      nudgeDays: { field: 'nudgeDays' },
+    },
+  },
+};
+
+const settings: PageDescriptor = {
+  id: 'settings',
+  title: 'Email',
+  place: 'settings',
+  body: [
+    {
+      kind: 'notice',
+      text: 'Reading mail, and the drafts waiting on you, are on the Mail page. This is what buddi reads, and what it has been told to do with it.',
+    },
+    { kind: 'link', label: 'Open Mail', to: { page: 'mail' } },
+    {
+      kind: 'section',
+      title: 'Mailboxes',
+      note: 'What this installation reads and sends as.',
+      body: [
+        {
+          kind: 'table',
+          query: { query: 'accounts' },
+          rows: 'accounts',
+          columns: [
+            { key: 'address', label: 'Address' },
+            { key: 'called', label: 'Called' },
+            { key: 'host', label: 'Host' },
+            { key: 'lastSync', label: 'Last sync' },
+            { key: 'secretName', label: 'Password kept as' },
+            { key: 'state', label: 'State' },
+          ],
+          actions: [
+            {
+              tool: 'email.remove_account',
+              label: 'Remove',
+              tone: 'danger',
+              confirm:
+                'Removing this mailbox deletes its mail and its drafts from buddi, and its password from your keychain. The mailbox itself is untouched.',
+              args: { id: { row: 'id' } },
+            },
+          ],
+          empty: 'No mailbox yet. Add one and buddi starts reading it.',
+        },
+        addAccount,
+      ],
+    },
+    {
+      kind: 'section',
+      title: 'Policies',
+      body: [
+        {
+          kind: 'stats',
+          query: { query: 'policies' },
+          items: [
+            { label: 'Applied', value: { path: 'appliedCount' }, unit: 'number' },
+            { label: 'Proposed', value: { path: 'proposedCount' }, unit: 'number' },
+            { label: 'Triage runs saved', value: { path: 'savedRuns' }, unit: 'number' },
+          ],
+        },
+        {
+          kind: 'notice',
+          text: 'A policy is a decision made once. The next message from that sender is handled by the rule instead of by a model run, and what each rule did is recorded so you can audit the silence.',
+        },
+        {
+          kind: 'list',
+          title: 'Applied',
+          note: 'Deciding right now, with no model run and nothing to approve each time.',
+          query: { query: 'policies' },
+          rows: 'applied',
+          item: {
+            title: { path: 'matcher' },
+            sub: { path: 'sub' },
+            pill: { value: { path: 'action' } },
+          },
+          select: { key: 'id' },
+          actions: [
+            { tool: 'email.revoke_policies', label: 'Revoke', args: { ids: { row: 'ids' } } },
+          ],
+          bulk: [
+            {
+              tool: 'email.revoke_policies',
+              label: 'Revoke selected',
+              tone: 'danger',
+              confirm: 'Revoke {count} rules? They stop deciding anything from now on.',
+              args: { ids: { selected: true } },
+            },
+          ],
+          empty: 'No policies are deciding anything yet. buddi proposes them from your own mail.',
+        },
+        {
+          kind: 'list',
+          title: 'Learned, proposed',
+          note: 'What buddi noticed in your own history. These decide nothing until you keep them.',
+          query: { query: 'policies' },
+          rows: 'proposed',
+          item: {
+            title: { path: 'matcher' },
+            sub: { path: 'sub' },
+            pill: { value: { path: 'action' }, tone: 'neutral' },
+          },
+          select: { key: 'id' },
+          actions: [
+            { tool: 'email.keep_policies', label: 'Keep', tone: 'accent', args: { ids: { row: 'ids' } } },
+            { tool: 'email.revoke_policies', label: 'Revoke', args: { ids: { row: 'ids' } } },
+          ],
+          bulk: [
+            {
+              tool: 'email.keep_policies',
+              label: 'Keep selected',
+              tone: 'accent',
+              confirm: 'Keep {count} rules? They start deciding straight away, with no model run.',
+              args: { ids: { selected: true } },
+            },
+            {
+              tool: 'email.revoke_policies',
+              label: 'Revoke selected',
+              tone: 'danger',
+              confirm: 'Revoke {count} rules? They stop deciding anything from now on.',
+              args: { ids: { selected: true } },
+            },
+          ],
+          empty: 'Nothing proposed. A sender needs three verdicts running before buddi suggests a rule.',
+        },
+        addRule,
+      ],
+    },
+    watchers,
+  ],
+};
+
+/** The two screens this plugin contributes. */
+export const emailPageDescriptors: PageDescriptor[] = [mail, settings];

@@ -18,9 +18,11 @@ import {
   createRevokePoliciesTool,
 } from './policies-tools.js';
 import { createDiscardDraftTool, createSaveDraftTool } from './drafts-tools.js';
+import { emailPageDescriptors } from './descriptors.js';
 import { emailPageQueries } from './queries.js';
 
 export * from './accounts.js';
+export * from './descriptors.js';
 export * from './drafts-tools.js';
 export * from './format.js';
 export * from './policies-tools.js';
@@ -46,7 +48,5 @@ export function emailQueries(): PageQuery[] {
 
 /** The two screens: the Mail place, and the Email settings tab. */
 export function emailPages(): PageDescriptor[] {
-  // Wired once the page engine carries the components these descriptors use
-  // (`repeat`, `search.rows`, `editor.readOnlyWhen`, …). See `descriptors.ts`.
-  return [];
+  return emailPageDescriptors;
 }
