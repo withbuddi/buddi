@@ -12,7 +12,7 @@ import '@testing-library/jest-dom/vitest';
 import { App, NARROW_QUERY, PLACES, useMediaQuery } from './App';
 import { fmtMoney, truncate } from './format';
 import { api } from './api';
-import { legacyRedirect, placeOf } from './routes';
+import { legacyRedirect, placeOf, pluginSettingsRoute } from './routes';
 import { Home, greeting, needsSentence } from './views/Home';
 
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '#/'); });
@@ -44,12 +44,12 @@ describe('the shell', () => {
     vi.unstubAllGlobals();
   });
 
-  it('has seven places on the rail, and sends every old hash to one of them', async () => {
+  it('has six places on the rail, and sends every old hash to one of them', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
     await act(async () => {
       render(<App />);
     });
-    expect(PLACES).toHaveLength(7);
+    expect(PLACES).toHaveLength(6);
     for (const place of PLACES) expect(screen.getByRole('link', { name: new RegExp(`^${place.label}`) })).toBeDefined();
     expect(screen.getByLabelText(/theme/i)).toBeDefined();
     for (const old of ['#/overview', '#/events', '#/jobs', '#/conversations', '#/missions', '#/approvals', '#/offers', '#/reminders', '#/providers', '#/browser', '#/sentinels']) {
@@ -58,6 +58,14 @@ describe('the shell', () => {
       expect(PLACES.map((p) => p.route)).toContain(placeOf(target!));
     }
     expect(legacyRedirect('#/conversations/abc')).toBe('#/activity/conversations/abc');
+    /*
+     * Mail is a plugin's page now (docs/specs/plugin-pages.md §7 step 2), and
+     * these two hashes are in bookmarks, in the owner's history and in every
+     * "open in buddi" link Telegram has sent. A conversation keeps its id.
+     */
+    expect(legacyRedirect('#/email')).toBe('#/p/email/mail');
+    expect(legacyRedirect('#/email/abc')).toBe('#/p/email/mail/abc');
+    expect(legacyRedirect('#/settings/email')).toBe(pluginSettingsRoute('email', 'settings'));
     expect(legacyRedirect('#/chat/x')).toBeNull();
     vi.unstubAllGlobals();
   });

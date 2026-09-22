@@ -702,6 +702,26 @@ suite('the draft lifecycle (postgres)', () => {
       const { rows } = await pool.query(`select count(*)::int as n from core.actions`);
       expect(rows[0].n).toBe(0);
     });
+
+    /**
+     * A dispatch that never came back is the one state where "send it again"
+     * is the wrong answer: the message may be on the wire right now. The old
+     * route refused this before an approval card was ever drawn; the guard
+     * lives in the tool now, so every caller gets it.
+     */
+    it('refuses a send for a draft a dispatch is holding and never confirmed', async () => {
+      const draft = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'On the wire.' });
+      await pool.query(`update email.drafts set sent_action_id = $2 where id = $1`, [
+        draft.id,
+        '66666666-6666-4666-8666-666666666666',
+      ]);
+      const refused = await registry.invoke('email.send', { draftId: draft.id }, ctx);
+      expect(refused.ok ? '' : refused.message).toContain(
+        'This draft was already dispatched and never confirmed. Check the mailbox before sending anything again.',
+      );
+      const { rows } = await pool.query(`select count(*)::int as n from core.actions`);
+      expect(rows[0].n).toBe(0);
+    });
   });
 
   describe('an approval that predates this build', () => {

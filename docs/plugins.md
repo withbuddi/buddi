@@ -941,6 +941,16 @@ A tool the owner may run from a page but no model should ever see carries
 and every agent grant is built from, and `invoke` refuses it for anyone but the
 owner's own path. A tool that stores a secret is the case it exists for.
 
+**The worked example is the mail plugin.** Its two screens — the Mail place and
+the Email settings tab — are descriptors like the ones above and nothing else:
+`packages/tools/email/src/pages/descriptors.ts` is the whole of what the owner
+sees, `queries.ts` is every read behind it, and `accounts.ts`,
+`policies-tools.ts` and `drafts-tools.ts` are the `ownerOnly` tools it writes
+through. It was compiled into `packages/web` until this existed, which is why
+it is worth reading: a list-detail with a URL per conversation, a `repeat` of
+editors, a gated Send whose approval card is drawn in place, a drawer that
+takes a password, and two lists with bulk actions over a selection.
+
 ---
 
 ### 2.6 Proposed agents and skills

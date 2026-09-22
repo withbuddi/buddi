@@ -1,7 +1,7 @@
 /**
  * The mail search query, built once (docs/specs/email.md §9).
  *
- * `email.search` and `GET /api/email/search` ask the same question of the same
+ * `email.search` and the Mail page's `threads` query ask the same question of the same
  * table. One builder writes the whole statement for both — not just the WHERE
  * clause — because the filters are where the meaning lives: "from this domain,
  * since March, with an attachment" has to mean the same thing to an agent and

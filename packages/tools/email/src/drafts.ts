@@ -3,7 +3,7 @@
  *
  * One module because three callers need the same rules and must not each have
  * their own: the tools an agent uses (`email.draft_reply`, `email.read_draft`,
- * `email.send`), the dashboard's own editor under `/api/email/drafts`, and the
+ * `email.send`), the dashboard's own editor (`email.save_draft`), and the
  * sweep that lapses what nobody touched. A second implementation of "is there
  * already a live draft on this thread" is a second answer to it.
  *
@@ -537,11 +537,24 @@ export function lapseLogLine(outcome: LapseOutcome): string {
  * same function, so a draft discarded while the card was open is refused rather
  * than sent.
  */
-export function sendRefusalFor(draft: DraftRecord): string | null {
+export function sendRefusalFor(draft: DraftRecord, underAction?: string | null): string | null {
   // Every status that is not live, `sent` included. Listing only the two the
   // spec names would let a send be *proposed* for an already-sent draft: an
   // approval card put in front of the owner for a message they have already
   // sent, which only refuses at execute time, after they have said yes.
+  /*
+   * Claimed by a dispatch that never came back. `sent_at` still null means a
+   * message may be on the wire right now, and proposing a second send is how
+   * the same letter goes out twice — so this is refused before an approval
+   * card is ever drawn, in the owner's words rather than the tool's.
+   *
+   * `underAction` is the action this very send is running as: the Executor
+   * claims the draft and then re-describes it, and a send must not refuse
+   * because of its own hold.
+   */
+  if (draft.sentActionId !== null && draft.sentAt === null && draft.sentActionId !== underAction) {
+    return 'This draft was already dispatched and never confirmed. Check the mailbox before sending anything again.';
+  }
   if (LIVE_DRAFT_STATUSES.includes(draft.status)) return null;
   const reasons: Record<Exclude<DraftStatus, 'draft' | 'edited'>, string> = {
     sent: `was already sent${draft.sentAt ? ` (${draft.sentAt})` : ''}`,
