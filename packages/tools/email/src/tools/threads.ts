@@ -27,7 +27,7 @@ import {
   type ThreadRecord,
 } from '../threads.js';
 import { normalizeAddress } from '../mail.js';
-import { DATE_PATTERN } from '../search.js';
+import { validateFilters, DATE_PATTERN } from '../search.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
 import { ACCOUNT_ARG, accountScope, boundedLimit, DEFAULT_LIMIT, MAX_LIMIT, UUID } from './shared.js';
 
@@ -103,17 +103,26 @@ const listInput = z.object({
 export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
   name: 'email.list_threads',
   description:
-    "The owner's mail as conversations rather than messages: subject, who is in it, how many messages, when it last moved, and which way — whether it is waiting on him or on them. The state is derived from who wrote last, the owner's Sent folder included, so a thread he answered from his phone says so. Filters, all optional: `state` ('waiting-on-me', 'waiting-on-them', 'closed', 'muted'), `participant` (an address, whoever wrote), and `since`/`until` (YYYY-MM-DD, against when the conversation last moved). Most recently moved first, and every mailbox unless you name one with `account`. Use email.search to find a message; use this to see where the conversations stand.",
+    "The owner's mail as conversations rather than messages: subject, who is in it, how many messages, when it last moved, and which way — whether it is waiting on him or on them. The state is derived from who wrote last, the owner's Sent folder included, so a thread he answered from his phone says so. Filters, all optional: `state` ('waiting-on-me', 'waiting-on-them', 'closed', 'muted'), `participant` (an address, whoever wrote), and `since`/`until` (YYYY-MM-DD, against when the conversation last moved, read in the owner's own timezone). Most recently moved first, and every mailbox unless you name one with `account`. Use email.search to find a message; use this to see where the conversations stand.",
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
     const scope = await accountScope(ctx.db, input.account);
+    // The same day check `email.search` makes: `2026-02-31` matches the
+    // pattern and is not a day, and `$n::date` would raise inside the pool.
+    const wrong = validateFilters({
+      ...(input.since ? { since: input.since } : {}),
+      ...(input.until ? { until: input.until } : {}),
+    });
+    if (wrong) throw new Error(`email.list_threads: ${wrong}`);
     const threads = await listThreadRows(ctx.db, {
       accountIds: scope.ids,
       ...(input.state ? { state: input.state } : {}),
       ...(input.participant ? { participant: normalizeAddress(input.participant) } : {}),
       ...(input.since ? { since: input.since } : {}),
       ...(input.until ? { until: input.until } : {}),
+      // Those two days are the owner's days, not the server's.
+      timezone: ctx.timezone,
       limit: boundedLimit(input.limit),
     });
     const totals = await participantsTotals(ctx.db, threads);

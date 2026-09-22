@@ -127,29 +127,50 @@ export default manifest;
 export { listRecent, readMessage, search } from './tools/read.js';
 // --- email step 6b: search and attachments ---
 export {
+  bounded,
   buildSearch,
+  isCalendarDate,
   likeNeedle,
   narrows,
   qualify,
+  searchColumns,
+  toSearchRow,
+  validateFilters,
   windowNote,
   DATE_PATTERN,
   DEFAULT_WINDOW_DAYS,
+  MIN_QUERY_CHARS,
   WHEN,
   type BuiltSearch,
   type SearchFilters,
+  type SearchOptions,
+  type SearchRow,
 } from './search.js';
 export {
   createFetchAttachmentTool,
-  executableRefusal,
   markFetched,
   pickAttachment,
+  resolveAgainstFresh,
   MAX_ATTACHMENT_BYTES,
-  REFUSED_EXTENSIONS,
-  REFUSED_MIMES,
   type FetchAttachmentInput,
   type FetchAttachmentOptions,
   type FetchAttachmentResult,
 } from './tools/attachments.js';
+export {
+  bareMime,
+  bytesRefusal,
+  declaredRefusal,
+  extensionOf,
+  isPartId,
+  mimeToStore,
+  safeFilename,
+  sniffMime,
+  zipEntryNames,
+  MAX_FILENAME,
+  PART_PATTERN,
+  REFUSED_EXTENSIONS,
+  REFUSED_MIMES,
+} from './attachments/safety.js';
 // --- end step 6b ---
 export { senderProfile } from './tools/sender.js';
 export {

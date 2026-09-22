@@ -26,6 +26,7 @@ import type {
   AccountRecord,
 } from '../ports.js';
 import { normalizeMessageId, parseReferences } from '../mail.js';
+import { isPartId, safeFilename } from '../attachments/safety.js';
 
 /** Only what this adapter uses. Keeps the port independent of imapflow's d.ts. */
 interface ImapFlowLike {
@@ -95,18 +96,24 @@ export function collectAttachments(node: Record<string, any> | undefined): Attac
     const disposition = String(n.disposition ?? '').toLowerCase();
     const type = String(n.type ?? '').toLowerCase();
     if (children.length === 0 && (disposition === 'attachment' || (n.dispositionParameters?.filename ?? n.parameters?.name))) {
+      const part = n.part ? String(n.part) : '';
       out.push({
-        filename:
+        // Normalised at the door: the name that is stored is the name the
+        // refusal check will read, and a trailing space must not be able to
+        // hide an extension from one of them (attachments/safety.ts).
+        filename: safeFilename(
           (n.dispositionParameters?.filename as string | undefined) ??
-          (n.parameters?.name as string | undefined) ??
-          null,
+            (n.parameters?.name as string | undefined) ??
+            null,
+        ),
         mime: type || 'application/octet-stream',
         sizeBytes: Number(n.size ?? 0),
         // The body part this file is, so a later fetch asks for it by name
         // rather than parsing the message again. `imapflow` fills `part` on
         // every node but the root of a single-part message, which carries no
-        // attachment anyway.
-        part: n.part ? String(n.part) : null,
+        // attachment anyway. Anything that is not a part id is not stored as
+        // one — the fetch re-reads the structure rather than trusting it.
+        part: isPartId(part) ? part : null,
       });
     }
     for (const child of children) walk(child);

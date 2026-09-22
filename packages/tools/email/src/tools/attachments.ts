@@ -14,20 +14,44 @@
  * Tier `auto`, and that is a considered position rather than an oversight.
  * Nothing here reaches the world: it reads one message the owner's own server
  * already delivered, with a peeking fetch that sets no flag, and writes a row
- * the owner can delete. The cost is bounded (one part, 25 MB), the refusals
- * are the interesting part, and each of them says why in a sentence:
+ * the owner can delete. The cost is bounded (one part, 25 MB).
  *
- *  - **too big** — the declared size is refused *before* the download, and the
- *    stream is cut if the server under-reported it;
- *  - **executable-ish** — a `.exe` fetched into the library is a file the
- *    owner may later double-click. Mail is the classic delivery vector and
- *    this tool is not going to be the courier;
+ * ## The stored listing is a hint; the body structure is the fact
+ *
+ * A stored `attachments` row can be stale — the message was re-read, the row
+ * predates part ids, somebody edited it — and a part id is a *position in a
+ * MIME tree*. Fetching part `2` because the stored array said so, when the
+ * server's tree now has something else at `2`, saves the wrong file under the
+ * right name. So the attachment is always re-resolved against a **fresh body
+ * structure** immediately before the download, matched on the part id first
+ * and on filename plus size as a fallback, and never by position: the fresh
+ * listing need not be ordered like the stored one, and `index` is a handle on
+ * the stored listing alone.
+ *
+ * ## The refusals, and why each one is where it is
+ *
+ *  - **too big** — refused on the declared size *before* the download, and
+ *    the stream is cut if the server under-reported it;
+ *  - **a program, by name or declared type** — refused before the download,
+ *    on the *normalised* name (`attachments/safety.ts`), so a trailing space
+ *    cannot hide an extension;
+ *  - **a program, by its bytes** — refused after the download and before the
+ *    save. This is the only layer that cannot be lied to by renaming a file;
  *  - **not there any more** — the message was purged, or the mailbox was
  *    recreated, or the mail was deleted upstream. Said plainly, because the
  *    alternative is an agent inventing a reason.
  */
-import { saveArtifact, sha256Of, type ArtifactRow, type ToolContext, type ToolDefinition } from '@buddi/core';
+import { saveArtifact, sha256Of, type ArtifactRow, type ToolDefinition } from '@buddi/core';
+import type { Pool } from 'pg';
 import { z } from 'zod';
+import {
+  bytesRefusal,
+  declaredRefusal,
+  isPartId,
+  mimeToStore,
+  safeFilename,
+  sniffMime,
+} from '../attachments/safety.js';
 import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type AttachmentInfo, type ImapClientFactory } from '../ports.js';
 import { FOLDER_COLUMNS, toFolder, type MessageRecord } from '../rows.js';
@@ -37,38 +61,25 @@ import { accountOf, requireAgentId, requireMessage, UUID } from './shared.js';
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /**
- * What this tool will not put in the owner's library.
- *
- * Extension first, because that is what a double-click reads; the declared
- * mime second, because a sender writes it and `application/octet-stream` is
- * what half of them say. Neither list is a security boundary on its own — the
- * point is that mail is where this class of file arrives, and a tool that
- * hands one to the store has made it one click away.
+ * The name and byte checks live in `attachments/safety.ts`, which is where the
+ * lists, the filename normalisation and the magic-byte sniffing are argued
+ * for. Re-exported here because this is the module they are *about*.
  */
-export const REFUSED_EXTENSIONS = [
-  'exe', 'scr', 'bat', 'cmd', 'com', 'pif', 'js', 'jse', 'vbs', 'vbe', 'wsf', 'wsh', 'msi', 'lnk',
-] as const;
-
-export const REFUSED_MIMES = [
-  'application/x-msdownload',
-  'application/x-msdos-program',
-  'application/x-executable',
-  'application/vnd.microsoft.portable-executable',
-  'application/x-ms-shortcut',
-] as const;
-
-/** Why this file is refused, or null when it is not. One sentence, plain. */
-export function executableRefusal(filename: string | null, mime: string): string | null {
-  const ext = (filename ?? '').toLowerCase().match(/\.([a-z0-9]{1,8})$/)?.[1] ?? '';
-  if ((REFUSED_EXTENSIONS as readonly string[]).includes(ext)) {
-    return `this attachment is a .${ext} file, which is a program rather than a document; buddi does not put executables in the owner's library, because mail is exactly where one arrives pretending to be an invoice`;
-  }
-  const declared = mime.toLowerCase().split(';')[0]?.trim() ?? '';
-  if ((REFUSED_MIMES as readonly string[]).includes(declared)) {
-    return `this attachment is declared as ${declared}, which is a program rather than a document; buddi does not put executables in the owner's library, because mail is exactly where one arrives pretending to be an invoice`;
-  }
-  return null;
-}
+export {
+  bareMime,
+  bytesRefusal,
+  declaredRefusal,
+  extensionOf,
+  mimeToStore,
+  isPartId,
+  safeFilename,
+  sniffMime,
+  zipEntryNames,
+  MAX_FILENAME,
+  PART_PATTERN,
+  REFUSED_EXTENSIONS,
+  REFUSED_MIMES,
+} from '../attachments/safety.js';
 
 /** How big a number reads to a person. Used only in refusals. */
 function megabytes(bytes: number): string {
@@ -98,13 +109,13 @@ export function pickAttachment(
     }
     return { index: by.index, attachment: found };
   }
-  const wanted = (by.filename ?? '').trim().toLowerCase();
+  const wanted = (safeFilename(by.filename) ?? '').toLowerCase();
   if (wanted === '') {
     throw new Error('say which attachment with `index` or `filename`');
   }
   const hits = attachments
     .map((attachment, index) => ({ attachment, index }))
-    .filter((e) => (e.attachment.filename ?? '').trim().toLowerCase() === wanted);
+    .filter((e) => (safeFilename(e.attachment.filename) ?? '').toLowerCase() === wanted);
   const only = hits[0];
   if (!only) {
     throw new Error(
@@ -122,6 +133,38 @@ export function pickAttachment(
 }
 
 /**
+ * The stored entry, found again in the server's own body structure.
+ *
+ * Matched on the **part id** first, because that is the identity of a MIME
+ * part and it is what the download asks for. When the stored row carries no
+ * usable part id — a row from before they were recorded — the fallback is
+ * filename plus size, which is as close to an identity as a listing gets.
+ *
+ * Never by position. The fresh listing is the server walking its own tree and
+ * has no obligation to be ordered like a row written months ago; resolving
+ * `index` against it is how the wrong file gets saved under the right name.
+ */
+export function resolveAgainstFresh(
+  stored: AttachmentInfo,
+  fresh: readonly AttachmentInfo[],
+): AttachmentInfo | null {
+  if (isPartId(stored.part)) {
+    const byPart = fresh.find((f) => f.part === stored.part);
+    if (byPart) return byPart;
+  }
+  const name = (safeFilename(stored.filename) ?? '').toLowerCase();
+  if (name !== '') {
+    const matches = fresh.filter(
+      (f) => (safeFilename(f.filename) ?? '').toLowerCase() === name && f.sizeBytes === stored.sizeBytes,
+    );
+    // One match or none. Two files of the same name and size are two things
+    // this cannot tell apart, and picking either would be a guess.
+    if (matches.length === 1) return matches[0] as AttachmentInfo;
+  }
+  return null;
+}
+
+/**
  * Write the artifact id back onto the message's listing.
  *
  * So the second fetch of the same file is a link rather than a download, and
@@ -131,21 +174,38 @@ export function pickAttachment(
  * attachment on the same message does not lose its own mark.
  */
 export async function markFetched(
-  ctx: Pick<ToolContext, 'db'>,
+  db: Pool,
   messageId: string,
   index: number,
   artifactId: string,
   part: string | null,
+  /**
+   * The listing to write when the stored array cannot hold the mark — a row
+   * whose `attachments` is empty or shorter than `index`, which is exactly
+   * the row that had to be re-read from the body structure. Without it the
+   * update matched nothing, the mark was silently dropped, and the next fetch
+   * downloaded the same file again.
+   */
+  fallback: readonly AttachmentInfo[],
 ): Promise<void> {
-  await ctx.db.query(
+  const marked = fallback.map((a, i) =>
+    i === index ? { ...a, artifactId, ...(part ? { part } : {}) } : a,
+  );
+  await db.query(
     `update email.messages
-        set attachments = jsonb_set(
-              attachments,
-              $2::text[],
-              (attachments -> $3) || $4::jsonb,
-              false)
-      where id = $1::uuid and jsonb_array_length(attachments) > $3`,
-    [messageId, `{${index}}`, index, JSON.stringify({ artifactId, ...(part ? { part } : {}) })],
+        set attachments = case
+              when jsonb_array_length(attachments) > $3
+                then jsonb_set(attachments, $2::text[], (attachments -> $3) || $4::jsonb, false)
+              else $5::jsonb
+            end
+      where id = $1::uuid`,
+    [
+      messageId,
+      `{${index}}`,
+      index,
+      JSON.stringify({ artifactId, ...(part ? { part } : {}) }),
+      JSON.stringify(marked),
+    ],
   );
 }
 
@@ -224,35 +284,66 @@ export function createFetchAttachmentTool(
           throw new Error(gone(message, 'the mailbox has been recreated since this message was read, so its uid no longer points at it'));
         }
 
-        // The stored listing, or the body structure when the row predates part
-        // ids. Re-reading is one metadata fetch and downloads no body.
-        let attachments = message.attachments;
-        if (attachments.length === 0 || attachments.some((a) => !a.part)) {
-          const fresh = await client.listAttachments(folder.name, message.uid);
-          if (fresh === null) throw new Error(gone(message, 'it is no longer in the mailbox'));
-          if (fresh.length > 0) attachments = fresh;
+        /*
+         * The stored listing is the handle the caller was given — `index`
+         * means a position in *it* — so the pick happens here. A row with no
+         * listing at all (ingested before part ids, or never populated) has
+         * no handle to offer, so the fresh structure stands in for it and the
+         * mark is written back over the row at the end.
+         */
+        let stored = message.attachments;
+        let listingIsFresh = false;
+        if (stored.length === 0) {
+          const first = await client.listAttachments(folder.name, message.uid);
+          if (first === null) throw new Error(gone(message, 'it is no longer in the mailbox'));
+          stored = first;
+          listingIsFresh = true;
         }
 
-        const { index, attachment } = pickAttachment(attachments, {
+        const { index, attachment } = pickAttachment(stored, {
           ...(args.index !== undefined ? { index: args.index } : {}),
           ...(args.filename !== undefined ? { filename: args.filename } : {}),
         });
 
-        const refusal = executableRefusal(attachment.filename, attachment.mime);
-        if (refusal) throw new Error(`email.fetch_attachment refuses: ${refusal}`);
+        /*
+         * And now the fact. Always re-read, even when the stored row looks
+         * complete: a part id is a position in a MIME tree, and the tree is
+         * the server's, not ours.
+         */
+        const fresh = listingIsFresh
+          ? stored
+          : await client.listAttachments(folder.name, message.uid);
+        if (fresh === null) throw new Error(gone(message, 'it is no longer in the mailbox'));
+        const live = resolveAgainstFresh(attachment, fresh);
+        if (!live) {
+          throw new Error(
+            gone(
+              message,
+              `${safeFilename(attachment.filename) ?? 'that attachment'} is no longer one of this message's parts on the server`,
+            ),
+          );
+        }
+
+        // One name, normalised once, used by the check, the save and the
+        // download header alike. A check that reads one string and a save
+        // that writes another is not a check.
+        const filename = safeFilename(live.filename);
+
+        const named = declaredRefusal(filename, live.mime);
+        if (named) throw new Error(`email.fetch_attachment refuses: ${named}`);
 
         // Refused *before* the download, on what the server declared.
-        if (attachment.sizeBytes > MAX_ATTACHMENT_BYTES) {
+        if (live.sizeBytes > MAX_ATTACHMENT_BYTES) {
           throw new Error(
-            `email.fetch_attachment refuses: ${attachment.filename ?? 'this attachment'} is ${megabytes(attachment.sizeBytes)}, over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit; ask the sender for a link instead`,
+            `email.fetch_attachment refuses: ${filename ?? 'this attachment'} is ${megabytes(live.sizeBytes)}, over the ${megabytes(MAX_ATTACHMENT_BYTES)} limit; ask the sender for a link instead`,
           );
         }
-        const part = attachment.part;
-        if (!part) {
+        if (!isPartId(live.part)) {
           throw new Error(
-            `the server did not say which body part ${attachment.filename ?? 'this attachment'} is, so it cannot be fetched`,
+            `the server did not say which body part ${filename ?? 'this attachment'} is, so it cannot be fetched`,
           );
         }
+        const part = live.part;
 
         const bytes = await client.downloadAttachment(
           folder.name,
@@ -260,9 +351,21 @@ export function createFetchAttachmentTool(
           part,
           MAX_ATTACHMENT_BYTES,
         );
-        if (!bytes || bytes.length === 0) {
-          throw new Error(gone(message, 'the attachment itself is no longer there'));
+        if (!bytes) throw new Error(gone(message, 'the attachment itself is no longer there'));
+        // An empty file is legal, and "empty" is not "missing". The artifact
+        // store will not hold zero bytes, so this is its own sentence rather
+        // than a claim that the mail has gone.
+        if (bytes.length === 0) {
+          throw new Error(
+            `email.fetch_attachment refuses: ${filename ?? 'this attachment'} is empty (0 bytes), so there is no file to keep`,
+          );
         }
+
+        // The last layer, and the only one that cannot be lied to: a PE
+        // renamed `invoice.pdf` passes both checks above and dies here.
+        const sniffed = bytesRefusal(bytes);
+        if (sniffed) throw new Error(`email.fetch_attachment refuses: ${sniffed}`);
+        const mime = mimeToStore(sniffMime(bytes), live.mime);
 
         /*
          * Whether these exact bytes are already here, asked *before* the save
@@ -284,8 +387,10 @@ export function createFetchAttachmentTool(
 
         const saved: ArtifactRow = await saveArtifact(ctx.db, {
           bytes,
-          mime: attachment.mime || 'application/octet-stream',
-          filename: attachment.filename,
+          // What the bytes are, unless the sender said something more precise
+          // about the same thing (a .docx really is a zip). See `mimeToStore`.
+          mime,
+          filename,
           // The owner's file now, recorded to whoever asked for it.
           createdBy: agentId,
           /*
@@ -299,7 +404,7 @@ export function createFetchAttachmentTool(
            */
           source: { surface: 'email', messageId: message.id },
         });
-        await markFetched(ctx, message.id, index, saved.id, part);
+        await markFetched(ctx.db, message.id, index, saved.id, part, stored);
 
         return {
           artifacts: [{ id: saved.id }],

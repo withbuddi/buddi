@@ -1,9 +1,10 @@
 /**
- * The two decisions `email.fetch_attachment` makes before it opens a socket:
- * which attachment is meant, and whether it is one buddi will keep at all.
+ * Which attachment the tool means, and how it finds it again on the server.
+ *
+ * The name and byte checks have their own file (`../attachments/safety.test.ts`).
  */
 import { describe, expect, it } from 'vitest';
-import { executableRefusal, pickAttachment } from './attachments.js';
+import { pickAttachment, resolveAgainstFresh } from './attachments.js';
 import type { AttachmentInfo } from '../ports.js';
 
 const pdf: AttachmentInfo = {
@@ -14,35 +15,12 @@ const pdf: AttachmentInfo = {
 };
 const png: AttachmentInfo = { filename: 'logo.png', mime: 'image/png', sizeBytes: 64, part: '3' };
 
-describe('executableRefusal', () => {
-  it('refuses by extension, whatever the sender declared the type to be', () => {
-    expect(executableRefusal('invoice.pdf.exe', 'application/pdf')).toContain('.exe');
-    expect(executableRefusal('SETUP.SCR', 'application/octet-stream')).toContain('.scr');
-    expect(executableRefusal('run.js', 'text/plain')).toContain('.js');
-  });
-
-  it('refuses by declared type, whatever the file is called', () => {
-    expect(executableRefusal('invoice', 'application/x-msdownload')).toContain('program');
-    expect(executableRefusal(null, 'application/x-msdownload; name=x')).toContain('program');
-  });
-
-  it('says why rather than just no', () => {
-    expect(executableRefusal('x.exe', 'application/pdf')).toContain('library');
-  });
-
-  it('keeps the documents mail is actually for', () => {
-    expect(executableRefusal('invoice.pdf', 'application/pdf')).toBeNull();
-    expect(executableRefusal('statement.xlsx', 'application/vnd.ms-excel')).toBeNull();
-    expect(executableRefusal(null, 'image/jpeg')).toBeNull();
-  });
-});
-
 describe('pickAttachment', () => {
   it('picks by position', () => {
     expect(pickAttachment([pdf, png], { index: 1 }).attachment).toBe(png);
   });
 
-  it('picks by filename, ignoring case and surrounding space', () => {
+  it('picks by filename, ignoring case, space and the characters a name may hide', () => {
     expect(pickAttachment([pdf, png], { filename: ' Invoice.PDF ' }).index).toBe(0);
   });
 
@@ -66,5 +44,43 @@ describe('pickAttachment', () => {
 
   it('asks which one when neither index nor filename is given', () => {
     expect(() => pickAttachment([pdf], {})).toThrow(/`index` or `filename`/);
+  });
+});
+
+describe('resolveAgainstFresh', () => {
+  it('finds the stored entry by its part id, whatever order the server lists in', () => {
+    // The bug this exists for: the fresh listing is the server walking its own
+    // tree and owes the stored row no particular order. Resolving `index`
+    // against it saves the wrong file under the right name.
+    const fresh = [png, pdf];
+    expect(resolveAgainstFresh(pdf, fresh)).toBe(pdf);
+    expect(resolveAgainstFresh(png, fresh)).toBe(png);
+  });
+
+  it('prefers the part id over a name that moved', () => {
+    const renamed = { ...pdf, filename: 'september.pdf' };
+    expect(resolveAgainstFresh(pdf, [png, renamed])).toBe(renamed);
+  });
+
+  it('falls back to filename and size for a row with no usable part id', () => {
+    const stored = { ...pdf, part: null };
+    expect(resolveAgainstFresh(stored, [png, pdf])).toBe(pdf);
+    // A stored part id that is not a part id is not trusted either.
+    expect(resolveAgainstFresh({ ...pdf, part: 'TEXT' }, [png, pdf])).toBe(pdf);
+  });
+
+  it('refuses to guess between two files of the same name and size', () => {
+    const twin = { ...pdf, part: '5' };
+    expect(resolveAgainstFresh({ ...pdf, part: null }, [pdf, twin])).toBeNull();
+  });
+
+  it('answers null when the part is simply no longer there', () => {
+    expect(resolveAgainstFresh(pdf, [png])).toBeNull();
+    expect(resolveAgainstFresh(pdf, [])).toBeNull();
+  });
+
+  it('does not match on a size that changed under the same name', () => {
+    const stored = { ...pdf, part: null };
+    expect(resolveAgainstFresh(stored, [{ ...pdf, sizeBytes: 2048 }])).toBeNull();
   });
 });
