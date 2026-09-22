@@ -165,23 +165,33 @@ $$ language sql immutable;
 -- nothing. Anything older than thirty days is stamped **as read**, with no
 -- rows, so both sweeps start near the present.
 --
--- `not exists (… is not null)` makes this a no-op on a replay. Without it, a
--- migration run a second time a year later would stamp a year of mail that the
--- watchers had been reading perfectly well, and stamp it for ever: the guard
--- says "only when nothing has ever been stamped", which is true exactly once.
-update messages
-   set receipts_scanned_at = now()
- where receipts_scanned_at is null
-   and direction = 'in'
-   and coalesce(internal_date, fetched_at) < now() - interval '30 days'
-   and not exists (select 1 from messages m2 where m2.receipts_scanned_at is not null);
+-- The guard is a marker of its own in `email.settings`, not "does any stamped
+-- row exist". The difference matters on a replay: by the time 011 were
+-- re-applied, most messages *would* be stamped — by the watchers, doing their
+-- job — so "any stamped row exists" would read as "already backfilled" for the
+-- right reason and as noise the rest of the time. A marker says exactly one
+-- thing, says it once, and is visible to anybody wondering whether this ran.
+do $backfill$
+begin
+  if not exists (select 1 from settings where key = 'receipts_backfilled_at') then
+    update messages
+       set receipts_scanned_at = now()
+     where receipts_scanned_at is null
+       and direction = 'in'
+       and coalesce(internal_date, fetched_at) < now() - interval '30 days';
 
-update messages
-   set suspicion_scanned_at = now()
- where suspicion_scanned_at is null
-   and direction = 'in'
-   and coalesce(internal_date, fetched_at) < now() - interval '30 days'
-   and not exists (select 1 from messages m2 where m2.suspicion_scanned_at is not null);
+    update messages
+       set suspicion_scanned_at = now()
+     where suspicion_scanned_at is null
+       and direction = 'in'
+       and coalesce(internal_date, fetched_at) < now() - interval '30 days';
+
+    insert into settings (key, value, updated_at)
+    values ('receipts_backfilled_at', to_jsonb(now()), now())
+    on conflict (key) do nothing;
+  end if;
+end
+$backfill$;
 
 /* ------------------------------------------------------------------ *
  * The sweeps' own indexes

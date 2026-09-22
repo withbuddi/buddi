@@ -274,8 +274,9 @@ visible and switchable on the Watchers page:
   a total speaks and a bare shipping notice does not. Always `info`: a bill is a
   thing to file, and a phone buzzing at a misread order confirmation costs the
   watcher its welcome. One finding per message, keyed to the message; it names
-  the total when one was read — as a number and a currency code *we* parsed,
-  never the sender's own string — and offers two actions in the detail, hand it
+  the total when one was read — in the prose, as a number *we* parsed and a
+  sign from a table of three, never the sender's own string, and never in
+  `data`, which is ids and numbers only — and offers two actions in the detail, hand it
   to whoever holds the `overview` role (falling back to `mail`) and record it.
   Hourly, with the bounded catch-up dates has: bodies are classified once and
   stamped (`messages.receipts_scanned_at`, migration `011_receipts.sql`), the
@@ -316,7 +317,12 @@ visible and switchable on the Watchers page:
   accident. **(b)** the body asks for credentials (0.6), a wire (0.7) or a gift
   card (0.8), from a pinned bilingual table, with a quarter added for
   "urgently" and its French **when the urgency is in the same sentence as the
-  ask**. Above 0.8 is `urgent`, the rest `info` — and a phrase that only
+  ask**. A *noun* is never a demand on its own: `wire transfer` and `gift card`
+  are the words receipts and dispatch notices are written in, so they count
+  only when the same sentence — the noun itself cut out of it first — carries a
+  verb of sending or paying, an asking construction ("can you", "please",
+  "merci de", "veuillez"), or a `to`/`vers` directly after the noun, which is
+  what a wiring instruction looks like when its verb is elsewhere. Above 0.8 is `urgent`, the rest `info` — and a phrase that only
   *names* a credential rather than asking to be given it (`reset your
   password`, `verify your account`, the vocabulary of every real reset mail)
   is capped below that line and can never be more than a notice. Only somebody
@@ -333,9 +339,17 @@ visible and switchable on the Watchers page:
   reply to nothing.
   Its limits: (a) says nothing about a name the owner has never written to, one
   he last wrote to more than two years ago, one too generic to identify
-  anybody, or a display name the impostor did not bother to copy; (b) is a
-  phrase table, so it is blind to a fraud that asks for nothing in the first
-  message — which is most of them.
+  anybody, or a display name the impostor did not bother to copy — and,
+  because the tokens are sorted, `May Lee` and `Lee May` are one name to it.
+  That collision is accepted: sorting is what makes `MEYER, Jean-Paul` match
+  `Jean-Paul Meyer`, which is the form half the world's address books produce,
+  and two real correspondents whose names are each other's reverse is rarer
+  than a corporate directory. The cost is a false warning, which is a warning
+  the agent reads the thread about; the alternative cost is silence about the
+  comma form, which is the shape an impostor would copy. (b) is a phrase table
+  over a *request*, not over a noun — `Your wire transfer was processed` is a
+  receipt and is read as one — so it is blind to a fraud that asks for nothing
+  in its first message, which is most of them.
 - `email.unanswered-by-them` (**built**): the owner wrote to somebody in the
   last thirty days, it was not a reply to a message of theirs, it *asked*
   something — a sentence ending in a question mark, or one of the pinned polite

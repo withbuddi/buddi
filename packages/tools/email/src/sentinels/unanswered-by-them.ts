@@ -37,6 +37,7 @@ import {
   nudgeFinding,
   type UnansweredAsk,
 } from '../watchers.js';
+import { cameAfter, cameBefore } from './order.js';
 import { mailAgent } from './waiting-on-me.js';
 
 /** Daily. A nudge is a thing the owner does once, not a thing he is reminded of. */
@@ -82,8 +83,8 @@ const UNANSWERED_SQL = `
          ) p
           where prev.thread_id = m.thread_id
             and prev.direction = 'in'
-            and (coalesce(prev.internal_date, prev.fetched_at), prev.id)
-                < (coalesce(m.internal_date, m.fetched_at), m.id)
+            and prev.id <> m.id
+            and ${cameBefore('prev', 'm')}
             and email.address_of(prev.from_addr) = email.address_of(p.addr)
        )
        -- Nothing came back from anybody he addressed it to.
@@ -96,9 +97,9 @@ const UNANSWERED_SQL = `
          ) a
           where inb.thread_id = m.thread_id
             and inb.direction = 'in'
-            -- (instant, row id) as one value: see promised-reply.ts.
-            and (coalesce(inb.internal_date, inb.fetched_at), inb.id)
-                > (coalesce(m.internal_date, m.fetched_at), m.id)
+            and inb.id <> m.id
+            -- order.ts's comparison, not a bare instant: the id is random.
+            and ${cameAfter('inb', 'm')}
             and email.address_of(inb.from_addr) = email.address_of(a.addr)
        )
        -- He has not already been back in touch.
@@ -106,8 +107,8 @@ const UNANSWERED_SQL = `
          select 1 from email.messages later
           where later.thread_id = m.thread_id
             and later.direction = 'out'
-            and (coalesce(later.internal_date, later.fetched_at), later.id)
-                > (coalesce(m.internal_date, m.fetched_at), m.id)
+            and later.id <> m.id
+            and ${cameAfter('later', 'm')}
        )
        -- Not a broadcast: a conversation any message of which carries a
        -- List-Id is a mailing list, and nobody there owes him an answer.
