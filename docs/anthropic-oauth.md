@@ -1,5 +1,7 @@
 # Claude OAuth experiment
 
+Status: reference, 2026-09-21
+
 Developed on `feature/anthropic-oauth`. The owner reported successful sign-in and
 assignment to Garage on 2026-09-19; the supplied Dashboard screenshot shows a
 successful Memory Recall tool call followed by an agent reply.

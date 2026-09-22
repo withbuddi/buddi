@@ -2,23 +2,19 @@
 
 A lightweight backlog for possibilities worth remembering, not a commitment to
 implement them. Keep ideas in the repository so they stay available across
-conversations and can be reviewed alongside the code.
+conversations and can be reviewed alongside the code. When we accept an idea it
+moves to [`docs/specs/`](../specs/); when it is actually built, it is folded
+into the matching page under [`docs/`](../) and this file is deleted.
 
 ## Index
 
 | Idea | Status | Summary |
 | --- | --- | --- |
 | [Reusable Codex adapter](reusable-codex-adapter.md) | Proposed | Extract the backend integration into a package other projects can consume. |
-| [Conversation context budget](conversation-context-budget.md) | Proposed | The 80k projection cap ignores the model window and starves browser and computer conversations. |
-| [Browser canvas tab](browser-canvas-tab.md) | Proposed | One pinned live Browser tab while an agent drives the browser, instead of a tab per act. |
-| [Telegram parity](telegram-parity.md) | Proposed | Screenshots and a take-over link on Telegram while an agent drives the browser. |
+| [Codex App Server experiment](codex-app-server-experiment.md) | Idea | Background for the reusable-adapter idea: the experiment behind `BUDDI_CODEX_EXPERIMENT`, as it stood 2026-09-19. |
 | [Voice](voice.md) | Proposed | Voice notes on Telegram, press-to-talk and read-aloud on the dashboard. |
 | [Owner secrets](owner-secrets.md) | Proposed | Site passwords the agent can fill but never see. |
-| [Queued input](queued-input.md) | Proposed | Send while the agent works: queued, shown at once, injected as an interjection. |
-| [Anthropic subscription login](anthropic-subscription-login.md) | Accepted | [Implementation](../anthropic-oauth.md) on the dedicated OAuth branch. |
-
-Existing tracked work remains in the [provider roadmap](../provider-roadmap.md);
-link to it instead of duplicating its checklist here.
+| [buddi as an MCP server](mcp.md) | Idea, parked | Expose buddi's own agents over MCP; parked, not pursued. |
 
 ## How to use this folder
 
@@ -28,8 +24,12 @@ link to it instead of duplicating its checklist here.
   paragraphs are enough; speculative ideas do not need implementation plans.
 - Use statuses: **Proposed**, **Exploring**, **Accepted**, **Deferred**, or
   **Dropped**. Keep the index and the idea's status in sync.
-- When we agree to implement an idea, mark it Accepted and link its implementation
-  plan or issue. Track execution there, not in two competing checklists.
+- When we agree to implement an idea, move its file to `docs/specs/` and mark
+  it accepted there; track execution against the roadmap, not a checklist here.
+- Once an accepted idea is actually built, fold what it describes into the
+  matching reference page under `docs/` and delete both the spec and this
+  entry. See [`docs/ROADMAP.md`](../ROADMAP.md) for what is built and what is
+  in progress.
 - Keep deferred/dropped ideas with a brief reason so we remember the decision.
 - Never include secrets, tokens, or private user data.
 

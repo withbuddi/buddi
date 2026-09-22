@@ -1,6 +1,6 @@
 # The developer plugin: an agent that works in a workspace
 
-Status: specification for review, 2026-09-21. Nothing here is built.
+Status: accepted, not started, 2026-09-21
 
 ## 1. Why a separate kind of agent
 

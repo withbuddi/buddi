@@ -1,5 +1,7 @@
 # Packaged install foundation
 
+Status: reference, 2026-09-20
+
 Experimental implementation on `feat/clean-install-foundation`. Nothing is
 published to npm. The full contract remains [install.md](install.md).
 
