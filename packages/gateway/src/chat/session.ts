@@ -108,7 +108,7 @@ import {
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import { failedTurnReply } from '../surfaces/failure.js';
-import { approvalResumeContext, type ApprovalResumption } from '../surfaces/owner-request.js';
+import { approvalResumeContext, ownerRequestContext, type ApprovalResumption } from '../surfaces/owner-request.js';
 import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
 
 /** The chat id this surface books its inline mission runs against. */
@@ -1108,7 +1108,14 @@ export class ChatSession {
       agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
       provider: deps.providerFor(agent),
       registry,
-      ctx: turn.approval ? approvalResumeContext(deps.ctx, turn.approval) : deps.ctx,
+      // A line typed at the prompt is the owner asking, exactly as a line typed
+      // into the dashboard is, and a decided approval is the owner acting too.
+      // Anything else — nothing today — gets the bare context.
+      ctx: turn.approval
+        ? approvalResumeContext(deps.ctx, turn.approval)
+        : turn.userMessage !== undefined
+          ? ownerRequestContext(deps.ctx, turn.userMessage)
+          : deps.ctx,
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.
@@ -1194,7 +1201,7 @@ export class ChatSession {
       const depth = turn.depth ?? 0;
       const resume = await this.#askApproval(result.pendingActionId);
       if (resume && depth < MAX_APPROVAL_CONTINUATIONS) {
-        return this.#run(agent, conversationId, { resume, depth: depth + 1 });
+        return this.#run(agent, conversationId, { resume, depth: depth + 1, approval: { tool: resume.tool } });
       }
       // Waiting on a button, not on an answer: no claim on the next message.
       return { stopped: 'awaiting-approval', pendingActionId: result.pendingActionId };
