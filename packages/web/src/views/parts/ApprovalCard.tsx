@@ -20,7 +20,9 @@ export type Scope = 'once' | 'conversation' | 'always';
  * to do only when the effect actually happened. Callers that just reload
  * ignore the argument.
  */
-export function useDecide(onDone: (outcome?: { decision: Decision; state?: string }) => void): {
+export function useDecide(
+  onDone: (outcome?: { decision: Decision; state?: string; result?: unknown }) => void,
+): {
   busy: string | null;
   note: string | null;
   failure: string | null;
@@ -44,14 +46,24 @@ export function useDecide(onDone: (outcome?: { decision: Decision; state?: strin
      * is holding something back until the effect happened would let it go on
      * a network blip, which is the one thing an approval exists to prevent.
      */
-    let outcome: { decision: Decision; state?: string } | undefined;
+    let outcome: { decision: Decision; state?: string; result?: unknown } | undefined;
     try {
       // Only pass what there is: an approval that offered no controls makes
       // exactly the request it always made.
       const result = choices
         ? await api.decide(id, decision, scope, choices)
         : await api.decide(id, decision, scope);
-      outcome = { decision, ...(result.execution?.state ? { state: result.execution.state } : {}) };
+      /*
+       * The tool's own output travels with the decision. A page holding a
+       * sentence to print — "Queued for 9:00", read out of the result — has
+       * no other way to get it: the effect happened *here*, in the approval,
+       * not in the call that proposed it.
+       */
+      outcome = {
+        decision,
+        ...(result.execution?.state ? { state: result.execution.state } : {}),
+        ...(result.execution && 'result' in result.execution ? { result: result.execution.result } : {}),
+      };
       setNote(
         decision === 'reject'
           ? `Rejected ${result.action.tool}.`

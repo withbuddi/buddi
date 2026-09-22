@@ -1469,7 +1469,11 @@ export const api = {
     // and value against what the action declared; nothing here is trusted.
     ownerChoices?: Record<string, string>,
   ) =>
-    post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(
+    post<{
+      action: ApprovalRow;
+      /** `result` is the tool's own output, when it ran and succeeded. */
+      execution: { state: string; message?: string; result?: unknown } | null;
+    }>(
       `/approvals/${encodeURIComponent(id)}/${decision}`,
       permissionScope || ownerChoices
         ? { ...(permissionScope ? { permissionScope } : {}), ...(ownerChoices ? { ownerChoices } : {}) }

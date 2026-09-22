@@ -190,7 +190,7 @@ const demoTools: PluginManifest['tools'] = [
     }),
     async execute(args) {
       demoWrites.push({ tool: 'demo.send', args });
-      return { sent: true };
+      return { message: 'Sent, and the thread has it.' };
     },
   },
   {
@@ -311,6 +311,7 @@ const board: PageDescriptor = {
       rows: 'items',
       count: 'total',
       note: 'note',
+      reset: true,
       results: { title: { path: 'title' }, sub: { path: 'sub' } },
       to: { page: 'board', item: { path: 'id' } },
       empty: 'Nothing matches those words.',
@@ -388,7 +389,12 @@ const board: PageDescriptor = {
             {
               kind: 'button',
               when: { path: 'attachmentId', equals: null },
-              action: { tool: 'demo.fetch', label: 'Fetch the attachment', args: { id: { path: 'id' } } },
+              action: {
+                tool: 'demo.fetch',
+                // Its words read the row it stands in, like a row action's.
+                label: 'Fetch what {from} sent',
+                args: { id: { path: 'id' } },
+              },
             },
             {
               kind: 'artifact',
@@ -413,7 +419,8 @@ const board: PageDescriptor = {
             query: { query: 'drafts', params: { id: { param: 'item' } } },
             rows: 'drafts',
             key: 'id',
-            item: { title: { path: 'subject' }, pill: { value: { path: 'state' } } },
+            // A draft is not good or bad: it is the thing on this screen.
+            item: { title: { path: 'subject' }, pill: { value: { path: 'state' }, tone: 'accent' } },
             empty: 'No drafts on this one.',
           },
           detail: [
@@ -458,7 +465,15 @@ const board: PageDescriptor = {
                   args: { id: { param: 'draft' } },
                   then: { route: { page: 'board' } },
                 },
-                { tool: 'demo.send', label: 'Send', busy: 'Proposing…', args: { id: { param: 'draft' } }, then: 'refresh' },
+                {
+                  tool: 'demo.send',
+                  label: 'Send',
+                  busy: 'Proposing…',
+                  // Read out of what the *approval's* execution returned.
+                  done: { path: 'message' },
+                  args: { id: { param: 'draft' } },
+                  then: 'refresh',
+                },
               ],
             },
           ],

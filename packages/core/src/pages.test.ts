@@ -411,6 +411,23 @@ describe('what a descriptor may not be', () => {
     expect(() => parse([page({ body: [attachment] })], { queries: ['items'], tools: ['demo.keep'] })).not.toThrow();
   });
 
+  it('does not count a value that merely looks like a component', () => {
+    /*
+     * `when: { in: [{ kind: 'weird' }] }` is the owner's *data* — a row whose
+     * field happens to hold an object with a `kind`. Counting it as nesting
+     * made the ordinary page one level deeper than it is.
+     */
+    let body: unknown[] = [
+      {
+        kind: 'notice',
+        text: 'The bottom.',
+        when: { path: 'state', in: [{ kind: 'weird', body: [{ kind: 'weirder' }] }] },
+      },
+    ];
+    for (let i = 0; i < 11; i += 1) body = [{ kind: 'section', body }];
+    expect(() => parse([page({ body })])).not.toThrow();
+  });
+
   it('refuses one that is deeper than a screen', () => {
     let body: unknown[] = [{ kind: 'notice', text: 'The bottom.' }];
     for (let i = 0; i < 12; i += 1) body = [{ kind: 'section', body }];

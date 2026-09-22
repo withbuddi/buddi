@@ -80,6 +80,7 @@ const board: Component[] = [
     rows: 'items',
     count: 'total',
     note: 'note',
+    reset: true,
     results: { title: { path: 'title' }, sub: { path: 'sub' } },
     to: { page: 'board', item: { path: 'id' } },
   },
@@ -138,7 +139,7 @@ const board: Component[] = [
           {
             kind: 'button',
             when: { path: 'attachmentId', equals: null },
-            action: { tool: 'demo.fetch', label: 'Fetch the attachment', args: { id: { path: 'id' } } },
+            action: { tool: 'demo.fetch', label: 'Fetch what {from} sent', args: { id: { path: 'id' } } },
           },
           {
             kind: 'artifact',
@@ -159,7 +160,7 @@ const board: Component[] = [
           query: { query: 'drafts', params: { id: { param: 'item' } } },
           rows: 'drafts',
           key: 'id',
-          item: { title: { path: 'subject' } },
+          item: { title: { path: 'subject' }, pill: { value: { path: 'state' }, tone: 'accent' } },
         },
         detail: [
           {
@@ -189,7 +190,7 @@ const board: Component[] = [
                 args: { id: { param: 'draft' } },
                 then: { route: { page: 'board' } },
               },
-              { tool: 'demo.send', label: 'Send', args: { id: { param: 'draft' } } },
+              { tool: 'demo.send', label: 'Send', done: { path: 'message' }, args: { id: { param: 'draft' } } },
             ],
           },
         ],
@@ -445,7 +446,8 @@ describe('the pieces a descriptor is made of', () => {
       'href',
       '/api/artifacts/artifact-1/download',
     );
-    const fetchButtons = screen.getAllByRole('button', { name: 'Fetch the attachment' });
+    // A button's words read the row it stands in, like a row action's.
+    const fetchButtons = screen.getAllByRole('button', { name: 'Fetch what Bo, on Wednesday sent' });
     expect(fetchButtons).toHaveLength(1);
     fireEvent.click(fetchButtons[0] as HTMLElement);
     await waitFor(() =>
@@ -576,6 +578,27 @@ describe('the pieces a descriptor is made of', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it('says what a gated write did, out of what the approval executed', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    vi.mocked(api.decide).mockResolvedValue({
+      action: approvalRow('act-2', 'Send it now'),
+      execution: { state: 'succeeded', result: { message: 'Sent, and the thread has it.' } },
+    } as never);
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
+    const card = (await screen.findByText('Send it now')).closest('.ui-card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    // The sentence is the tool's own, and it only becomes true here.
+    expect(await screen.findByText('Sent, and the thread has it.')).toBeInTheDocument();
+  });
+
+  it('draws a draft\'s pill in the accent: it is the thing on this screen', async () => {
+    draw('board', 'a1');
+    const pill = (await screen.findByText('draft')) as HTMLElement;
+    expect(pill).toHaveAttribute('data-tone', 'accent');
+  });
+
   it('does not act on `then` when the approval was rejected', async () => {
     vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
     vi.mocked(api.decide).mockResolvedValue({
@@ -696,6 +719,10 @@ describe('the pieces a descriptor is made of', () => {
     // The count and the caveat the query answered with.
     expect(await screen.findByText(/9 in all/)).toBeInTheDocument();
     expect(screen.getByText(/The newest nine/)).toBeInTheDocument();
+    // And Clear empties the field and the results with it.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect((screen.getByLabelText('Words') as HTMLInputElement).value).toBe('');
+    await waitFor(() => expect(screen.queryByText(/9 in all/)).not.toBeInTheDocument());
   });
 
   it('says what the answer is, even when the answer is nothing', async () => {
