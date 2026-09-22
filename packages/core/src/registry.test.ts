@@ -167,6 +167,164 @@ describe('ToolRegistry', () => {
 });
 
 /**
+ * A tier decided per call (`ToolDefinition.tierFor`).
+ *
+ * The same tool, gated or not depending on what it was asked to do — which is
+ * the developer plugin's whole problem: `rm -rf .` and `ls` are both "run a
+ * command". What is under test is that the decision is *acted on* (the auto
+ * one runs, the gated one records an action), that the sentence explaining it
+ * reaches the card, and that neither a throw nor a tier outside the three
+ * lets anything happen.
+ */
+describe('tierFor: a tier decided per call', () => {
+  /** Every insert this fake sees, so a test can read the preview it recorded. */
+  function recordingDb(): { db: ToolContext['db']; previews: string[] } {
+    const previews: string[] = [];
+    const db = {
+      query: async (sql: string, params?: any[]) => {
+        if (!sql.includes('insert into core.actions')) return { rows: [] };
+        previews.push(String(params?.[8]));
+        return {
+          rows: [
+            {
+              id: '22222222-2222-2222-2222-222222222222',
+              tool: 'demo.double',
+              tool_version: '0.0.1',
+              agent_id: 'agent-1',
+              conversation_id: null,
+              job_id: null,
+              canonical_args: { n: 1 },
+              envelope: { n: 1 },
+              args_hash: 'hash',
+              preview: String(params?.[8]),
+              expires_at: new Date('2026-01-02T00:00:00Z'),
+              policy_version: 1,
+              created_at: new Date('2026-01-01T00:00:00Z'),
+              state: 'pending',
+              updated_at: new Date('2026-01-01T00:00:00Z'),
+            },
+          ],
+        };
+      },
+    };
+    return { db: db as unknown as ToolContext['db'], previews };
+  }
+
+  /** A tool that is `session` by declaration and decides each call. */
+  function deciding(
+    tierFor: (input: { n: number }) => Promise<{ tier: Tier; reason?: string }>,
+    execute = vi.fn(async (i: { n: number }) => i.n * 2),
+  ): { manifest: PluginManifest; execute: ReturnType<typeof vi.fn> } {
+    const base = manifest('session', execute as never);
+    const tool = base.tools[0]!;
+    return {
+      manifest: {
+        ...base,
+        tools: [
+          {
+            ...tool,
+            describe: () => ({ envelope: { n: 1 }, preview: 'Double one number.' }),
+            tierFor: (input: unknown) => tierFor(input as { n: number }),
+          },
+        ],
+      },
+      execute,
+    };
+  }
+
+  it('executes a call the tool decided is auto, whatever it declared', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m, execute } = deciding(async () => ({ tier: 'auto' }));
+    r.register(m);
+    // Declared `session`, so that is still what the model is told and what a
+    // grant is checked against.
+    expect(r.list()[0]?.tier).toBe('session');
+    await expect(r.invoke('demo.double', { n: 21 }, ctx)).resolves.toEqual({ ok: true, output: 42 });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('records an approval whose preview carries the rule that matched', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m, execute } = deciding(async () => ({
+      tier: 'gated',
+      reason: 'npm install reaches the network.',
+    }));
+    r.register(m);
+    const { db, previews } = recordingDb();
+    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db, agentId: 'agent-1' });
+    expect(res).toMatchObject({ ok: false, reason: 'approval-required' });
+    expect((res as { preview: string }).preview).toBe(
+      'Double one number. — npm install reaches the network.',
+    );
+    expect(previews).toEqual(['Double one number. — npm install reaches the network.']);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('leaves the preview alone when no reason was given', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m } = deciding(async () => ({ tier: 'gated' }));
+    r.register(m);
+    const { db, previews } = recordingDb();
+    await r.invoke('demo.double', { n: 1 }, { ...ctx, db, agentId: 'agent-1' });
+    expect(previews).toEqual(['Double one number.']);
+  });
+
+  it('refuses the call when tierFor throws', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m, execute } = deciding(async () => {
+      throw new Error('the workspace record is gone');
+    });
+    r.register(m);
+    const res = await r.invoke('demo.double', { n: 1 }, ctx);
+    expect(res).toMatchObject({ ok: false, reason: 'tool-error' });
+    expect((res as { message: string }).message).toMatch(/the workspace record is gone/);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('refuses a tier that may not be decided per call', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m, execute } = deciding(async () => ({ tier: 'draft' as Tier }));
+    r.register(m);
+    const res = await r.invoke('demo.double', { n: 1 }, ctx);
+    expect(res).toMatchObject({ ok: false, reason: 'tool-error' });
+    expect((res as { message: string }).message).toMatch(/only auto, gated, session/);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('still asks everything `session` asks when that is what it returns', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m, execute } = deciding(async () => ({ tier: 'session' }));
+    r.register(m);
+    // No owner request: the per-call decision buys nothing on its own.
+    expect(await r.invoke('demo.double', { n: 1 }, ctx)).toMatchObject({
+      ok: false,
+      reason: 'session-not-authorized',
+    });
+    expect(execute).not.toHaveBeenCalled();
+    const granted: ToolContext = {
+      ...ctx,
+      ownerRequest: { id: 'r1', text: 'run the tests', expiresAt: Date.now() + 60_000 },
+      sessionTools: ['demo.double'],
+      agentId: 'agent-1',
+      conversationId: 'c1',
+    };
+    await expect(r.invoke('demo.double', { n: 4 }, granted)).resolves.toEqual({ ok: true, output: 8 });
+  });
+
+  it('is never asked before the arguments are valid', async () => {
+    const tierFor = vi.fn(async () => ({ tier: 'auto' as Tier }));
+    const r = new ToolRegistry();
+    const { manifest: m } = deciding(tierFor as never);
+    r.register(m);
+    expect(await r.invoke('demo.double', { n: 'twenty' }, ctx)).toMatchObject({
+      ok: false,
+      reason: 'invalid-args',
+    });
+    expect(tierFor).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * The provider contract. Anthropic refuses a whole request whose
  * `input_schema.type` is missing ("tools.N.custom.input_schema.type: Field
  * required") and OpenAI wants the same of `function.parameters`, so an object

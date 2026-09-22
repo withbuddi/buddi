@@ -109,6 +109,15 @@ import {
   type WebChatDeps,
 } from './chat.js';
 import { readAgentAttention, streamAttention } from './attention.js';
+import {
+  PREVIEW_PREFIX,
+  parsePreviewCheckPath,
+  parsePreviewPath,
+  previewCheck,
+  proxyPreview,
+  upgradePreview,
+  type PreviewDeps,
+} from './preview.js';
 import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   TAILSCALE_SETTING_KEY,
@@ -410,6 +419,37 @@ export function createWebApp(deps: WebServerDeps): Server {
       return session;
     },
   });
+  /** What the preview proxy needs: the manifests, and the owner's context. */
+  const previewDeps = (): PreviewDeps => ({ registry: deps.registry, ctx: deps.ctx, log });
+  /**
+   * The gate in front of a preview websocket: the dashboard's own, and no more.
+   *
+   * The same three ways in as any request — a live session cookie, a confirmed
+   * Tailscale identity, or a loopback binding that is open by definition — and
+   * the same refusal to let another site drive it: an Origin this server would
+   * not accept a write from is refused before the daemon is asked anything.
+   * There is no CSRF frame here because the app behind the proxy has never
+   * heard of this dashboard and cannot be asked to echo its token.
+   */
+  const previewAuthorized = async (req: IncomingMessage): Promise<boolean> => {
+    const at = deps.now();
+    const origin = requestOrigin(req);
+    if (origin !== undefined && !allowed().has(origin)) return false;
+    const scope = requestScope(req);
+    const session = sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE], scope, at);
+    if (session) {
+      if (session.via === 'tailscale') {
+        const confirmed = await identityOf(req, at);
+        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
+          sessions.destroy(session.id);
+          return false;
+        }
+      }
+      return true;
+    }
+    if (openAccess && scope === 'local') return true;
+    return (await identityOf(req, at)) !== null;
+  };
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -537,6 +577,16 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
+  /*
+   * Hot reload, on the same one listener.
+   *
+   * A whole subtree rather than a path, because the socket belongs to somebody
+   * else's dev server and it puts it wherever it likes. The gate is this
+   * server's, asked before a byte is forwarded.
+   */
+  extension.attachPrefix(PREVIEW_PREFIX, (req, socket, head) => {
+    void upgradePreview(previewDeps(), req, socket, head, previewAuthorized);
+  });
   server.once('close', () => { extension.shutdown(); hand.shutdown(); });
   return server;
 
@@ -674,6 +724,32 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (sessions.renewCookie(session, now)) res.setHeader('Set-Cookie', sessionCookies(session));
 
     const mutating = method !== 'GET' && method !== 'HEAD';
+
+    /*
+     * A plugin's own process, proxied (docs/plugins.md §2.5c).
+     *
+     * Here rather than in `api()` because it is not an API: it is somebody
+     * else's app, served on this origin, and everything below the prefix
+     * belongs to it — including methods and paths this server would otherwise
+     * answer 405. It sits *after* the session gate, so an unauthenticated
+     * caller has already had its empty 401 and learned nothing about which
+     * previews exist.
+     *
+     * A write keeps the Origin check, which is what stops another site from
+     * driving the owner's dev server through their session. It does not keep
+     * the CSRF header: the app behind the proxy has never heard of this
+     * dashboard and cannot echo a token it was never given. The frame is
+     * same-origin, so a form inside it carries the Origin this server wants.
+     */
+    const preview = parsePreviewPath(url.pathname);
+    if (preview) {
+      if (mutating) {
+        const origin = requestOrigin(req);
+        if (origin === undefined || !allowed().has(origin)) return sendEmpty(res, 403);
+      }
+      return proxyPreview(previewDeps(), preview, req, res, url.search);
+    }
+
     if (mutating) {
       const origin = requestOrigin(req);
       if (origin === undefined || !allowed().has(origin)) return sendEmpty(res, 403);
@@ -761,6 +837,16 @@ export function createWebApp(deps: WebServerDeps): Server {
        * The library: what the store holds, for a person (docs/files.md). Read
        * only, owner only, never an agent tool. Origin is what the row says.
        */
+      /*
+       * "Is my preview being served, and does it assume it owns a host?"
+       *
+       * The plugin's own question, answered from what the proxy saw on the
+       * first HTML response it forwarded. It is a warning for the owner —
+       * `developer.preview` prints it beside the link — and never a gate.
+       */
+      const check = parsePreviewCheckPath(path);
+      if (check) return sendJson(res, 200, previewCheck(check.plugin, check.name));
+
       if (path === '/api/artifacts') {
         const origin = q.get('origin');
         const family = q.get('family');

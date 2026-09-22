@@ -17,6 +17,8 @@ import type {
   DocumentProps,
   KeyValueMap,
   KeyValueProps,
+  PreviewMap,
+  PreviewProps,
   RendererName,
   TableCell,
   TableMap,
@@ -266,6 +268,29 @@ export function resolveDocument(output: unknown, map: DocumentMap): DocumentProp
   };
 }
 
+/**
+ * The one URL the canvas will frame: a path under `/preview/`.
+ *
+ * The frame runs on the dashboard's own origin, with the owner's session on
+ * it, so what goes in it is not a matter of taste. `/preview/` is the prefix
+ * the gateway proxies and the only one a plugin may point at; a descriptor
+ * naming `/api/…`, another site, or a scheme of its own gets no frame at all.
+ * Checked here, at render time, because this is the last place before the
+ * `src` attribute exists.
+ */
+export function isPreviewPath(src: string): boolean {
+  return isSameOrigin(src) && src.startsWith('/preview/');
+}
+
+export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
+  const src = map.src ? asString(readPath(output, map.src)) : null;
+  return {
+    src: src && isPreviewPath(src) ? src : null,
+    title: asString(readRef(output, map.title)),
+    output: map.output ? asString(readPath(output, map.output)) : null,
+  };
+}
+
 /** Relative paths only. Anything with a scheme or `//` host is refused. */
 export function isSameOrigin(src: string): boolean {
   return src.startsWith('/') && !src.startsWith('//');
@@ -302,6 +327,8 @@ export function applyDescriptor(
       return { renderer: 'keyvalue', props: resolveKeyValue(output, map as KeyValueMap) };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
+    case 'preview':
+      return { renderer: 'preview', props: resolvePreview(output, map as PreviewMap) };
     default:
       return { renderer: 'structured', props: { value: output } };
   }
