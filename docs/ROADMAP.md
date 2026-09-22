@@ -41,6 +41,9 @@ next. Checked against the code and `git log` on 2026-09-21.
   summary every run gets for free.
 - [The web plugin](web.md) — search and read-one-page as a capability.
 - [Writing a plugin](plugins.md) — the contract for anything an agent can do.
+- [Plugin pages](specs/plugin-pages.md) — a plugin's screens as data: rail
+  entries and settings tabs from descriptors, reads as queries, writes as
+  tools; the email screens are the proof.
 - [Email](specs/email.md) — all six steps: policies and the gate, accounts,
   threads and Sent, six watchers with a switch each, the draft lifecycle with
   owner choices on the approval card, a Mail page with search, attachments
@@ -48,9 +51,7 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- [Plugin pages](specs/plugin-pages.md) — a plugin's screens as data: rail
-  entries and settings tabs from descriptors, reads as queries, writes as
-  tools. The proof is porting Mail and Settings → Email to it.
+Nothing at the moment; the next item below is the developer plugin.
 
 ## Next, in order
 
@@ -74,6 +75,9 @@ Small, whenever a slot opens:
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
 - Artefacts page — the list of `core.artifacts` with preview and download.
+- `ToolRef.pending` on plugin pages — a sentence drawn above a gated action's
+  approval card while it waits ("Nothing has been sent…"); the one Mail
+  behaviour the port could not express.
 
 ## Later
 
