@@ -11,13 +11,15 @@ import { runScheduler } from '../scheduler/runner.js';
 import { upsertMission } from '../scheduler/missions.js';
 import type { PluginManifest } from '../tools.js';
 import { consumeDigestItems, pendingDigestItems, renderDigest } from './digest.js';
-import { getFinding, openFindings, runSentinels } from './run.js';
+import { getFinding, openFindings, runSentinels, snoozeFinding } from './run.js';
+import { sentinelIsEnabled, sentinelSwitches, setSentinelEnabled } from './switches.js';
 import {
   INFO_COOLDOWN_MS,
   SENTINEL_WAKE_MISSION_ID,
   URGENT_COOLDOWN_MS,
   type Finding,
   type Sentinel,
+  type SentinelResult,
 } from './types.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 
@@ -30,16 +32,16 @@ const T0 = new Date('2026-09-11T12:00:00Z');
 const at = (ms: number): Date => new Date(T0.getTime() + ms);
 
 /** A sentinel whose answer the test sets, run after run. */
-function scripted(id: string, script: Finding[][]): Sentinel {
+function scripted(id: string, script: SentinelResult[]): Sentinel {
   let call = 0;
   return {
     id,
     description: 'test watcher',
     every: 60,
     async run() {
-      const findings = script[Math.min(call, script.length - 1)] ?? [];
+      const result = script[Math.min(call, script.length - 1)] ?? [];
       call += 1;
-      return findings;
+      return result;
     },
   };
 }
@@ -98,7 +100,7 @@ suite('sentinels (postgres)', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'truncate core.sentinel_findings, core.sentinel_runs, core.digest_items cascade',
+      'truncate core.sentinel_findings, core.sentinel_runs, core.sentinel_switches, core.digest_items cascade',
     );
     await pool.query(
       'truncate core.occurrences, core.last_materialized, core.schedule_specs, core.missions cascade',
@@ -208,6 +210,9 @@ suite('sentinels (postgres)', () => {
         T0.getTime() + INFO_COOLDOWN_MS,
       );
       expect(renderDigest(items)).toContain(info.title);
+      // The recap is told what these items are: readings, not verdicts.
+      expect(renderDigest(items)).toContain('not yet verified');
+      expect(renderDigest(items)).not.toContain('already verified');
     });
 
     it('is consumed exactly once, and stamps the finding delivered', async () => {
@@ -238,6 +243,47 @@ suite('sentinels (postgres)', () => {
       expect(await events('sentinel.resolved')).toMatchObject([{ key: urgent.key }]);
     });
 
+    it('takes the finding out of the digest queue when it resolves', async () => {
+      // A fact that is no longer true must not be read out on Sunday. The
+      // recap consumes what is pending; an item left behind would have it
+      // reporting something the watcher itself has stopped believing.
+      const manifests = pluginWith(scripted('w', [[info], []]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await pendingDigestItems(pool)).toHaveLength(1);
+
+      const [outcome] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(outcome?.resolved).toBe(1);
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+    });
+
+    it('resolves and un-queues in one act, so neither can happen without the other', async () => {
+      // Both statements are in one transaction. What is observable from here
+      // is the pair: the row resolved *and* the queue empty, with no state in
+      // which the recap would read out a fact the watcher has dropped.
+      const manifests = pluginWith(scripted('w', [[info], []]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      const { rows } = await pool.query(
+        `select (select count(*)::int from core.sentinel_findings
+                  where key = $1 and resolved_at is not null) as resolved,
+                (select count(*)::int from core.digest_items
+                  where finding_key = $1 and consumed_at is null) as queued`,
+        [info.key],
+      );
+      expect(rows[0]).toEqual({ resolved: 1, queued: 0 });
+    });
+
+    it('leaves an item that was already read out where it is', async () => {
+      const manifests = pluginWith(scripted('w', [[info], []]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      const ids = (await pendingDigestItems(pool)).map((i) => i.id);
+      await consumeDigestItems(pool, ids, at(1000));
+
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      const { rows } = await pool.query(`select count(*)::int as n from core.digest_items`);
+      expect(rows[0].n).toBe(1);
+    });
+
     it('speaks again immediately when a resolved fact comes back', async () => {
       await wakeMission();
       const manifests = pluginWith(scripted('w', [[urgent], [], [urgent]]));
@@ -248,6 +294,104 @@ suite('sentinels (postgres)', () => {
 
       expect(await wakes()).toHaveLength(2);
       expect((await getFinding(pool, urgent.key))?.resolvedAt).toBeNull();
+    });
+  });
+
+  describe('a fact that got worse', () => {
+    it('speaks through the cooldown when info becomes urgent', async () => {
+      await wakeMission();
+      // The waiting-on-me case exactly: raised as `info` on day two, still the
+      // same key on day seven, and `urgent` by then. The info cooldown is a
+      // week, so without the escalation rule the owner would hear about it on
+      // day nine — two days after the point of the word "urgent".
+      const escalating: Finding = { ...info, severity: 'urgent' };
+      const manifests = pluginWith(scripted('w', [[info], [escalating]]));
+
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await pendingDigestItems(pool)).toHaveLength(1);
+      expect(await wakes()).toHaveLength(0);
+
+      const [outcome] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(outcome?.fired).toBe(1);
+      expect(await wakes()).toHaveLength(1);
+      expect((await getFinding(pool, info.key))?.cooldownUntil?.getTime()).toBe(
+        at(60_000).getTime() + URGENT_COOLDOWN_MS,
+      );
+    });
+
+    it('takes its old digest line with it when it escalates', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[info], [{ ...info, severity: 'urgent' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await pendingDigestItems(pool)).toHaveLength(1);
+
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      // The owner has just been woken about it; the recap must not read out
+      // day two's milder wording on Sunday as though it were news.
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      expect(await wakes()).toHaveLength(1);
+    });
+
+    it('leaves a digest line that was already read out where it is', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[info], [{ ...info, severity: 'urgent' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await consumeDigestItems(pool, (await pendingDigestItems(pool)).map((i) => i.id), at(1000));
+
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      const { rows } = await pool.query(`select count(*)::int as n from core.digest_items`);
+      expect(rows[0].n).toBe(1);
+    });
+
+    it('says nothing again when it gets better', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[urgent], [{ ...urgent, severity: 'info' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      const [outcome] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(outcome?.fired).toBe(0);
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+    });
+
+    it('still respects a snooze', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[info], [{ ...info, severity: 'urgent' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await snoozeFinding(pool, info.key, true, at(1000));
+      const [outcome] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(outcome?.fired).toBe(0);
+      expect(await wakes()).toHaveLength(0);
+    });
+  });
+
+  describe('a cap is not a resolution', () => {
+    /** Twenty-five facts, of which the sentinel is willing to raise twenty. */
+    const many: Finding[] = Array.from({ length: 25 }, (_, i) => ({
+      ...info,
+      key: `w:fact-${String(i).padStart(2, '0')}`,
+      title: `fact ${i}`,
+    }));
+    const capped = { findings: many.slice(0, 20), keys: many.map((f) => f.key) };
+
+    it('resolves nothing for the rows past the cap', async () => {
+      const manifests = pluginWith(scripted('w', [capped]));
+      const [first] = await runSentinels(pool, manifests, T0, 'UTC');
+      expect(first).toMatchObject({ findings: 20, fired: 20, resolved: 0 });
+
+      const [second] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(second?.resolved).toBe(0);
+      expect(await openFindings(pool, 'w')).toHaveLength(20);
+    });
+
+    it('resolves a key the sentinel stops naming at all', async () => {
+      const manifests = pluginWith(
+        scripted('w', [capped, { findings: capped.findings, keys: capped.keys.slice(0, 24) }]),
+      );
+      await runSentinels(pool, manifests, T0, 'UTC');
+      const [second] = await runSentinels(pool, manifests, at(60_000), 'UTC');
+      // The dropped key was past the cap, so it was never raised and there is
+      // no open row to resolve; the twenty that were raised stay open.
+      expect(second?.resolved).toBe(0);
+      expect(await openFindings(pool, 'w')).toHaveLength(20);
     });
   });
 
@@ -282,6 +426,47 @@ suite('sentinels (postgres)', () => {
         { sentinel_id: 'w', last_error: null },
       ]);
       expect(await pendingDigestItems(pool)).toHaveLength(1);
+    });
+  });
+
+  describe("the owner's switch", () => {
+    it('is on for a watcher nobody has touched', async () => {
+      expect(sentinelIsEnabled(await sentinelSwitches(pool), 'w')).toBe(true);
+    });
+
+    it('stops a watcher running at all', async () => {
+      const manifests = pluginWith(scripted('w', [[info], [info]]));
+      await setSentinelEnabled(pool, 'w', false, T0);
+
+      const [outcome] = await runSentinels(pool, manifests, T0, 'UTC');
+      expect(outcome).toMatchObject({ sentinelId: 'w', ran: false, disabled: true });
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      // Nothing ran, so nothing is in the ledger either.
+      const { rows } = await pool.query(`select count(*)::int as n from core.sentinel_runs`);
+      expect(rows[0].n).toBe(0);
+    });
+
+    it('leaves its open findings alone rather than resolving them', async () => {
+      const manifests = pluginWith(scripted('w', [[info]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await openFindings(pool, 'w')).toHaveLength(1);
+
+      await setSentinelEnabled(pool, 'w', false, at(60_000));
+      await runSentinels(pool, manifests, at(120_000), 'UTC');
+      const open = await openFindings(pool, 'w');
+      expect(open).toHaveLength(1);
+      expect(open[0]!.resolvedAt).toBeNull();
+    });
+
+    it('runs again once it is switched back on', async () => {
+      const manifests = pluginWith(scripted('w', [[info]]));
+      await setSentinelEnabled(pool, 'w', false, T0);
+      await runSentinels(pool, manifests, T0, 'UTC');
+      const back = await setSentinelEnabled(pool, 'w', true, at(60_000));
+      expect(back).toMatchObject({ sentinelId: 'w', enabled: true });
+
+      const [outcome] = await runSentinels(pool, manifests, at(120_000), 'UTC');
+      expect(outcome).toMatchObject({ ran: true, findings: 1, fired: 1 });
     });
   });
 

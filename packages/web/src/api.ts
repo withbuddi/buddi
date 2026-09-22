@@ -191,6 +191,19 @@ export interface Overview {
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
 }
 
+/** What the mail watchers read, and the range the page may set. */
+export interface EmailWatcherSettings {
+  /** Days a conversation may wait on the owner before it is reported. */
+  waitingDays: number;
+  /** How sure the date parser must be before a stated date is a finding. */
+  dateConfidence: number;
+  defaults: { waitingDays: number; dateConfidence: number };
+  limits: {
+    waitingDays: { min: number; max: number };
+    dateConfidence: { min: number; max: number };
+  };
+}
+
 /** One standing decision about incoming mail. `/api/email/policies`. */
 export interface EmailPolicy {
   id: string;
@@ -413,7 +426,13 @@ export interface ReminderRow {
 }
 
 export interface SentinelsView {
-  installed: Array<{ id: string; description: string; every: number }>;
+  installed: Array<{
+    id: string;
+    description: string;
+    every: number;
+    /** False when the owner has switched this watcher off. It does not run. */
+    enabled: boolean;
+  }>;
   runs: Array<{ sentinelId: string; lastRunAt: string; lastError: string | null }>;
   open: SentinelFinding[];
   resolved: SentinelFinding[];
@@ -1219,6 +1238,15 @@ export const api = {
     post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
+  /**
+   * Switch one watcher off, or back on. Off means it does not run at all; what
+   * it already found stays where it is rather than reading as resolved.
+   */
+  setSentinelEnabled: (id: string, enabled: boolean) =>
+    post<{ sentinelId: string; enabled: boolean }>(
+      `/sentinels/${encodeURIComponent(id)}/enabled`,
+      { enabled },
+    ),
   snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
   agents: () => get<AgentsView>('/agents'),
   /**
@@ -1261,6 +1289,10 @@ export const api = {
     post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
   /* ---- mail accounts ---- */
   emailAccounts: () => get<EmailAccountsView>('/email/accounts'),
+  /** The two settings the mail watchers read (docs/specs/email.md §7). */
+  emailWatchers: () => get<EmailWatcherSettings>('/email/watchers'),
+  setEmailWatchers: (patch: { waitingDays?: number; dateConfidence?: number }) =>
+    post<EmailWatcherSettings>('/email/watchers', patch),
   addEmailAccount: (body: NewEmailAccount) => post<EmailAccountView>('/email/accounts', body),
   removeEmailAccount: (id: string) =>
     del<{ removed: boolean; address: string | null; secretRemoved: boolean }>(

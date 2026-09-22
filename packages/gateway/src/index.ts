@@ -12,6 +12,7 @@ export * from './db-ready.js';
 export * from './missions/execute.js';
 export * from './missions/defaults.js';
 export * from './missions/recap.js';
+export * from './missions/watcher-mail.js';
 export * from './missions/reminders.js';
 export * from './web/index.js';
 export { startTelegram, describePaired } from './telegram/main.js';

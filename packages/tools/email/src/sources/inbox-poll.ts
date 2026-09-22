@@ -46,6 +46,7 @@ import type { Pool, PoolClient } from 'pg';
 import { INBOX, listAccounts, resolveAuth, type EnvLike } from '../config.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
+import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
 import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
@@ -166,6 +167,13 @@ interface PendingTriage {
   cc: string[];
   subject: string;
   date: string | null;
+  /**
+   * The ordering clock — INTERNALDATE, the poll's own instant when the server
+   * gave none. The sender's `Date` header is `date` above and is never this:
+   * the date watcher reads "Thursday at 3pm" against *this* instant, and a
+   * forged header would otherwise move every such reading in the message.
+   */
+  at: string;
   hasAttachments: boolean;
   attachments: Parameters<typeof triagePrompt>[0]['attachments'];
   bodyText: string;
@@ -409,6 +417,7 @@ async function commitBatch(
         cc: message.cc,
         subject: message.subject,
         date: message.date ? message.date.toISOString() : null,
+        at: (message.internalDate ?? now).toISOString(),
         hasAttachments: message.hasAttachments,
         attachments: message.attachments,
         bodyText: message.bodyText,
@@ -442,7 +451,7 @@ async function commitBatch(
 async function unstamped(db: Pool, accountId: string, limit: number): Promise<PendingTriage[]> {
   const { rows } = await db.query(
     `select id, thread_id, from_addr, to_addrs, cc, subject, date, has_attachments, attachments,
-            body_text, thread_key, list_id
+            body_text, thread_key, list_id, coalesce(internal_date, fetched_at) as at
        from email.messages
       where account_id = $1 and triage_enqueued_at is null and direction = 'in'
       order by fetched_at asc, uid asc
@@ -457,6 +466,7 @@ async function unstamped(db: Pool, accountId: string, limit: number): Promise<Pe
     cc: Array.isArray(row.cc) ? row.cc : [],
     subject: row.subject ?? '',
     date: row.date instanceof Date ? row.date.toISOString() : (row.date ?? null),
+    at: row.at instanceof Date ? row.at.toISOString() : String(row.at),
     hasAttachments: Boolean(row.has_attachments),
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
     bodyText: row.body_text ?? '',
@@ -759,6 +769,39 @@ async function drain(
     );
     const action = decision.refused ? 'refused' : decision.action;
 
+    /*
+     * The dates this message states, read here and stored (docs/specs/email.md
+     * §7's `email.date-stated`). It happens at ingest because the body is in
+     * hand and the parse is a regex sweep over one string — and because the
+     * alternative is the sentinel re-reading every message that ever landed.
+     *
+     * An ignored sender is stamped, not read: the watchers are not a way round
+     * the owner's own gate — and that stamp belongs to the transaction that
+     * records the ignore, not to this line. A parse that throws must never cost
+     * the message its run, so it is logged and the message left unscanned for
+     * the next poll.
+     */
+    const ignoring = !decision.refused && decision.action === 'ignore' && Boolean(decision.policy);
+    try {
+      if (!ignoring) {
+        await scanMessageDates(
+          ctx.db,
+          { id: message.id, bodyText: message.bodyText, subject: message.subject },
+          { at: new Date(message.at), timezone: ctx.timezone },
+          ctx.now(),
+        );
+      }
+      // An ignored sender's message is stamped inside the transaction that
+      // records the ignore, below: a stamp that committed while the ignore
+      // rolled back would leave the message unread for dates forever, even
+      // after the owner revoked the policy.
+    } catch (err) {
+      (ctx.log ?? (() => {}))(
+        `email.inbox-poll: could not read dates in message ${message.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}; the watcher will try again`,
+      );
+    }
+
     if (!decision.refused && decision.action === 'ignore' && decision.policy) {
       // Everything this claims happens here, or none of it does: the triage
       // row, the event that says the message was ignored, and the stamp that
@@ -767,6 +810,10 @@ async function drain(
       // that produces silence.
       await inOneTransaction(ctx.db, async (tx) => {
         await ignoreByPolicy(tx, message, decision.policy as PolicyRecord, ctx.now());
+        // Stamped without being read: the watchers are not a way round the
+        // owner's own gate (see `dates-store.ts`). In here with the rest of
+        // it, so a rolled-back ignore leaves nothing stamped behind.
+        await skipDates(tx, message.id, ctx.now());
         await recordEvent(
           tx,
           {
