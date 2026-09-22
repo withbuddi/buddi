@@ -180,6 +180,7 @@ import {
   type RouteReply,
 } from './backups.js';
 import {
+  acceptAgentRoute,
   approveRoute,
   listPlugins,
   pluginJobRoute,
@@ -1816,6 +1817,19 @@ export function createWebApp(deps: WebServerDeps): Server {
       return reply(res, stagedApprove[2] === 'approve'
         ? await approveRoute(pluginDeps(), id, body)
         : rejectRoute(pluginDeps(), id));
+    }
+    /*
+     * Accepting an agent a plugin proposes, from the page that lists it. It
+     * is the owner invoking the same gated tool Agent Father invokes, so what
+     * comes back is an approval to draw, never a written file.
+     */
+    const acceptAgent = /^\/api\/plugins\/([^/]+)\/agents\/([^/]+)\/accept$/.exec(path);
+    if (acceptAgent) {
+      return reply(res, await acceptAgentRoute(
+        pagesDeps(),
+        decodeURIComponent(acceptAgent[1] as string),
+        decodeURIComponent(acceptAgent[2] as string),
+      ));
     }
     const pluginAction = /^\/api\/plugins\/([^/]+)\/(update|uninstall)$/.exec(path);
     if (pluginAction) {
