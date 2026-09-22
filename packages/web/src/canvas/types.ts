@@ -93,7 +93,7 @@ export interface DocumentMap {
 
 /** A loopback process of the owner's, framed beside what it is printing. */
 export interface PreviewMap {
-  /** Path to a same-origin URL that must start with `/preview/`. */
+  /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
   src: string;
   title?: ValueRef;
   /** Path to the process's recent output text. */
@@ -170,11 +170,15 @@ export interface DocumentProps {
 
 export interface PreviewProps {
   /**
-   * Where the frame points. Already checked to start with `/preview/`, so the
-   * panel never frames anything but a process this gateway is proxying; null
-   * when the descriptor named something else, or nothing.
+   * Which preview to ask the dashboard for a link to, or null when the
+   * descriptor named something that is not one.
+   *
+   * Not a URL: a preview is served on a *different origin* with a credential
+   * of its own, and the only way to one is `GET /api/preview/<plugin>/<name>/link`,
+   * which mints a single-use ticket. So what a descriptor can say is *which*
+   * preview, and the panel goes and asks.
    */
-  src: string | null;
+  target: { plugin: string; name: string } | null;
   title: string | null;
   /** What the process has printed lately, shown beside the frame. */
   output: string | null;

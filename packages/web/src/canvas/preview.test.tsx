@@ -1,34 +1,41 @@
 /**
  * The `preview` panel: a process of the owner's, framed beside its output.
  *
- * The property worth a test is the refusal. This panel puts a URL a *plugin*
- * chose into an iframe on the dashboard's own origin, with the owner's session
- * on it — so the only address it may point at is one this gateway proxies,
- * under `/preview/`. Everything else about the panel is layout; this is the
- * rule, and it is asserted from both sides: the resolver drops the address,
- * and the panel draws no frame at all.
+ * The property worth a test is what the panel is *allowed* to frame. A
+ * preview lives on a second origin with a credential of its own, so this
+ * panel cannot construct a URL at all: a descriptor names a process, the
+ * panel asks the dashboard's link route, and frames the answer. Anything the
+ * descriptor says that is not a preview — the dashboard's own paths, another
+ * site, a path that resolves out of the prefix — names no process and is
+ * drawn as nothing.
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { afterEach, describe, expect, it } from 'vitest';
-import { applyDescriptor, isPreviewPath, resolvePreview } from './resolve';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { applyDescriptor, previewTarget, resolvePreview } from './resolve';
 import { PreviewView } from './views/PreviewView';
 import { rendererFor, RENDERERS } from './registry';
 import { hasSubstance } from './renderables';
+import { api } from '../api';
 import type { PreviewMap } from './types';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const map: PreviewMap = { src: 'url', title: { path: 'name' }, output: 'recent' };
+const TICKETED = 'http://127.0.0.1:4318/preview/developer/web/?ticket=abc';
 
 describe('resolving a preview', () => {
-  it('takes the frame, the heading and the output out of the result', () => {
+  it('takes the process, the heading and the output out of the result', () => {
     expect(
       resolvePreview({ url: '/preview/developer/web/', name: 'web', recent: 'ready in 412 ms' }, map),
-    ).toEqual({ src: '/preview/developer/web/', title: 'web', output: 'ready in 412 ms' });
+    ).toEqual({
+      target: { plugin: 'developer', name: 'web' },
+      title: 'web',
+      output: 'ready in 412 ms',
+    });
   });
 
-  it('drops any address that is not one this gateway proxies', () => {
+  it('names no process for anything that is not a preview', () => {
     for (const src of [
       // An absolute URL is an absolute URL whatever host it names; this one
       // keeps the bundle test's rule that no source file names a remote host.
@@ -38,11 +45,19 @@ describe('resolving a preview', () => {
       '/',
       'preview/developer/web/',
       'javascript:alert(1)',
+      // The two that a `startsWith('/preview/')` would have waved through:
+      // the browser resolves both to the dashboard's own root.
+      '/preview/../../',
+      '/preview/developer/../../api/approvals',
+      // A preview is a plugin and a process, and nothing deeper.
+      '/preview/developer',
+      '/preview/developer/web/assets/app.js',
     ]) {
-      expect(isPreviewPath(src), src).toBe(false);
-      expect(resolvePreview({ url: src }, map).src, src).toBeNull();
+      expect(previewTarget(src), src).toBeNull();
+      expect(resolvePreview({ url: src }, map).target, src).toBeNull();
     }
-    expect(isPreviewPath('/preview/developer/web/')).toBe(true);
+    expect(previewTarget('/preview/developer/web/')).toEqual({ plugin: 'developer', name: 'web' });
+    expect(previewTarget('/preview/developer/web')).toEqual({ plugin: 'developer', name: 'web' });
   });
 
   it('is reached by the renderer name a descriptor asks for', () => {
@@ -51,40 +66,50 @@ describe('resolving a preview', () => {
       { url: '/preview/developer/web/' },
     )).toEqual({
       renderer: 'preview',
-      props: { src: '/preview/developer/web/', title: null, output: null },
+      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null },
     });
     expect(rendererFor('preview')).toBe(RENDERERS.preview);
   });
 
-  it('earns its tab from the address, not from the output', () => {
-    expect(hasSubstance('preview', { src: '/preview/developer/web/', output: null })).toBe(true);
-    expect(hasSubstance('preview', { src: null, output: 'a page of logs' })).toBe(false);
+  it('earns its tab from the process, not from the output', () => {
+    expect(hasSubstance('preview', { target: { plugin: 'developer', name: 'web' } })).toBe(true);
+    expect(hasSubstance('preview', { target: null, output: 'a page of logs' })).toBe(false);
   });
 });
 
 describe('the panel', () => {
-  it('frames the process, sandboxed, with a way out of the frame', () => {
+  it('asks the dashboard for a link, then frames it', async () => {
+    const link = vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
     render(
       <PreviewView
-        props={{ src: '/preview/developer/web/', title: 'web', output: 'ready in 412 ms' }}
+        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms' }}
       />,
     );
+    await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
+    expect(link).toHaveBeenCalledWith('developer', 'web');
     const frame = screen.getByTitle('web');
     expect(frame.tagName).toBe('IFRAME');
-    expect(frame).toHaveAttribute('src', '/preview/developer/web/');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin');
-    // An app that refuses framing shows an empty box; the link is the answer,
-    // so it is always there.
-    expect(screen.getByRole('link', { name: 'Open in a tab' })).toHaveAttribute(
-      'href',
-      '/preview/developer/web/',
-    );
+    expect(frame).toHaveAttribute('src', TICKETED);
+    // No `sandbox`: the frame is cross-origin already, and `allow-same-origin`
+    // on a same-origin frame was the hole this whole arrangement closes.
+    expect(frame).not.toHaveAttribute('sandbox');
+    // An app that refuses framing shows an empty box; the link is the answer.
+    expect(screen.getByRole('link', { name: 'Open in a tab' })).toHaveAttribute('href', TICKETED);
     expect(screen.getByText('ready in 412 ms')).toBeInTheDocument();
   });
 
-  it('draws nothing framed when the address was refused', () => {
-    render(<PreviewView props={{ src: null, title: 'web', output: null }} />);
+  it('says so when the link cannot be had, and frames nothing', async () => {
+    vi.spyOn(api, 'previewLink').mockRejectedValue(new Error('no such preview'));
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null }} />);
+    await waitFor(() => expect(screen.getByText('no such preview')).toBeInTheDocument());
     expect(document.querySelector('iframe')).toBeNull();
-    expect(screen.getByText(/no address on this dashboard/)).toBeInTheDocument();
+  });
+
+  it('draws nothing framed, and asks for nothing, when no process was named', () => {
+    const link = vi.spyOn(api, 'previewLink');
+    render(<PreviewView props={{ target: null, title: 'web', output: null }} />);
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(link).not.toHaveBeenCalled();
+    expect(screen.getByText(/names no preview/)).toBeInTheDocument();
   });
 });

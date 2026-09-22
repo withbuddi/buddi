@@ -340,8 +340,25 @@ async tierFor(input, ctx) {
 ```
 
 `registry.invoke` calls it once, after zod has validated the arguments and
-before the tier is acted on, and what it returns replaces `tier` **for that
-call only**. Four things are worth knowing:
+before the tier is acted on.
+
+**The declared tier is the floor, not a default.** `tierFor` reads arguments a
+**model** chose — the example above is a parser over attacker-chosen text — so
+it cannot be the boundary. It chooses only *within* the envelope the
+declaration already bought:
+
+| Declared | `tierFor` may return | What it means |
+| --- | --- | --- |
+| `auto` | `auto`, `gated` | Runs, or asks about this one call. `session` is refused `tool-error`: a session grant is resolved from the declared tier, so one that was never declared can never be authorized. |
+| `gated` | `gated` | A gated tool is gated on every call. `auto` or `session` is refused `tool-error` — a rule written over model-chosen arguments does not get to overrule "the owner sees this first". |
+| `session` | `auto`, `gated`, `session` | **Every session precondition is checked first, whatever the answer**: a live `ctx.ownerRequest`, membership in `ctx.sessionTools`, an `agentId` and a `conversationId`, and `delegationDepth === 0`. Only then does `tierFor` pick between "run it now, under the grant" (`auto`) and "ask the owner about this one" (`gated`). |
+| `draft` | — | Refused at `register()`: a draft tool never executes, so there is nothing to decide per call. |
+
+So a delegate of a developer agent gets `session-not-authorized` from
+`developer.run` even in `run` mode, and a scheduled job with no owner request
+gets the same. That is the property the declaration is *for*.
+
+The rest:
 
 - It may return `auto`, `gated` or `session`, and nothing else. A fourth value
   is a defect in your plugin and the call is refused `tool-error`.
@@ -350,14 +367,15 @@ call only**. Four things are worth knowing:
 - `reason` is one plain sentence naming the rule that decided. When the call is
   gated it is appended to the preview, so the card the owner reads says why it
   is being asked.
-- `tier` itself is still what the tool *is*: it is what the model is shown,
-  what an agent's grant is checked against, and — for `session` — what the
-  runtime resolves the session grant from. A tool that returns `session` from
-  `tierFor` but declares `auto` is refused `session-not-authorized`, because no
-  grant for it was ever resolved. Declare the strictest, narrow from there.
+- A tool with a `tierFor` never uses a standing permission, even with
+  `reusableApproval` set. "Always allow this tool" was said about a call that
+  was `ls`, and there is nothing in the permission row that could tell it from
+  the call that is `npm install`.
 
 Nothing calls `tierFor` again later: an approved action executes what it
-recorded, under the tier it was created with.
+recorded, under the tier it was created with — which the action now carries in
+`core.actions.tier`, inside the hash, and which the Executor asserts is
+`gated`.
 
 **`invoke` fails closed.** The refusals, in the order they are decided:
 
@@ -365,7 +383,8 @@ recorded, under the tier it was created with.
 | --- | --- |
 | Name not registered | `unknown-tool` |
 | Zod rejects the arguments | `invalid-args` |
-| `tierFor` threw, or asked for a tier that is not one of the three | `tool-error` |
+| `tierFor` threw, asked for a tier that is not one of the three, or asked for one outside the declared tier's envelope | `tool-error` |
+| Declared `session`, on any per-call result, without a live owner request / grant / conversation, or inside a delegation | `session-not-authorized` |
 | Tier `gated` | *not a refusal* — `approval-required` plus an `actionId` |
 | Tier `gated` with `reusableApproval`, called by a delegate | `tool-error` — a delegate never inherits a standing approval |
 | Tier `session` with no live owner request, no session grant, or inside a delegation | `session-not-authorized` |
@@ -785,12 +804,16 @@ means, the page knows how to draw a line, and this says which is which.
   objects between them are not levels.
 - **A running process is a renderer too.** `preview` takes
   `{ src, title?, output? }`: `src` is a path into your result, and what it
-  finds must start with `/preview/` — the prefix the gateway proxies (§2.5c).
-  The panel draws a sandboxed frame of it, an "Open in a tab" link beside the
-  heading for an app that refuses framing, and the text at `output` next to
-  the frame. A `src` that is anything else is refused **at render time** and
-  the panel says so: a descriptor is data from a plugin, and "put this URL in
-  an iframe on the dashboard's origin" is not a sentence a plugin gets to say.
+  finds must be the string `/preview/<plugin>/<name>/` — which *names* a
+  process rather than being a URL the page may load. The panel reads the
+  plugin and the name out of it, asks `GET /api/preview/<plugin>/<name>/link`
+  (§2.5c), and frames the ticketed URL that comes back, with "Open in a tab"
+  beside the heading and the text at `output` next to the frame. The frame is
+  cross-origin, so nothing sizes it to its content. Anything else — another
+  path, another site, a path that resolves out of the prefix — names no
+  process and is drawn as nothing: a descriptor is data from a plugin, and
+  "put this URL in an iframe on the dashboard" is not a sentence a plugin gets
+  to say.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   with zod (`packages/core/src/views.ts`), checks the renderer against its own
   map shape, and refuses a descriptor naming a tool your manifest does not
@@ -1018,38 +1041,74 @@ export interface PreviewProvider {
 A plugin that starts long-lived processes — the developer plugin's
 `developer.start`, a dev server, a docs site — has something running on a
 loopback port that only that machine can reach. `previews` is the one door
-through it: the gateway serves `/preview/<plugin>/<name>/…` from that port.
+through it.
 
-- **The gate is the dashboard's own, and nothing more.** A signed-in session
-  cookie, or a Tailscale identity the local daemon confirms. Anything else gets
-  the dashboard's empty `401` — never a redirect to a sign-in page, which would
-  tell an anonymous caller that this exact preview exists. A write additionally
-  needs an `Origin` this dashboard would accept, so another site cannot drive
-  the owner's dev server through their session; it does **not** need the CSRF
-  header, because the app behind the proxy has never heard of this dashboard.
-- **`resolve` is asked on every request.** It is a lookup, not a launcher: it
-  starts nothing, and a `null` — or a throw, or a plugin with no `previews` —
-  is answered `404`. A port that refuses the connection is `502` with one
-  sentence. The host is always `127.0.0.1`, whatever you return.
-- **What crosses.** Up: the method, the path below the prefix, the query, the
-  body, and every header except `cookie`, `authorization` and the hop-by-hop
-  ones, plus `x-forwarded-prefix: /preview/<plugin>/<name>`. Down: the status,
-  the headers, and the body byte for byte, with each `Set-Cookie`'s `Path`
-  scoped into the prefix and `Cache-Control: no-store`. Both directions stream;
-  nothing is buffered.
-- **Websockets are proxied** on the same listener, so hot reload works.
-- **Nothing in the body is rewritten.** An app that assumes it owns the root of
-  a host — `<script src="/main.js">` — breaks under a path prefix, and an HTML
-  rewriter that is wrong is worse than an app that is plainly broken. So the
-  proxy *scans* the first 64 KB of the first HTML response for `src="/…"` and
-  `href="/…"` outside the prefix, and
-  `GET /api/preview/<plugin>/<name>/check` answers
-  `{ ok, absoluteAssets: boolean }`. Your tool reads that and warns the owner,
-  with "Open in a tab" as the answer; a framework that can be told its base
-  path should be told it, from `x-forwarded-prefix`.
+**The trust boundary, plainly.** The app behind that port is *untrusted code*:
+it is what an agent wrote a minute ago, most likely from input somebody else
+chose. So it never shares the dashboard's origin, the dashboard's cookies or
+the dashboard's API. It is served from **a second loopback listener on a second
+port** (the dashboard's plus one, or `BUDDI_PREVIEW_PORT`), which serves
+`/preview/<plugin>/<name>/…` and answers `404` to everything else — no `/api`,
+no assets, no session. An iframe `sandbox` attribute would not have done this
+job: with `allow-same-origin` the frame keeps the origin, without it most dev
+servers stop working, and "Open in a tab" bypasses the frame either way.
 
-The `preview` renderer (§2.5) frames the same URL beside the process's output,
-which is how it reaches the canvas.
+**Getting in is an exchange, not a cookie you already have.** The dashboard's
+session cookie is host-only, and browsers ignore ports when they decide what to
+send, so it *does* arrive at the preview port — and is never looked at there.
+Instead:
+
+1. `GET /api/preview/<plugin>/<name>/link` on the **dashboard**, behind the
+   dashboard's own gate, answers `{ url }`: the preview origin, that preview's
+   path, and a single-use ticket good for five minutes.
+2. Opening it spends the ticket and sets `buddi_preview` — HttpOnly,
+   `SameSite=Lax`, `Path=/preview/<plugin>/<name>`, 24 hours — then redirects
+   to the clean path. A ticket names the preview it was minted for: it is not a
+   key to another one, and neither is the cookie.
+3. Every later request and every websocket upgrade needs that cookie. Anything
+   else is `401` with no body and no `Location`.
+
+**`resolve` is asked on every request, and may only answer with a port it is
+actually running.** It is a lookup, not a launcher: it starts nothing, and a
+`null` — or a throw, or a plugin with no `previews` — is `404`. The gateway
+forces the host to `127.0.0.1` whatever you return, and refuses a port outside
+1024–65535, Postgres's 5432, and either of its own two listeners (a preview
+pointed at the preview listener is an infinite proxy loop). Everything else is
+yours to get right: return the port of the process you started under that name
+and nothing else, because a port you hand over is a port the owner's browser
+will be pointed at.
+
+**What crosses.** Up: the method, the path below the prefix, the query, the
+body, and every header except the hop-by-hop ones (including the fields the
+request's own `Connection` nominates), `authorization`, the dashboard's CSRF
+header, and buddi's own three cookies — the app's other cookies go through,
+because it has an origin now and they are its own. Plus
+`x-forwarded-prefix: /preview/<plugin>/<name>`, which a framework that can be
+told its base path should be told from. Down: the status, the headers, and the
+body byte for byte, with each `Set-Cookie`'s `Path` scoped into the prefix, any
+`Set-Cookie` named after one of buddi's dropped, `Cache-Control: no-store`,
+`X-Content-Type-Options: nosniff` and — unless the app sent its own —
+`Content-Security-Policy: frame-ancestors <the dashboard>`. Both directions
+stream; nothing is buffered. Websockets are proxied on the same listener, so
+hot reload works.
+
+**Nothing in the body is rewritten.** An app that assumes it owns the root of a
+host — `<script src="/main.js">` — breaks under a path prefix, and an HTML
+rewriter that is wrong is worse than an app that is plainly broken. So the
+proxy *scans* the first 64 KB of the first HTML response for `src="/…"` and
+`href="/…"` outside the prefix, and `GET /api/preview/<plugin>/<name>/check`
+answers `{ ok, absoluteAssets }`. `ok` is false when nothing serves that
+preview at all. Your tool reads it and warns the owner, with "Open in a tab" as
+the answer.
+
+**On the tailnet.** The dashboard's own `tailscale serve` does not publish this
+port. A plugin that wants a preview reachable from the tailnet asks for it
+itself — `tailscale serve --https=<port> http://127.0.0.1:<previewPort>` — and
+owns turning it off again; buddi does not do it for you, and the sentence on
+the page that offers it should say what it exposes.
+
+The `preview` renderer (§2.5) frames the link route's answer beside the
+process's output, which is how it reaches the canvas.
 
 ---
 
@@ -2214,7 +2273,7 @@ this says what it is *for*.
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
-| `previews` | `PreviewProvider` | no | A loopback process of yours, served behind the dashboard's sign-in at `/preview/<plugin>/<name>/`. Almost no plugin has one. See §2.5c. |
+| `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
 
@@ -2222,7 +2281,7 @@ this says what it is *for*.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `resolve` | `(name, ctx) => Promise<{port, host?}\|null>` | yes | The loopback port behind `/preview/<plugin>/<name>/`, asked on every proxied request. A lookup, never a launcher: `null` — or a throw — is a `404`. The host is `127.0.0.1` whatever you return. See §2.5c. |
+| `resolve` | `(name, ctx) => Promise<{port, host?}\|null>` | yes | The loopback port behind `/preview/<plugin>/<name>/`, asked on every proxied request. A lookup, never a launcher: `null` — or a throw — is a `404`. It must be a port your plugin is actually running that process on; the host is `127.0.0.1` whatever you return, and the gateway refuses a privileged port, 5432 and its own two listeners. See §2.5c. |
 
 ### Tools
 
@@ -2233,8 +2292,8 @@ this says what it is *for*.
 | `name` | `string` | yes | Namespaced to the plugin: `finance.project_cashflow`. A collision with an already-registered name throws at `register()`. |
 | `description` | `string` | yes | What the model reads. Say *when* to use it, in the second person. |
 | `tier` | `Tier` | yes | `'auto' \| 'draft' \| 'gated' \| 'session'` — see the table below. |
-| `tierFor` | `(input, ctx) => Promise<{tier, reason?}>` | no | Decide this one call's tier from its arguments, after zod and before the tier is acted on. May return `auto`, `gated` or `session`; a throw or anything else refuses the call `tool-error`. `reason` is one sentence, appended to the preview when the call is gated. `tier` above still decides what the model is shown and what a grant is checked against. See §2.1. |
-| `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0`. |
+| `tierFor` | `(input, ctx) => Promise<{tier, reason?}>` | no | Decide this one call's tier from its arguments, after zod and before the tier is acted on — **within the declared tier's envelope**, which is the floor: a gated tool stays gated, a session tool keeps every session precondition on every call, and a per-call `session` on anything else is refused. A throw, or a tier outside that envelope, refuses the call `tool-error`. `reason` is one sentence, appended to the preview when the call is gated. See §2.1. |
+| `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0` — and neither can a tool with a `tierFor`: a permission is keyed on the tool, and the whole point of `tierFor` is that one tool has many costs. |
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |

@@ -151,14 +151,16 @@ export interface DocumentMap {
 /**
  * A process of the owner's, framed beside what it is printing.
  *
- * `src` is a path into the output, and what it finds must start with
- * `/preview/` — the one prefix the gateway proxies, behind the dashboard's own
- * sign-in. Anything else is dropped at render time rather than framed: a
- * descriptor is data from a plugin, and "put this URL in an iframe on the
- * dashboard's origin" is not a thing a plugin gets to say.
+ * `src` is a path into the output, and what it finds *names* a process —
+ * `/preview/<plugin>/<name>/` — rather than being a URL the page may load. A
+ * preview is served on a second origin with a credential of its own, and the
+ * only way to one is the dashboard's link route, which the panel calls for
+ * itself. So a descriptor says which process and nothing more: anything else
+ * is drawn as nothing, because "put this URL in an iframe on the dashboard" is
+ * not a sentence a plugin gets to say.
  */
 export interface PreviewMap {
-  /** Path to a same-origin URL that must start with `/preview/`. */
+  /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
   src: string;
   title?: ValueRef;
   /** Path to the process's recent output text, shown beside the frame. */

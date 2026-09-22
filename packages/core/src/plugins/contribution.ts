@@ -12,7 +12,10 @@
  *  - **tier `auto` is the loud part.** A tool at `auto` runs with no human in
  *    the loop the first time a model decides to call it. A plugin that quietly
  *    ships one is the case this summary exists for, so `auto` tools are counted
- *    in the headline, listed first, and never folded into a total.
+ *    in the headline, listed first, and never folded into a total. An
+ *    `ownerOnly` tool is *not* one of them whatever its tier: no model is told
+ *    it exists, so nothing but the owner's own click can call it, and counting
+ *    it under "runs without asking you" overstates what arrives.
  *  - **anything that runs on a timer is named with its period.** A sentinel or
  *    a source needs nobody to ask: it wakes up. "Runs every 6 hours, by itself"
  *    is a fact about what the owner is agreeing to, not a footnote.
@@ -27,6 +30,8 @@ export interface ContributedTool {
   name: string;
   tier: Tier;
   description: string;
+  /** No model ever sees it: the owner calls it from one of the plugin's pages. */
+  ownerOnly?: boolean;
 }
 
 export interface ContributedTimer {
@@ -57,6 +62,17 @@ export interface PluginContribution {
   /** The subset that runs with nobody asked. Never folded into a total. */
   autoTools: ContributedTool[];
   gatedTools: ContributedTool[];
+  /**
+   * The subset only the owner can call, from one of the plugin's own pages.
+   *
+   * Counted apart from both of the others, and that is the whole point: an
+   * `ownerOnly` tool at tier `auto` is not "runs without asking you" — no
+   * model is ever told it exists, and the only thing that can call it is the
+   * owner clicking something. Listing it under the loud heading was a summary
+   * that overstated what an installation brings, which is the one direction
+   * this summary must never be wrong in.
+   */
+  ownerTools: ContributedTool[];
   sentinels: ContributedTimer[];
   sources: ContributedTimer[];
   missions: Array<{ id: string; name: string; cron: string; agent: string }>;
@@ -72,15 +88,18 @@ export function contributionOf(manifest: PluginManifest): PluginContribution {
     name: tool.name,
     tier: tool.tier,
     description: tool.description,
+    ...(tool.ownerOnly === true ? { ownerOnly: true } : {}),
   }));
+  const agentTools = tools.filter((t) => t.ownerOnly !== true);
   return {
     name: manifest.name,
     version: manifest.version,
     ...(manifest.description === undefined ? {} : { description: manifest.description }),
     ...(manifest.schema && manifest.schema !== 'core' ? { schema: manifest.schema } : {}),
     tools,
-    autoTools: tools.filter((t) => t.tier === 'auto'),
-    gatedTools: tools.filter((t) => t.tier !== 'auto'),
+    autoTools: agentTools.filter((t) => t.tier === 'auto'),
+    gatedTools: agentTools.filter((t) => t.tier !== 'auto'),
+    ownerTools: tools.filter((t) => t.ownerOnly === true),
     sentinels: (manifest.sentinels ?? []).map((s) => ({
       id: s.id,
       description: s.description,
@@ -155,6 +174,12 @@ export function renderContribution(c: PluginContribution): string[] {
   if (c.gatedTools.length > 0) {
     lines.push(`  ${c.gatedTools.length} need your approval before they do anything:`);
     for (const tool of c.gatedTools) lines.push(`    ${tool.name} (${tool.tier}) — ${oneLine(tool.description)}`);
+  }
+  if (c.ownerTools.length > 0) {
+    lines.push(
+      `  ${c.ownerTools.length} only you can use from its pages; no agent ever sees them:`,
+    );
+    for (const tool of c.ownerTools) lines.push(`    ${tool.name} — ${oneLine(tool.description)}`);
   }
   lines.push('');
 

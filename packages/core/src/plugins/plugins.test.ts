@@ -32,7 +32,12 @@ import {
   type InstalledPlugin,
 } from './types.js';
 
-function tool(name: string, tier: 'auto' | 'gated', description: string): ToolDefinition<any, any> {
+function tool(
+  name: string,
+  tier: 'auto' | 'gated',
+  description: string,
+  extra: Partial<ToolDefinition<any, any>> = {},
+): ToolDefinition<any, any> {
   return {
     name,
     description,
@@ -41,6 +46,7 @@ function tool(name: string, tier: 'auto' | 'gated', description: string): ToolDe
     async execute() {
       return {};
     },
+    ...extra,
   };
 }
 
@@ -53,6 +59,9 @@ const manifest: PluginManifest = {
   tools: [
     tool('garden.plants', 'auto', 'Every plant the owner has recorded. Reads the garden schema.'),
     tool('garden.order_seeds', 'gated', 'Orders seeds from the shop, with the owner\'s card.'),
+    // Tier `auto`, and yet nothing a model can reach: the owner clicks it on
+    // one of the plugin's own pages.
+    tool('garden.save_key', 'auto', 'Stores the shop account key.', { ownerOnly: true }),
   ],
   sentinels: [{ id: 'garden.dry', description: 'Warns when a pot has not been watered.', every: 21_600, run: async () => [] }],
   sources: [{ id: 'garden.sensor', description: 'Polls the moisture sensor.', every: 900, poll: async () => {} }],
@@ -88,6 +97,22 @@ describe('what an owner sees before installing', () => {
     expect(text).toContain('1 need your approval before they do anything');
   });
 
+  it('counts a tool only the owner can call apart from the ones that run on their own', () => {
+    // It is tier `auto`, and it is *not* "runs without asking you": no model
+    // is ever told it exists. Counting it there would overstate what arrives,
+    // which is the one direction this summary must not be wrong in.
+    expect(contribution.ownerTools.map((t) => t.name)).toEqual(['garden.save_key']);
+    expect(contribution.autoTools.map((t) => t.name)).not.toContain('garden.save_key');
+    expect(contribution.gatedTools.map((t) => t.name)).not.toContain('garden.save_key');
+    const text = renderContribution(contribution).join('\n');
+    expect(text).toContain('TOOLS (3)');
+    expect(text).toContain('1 run WITHOUT ASKING YOU (tier auto)');
+    expect(text).toContain('1 only you can use from its pages; no agent ever sees them:');
+    expect(text).toContain('garden.save_key — Stores the shop account key.');
+    // And the headline counts what an agent can reach, not what a page can.
+    expect(contributionHeadline(contribution)).toContain('1 auto');
+  });
+
   it('names the schema it will own, the timers it will run, and the hosts it wants', () => {
     const text = renderContribution(contribution).join('\n');
     expect(text).toContain('It owns the Postgres schema "garden"');
@@ -117,7 +142,7 @@ describe('what an owner sees before installing', () => {
 
   it('gives one line for a list', () => {
     expect(contributionHeadline(contribution)).toBe(
-      '2 tools, 1 auto, 2 on a timer, 1 agents proposed, 1 missions suggested',
+      '3 tools, 1 auto, 2 on a timer, 1 agents proposed, 1 missions suggested',
     );
   });
 

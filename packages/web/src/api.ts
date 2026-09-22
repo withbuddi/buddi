@@ -1115,6 +1115,13 @@ export const api = {
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
+  /**
+   * The way into a preview: a URL on the preview origin carrying a
+   * single-use ticket. It is asked for per panel and never stored — the
+   * ticket is good for five minutes and once.
+   */
+  previewLink: (plugin: string, name: string) =>
+    get<{ url: string }>(`/preview/${encodeURIComponent(plugin)}/${encodeURIComponent(name)}/link`),
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),

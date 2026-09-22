@@ -140,6 +140,7 @@ const sampleAction = {
   claimedBy: null,
   claimedAt: null,
   choices: [],
+  tier: 'gated' as const,
   ownerChoices: null,
   outcome: null,
   updatedAt: new Date('2026-09-13T12:00:00Z'),
