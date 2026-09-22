@@ -108,6 +108,7 @@ import {
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import { failedTurnReply } from '../surfaces/failure.js';
+import { approvalResumeContext, type ApprovalResumption } from '../surfaces/owner-request.js';
 import { conversationForTurn } from '../surfaces/conversation-lifetime.js';
 
 /** The chat id this surface books its inline mission runs against. */
@@ -931,7 +932,9 @@ export class ChatSession {
     const action = await getAction(this.#deps.pool, resume.actionId);
     if (!action || !action.conversationId) return;
     const agent = this.#deps.catalog.get(action.agentId) ?? this.#agent;
-    await this.#run(agent, action.conversationId, { resume });
+    // Typing `/approve` is the owner acting, so the run it continues is an
+    // owner request — the same rule the dashboard and Telegram follow.
+    await this.#run(agent, action.conversationId, { resume, approval: { tool: action.tool } });
   }
 
   /* ---------------------------------------------------------------- *
@@ -1069,6 +1072,8 @@ export class ChatSession {
     turn: {
       userMessage?: string;
       resume?: ApprovalResume;
+      /** Set only with `resume`, and only when an owner decision is what wakes it. */
+      approval?: ApprovalResumption;
       attachments?: AttachmentRef[];
       depth?: number;
       /** One extra instruction for this turn, after the surface paragraph. */
@@ -1103,7 +1108,7 @@ export class ChatSession {
       agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
       provider: deps.providerFor(agent),
       registry,
-      ctx: deps.ctx,
+      ctx: turn.approval ? approvalResumeContext(deps.ctx, turn.approval) : deps.ctx,
       pool: deps.pool,
       // The provider's own web search leaves the same audit row `web.search`
       // does; see @buddi/tool-web's native.ts.

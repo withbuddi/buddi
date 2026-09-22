@@ -45,6 +45,8 @@ const TOKEN = 'a-test-dashboard-token-long-enough';
  * ------------------------------------------------------------------ */
 
 const sent: Array<{ to: string; actionId?: string }> = [];
+/** Every call the `session`-tier tool actually reached, with the context it saw. */
+const sessionCalls: Array<{ what: string; ctx: ToolContext }> = [];
 
 const demoManifest: PluginManifest = {
   name: 'demo',
@@ -73,6 +75,18 @@ const demoManifest: PluginManifest = {
       async execute(input: { to: string; body: string }, ctx: ToolContext) {
         sent.push({ to: input.to, ...(ctx.actionId ? { actionId: ctx.actionId } : {}) });
         return { delivered: true };
+      },
+    },
+    {
+      // The shape the developer plugin's tools have: declared `session`, so
+      // nothing but a live owner request in a top-level run may reach it.
+      name: 'demo.session',
+      description: 'Only reachable while the owner is asking.',
+      tier: 'session',
+      input: z.object({ what: z.string() }),
+      async execute(input: { what: string }, ctx: ToolContext) {
+        sessionCalls.push({ what: input.what, ctx });
+        return { did: input.what };
       },
     },
   ],
@@ -143,7 +157,7 @@ const fakeCatalog = (): AgentCatalog => {
     availability: { ok: true as const },
     file: '/agents/demo/agent.md',
     model: 'claude-test',
-    tools: ['demo.read', 'demo.send'],
+    tools: ['demo.read', 'demo.send', 'demo.session'],
     maxTurns: 6,
     language: 'mirror' as const,
     provider: {
@@ -157,7 +171,7 @@ const fakeCatalog = (): AgentCatalog => {
       id: AGENT_ID,
       name: 'Demo',
       systemPrompt: 'you are a demo',
-      tools: ['demo.read', 'demo.send'],
+      tools: ['demo.read', 'demo.send', 'demo.session'],
       provider: {
         kind: 'anthropic' as const,
         model: 'claude-test',
@@ -400,6 +414,7 @@ suite('the dashboard chat API', () => {
 
   beforeEach(async () => {
     sent.length = 0;
+    sessionCalls.length = 0;
     provider.script = [];
     provider.block = null;
     provider.seen.length = 0;
@@ -876,6 +891,68 @@ suite('the dashboard chat API', () => {
     expect(approval[0].decided_via).toBe('web');
 
     expect((await client.get('/api/approvals/00000000-0000-0000-0000-000000000000')).status).toBe(404);
+  });
+
+  /**
+   * The run a decision wakes is still the owner asking.
+   *
+   * Deciding an approval is the owner acting, at this keyboard, in this
+   * conversation — so the resumed run carries an owner request of its own and a
+   * `session` tool keeps working across the approval. Before this, the resumed
+   * run was handed the bare context and the very next narrow call came back
+   * `session-not-authorized`.
+   */
+  it('gives the run resumed by an approval an owner request, so a session tool still works', async () => {
+    const client = await signedIn();
+    provider.script = [call('t1', 'demo.send', { to: 'a@example.test', body: 'hi' })];
+    const { conversationId } = (await (
+      await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'send it, then look' })
+    ).json()) as any;
+    await settled(conversationId);
+
+    const { rows } = await pool.query(`select id from core.actions order by created_at desc limit 1`);
+    const actionId = rows[0].id as string;
+
+    // The resumed run narrows straight into the session tool.
+    provider.script = [call('t2', 'demo.session', { what: 'narrow' }), say('looked.')];
+    expect((await client.post(`/api/approvals/${actionId}/approve`)).status).toBe(200);
+    await settled(conversationId, 2);
+
+    expect(sessionCalls).toHaveLength(1);
+    const seen = sessionCalls[0] as { what: string; ctx: ToolContext };
+    expect(seen.what).toBe('narrow');
+    // No record holds the words of the turn the action came from, so the
+    // request is named after the decision itself.
+    expect(seen.ctx.ownerRequest?.text).toBe('approved demo.send');
+    expect(seen.ctx.ownerRequest?.expiresAt).toBeGreaterThan(Date.now());
+    expect(seen.ctx.sessionTools).toContain('demo.session');
+    // It ran: the model got an output, not a refusal.
+    const results = provider.seen.at(-1)?.messages.flatMap((m: any) =>
+      Array.isArray(m.content) ? m.content : []) ?? [];
+    expect(results.some((b: any) => b.type === 'tool_result' && JSON.stringify(b).includes('narrow'))).toBe(true);
+  });
+
+  /**
+   * And it stays the *owner's* standing. A delegate inherits the conversation
+   * but never the request: same context, one step down, still refused.
+   */
+  it('does not let a delegate of the resumed run reach the session tool', async () => {
+    const client = await signedIn();
+    provider.script = [call('t1', 'demo.send', { to: 'a@example.test', body: 'hi' })];
+    const { conversationId } = (await (
+      await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'send it' })
+    ).json()) as any;
+    await settled(conversationId);
+    const { rows } = await pool.query(`select id from core.actions order by created_at desc limit 1`);
+    provider.script = [call('t2', 'demo.session', { what: 'narrow' }), say('looked.')];
+    expect((await client.post(`/api/approvals/${rows[0].id}/approve`)).status).toBe(200);
+    await settled(conversationId, 2);
+    const seen = (sessionCalls[0] as { ctx: ToolContext }).ctx;
+
+    sessionCalls.length = 0;
+    const delegated = await registry.invoke('demo.session', { what: 'narrow' }, { ...seen, delegationDepth: 1 });
+    expect(delegated).toMatchObject({ ok: false, reason: 'session-not-authorized' });
+    expect(sessionCalls).toHaveLength(0);
   });
 
   /* ---------------- offered actions ---------------- */
