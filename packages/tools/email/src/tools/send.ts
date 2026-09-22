@@ -30,19 +30,23 @@ import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '..
 import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
-import { accountOf, findMessage, identityFor, requireDraft, UUID } from './shared.js';
+import { accountOf, findMessage, identityChoices, identityFor, requireDraft, UUID } from './shared.js';
 
 /**
  * The implementation version pinned into the action object.
  *
  * 0.2.0 added `replyAudience`: the envelope now states how a reply's audience
  * compares with the sender-only default, so the preview can say "four people
- * beyond the sender" rather than showing one longer list. It is the envelope's
- * own version and is recorded inside it; the approval is bound to the plugin
- * manifest's version, which has not moved, so approvals already waiting stay
- * valid.
+ * beyond the sender" rather than showing one longer list.
+ *
+ * 0.3.0 made the sending identity the owner's choice. `from` is the account's
+ * own address unless the owner picks otherwise, and `fromChoices` lists what
+ * they may pick: no alias is derived from the original's `To`/`Cc` any more,
+ * because those are headers the sender writes. It is the envelope's own version
+ * and is recorded inside it; the approval is bound to the plugin manifest's
+ * version, which has not moved, so approvals already waiting stay valid.
  */
-export const SEND_TOOL_VERSION = '0.2.0';
+export const SEND_TOOL_VERSION = '0.3.0';
 
 /** One dispatch's budget. Past it the Executor marks the attempt `unknown`. */
 export const SEND_TIMEOUT_MS = 60_000;
@@ -82,7 +86,14 @@ export interface SendEnvelope {
   toolVersion: string;
   draftId: string;
   accountAddress: string;
+  /**
+   * The identity this leaves under. The account's own address unless the owner
+   * chose one of `fromChoices` on the approval card — never an alias inferred
+   * from the original's headers.
+   */
   from: string;
+  /** Every identity the owner may choose here: the address, then its aliases. */
+  fromChoices: string[];
   to: string[];
   cc: string[];
   /** Blind recipients. Always present, always shown: a hidden one is the bug. */
@@ -114,6 +125,13 @@ export function renderPreview(envelope: SendEnvelope): string {
     envelope.from === envelope.accountAddress
       ? `Send mail as ${envelope.from}`
       : `Send mail as ${envelope.from} (from the ${envelope.accountAddress} mailbox)`,
+    ...(envelope.fromChoices.filter((choice) => choice !== envelope.from).length > 0
+      ? [
+          `         or, if you choose it here, as ${envelope.fromChoices
+            .filter((choice) => choice !== envelope.from)
+            .join(' or ')}`,
+        ]
+      : []),
     '',
     `To:      ${list(envelope.to)}`,
     `Cc:      ${list(envelope.cc)}`,
@@ -206,12 +224,14 @@ export async function buildEnvelope(
     toolVersion: SEND_TOOL_VERSION,
     draftId: draft.id,
     accountAddress: account.address,
-    // docs/email.md §4, identity: the alias the original was addressed to when
-    // it is one of this account's, and the account's own address otherwise.
-    // It is derived from the stored original, never from anything the model
-    // wrote, and it is in the envelope the approval is bound to — so the owner
-    // reads the identity that will be on the wire.
-    from: identityFor(account, original ? [...original.to, ...original.cc] : []),
+    // docs/email.md §4, identity: the account's own address, and one of its
+    // aliases only when the owner says so on the card. Nothing is read off the
+    // original's To or Cc — a sender can write any address there, including an
+    // alias of the owner's that the message never actually reached. Both the
+    // identity and the alternatives are in the envelope the approval is bound
+    // to, so the owner reads what will be on the wire and what else it could be.
+    from: identityFor(account),
+    fromChoices: identityChoices(account),
     to: draft.to,
     cc: draft.cc,
     bcc: draft.bcc,

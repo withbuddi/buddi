@@ -20,6 +20,7 @@
  * through `resolveAuth`, which reads the named entry from the environment the
  * caller hands it; the vault is what fills that environment at startup.
  */
+import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import {
   type AccountRecord,
@@ -54,12 +55,25 @@ export const ACCOUNT_SECRET_PREFIX = 'EMAIL_';
  * remove the secret without a second lookup. Secret names are
  * environment-variable shaped (`assertSecretName` in core refuses anything
  * else), so everything that is not a letter, a digit or an underscore becomes
- * one: `amen@example.com` is `EMAIL_AMEN_EXAMPLE_COM`.
+ * one.
+ *
+ * And then a hash, which is not decoration. Sanitising alone is not injective:
+ * `a-b@example.test` and `a.b@example.test` both flatten to
+ * `EMAIL_A_B_EXAMPLE_TEST`, and two accounts sharing one vault entry means
+ * adding the second overwrites the first's password, and removing either
+ * deletes the other's. So the name carries eight hex digits of
+ * sha256(normalised address): still readable at a glance
+ * (`EMAIL_AMEN_EXAMPLE_COM_3f2a9c41`), and distinct for distinct mailboxes.
+ * The database backs this up with a unique constraint on `secret_name`, and
+ * the settings page refuses a name another row already owns *before* it writes
+ * anything to the vault.
  */
 export function secretNameFor(address: string): string {
-  const sanitised = address.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const normalised = address.trim().toLowerCase();
+  const sanitised = normalised.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   if (sanitised === '') throw new Error(`no secret name can be derived from ${JSON.stringify(address)}`);
-  return `${ACCOUNT_SECRET_PREFIX}${sanitised}`;
+  const digest = createHash('sha256').update(normalised, 'utf8').digest('hex').slice(0, 8);
+  return `${ACCOUNT_SECRET_PREFIX}${sanitised}_${digest}`;
 }
 
 /**

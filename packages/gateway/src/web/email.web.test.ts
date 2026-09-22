@@ -15,6 +15,7 @@ import {
   listEmailAccounts,
   removeEmailAccount,
   readNewAccount,
+  writeEmailPolicy,
   type EmailWebDeps,
 } from './email.js';
 
@@ -221,4 +222,133 @@ it('lists what is configured without ever carrying a password', async () => {
   const listing = await listEmailAccounts(deps().deps);
   expect(listing.accounts).toEqual([]);
   expect(EmailWebError.name).toBe('EmailWebError');
+});
+
+/*
+ * One vault entry per mailbox.
+ *
+ * The old name was the address with every non-alphanumeric run flattened to
+ * `_`, which two different addresses can share — and a shared name means the
+ * second account overwrites the first's password, and removing either deletes
+ * the other's.
+ */
+it('gives two addresses that sanitise alike two different vault names', () => {
+  const dashed = secretNameFor('a-b@example.test');
+  const dotted = secretNameFor('a.b@example.test');
+  expect(dashed).not.toBe(dotted);
+  // Still readable: the address, then eight hex digits of its hash.
+  expect(dashed).toMatch(/^EMAIL_A_B_EXAMPLE_TEST_[0-9a-f]{8}$/);
+  // And stable: the same address, in any case, is the same name.
+  expect(secretNameFor('A-B@Example.TEST')).toBe(dashed);
+});
+
+it('refuses a vault name another account already owns, before touching the vault', async () => {
+  const pool = {
+    query: vi.fn(async (sql: string) => {
+      if (/select address from email\.accounts where secret_name/.test(sql)) {
+        return { rows: [{ address: 'someone.else@work.test' }] };
+      }
+      return { rows: [] };
+    }),
+  };
+  const imap = fakeConnect();
+  const { deps: d, vault, env } = deps({ pool: pool as never, connect: imap.connect });
+
+  await expect(addEmailAccount(d, BODY)).rejects.toMatchObject({ status: 409 });
+  await expect(addEmailAccount(d, BODY)).rejects.toThrow(/already belongs to someone\.else@work\.test/);
+  // Nothing was written: that name holds somebody's password.
+  expect(await vault.list()).toEqual([]);
+  expect(env[SECRET]).toBeUndefined();
+});
+
+/*
+ * A policy says which mailbox it is about.
+ *
+ * A row with no account applies to every account on the installation, and that
+ * has to be something the owner ticked — not something they left blank.
+ */
+const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
+
+function policyPool(): { pool: never; inserts: unknown[][] } {
+  const inserts: unknown[][] = [];
+  const pool = {
+    query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (/from email\.accounts where id/.test(sql)) {
+        return { rows: params[0] === ACCOUNT_ID ? [{ '?column?': 1 }] : [] };
+      }
+      if (/insert into email\.policies/.test(sql)) {
+        inserts.push(params);
+        return {
+          rows: [
+            {
+              id: 'p1',
+              account_id: params[0],
+              scope: params[1],
+              matcher: params[2],
+              action: params[3],
+              params: JSON.parse(String(params[4])),
+              origin: params[5],
+              proposed: params[6],
+              created_from: [],
+              created_at: new Date('2026-09-21T10:00:00Z'),
+              revoked_at: null,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    }),
+  };
+  return { pool: pool as never, inserts };
+}
+
+const NOW = new Date('2026-09-21T10:00:00Z');
+const RULE = { scope: 'sender', matcher: 'news@shop.test', action: 'ignore' };
+
+it('refuses a rule that names neither a mailbox nor all of them', async () => {
+  const { pool } = policyPool();
+  const reply = await writeEmailPolicy(pool, RULE, NOW);
+  expect(reply.status).toBe(400);
+  expect(JSON.stringify(reply.body)).toMatch(/which mailbox/i);
+});
+
+it('refuses a mailbox that is not one of the owner’s, and refuses both at once', async () => {
+  const { pool } = policyPool();
+  expect(
+    await writeEmailPolicy(pool, { ...RULE, accountId: '33333333-3333-4333-8333-333333333333' }, NOW),
+  ).toMatchObject({ status: 400 });
+  expect(
+    await writeEmailPolicy(pool, { ...RULE, accountId: ACCOUNT_ID, allAccounts: true }, NOW),
+  ).toMatchObject({ status: 400 });
+});
+
+it('writes the mailbox the owner chose onto the rule', async () => {
+  const { pool, inserts } = policyPool();
+  const reply = await writeEmailPolicy(pool, { ...RULE, accountId: ACCOUNT_ID }, NOW);
+  expect(reply.status).toBe(200);
+  expect(inserts[0]?.[0]).toBe(ACCOUNT_ID);
+});
+
+it('writes an installation-wide rule only for the explicit "every mailbox" choice', async () => {
+  const { pool, inserts } = policyPool();
+  const reply = await writeEmailPolicy(pool, { ...RULE, allAccounts: true }, NOW);
+  expect(reply.status).toBe(200);
+  expect(inserts[0]?.[0]).toBeNull();
+});
+
+it('records the sender a thread rule silences, because a thread key is the sender’s to write', async () => {
+  const { pool, inserts } = policyPool();
+  const reply = await writeEmailPolicy(
+    pool,
+    {
+      scope: 'thread',
+      matcher: '<root@example.test>',
+      action: 'ignore',
+      sender: 'Them <THEM@example.test>',
+      accountId: ACCOUNT_ID,
+    },
+    NOW,
+  );
+  expect(reply.status).toBe(200);
+  expect(JSON.parse(String(inserts[0]?.[4]))).toMatchObject({ sender: 'them@example.test' });
 });

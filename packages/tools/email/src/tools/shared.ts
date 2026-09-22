@@ -226,27 +226,48 @@ export function ownAddresses(account: AccountRecord): string[] {
 }
 
 /**
- * The identity a reply leaves under.
+ * The identities this account may send under: its address first, then aliases.
  *
- * docs/email.md §4: "a draft's `from` is the alias the original was addressed
- * to, else the account's address". So: whichever of this account's aliases the
- * original actually reached, and the account's own address when none of them
- * did (including when there is no original at all).
+ * The account's own address leads because it is the default and the only one
+ * that is certainly the owner's to send as. The aliases follow in the order the
+ * owner entered them on the settings page.
  *
- * The comparison is on the normalised address and not on `mailboxKey`: that key
- * exists to answer "is this the owner?" and deliberately collapses plus-tags
- * onto the base mailbox, which is the right answer there and the wrong one
- * here — an alias is a distinct identity the owner typed, and
- * `owner+web@example.test` must be chosen because the original reached *it*,
- * not because it reaches the same inbox as `owner@example.test`.
+ * ## Why nothing here looks at the original's To or Cc
+ *
+ * It used to: a reply left under whichever alias appeared in the original's
+ * recipients. But `To` and `Cc` are written by the sender. Mail reaches a
+ * mailbox through Bcc, through forwarding and through catch-all addresses, so
+ * the headers do not say which identity the message was delivered to — they say
+ * which one somebody typed. Anyone who knew the owner had a
+ * `legal@` or `billing@` alias could put it on the `To` line of a message sent
+ * somewhere else entirely and the proposed reply would go out under it.
+ *
+ * So the identity **defaults to the account's address**, and an alias is used
+ * only when the owner chooses it: the send envelope carries these choices
+ * (`fromChoices`) next to the `from` it will use, and the approval card is
+ * where that choice is made. Delivery-envelope metadata (the SMTP RCPT TO,
+ * `Delivered-To`, `X-Original-To`) would be trustworthy, but this build does
+ * not capture it at ingest; until it does, the owner is the source of truth
+ * and not the message.
  */
-export function identityFor(
-  account: AccountRecord,
-  addressedTo: readonly string[] = [],
-): string {
-  const reached = new Set(addressedTo.map((address) => normalizeAddress(address)));
-  const alias = account.aliases.find((candidate) => reached.has(normalizeAddress(candidate)));
-  return alias ?? account.address;
+export function identityChoices(account: AccountRecord): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of [account.address, ...account.aliases]) {
+    const address = normalizeAddress(candidate);
+    if (address === '' || seen.has(address)) continue;
+    seen.add(address);
+    out.push(address);
+  }
+  return out;
+}
+
+/**
+ * The identity a reply leaves under, before the owner has chosen anything: the
+ * account's own address, always. See `identityChoices`.
+ */
+export function identityFor(account: AccountRecord): string {
+  return account.address;
 }
 
 export async function findMessage(db: Pool, id: string): Promise<MessageRecord | null> {

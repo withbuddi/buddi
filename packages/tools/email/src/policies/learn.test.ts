@@ -22,11 +22,23 @@ describe('learnedProposal', () => {
     expect(CONSISTENT_VERDICTS).toBe(3);
   });
 
-  it('applies an ignore at once for three promo verdicts and no reply', () => {
+  it('proposes — never applies — an ignore for three promo verdicts and no reply', () => {
+    // docs/email.md §3: until the Sent folder is synced, "no reply" is read
+    // off drafts buddi itself sent, so it cannot silence anyone by itself.
     const proposal = learnedProposal(promo, false);
-    expect(proposal).toMatchObject({ action: 'ignore', proposed: false });
+    expect(proposal).toMatchObject({ action: 'ignore', proposed: true });
     expect(proposal?.createdFrom).toHaveLength(3);
     expect(proposal?.createdFrom[0]).toEqual({ messageId: 'm0', processingVersion: 2 });
+  });
+
+  it('proposes and applies nothing at all — every rule it makes is a suggestion', () => {
+    const all = [
+      learnedProposal(promo, false),
+      learnedProposal(verdicts(['service-notice', 'low'], ['other', 'low'], ['promo', 'low']), false),
+      learnedProposal(verdicts(['reply-needed', 'normal'], ['reply-needed', 'urgent'], ['reply-needed', 'low']), true),
+    ].filter((p) => p !== null);
+    expect(all).toHaveLength(3);
+    expect(all.every((p) => p!.proposed)).toBe(true);
   });
 
   it('refuses to silence a sender the owner has written back to', () => {

@@ -24,9 +24,12 @@
  *     they will never read. The test goes through the plugin's own client
  *     factory, so it is the same code path the source uses and a test injects a
  *     fake instead of dialling out.
- *  2. **The password goes to the vault**, under `EMAIL_<sanitised address>` —
- *     derived from the address rather than chosen, so the name is the same on
- *     the page, in the row, in the keychain and in `buddi doctor`.
+ *  2. **The password goes to the vault**, under
+ *     `EMAIL_<sanitised address>_<8 hex of its hash>` — derived from the
+ *     address rather than chosen, so the name is the same on the page, in the
+ *     row, in the keychain and in `buddi doctor`, and distinct for two
+ *     addresses that sanitise alike. A name another row already owns is
+ *     refused before the vault is touched: that name holds someone's password.
  *  3. **The row is written**, carrying that name and nothing else. Nothing in
  *     the email schema ever holds a credential.
  *
@@ -46,6 +49,11 @@
  *
  * Every policy reply is shaped the same — `{ applied, proposed }` — so the page
  * reloads from whatever the last call returned instead of asking again.
+ *
+ * One rule the route enforces that the JSON cannot: **a policy says which
+ * mailbox it is about.** Either an `accountId` that resolves to a row, or
+ * `allAccounts: true` — the form's "for every mailbox" checkbox. An omitted
+ * account used to mean "all of them", which is a decision nobody made.
  */
 import { createVault, type Vault } from '@buddi/core';
 import {
@@ -55,6 +63,7 @@ import {
   keepPolicy,
   lastSyncByAccount,
   listAccounts,
+  normalizeAddress,
   policiesView,
   refusalFor,
   revokePolicy,
@@ -263,6 +272,28 @@ export async function addEmailAccount(
   const vault = deps.vault ?? createVault({ env: deps.env });
   if (!vault) throw new EmailWebError(409, 'This installation has nowhere safe to keep the password.');
   const secretName = secretNameFor(account.address);
+
+  /*
+   * Nobody else's secret, checked before the vault is touched at all.
+   *
+   * The name is derived from the address and carries a hash of it, so two
+   * mailboxes cannot collide by accident any more — but "cannot by accident" is
+   * not "cannot", and what is at stake is another account's password: a
+   * `vault.set` under a name a different row owns overwrites it, and the
+   * cleanup below would then delete it. So the row is looked for first, and the
+   * refusal happens while nothing has been written.
+   */
+  const { rows: owner } = await deps.pool.query<{ address: string }>(
+    `select address from email.accounts where secret_name = $1`,
+    [secretName],
+  );
+  if (owner.length > 0) {
+    throw new EmailWebError(
+      409,
+      `The keychain entry ${secretName} already belongs to ${owner[0]!.address}. Remove that account first — nothing was changed.`,
+    );
+  }
+
   try {
     await vault.set(secretName, account.password);
   } catch {
@@ -405,6 +436,7 @@ export async function writeEmailPolicy(
     return { status: 400, body: { error: `\`action\` must be one of ${POLICY_ACTIONS.join(', ')}` } };
   }
   const matcher = typeof input.matcher === 'string' ? input.matcher : '';
+
   const params: PolicyParams = {};
   if (typeof input.agentId === 'string' && input.agentId.trim()) params.agentId = input.agentId.trim();
   if (typeof input.instruction === 'string' && input.instruction.trim()) params.instruction = input.instruction.trim();
@@ -414,14 +446,64 @@ export async function writeEmailPolicy(
     params.category = 'promo';
     params.urgency = 'low';
   }
+  // A thread or a list is named by a header its sender writes, so an `ignore`
+  // on one silences only the address recorded with it (`gate.ts`).
+  if (typeof input.sender === 'string' && input.sender.trim() &&
+      (input.scope === 'thread' || input.scope === 'list-id')) {
+    params.sender = normalizeAddress(input.sender);
+  }
 
   const refusal = refusalFor({ scope: input.scope, matcher, action: input.action, params });
   if (refusal) return { status: 400, body: { error: refusal } };
 
+  /*
+   * Which mailbox, said out loud or not at all.
+   *
+   * A policy with no account applies to *every* account on this installation
+   * (`gate.ts`), and the same sender is worth different things in different
+   * inboxes — so "the owner left the field empty" must never be the way an
+   * installation-wide rule gets written. The route takes either an `accountId`
+   * that resolves to a row here, or `allAccounts: true`, which is a checkbox on
+   * the form ("for every mailbox") and therefore a choice somebody made.
+   */
+  const allAccounts = input.allAccounts === true;
+  const accountId = typeof input.accountId === 'string' ? input.accountId.trim() : '';
+  if (allAccounts && accountId !== '') {
+    return {
+      status: 400,
+      body: { error: 'Choose one mailbox, or "for every mailbox" — not both.' },
+    };
+  }
+  if (!allAccounts) {
+    if (accountId === '') {
+      return {
+        status: 400,
+        body: {
+          error:
+            'Say which mailbox this rule is for, or tick "for every mailbox". The same sender can matter in one inbox and not in another.',
+        },
+      };
+    }
+    const { rows } = await pool.query(`select 1 from email.accounts where id = $1::uuid`, [
+      accountId,
+    ]).catch(() => ({ rows: [] as unknown[] }));
+    if (rows.length === 0) {
+      return { status: 400, body: { error: 'That mailbox is not one of yours.' } };
+    }
+  }
+
+
   try {
     await createPolicy(
       pool,
-      { scope: input.scope, matcher, action: input.action, params, origin: 'owner' },
+      {
+        accountId: allAccounts ? null : accountId,
+        scope: input.scope,
+        matcher,
+        action: input.action,
+        params,
+        origin: 'owner',
+      },
       now,
     );
   } catch (err) {

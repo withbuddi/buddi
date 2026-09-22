@@ -46,7 +46,7 @@ import type { Pool, PoolClient } from 'pg';
 import { INBOX, listAccounts, resolveAuth, type EnvLike } from '../config.js';
 import { prepareForIngest, triagePrompt } from '../mail.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
-import { loadPolicies, recordEvent } from '../policies/store.js';
+import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { senderVerdicts } from '../policies/learn.js';
 import type { AccountRecord, ImapClient, ImapClientFactory } from '../ports.js';
 import { MAILBOX_COLUMNS, toMailbox, type MailboxRecord } from '../rows.js';
@@ -503,20 +503,29 @@ async function drain(
       },
       policies,
     );
-    await recordEvent(
-      ctx.db,
-      {
-        messageId: message.id,
-        policyId: decision.policy?.id ?? null,
-        action: decision.refused ? 'refused' : decision.action,
-        detail: decision.detail,
-      },
-      ctx.now(),
-    );
+    const action = decision.refused ? 'refused' : decision.action;
 
     if (!decision.refused && decision.action === 'ignore' && decision.policy) {
-      await ignoreByPolicy(ctx, message, decision.policy);
-      await stamp(ctx, message.id);
+      // Everything this claims happens here, or none of it does: the triage
+      // row, the event that says the message was ignored, and the stamp that
+      // stops the next poll picking it up. A committed "ignored" beside a
+      // missing triage row would be the audit log lying about the one action
+      // that produces silence.
+      await inOneTransaction(ctx.db, async (tx) => {
+        await ignoreByPolicy(tx, message, decision.policy as PolicyRecord, ctx.now());
+        await recordEvent(
+          tx,
+          {
+            messageId: message.id,
+            policyId: decision.policy?.id ?? null,
+            action,
+            detail: decision.detail,
+            status: 'done',
+          },
+          ctx.now(),
+        );
+        await stampOn(tx, message.id, ctx.now());
+      });
       (ctx.log ?? (() => {}))(
         `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
           `${decision.policy.matcher} (ignore); no run started`,
@@ -524,12 +533,64 @@ async function drain(
       continue;
     }
 
-    await ctx.enqueueRun({
-      agentId: runAgentFor(decision, agentId),
-      prompt: await promptFor(ctx, message, decision, policies),
-      dedupKey: triageDedupKey(message.id),
-    });
+    // The enqueue is the gateway's and cannot join a transaction here, so the
+    // event is written `pending` first, and only becomes `done` once the run
+    // exists. A throw leaves `failed` and an unstamped message: the next poll
+    // tries again and updates this same row rather than adding another.
+    await recordEvent(
+      ctx.db,
+      {
+        messageId: message.id,
+        policyId: decision.policy?.id ?? null,
+        action,
+        detail: decision.detail,
+        status: 'pending',
+      },
+      ctx.now(),
+    );
+    try {
+      await ctx.enqueueRun({
+        agentId: runAgentFor(decision, agentId),
+        prompt: await promptFor(ctx, account, message, decision, policies),
+        dedupKey: triageDedupKey(message.id),
+      });
+    } catch (err) {
+      await settleEvent(
+        ctx.db,
+        message.id,
+        'failed',
+        `${decision.detail} The run could not be queued: ${
+          err instanceof Error ? err.message : String(err)
+        } — the message stays pending and the next poll tries again.`,
+      );
+      throw err;
+    }
+    await settleEvent(ctx.db, message.id, 'done');
     await stamp(ctx, message.id);
+  }
+}
+
+/**
+ * Run one unit of work in a transaction of its own.
+ *
+ * The pool is the source's, not a client, so the client is taken and given
+ * back here rather than held across the poll: a connection kept open for the
+ * length of a drain is a connection the rest of the installation cannot use.
+ */
+async function inOneTransaction(
+  pool: Pool,
+  work: (tx: PoolClient) => Promise<void>,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await work(client);
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -551,11 +612,15 @@ function runAgentFor(decision: GateDecision, fallback: string): string {
  */
 async function promptFor(
   ctx: SourceContext,
+  account: AccountRecord,
   message: PendingTriage,
   decision: GateDecision,
   policies: readonly PolicyRecord[],
 ): Promise<string> {
-  const verdicts = await senderVerdicts(ctx.db, message.from, 5);
+  // This account's history and nobody else's: what a sender did in another
+  // mailbox is not evidence about this one, and a run told otherwise would
+  // carry verdicts about mail that never arrived here.
+  const verdicts = await senderVerdicts(ctx.db, account.id, message.from, 5);
   const senderPolicy =
     decision.policy ??
     policies.find(
@@ -621,11 +686,12 @@ function instructionFor(decision: GateDecision): string | undefined {
  * the triage table, and a hole in it would look like a bug.
  */
 async function ignoreByPolicy(
-  ctx: SourceContext,
+  db: Pool | PoolClient,
   message: PendingTriage,
   policy: PolicyRecord,
+  now: Date,
 ): Promise<void> {
-  await ctx.db.query(
+  await db.query(
     `insert into email.triage
        (message_id, processing_version, category, urgency, summary, action_needed, decided_at)
      values ($1, $2, $3, $4, $5, null, $6)
@@ -636,16 +702,21 @@ async function ignoreByPolicy(
       policy.params.category ?? 'promo',
       policy.params.urgency ?? 'low',
       `Handled by a standing policy (${policy.scope} ${policy.matcher}): ignored without a triage run.`,
-      ctx.now(),
+      now,
     ],
   );
 }
 
 /** The enqueue stamp, written last. See the module comment. */
 async function stamp(ctx: SourceContext, messageId: string): Promise<void> {
-  await ctx.db.query(
+  await stampOn(ctx.db, messageId, ctx.now());
+}
+
+/** The same stamp, on a handle the caller chose — a transaction, usually. */
+async function stampOn(db: Pool | PoolClient, messageId: string, now: Date): Promise<void> {
+  await db.query(
     `update email.messages set triage_enqueued_at = $2
       where id = $1 and triage_enqueued_at is null`,
-    [messageId, ctx.now()],
+    [messageId, now],
   );
 }

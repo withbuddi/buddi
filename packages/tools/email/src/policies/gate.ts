@@ -15,18 +15,27 @@
  *
  * What the gate never does:
  *
- *  - It never reads a *proposed* policy. A learned proposal is a suggestion on
- *    the settings page until the owner keeps it, and the one exception —
- *    `ignore` for a sender with three promo verdicts and no reply — is written
- *    with `proposed = false` by the thing that learns it, not special-cased
- *    here.
+ *  - It never reads a *proposed* policy. Everything learned is a proposal on
+ *    the settings page until the owner keeps it — promo included. Nothing
+ *    learned applies itself while the Sent folder is unsynced (docs/email.md
+ *    §3): "never replied" cannot be known from mail buddi has not read.
  *  - It never reads a revoked one. Revocation keeps the row as a record; it
  *    does not keep its effect.
  *  - It never trusts the message. A From header is forged as easily as it is
  *    read. A policy is the *owner's* standing instruction about a string, and
- *    the worst a forged header can do is claim a rule that silences it.
+ *    the worst a forged header can do is claim a rule that starts the run it
+ *    would have had anyway — never one that stops it. Which is the rule below:
+ *  - **A thread or list-id match never silences a message on its own.**
+ *    `threadKey` comes from `References`/`In-Reply-To` and `List-Id` is copied
+ *    off the wire, so both are strings the sender chooses. An `ignore` on
+ *    either applies only when the sender is corroborated — see
+ *    `ignoreIsCorroborated`.
+ *
+ * And one that is not about trust but about identity: a `sender` policy matches
+ * the **normalised exact address**. `mailboxKey` is not used here; it collapses
+ * `+tags` for every domain and exists to answer "is this the owner?".
  */
-import { mailboxKey, normalizeAddress, normalizeListId } from '../mail.js';
+import { normalizeAddress, normalizeListId } from '../mail.js';
 
 export const POLICY_SCOPES = ['thread', 'sender', 'list-id', 'domain'] as const;
 export type PolicyScope = (typeof POLICY_SCOPES)[number];
@@ -76,6 +85,14 @@ export interface PolicyParams {
   /** `ignore`: the triage row written from the policy. */
   category?: string;
   urgency?: 'urgent' | 'normal' | 'low';
+  /**
+   * `thread` and `list-id`: the sender this policy was created about.
+   *
+   * A thread key and a List-Id are strings the *sender* controls (see the
+   * corroboration rule below), so a policy about one carries the address it
+   * was created for, and an `ignore` on it fires only for that address.
+   */
+  sender?: string;
 }
 
 export interface PolicyRecord {
@@ -132,11 +149,14 @@ export function matches(policy: PolicyRecord, header: MessageHeader): boolean {
     case 'thread':
       return header.threadKey !== null && header.threadKey.trim().toLowerCase() === matcher;
     case 'sender': {
-      // By mailbox, not by string: a plus-tag, a capital letter or one of
-      // Gmail's dots is the same person, and a policy that a `+tag` walks past
-      // is a policy the owner will think is on when it is off.
-      const key = mailboxKey(header.from);
-      return key !== '' && key === mailboxKey(matcher);
+      // The normalised *exact* address, not `mailboxKey`. That key collapses
+      // `+tags` onto the base mailbox for every domain, and plenty of
+      // providers treat a plus as an ordinary local-part character: an ignore
+      // for `sales@example.test` must not silence the distinct sender
+      // `sales+legal@example.test`. `mailboxKey` stays what its own
+      // documentation says it is — the answer to "is this the owner?".
+      const address = normalizeAddress(header.from);
+      return address !== '' && address === normalizeAddress(matcher);
     }
     case 'list-id': {
       const listId = normalizeListId(header.listId ?? null);
@@ -166,6 +186,44 @@ function newerFirst(a: PolicyRecord, b: PolicyRecord): number {
 }
 
 /**
+ * May this thread or list-id policy silence this message?
+ *
+ * **A thread or a List-Id match may never produce `ignore` on its own.** Both
+ * are matched against headers the sender writes: `References`/`In-Reply-To`
+ * decide `threadKey`, and `List-Id` is copied verbatim off the wire. Neither is
+ * authenticated, so anyone who learns a muted thread's root id or a public
+ * list's id could otherwise address a message into silence — and thread is the
+ * *first* scope in the precedence order, so that silence would beat every
+ * sender, list and domain rule the owner has.
+ *
+ * So an `ignore` carried by a `thread` or `list-id` policy applies only when
+ * one of two things is also true:
+ *
+ *  1. the policy records the **sender it was created for** (`params.sender`) —
+ *     that is how the owner muting *this* thread or *this* list is stored — and
+ *     the message is from that address; or
+ *  2. the sender of this message independently matches a live **sender or
+ *     domain** policy of the same account, which is the owner (or the learning)
+ *     having said something about the address itself.
+ *
+ * Nothing else changes: `notify`, `draft`, `wake` and `hand-to-agent` all still
+ * start a run, so a forged header can at worst ask for the treatment the
+ * message would have had anyway. Only the action that *stops* a run is bound to
+ * something the sender cannot choose.
+ */
+function ignoreIsCorroborated(
+  policy: PolicyRecord,
+  header: MessageHeader,
+  live: readonly PolicyRecord[],
+): boolean {
+  if (policy.scope !== 'thread' && policy.scope !== 'list-id') return true;
+  if (policy.action !== 'ignore') return true;
+  const recorded = normalizeAddress(policy.params.sender ?? '');
+  if (recorded !== '') return recorded === normalizeAddress(header.from);
+  return live.some((p) => (p.scope === 'sender' || p.scope === 'domain') && matches(p, header));
+}
+
+/**
  * The gate. Pure: the same header and the same rows always decide the same way.
  */
 export function applyPolicies(
@@ -174,7 +232,10 @@ export function applyPolicies(
 ): GateDecision {
   const live = policies.filter((p) => isLive(p, header.accountId) && matches(p, header));
   for (const scope of POLICY_SCOPES) {
-    const candidates = live.filter((p) => p.scope === scope).sort(newerFirst);
+    const candidates = live
+      .filter((p) => p.scope === scope)
+      .filter((p) => ignoreIsCorroborated(p, header, live))
+      .sort(newerFirst);
     const policy = candidates[0];
     if (!policy) continue;
     if (isUnimplementedAction(policy.action)) {

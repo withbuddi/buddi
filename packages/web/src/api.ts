@@ -194,6 +194,8 @@ export interface Overview {
 /** One standing decision about incoming mail. `/api/email/policies`. */
 export interface EmailPolicy {
   id: string;
+  /** The mailbox it is about. Null is the explicit "every mailbox" choice. */
+  accountId: string | null;
   scope: string;
   matcher: string;
   action: string;
@@ -1284,9 +1286,24 @@ export const api = {
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
   /* ---- mail policies ---- */
   emailPolicies: () => get<EmailPoliciesView>('/email/policies'),
-  /** Write one, or keep a proposal. Both answer with the two lists. */
-  setEmailPolicy: (body: { scope: string; matcher: string; action: string; agentId?: string; instruction?: string; note?: string }) =>
-    post<EmailPoliciesView>('/email/policies', body),
+  /**
+   * Write one, or keep a proposal. Both answer with the two lists.
+   *
+   * `accountId` or `allAccounts` is required, never neither: a rule with no
+   * mailbox decides for all of them, and that has to be something the owner
+   * ticked rather than something they left blank.
+   */
+  setEmailPolicy: (body: {
+    scope: string;
+    matcher: string;
+    action: string;
+    accountId?: string;
+    allAccounts?: boolean;
+    agentId?: string;
+    instruction?: string;
+    note?: string;
+    sender?: string;
+  }) => post<EmailPoliciesView>('/email/policies', body),
   keepEmailPolicy: (id: string) => post<EmailPoliciesView>('/email/policies', { keep: id }),
   revokeEmailPolicy: (id: string) =>
     del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),

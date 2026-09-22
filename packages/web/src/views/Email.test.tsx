@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type EmailPoliciesView, type EmailPolicy } from '../api';
-import { Email, KEYCHAIN_LINE, hostsFor, subFor } from './Email';
+import { Email, EMPTY_RULE, KEYCHAIN_LINE, hostsFor, ruleBodyOf, subFor } from './Email';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -42,7 +42,7 @@ const ACCOUNT = {
   imapPort: 993,
   smtpHost: 'smtp.work.test',
   smtpPort: 465,
-  secretName: 'EMAIL_OWNER_WORK_TEST',
+  secretName: 'EMAIL_OWNER_WORK_TEST_3f2a9c41',
   enabled: true,
   addedVia: 'page' as const,
   lastSyncAt: '2026-09-21T09:00:00Z',
@@ -51,6 +51,7 @@ const ACCOUNT = {
 function policy(over: Partial<EmailPolicy> = {}): EmailPolicy {
   return {
     id: 'p1',
+    accountId: null,
     scope: 'sender',
     matcher: 'news@shop.test',
     action: 'ignore',
@@ -102,7 +103,7 @@ describe('Settings → Email → Accounts', () => {
     render(<Email />);
     expect(await screen.findByText('owner@work.test')).toBeInTheDocument();
     expect(screen.getByText('imap.work.test:993 · smtp.work.test:465')).toBeInTheDocument();
-    expect(screen.getByText('EMAIL_OWNER_WORK_TEST')).toBeInTheDocument();
+    expect(screen.getByText('EMAIL_OWNER_WORK_TEST_3f2a9c41')).toBeInTheDocument();
     expect(screen.getByText('invoices@work.test')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
     expect(screen.getByText(KEYCHAIN_LINE)).toBeInTheDocument();
@@ -240,5 +241,91 @@ describe('the line under a rule', () => {
   it('names who decided it', () => {
     expect(subFor(policy({ origin: 'owner', learnedFrom: 0 }))).toContain('you decided it');
     expect(subFor(policy({ origin: 'owner', learnedFrom: 0 }))).not.toContain('verdicts');
+  });
+});
+
+/*
+ * A rule says which mailbox it is about.
+ *
+ * The route refuses one that names neither a mailbox nor all of them, and the
+ * form is where that stops being a refusal and becomes a choice: pick the
+ * mailbox, or tick "for every mailbox". Leaving the field blank is neither.
+ */
+describe('Settings → Email → Add a rule', () => {
+  beforeEach(() => {
+    vi.mocked(api.setEmailPolicy).mockResolvedValue(VIEW);
+  });
+
+  it('will not write a rule until a mailbox is chosen', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    const add = screen.getByRole('button', { name: 'Add the rule' });
+    expect(add).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Their address'), {
+      target: { value: 'news@shop.test' },
+    });
+    // A matcher on its own is not enough: the mailbox is still unsaid.
+    expect(add).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: ACCOUNT.id } });
+    expect(add).toBeEnabled();
+    fireEvent.click(add);
+    await waitFor(() => expect(api.setEmailPolicy).toHaveBeenCalledTimes(1));
+    expect(api.setEmailPolicy).toHaveBeenCalledWith({
+      scope: 'sender',
+      matcher: 'news@shop.test',
+      action: 'ignore',
+      accountId: ACCOUNT.id,
+    });
+  });
+
+  it('writes an installation-wide rule only when "for every mailbox" is ticked', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('Their address'), { target: { value: 'news@shop.test' } });
+    fireEvent.click(screen.getByLabelText('For every mailbox'));
+    expect(screen.getByLabelText('Which mailbox')).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add the rule' }));
+    await waitFor(() => expect(api.setEmailPolicy).toHaveBeenCalledTimes(1));
+    expect(api.setEmailPolicy).toHaveBeenCalledWith({
+      scope: 'sender',
+      matcher: 'news@shop.test',
+      action: 'ignore',
+      allAccounts: true,
+    });
+  });
+
+  it('asks for the sender when silencing a conversation, because the key is theirs to write', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    expect(screen.queryByLabelText('From this address')).toBeNull();
+    fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
+    expect(screen.getByLabelText('From this address')).toBeInTheDocument();
+    // And not for an action that only ever starts a run.
+    fireEvent.change(screen.getByLabelText('What happens'), { target: { value: 'notify' } });
+    expect(screen.queryByLabelText('From this address')).toBeNull();
+  });
+
+  it('sends the mailbox as one of two things, never as an omission', () => {
+    expect(ruleBodyOf({ ...EMPTY_RULE, matcher: 'a@b.test', accountId: 'acc-1' })).toEqual({
+      scope: 'sender',
+      matcher: 'a@b.test',
+      action: 'ignore',
+      accountId: 'acc-1',
+    });
+    expect(
+      ruleBodyOf({ ...EMPTY_RULE, matcher: 'a@b.test', allAccounts: true, accountId: '' }),
+    ).toEqual({ scope: 'sender', matcher: 'a@b.test', action: 'ignore', allAccounts: true });
+    // The sender travels only where it means something.
+    expect(
+      ruleBodyOf({ ...EMPTY_RULE, scope: 'thread', matcher: '<r@x>', sender: 'Them <THEM@x.test>', accountId: 'acc-1' }),
+    ).toMatchObject({ sender: 'them@x.test' });
+    expect(
+      ruleBodyOf({ ...EMPTY_RULE, matcher: 'a@b.test', sender: 'them@x.test', accountId: 'acc-1' }),
+    ).not.toHaveProperty('sender');
   });
 });
