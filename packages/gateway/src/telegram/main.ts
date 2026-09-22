@@ -38,7 +38,7 @@ import { hostBrowser } from '@buddi/tool-browser';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { browserTabUrl, webConfig } from '../web/config.js';
 import { BROWSER_ACT, BrowserPhotos, runBrowserCommand } from './browser-view.js';
-import { ownerRequestContext } from '../surfaces/owner-request.js';
+import { approvalResumeContext, ownerRequestContext } from '../surfaces/owner-request.js';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -363,7 +363,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           : 'Decided. That was a group\'s request; it continues when the dashboard is running.');
         return;
       }
-      const reply = await runInteractive({ chatId, conversationId: action.conversationId, agent, text: '', resume });
+      // The decision is the owner's act; the run it wakes says so.
+      const reply = await runInteractive({ chatId, conversationId: action.conversationId, agent, text: '', resume, approval: { tool: action.tool } });
       const text = replyText(reply);
       if (text) await api.sendMessage(chatId, text);
     },
@@ -439,7 +440,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume, interjections }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume, approval, interjections }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -472,7 +473,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
         provider: deps.providerFor ? deps.providerFor(deps.catalog.resolve(agent.id)) : deps.provider,
         registry,
-        ctx: resume ? deps.ctx : ownerRequestContext(deps.ctx, text),
+        // A resume carries the owner's decision, which is the owner acting in
+        // this chat: it is an owner request too, so a `session` tool still
+        // works on the other side of an approval. A resume for any other
+        // reason — there is none today — would not get one.
+        ctx: resume
+          ? (approval ? approvalResumeContext(deps.ctx, approval) : deps.ctx)
+          : ownerRequestContext(deps.ctx, text),
         pool,
         conversationId,
         ...(resume ? { resume } : { userMessage: text }),

@@ -92,7 +92,7 @@ import {
   type RuntimeProvider,
 } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
-import { ownerRequestContext } from '../surfaces/owner-request.js';
+import { approvalResumeContext, ownerRequestContext, type ApprovalResumption } from '../surfaces/owner-request.js';
 import type { Pool } from 'pg';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
@@ -952,6 +952,12 @@ interface RunTurn {
   text: string;
   files: ArtifactRow[];
   resume?: RunAgentOptions['resume'];
+  /**
+   * Set when — and only when — `resume` is the owner's own decision on an
+   * approval. It is what makes the resumed run an owner request again; see
+   * `approvalResumeContext`.
+   */
+  approval?: ApprovalResumption;
   /** Set for a run inside a room: which group, which request, and whose voice. */
   group?: RoomTurn;
   /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
@@ -1332,7 +1338,7 @@ export class WebChat {
   }
 
   /** Wait for every queued run to finish. Used by tests and by shutdown. */
-  resumeHost(action: { agentId: string; conversationId: string | null }, resume: NonNullable<RunAgentOptions['resume']>): void {
+  resumeHost(action: { agentId: string; conversationId: string | null; tool?: string }, resume: NonNullable<RunAgentOptions['resume']>): void {
     if (!action.conversationId) return;
     const agent = this.#deps.catalog.get(action.agentId);
     if (!agent) return;
@@ -1343,10 +1349,10 @@ export class WebChat {
       // coordinator picks up.
       const groupId = await conversationGroup(this.#deps.pool, conversationId).catch(() => null);
       if (groupId) {
-        this.#enqueue(groupKey(groupId), () => this.#resumeGroup(groupId, conversationId, agent, resume));
+        this.#enqueue(groupKey(groupId), () => this.#resumeGroup(groupId, conversationId, agent, resume, action.tool));
         return;
       }
-      this.#enqueue(conversationId, async () => { await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume }); });
+      this.#enqueue(conversationId, async () => { await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume, approval: { tool: action.tool } }); });
     })();
   }
 
@@ -1503,7 +1509,7 @@ export class WebChat {
    * coordinator continues. Only the request waiting on exactly this action,
    * by this agent, resumes — a stopped request, or a newer one, never does.
    */
-  async #resumeGroup(groupId: string, conversationId: string, agent: CatalogAgent, resume: NonNullable<RunAgentOptions['resume']>): Promise<void> {
+  async #resumeGroup(groupId: string, conversationId: string, agent: CatalogAgent, resume: NonNullable<RunAgentOptions['resume']>, tool?: string): Promise<void> {
     const pool = this.#deps.pool;
     const group = await getGroup(pool, groupId);
     const request = group ? await suspendedGroupRequest(pool, conversationId, resume.actionId, agent.id) : null;
@@ -1517,6 +1523,9 @@ export class WebChat {
     let concluded = false;
     const memberResult = await this.#run({
       agent, conversationId, runId: randomUUID(), text: '', files: [], resume,
+      // The room still holds what the owner asked for, so the resumed run says
+      // that rather than naming the decision.
+      approval: { tool, text: request.text },
       group: { row: group, request: running, role: agent.id === group.coordinator ? 'coordinator' : 'member', openingSpeaker: agent.id, opening: '', onContribution: () => { contributions += 1; concluded = false; } },
     });
     if (memberResult === 'suspended') return;
@@ -1806,7 +1815,14 @@ export class WebChat {
     await withdrawTurnOffers(deps.pool, conversationId, deps.now(), this.#log);
 
     const base = agent.definition(deps.now(), deps.timezone);
-    const baseCtx = turn.resume ? deps.ctx : ownerRequestContext(deps.ctx, turn.text, runId);
+    // A decided approval is the owner acting in this conversation, so the run
+    // it wakes carries an owner request of its own — otherwise a `session`
+    // tool the agent used a moment ago fails the instant it is resumed. A
+    // resume with no decision behind it (nothing produces one today) gets the
+    // bare context, because nothing about it would be the owner speaking.
+    const baseCtx = turn.resume
+      ? (turn.approval ? approvalResumeContext(deps.ctx, turn.approval, runId) : deps.ctx)
+      : ownerRequestContext(deps.ctx, turn.text, runId);
     const options: RunAgentOptions = {
       // In a room, delegation is the ask tool and nothing else: an agent
       // that could delegate would reach a non-member, off budget, off record.

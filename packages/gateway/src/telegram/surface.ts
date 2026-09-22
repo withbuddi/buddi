@@ -488,6 +488,12 @@ export interface RunAttachment {
 
 export interface RunRequest {
   resume?: import('@buddi/runtime').ApprovalResume;
+  /**
+   * Set only alongside `resume`, and only when the resume is the owner's own
+   * decision on an approval: it is what gives the woken run an owner request
+   * again (`approvalResumeContext`).
+   */
+  approval?: import('../surfaces/owner-request.js').ApprovalResumption;
   conversationId: string;
   chatId: string;
   text: string;
