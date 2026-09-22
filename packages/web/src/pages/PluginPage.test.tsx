@@ -141,6 +141,8 @@ const board: Component[] = [
           // The one link that leaves the plugin: an agent's chat, named by a
           // path into the data rather than by a URL the descriptor wrote.
           { kind: 'link', label: 'The agent that holds it', to: { chat: { path: 'holder' } } },
+          // …and the same link over a field the data does not answer.
+          { kind: 'link', label: 'Nobody holds it', to: { chat: { path: 'nobody' } } },
         ],
       },
       {
@@ -435,6 +437,17 @@ describe('the pieces a descriptor is made of', () => {
     draw('board', 'a1');
     const link = await screen.findByRole('link', { name: 'The agent that holds it' });
     expect(link).toHaveAttribute('href', '#/chat/ada');
+  });
+
+  /**
+   * And no link at all when the data does not answer one. A button that
+   * navigates to the empty hash — which is what returning `''` used to do —
+   * is worse than no button: the shell re-renders on a route to nowhere.
+   */
+  it('draws no link when the chat id is missing', async () => {
+    draw('board', 'a1');
+    await screen.findByRole('link', { name: 'The agent that holds it' });
+    expect(screen.queryByRole('link', { name: 'Nobody holds it' })).toBeNull();
   });
 
   it('draws stats from their query, formatted by the unit the descriptor named', async () => {
