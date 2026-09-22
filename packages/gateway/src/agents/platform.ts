@@ -1311,12 +1311,32 @@ export interface AcceptPluginAgentEnvelope extends Omit<CreateAgentEnvelope, 'to
   proposalChecksum: string;
   /** Skills written into the new agent's own `skills/` by the same approval. */
   skills: Array<{ name: string; description: string; file: string; content: string }>;
+  /**
+   * The handle of the agent this one's account was taken from, when nobody
+   * named one: the accepting agent itself, or the default agent behind it.
+   * Null when the account was named, or when this installation has none.
+   */
+  inheritedFrom: string | null;
 }
 
 const acceptAgentInput = z
   .object({
     plugin: z.string().min(1).describe('Which plugin proposed it, e.g. "weather".'),
     agent: z.string().min(1).describe('The proposed agent id, as platform.plugin_agents lists it.'),
+    account: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The named model account it runs on, by the name the owner gave it (platform.list_accounts). ' +
+          'Leave it out and it speaks through the same account you do. Name one only when the owner ' +
+          'picked it; never guess.',
+      ),
+    model: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Pin a model the account serves. Leave it out for the proposal's, or for yours."),
   })
   .strict();
 
@@ -1338,6 +1358,23 @@ function buildAcceptAgentEnvelope(
 ): AcceptPluginAgentEnvelope {
   const proposal = findProposal(deps.registry, input.plugin, input.agent);
   const suggestion = proposal.agent;
+  /*
+   * Where an accepted agent speaks from.
+   *
+   * A proposal is written by somebody who has never seen this installation, so
+   * it almost never names an account and usually names no model either. Left
+   * at that, accepting one produced an agent in the roster with "Choose a
+   * provider account" against it and no way to say a word until the owner went
+   * to the Agents page — an approval that did not finish the thing it was for.
+   * So unless the owner named an account, or the plugin insisted on a legacy
+   * provider, it speaks through the account the accepting agent speaks
+   * through, and the preview says so in those words.
+   */
+  const speaks =
+    input.account === undefined && suggestion.provider === undefined
+      ? speakingAccount(deps.binding, deps.proposedBy)
+      : null;
+  const model = input.model ?? suggestion.model ?? speaks?.account.model;
   const base = buildCreateEnvelope(
     {
       id: suggestion.id,
@@ -1346,7 +1383,12 @@ function buildAcceptAgentEnvelope(
       description: suggestion.description,
       persona: suggestion.persona,
       tools: suggestion.tools,
-      ...(suggestion.model === undefined ? {} : { model: suggestion.model }),
+      ...(input.account === undefined
+        ? speaks === null
+          ? {}
+          : { account: speaks.account.label }
+        : { account: input.account }),
+      ...(model === undefined ? {} : { model }),
       ...(suggestion.provider === undefined ? {} : { provider: suggestion.provider }),
       ...(suggestion.maxTurns === undefined ? {} : { maxTurns: suggestion.maxTurns }),
       ...(suggestion.language === undefined ? {} : { language: suggestion.language }),
@@ -1392,6 +1434,45 @@ function buildAcceptAgentEnvelope(
     fromPlugin: { name: proposal.plugin, version: proposal.pluginVersion },
     proposalChecksum: proposalChecksum(suggestion),
     skills,
+    inheritedFrom: base.account === null ? null : (speaks?.from ?? null),
+  };
+}
+
+/**
+ * The account the accepting agent speaks through, and whose it is.
+ *
+ * The caller's own binding first — the agent running the tool is the one the
+ * owner is talking to, and a colleague accepted mid-conversation that thinks
+ * with a different brain than the one doing the accepting is a surprise
+ * nobody asked for. Then the installation's usual answer (`inheritedAccount`):
+ * the default agent's, or the only account there is. A binding the accounts
+ * service no longer serves is not taken, for the same reason it is not
+ * inherited — it would be an agent born unable to answer.
+ */
+function speakingAccount(
+  binding: ResolvedBinding,
+  agentId: string,
+): { account: AccountChoice; from: string | null } | null {
+  const accounts = binding.accounts;
+  if (!accounts) return null;
+  const usable = accounts.list().filter((row) => row.enabled && row.configured);
+  if (usable.length === 0) return null;
+  const caller = binding.catalog.get(agentId);
+  const bound = caller ? accounts.bindingOf(caller.id) : undefined;
+  const row = bound ? usable.find((candidate) => candidate.id === bound.accountId) : undefined;
+  if (caller && row && bound && !accountModelProblem(row.kind as never, bound.model)) {
+    return {
+      account: { id: row.id, label: row.label, kind: row.kind, model: bound.model },
+      from: caller.handle === '' ? caller.id : caller.handle,
+    };
+  }
+  const fallback = inheritedAccount(binding);
+  if (!fallback) return null;
+  const holder = defaultHolder(binding);
+  const held = holder ? accounts.bindingOf(holder.id) : undefined;
+  return {
+    account: fallback,
+    from: holder && held?.accountId === fallback.id ? (holder.handle === '' ? holder.id : holder.handle) : null,
   };
 }
 
@@ -1405,6 +1486,17 @@ export function renderAcceptAgentPreview(
     '',
     renderCreatePreview({ ...envelope, tool: 'platform.create_agent' }, specs),
     '',
+    // The half an accepted proposal used to leave out: a plugin names no
+    // account, so without this line the owner approved an agent that could
+    // not speak until they went somewhere else and said where it thinks.
+    ...(envelope.account === null
+      ? []
+      : [
+          `Speaks through ${envelope.account.label} with ${envelope.account.model}` +
+            `${envelope.inheritedFrom === null ? '' : ` (from @${envelope.inheritedFrom})`}; ` +
+            'change it on the Agents page.',
+          '',
+        ]),
     ...(envelope.skills.length === 0
       ? []
       : [
@@ -2185,7 +2277,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'directory, with the grant the plugin asked for. This needs the owner\'s approval, and what they ' +
       'are approving is ACCESS — the plugin wrote the proposal, but the owner grants the tools, and they ' +
       'see exactly what those tools reach before saying yes. The file becomes theirs: upgrading the ' +
-      'plugin never rewrites it. ' +
+      'plugin never rewrites it. A proposal names no provider account, so unless you pass `account` ' +
+      'the new agent speaks through the same one you do and is live the moment it is approved. ' +
       CONDUCT,
     tier: 'gated',
     input: acceptAgentInput,
@@ -2224,6 +2317,9 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         ),
       });
       const reload = reloadResult(binding);
+      // The assignment is what makes it live rather than merely present: an
+      // agent file with no account behind it sits in the roster disabled.
+      const assigned = await assignAccount(binding, envelope.id, envelope.account);
       return {
         ok: true,
         id: envelope.id,
@@ -2232,10 +2328,11 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         tools: envelope.tools,
         fromPlugin: envelope.fromPlugin,
         skills: envelope.skills.map((s) => s.name),
+        account: envelope.account,
         live: reload.reloaded,
         message:
           `@${envelope.handle} exists, and it is the owner's file now — ${envelope.fromPlugin.name} cannot ` +
-          `change it. ${reload.message}`,
+          `change it. ${reload.message}${assigned}`,
       };
     },
   };

@@ -233,6 +233,30 @@ export function applyInstall(
  * sentence that says so per agent, which is the only thing an upgrade is
  * allowed to do about them.
  */
+/**
+ * What to do about the agents a freshly installed plugin proposes.
+ *
+ * Installing creates none of them, which used to be said as "ask your agent
+ * for one by name" — and the owner then asked whichever agent they happened to
+ * be talking to, which does not hold the tools that make agents and could only
+ * say no. Exactly one agent can: Agent Father. So the sentence names it, and
+ * the example is the whole thing to type.
+ *
+ * The same lines are printed by `buddi plugins install` and returned by the
+ * dashboard's install route, so the two cannot drift apart.
+ */
+export function acceptAgentSteps(
+  plugin: string,
+  agents: ReadonlyArray<{ id: string }>,
+): string[] {
+  if (agents.length === 0) return [];
+  return [
+    'It proposes agents. Nothing was created — Agent Father is the one agent that can make them:',
+    ...agents.map((agent) => `  Ask Agent Father: "accept the ${agent.id} agent from the ${plugin} plugin"`),
+    'You will be shown the whole tool grant and asked to approve it.',
+  ];
+}
+
 export function renderAgentDrift(plan: InstallPlan): string[] {
   if (plan.agents.length === 0) return [];
   const lines = ['', 'AGENTS IT PROPOSES, AND YOUR COPIES'];

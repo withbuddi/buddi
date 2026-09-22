@@ -1336,6 +1336,17 @@ export const api = {
       `/plugins/${encodeURIComponent(name)}/uninstall`,
       body,
     ),
+  /**
+   * Accept an agent a plugin proposes, as the owner.
+   *
+   * Gated, so what comes back is an approval id and its preview: the page
+   * draws the card and the owner decides there. A `result` instead would mean
+   * the tool was not gated, which it is.
+   */
+  acceptPluginAgent: (plugin: string, agent: string) =>
+    post<{ approvalId?: string; preview?: string; result?: unknown }>(
+      `/plugins/${encodeURIComponent(plugin)}/agents/${encodeURIComponent(agent)}/accept`,
+    ),
   recovery: () => get<RecoveryView>('/recovery'),
   leaveRecovery: (body: { dropPending: boolean; keepGrants: string[] }) =>
     post<{ accepted?: boolean }>('/recovery/leave', body),
