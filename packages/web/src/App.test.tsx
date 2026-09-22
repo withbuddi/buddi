@@ -99,7 +99,7 @@ describe('home', () => {
     vi.spyOn(api, 'missions').mockResolvedValue({ missions: [] });
     vi.spyOn(api, 'reminders').mockResolvedValue({ reminders: [] });
     vi.spyOn(api, 'conversations').mockResolvedValue({ conversations: [] });
-    vi.spyOn(api, 'offers').mockResolvedValue({ offers: [] });
+    vi.spyOn(api, 'offers').mockResolvedValue({ offers: [], closed: [] });
     const agents = [{ id: 'ledger', handle: 'ledger', name: 'Ledger', description: 'Keeps the books', available: true, roles: [], provider: 'x', model: 'y' }];
     await act(async () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={agents} attention={new Map()} />);
