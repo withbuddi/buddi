@@ -99,38 +99,36 @@ const messages: Component = {
         },
         /*
          * The bytes were never downloaded at ingest — what is stored is a
-         * listing — so each row is a Fetch, and what a fetch produced is a
-         * file in the owner's library, linked underneath.
+         * listing — so an attachment is one block: what it is, a Fetch while
+         * there is nothing to download, and the link to the file once there
+         * is. `when` is asked of the row, so the button gives way rather than
+         * sitting beside the link it produced.
          */
         {
-          kind: 'list',
+          kind: 'repeat',
           title: 'Attachments',
           query: message(),
           rows: 'attachments',
           // The index, never the filename: a filename comes off the wire, and
           // two `invoice.pdf` on one message are two rows, not one.
           key: 'index',
-          item: {
-            title: { path: 'filename' },
-            sub: { path: 'detail' },
-            pill: { value: { path: 'held' } },
-          },
-          actions: [
-            {
-              tool: 'email.fetch_attachment',
-              label: 'Fetch',
-              busy: 'Fetching…',
-              args: { message: { row: 'messageId' }, index: { row: 'index' } },
-            },
-          ],
           empty: 'Nothing was attached to this message.',
-        },
-        {
-          kind: 'repeat',
-          query: message(),
-          rows: 'attachments',
-          key: 'index',
           body: [
+            { kind: 'notice', text: { path: 'line' } },
+            {
+              kind: 'button',
+              when: { path: 'artifactId', equals: null },
+              action: {
+                // Plain words: a `button` is not handed its row for `{field}`
+                // substitution the way a row action is, and the line above it
+                // already names the file.
+                tool: 'email.fetch_attachment',
+                label: 'Fetch',
+                busy: 'Fetching…',
+                done: { path: 'note' },
+                args: { message: { path: 'messageId' }, index: { path: 'index' } },
+              },
+            },
             {
               kind: 'artifact',
               when: { path: 'artifactId', equals: null, not: true },
@@ -209,6 +207,7 @@ const drafts: Component = {
         tool: 'email.save_draft',
         label: 'Save',
         busy: 'Saving…',
+        done: { path: 'note' },
         args: {
           draftId: { path: 'id' },
           to: { field: 'to' },
@@ -226,6 +225,7 @@ const drafts: Component = {
           tone: 'danger',
           placement: 'leading',
           busy: 'Discarding…',
+          done: { path: 'note' },
           confirm: 'Discard this draft? It is kept, so you can still read what was proposed.',
           args: { draftId: { path: 'id' } },
         },
@@ -303,80 +303,95 @@ const mail: PageDescriptor = {
         title: { path: 'subject' },
         sub: { path: 'line' },
         meta: [{ path: 'attachment' }, { path: 'when' }],
-        pill: { value: { path: 'who' } },
+        // The owner's own words are toned as such, as the old list drew them.
+        pill: { value: { path: 'who' }, tone: { path: 'whoTone' } },
         to: { page: 'mail', item: { path: 'threadId' } },
       },
       empty: 'Nothing here matches that.',
     },
     {
-      kind: 'list-detail',
-      param: THREAD,
-      list: {
-        kind: 'list',
-        title: 'Conversations',
-        query: { query: 'threads' },
-        rows: 'threads',
-        key: 'id',
-        item: {
-          title: { path: 'subject' },
-          sub: { path: 'participants' },
-          meta: [{ path: 'when' }],
-          pill: { value: { path: 'pill' } },
-          to: { page: 'mail', item: { path: 'id' } },
-        },
-        empty: 'No conversations yet. buddi builds them as mail arrives.',
-      },
-      detail: [
-        /*
-         * The parts of a conversation are siblings rather than one nested
-         * tree: a descriptor may be twelve levels deep, and a message's
-         * attachments are already six of them below this line.
-         */
+      /*
+       * The way across to the configuration is a header action, right-aligned
+       * like every other primary action, rather than a link at the foot of the
+       * page — and it routes to the *settings tab*, because a `RouteRef` to a
+       * settings page resolves to the tab it is rather than to a bare page.
+       */
+      kind: 'section',
+      title: 'Conversations',
+      actions: [{ kind: 'link', label: 'Mailboxes and rules', to: { page: 'settings' } }],
+      body: [
         {
-          kind: 'detail',
-          title: 'Conversation',
-          query: thread(),
-          fields: [
-            { label: 'Subject', value: { path: 'subject' } },
-            { label: 'State', value: { path: 'state' } },
-            { label: 'With', value: { path: 'participants' } },
-            { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
-            { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
-          ],
-          body: [],
-        },
-        messages,
-        drafts,
-        /*
-         * The ended drafts. The fold is always here rather than shown only
-         * when there are some: `when` would be asked against the page's own
-         * data — which, inside a detail the route owns, is nothing — and a
-         * question that can only be answered "no" is how a whole section
-         * quietly stops existing. The list inside says when there is nothing.
-         */
-        {
-          kind: 'expand',
-          label: 'Older drafts',
-          query: thread(),
-          body: [
+          kind: 'list-detail',
+          param: THREAD,
+          list: {
+            kind: 'list',
+            query: { query: 'threads' },
+            rows: 'threads',
+            key: 'id',
+            item: {
+              title: { path: 'subject' },
+              sub: { path: 'participants' },
+              meta: [{ path: 'when' }],
+              // Both facts: where the conversation stands, and whether a reply is
+              // waiting on the owner. One in place of the other hid the state of
+              // every conversation an agent had drafted for.
+              pills: [{ value: { path: 'state' } }, { value: { path: 'draftPill' } }],
+              to: { page: 'mail', item: { path: 'id' } },
+            },
+            empty: 'No conversations yet. buddi builds them as mail arrives.',
+          },
+          detail: [
+            /*
+             * The parts of a conversation are siblings rather than one nested
+             * tree: a descriptor may be twelve levels deep, and a message's
+             * attachments are already six of them below this line.
+             */
             {
-              kind: 'list',
-              query: { query: 'thread', params: { id: { path: 'id' } } },
-              rows: 'older',
-              key: 'id',
-              item: {
-                title: { path: 'subject' },
-                sub: { path: 'statusLine' },
-                pill: { value: { path: 'status' } },
-              },
-              empty: 'Nothing has ended on this conversation yet.',
+              kind: 'detail',
+              title: 'Conversation',
+              query: thread(),
+              fields: [
+                { label: 'Subject', value: { path: 'subject' } },
+                { label: 'State', value: { path: 'state' } },
+                { label: 'With', value: { path: 'participants' } },
+                { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
+                { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
+              ],
+              body: [],
+            },
+            messages,
+            drafts,
+            /*
+             * The ended drafts. The fold is always here rather than shown only
+             * when there are some: `when` would be asked against the page's own
+             * data — which, inside a detail the route owns, is nothing — and a
+             * question that can only be answered "no" is how a whole section
+             * quietly stops existing. The list inside says when there is nothing.
+             */
+            {
+              kind: 'expand',
+              label: 'Older drafts',
+              query: thread(),
+              body: [
+                {
+                  kind: 'list',
+                  query: { query: 'thread', params: { id: { path: 'id' } } },
+                  rows: 'older',
+                  key: 'id',
+                  item: {
+                    title: { path: 'subject' },
+                    sub: { path: 'statusLine' },
+                    pill: { value: { path: 'status' } },
+                  },
+                  empty: 'Nothing has ended on this conversation yet.',
+                },
+              ],
             },
           ],
+          empty: 'Choose a conversation to read it here.',
         },
       ],
-      empty: 'Choose a conversation to read it here.',
     },
-    { kind: 'link', label: 'Mailboxes and rules', to: { page: 'settings' } },
   ],
 };
 
@@ -428,6 +443,8 @@ const addAccount: Component = {
     label: 'Add the account',
     tone: 'accent',
     busy: 'Opening the mailbox…',
+    // The tool's own sentence: it knows the address it just opened.
+    done: { path: 'note' },
     then: 'close',
     args: {
       address: { field: 'address' },
@@ -455,11 +472,17 @@ const addRule: Component = {
   kind: 'form',
   drawer: { title: 'Add a rule', button: 'Add a rule' },
   fields: [
+    /*
+     * The mailbox first, and picked: a conversation lives in exactly one of
+     * them, so the picker below can only offer that one's threads once this
+     * is answered — never fifty threads across every account, which could
+     * hand a busy mailbox's conversations to a rule meant for a quiet one.
+     */
     {
       name: 'mailbox',
       label: 'Mailbox',
-      type: 'email',
-      hint: 'The address of the mailbox this rule is about, as it appears under Mailboxes above.',
+      type: 'select',
+      optionsFrom: { query: { query: 'accounts' }, rows: 'accounts', value: 'id', label: 'label' },
       disabledWhen: { path: 'allAccounts', equals: true },
     },
     {
@@ -467,6 +490,8 @@ const addRule: Component = {
       label: 'For every mailbox',
       type: 'checkbox',
       hint: 'The same sender can matter in one inbox and not in another, so a rule says which one it is about — unless you tick this.',
+      // Meaningless for one conversation, and refused by the tool besides.
+      disabledWhen: { path: 'scope', equals: 'thread' },
     },
     {
       name: 'scope',
@@ -481,11 +506,34 @@ const addRule: Component = {
       ],
     },
     {
+      // Typed, for the three scopes that are a string somebody can write.
       name: 'matcher',
       label: 'Which',
       type: 'text',
       required: true,
-      hint: 'An address, a domain, a List-Id — or, for one conversation, the id in its address on the Mail page.',
+      when: { path: 'scope', in: ['sender', 'domain', 'list-id'] },
+      hint: 'An address like news@shop.example, a domain like shop.example, or a List-Id.',
+    },
+    {
+      /*
+       * **Picked, never typed** (docs/specs/email.md §5). A thread is named in
+       * the database by the root Message-ID of its chain, which is not
+       * something an owner has, so the one scope that cannot be a text field
+       * is a list of subjects — re-read whenever the mailbox above changes.
+       */
+      name: 'thread',
+      label: 'Which conversation',
+      type: 'select',
+      required: true,
+      when: { path: 'scope', equals: 'thread' },
+      optionsFrom: {
+        query: { query: 'rule_threads' },
+        rows: 'threads',
+        value: 'id',
+        label: 'label',
+        dependsOn: ['mailbox'],
+      },
+      hint: 'The conversations buddi has seen in the mailbox above, most recent first.',
     },
     {
       name: 'action',
@@ -503,21 +551,34 @@ const addRule: Component = {
       name: 'sender',
       label: 'From this address',
       type: 'text',
-      hint: 'For a conversation or a list: they are named by headers their sender writes, so silence here applies to one address. Without it, such a rule silences nothing on its own.',
+      when: { path: 'scope', in: ['thread', 'list-id'] },
+      hint: 'A conversation and a list are named by headers their sender writes, so silence here applies to one address. Without it, such a rule silences nothing on its own.',
     },
-    { name: 'note', label: 'The line you get', type: 'text', hint: 'For "send me one line".' },
-    { name: 'instruction', label: 'What the reply should say', type: 'text', hint: 'For "draft a reply".' },
+    {
+      name: 'note',
+      label: 'The line you get',
+      type: 'text',
+      when: { path: 'action', equals: 'notify' },
+    },
+    {
+      name: 'instruction',
+      label: 'What the reply should say',
+      type: 'text',
+      when: { path: 'action', equals: 'draft' },
+    },
   ],
   submit: {
     tool: 'email.add_rule',
     label: 'Add the rule',
     tone: 'accent',
+    done: { path: 'note' },
     then: 'close',
     args: {
       mailbox: { field: 'mailbox' },
       allAccounts: { field: 'allAccounts' },
       scope: { field: 'scope' },
       matcher: { field: 'matcher' },
+      thread: { field: 'thread' },
       action: { field: 'action' },
       sender: { field: 'sender' },
       note: { field: 'note' },
@@ -588,6 +649,7 @@ const watchers: Component = {
     tool: 'email.set_settings',
     label: 'Save',
     tone: 'accent',
+    done: { path: 'note' },
     args: {
       waitingDays: { field: 'waitingDays' },
       dateConfidence: { field: 'dateConfidence' },
@@ -626,15 +688,18 @@ const settings: PageDescriptor = {
             { key: 'host', label: 'Host' },
             { key: 'lastSync', label: 'Last sync' },
             { key: 'secretName', label: 'Password kept as' },
-            { key: 'state', label: 'State' },
+            // A mailbox buddi is not reading is worth catching an eye.
+            { key: 'state', label: 'State', pill: { tone: { path: 'stateTone' } } },
           ],
           actions: [
             {
               tool: 'email.remove_account',
               label: 'Remove',
               tone: 'danger',
+              // A destructive confirmation names what it is about to destroy.
               confirm:
-                'Removing this mailbox deletes its mail and its drafts from buddi, and its password from your keychain. The mailbox itself is untouched.',
+                'Remove {address}? It deletes its mail and its drafts from buddi, and its password from your keychain. The mailbox itself is untouched.',
+              done: { path: 'note' },
               args: { id: { row: 'id' } },
             },
           ],
@@ -673,14 +738,28 @@ const settings: PageDescriptor = {
           },
           select: { key: 'id' },
           actions: [
-            { tool: 'email.revoke_policies', label: 'Revoke', args: { ids: { row: 'ids' } } },
+            {
+              tool: 'email.revoke_policies',
+              label: 'Revoke',
+              confirm: 'Revoke the rule about {matcher}? It stops deciding anything from now on.',
+              done: { path: 'note' },
+              args: { ids: { row: 'ids' } },
+            },
           ],
           bulk: [
             {
+              /*
+               * With nothing ticked this is every row shown — "Revoke all 73"
+               * — which is the reason the bulk act exists: going through
+               * seventy rules one tap at a time is how an owner ends up not
+               * going through them at all.
+               */
               tool: 'email.revoke_policies',
-              label: 'Revoke selected',
+              all: true,
+              label: 'Revoke {count} {rule|rules}',
               tone: 'danger',
-              confirm: 'Revoke {count} rules? They stop deciding anything from now on.',
+              confirm: 'Revoke {count} {rule|rules}? They stop deciding anything from now on.',
+              done: { path: 'note' },
               args: { ids: { selected: true } },
             },
           ],
@@ -699,22 +778,39 @@ const settings: PageDescriptor = {
           },
           select: { key: 'id' },
           actions: [
-            { tool: 'email.keep_policies', label: 'Keep', tone: 'accent', args: { ids: { row: 'ids' } } },
-            { tool: 'email.revoke_policies', label: 'Revoke', args: { ids: { row: 'ids' } } },
+            {
+              tool: 'email.keep_policies',
+              label: 'Keep',
+              tone: 'accent',
+              confirm: 'Keep the rule about {matcher}? It starts deciding straight away.',
+              done: { path: 'note' },
+              args: { ids: { row: 'ids' } },
+            },
+            {
+              tool: 'email.revoke_policies',
+              label: 'Revoke',
+              confirm: 'Revoke the rule about {matcher}? Nothing proposed it again for a while.',
+              done: { path: 'note' },
+              args: { ids: { row: 'ids' } },
+            },
           ],
           bulk: [
             {
               tool: 'email.keep_policies',
-              label: 'Keep selected',
+              all: true,
+              label: 'Keep {count} {rule|rules}',
               tone: 'accent',
-              confirm: 'Keep {count} rules? They start deciding straight away, with no model run.',
+              confirm: 'Keep {count} {rule|rules}? They start deciding straight away, with no model run.',
+              done: { path: 'note' },
               args: { ids: { selected: true } },
             },
             {
               tool: 'email.revoke_policies',
-              label: 'Revoke selected',
+              all: true,
+              label: 'Revoke {count} {rule|rules}',
               tone: 'danger',
-              confirm: 'Revoke {count} rules? They stop deciding anything from now on.',
+              confirm: 'Revoke {count} {rule|rules}? They stop deciding anything from now on.',
+              done: { path: 'note' },
               args: { ids: { selected: true } },
             },
           ],

@@ -188,6 +188,19 @@ Three departures, as built:
   nothing else. It saves the owner's attention, not a model call; only
   `ignore` saves the call.
 
+**Writing one, from the page.** "Add a rule" is a drawer on Settings → Email
+that writes through `email.add_rule` — the owner's own path to the same table,
+with no approval card in the way, because they are the one acting. Two of its
+fields are **picked, never typed**, and both for the same reason: the mailbox,
+because a rule with no mailbox decides for every mailbox and that has to be a
+choice somebody made rather than a field left empty; and, for a rule about one
+conversation, the conversation itself — the database names a thread by the root
+Message-ID of its chain, which is not something an owner has. The mailbox picker
+reads the `accounts` query; the conversation picker reads `rule_threads`, which
+depends on the mailbox above it and offers that mailbox's fifty most recent
+threads as `[mailbox] subject — participants`. "For every mailbox" is a tick,
+disabled for a conversation rule and refused by the tool besides.
+
 ## 6. What a triage run receives
 
 The thread, not the message: the last few messages of the thread in order,
@@ -479,7 +492,10 @@ reads through `GET /api/pages/email/<query>` (`threads`, `thread`, `message`,
 `draft`) and writes through `POST /api/pages/email/act` — `email.save_draft`,
 `email.discard_draft` and the gated `email.send` — behind the same session and
 CSRF gate as the rest of `/api`. Save, Discard and the version precondition are
-unchanged; they are a tool's refusals now rather than a route's status codes.
+unchanged; they are a tool's refusals now rather than a route's status codes,
+and what a write says back — "Saved. These are your words now…", "Discarded. It
+is kept under Older drafts…" — is the tool's own sentence, drawn where the
+button is.
 
 **Two writers, one row.** Every rule above is in the SQL predicate, not in a
 check above the write, because everything here has a second writer: an agent

@@ -19,7 +19,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, createVault, pageQueryContext, runMigrations, ToolRegistry, type Vault } from '@buddi/core';
+import {
+  createPool,
+  createVault,
+  pageQueryContext,
+  runMigrations,
+  QueryRefusal,
+  ToolRegistry,
+  type Vault,
+} from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME, listAccounts, secretNameFor } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
@@ -189,7 +197,9 @@ suite('the mail pages, over postgres', () => {
   it('lists the conversations with the draft pill, and searches the same rows', async () => {
     const listed = await ask('threads');
     expect(listed.threads).toHaveLength(1);
-    expect(listed.threads[0]).toMatchObject({ subject: 'Invoice 42', pill: 'draft' });
+    // The state and the draft are two pills now, not one in place of the other.
+    expect(listed.threads[0]).toMatchObject({ subject: 'Invoice 42', draftPill: 'draft' });
+    expect(listed.threads[0].state).toBeTruthy();
     // Nothing narrows it, so the search half is empty rather than everything.
     expect(listed.items).toEqual([]);
 
@@ -275,6 +285,7 @@ suite('the mail pages, over postgres', () => {
       draft: await ask('draft', { id: ids.draftId }),
       accounts: await ask('accounts'),
       policies: await ask('policies'),
+      rule_threads: await ask('rule_threads'),
       watcher_settings: await ask('watcher_settings'),
     };
     const at = readPath;
@@ -287,8 +298,13 @@ suite('the mail pages, over postgres', () => {
         const rows = at(answers[own], node.rows);
         expect(Array.isArray(rows), `${own}.${node.rows} is an array`).toBe(true);
         seen.push(`${own}.${node.rows}`);
-        if (typeof node.key === 'string' && (rows as unknown[]).length > 0) {
-          expect(at((rows as unknown[])[0], node.key), `${own}.${node.rows}[0].${node.key}`).toBeDefined();
+        const first = (rows as unknown[])[0];
+        // A row's key, and — for a picker — the value it submits and the
+        // words the owner reads.
+        for (const field of ['key', 'value', 'label'] as const) {
+          if (typeof node[field] === 'string' && first !== undefined) {
+            expect(at(first, node[field]), `${own}.${node.rows}[0].${node[field]}`).toBeDefined();
+          }
         }
       }
       for (const child of Array.isArray(node) ? node : Object.values(node)) walk(child, own);
@@ -300,12 +316,15 @@ suite('the mail pages, over postgres', () => {
       'threads.threads',
       'thread.messages',
       'message.attachments',
-      'message.attachments',
       'thread.drafts',
       'thread.older',
       'accounts.accounts',
       'policies.applied',
       'policies.proposed',
+      // The rule drawer's two pickers: the mailboxes, and that mailbox's
+      // conversations.
+      'accounts.accounts',
+      'rule_threads.threads',
     ]);
   });
 
@@ -360,6 +379,7 @@ suite('the mail pages, over postgres', () => {
         for (const [i, child] of (component.body ?? []).entries()) await walk(child, root, `${where}.${i}`);
         return;
       }
+      if (kind === 'button') return;
       if (kind === 'list-detail') {
         // The detail is handed the page's data, not the list's row.
         for (const [i, child] of (component.detail ?? []).entries()) {
@@ -395,13 +415,15 @@ suite('the mail pages, over postgres', () => {
     }
     // The conditions that are left, and where each one stands.
     expect(checked).toEqual([
-      // An attachment's link, asked of the attachment's own row.
-      'mail.body.2.detail.1.0.2.0.when(artifactId)',
+      // An attachment's Fetch and its link, each asked of its own row: the
+      // button gives way to the link the moment there is a file.
+      'mail.body.2.0.detail.1.0.1.1.when(artifactId)',
+      'mail.body.2.0.detail.1.0.1.2.when(artifactId)',
       // The two draft notices, each asked of the draft the editor is about.
-      'mail.body.2.detail.2.0.when(unresolved)',
-      'mail.body.2.detail.2.1.when(notLive)',
+      'mail.body.2.0.detail.2.0.when(unresolved)',
+      'mail.body.2.0.detail.2.1.when(notLive)',
     ]);
-    expect(roots).toContain('mail.body.2.detail.3 → thread');
+    expect(roots).toContain('mail.body.2.0.detail.3 → thread');
   });
 
   /**
@@ -416,7 +438,8 @@ suite('the mail pages, over postgres', () => {
     await act('email.discard_draft', { draftId: ids.draftId });
 
     const mail = emailPageDescriptors.find((page) => page.id === 'mail')!;
-    const split: any = mail.body.find((c: any) => c.kind === 'list-detail');
+    const section: any = mail.body.find((c: any) => c.kind === 'section');
+    const split: any = section.body.find((c: any) => c.kind === 'list-detail');
     const fold: any = split.detail.find((c: any) => c.kind === 'expand' && c.label === 'Older drafts');
     expect(fold, 'the Mail detail has an Older drafts fold').toBeDefined();
     expect(fold.when, 'the fold may not ask a question of data it is not handed').toBeUndefined();
@@ -516,6 +539,53 @@ suite('the mail pages, over postgres', () => {
     expect(held.unresolvedLine).toContain('The server said: connection reset by peer');
   });
 
+  /**
+   * The rule form's two pickers (docs/specs/email.md §5).
+   *
+   * A conversation is **picked, never typed**: the database names a thread by
+   * the root Message-ID of its chain, which is not something an owner has. So
+   * the form offers subjects, scoped to the mailbox it was already told about,
+   * and sends the id the gate matches.
+   */
+  it('offers the mailboxes, and one mailbox\'s conversations, as things to pick', async () => {
+    const accounts = await ask('accounts');
+    const mailbox = accounts.accounts[0];
+    expect(mailbox.label).toBe(OWNER);
+
+    const all = await ask('rule_threads');
+    expect(all.threads).toHaveLength(1);
+    expect(all.threads[0]).toMatchObject({ id: ids.threadId, accountId: mailbox.id });
+    // The mailbox is named on the label even when the list is one mailbox's:
+    // a label should say what it is on its own.
+    expect(all.threads[0].label).toContain(`[${OWNER}] Invoice 42 — `);
+
+    expect((await ask('rule_threads', { mailbox: mailbox.id })).threads).toHaveLength(1);
+    expect(
+      (await ask('rule_threads', { mailbox: '99999999-9999-4999-8999-999999999999' })).threads,
+    ).toEqual([]);
+  });
+
+  /**
+   * A refusal the owner can act on is answered as one.
+   *
+   * `QueryRefusal` is the difference between "the email plugin could not
+   * answer threads" — which is what every one of these used to become — and
+   * the sentence that says what to do about it.
+   */
+  it('refuses a read in words the owner can act on', async () => {
+    for (const [name, params, sentence] of [
+      ['thread', { id: '99999999-9999-4999-8999-999999999999' }, 'No conversation here has that id.'],
+      ['draft', { id: '99999999-9999-4999-8999-999999999999' }, 'No draft here has that id.'],
+      ['message', { id: '99999999-9999-4999-8999-999999999999' }, 'No message here has that id.'],
+      ['threads', { searching: 'true' }, 'Type something to search for, or set one of the filters.'],
+      ['threads', { searching: 'true', q: 'invoice', since: 'March' }, '`since`'],
+    ] as const) {
+      const refused = await ask(name, params as Record<string, unknown>).catch((error: unknown) => error);
+      expect(refused, `${name} refuses`).toBeInstanceOf(QueryRefusal);
+      expect((refused as Error).message).toContain(sentence);
+    }
+  });
+
   /* -------------------------------------------------------------- *
    * The writes
    * -------------------------------------------------------------- */
@@ -577,6 +647,37 @@ suite('the mail pages, over postgres', () => {
     expect(policies.applied[0].sub).toContain('you decided it');
     // The row's own button sends this, so it is a list of one.
     expect(policies.applied[0].ids).toEqual([policies.applied[0].id]);
+  });
+
+  it('writes a rule about the conversation that was picked, and never about every mailbox', async () => {
+    const mailbox = (await ask('accounts')).accounts[0];
+    // The form sends ids, because that is what the pickers carry.
+    const added = await act('email.add_rule', {
+      scope: 'thread',
+      thread: ids.threadId,
+      action: 'ignore',
+      sender: 'Dorothée <TDOROTHEE@client.test>',
+      mailbox: mailbox.id,
+    });
+    expect(added).toMatchObject({ added: true });
+    expect(added.note).toContain('ignore thread');
+    const { rows } = await pool.query(`select account_id, matcher, params from email.policies`);
+    expect(String(rows[0].account_id)).toBe(mailbox.id);
+    expect(rows[0].matcher).toBe(ids.threadId);
+    expect(rows[0].params.sender).toBe('tdorothee@client.test');
+
+    // A conversation lives in one mailbox, so this pair cannot both be true.
+    expect(
+      await refusal('email.add_rule', {
+        scope: 'thread',
+        thread: ids.threadId,
+        action: 'ignore',
+        allAccounts: true,
+      }),
+    ).toBe('A conversation lives in one mailbox, so a rule about one is never "every mailbox".');
+    expect(
+      await refusal('email.add_rule', { scope: 'thread', action: 'ignore', mailbox: mailbox.id }),
+    ).toBe('Choose the conversation this rule is about.');
   });
 
   it('keeps and revokes a selection in one act, by the ids the page is showing', async () => {

@@ -19,7 +19,7 @@
  *    arrives from `message`, when the owner opens one.
  */
 import { z } from 'zod';
-import type { PageQuery, ToolContext } from '@buddi/core';
+import { QueryRefusal, type PageQuery, type ToolContext } from '@buddi/core';
 import {
   booleanFilter,
   buildSearch,
@@ -39,7 +39,7 @@ import {
   LIVE_DRAFT_STATUSES,
   type DraftRecord,
 } from '../rows.js';
-import { policyLists } from '../tools/policies.js';
+import { policyLists, threadChoices } from '../tools/policies.js';
 import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
@@ -212,9 +212,10 @@ export function threadsQuery(): PageQuery {
           subject: thread.subject === '' ? '(no subject)' : thread.subject,
           participants: thread.participants.join(', '),
           state: thread.state,
-          // The "draft" pill: a reply waiting on the owner, visible without
-          // opening anything.
-          pill: withDraft.has(thread.id) ? 'draft' : thread.state,
+          // The "draft" pill sits *beside* the state, never in place of it: a
+          // conversation that is waiting on the owner and has a reply written
+          // for it is two facts, and the old page showed both.
+          draftPill: withDraft.has(thread.id) ? 'draft' : '',
           when: relative(thread.lastAt, now),
           messageCount: thread.messageCount,
         })),
@@ -231,9 +232,7 @@ async function searchHits(
   ids: string[],
 ): Promise<{ items: unknown[]; count: number; window?: string }> {
   const attachments = booleanFilter('hasAttachments', input.hasAttachments);
-  // See the note on `validateFilters` below: this sentence is written for the
-  // owner and does not reach them yet.
-  if (!attachments.ok) throw new Error(attachments.message);
+  if (!attachments.ok) throw new QueryRefusal(attachments.message);
   const filters: SearchFilters = {
     ...(input.q && input.q.trim() !== '' ? { query: input.q.trim() } : {}),
     ...(input.from && input.from.trim() !== '' ? { from: input.from.trim() } : {}),
@@ -248,19 +247,18 @@ async function searchHits(
     // A search with nothing in it is a question the owner can fix, so it is
     // answered rather than ignored — but only when they actually searched.
     if (input.searching === 'true') {
-      throw new Error('Type something to search for, or set one of the filters.');
+      throw new QueryRefusal('Type something to search for, or set one of the filters.');
     }
     return { items: [], count: 0 };
   }
   const wrong = validateFilters(filters);
   /*
-   * The same refusal the route answered with, from the same function. Until
-   * a query can raise an owner-readable refusal of its own, the page draws the
-   * engine's sentence ("The email plugin could not answer threads.") and this
-   * one reaches the installation's log with the request's reference — which is
-   * a step down from the old 400 and is being fixed in the engine.
+   * The same refusal the route answered with, from the same function, and it
+   * reaches the owner: a `QueryRefusal` is answered 400 with its own sentence
+   * rather than folded into "the email plugin could not answer threads".
+   * A malformed filter is something the owner can read and fix.
    */
-  if (wrong) throw new Error(wrong);
+  if (wrong) throw new QueryRefusal(wrong);
 
   const now = ctx.now();
   const built = buildSearch(ids, filters, {
@@ -275,6 +273,9 @@ async function searchHits(
     subject: m.subject === '' ? '(no subject)' : m.subject,
     line: `${m.from} — ${m.snippet}`,
     who: m.direction === 'out' ? 'you wrote' : 'they wrote',
+    // A pill's tone may be read from the row: the owner's own words are the
+    // ones they already know about, and the old list toned them the same way.
+    whoTone: m.direction === 'out' ? 'good' : 'neutral',
     when: relative(m.date, now),
     attachment: m.hasAttachments ? 'attachment' : '',
   }));
@@ -300,7 +301,7 @@ export function threadQuery(): PageQuery {
       const { id } = params as { id: string };
       const now = ctx.now();
       const thread = await findThread(ctx.db, id);
-      if (!thread) throw new Error('No conversation here has that id.');
+      if (!thread) throw new QueryRefusal('No conversation here has that id.');
       // Headers and snippets only: twenty bodies is a page weight nobody
       // reads, and one arrives from `message` when the owner opens it.
       const messages = await threadMessages(ctx.db, thread.id, THREAD_MESSAGE_LIMIT);
@@ -370,7 +371,7 @@ export function draftQuery(): PageQuery {
         `select ${DRAFT_COLUMNS} from email.drafts where id = $1::uuid`,
         [id],
       );
-      if (!rows[0]) throw new Error('No draft here has that id.');
+      if (!rows[0]) throw new QueryRefusal('No draft here has that id.');
       return draftRow(toDraft(rows[0]), ctx.now());
     },
   };
@@ -392,7 +393,7 @@ export function messageQuery(): PageQuery {
         [id],
       );
       const row = rows[0] as Record<string, any> | undefined;
-      if (!row) throw new Error('No message here has that id.');
+      if (!row) throw new QueryRefusal('No message here has that id.');
       const messageId = String(row.id);
       const purged = row.body_purged_at !== null;
       const body = purged
@@ -430,6 +431,9 @@ export function accountsQuery(): PageQuery {
           id: account.id,
           address: account.address,
           called: account.displayName ?? '',
+          // What the rule form's mailbox picker reads. Built here because a
+          // descriptor draws a label, it does not compose one.
+          label: account.displayName ? `${account.displayName} — ${account.address}` : account.address,
           aliases: account.aliases.join(', '),
           host: `${account.imapHost}:${account.imapPort} · ${account.smtpHost}:${account.smtpPort}`,
           // A name, never a value. Nothing in the email schema holds a credential.
@@ -443,6 +447,9 @@ export function accountsQuery(): PageQuery {
           ]
             .filter((word) => word !== '')
             .join(' · '),
+          // A mailbox buddi is not reading is the one fact on this table worth
+          // catching an eye, so the cell is a pill and the pill is toned.
+          stateTone: account.enabled ? 'neutral' : 'warning',
         })),
       };
     },
@@ -504,6 +511,46 @@ export function policiesQuery(): PageQuery {
   };
 }
 
+/**
+ * The conversations a `thread` rule may be about (docs/specs/email.md §5).
+ *
+ * A rule about one conversation is **picked, never typed**: the database names
+ * a thread by the root Message-ID of its chain, which is not something an
+ * owner has or should have to find, so the form offers subjects and sends the
+ * id the gate matches. Scoped to the mailbox the form has already chosen —
+ * a conversation lives in exactly one of them, and offering a busy mailbox's
+ * threads for a rule meant for a quiet one is how a rule ends up about the
+ * wrong conversation.
+ */
+export function ruleThreadsQuery(): PageQuery {
+  return {
+    name: 'rule_threads',
+    params: z.object({ mailbox: UUID.optional() }).strict(),
+    async produce(params, ctx: ToolContext) {
+      const { mailbox } = params as { mailbox?: string };
+      const accounts = await listAccounts(ctx.db, { enabledOnly: false });
+      const named = new Map(
+        accounts.map((account) => [
+          account.id,
+          account.displayName ? account.displayName : account.address,
+        ]),
+      );
+      const threads = await threadChoices(ctx.db, mailbox);
+      return {
+        threads: threads.map((thread) => {
+          const subject = thread.subject.trim() === '' ? '(no subject)' : thread.subject.trim();
+          const others = thread.participants.slice(0, 2).join(', ');
+          const base = others === '' ? subject : `${subject} — ${others}`;
+          const box = named.get(thread.accountId);
+          // The mailbox is named even when the list is already filtered to
+          // one: a label should say what it is on its own.
+          return { id: thread.id, accountId: thread.accountId, label: box ? `[${box}] ${base}` : base };
+        }),
+      };
+    },
+  };
+}
+
 /** The five numbers the mail watchers read (docs/specs/email.md §7). */
 export function watcherSettingsQuery(): PageQuery {
   return {
@@ -550,6 +597,7 @@ export function emailPageQueries(): PageQuery[] {
     messageQuery(),
     accountsQuery(),
     policiesQuery(),
+    ruleThreadsQuery(),
     watcherSettingsQuery(),
   ];
 }
