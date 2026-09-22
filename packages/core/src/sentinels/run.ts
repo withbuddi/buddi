@@ -15,6 +15,7 @@
  */
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
+import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
 import type { PluginManifest } from '../tools.js';
 import {
   INFO_COOLDOWN_MS,
@@ -98,6 +99,9 @@ export async function runSentinels(
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
 
+  // The owner's switches, read once per tick. Absent means on.
+  const switches = await sentinelSwitches(pool);
+
   const { rows: ledger } = await pool.query<RunLedgerRow>(
     `select sentinel_id, last_run_at, last_error from core.sentinel_runs`,
   );
@@ -105,6 +109,22 @@ export async function runSentinels(
 
   const outcomes: SentinelOutcome[] = [];
   for (const sentinel of sentinels) {
+    /*
+     * Switched off by the owner: it does not run, and — just as important — its
+     * open findings are not resolved. A tick that did not look has learned
+     * nothing about whether they are still true.
+     */
+    if (!sentinelIsEnabled(switches, sentinel.id)) {
+      outcomes.push({
+        sentinelId: sentinel.id,
+        ran: false,
+        disabled: true,
+        findings: 0,
+        fired: 0,
+        resolved: 0,
+      });
+      continue;
+    }
     const previous = lastRun.get(sentinel.id);
     const dueAt = previous ? previous.getTime() + sentinel.every * 1000 : 0;
     if (previous && now.getTime() < dueAt) {

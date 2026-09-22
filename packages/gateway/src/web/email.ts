@@ -72,6 +72,14 @@ import {
   secretNameFor,
   toAccount,
   imapflowFactory,
+  loadWatcherSettings,
+  setWatcherSettings,
+  DEFAULT_DATE_CONFIDENCE,
+  DEFAULT_WAITING_DAYS,
+  MAX_DATE_CONFIDENCE,
+  MAX_WAITING_DAYS,
+  MIN_DATE_CONFIDENCE,
+  MIN_WAITING_DAYS,
   PolicyRefusal,
   POLICY_ACTIONS,
   POLICY_SCOPES,
@@ -611,4 +619,101 @@ export async function deleteEmailPolicy(
   const revoked = await revokePolicy(pool, id, now);
   if (!revoked) return { status: 404, body: { error: 'That policy is no longer there.' } };
   return { status: 200, body: await policiesView(pool) };
+}
+
+/* ------------------------------------------------------------------ *
+ * Watchers (docs/specs/email.md §7)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The two settings the mail watchers read, and the limits the page shows.
+ *
+ * They are the owner's preferences over this plugin's own rows — there is no
+ * secret, no effect and nothing to approve, so the page writes them directly.
+ * The clamps live in the plugin (`watchers.ts`); the route's job is to refuse
+ * what is not a number at all, rather than to quietly turn it into one.
+ */
+export interface EmailWatcherSettingsView {
+  waitingDays: number;
+  dateConfidence: number;
+  defaults: { waitingDays: number; dateConfidence: number };
+  limits: {
+    waitingDays: { min: number; max: number };
+    dateConfidence: { min: number; max: number };
+  };
+}
+
+function watcherView(settings: { waitingDays: number; dateConfidence: number }): EmailWatcherSettingsView {
+  return {
+    waitingDays: settings.waitingDays,
+    dateConfidence: settings.dateConfidence,
+    defaults: { waitingDays: DEFAULT_WAITING_DAYS, dateConfidence: DEFAULT_DATE_CONFIDENCE },
+    limits: {
+      waitingDays: { min: MIN_WAITING_DAYS, max: MAX_WAITING_DAYS },
+      dateConfidence: { min: MIN_DATE_CONFIDENCE, max: MAX_DATE_CONFIDENCE },
+    },
+  };
+}
+
+/** GET: the watcher settings. The defaults when the plugin is not installed. */
+export async function readEmailWatchers(pool: Pool): Promise<RouteReply> {
+  try {
+    return { status: 200, body: watcherView(await loadWatcherSettings(pool)) };
+  } catch {
+    // No email schema yet: the section shows the defaults rather than an error
+    // the owner cannot act on, exactly as the policies route does.
+    return {
+      status: 200,
+      body: watcherView({
+        waitingDays: DEFAULT_WAITING_DAYS,
+        dateConfidence: DEFAULT_DATE_CONFIDENCE,
+      }),
+    };
+  }
+}
+
+/** POST: change one or both. Out of range is refused, not clamped silently. */
+export async function writeEmailWatchers(
+  pool: Pool,
+  body: unknown,
+  now: Date,
+): Promise<RouteReply> {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const patch: { waitingDays?: number; dateConfidence?: number } = {};
+
+  if (input.waitingDays !== undefined) {
+    const days = Number(input.waitingDays);
+    if (!Number.isInteger(days) || days < MIN_WAITING_DAYS || days > MAX_WAITING_DAYS) {
+      return {
+        status: 400,
+        body: {
+          error: `The waiting window is a whole number of days between ${MIN_WAITING_DAYS} and ${MAX_WAITING_DAYS}.`,
+        },
+      };
+    }
+    patch.waitingDays = days;
+  }
+
+  if (input.dateConfidence !== undefined) {
+    const confidence = Number(input.dateConfidence);
+    if (
+      !Number.isFinite(confidence) ||
+      confidence < MIN_DATE_CONFIDENCE ||
+      confidence > MAX_DATE_CONFIDENCE
+    ) {
+      return {
+        status: 400,
+        body: {
+          error: `The date confidence is a number between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}.`,
+        },
+      };
+    }
+    patch.dateConfidence = confidence;
+  }
+
+  if (patch.waitingDays === undefined && patch.dateConfidence === undefined) {
+    return { status: 400, body: { error: 'Name at least one setting to change.' } };
+  }
+
+  return { status: 200, body: watcherView(await setWatcherSettings(pool, patch, now)) };
 }

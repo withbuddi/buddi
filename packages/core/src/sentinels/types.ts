@@ -165,6 +165,8 @@ export type SentinelOutcome = {
   sentinelId: string;
   /** False when the period had not elapsed: nothing ran, nothing changed. */
   ran: boolean;
+  /** True when the owner has this watcher switched off. It did not run. */
+  disabled?: boolean;
   findings: number;
   /** Findings that woke the owner or went to the digest this tick. */
   fired: number;

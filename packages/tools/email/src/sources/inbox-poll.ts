@@ -46,6 +46,7 @@ import type { Pool, PoolClient } from 'pg';
 import { INBOX, listAccounts, resolveAuth, type EnvLike } from '../config.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
+import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
 import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
@@ -166,6 +167,13 @@ interface PendingTriage {
   cc: string[];
   subject: string;
   date: string | null;
+  /**
+   * The ordering clock — INTERNALDATE, the poll's own instant when the server
+   * gave none. The sender's `Date` header is `date` above and is never this:
+   * the date watcher reads "Thursday at 3pm" against *this* instant, and a
+   * forged header would otherwise move every such reading in the message.
+   */
+  at: string;
   hasAttachments: boolean;
   attachments: Parameters<typeof triagePrompt>[0]['attachments'];
   bodyText: string;
@@ -409,6 +417,7 @@ async function commitBatch(
         cc: message.cc,
         subject: message.subject,
         date: message.date ? message.date.toISOString() : null,
+        at: (message.internalDate ?? now).toISOString(),
         hasAttachments: message.hasAttachments,
         attachments: message.attachments,
         bodyText: message.bodyText,
@@ -442,7 +451,7 @@ async function commitBatch(
 async function unstamped(db: Pool, accountId: string, limit: number): Promise<PendingTriage[]> {
   const { rows } = await db.query(
     `select id, thread_id, from_addr, to_addrs, cc, subject, date, has_attachments, attachments,
-            body_text, thread_key, list_id
+            body_text, thread_key, list_id, coalesce(internal_date, fetched_at) as at
        from email.messages
       where account_id = $1 and triage_enqueued_at is null and direction = 'in'
       order by fetched_at asc, uid asc
@@ -457,6 +466,7 @@ async function unstamped(db: Pool, accountId: string, limit: number): Promise<Pe
     cc: Array.isArray(row.cc) ? row.cc : [],
     subject: row.subject ?? '',
     date: row.date instanceof Date ? row.date.toISOString() : (row.date ?? null),
+    at: row.at instanceof Date ? row.at.toISOString() : String(row.at),
     hasAttachments: Boolean(row.has_attachments),
     attachments: Array.isArray(row.attachments) ? row.attachments : [],
     bodyText: row.body_text ?? '',
@@ -758,6 +768,35 @@ async function drain(
       policies,
     );
     const action = decision.refused ? 'refused' : decision.action;
+
+    /*
+     * The dates this message states, read here and stored (docs/specs/email.md
+     * §7's `email.date-stated`). It happens at ingest because the body is in
+     * hand and the parse is a regex sweep over one string — and because the
+     * alternative is the sentinel re-reading every message that ever landed.
+     *
+     * An ignored sender is stamped, not read: the watchers are not a way round
+     * the owner's own gate. A parse that throws must never cost the message its
+     * run, so it is logged and the message is stamped with nothing found.
+     */
+    const ignoring = !decision.refused && decision.action === 'ignore' && Boolean(decision.policy);
+    try {
+      if (ignoring) {
+        await skipDates(ctx.db, message.id, ctx.now());
+      } else {
+        await scanMessageDates(
+          ctx.db,
+          { id: message.id, bodyText: message.bodyText, subject: message.subject },
+          { at: new Date(message.at), timezone: ctx.timezone },
+          ctx.now(),
+        );
+      }
+    } catch (err) {
+      (ctx.log ?? (() => {}))(
+        `email.inbox-poll: could not read dates in message ${message.id}: ` +
+          `${err instanceof Error ? err.message : String(err)}; the watcher will try again`,
+      );
+    }
 
     if (!decision.refused && decision.action === 'ignore' && decision.policy) {
       // Everything this claims happens here, or none of it does: the triage

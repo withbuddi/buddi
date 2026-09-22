@@ -12,6 +12,7 @@ import { upsertMission } from '../scheduler/missions.js';
 import type { PluginManifest } from '../tools.js';
 import { consumeDigestItems, pendingDigestItems, renderDigest } from './digest.js';
 import { getFinding, openFindings, runSentinels } from './run.js';
+import { sentinelIsEnabled, sentinelSwitches, setSentinelEnabled } from './switches.js';
 import {
   INFO_COOLDOWN_MS,
   SENTINEL_WAKE_MISSION_ID,
@@ -98,7 +99,7 @@ suite('sentinels (postgres)', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'truncate core.sentinel_findings, core.sentinel_runs, core.digest_items cascade',
+      'truncate core.sentinel_findings, core.sentinel_runs, core.sentinel_switches, core.digest_items cascade',
     );
     await pool.query(
       'truncate core.occurrences, core.last_materialized, core.schedule_specs, core.missions cascade',
@@ -282,6 +283,47 @@ suite('sentinels (postgres)', () => {
         { sentinel_id: 'w', last_error: null },
       ]);
       expect(await pendingDigestItems(pool)).toHaveLength(1);
+    });
+  });
+
+  describe("the owner's switch", () => {
+    it('is on for a watcher nobody has touched', async () => {
+      expect(sentinelIsEnabled(await sentinelSwitches(pool), 'w')).toBe(true);
+    });
+
+    it('stops a watcher running at all', async () => {
+      const manifests = pluginWith(scripted('w', [[info], [info]]));
+      await setSentinelEnabled(pool, 'w', false, T0);
+
+      const [outcome] = await runSentinels(pool, manifests, T0, 'UTC');
+      expect(outcome).toMatchObject({ sentinelId: 'w', ran: false, disabled: true });
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      // Nothing ran, so nothing is in the ledger either.
+      const { rows } = await pool.query(`select count(*)::int as n from core.sentinel_runs`);
+      expect(rows[0].n).toBe(0);
+    });
+
+    it('leaves its open findings alone rather than resolving them', async () => {
+      const manifests = pluginWith(scripted('w', [[info]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await openFindings(pool, 'w')).toHaveLength(1);
+
+      await setSentinelEnabled(pool, 'w', false, at(60_000));
+      await runSentinels(pool, manifests, at(120_000), 'UTC');
+      const open = await openFindings(pool, 'w');
+      expect(open).toHaveLength(1);
+      expect(open[0]!.resolvedAt).toBeNull();
+    });
+
+    it('runs again once it is switched back on', async () => {
+      const manifests = pluginWith(scripted('w', [[info]]));
+      await setSentinelEnabled(pool, 'w', false, T0);
+      await runSentinels(pool, manifests, T0, 'UTC');
+      const back = await setSentinelEnabled(pool, 'w', true, at(60_000));
+      expect(back).toMatchObject({ sentinelId: 'w', enabled: true });
+
+      const [outcome] = await runSentinels(pool, manifests, at(120_000), 'UTC');
+      expect(outcome).toMatchObject({ ran: true, findings: 1, fired: 1 });
     });
   });
 
