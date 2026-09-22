@@ -102,6 +102,11 @@ export interface ColumnMap {
    * Draw this cell as a pill rather than as text — a state, not a number.
    * `tone` may be a path within the row, so a row that already says
    * `"critical"` colours itself and the descriptor lists nothing.
+   *
+   * When the cell's value is an **array**, each item is its own pill and
+   * carries its own words and tone (`{ value, tone }`): an account that is
+   * switched off *and* configured from the environment is two facts about it,
+   * not one sentence to be parsed.
    */
   pill?: { tone?: Tone | ValueRef };
 }

@@ -54,7 +54,10 @@ export interface ColumnMap {
   type?: ColumnType;
   currency?: ValueRef;
   bar?: { max: ValueRef; thresholds?: Array<{ atLeast: number; tone: Tone }> };
-  /** Draw the cell as a pill; `tone` may be a path within the row. */
+  /**
+   * Draw the cell as a pill; `tone` may be a path within the row, and an
+   * array value becomes one pill per `{ value, tone }` item.
+   */
   pill?: { tone?: Tone | ValueRef };
 }
 

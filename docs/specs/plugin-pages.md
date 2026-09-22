@@ -107,7 +107,8 @@ type Component =
   | { kind: 'link'; label: string; to: RouteRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
-  /** A column may carry `pill: { tone }` — a state, in the tone the row names. */
+  /** A column may carry `pill: { tone }` — a state, in the tone the row names;
+      an array value draws one pill per `{ value, tone }` item. */
   | { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] }
   | { kind: 'detail'; query: QueryRef; fields: Array<{ label: string; value: ValueRef; unit?: Unit }>; body: Component[] }
   | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string } }
@@ -141,7 +142,8 @@ interface Field { name: string; label: string; type: 'text' | 'number' | 'select
 
 // `when` and `disabledWhen` on a Field are asked of the form's own values
 // first — a path naming a field reads what the owner has just typed — and of
-// the loaded data otherwise.
+// the loaded data otherwise. A field they hide or grey is neither required
+// nor submitted: the owner said nothing about it.
 
 ```
 

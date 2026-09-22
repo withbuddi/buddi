@@ -52,8 +52,23 @@ const DATA: Record<string, unknown> = {
   draft: { id: 'd1', subject: 'A reply', body: 'Nearly done.', updatedAt: '2026-09-22T09:05:00.000Z', locked: false },
   accounts: {
     accounts: [
-      { id: 'acc-1', address: 'owner@example.com', state: 'ready', tone: 'good' },
-      { id: 'acc-2', address: 'old@example.com', state: 'locked', tone: 'critical' },
+      {
+        id: 'acc-1',
+        address: 'owner@example.com',
+        state: 'ready',
+        tone: 'good',
+        states: [{ value: 'ready', tone: 'good' }],
+      },
+      {
+        id: 'acc-2',
+        address: 'old@example.com',
+        state: 'locked',
+        tone: 'critical',
+        states: [
+          { value: 'off', tone: 'critical' },
+          { value: 'from .env', tone: 'neutral' },
+        ],
+      },
     ],
   },
   settings: { everyMinutes: 15, keepDays: 30 },
@@ -214,6 +229,7 @@ const settings: Component[] = [
         columns: [
           { key: 'address', label: 'Address' },
           { key: 'state', label: 'State', pill: { tone: { path: 'tone' } } },
+          { key: 'states', label: 'Also', pill: {} },
         ],
         actions: [
           {
@@ -287,11 +303,20 @@ const settings: Component[] = [
           { value: 'done', label: 'Done' },
         ],
       },
+      { name: 'everything', label: 'Everything in the mailbox', type: 'checkbox' },
+      {
+        name: 'note',
+        label: 'Why',
+        type: 'text',
+        required: true,
+        when: { path: 'everything', equals: true },
+      },
       {
         name: 'thing',
         label: 'Thing',
         type: 'select',
         required: true,
+        when: { path: 'everything', equals: true, not: true },
         optionsFrom: {
           query: { query: 'items' },
           rows: 'items',
@@ -306,7 +331,7 @@ const settings: Component[] = [
       label: 'Add',
       tone: 'accent',
       done: { path: 'message' },
-      args: { account: { field: 'account' }, thing: { field: 'thing' } },
+      args: { account: { field: 'account' }, thing: { field: 'thing' }, note: { field: 'note' } },
       then: 'close',
     },
   },
@@ -827,6 +852,42 @@ describe('a settings page', () => {
     expect(await screen.findByText('Rule added for a1.')).toBeInTheDocument();
   });
 
+  it('does not ask for a field nobody can see, and does not send it either', async () => {
+    draw('settings');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a rule' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('Mailbox')).toBeInTheDocument());
+    fireEvent.change(within(dialog).getByLabelText('Mailbox'), { target: { value: 'acc-1' } });
+    // The other branch: `Why` is required, `Thing` is not asked for at all.
+    fireEvent.click(within(dialog).getByLabelText('Everything in the mailbox'));
+    expect(within(dialog).queryByLabelText('Thing')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Add' })).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText('Why'), { target: { value: 'It is all mine.' } });
+    // One required field filled, the other one hidden: the form submits…
+    const add = within(dialog).getByRole('button', { name: 'Add' });
+    expect(add).toBeEnabled();
+    fireEvent.click(add);
+    await waitFor(() =>
+      // …and the hidden field is not in the arguments at all.
+      expect(api.pageAct).toHaveBeenCalledWith('demo', {
+        tool: 'demo.add_rule',
+        args: { account: 'acc-1', note: 'It is all mine.' },
+      }),
+    );
+  });
+
+  it('draws every state of a row as its own pill', async () => {
+    draw('settings');
+    await screen.findByText('old@example.com');
+    const row = [...document.querySelectorAll('.ui-table tbody tr')][1] as HTMLElement;
+    const pills = [...row.querySelectorAll('.ui-pill')].map((p) => [p.textContent, p.getAttribute('data-tone')]);
+    expect(pills).toEqual([
+      ['locked', 'critical'],
+      ['off', 'critical'],
+      ['from .env', null],
+    ]);
+  });
+
   it('opens a drawer form, refuses to submit until it is filled, and closes on `then`', async () => {
     draw('settings');
     fireEvent.click(await screen.findByRole('button', { name: 'Add an account' }));
@@ -839,7 +900,9 @@ describe('a settings page', () => {
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', {
         tool: 'demo.add_account',
-        args: { address: 'owner@example.com', password: 'hunter2', imapHost: '' },
+        // `imapHost` is behind "Give the hosts myself", which nobody ticked:
+        // the owner said nothing about it, so it is not sent at all.
+        args: { address: 'owner@example.com', password: 'hunter2' },
       }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

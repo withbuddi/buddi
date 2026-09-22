@@ -51,8 +51,24 @@ export const DEMO_DATA = {
   },
   accounts: {
     accounts: [
-      { id: 'acc-1', address: 'owner@example.com', state: 'ready', tone: 'good' },
-      { id: 'acc-2', address: 'old@example.com', state: 'locked', tone: 'critical' },
+      {
+        id: 'acc-1',
+        address: 'owner@example.com',
+        state: 'ready',
+        tone: 'good',
+        states: [{ value: 'ready', tone: 'good' }],
+      },
+      {
+        id: 'acc-2',
+        address: 'old@example.com',
+        state: 'locked',
+        tone: 'critical',
+        // Two facts about it, each in its own tone.
+        states: [
+          { value: 'off', tone: 'critical' },
+          { value: 'from .env', tone: 'neutral' },
+        ],
+      },
     ],
   },
   settings: { everyMinutes: 15, keepDays: 30 },
@@ -505,6 +521,8 @@ const settings: PageDescriptor = {
             { key: 'address', label: 'Address' },
             // A state, drawn as a state, in the tone the row itself carries.
             { key: 'state', label: 'State', pill: { tone: { path: 'tone' } } },
+            // Several states at once: one pill per item, each with its tone.
+            { key: 'states', label: 'Also', pill: {} },
           ],
           actions: [
             {
@@ -585,11 +603,19 @@ const settings: PageDescriptor = {
             { value: 'done', label: 'Done' },
           ],
         },
+        // Two branches, each with a field the other does not ask for. A
+        // required field nobody can see must not hold the form shut.
+        {
+          name: 'everything',
+          label: 'Everything in the mailbox',
+          type: 'checkbox',
+        },
         {
           name: 'thing',
           label: 'Thing',
           type: 'select',
           required: true,
+          when: { path: 'everything', equals: true, not: true },
           // Re-read whenever the state above changes, with its value as the
           // parameter: mailbox, then what is in it.
           optionsFrom: {
