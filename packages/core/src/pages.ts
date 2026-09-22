@@ -176,6 +176,12 @@ export interface ToolRef {
   /** The label while it is running: "Saving…", "Proposing…". */
   busy?: string;
   /**
+   * What the page says once it has worked: "Saved.", or a `ValueRef` read out
+   * of the tool's own result ("Queued for 9:00."). A gated tool says it after
+   * the approval executed, because that is when it is true.
+   */
+  done?: string | ValueRef;
+  /**
    * `leading` puts this action at the *left* of its toolbar, with a spacer
    * after it — Discard on the left, then Save, then Send on the right. The
    * primary action stays rightmost, which is the house rule.
@@ -189,14 +195,40 @@ export interface ToolRef {
   then?: 'refresh' | 'close' | { route: RouteRef };
 }
 
-/** A tool on one row: its arguments may read that row. */
+/**
+ * A tool on one row: its arguments may read that row, and so may its words.
+ *
+ * `label` and `confirm` may carry `{fieldName}` placeholders, filled from the
+ * row — "Remove {address}?" asks about the thing in front of the owner rather
+ * than about "this account".
+ */
 export interface RowAction extends ToolRef {
   args: Record<string, ValueRef | { row: string }>;
+  /** Offered only on the rows where this holds: Fetch, until there is a file. */
+  when?: Visibility;
 }
 
 /** A tool over a selection: its arguments may read it. */
 export interface BulkAction extends ToolRef {
   args: Record<string, ValueRef | { selected: true }>;
+  /**
+   * With nothing ticked, offer it on **every** row the owner may act on —
+   * "Keep all 12" — instead of a button that does nothing. `{count}` in the
+   * label and the confirmation is that number.
+   */
+  all?: true;
+}
+
+/**
+ * A small word about state, on a row.
+ *
+ * `tone` may itself be a path: a row that already carries `"critical"` says
+ * so, and the descriptor does not have to enumerate every value a column can
+ * hold in order to colour it.
+ */
+export interface PillRef {
+  value: ValueRef;
+  tone?: Tone | ValueRef;
 }
 
 /** One line of a list: what it says, and where it goes. */
@@ -204,7 +236,9 @@ export interface ListItem {
   title: ValueRef;
   sub?: ValueRef;
   meta?: ValueRef[];
-  pill?: { value: ValueRef; tone?: Tone };
+  pill?: PillRef;
+  /** Several, when one word is not the whole state of a row. */
+  pills?: PillRef[];
   to?: RouteRef;
 }
 
@@ -235,8 +269,37 @@ export interface Field {
   hint?: string;
   /** Path into the `initial` (form) or `query` (editor) result this starts from. */
   from?: string;
-  /** Drawn, but not editable, while this holds of the surrounding data. */
+  /**
+   * Where a select's options come from, when they are not a fixed list: a
+   * query, read when the form opens and again whenever one of `dependsOn`
+   * changes. That is how "the mailbox, then its conversations" is one form.
+   */
+  optionsFrom?: OptionsFrom;
+  /**
+   * Shown only while this holds — and it is asked of the form's *own values*
+   * as much as of the data behind it: a path that names a field on this form
+   * reads what the owner has just typed, so one control can reveal another
+   * without a round trip. Everything else resolves against the loaded data.
+   */
+  when?: Visibility;
+  /** Drawn, but not editable, on the same terms as `when`. */
   disabledWhen?: Visibility;
+}
+
+/** A select's options, read from a query rather than written in the descriptor. */
+export interface OptionsFrom {
+  query: QueryRef;
+  /** Path to the array of rows in the answer. */
+  rows: string;
+  /** Path within a row to the value a choice submits… */
+  value: string;
+  /** …and to the words the owner reads. */
+  label: string;
+  /**
+   * Field names whose current value is sent as a parameter of the same name,
+   * and whose change re-reads the options. An empty one is left out.
+   */
+  dependsOn?: string[];
 }
 
 /**
@@ -267,8 +330,16 @@ export interface ComponentCommon {
   empty?: string;
 }
 
+/** What a section may put on the right of its heading: going, or doing. */
+export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' }>;
+
 export type Component =
-  | (ComponentCommon & { kind: 'section'; body: Component[] })
+  | (ComponentCommon & {
+      kind: 'section';
+      /** Right of the heading: a link away, or one button. Never a list of them. */
+      actions?: SectionAction[];
+      body: Component[];
+    })
   /** A sentence. `text` may be a path, for something the data has to say. */
   | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
@@ -413,12 +484,26 @@ const routeRefSchema = z
 const TOOL_NAME = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 
 /** The half of a tool reference that has nothing to do with where args come from. */
+const visibilitySchema = z
+  .object({
+    path: viewPathSchema,
+    equals: z.unknown(),
+    in: z.array(z.unknown()).min(1).max(24).optional(),
+    not: z.literal(true).optional(),
+  })
+  .strict()
+  .refine(
+    (v) => 'equals' in v || v.in !== undefined,
+    'a condition needs `equals` or `in`: a path on its own is not a question',
+  );
+
 const toolRefCommon = {
   tool: z.string().regex(TOOL_NAME, 'a tool name is `plugin.tool`, lower case'),
   label,
   tone: z.enum(['accent', 'danger']).optional(),
   confirm: sentence.optional(),
   busy: label.optional(),
+  done: z.union([sentence, valueRefSchema]).optional(),
   placement: z.literal('leading').optional(),
   then: z.union([z.enum(['refresh', 'close']), z.object({ route: routeRefSchema }).strict()]).optional(),
 };
@@ -433,31 +518,27 @@ const rowArgSchema = z.union([valueRefSchema, z.object({ row: viewPathSchema }).
 const bulkArgSchema = z.union([valueRefSchema, z.object({ selected: z.literal(true) }).strict()]);
 
 const toolRefSchema = z.object({ ...toolRefCommon, args: z.record(fieldArgSchema).optional() }).strict();
-const rowActionSchema = z.object({ ...toolRefCommon, args: z.record(rowArgSchema) }).strict();
-const bulkActionSchema = z.object({ ...toolRefCommon, args: z.record(bulkArgSchema) }).strict();
+const rowActionSchema = z
+  .object({ ...toolRefCommon, args: z.record(rowArgSchema), when: visibilitySchema.optional() })
+  .strict();
+const bulkActionSchema = z
+  .object({ ...toolRefCommon, args: z.record(bulkArgSchema), all: z.literal(true).optional() })
+  .strict();
+
+const pillSchema = z
+  .object({ value: valueRefSchema, tone: z.union([toneSchema, valueRefSchema]).optional() })
+  .strict();
 
 const listItemSchema = z
   .object({
     title: valueRefSchema,
     sub: valueRefSchema.optional(),
     meta: z.array(valueRefSchema).max(6).optional(),
-    pill: z.object({ value: valueRefSchema, tone: toneSchema.optional() }).strict().optional(),
+    pill: pillSchema.optional(),
+    pills: z.array(pillSchema).max(4).optional(),
     to: routeRefSchema.optional(),
   })
   .strict();
-
-const visibilitySchema = z
-  .object({
-    path: viewPathSchema,
-    equals: z.unknown(),
-    in: z.array(z.unknown()).min(1).max(24).optional(),
-    not: z.literal(true).optional(),
-  })
-  .strict()
-  .refine(
-    (v) => 'equals' in v || v.in !== undefined,
-    'a condition needs `equals` or `in`: a path on its own is not a question',
-  );
 
 const fieldSchema = z
   .object({
@@ -471,12 +552,26 @@ const fieldSchema = z
     step: z.number().optional(),
     hint: sentence.optional(),
     from: viewPathSchema.optional(),
+    optionsFrom: z
+      .object({
+        query: queryRefSchema,
+        rows: viewPathSchema,
+        value: viewPathSchema,
+        label: viewPathSchema,
+        dependsOn: z.array(z.string().regex(PAGE_NAME, 'a field name is a name')).max(8).optional(),
+      })
+      .strict()
+      .optional(),
+    when: visibilitySchema.optional(),
     disabledWhen: visibilitySchema.optional(),
   })
   .strict()
   .refine(
-    (field) => field.type !== 'select' || (field.options !== undefined && field.options.length > 0),
-    'a select field needs `options`',
+    (field) =>
+      field.type !== 'select' ||
+      (field.options !== undefined && field.options.length > 0) ||
+      field.optionsFrom !== undefined,
+    'a select field needs `options` or `optionsFrom`',
   );
 
 const common = {
@@ -496,7 +591,21 @@ const common = {
  */
 export const componentSchema: z.ZodType<Component> = z.lazy(() =>
   z.discriminatedUnion('kind', [
-    z.object({ ...common, kind: z.literal('section'), body: z.array(componentSchema).max(24) }).strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('section'),
+        actions: z
+          .array(componentSchema)
+          .max(4)
+          .refine(
+            (actions) => actions.every((a) => (a as Component).kind === 'link' || (a as Component).kind === 'button'),
+            "a section's header actions are links and buttons, nothing else",
+          )
+          .optional(),
+        body: z.array(componentSchema).max(24),
+      })
+      .strict(),
     z
       .object({
         ...common,
@@ -955,6 +1064,22 @@ export function parsePageContributions(opts: {
 /* ------------------------------------------------------------------ *
  * The read-only pool
  * ------------------------------------------------------------------ */
+
+/**
+ * A query saying no, in words meant for the owner.
+ *
+ * Everything else a `produce` throws is a defect, and a defect is a 502 with
+ * a generic sentence and the detail in the log. This is the other case: "No
+ * conversation here has that id" is an *answer*, the owner is the one who
+ * asked, and it reaches them as a 400 carrying this message verbatim. Throw
+ * it only for what the owner can act on; never for a bug.
+ */
+export class QueryRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QueryRefusal';
+  }
+}
 
 /** A query tried to do something other than read. */
 export class ReadOnlyRefusal extends Error {

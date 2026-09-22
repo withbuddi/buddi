@@ -15,15 +15,15 @@
  */
 import { z } from 'zod';
 import type { PluginManifest, ToolContext } from '../../tools.js';
-import type { PageDescriptor, PageQuery } from '../../pages.js';
+import { QueryRefusal, type PageDescriptor, type PageQuery } from '../../pages.js';
 
 /** What the demo plugin's queries answer with. Constants, deliberately. */
 export const DEMO_DATA = {
   counts: { items: 3, open: 1, state: 'ready', headline: 'Three things, one of them open.' },
   items: {
     items: [
-      { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', pinned: false },
-      { id: 'a2', title: 'The second thing', sub: 'two@example.com', state: 'done', pinned: true },
+      { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', tone: 'warning', pinned: false },
+      { id: 'a2', title: 'The second thing', sub: 'two@example.com', state: 'done', tone: 'good', pinned: true },
     ],
     older: [{ id: 'a0', title: 'An older thing', sub: 'zero@example.com', state: 'done', pinned: false }],
   },
@@ -49,7 +49,12 @@ export const DEMO_DATA = {
     updatedAt: '2026-09-22T09:05:00.000Z',
     locked: false,
   },
-  accounts: { accounts: [{ id: 'acc-1', address: 'owner@example.com', state: 'ready' }] },
+  accounts: {
+    accounts: [
+      { id: 'acc-1', address: 'owner@example.com', state: 'ready', tone: 'good' },
+      { id: 'acc-2', address: 'old@example.com', state: 'locked', tone: 'critical' },
+    ],
+  },
   settings: { everyMinutes: 15, keepDays: 30 },
 } as const;
 
@@ -78,7 +83,18 @@ export const demoQueries: PageQuery[] = [
       };
     },
   },
-  { name: 'item', params: ID, produce: async () => DEMO_DATA.item },
+  {
+    name: 'item',
+    params: ID,
+    produce: async (params) => {
+      // An answer, not a defect: the owner followed a link to something that
+      // is not here, and this sentence is what they should read.
+      if ((params as { id: string }).id !== DEMO_DATA.item.id) {
+        throw new QueryRefusal('No thing here has that id.');
+      }
+      return DEMO_DATA.item;
+    },
+  },
   { name: 'messages', params: ID, produce: async () => DEMO_DATA.messages },
   { name: 'drafts', params: ID, produce: async () => DEMO_DATA.drafts },
   { name: 'body', params: ID, produce: async () => DEMO_DATA.body },
@@ -245,10 +261,20 @@ const demoTools: PluginManifest['tools'] = [
     },
   },
   {
+    name: 'demo.add_rule',
+    description: 'Write a rule about one thing in one account.',
+    tier: 'auto',
+    input: z.object({ account: z.string(), thing: z.string() }).strict(),
+    async execute(args) {
+      demoWrites.push({ tool: 'demo.add_rule', args });
+      return { message: `Rule added for ${(args as { thing: string }).thing}.` };
+    },
+  },
+  {
     name: 'demo.set_settings',
     description: 'Write the watcher settings.',
     tier: 'auto',
-    input: z.object({ everyMinutes: z.number(), keepDays: z.number() }).strict(),
+    input: z.object({ everyMinutes: z.number().optional(), keepDays: z.number().optional(), pause: z.boolean().optional() }).strict(),
     async execute(args) {
       demoWrites.push({ tool: 'demo.set_settings', args });
       return { saved: true };
@@ -302,7 +328,8 @@ const board: PageDescriptor = {
           title: { path: 'title' },
           sub: { path: 'sub' },
           meta: [{ path: 'state' }],
-          pill: { value: { path: 'state' } },
+          pill: { value: { path: 'state' }, tone: { path: 'tone' } },
+          pills: [{ value: { path: 'sub' }, tone: 'neutral' }],
           to: { page: 'board', item: { path: 'id' } },
         },
         select: { key: 'id', disabledWhen: { path: 'pinned', equals: true } },
@@ -310,8 +337,11 @@ const board: PageDescriptor = {
         bulk: [
           {
             tool: 'demo.keep_many',
-            label: 'Keep selected',
-            confirm: 'Keep {count} things?',
+            // With nothing ticked this is about every row the owner may keep,
+            // and it says how many that is.
+            all: true,
+            label: 'Keep {count} {thing|things}',
+            confirm: 'Keep {count} {thing|things}?',
             args: { ids: { selected: true } },
           },
         ],
@@ -410,6 +440,7 @@ const board: PageDescriptor = {
                 label: 'Save',
                 tone: 'accent',
                 busy: 'Saving…',
+                done: 'Saved.',
                 args: {
                   id: { param: 'draft' },
                   subject: { field: 'subject' },
@@ -448,6 +479,8 @@ const settings: PageDescriptor = {
       kind: 'section',
       title: 'Accounts',
       note: 'What this installation reads.',
+      // Right of the heading: the way back to the working page.
+      actions: [{ kind: 'link', label: 'The board', to: { page: 'board' } }],
       body: [
         {
           kind: 'table',
@@ -455,14 +488,18 @@ const settings: PageDescriptor = {
           rows: 'accounts',
           columns: [
             { key: 'address', label: 'Address' },
-            { key: 'state', label: 'State' },
+            // A state, drawn as a state, in the tone the row itself carries.
+            { key: 'state', label: 'State', pill: { tone: { path: 'tone' } } },
           ],
           actions: [
             {
               tool: 'demo.remove_account',
               label: 'Remove',
               tone: 'danger',
-              confirm: 'Remove this account?',
+              // The words are about the row in front of the owner.
+              confirm: 'Remove {address}?',
+              // Offered only while there is something to remove.
+              when: { path: 'state', equals: 'ready' },
               args: { id: { row: 'id' } },
             },
           ],
@@ -475,17 +512,30 @@ const settings: PageDescriptor = {
             { name: 'address', label: 'Address', type: 'email', required: true },
             { name: 'password', label: 'Password', type: 'secret', required: true, hint: 'Kept in the vault.' },
             {
+              name: 'advanced',
+              label: 'Give the hosts myself',
+              type: 'checkbox',
+              hint: 'Only when the address does not say.',
+            },
+            // Shown by what the owner has just ticked, with no round trip.
+            {
               name: 'imapHost',
               label: 'IMAP host',
               type: 'text',
-              hint: 'Only if the address does not say; the tool works it out otherwise.',
+              when: { path: 'advanced', equals: true },
             },
-            { name: 'smtpHost', label: 'SMTP host', type: 'text', hint: 'The same.' },
+            {
+              name: 'smtpHost',
+              label: 'SMTP host',
+              type: 'text',
+              when: { path: 'advanced', equals: true },
+            },
           ],
           submit: {
             tool: 'demo.add_account',
             label: 'Add',
             tone: 'accent',
+            done: 'The mailbox was added.',
             args: {
               address: { field: 'address' },
               password: { field: 'password' },
@@ -496,6 +546,55 @@ const settings: PageDescriptor = {
           },
         },
       ],
+    },
+    {
+      kind: 'form',
+      title: 'Rules',
+      note: 'A rule is about one thing in one mailbox.',
+      drawer: { title: 'Add a rule', button: 'Add a rule' },
+      fields: [
+        {
+          name: 'account',
+          label: 'Mailbox',
+          type: 'select',
+          required: true,
+          // The options are a read, not a list in the descriptor.
+          optionsFrom: { query: { query: 'accounts' }, rows: 'accounts', value: 'id', label: 'address' },
+        },
+        {
+          name: 'state',
+          label: 'State',
+          type: 'select',
+          options: [
+            { value: 'open', label: 'Open' },
+            { value: 'done', label: 'Done' },
+          ],
+        },
+        {
+          name: 'thing',
+          label: 'Thing',
+          type: 'select',
+          required: true,
+          // Re-read whenever the state above changes, with its value as the
+          // parameter: mailbox, then what is in it.
+          optionsFrom: {
+            query: { query: 'items' },
+            rows: 'items',
+            value: 'id',
+            label: 'title',
+            dependsOn: ['state'],
+          },
+        },
+      ],
+      submit: {
+        tool: 'demo.add_rule',
+        label: 'Add',
+        tone: 'accent',
+        // The sentence is the tool's own: it knows what it did.
+        done: { path: 'message' },
+        args: { account: { field: 'account' }, thing: { field: 'thing' } },
+        then: 'close',
+      },
     },
     {
       // A picker, not a search box: it asks again on every change.
@@ -523,14 +622,29 @@ const settings: PageDescriptor = {
       title: 'Watchers',
       initial: { query: 'settings' },
       fields: [
-        { name: 'everyMinutes', label: 'Check every', type: 'number', from: 'everyMinutes', min: 1, max: 240 },
+        { name: 'pause', label: 'Pause the watchers', type: 'checkbox' },
+        {
+          name: 'everyMinutes',
+          label: 'Check every',
+          type: 'number',
+          from: 'everyMinutes',
+          min: 1,
+          max: 240,
+          // Asked of the form's own values: it greys out as the box is ticked.
+          disabledWhen: { path: 'pause', equals: true },
+        },
         { name: 'keepDays', label: 'Keep for', type: 'number', from: 'keepDays', min: 1, max: 365 },
       ],
       submit: {
         tool: 'demo.set_settings',
         label: 'Save',
         tone: 'accent',
-        args: { everyMinutes: { field: 'everyMinutes' }, keepDays: { field: 'keepDays' } },
+        done: 'Saved.',
+        args: {
+          everyMinutes: { field: 'everyMinutes' },
+          keepDays: { field: 'keepDays' },
+          pause: { field: 'pause' },
+        },
       },
     },
   ],

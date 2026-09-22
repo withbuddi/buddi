@@ -61,6 +61,8 @@ export interface ToolRef {
   confirm?: string;
   /** The label while it is running. */
   busy?: string;
+  /** What the page says once it worked; a `ValueRef` reads the tool's result. */
+  done?: string | ValueRef;
   /** Left of the toolbar, with a spacer after it. The primary stays rightmost. */
   placement?: 'leading';
   then?: 'refresh' | 'close' | { route: RouteRef };
@@ -68,17 +70,28 @@ export interface ToolRef {
 
 export interface RowAction extends ToolRef {
   args: Record<string, ValueRef | { row: string }>;
+  /** Offered only on the rows where this holds. */
+  when?: Visibility;
 }
 
 export interface BulkAction extends ToolRef {
   args: Record<string, ValueRef | { selected: true }>;
+  /** With nothing ticked, offer it on every row the owner may act on. */
+  all?: true;
+}
+
+/** A word about state; `tone` may itself be a path within the row. */
+export interface PillRef {
+  value: ValueRef;
+  tone?: Tone | ValueRef;
 }
 
 export interface ListItem {
   title: ValueRef;
   sub?: ValueRef;
   meta?: ValueRef[];
-  pill?: { value: ValueRef; tone?: Tone };
+  pill?: PillRef;
+  pills?: PillRef[];
   to?: RouteRef;
 }
 
@@ -92,6 +105,16 @@ export interface GroupBy {
   labels?: Record<string, string>;
 }
 
+/** A select's options, read from a query rather than written in the descriptor. */
+export interface OptionsFrom {
+  query: QueryRef;
+  rows: string;
+  value: string;
+  label: string;
+  /** Fields whose value is sent as a parameter, and whose change re-reads. */
+  dependsOn?: string[];
+}
+
 export interface Field {
   name: string;
   label: string;
@@ -103,6 +126,9 @@ export interface Field {
   step?: number;
   hint?: string;
   from?: string;
+  optionsFrom?: OptionsFrom;
+  /** Asked of the form's own values first, then of the data behind it. */
+  when?: Visibility;
   disabledWhen?: Visibility;
 }
 
@@ -126,8 +152,11 @@ export type ListComponent = ComponentCommon & {
   collapsed?: { label: string; rows: string };
 };
 
+/** What a section may put on the right of its heading. */
+export type SectionAction = Extract<Component, { kind: 'link' } | { kind: 'button' }>;
+
 export type Component =
-  | (ComponentCommon & { kind: 'section'; body: Component[] })
+  | (ComponentCommon & { kind: 'section'; actions?: SectionAction[]; body: Component[] })
   | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
   | (ComponentCommon & {

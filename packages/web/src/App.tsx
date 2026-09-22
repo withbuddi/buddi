@@ -436,6 +436,7 @@ function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; p
           item={located.item ?? null}
           navigate={props.navigate}
           timezone={props.timezone}
+          siblings={pluginPages.all.filter((p) => p.plugin === located.plugin)}
         />
       );
     }

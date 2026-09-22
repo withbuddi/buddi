@@ -20,6 +20,7 @@ import type {
   ComponentCommon as CoreComponentCommon,
   Field as CoreField,
   GroupBy as CoreGroupBy,
+  OptionsFrom as CoreOptionsFrom,
   ListItem as CoreListItem,
   PageDescriptor as CorePageDescriptor,
   QueryRef as CoreQueryRef,
@@ -34,6 +35,7 @@ import type {
   Field,
   GroupBy,
   ListItem,
+  OptionsFrom,
   PluginPageDescriptor,
   QueryRef,
   RouteRef,
@@ -83,6 +85,7 @@ interface Conformance {
   selection: Exact<CoreSelection, Selection>;
   groupBy: Exact<CoreGroupBy, GroupBy>;
   field: Exact<CoreField, Field>;
+  optionsFrom: Exact<CoreOptionsFrom, OptionsFrom>;
   componentCommon: Exact<CoreComponentCommon, ComponentCommon>;
   /** The served descriptor is core's, plus the plugin the route carries. */
   descriptor: Exact<CorePageDescriptor & { plugin: string }, PluginPageDescriptor>;
@@ -97,6 +100,7 @@ export const CONTRACTS_AGREE: Conformance = {
   selection: true,
   groupBy: true,
   field: true,
+  optionsFrom: true,
   componentCommon: true,
   descriptor: true,
 };
