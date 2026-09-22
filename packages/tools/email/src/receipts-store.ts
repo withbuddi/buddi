@@ -1,0 +1,181 @@
+/**
+ * Reading a message for receipt vocabulary, and keeping what was read.
+ *
+ * The same shape as `dates-store.ts`, for the same reasons: the classifier is
+ * pure (`phrases.ts`), the reading is stored once (`email.receipts`), and
+ * `messages.receipts_scanned_at` is the line that makes "not a receipt"
+ * different from "never looked".
+ *
+ * One departure from dates, and it is deliberate: there is no ingest half. A
+ * receipt is worth a finding for a fortnight and nothing about it is urgent, so
+ * the hourly sweep is early enough, and the poll path stays as narrow as it is.
+ *
+ * A message from a sender the owner has a live `ignore` policy about is stamped
+ * without being read, and a policy that arrives *after* a scan silences what is
+ * already stored. §7's watchers are not a way around the gate.
+ */
+import type { Pool, PoolClient } from 'pg';
+import { classifyReceipt, firstLines, type ReceiptReading } from './phrases.js';
+
+type Db = Pool | PoolClient;
+
+/** How many unscanned messages one sentinel tick reads. */
+export const RECEIPT_SCAN_BATCH = 200;
+
+/** How many lines of the body the classifier is shown. §7's "the first lines". */
+export const RECEIPT_BODY_LINES = 12;
+
+/** A message the catch-up sweep is about to read. */
+export interface ScannableReceipt {
+  id: string;
+  subject: string;
+  from: string;
+  bodyText: string | null;
+  /** True when a live `ignore` policy covers this sender, in this account. */
+  ignored: boolean;
+}
+
+/** The live-ignore predicate the gate uses, as a fragment over an alias. */
+export function ignoredSql(alias: string): string {
+  return `exists (
+    select 1 from email.policies p
+     where p.revoked_at is null
+       and p.proposed = false
+       and p.action = 'ignore'
+       and (p.account_id is null or p.account_id = ${alias}.account_id)
+       and (
+         (p.scope = 'sender' and p.matcher = email.address_of(${alias}.from_addr))
+         or (p.scope = 'domain'
+             and p.matcher = split_part(email.address_of(${alias}.from_addr), '@', 2))
+       )
+  )`;
+}
+
+/** Messages nothing has read for receipts yet, oldest fetched first, bounded. */
+export async function unscannedReceipts(
+  db: Db,
+  limit = RECEIPT_SCAN_BATCH,
+): Promise<ScannableReceipt[]> {
+  const { rows } = await db.query(
+    `select m.id, m.subject, m.from_addr, m.body_text, ${ignoredSql('m')} as ignored
+       from email.messages m
+      where m.receipts_scanned_at is null
+        and m.direction = 'in'
+      order by m.fetched_at asc, m.id asc
+      limit $1`,
+    [limit],
+  );
+  return rows.map((row: Record<string, any>) => ({
+    id: String(row.id),
+    subject: row.subject ?? '',
+    from: row.from_addr ?? '',
+    bodyText: row.body_text ?? null,
+    ignored: row.ignored === true,
+  }));
+}
+
+/** Stamp a message as read without reading it. See the module note. */
+export async function skipReceipt(db: Db, messageId: string, now: Date): Promise<void> {
+  await db.query(`update email.messages set receipts_scanned_at = $2 where id = $1::uuid`, [
+    messageId,
+    now,
+  ]);
+}
+
+/**
+ * Store one reading and stamp the message. `null` stamps and stores nothing.
+ *
+ * Idempotent: a forced rescan keeps the better confidence rather than adding a
+ * second row, exactly as `recordDates` does.
+ */
+export async function recordReceipt(
+  db: Db,
+  messageId: string,
+  reading: ReceiptReading | null,
+  now: Date,
+): Promise<void> {
+  if (reading !== null) {
+    await db.query(
+      `insert into email.receipts (message_id, confidence, phrase, amount, currency, found_at)
+       values ($1::uuid, $2, $3, $4, $5, $6)
+       on conflict (message_id) do update
+          set confidence = greatest(email.receipts.confidence, excluded.confidence),
+              phrase = excluded.phrase,
+              amount = excluded.amount,
+              currency = excluded.currency`,
+      [
+        messageId,
+        reading.confidence,
+        reading.phrase,
+        reading.amount === null ? null : reading.amount.value,
+        reading.amount === null ? null : reading.amount.currency,
+        now,
+      ],
+    );
+  }
+  await skipReceipt(db, messageId, now);
+}
+
+/** Read one message and keep the result. The classifier's only caller. */
+export async function scanMessageReceipt(
+  db: Db,
+  message: { id: string; subject: string; from: string; bodyText: string | null },
+  now: Date,
+): Promise<ReceiptReading | null> {
+  const reading = classifyReceipt({
+    subject: message.subject,
+    from: message.from,
+    body: firstLines(message.bodyText, RECEIPT_BODY_LINES),
+  });
+  await recordReceipt(db, message.id, reading, now);
+  return reading;
+}
+
+/** A stored reading, joined to the message it was found in. */
+export interface StoredReceipt {
+  messageId: string;
+  threadId: string | null;
+  subject: string;
+  from: string;
+  confidence: number;
+  phrase: string;
+  amount: number | null;
+  currency: string | null;
+}
+
+/**
+ * Stored readings for messages that arrived since `since`, above a confidence.
+ *
+ * Muted conversations are left out — a muted thread is a decision — and so are
+ * senders an `ignore` policy has covered since the scan.
+ */
+export async function receiptsSince(
+  db: Db,
+  since: Date,
+  minConfidence: number,
+): Promise<StoredReceipt[]> {
+  const { rows } = await db.query(
+    `select r.message_id, m.thread_id, m.subject, m.from_addr,
+            r.confidence, r.phrase, r.amount, r.currency
+       from email.receipts r
+       join email.messages m on m.id = r.message_id
+       left join email.threads t on t.id = m.thread_id
+      where m.direction = 'in'
+        and coalesce(m.internal_date, m.fetched_at) >= $1::timestamptz
+        and r.confidence >= $2
+        and coalesce(t.state, 'waiting-on-me') <> 'muted'
+        and not ${ignoredSql('m')}
+      order by coalesce(m.internal_date, m.fetched_at) desc, r.message_id asc`,
+    [since, minConfidence],
+  );
+  return rows.map((row: Record<string, any>) => ({
+    messageId: String(row.message_id),
+    threadId: row.thread_id === null || row.thread_id === undefined ? null : String(row.thread_id),
+    subject: row.subject ?? '',
+    from: row.from_addr ?? '',
+    confidence: Number(row.confidence),
+    phrase: row.phrase ?? '',
+    amount: row.amount === null || row.amount === undefined ? null : Number(row.amount),
+    currency: row.currency ?? null,
+  }));
+}

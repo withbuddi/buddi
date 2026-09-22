@@ -19,7 +19,34 @@ import {
   MAX_WAITING_DAYS,
   MIN_WAITING_DAYS,
   WARNING_WAITING_DAYS,
+  clampNudgeDays,
+  clampPromisedDays,
+  money,
+  nudgeFinding,
+  nudgeKey,
+  promisedDraftFinding,
+  promisedDraftKey,
+  promisedFinding,
+  promisedKey,
+  receiptFinding,
+  receiptKey,
+  severityForPromise,
+  severityForSuspicion,
+  suspiciousFinding,
+  ASK_URGENT_ABOVE,
+  DEFAULT_NUDGE_DAYS,
+  DEFAULT_PROMISED_DAYS,
+  DEFAULT_WATCHER_SETTINGS,
+  MAX_NUDGE_DAYS,
+  MAX_PROMISED_DAYS,
+  MIN_NUDGE_DAYS,
+  MIN_PROMISED_DAYS,
+  WARNING_PROMISED_DAYS,
+  type PromisedReply,
+  type ReceiptHit,
   type StatedDate,
+  type Suspicion,
+  type UnansweredAsk,
   type WaitingThread,
 } from './watchers.js';
 
@@ -205,5 +232,212 @@ describe('the waiting-days setting', () => {
     expect(clampWaitingDays(1000)).toBe(MAX_WAITING_DAYS);
     expect(clampWaitingDays(2.7)).toBe(2);
     expect(clampWaitingDays(Number.NaN)).toBe(DEFAULT_WAITING_DAYS);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Step 6's four watchers (docs/specs/email.md §7, §13.6)
+ * ------------------------------------------------------------------ */
+
+describe('email.promised-reply', () => {
+  const PROMISE: PromisedReply = {
+    threadId: 't-2',
+    messageId: 'm-4',
+    subject: 'The quote',
+    to: 'client@work.test',
+    phrase: "I'll get back to you",
+    ageDays: 4,
+  };
+
+  it('keys the conversation and the promise, and a draft separately', () => {
+    expect(promisedFinding(PROMISE).key).toBe('email.promised-reply:t-2:m-4');
+    expect(promisedDraftKey('t-2', 'd-7')).toBe('email.promised-reply:t-2:draft:d-7');
+    // Two different unkept promises on one conversation are two facts, and
+    // core must not resolve one because the other was raised.
+    expect(promisedKey('t-2', 'm-4')).not.toBe(promisedDraftKey('t-2', 'm-4'));
+  });
+
+  it('notices at the setting and warns at a week', () => {
+    expect(severityForPromise(3)).toBe('info');
+    expect(severityForPromise(WARNING_PROMISED_DAYS)).toBe('urgent');
+  });
+
+  it("fences the owner's own words, because they came back through a mailbox", () => {
+    const finding = promisedFinding(PROMISE);
+    expect(finding.title).toContain(quoted('client@work.test'));
+    expect(finding.detail).toContain(quoted("I'll get back to you"));
+    expect(finding.data).toEqual({
+      threadId: 't-2',
+      messageId: 'm-4',
+      ageDays: 4,
+      watcher: 'promised-reply',
+    });
+  });
+
+  it('tells the agent the draft is the owner’s to send', () => {
+    const finding = promisedDraftFinding({
+      threadId: 't-2',
+      draftId: 'd-7',
+      subject: 'The quote',
+      to: 'client@work.test',
+      agent: 'mailer',
+      ageDays: 9,
+    });
+    expect(finding.severity).toBe('urgent');
+    expect(finding.detail).toContain('email.read_draft');
+    expect(finding.detail).toContain('nothing here may send it');
+    expect(finding.data).toEqual({
+      threadId: 't-2',
+      draftId: 'd-7',
+      ageDays: 9,
+      watcher: 'promised-reply',
+    });
+  });
+});
+
+describe('email.receipt-or-bill', () => {
+  const HIT: ReceiptHit = {
+    messageId: 'm-11',
+    threadId: 't-3',
+    subject: 'Invoice 2026-114',
+    from: 'billing@insurer.test',
+    confidence: 0.95,
+    phrase: 'Invoice',
+    amount: 120.5,
+    currency: 'EUR',
+  };
+
+  it('is always info: a bill is a thing to file, not a thing to wake up for', () => {
+    expect(receiptFinding(HIT).severity).toBe('info');
+    expect(receiptFinding({ ...HIT, confidence: 0.95, amount: null, currency: null }).severity).toBe(
+      'info',
+    );
+  });
+
+  it('names the total in our own words, and only when one was read', () => {
+    expect(money(120.5, 'EUR')).toBe('€120.50');
+    expect(money(null, 'EUR')).toBeNull();
+    expect(receiptFinding(HIT).title).toContain('€120.50');
+    expect(receiptFinding({ ...HIT, amount: null, currency: null }).title).toBe(
+      `A receipt or bill arrived: ${quoted('Invoice 2026-114')}`,
+    );
+  });
+
+  it('carries ids, numbers and the two actions — and no sender text', () => {
+    expect(receiptFinding(HIT).data).toEqual({
+      messageId: 'm-11',
+      threadId: 't-3',
+      confidence: 0.95,
+      amount: 120.5,
+      currency: 'EUR',
+      suggestedActions: ['hand-to-overview', 'record'],
+      watcher: 'receipt-or-bill',
+    });
+  });
+
+  it('keys the message, so the same receipt is one fact for ever', () => {
+    expect(receiptKey('m-11')).toBe('email.receipt-or-bill:m-11');
+  });
+});
+
+describe('email.suspicious-sender', () => {
+  const BASE: Suspicion = {
+    messageId: 'm-20',
+    threadId: 't-4',
+    subject: 'Urgent request',
+    from: '"Ana Rios" <ana.rios@work-payments.test>',
+    firstLine: 'Are you at your desk?',
+    lookAlike: false,
+    ask: null,
+  };
+
+  it('wakes somebody for a look-alike, whatever else is in the message', () => {
+    expect(severityForSuspicion({ ...BASE, lookAlike: true })).toBe('urgent');
+  });
+
+  it('wakes somebody for an ask only above the line §7 draws', () => {
+    const ask = (confidence: number) => ({ kind: 'wire', confidence, phrase: 'wire transfer' });
+    expect(severityForSuspicion({ ...BASE, ask: ask(0.7) })).toBe('info');
+    expect(severityForSuspicion({ ...BASE, ask: ask(ASK_URGENT_ABOVE) })).toBe('info');
+    expect(severityForSuspicion({ ...BASE, ask: ask(0.95) })).toBe('urgent');
+  });
+
+  it('names one message once, and says which tests fired', () => {
+    const both = suspiciousFinding({
+      ...BASE,
+      lookAlike: true,
+      ask: { kind: 'wire', confidence: 0.95, phrase: 'wire transfer' },
+    });
+    expect(both.key).toBe('email.suspicious-sender:m-20');
+    expect(both.data.tests).toEqual(['look-alike', 'ask']);
+    expect(both.detail).toContain('display name');
+    expect(both.detail).toContain('a transfer');
+  });
+
+  it('quotes one line of the body and no more, and forbids a reply', () => {
+    const finding = suspiciousFinding({ ...BASE, lookAlike: true });
+    expect(finding.detail).toContain(quoted('Are you at your desk?'));
+    expect(finding.detail).toContain('Do not reply to it, do not draft a reply');
+    // The body never reaches `data`: only ids, the tests and a number.
+    expect(Object.keys(finding.data).sort()).toEqual([
+      'confidence',
+      'messageId',
+      'tests',
+      'threadId',
+      'watcher',
+    ]);
+  });
+});
+
+describe('email.unanswered-by-them', () => {
+  const ASK: UnansweredAsk = {
+    threadId: 't-5',
+    messageId: 'm-30',
+    subject: 'The survey',
+    to: 'surveyor@work.test',
+    phrase: 'Could you send the report?',
+    ageDays: 6,
+  };
+
+  it('is info, once, keyed to the conversation and the message that asked', () => {
+    const finding = nudgeFinding(ASK);
+    expect(finding.severity).toBe('info');
+    expect(finding.key).toBe('email.unanswered-by-them:t-5:m-30');
+    expect(nudgeKey('t-5', 'm-30')).toBe(finding.key);
+  });
+
+  it('offers a draft and forbids a send', () => {
+    const finding = nudgeFinding(ASK);
+    expect(finding.detail).toContain('email.draft_reply');
+    expect(finding.detail).toContain('Never send it.');
+    expect(finding.data.suggestedAction).toBe('draft-a-nudge');
+  });
+
+  it('fences the address, the subject and the question', () => {
+    const finding = nudgeFinding(ASK);
+    expect(finding.title).toContain(quoted('surveyor@work.test'));
+    expect(finding.title).toContain(quoted('The survey'));
+    expect(finding.detail).toContain(quoted('Could you send the report?'));
+  });
+});
+
+describe('the five watcher settings', () => {
+  it('clamps each to its own bounds, and falls back to its own default', () => {
+    expect(clampPromisedDays(0)).toBe(MIN_PROMISED_DAYS);
+    expect(clampPromisedDays(900)).toBe(MAX_PROMISED_DAYS);
+    expect(clampPromisedDays(Number.NaN)).toBe(DEFAULT_PROMISED_DAYS);
+    expect(clampNudgeDays(0)).toBe(MIN_NUDGE_DAYS);
+    expect(clampNudgeDays(900)).toBe(MAX_NUDGE_DAYS);
+    expect(clampNudgeDays(Number.NaN)).toBe(DEFAULT_NUDGE_DAYS);
+  });
+
+  it('starts where §7 says it starts', () => {
+    expect(DEFAULT_WATCHER_SETTINGS).toEqual({
+      waitingDays: DEFAULT_WAITING_DAYS,
+      dateConfidence: 0.6,
+      promisedDays: 3,
+      receiptConfidence: 0.7,
+      nudgeDays: 5,
+    });
   });
 });
