@@ -256,6 +256,23 @@ suite('sentinels (postgres)', () => {
       expect(await pendingDigestItems(pool)).toHaveLength(0);
     });
 
+    it('resolves and un-queues in one act, so neither can happen without the other', async () => {
+      // Both statements are in one transaction. What is observable from here
+      // is the pair: the row resolved *and* the queue empty, with no state in
+      // which the recap would read out a fact the watcher has dropped.
+      const manifests = pluginWith(scripted('w', [[info], []]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      const { rows } = await pool.query(
+        `select (select count(*)::int from core.sentinel_findings
+                  where key = $1 and resolved_at is not null) as resolved,
+                (select count(*)::int from core.digest_items
+                  where finding_key = $1 and consumed_at is null) as queued`,
+        [info.key],
+      );
+      expect(rows[0]).toEqual({ resolved: 1, queued: 0 });
+    });
+
     it('leaves an item that was already read out where it is', async () => {
       const manifests = pluginWith(scripted('w', [[info], []]));
       await runSentinels(pool, manifests, T0, 'UTC');
@@ -300,6 +317,30 @@ suite('sentinels (postgres)', () => {
       expect((await getFinding(pool, info.key))?.cooldownUntil?.getTime()).toBe(
         at(60_000).getTime() + URGENT_COOLDOWN_MS,
       );
+    });
+
+    it('takes its old digest line with it when it escalates', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[info], [{ ...info, severity: 'urgent' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await pendingDigestItems(pool)).toHaveLength(1);
+
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      // The owner has just been woken about it; the recap must not read out
+      // day two's milder wording on Sunday as though it were news.
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      expect(await wakes()).toHaveLength(1);
+    });
+
+    it('leaves a digest line that was already read out where it is', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[info], [{ ...info, severity: 'urgent' }]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await consumeDigestItems(pool, (await pendingDigestItems(pool)).map((i) => i.id), at(1000));
+
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      const { rows } = await pool.query(`select count(*)::int as n from core.digest_items`);
+      expect(rows[0].n).toBe(1);
     });
 
     it('says nothing again when it gets better', async () => {

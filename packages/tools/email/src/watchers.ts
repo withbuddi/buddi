@@ -178,11 +178,18 @@ export interface WaitingFinding {
   severity: 'urgent' | 'info';
   title: string;
   detail: string;
+  /**
+   * Ids and numbers, and nothing a sender wrote.
+   *
+   * `data` is handed to a model verbatim — `renderFinding` serialises it into
+   * the wake prompt and the dashboard prints it — so a raw subject or address
+   * in here would be the one unfenced path left for text a stranger chose. The
+   * words are in `title` and `detail`, already fenced; what travels here is
+   * what the agent needs to go and read the thread for itself.
+   */
   data: {
     threadId: string;
     messageId: string;
-    from: string;
-    subject: string;
     ageDays: number;
     watcher: 'waiting-on-me';
   };
@@ -209,8 +216,6 @@ export function waitingFinding(thread: WaitingThread): WaitingFinding {
     data: {
       threadId: thread.threadId,
       messageId: thread.lastInboundId,
-      from: thread.from,
-      subject,
       ageDays: thread.ageDays,
       watcher: 'waiting-on-me',
     },
@@ -243,11 +248,11 @@ export interface DateFinding {
   severity: 'urgent' | 'info';
   title: string;
   detail: string;
+  /** Ids, the day and the number. The sender's phrase stays in `detail`, fenced. */
   data: {
     messageId: string;
     threadId: string | null;
     date: string;
-    phrase: string;
     confidence: number;
     suggestedAction: 'set-a-reminder';
     watcher: 'date-stated';
@@ -278,7 +283,6 @@ export function dateFinding(hit: StatedDate): DateFinding {
       messageId: hit.messageId,
       threadId: hit.threadId,
       date: hit.date,
-      phrase: hit.phrase,
       confidence: hit.confidence,
       suggestedAction: 'set-a-reminder',
       watcher: 'date-stated',

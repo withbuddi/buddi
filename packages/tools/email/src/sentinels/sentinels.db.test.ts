@@ -428,6 +428,66 @@ suite('email watchers (postgres)', () => {
       const pending = await pendingDigestItems(pool);
       expect(pending.map((i) => i.findingKey)).toEqual([open[0]!.key]);
     });
+
+    it('does not replay a fact that had already resolved before it was switched off', async () => {
+      const manifests = [{ ...manifest, sentinels: [waitingOnMe] }];
+      const thread = await waitingThread({ ageDays: 3, uid: 810, subject: 'Answered in time' });
+      const raised = await runSentinels(pool, manifests, NOW, 'UTC');
+      expect(raised[0]).toMatchObject({ findings: 1, fired: 1 });
+      const key = (await openFindings(pool, 'email.waiting-on-me'))[0]!.key;
+
+      // Answered, and the next tick resolves it — all while the watcher is on.
+      await setThreadState(pool, thread.threadId, 'waiting-on-them');
+      const resolvedTick = await runSentinels(
+        pool,
+        manifests,
+        new Date(NOW.getTime() + 13 * 3_600_000),
+        'UTC',
+      );
+      expect(resolvedTick[0]).toMatchObject({ findings: 0, resolved: 1 });
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+
+      // Off, then on three days later.
+      await setSentinelEnabled(pool, 'email.waiting-on-me', false, new Date(NOW.getTime() + 14 * 3_600_000));
+      const later = new Date(NOW.getTime() + 3 * 86_400_000);
+      await setSentinelEnabled(pool, 'email.waiting-on-me', true, later);
+      const back = await runSentinels(pool, manifests, later, 'UTC');
+
+      // Nothing was said, and the old fact is still resolved: a finding that
+      // was over before the switch was touched is not news afterwards.
+      expect(back[0]).toMatchObject({ ran: true, findings: 0, fired: 0, resolved: 0 });
+      expect(await pendingDigestItems(pool)).toEqual([]);
+      const { rows } = await pool.query(
+        `select resolved_at is not null as resolved from core.sentinel_findings where key = $1`,
+        [key],
+      );
+      expect(rows).toEqual([{ resolved: true }]);
+    });
+
+    it('never makes a finding for a fact that arose and ceased while it was off', async () => {
+      const manifests = [{ ...manifest, sentinels: [waitingOnMe] }];
+      await setSentinelEnabled(pool, 'email.waiting-on-me', false, NOW);
+
+      // Nobody is looking: a conversation starts waiting, and is answered.
+      const unseen = await waitingThread({ ageDays: 3, uid: 820, subject: 'Came and went' });
+      await runSentinels(pool, manifests, new Date(NOW.getTime() + 86_400_000), 'UTC');
+      await setThreadState(pool, unseen.threadId, 'waiting-on-them');
+
+      const later = new Date(NOW.getTime() + 2 * 86_400_000);
+      await setSentinelEnabled(pool, 'email.waiting-on-me', true, later);
+      const back = await runSentinels(pool, manifests, later, 'UTC');
+
+      expect(back[0]).toMatchObject({ ran: true, findings: 0, fired: 0, resolved: 0 });
+      const { rows } = await pool.query(
+        `select count(*)::int as n from core.sentinel_findings where key like $1`,
+        [`email.waiting-on-me:${unseen.threadId}:%`],
+      );
+      // It never existed as a finding, so there is nothing to replay and
+      // nothing to resolve: the owner hears about what is true, not about
+      // what happened to be true while he was not being told.
+      expect(rows[0].n).toBe(0);
+      expect(await pendingDigestItems(pool)).toEqual([]);
+    });
   });
 
   // ------------------------------------------------------- date-stated
