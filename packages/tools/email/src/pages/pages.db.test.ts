@@ -25,6 +25,7 @@ import { ensureGmailAccount, GMAIL_SECRET_NAME, listAccounts, secretNameFor } fr
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
+import { emailPageDescriptors } from './descriptors.js';
 import type { ImapClientFactory } from '../ports.js';
 import type { ToolContext } from '../types.js';
 
@@ -200,6 +201,55 @@ suite('the mail pages, over postgres', () => {
     expect(await ask('watcher_settings')).toMatchObject({ waitingDays: 2, dateConfidence: 0.6 });
     await act('email.set_settings', { waitingDays: 5 });
     expect(await ask('watcher_settings')).toMatchObject({ waitingDays: 5 });
+  });
+
+  /**
+   * The descriptors say `rows: 'threads'`, `key: 'id'`, `from: 'toText'`; the
+   * queries above say what is actually there. Nothing checks the two against
+   * each other at run time — a path that misses is an empty panel — so they
+   * are checked here, against a real answer, for every array a page draws.
+   */
+  it('draws only paths its own queries answer with', async () => {
+    const answers: Record<string, any> = {
+      threads: await ask('threads', { q: 'invoice' }),
+      thread: await ask('thread', { id: ids.threadId }),
+      message: await ask('message', { id: ids.messageId }),
+      draft: await ask('draft', { id: ids.draftId }),
+      accounts: await ask('accounts'),
+      policies: await ask('policies'),
+      watcher_settings: await ask('watcher_settings'),
+    };
+    const at = (value: unknown, path: string): unknown =>
+      path.split('.').reduce<unknown>((cursor, part) => (cursor as any)?.[part], value);
+
+    const seen: string[] = [];
+    const walk = (node: any, query: string | null): void => {
+      if (node === null || typeof node !== 'object') return;
+      const own: string | null = node.query?.query ?? query;
+      if (typeof node.rows === 'string' && own) {
+        const rows = at(answers[own], node.rows);
+        expect(Array.isArray(rows), `${own}.${node.rows} is an array`).toBe(true);
+        seen.push(`${own}.${node.rows}`);
+        if (typeof node.key === 'string' && (rows as unknown[]).length > 0) {
+          expect(at((rows as unknown[])[0], node.key), `${own}.${node.rows}[0].${node.key}`).toBeDefined();
+        }
+      }
+      for (const child of Array.isArray(node) ? node : Object.values(node)) walk(child, own);
+    };
+    for (const page of emailPageDescriptors) walk(page.body, null);
+    // Every list, repeat and search on both pages, and no fewer.
+    expect(seen).toEqual([
+      'threads.items',
+      'threads.threads',
+      'thread.messages',
+      'message.attachments',
+      'message.attachments',
+      'thread.drafts',
+      'thread.older',
+      'accounts.accounts',
+      'policies.applied',
+      'policies.proposed',
+    ]);
   });
 
   /* -------------------------------------------------------------- *

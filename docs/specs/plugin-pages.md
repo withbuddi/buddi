@@ -1,9 +1,9 @@
 # Plugin pages: a plugin's screens, as data
 
-Status: §7 step 1 (the engine) and step 2 (the email port) built 2026-09-22.
-The Mail page and Settings → Email are now descriptors the email plugin
-contributes; their compiled-in versions are deleted. Step 3 (docs/plugins.md
-§2.5a) remains.
+Status: built 2026-09-22 — §7 step 1 (the engine), step 2 (the email port) and
+step 3 (docs/plugins.md §2.5a and §2.5b). The Mail page and Settings → Email
+are descriptors the email plugin contributes; their compiled-in versions are
+deleted, and `packages/web` names no plugin outside its redirect table.
 
 ## 1. The problem
 
