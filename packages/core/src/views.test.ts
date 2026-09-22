@@ -91,6 +91,29 @@ describe('view descriptors', () => {
     }
   });
 
+  it('accepts a preview that names a frame, and refuses anything beside it', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.read',
+      renderer: 'preview',
+      map: { src: 'url', title: { path: 'name' }, output: 'recent' },
+    });
+    expect(parsed.renderer).toBe('preview');
+    // `src` is what the panel points at: a descriptor without one has nothing
+    // to draw, and one with an extra field is a descriptor written against a
+    // renderer that does not exist.
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.read', renderer: 'preview', map: { output: 'recent' } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+    expect(() =>
+      parseViewDescriptors(
+        [{ tool: 'demo.read', renderer: 'preview', map: { src: 'url', height: '400' } }],
+        { plugin: 'demo' },
+      ),
+    ).toThrow(/invalid view descriptor/);
+  });
+
   it('refuses a descriptor for a tool the plugin does not contribute', () => {
     expect(() =>
       parseViewDescriptors([{ tool: 'demo.gone', renderer: 'structured', map: {} }], {

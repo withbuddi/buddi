@@ -133,7 +133,7 @@ export async function decideApproval(
         and ap.state = 'pending'
         and a.expires_at > $5
       returning a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-                a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
+                a.canonical_args, a.envelope, a.choices, a.tier, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
                 ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at${remember ? `

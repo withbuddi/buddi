@@ -35,6 +35,10 @@ export interface CookieOptions {
   httpOnly?: boolean;
   maxAgeSeconds?: number;
   secure?: boolean;
+  /** `Strict` by default, and nothing here has yet needed anything else. */
+  sameSite?: 'Strict' | 'Lax';
+  /** `/` by default. A preview scopes its cookie to its own subtree. */
+  path?: string;
 }
 
 /**
@@ -44,7 +48,11 @@ export interface CookieOptions {
  * sessions add Secure; direct loopback HTTP sessions do not.
  */
 export function cookieHeader(name: string, value: string, opts: CookieOptions = {}): string {
-  const parts = [`${name}=${encodeURIComponent(value)}`, 'Path=/', 'SameSite=Strict'];
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=${opts.path ?? '/'}`,
+    `SameSite=${opts.sameSite ?? 'Strict'}`,
+  ];
   if (opts.httpOnly !== false) parts.push('HttpOnly');
   if (opts.secure) parts.push('Secure');
   if (opts.maxAgeSeconds !== undefined) parts.push(`Max-Age=${Math.max(0, Math.floor(opts.maxAgeSeconds))}`);

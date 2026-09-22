@@ -420,6 +420,16 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     now,
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
-      systemContext: () => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }) },
+      systemContext: () => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }),
+      /*
+       * A getter, not a value: this object is built before anything is bound,
+       * and the preview listener publishes its port into the environment the
+       * moment it has one. Reading it here means a plugin never sees a stale
+       * number and nothing has to remember to write one back.
+       */
+      get previewPort(): number | undefined {
+        const port = Number(process.env.BUDDI_PREVIEW_PORT ?? '');
+        return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
+      } },
   };
 }

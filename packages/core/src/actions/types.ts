@@ -9,7 +9,7 @@
  * invalidates the approval" is a fact about the code, not a promise.
  */
 import { createHash } from 'node:crypto';
-import type { OwnerChoice } from '../tools.js';
+import type { OwnerChoice, Tier } from '../tools.js';
 // The narrow slice of `pg.Pool` core uses everywhere. Declared once, in
 // `owner.ts`, so `@buddi/core` exports exactly one `Queryable`.
 export type { Queryable } from '../owner.js';
@@ -64,6 +64,15 @@ export interface ActionRecord {
   envelope: unknown;
   /** The controls the tool offered the owner. Empty for almost every action. */
   choices: OwnerChoice[];
+  /**
+   * The tier this call was recorded under — `gated` for every action this
+   * build creates. Null on a row written before the column existed.
+   *
+   * It matters because `ToolDefinition.tierFor` makes the tier a property of
+   * the call rather than of the tool: without this, nothing in the record says
+   * which rule produced the approval the owner is reading.
+   */
+  tier: Tier | null;
   argsHash: string;
   preview: string;
   expiresAt: Date;
@@ -158,11 +167,16 @@ export function hashAction(
   args: unknown,
   envelope: unknown,
   choices?: readonly OwnerChoice[] | null,
+  /**
+   * The tier the action was created under. Folded in only when present, for
+   * the same reason `choices` is: a row from before the column existed hashes
+   * to what it hashed to then.
+   */
+  tier?: Tier | null,
 ): string {
   const base = { tool, toolVersion, args, envelope };
-  return sha256(
-    canonicalJson(choices && choices.length > 0 ? { ...base, choices } : base),
-  );
+  const withChoices = choices && choices.length > 0 ? { ...base, choices } : base;
+  return sha256(canonicalJson(tier ? { ...withChoices, tier } : withChoices));
 }
 
 /* ------------------------------------------------------------------ *
@@ -259,6 +273,11 @@ export function validateDeclaredChoices(choices: readonly OwnerChoice[]): OwnerC
  * Row mapping
  * ------------------------------------------------------------------ */
 
+/** A stored tier, read defensively: anything else reads as "not recorded". */
+function isTier(value: unknown): value is Tier {
+  return value === 'auto' || value === 'draft' || value === 'gated' || value === 'session';
+}
+
 export function toActionRecord(row: any): ActionRecord {
   return {
     id: String(row.id),
@@ -272,6 +291,7 @@ export function toActionRecord(row: any): ActionRecord {
     // A row read from a build before the column existed has none, which is the
     // same thing as "this action offered the owner nothing to choose".
     choices: toChoiceList(parseJson(row.choices ?? null)),
+    tier: isTier(row.tier) ? row.tier : null,
     argsHash: row.args_hash,
     preview: row.preview,
     expiresAt: new Date(row.expires_at),

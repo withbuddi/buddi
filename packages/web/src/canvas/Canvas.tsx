@@ -411,6 +411,7 @@ const SHAPE: Record<RendererName, string> = {
   bars: 'a bar comparison',
   keyvalue: 'a list of figures',
   document: 'a document to read',
+  preview: 'the app, running',
   envelope: 'a decision to make',
   structured: 'the result, laid out',
 };
@@ -439,6 +440,8 @@ const SHAPE_PATHS: Record<RendererName, JSX.Element> = {
   bars: <path d="M3 13V8.2M7 13V3.6M11 13V6.4M2 13.6h12" />,
   keyvalue: <path d="M2.6 4.6h4M9.4 4.6h4M2.6 8h4M9.4 8h4M2.6 11.4h4M9.4 11.4h4" />,
   document: <path d="M4 2.4h5l3 3v8.2H4zM9 2.4v3h3M6 9h4M6 11.2h3" />,
+  // A window with a title bar: the app itself, framed.
+  preview: <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 6h11.6M4.1 4.7h.01M6 4.7h.01" />,
   envelope: <path d="M2.2 4h11.6v8H2.2zM2.2 4.4 8 8.8l5.8-4.4" />,
   structured: <path d="M4 2.6h8v10.8H4zM6.2 5.6h3.6M6.2 8h3.6M6.2 10.4h2.2" />,
 };

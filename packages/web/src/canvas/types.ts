@@ -18,6 +18,7 @@ export type RendererName =
   | 'bars'
   | 'keyvalue'
   | 'document'
+  | 'preview'
   | 'envelope'
   | 'structured';
 
@@ -90,12 +91,22 @@ export interface DocumentMap {
   metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
 }
 
+/** A loopback process of the owner's, framed beside what it is printing. */
+export interface PreviewMap {
+  /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
+  src: string;
+  title?: ValueRef;
+  /** Path to the process's recent output text. */
+  output?: string;
+}
+
 export type ViewMap =
   | TimeseriesMap
   | TableMap
   | BarsMap
   | KeyValueMap
   | DocumentMap
+  | PreviewMap
   | Record<string, never>;
 
 export interface ViewDescriptor {
@@ -155,6 +166,22 @@ export interface DocumentProps {
   src: string | null;
   title: string | null;
   metadata: Array<{ label: string; value: unknown; unit: Unit }>;
+}
+
+export interface PreviewProps {
+  /**
+   * Which preview to ask the dashboard for a link to, or null when the
+   * descriptor named something that is not one.
+   *
+   * Not a URL: a preview is served on a *different origin* with a credential
+   * of its own, and the only way to one is `GET /api/preview/<plugin>/<name>/link`,
+   * which mints a single-use ticket. So what a descriptor can say is *which*
+   * preview, and the panel goes and asks.
+   */
+  target: { plugin: string; name: string } | null;
+  title: string | null;
+  /** What the process has printed lately, shown beside the frame. */
+  output: string | null;
 }
 
 export interface EnvelopeProps {

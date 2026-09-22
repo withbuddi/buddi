@@ -165,6 +165,12 @@ const HTTP_EXEMPT = [
   // socket in /var/run, there is no origin and so no pool to wedge, and one
   // request per whois is all it ever sends.
   /^packages\/gateway\/src\/web\/tailscale\.ts$/,
+  // The preview reverse proxy. It is not a client of anything: it forwards one
+  // request the owner's browser made to a loopback port on this machine, and
+  // must stream both ways and carry a websocket upgrade — neither of which
+  // `fetch` can do. There is no pool: every call makes its own request with no
+  // agent and no keep-alive, and the connection dies with the response.
+  /^packages\/gateway\/src\/web\/preview\.ts$/,
   // Tests may stand up servers, inject pooling agents, and prove the bug. The
   // rule is about what the *service* does at runtime.
   /\.test\.(ts|tsx|mts|js|mjs)$/,

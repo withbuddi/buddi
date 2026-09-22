@@ -17,6 +17,8 @@ import type {
   DocumentProps,
   KeyValueMap,
   KeyValueProps,
+  PreviewMap,
+  PreviewProps,
   RendererName,
   TableCell,
   TableMap,
@@ -266,6 +268,45 @@ export function resolveDocument(output: unknown, map: DocumentMap): DocumentProp
   };
 }
 
+/**
+ * Which preview a descriptor named, or null.
+ *
+ * A preview is not a URL this page may construct: it is served on another
+ * origin, behind a credential the dashboard mints one link at a time. So what
+ * a descriptor says is *which* process — spelled as the path
+ * `/preview/<plugin>/<name>/`, which is the sentence the plugin already
+ * writes — and the panel asks the link route for the rest.
+ *
+ * Parsed through `URL` rather than matched as a string, so `/preview/a/../..`
+ * is read as the `/` it resolves to and refused, rather than passing a
+ * `startsWith` and framing the dashboard.
+ */
+export function previewTarget(src: string): { plugin: string; name: string } | null {
+  if (!isSameOrigin(src)) return null;
+  let pathname: string;
+  try {
+    // A `file:` base, not an http one: the resolution is the only thing wanted
+    // here, and this file may not name a host at all — the bundle test reads
+    // every source for one, because a page that reaches off-origin is the
+    // thing that must never ship.
+    pathname = new URL(src, 'file:///').pathname;
+  } catch {
+    return null;
+  }
+  const match = /^\/preview\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/?$/.exec(pathname);
+  if (!match) return null;
+  return { plugin: match[1] as string, name: match[2] as string };
+}
+
+export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
+  const src = map.src ? asString(readPath(output, map.src)) : null;
+  return {
+    target: src ? previewTarget(src) : null,
+    title: asString(readRef(output, map.title)),
+    output: map.output ? asString(readPath(output, map.output)) : null,
+  };
+}
+
 /** Relative paths only. Anything with a scheme or `//` host is refused. */
 export function isSameOrigin(src: string): boolean {
   return src.startsWith('/') && !src.startsWith('//');
@@ -302,6 +343,8 @@ export function applyDescriptor(
       return { renderer: 'keyvalue', props: resolveKeyValue(output, map as KeyValueMap) };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
+    case 'preview':
+      return { renderer: 'preview', props: resolvePreview(output, map as PreviewMap) };
     default:
       return { renderer: 'structured', props: { value: output } };
   }

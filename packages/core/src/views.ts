@@ -15,8 +15,8 @@
  *     installation with no finance plugin ships no finance code.
  *
  *  2. **The renderers are generic.** `timeseries`, `table`, `bars`,
- *     `keyvalue`, `document`, `envelope`, `structured` — shapes, not domains.
- *     Nothing in the web package is allowed to know the word "cashflow".
+ *     `keyvalue`, `document`, `preview`, `envelope`, `structured` — shapes, not
+ *     domains. Nothing in the web package is allowed to know the word "cashflow".
  *
  * A plugin with no descriptors is the normal case: its tool results fall back
  * to `structured`, which is a readable view of the JSON rather than a dump.
@@ -29,6 +29,7 @@ export type RendererName =
   | 'bars'
   | 'keyvalue'
   | 'document'
+  | 'preview'
   | 'envelope'
   | 'structured';
 
@@ -147,12 +148,32 @@ export interface DocumentMap {
   metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
 }
 
+/**
+ * A process of the owner's, framed beside what it is printing.
+ *
+ * `src` is a path into the output, and what it finds *names* a process —
+ * `/preview/<plugin>/<name>/` — rather than being a URL the page may load. A
+ * preview is served on a second origin with a credential of its own, and the
+ * only way to one is the dashboard's link route, which the panel calls for
+ * itself. So a descriptor says which process and nothing more: anything else
+ * is drawn as nothing, because "put this URL in an iframe on the dashboard" is
+ * not a sentence a plugin gets to say.
+ */
+export interface PreviewMap {
+  /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
+  src: string;
+  title?: ValueRef;
+  /** Path to the process's recent output text, shown beside the frame. */
+  output?: string;
+}
+
 export type ViewMap =
   | TimeseriesMap
   | TableMap
   | BarsMap
   | KeyValueMap
   | DocumentMap
+  | PreviewMap
   | Record<string, never>;
 
 /** One tool, one way of drawing it. */
@@ -318,6 +339,14 @@ const documentMapSchema = z
     'a document view needs either `text` or `src`',
   );
 
+const previewMapSchema = z
+  .object({
+    src: viewPathSchema,
+    title: valueRefSchema.optional(),
+    output: viewPathSchema.optional(),
+  })
+  .strict();
+
 /** The two renderers that need no mapping: they read the output as it stands. */
 const emptyMapSchema = z.object({}).strict();
 
@@ -339,6 +368,7 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('bars'), map: barsMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('keyvalue'), map: keyValueMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('document'), map: documentMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('preview'), map: previewMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('envelope'), map: emptyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('structured'), map: emptyMapSchema }).strict(),
 ]);

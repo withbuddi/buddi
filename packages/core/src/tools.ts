@@ -115,6 +115,21 @@ export interface ToolContext {
    */
   jobId?: string;
   /**
+   * The port this gateway serves previews on, when it is serving them.
+   *
+   * A plugin with `previews` needs it for one thing: building a URL that is
+   * not this process's to build — a `tailscale serve` target, a line in a log,
+   * a link in a tool result. It is *not* how a preview is reached from the
+   * dashboard; that is the link route, which mints a credential. This is only
+   * the number, and it is here rather than guessed as "the dashboard plus one"
+   * because that guess is wrong the moment the port next door was taken.
+   *
+   * Absent when previews could not be bound, and outside a gateway process.
+   * `BUDDI_PREVIEW_PORT` in the environment carries the same number, for a
+   * plugin that reads its configuration rather than its context.
+   */
+  previewPort?: number;
+  /**
    * The approved action a **gated** `execute` is running under, and therefore
    * its idempotency key. Only `executeApproved` sets it — it is the single
    * caller of a gated tool — so a tool that must not send the same thing twice
@@ -194,6 +209,33 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   /** Shown to the model. */
   description: string;
   tier: Tier;
+  /**
+   * Decide this one call's tier from its arguments — the same tool, gated or
+   * not depending on what it was asked to do.
+   *
+   * `tier` above is what the tool *is*: it is what a model is told, what an
+   * agent's grant is checked against, and what the runtime resolves session
+   * grants from. This is what one call *costs*, and it can only be read from
+   * the arguments: `rm -rf .` and `ls` are both "run a command", and the first
+   * is the reason approvals exist. So a tool whose tier is a property of its
+   * input declares the strictest tier it can ever need and narrows it here.
+   *
+   * Called by `registry.invoke` after the arguments are parsed and before the
+   * tier is acted on; what it returns replaces `tier` **for that call only**.
+   * Three rules keep it from becoming a way around the gate:
+   *
+   *  - it may return `auto`, `gated` or `session` and nothing else;
+   *  - a throw refuses the call (`tool-error`) — a rule that cannot be
+   *    evaluated is not a rule that passed;
+   *  - `session` still means everything it meant: a live owner request, an
+   *    explicit grant resolved from the *declared* tier, and no delegate.
+   *
+   * `reason` is one plain sentence naming the rule that decided, carried into
+   * the approval's preview so the card says why it is asking. Nothing calls
+   * this again later: `executeApproved` runs what the action recorded, and the
+   * action was created under the tier this returned.
+   */
+  tierFor?(input: I, ctx: ToolContext): Promise<{ tier: Tier; reason?: string }>;
   /** Opt-in only: owner may remember approval for this tool/agent/version. */
   reusableApproval?: boolean;
   /**
@@ -410,6 +452,35 @@ export interface NetworkUse {
   why: string;
 }
 
+/**
+ * A plugin that has a process of its own listening on a loopback port, and can
+ * say which port stands behind a given name.
+ *
+ * The gateway serves `/preview/<plugin>/<name>/…` from that port on its
+ * **preview origin** — a second loopback listener with a credential of its
+ * own, never the dashboard's, because the app behind the port is untrusted
+ * code (docs/plugins.md §2.5c). The plugin owns the process and the naming;
+ * core owns the gate. Neither knows the other's half: this interface is the
+ * whole of the seam, and a plugin with no long-lived processes simply has no
+ * `previews`.
+ *
+ * `resolve` is asked on **every** proxied request, not once per process, so
+ * that a port that has stopped being this name's port stops being served the
+ * moment it does. It is a lookup, not a launcher: it starts nothing, and
+ * returning `null` is how a plugin says "there is no such preview", which the
+ * gateway answers 404.
+ *
+ * It must answer with a port the plugin is *actually running that process on*.
+ * The gateway forces loopback and refuses the obviously wrong ports — its own
+ * two listeners, Postgres, anything privileged — but a plugin whose record an
+ * agent can influence is the one deciding where the owner's browser is
+ * pointed, and that is the plugin's half of the boundary.
+ */
+export interface PreviewProvider {
+  /** The port behind `/preview/<plugin>/<name>/`, or null when there is none. */
+  resolve(name: string, ctx: ToolContext): Promise<{ port: number; host?: '127.0.0.1' } | null>;
+}
+
 export interface PluginManifest {
   /** Plugin family name, e.g. 'finance'. */
   name: string;
@@ -476,6 +547,12 @@ export interface PluginManifest {
    * `platform.accept_plugin_skill`; a skill grants no tool and lowers no tier.
    */
   skills?: SuggestedSkill[];
+  /**
+   * A loopback process of this plugin's, served on the gateway's preview
+   * origin at `/preview/<plugin>/<name>/` (optional). See `PreviewProvider`;
+   * almost no plugin has one, and the field is absent when it does not.
+   */
+  previews?: PreviewProvider;
   /**
    * One line on what this plugin is, shown before it is installed. Optional so
    * every existing manifest still compiles; a plugin meant to be distributed

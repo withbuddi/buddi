@@ -19,7 +19,7 @@ import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
-import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
+import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolContext, ToolDefinition } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery } from './pages.js';
 import type { HomeContribution } from './home.js';
@@ -29,6 +29,33 @@ export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
 
 /** Tiers that become an action and wait for the owner. */
 export const GATED_TIERS: readonly Tier[] = ['gated'];
+
+/**
+ * The tiers a tool may choose per call (`ToolDefinition.tierFor`).
+ *
+ * `draft` is missing on purpose: it is a statement about what a tool *is* —
+ * something this build does not execute at all — and a tool that decided to be
+ * a draft one call in three would be a tool nobody could reason about.
+ */
+export const PER_CALL_TIERS: readonly Tier[] = ['auto', 'gated', 'session'];
+
+/**
+ * Everything the `session` tier asks, in one place.
+ *
+ * It is asked of a tool that *declares* `session` on every call, whatever a
+ * `tierFor` decided that call costs — the declaration is what the runtime
+ * resolved a grant from, so it is also what the grant is checked against.
+ */
+function sessionAuthorized(name: string, ctx: ToolContext): boolean {
+  return Boolean(
+    ctx.ownerRequest &&
+      ctx.ownerRequest.expiresAt > Date.now() &&
+      ctx.sessionTools?.includes(name) &&
+      ctx.agentId &&
+      ctx.conversationId &&
+      (ctx.delegationDepth ?? 0) === 0,
+  );
+}
 
 /** A page descriptor, and the plugin whose route it lives under. */
 export type RegisteredPage = PageDescriptor & { plugin: string };
@@ -243,6 +270,18 @@ export class ToolRegistry {
           `tool name collision: ${tool.name} (${existing.plugin} and ${manifest.name})`,
         );
       }
+      /*
+       * `draft` is a statement that this build runs the tool at all — not a
+       * cost one call can weigh — so deciding per call is meaningless under
+       * it, and a plugin that wrote both has misunderstood one of them.
+       * Caught here, where the plugin can still be named.
+       */
+      if (tool.tierFor !== undefined && tool.tier === 'draft') {
+        throw new Error(
+          `tool ${tool.name} (plugin ${manifest.name}) declares tier 'draft' and a tierFor; ` +
+            `a draft tool never executes, so there is nothing to decide per call`,
+        );
+      }
       // The provider contract, checked where the plugin can still be named.
       schemas.set(tool.name, toolInputSchema(tool, manifest.name));
     }
@@ -332,6 +371,19 @@ export class ToolRegistry {
   /** Which plugin contributed a tool — the act route's "of that plugin" check. */
   pluginOf(name: string): string | undefined {
     return this.#tools.get(name)?.plugin;
+  }
+
+  /**
+   * The preview provider this plugin registered, if it has one.
+   *
+   * By plugin name because that is what the route carries: `/preview/<plugin>/
+   * <name>/` names the plugin first, and a name is only ever resolved by the
+   * plugin that owns it. Undefined for every plugin that ships no processes,
+   * which the gateway answers 404 — the same answer a name nobody knows gets,
+   * and for the same reason.
+   */
+  previews(plugin: string): PreviewProvider | undefined {
+    return this.#manifests.get(plugin)?.previews;
   }
 
   /** Every Home block the installed plugins contribute, in registration order. */
@@ -435,25 +487,109 @@ export class ToolRegistry {
       };
     }
 
-    if (GATED_TIERS.includes(tool.tier)) {
-      if (tool.reusableApproval && (ctx.delegationDepth ?? 0) > 0) {
-        return { ok: false, reason: 'tool-error', message: 'Host execution requires a direct owner conversation; delegates do not inherit host permissions.' };
+    /*
+     * The tier this call runs under.
+     *
+     * `tool.tier` — the *declared* tier — unless the tool decides per call,
+     * which it may only do once the arguments have been validated: a rule read
+     * off unparsed input is a rule read off whatever the model happened to
+     * send. And that is the reason for everything below. `tierFor` reads
+     * arguments a **model** chose, so it cannot be the boundary; the declared
+     * tier is, and `tierFor` only chooses inside the envelope that declaration
+     * already bought. See `ToolDefinition.tierFor`.
+     */
+    const declared: Tier = tool.tier;
+    let tier: Tier = declared;
+    let tierReason: string | undefined;
+    const decidedPerCall = tool.tierFor !== undefined;
+    if (tool.tierFor) {
+      let decided: { tier: Tier; reason?: string };
+      try {
+        decided = await tool.tierFor(parsed.data, ctx);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} could not decide what this call needs: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
       }
-      return this.#requestApproval(tool, version, parsed.data, ctx);
+      if (!PER_CALL_TIERS.includes(decided?.tier as Tier)) {
+        // A tier outside the three is a defect in the plugin, and the safe
+        // reading of a defect is that nothing runs.
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} asked for tier '${String(decided?.tier)}' on this call; only ${PER_CALL_TIERS.join(
+            ', ',
+          )} may be decided per call`,
+        };
+      }
+      /*
+       * The envelope. Two refusals, both naming a defect in the plugin rather
+       * than anything the model did:
+       *
+       *  - A tool that *is* gated may not decide it is not. Gated means the
+       *    owner sees every call before it happens, and a rule written over
+       *    model-chosen arguments is not allowed to overrule that.
+       *  - `session` is a grant the runtime resolved at run start from the
+       *    *declared* tier (`sessionTools`), so a per-call `session` on a tool
+       *    that did not declare it can never be authorized — it would be an
+       *    hour of debugging for a plugin author, and it is one sentence here.
+       */
+      if (decided.tier === 'session' && declared !== 'session') {
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} asked for tier 'session' on this call but declares '${declared}'; a session grant is resolved from the declared tier, so declare 'session' and narrow from there`,
+        };
+      }
+      if (GATED_TIERS.includes(declared) && !GATED_TIERS.includes(decided.tier)) {
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} asked for tier '${decided.tier}' on this call but declares 'gated'; a gated tool is gated on every call`,
+        };
+      }
+      tier = decided.tier;
+      if (typeof decided.reason === 'string' && decided.reason.trim() !== '') {
+        tierReason = decided.reason.trim();
+      }
     }
 
-    if (tool.tier === 'session' && (!ctx.ownerRequest ||
-      ctx.ownerRequest.expiresAt <= Date.now() || !ctx.sessionTools?.includes(name) ||
-      !ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0)) {
+    /*
+     * The session floor.
+     *
+     * A tool that declares `session` keeps every one of that tier's
+     * preconditions on **every** call, whatever `tierFor` returned: a live
+     * owner request, an explicit grant, an agent and a conversation, and no
+     * delegation. What `tierFor` chooses inside that envelope is only "run it
+     * now, under the grant that was already resolved" (`auto`) or "ask the
+     * owner about this one" (`gated`).
+     *
+     * Without this, a developer agent's delegate — `delegationDepth > 0` and
+     * an empty `sessionTools` — would get a shell out of a tool that declared
+     * the strictest tier there is, which is the exact opposite of what the
+     * declaration means.
+     */
+    if ((declared === 'session' || tier === 'session') && !sessionAuthorized(name, ctx)) {
       return { ok: false, reason: 'session-not-authorized',
         message: 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
     }
 
-    if (tool.tier !== 'session' && !EXECUTABLE_TIERS.includes(tool.tier)) {
+    if (GATED_TIERS.includes(tier)) {
+      if (tool.reusableApproval && (ctx.delegationDepth ?? 0) > 0) {
+        return { ok: false, reason: 'tool-error', message: 'Host execution requires a direct owner conversation; delegates do not inherit host permissions.' };
+      }
+      return this.#requestApproval(tool, version, parsed.data, ctx, tierReason, decidedPerCall);
+    }
+
+    if (tier !== 'session' && !EXECUTABLE_TIERS.includes(tier)) {
       return {
         ok: false,
         reason: 'tier-not-executable',
-        message: `tool ${name} is tier '${tool.tier}'; only ${EXECUTABLE_TIERS.join(
+        message: `tool ${name} is tier '${tier}'; only ${EXECUTABLE_TIERS.join(
           ', ',
         )} executes in this build`,
       };
@@ -483,6 +619,10 @@ export class ToolRegistry {
     version: string,
     args: unknown,
     ctx: ToolContext,
+    /** Why this call is gated, when a `tierFor` decided it and said so. */
+    tierReason?: string,
+    /** Whether a `tierFor` chose this call's tier at all. */
+    decidedPerCall = false,
   ): Promise<InvokeResult> {
     let described: EffectDescription;
     try {
@@ -501,6 +641,19 @@ export class ToolRegistry {
       };
     }
 
+    /*
+     * The rule that made this gated, on the card.
+     *
+     * The owner is being asked about *this* call and not the tool in general,
+     * so the sentence that explains the difference belongs in the preview —
+     * which is also the only text an approval surface is allowed to render.
+     * Appended rather than substituted: the tool's own account of the effect
+     * is still what is being approved.
+     */
+    const preview = tierReason
+      ? `${described.preview.replace(/\s+$/, '')} — ${tierReason}`
+      : described.preview;
+
     try {
       const action = await createAction(ctx.db, {
         tool: tool.name,
@@ -510,13 +663,31 @@ export class ToolRegistry {
         jobId: ctx.jobId ?? null,
         canonicalArgs: args,
         envelope: described.envelope,
-        preview: described.preview,
+        preview,
         // The controls the tool offered the owner. They are part of what was
         // shown, so they are recorded on the action and hashed with it.
         ...(described.choices && described.choices.length > 0 ? { choices: described.choices } : {}),
+        /*
+         * The tier this call was recorded under. Always `gated` — that is the
+         * only tier that records anything — but written down because
+         * `tierFor` makes the tier a property of the call: without it, an
+         * action created by a per-call rule is indistinguishable from one
+         * created by a tool that is simply gated, and the Executor has
+         * nothing to assert.
+         */
+        tier: 'gated',
         now: ctx.now(),
       });
-      const permission = tool.reusableApproval
+      /*
+       * A standing permission is keyed on the tool, not on the call.
+       *
+       * `tierFor` exists because one tool has many costs; "always allow
+       * `developer.run`" was said about a call that was `ls`, and it must not
+       * answer for the call that is `npm install`. There is nothing in the
+       * permission row that could tell them apart, so a call whose tier was
+       * decided per call is always put to the owner.
+       */
+      const permission = tool.reusableApproval && !decidedPerCall
         ? await findToolPermission(ctx.db, ctx, tool.name, version) : undefined;
       if (permission) {
         const decision = await decideApproval(ctx.db, { actionId: action.id, decision: 'approved',

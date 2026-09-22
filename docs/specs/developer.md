@@ -44,8 +44,35 @@ never by the agent:
   project's own scripts then run as them.
 
 The mode is what the `session` tier was made for: the runtime resolves the
-agent's session grants from the mode at run start, so a delegate never
-inherits them.
+agent's session grants from the *declared* tier at run start, so a delegate
+never inherits them.
+
+How the mode becomes a tier: every tool here declares `tier: 'session'` — the
+strictest it will ever need, and what the grant is checked against — and
+narrows each call with `ToolDefinition.tierFor` (docs/plugins.md §2.1). It is
+called after the arguments are validated and before the tier is acted on, and
+it reads the plugin's own workspace record for this agent:
+
+- no workspace for this agent, or a path that resolves outside it: `gated`,
+  with the reason naming the rule;
+- a command matching §5: `gated`, whatever the mode, with the rule named;
+- otherwise the mode decides — `ask` gates everything, `edit` gates commands
+  and lets reads and writes through as `auto`, `run` lets commands through too.
+
+The `reason` is one sentence and it is appended to the approval's preview, so
+the card the owner reads says which rule matched (§5). The mode is read from
+the record on every call, so changing it on the agent's page changes the next
+call and not the run.
+
+What `tierFor` does **not** do is widen anything. Every rule in it is a parser
+over words a model chose, so the registry keeps the declared tier as the floor:
+a declared-`session` tool is checked for a live owner request, an explicit
+grant, an agent, a conversation and `delegationDepth` 0 on *every* call,
+whatever the mode returned, before that answer is acted on at all. So a
+delegate of a developer agent gets `session-not-authorized` from
+`developer.run` even in `run` mode (§10, acceptance 5), a scheduled run with no
+owner request gets the same, and a command the §5 parser misreads costs the
+owner one unexpected card rather than an unapproved shell.
 
 ## 4. Tools
 
@@ -230,14 +257,36 @@ gets a preview, two ways, both ending when the process stops:
   absolute assets. Sharing a preview with someone who has no access is not
   in scope; if it is ever wanted it is a signed, expiring variant of the
   same link, a small addition.
+
+  As built (docs/plugins.md §2.5c): the plugin declares
+  `previews: { resolve(name, ctx) }`, which answers with the port behind a
+  process name or `null`, asked on every request — and it must be a port the
+  plugin is really running that process on, since the gateway only refuses the
+  obviously wrong ones (privileged, 5432, its own two listeners). The way in is
+  an exchange, not the dashboard's cookie:
+  `GET /api/preview/developer/<name>/link` on the dashboard, behind the
+  dashboard's gate, answers `{ url }` with a single-use five-minute ticket on
+  it; opening that URL sets `buddi_preview` (HttpOnly, SameSite=Lax, scoped to
+  that one preview, 24 hours) and redirects to the clean path; every later
+  request and every upgrade needs that cookie, and anything else is a bodyless
+  401. `GET /api/preview/developer/<name>/check` answers
+  `{ ok, absoluteAssets }` from what the proxy saw on the first HTML response,
+  which is where `developer.preview`'s warning comes from. The canvas panel is
+  the `preview` renderer (docs/plugins.md §2.5): `{ src, title?, output? }`,
+  where `src` names the process as `/preview/developer/<name>/`; the panel
+  calls `link` itself and frames the answer, cross-origin, with "Open in a tab"
+  for an app that refuses framing.
+
 - **A Tailscale route per port**, for those apps: when Tailscale is running
-  and the owner allowed it on Settings → Developer, buddi adds
-  `tailscale serve --https=<port> http://127.0.0.1:<preview port>` when the
+  and the owner allowed it on Settings → Developer, the plugin adds
+  `tailscale serve --https=<port> http://127.0.0.1:<previewPort>` when the
   process starts and removes it when it stops, giving a clean
-  `https://<host>:<port>` guarded by the tailnet alone. It points at the
-  preview listener, not at the app's own port: pointing it at the app would
-  publish the app with no credential at all. Off by default; the sentence on the page
-  says what it exposes.
+  `https://<host>:<port>` guarded by the tailnet alone. `<previewPort>` is
+  `ctx.previewPort` (or `BUDDI_PREVIEW_PORT`), never "the dashboard plus one":
+  the gateway steps along when that port is taken, and a route built on the
+  guess points at nothing. It is the plugin's to
+  add and to take away — the gateway publishes only the dashboard — and it is
+  off by default; the sentence on the page says what it exposes.
 
 The canvas gets a **Preview** panel: the buddi-proxied app framed beside
 the process output, "Open in a tab" for apps that refuse framing, and a

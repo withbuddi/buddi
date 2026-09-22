@@ -8,7 +8,7 @@
  * happens later is written to the approval row or the effect ledger.
  */
 import type { Queryable } from '../owner.js';
-import type { OwnerChoice } from '../tools.js';
+import type { OwnerChoice, Tier } from '../tools.js';
 import {
   DEFAULT_APPROVAL_TTL_MS,
   POLICY_VERSION,
@@ -52,6 +52,11 @@ export interface CreateActionInput {
   preview: string;
   /** What the tool offered the owner to decide. Part of the approved hash. */
   choices?: readonly OwnerChoice[];
+  /**
+   * The tier this call was recorded under — `gated`, since nothing else
+   * records an action. Part of the approved hash when present.
+   */
+  tier?: Tier;
   /** Defaults to 24 hours from `now`. */
   ttlMs?: number;
   expiresAt?: Date;
@@ -65,7 +70,7 @@ export interface CreateActionInput {
  */
 const SELECT_ACTION = `
   select a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-         a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
+         a.canonical_args, a.envelope, a.choices, a.tier, a.args_hash, a.preview, a.expires_at,
          a.policy_version, a.created_at,
          ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
          ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at
@@ -83,14 +88,15 @@ export async function createAction(
   // Checked here, before anyone is asked: a menu whose default is not on it is
   // a menu the owner cannot be honestly shown.
   const choices = validateDeclaredChoices(input.choices ?? []);
-  const argsHash = hashAction(input.tool, input.toolVersion, canonicalArgs, input.envelope, choices);
+  const tier = input.tier ?? null;
+  const argsHash = hashAction(input.tool, input.toolVersion, canonicalArgs, input.envelope, choices, tier);
 
   const { rows } = await pool.query(
     `with a as (
        insert into core.actions
          (tool, tool_version, agent_id, conversation_id, job_id, canonical_args,
-          envelope, args_hash, preview, expires_at, policy_version, created_at, choices)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb)
+          envelope, args_hash, preview, expires_at, policy_version, created_at, choices, tier)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14)
        returning *
      ), ap as (
        insert into core.approvals (action_id, state, updated_at)
@@ -98,7 +104,7 @@ export async function createAction(
        returning *
      )
      select a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-            a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
+            a.canonical_args, a.envelope, a.choices, a.tier, a.args_hash, a.preview, a.expires_at,
             a.policy_version, a.created_at,
             ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
             ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at
@@ -118,6 +124,7 @@ export async function createAction(
       input.policyVersion ?? POLICY_VERSION,
       now,
       JSON.stringify(choices),
+      tier,
     ],
   );
   const row = rows[0];
