@@ -3,7 +3,7 @@
  *
  * One module because three callers need the same rules and must not each have
  * their own: the tools an agent uses (`email.draft_reply`, `email.read_draft`,
- * `email.send`), the dashboard's own editor under `/api/email/drafts`, and the
+ * `email.send`), the dashboard's own editor (`email.save_draft`), and the
  * sweep that lapses what nobody touched. A second implementation of "is there
  * already a live draft on this thread" is a second answer to it.
  *

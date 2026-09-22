@@ -192,71 +192,6 @@ export interface Overview {
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
 }
 
-/** Which of the five numbers the mail watchers read. */
-export type EmailWatcherSetting =
-  | 'waitingDays'
-  | 'dateConfidence'
-  | 'promisedDays'
-  | 'receiptConfidence'
-  | 'nudgeDays';
-
-/** What the mail watchers read, and the range the page may set. */
-export type EmailWatcherNumbers = Record<EmailWatcherSetting, number>;
-
-export interface EmailWatcherSettings extends EmailWatcherNumbers {
-  defaults: EmailWatcherNumbers;
-  limits: Record<EmailWatcherSetting, { min: number; max: number }>;
-}
-
-/** One standing decision about incoming mail. `/api/email/policies`. */
-export interface EmailPolicy {
-  id: string;
-  /** The mailbox it is about. Null is the explicit "every mailbox" choice. */
-  accountId: string | null;
-  scope: string;
-  matcher: string;
-  action: string;
-  params: Record<string, unknown>;
-  origin: string;
-  /** True while it is only a suggestion: it decides nothing until it is kept. */
-  proposed: boolean;
-  /** How many verdicts it was learned from. Zero when the owner wrote it. */
-  learnedFrom: number;
-  /** Triage runs it has skipped. Only `ignore` ever skips one. */
-  runsSaved: number;
-  decisions: number;
-  createdAt: string | null;
-  revokedAt: string | null;
-}
-
-/** One conversation, offered by subject when a rule is about a thread. */
-export interface EmailThreadChoice {
-  id: string;
-  accountId: string;
-  subject: string;
-  state: string;
-  participants: string[];
-  lastAt: string | null;
-}
-
-export interface EmailPoliciesView {
-  applied: EmailPolicy[];
-  proposed: EmailPolicy[];
-  /** The conversations a `thread` rule may be about, newest first. */
-  threads?: EmailThreadChoice[];
-  /** Set when the email plugin is not installed on this machine. */
-  unavailable?: string;
-}
-
-/**
- * What one bulk keep or revoke did. The two lists come back with it, so the
- * page redraws from the answer instead of asking again.
- */
-export interface EmailPoliciesBulk extends EmailPoliciesView {
-  kept: number;
-  revoked: number;
-  missing: number;
-}
 
 export interface EventRow {
   id: string;
@@ -354,117 +289,6 @@ export interface JobRow {
   suspendedReason: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-/** One conversation in the list. `hasLiveDraft` is the small "draft" pill. */
-export interface EmailThreadRow {
-  id: string;
-  accountId: string;
-  subject: string;
-  participants: string[];
-  state: string;
-  lastAt: string | null;
-  messageCount: number;
-  hasLiveDraft: boolean;
-}
-
-/** One message as the thread list draws it: headers and a snippet, no body. */
-export interface EmailThreadMessage {
-  id: string;
-  direction: 'in' | 'out';
-  from: string;
-  to: string[];
-  subject: string;
-  date: string | null;
-  snippet: string;
-}
-
-export interface EmailDraftRow {
-  id: string;
-  threadId: string | null;
-  accountId: string | null;
-  inReplyTo: string | null;
-  to: string[];
-  cc: string[];
-  bcc: string[];
-  subject: string;
-  bodyText: string;
-  createdByAgent: string;
-  status: string;
-  editedBy: string | null;
-  updatedAt: string | null;
-  createdAt: string | null;
-  sentAt: string | null;
-  live: boolean;
-  /** The approved action holding this draft, when one is. */
-  sentActionId: string | null;
-  sendError: string | null;
-  /** Dispatched and never confirmed: nothing may be done to it until checked. */
-  unresolved: boolean;
-}
-
-/** One attachment of a message: the listing, and where it went if fetched. */
-export interface EmailAttachment {
-  index: number;
-  filename: string | null;
-  mime: string;
-  sizeBytes: number;
-  /** The artifact it became, once somebody fetched it. Null until then. */
-  artifactId: string | null;
-}
-
-/** One search hit (docs/specs/email.md §9). Opens the conversation it is in. */
-export interface EmailSearchHit {
-  id: string;
-  threadId: string | null;
-  accountId: string;
-  direction: 'in' | 'out';
-  from: string;
-  subject: string;
-  date: string | null;
-  snippet: string;
-  hasAttachments: boolean;
-}
-
-export interface EmailSearchResult {
-  count: number;
-  messages: EmailSearchHit[];
-  /** Set when nothing narrowed the search and only 90 days were looked at. */
-  window?: string;
-}
-
-/** What the search field holds. Every field optional; at least one is needed. */
-export interface EmailSearchQuery {
-  q?: string;
-  from?: string;
-  since?: string;
-  until?: string;
-  hasAttachments?: boolean;
-}
-
-/** One message read in full, on request. */
-export interface EmailMessageBody {
-  id: string;
-  from: string;
-  to: string[];
-  cc: string[];
-  subject: string;
-  date: string | null;
-  direction: 'in' | 'out';
-  /** Null once retention has purged it; the headers stay either way. */
-  bodyText: string | null;
-  purged: boolean;
-  /** Its attachments, by name and size. The bytes come on request.  */
-  attachments: EmailAttachment[];
-}
-
-export interface EmailThreadDetail {
-  thread: EmailThreadRow;
-  messages: EmailThreadMessage[];
-  /** The drafts still waiting on this conversation. */
-  drafts: EmailDraftRow[];
-  /** Sent, discarded and lapsed — folded away under "Older drafts". */
-  older: EmailDraftRow[];
 }
 
 /** One control the tool offered the owner on this approval. */
@@ -606,44 +430,6 @@ export interface OllamaProbe {
   baseUrl: string;
   /** Where Ollama's hosted service answers, for the card that offers it. */
   cloudBaseUrl: string;
-}
-
-/**
- * One mailbox this installation reads and sends as.
- *
- * `secretName` is the name of the vault entry holding its password, never the
- * password: nothing on this route has ever carried one, and the page has no
- * field that would show it.
- */
-export interface EmailAccountView {
-  id: string;
-  address: string;
-  displayName: string | null;
-  aliases: string[];
-  imapHost: string;
-  imapPort: number;
-  smtpHost: string;
-  smtpPort: number;
-  secretName: string;
-  enabled: boolean;
-  addedVia: 'env' | 'page';
-  lastSyncAt: string | null;
-}
-
-export interface EmailAccountsView {
-  accounts: EmailAccountView[];
-}
-
-/** What the "Add an account" form sends. The password goes no further. */
-export interface NewEmailAccount {
-  address: string;
-  imapHost: string;
-  imapPort: number;
-  smtpHost: string;
-  smtpPort: number;
-  password: string;
-  displayName?: string | null;
-  aliases?: string[];
 }
 
 /** Telegram, as this installation stands: a token, a surface, a phone. */
@@ -1431,17 +1217,6 @@ export const api = {
    */
   pageAct: (plugin: string, body: { tool: string; args?: Record<string, unknown> }) =>
     post<PageActResult>(`/pages/${encodeURIComponent(plugin)}/act`, body),
-  /* ---- mail accounts ---- */
-  emailAccounts: () => get<EmailAccountsView>('/email/accounts'),
-  /** The five settings the mail watchers read (docs/specs/email.md §7). */
-  emailWatchers: () => get<EmailWatcherSettings>('/email/watchers'),
-  setEmailWatchers: (patch: Partial<EmailWatcherNumbers>) =>
-    post<EmailWatcherSettings>('/email/watchers', patch),
-  addEmailAccount: (body: NewEmailAccount) => post<EmailAccountView>('/email/accounts', body),
-  removeEmailAccount: (id: string) =>
-    del<{ removed: boolean; address: string | null; secretRemoved: boolean }>(
-      `/email/accounts/${encodeURIComponent(id)}`,
-    ),
   /* ---- Telegram, from the first-run thread ---- */
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
@@ -1523,88 +1298,6 @@ export const api = {
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
-  /* ---- mail policies ---- */
-  emailPolicies: (accountId?: string) =>
-    get<EmailPoliciesView>('/email/policies', accountId ? { account: accountId } : {}),
-  /**
-   * Write one, or keep a proposal. Both answer with the two lists.
-   *
-   * `accountId` or `allAccounts` is required, never neither: a rule with no
-   * mailbox decides for all of them, and that has to be something the owner
-   * ticked rather than something they left blank.
-   */
-  setEmailPolicy: (body: {
-    scope: string;
-    matcher: string;
-    action: string;
-    accountId?: string;
-    allAccounts?: boolean;
-    agentId?: string;
-    instruction?: string;
-    note?: string;
-    sender?: string;
-  }) => post<EmailPoliciesView>('/email/policies', body),
-  keepEmailPolicy: (id: string) => post<EmailPoliciesView>('/email/policies', { keep: id }),
-  /**
-   * Keep or revoke a selection in one go. The ids are the ones the page is
-   * showing: the route applies exactly those and answers how many it touched.
-   */
-  bulkEmailPolicies: (action: 'keep' | 'revoke', ids: string[]) =>
-    post<EmailPoliciesBulk>('/email/policies/bulk', { action, ids }),
-  revokeEmailPolicy: (id: string) =>
-    del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),
-  /* ---- conversations and drafts (docs/specs/email.md §8) ---- */
-  emailThreads: (accountId?: string) =>
-    get<{ threads: EmailThreadRow[] }>('/email/threads', accountId ? { account: accountId } : {}),
-  emailThread: (id: string) =>
-    get<EmailThreadDetail>(`/email/threads/${encodeURIComponent(id)}`),
-  emailDraft: (id: string) => get<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`),
-  /** One message's body, fetched when it is opened. The list ships snippets. */
-  emailMessage: (id: string) =>
-    get<{ message: EmailMessageBody }>(`/email/messages/${encodeURIComponent(id)}`),
-  /* ---- search, and attachments on request (docs/specs/email.md §9, §10) ---- */
-  emailSearch: (query: EmailSearchQuery) =>
-    get<EmailSearchResult>('/email/search', {
-      ...(query.q ? { q: query.q } : {}),
-      ...(query.from ? { from: query.from } : {}),
-      ...(query.since ? { since: query.since } : {}),
-      ...(query.until ? { until: query.until } : {}),
-      ...(query.hasAttachments ? { hasAttachments: 'true' } : {}),
-    }),
-  /**
-   * Pull one attachment into the library. The owner is the one asking, so the
-   * file is recorded to them; the answer carries the artifact it became.
-   */
-  fetchEmailAttachment: (messageId: string, index: number) =>
-    post<{ artifactId: string | null; filename: string | null; mime: string; sizeBytes: number; alreadyHeld: boolean }>(
-      `/email/messages/${encodeURIComponent(messageId)}/attachments/${index}/fetch`,
-    ),
-  /** The owner's own save. It makes the words theirs; no agent writes over them. */
-  saveEmailDraft: (
-    id: string,
-    body: {
-      to: string[];
-      cc: string[];
-      bcc: string[];
-      subject: string;
-      bodyText: string;
-      /**
-       * The version the editor loaded. Required: the route refuses with 409 and
-       * the current draft when it no longer matches, and with 400 when it is
-       * missing — an optional precondition is not one, and a save with no
-       * version is exactly the stale overwrite this exists to stop.
-       */
-      updatedAt: string;
-    },
-  ) => put<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`, body),
-  discardEmailDraft: (id: string) =>
-    post<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}/discard`, {}),
-  /**
-   * Propose the send. Nothing leaves here: the answer is the id of the
-   * `email.send` action, and the owner approves it on the card like any other.
-   */
-  sendEmailDraft: (id: string) =>
-    post<{ actionId: string; preview: string }>(`/email/drafts/${encodeURIComponent(id)}/send`, {}),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),

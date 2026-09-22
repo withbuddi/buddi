@@ -1,7 +1,9 @@
 # Plugin pages: a plugin's screens, as data
 
-Status: specified 2026-09-22, not built. The proof of it is porting the Mail
-page and Settings → Email to it and deleting their compiled-in versions.
+Status: §7 step 1 (the engine) and step 2 (the email port) built 2026-09-22.
+The Mail page and Settings → Email are now descriptors the email plugin
+contributes; their compiled-in versions are deleted. Step 3 (docs/plugins.md
+§2.5a) remains.
 
 ## 1. The problem
 

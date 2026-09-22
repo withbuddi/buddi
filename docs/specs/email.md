@@ -86,9 +86,15 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
 ## 4. Accounts
 
 - Settings → Email lists accounts: address, host, folders synced, last
-  sync, the vault secret's name, remove. "Add an account" takes address,
-  IMAP and SMTP hosts, and the app password, which goes to the vault under
-  a name derived from the address. Gmail and common hosts are prefilled.
+  sync, the vault secret's name, remove. It is a **page descriptor this
+  plugin contributes** (docs/specs/plugin-pages.md), not a screen compiled
+  into the dashboard: a table over the `accounts` query, with
+  `email.remove_account` on each row and a drawer that writes through
+  `email.add_account`. "Add an account" takes address and app password, and
+  the hosts only when they differ from the ones `email.add_account` works
+  out from the address — Gmail and the common providers are known to it,
+  and anything else falls back to `imap.`/`smtp.` on its own domain. The
+  password goes to the vault under a name derived from the address.
   The secret's name is *derived*, never chosen: `EMAIL_`, the address
   upper-cased with every non-alphanumeric character turned into an
   underscore, then eight hex digits of the address's SHA-256 — so
@@ -444,12 +450,16 @@ the owner's pick against the declared list and hands it to `execute` as
 `ctx.choices.from`. The identity on the wire changes; the mailbox that
 authenticates does not.
 
-**The Mail page** (`#/email`) carries the owner's half of this, as a place of
-its own rather than a block under Settings → Email: that page is configuration,
-read once and then rarely, and this is a working surface with a message list, an
-editor and an approval card that dispatches mail. Conversations are listed
-newest first, each a link (`#/email/<threadId>`, so a draft can be linked to and
-come back to) with a small `draft` pill when one is waiting; opening one shows
+**The Mail page** (`#/p/email/mail`) carries the owner's half of this, as a
+place of its own rather than a block under Settings → Email: that page is
+configuration, read once and then rarely, and this is a working surface with a
+message list, an editor and an approval card that dispatches mail. It is a
+**page descriptor this plugin contributes** (docs/specs/plugin-pages.md): a
+list-detail over the `threads` and `thread` queries, and nothing in
+`packages/web` knows the word "mail". Conversations are listed newest first,
+each a link (`#/p/email/mail/<threadId>`, so a draft can be linked to and come
+back to — the old `#/email/<threadId>` still lands on it) with a small `draft`
+pill when one is waiting; opening one shows
 the thread's messages — snippets, with a body fetched only when a message is
 opened — and, under them, its drafts. A live draft shows the agent that wrote
 it, its status, when it last changed, and editable To/Cc/Bcc/Subject/Body with
@@ -457,9 +467,12 @@ it, its status, when it last changed, and editable To/Cc/Bcc/Subject/Body with
 **Discard** (status `discarded`) and **Send** — which does not send: it records
 the `email.send` action by the same path an agent takes and shows the approval
 card, alias select and all, for the owner to approve. Settings → Email keeps one
-line pointing across. The routes are `/api/email/threads`,
-`/api/email/messages/:id` and `/api/email/drafts` (list per thread, get, put,
-discard, send), behind the same session and CSRF gate as the rest of `/api`.
+line pointing across. There are no `/api/email/*` routes any more: the page
+reads through `GET /api/pages/email/<query>` (`threads`, `thread`, `message`,
+`draft`) and writes through `POST /api/pages/email/act` — `email.save_draft`,
+`email.discard_draft` and the gated `email.send` — behind the same session and
+CSRF gate as the rest of `/api`. Save, Discard and the version precondition are
+unchanged; they are a tool's refusals now rather than a route's status codes.
 
 **Two writers, one row.** Every rule above is in the SQL predicate, not in a
 check above the write, because everything here has a second writer: an agent
@@ -556,7 +569,8 @@ conversations since March" is about the ones that are still alive, not about
 when they began.
 
 The Mail page has a search field above the conversation list — text, from,
-since, until, with attachments — over `GET /api/email/search`. The route and
+since, until, with attachments — over the `threads` page query, which answers
+with the conversations and, when something narrows it, the hits. That query and
 the tool share **one query builder**
 (`packages/tools/email/src/search.ts`), so the owner and their agents asking
 the same question get the same answer. Each result links to the conversation
@@ -629,9 +643,9 @@ Also:
   buddi has no copy either. An **empty** attachment is called empty, which is
   a different thing from missing.
 - On the Mail page, an opened message lists its attachments with a Fetch per
-  row (`POST /api/email/messages/:id/attachments/:index/fetch`, the same
-  session and CSRF gate as every other write, the owner as `createdBy`), and
-  the row becomes a download link once the file is here.
+  row — `email.fetch_attachment` through the page's act route, the same
+  session and CSRF gate as every other write, the owner as `createdBy` — and
+  a file already here carries its download link.
 
 **Retention does not touch them.** The body of a message is purged on the
 owner's window; the artifact a fetch produced is the owner's own file, in their
