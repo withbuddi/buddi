@@ -37,6 +37,7 @@ import {
   createPlatformManifest,
   pluginAgentProposals,
   type AcceptPluginAgentEnvelope,
+  type PlatformAccounts,
 } from './platform.js';
 import { driftFor, PROVENANCE_FILE, readProvenance } from '../plugins/provenance.js';
 
@@ -108,7 +109,7 @@ interface Harness {
   ctx: ToolContext;
 }
 
-function harness(agents: SuggestedAgent[] = [GARDENER]): Harness {
+function harness(agents: SuggestedAgent[] = [GARDENER], accounts?: PlatformAccounts): Harness {
   const root = mkdtempSync(path.join(tmpdir(), 'buddi-plugin-agents-'));
   const agentsDir = path.join(root, 'agents');
   const skillsDir = path.join(root, 'skills');
@@ -134,6 +135,7 @@ function harness(agents: SuggestedAgent[] = [GARDENER]): Harness {
     agentsDir,
     skillsDir,
     examplesDir: EXAMPLES_AGENTS_DIR,
+    ...(accounts ? { accounts: () => accounts } : {}),
   });
   const manifest = createPlatformManifest(registry);
   return {
@@ -349,5 +351,116 @@ describe('an upgrade never overwrites the owner\'s edits', () => {
     });
     expect(drift.state).toBe('owner-edited');
     expect(existsSync(path.join(dir, PROVENANCE_FILE))).toBe(false);
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * Where an accepted agent speaks from
+ * ------------------------------------------------------------------ */
+
+/**
+ * The half the approval used to leave out.
+ *
+ * A proposal is written by somebody who has never seen this installation, so
+ * it names no provider account. Accepting one therefore produced a file and
+ * an agent in the roster with "Choose a provider account" against it and not a
+ * word it could say — an approval the owner had to finish somewhere else. So
+ * unless they name an account, the accepted agent speaks through the one the
+ * accepting agent speaks through, the preview says so, and the assignment is
+ * part of the same yes.
+ */
+describe('an accepted agent speaks through an account', () => {
+  const assigned: Array<[string, string, string]> = [];
+  const bindings = new Map<string, { accountId: string; model: string }>();
+  const accounts: PlatformAccounts = {
+    list: () => [
+      { id: 'acc-local', label: 'Local endpoint', kind: 'openai-compatible', enabled: true, configured: true, defaultModel: 'qwen3:8b', assignedAgents: [] },
+      { id: 'acc-claude', label: 'Anthropic API', kind: 'anthropic', enabled: true, configured: true, defaultModel: 'claude-sonnet-5', assignedAgents: [] },
+    ],
+    bindingOf: (id) => bindings.get(id),
+    assign: async (agentId, accountId, model) => {
+      assigned.push([agentId, accountId, model]);
+      bindings.set(agentId, { accountId, model });
+    },
+  };
+
+  let a: Harness;
+  beforeEach(() => {
+    assigned.length = 0;
+    bindings.clear();
+    // The brain the owner gave the agent that is doing the accepting.
+    bindings.set('agent-father', { accountId: 'acc-claude', model: 'claude-sonnet-5' });
+    a = harness([GARDENER], accounts);
+  });
+
+  it('takes the accepting agent\'s account and model when nobody named one, and is live', async () => {
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(a, 'platform.accept_plugin_agent', {
+      plugin: 'garden',
+      agent: 'gardener',
+    });
+    expect(envelope.account).toEqual({
+      id: 'acc-claude',
+      label: 'Anthropic API',
+      kind: 'anthropic',
+      model: 'claude-sonnet-5',
+    });
+    expect(envelope.inheritedFrom).toBe('father');
+    // The sentence the card shows, so the owner is never approving an agent
+    // whose brain is a question they will be asked later.
+    expect(preview).toContain(
+      'Speaks through Anthropic API with claude-sonnet-5 (from @father); change it on the Agents page.',
+    );
+    // With named accounts the model lives on the assignment, not in the file.
+    expect(envelope.content).not.toContain('model:');
+
+    const result = (await a.tool('platform.accept_plugin_agent').execute(
+      { plugin: 'garden', agent: 'gardener' },
+      a.ctx,
+    )) as { message: string };
+    expect(assigned).toContainEqual(['gardener', 'acc-claude', 'claude-sonnet-5']);
+    expect(result.message).toContain('Runs on "Anthropic API" with claude-sonnet-5.');
+  });
+
+  it('takes the account and the model the owner named instead', async () => {
+    const input = { plugin: 'garden', agent: 'gardener', account: 'local endpoint', model: 'qwen3:32b' };
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(a, 'platform.accept_plugin_agent', input);
+    expect(envelope.account).toEqual({
+      id: 'acc-local',
+      label: 'Local endpoint',
+      kind: 'openai-compatible',
+      model: 'qwen3:32b',
+    });
+    // Named, not inherited: there is nobody to credit it to.
+    expect(envelope.inheritedFrom).toBeNull();
+    expect(preview).toContain('Speaks through Local endpoint with qwen3:32b; change it on the Agents page.');
+    await a.tool('platform.accept_plugin_agent').execute(input, a.ctx);
+    expect(assigned).toContainEqual(['gardener', 'acc-local', 'qwen3:32b']);
+  });
+
+  it('keeps a model the proposal itself names, on the account the accepting agent uses', () => {
+    const pinned = harness([{ ...GARDENER, model: 'claude-opus-4' }], accounts);
+    const { envelope } = described<AcceptPluginAgentEnvelope>(pinned, 'platform.accept_plugin_agent', {
+      plugin: 'garden',
+      agent: 'gardener',
+    });
+    expect(envelope.account).toMatchObject({ label: 'Anthropic API', model: 'claude-opus-4' });
+    expect(envelope.model).toBe('claude-opus-4');
+  });
+
+  it('refuses a model the named account cannot run, before any action exists', () => {
+    expect(
+      refusalOf(a, 'platform.accept_plugin_agent', { plugin: 'garden', agent: 'gardener', account: 'Anthropic API', model: 'gpt-5' }),
+    ).toContain('Anthropic API');
+  });
+
+  it('changes nothing on an installation with no named accounts', () => {
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(h, 'platform.accept_plugin_agent', {
+      plugin: 'garden',
+      agent: 'gardener',
+    });
+    expect(envelope.account).toBeNull();
+    expect(envelope.inheritedFrom).toBeNull();
+    expect(preview).not.toContain('Speaks through');
   });
 });

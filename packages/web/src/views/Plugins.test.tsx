@@ -27,6 +27,9 @@ vi.mock('../api', async (load) => {
       uninstallPlugin: vi.fn(),
       uploadPlugin: vi.fn(),
       serviceAction: vi.fn(),
+      acceptPluginAgent: vi.fn(),
+      approval: vi.fn(),
+      decide: vi.fn(),
     },
   };
 });
@@ -176,9 +179,10 @@ describe('the plugins section', () => {
     vi.mocked(api.uninstallPlugin).mockResolvedValue({ name: 'weather', purged: false, notes: [], restartNeeded: true });
     render(<Plugins />);
 
-    // The agent it would unlock, and where accepting one happens.
+    // The agent it would unlock, and the two places accepting one happens.
     expect(await screen.findByText('@sky')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Accept them on the Agents page/ })).toHaveAttribute('href', '#/agents');
+    expect(screen.getByRole('button', { name: 'Accept' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /on the Agents page/ })).toHaveAttribute('href', '#/agents');
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove…' }));
     fireEvent.click(screen.getByLabelText(/Also drop its data/));
@@ -193,6 +197,61 @@ describe('the plugins section', () => {
     await waitFor(() =>
       expect(api.uninstallPlugin).toHaveBeenCalledWith('weather', { purge: true, confirm: 'weather' }),
     );
+  });
+
+  /**
+   * The button that finishes what "1 agent proposed" starts.
+   *
+   * Accepting is gated, so the page never writes an agent: it asks the route,
+   * gets an approval back, and draws the very card Home draws — with the whole
+   * tool grant on it — for the owner to decide there.
+   */
+  it('accepts a proposed agent and draws the approval in place', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        installed: [
+          {
+            name: 'garden',
+            version: '1.2.0',
+            source: { kind: 'registry', name: 'garden', version: '1.2.0' },
+            publisher: 'someone',
+            installedAt: new Date().toISOString(),
+            contribution: { tools: 2, sentinels: 0, views: 0, agents: 1 },
+            unlocks: [{ id: 'gardener', handle: 'gardener', drift: { state: 'not-accepted', message: 'not accepted yet' } }],
+            loaded: true,
+          },
+        ],
+      }),
+    );
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'action-1', preview: 'the whole grant' });
+    vi.mocked(api.approval).mockResolvedValue({
+      id: 'action-1',
+      tool: 'platform.accept_plugin_agent',
+      toolVersion: '1',
+      agentId: 'owner',
+      conversationId: null,
+      jobId: null,
+      preview: 'This gives @gardener your garden tools (2)',
+      envelope: {},
+      canonicalArgs: {},
+      argsHash: 'sha256-x',
+      policyVersion: 1,
+      state: 'pending',
+      decidedBy: null,
+      decidedVia: null,
+      decidedAt: null,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      createdAt: new Date().toISOString(),
+      outcome: null,
+    });
+
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
+    await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('garden', 'gardener'));
+
+    // The card, with the grant on it, and the decision still the owner's.
+    expect(await screen.findByText('This gives @gardener your garden tools (2)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
   });
 
   /**

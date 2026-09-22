@@ -384,3 +384,28 @@ it('refuses an upload that is not a .tgz before anything is written', async () =
   expect(engine.stagePlugin).not.toHaveBeenCalled();
   expect(existsSync(path.join(env.BUDDI_DATA_DIR as string, 'plugins', 'incoming'))).toBe(false);
 });
+
+/**
+ * The Accept button's route, as a route: behind the same gate as every other
+ * write, and reaching the same 404 an unknown proposal gets anywhere else.
+ * What it does once it is reached is `plugin-agents.web.test.ts`.
+ */
+it('gates accepting a proposed agent on the session and the CSRF token', async () => {
+  const { origin, headers } = await dashboard(fakeEngine(), await emptyRecord());
+  const url = `${origin}/api/plugins/garden/agents/gardener/accept`;
+
+  const bare = await fetch(url, { method: 'POST' });
+  expect(bare.status).toBe(403);
+
+  const noToken = await fetch(url, {
+    method: 'POST',
+    headers: { Cookie: headers.Cookie, Origin: headers.Origin, 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  expect(noToken.status).toBe(403);
+
+  // With both, it reaches the route — and this server has no garden plugin.
+  const reached = await fetch(url, { method: 'POST', headers: json(headers), body: '{}' });
+  expect(reached.status).toBe(404);
+  expect((await reached.json()).error).toContain('gardener');
+});
