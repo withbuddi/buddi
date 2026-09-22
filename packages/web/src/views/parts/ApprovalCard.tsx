@@ -38,6 +38,12 @@ export function useDecide(onDone: (outcome?: { decision: Decision; state?: strin
     setBusy(id);
     setFailure(null);
     setNote(null);
+    /*
+     * Undefined until the server has actually decided. A failed call — the
+     * gateway restarting, a 500 — must not read as "decided": a caller that
+     * is holding something back until the effect happened would let it go on
+     * a network blip, which is the one thing an approval exists to prevent.
+     */
     let outcome: { decision: Decision; state?: string } | undefined;
     try {
       // Only pass what there is: an approval that offered no controls makes
@@ -59,6 +65,9 @@ export function useDecide(onDone: (outcome?: { decision: Decision; state?: strin
       setFailure(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
+      // Always called — a list still reloads after a failure — but with
+      // `undefined` when nothing was decided, and that is the bit that
+      // matters to a caller waiting on the outcome.
       onDone(outcome);
     }
   };

@@ -278,16 +278,85 @@ describe('what a descriptor may not be', () => {
     ).toThrow(/body\.0\.when: a condition needs `equals` or `in`/);
   });
 
-  it('refuses a descriptor that refers to itself', () => {
+  it('refuses a descriptor that contains itself', () => {
     const cyclic: Record<string, unknown> = { id: 'board', title: 'Board', place: 'rail' };
     cyclic.body = [{ kind: 'notice', text: 'Hi.', me: cyclic }];
-    expect(() => parse([cyclic])).toThrow(/page descriptor board refers to itself/);
+    expect(() => parse([cyclic])).toThrow(/page descriptor board contains itself/);
+  });
+
+  it('lets a descriptor use the same object twice: reuse is not a cycle', () => {
+    // The same action on two rows, written once. Nothing here contains
+    // itself, and a walk that only remembers "seen" would call it a cycle.
+    const keep = { tool: 'demo.keep', label: 'Keep', args: { id: { row: 'id' } } };
+    const list = (title: string): unknown => ({
+      kind: 'list',
+      title,
+      query: { query: 'items' },
+      rows: 'items',
+      key: 'id',
+      item: { title: { path: 'title' } },
+      actions: [keep],
+    });
+    expect(() =>
+      parse([page({ body: [list('One'), list('Two')] })], { queries: ['items'], tools: ['demo.keep'] }),
+    ).not.toThrow();
+  });
+
+  it('counts components, not the arrays and objects that hold them', () => {
+    /*
+     * The one-block attachment shape the email port writes: a list-detail
+     * holding a repeat holding an expand holding a repeat holding a button
+     * whose argument is a path. Five components deep, and every array, arg map
+     * and `{ path }` between them is not nesting.
+     */
+    const attachment = {
+      kind: 'list-detail',
+      param: 'thread',
+      list: {
+        kind: 'list',
+        query: { query: 'items' },
+        rows: 'items',
+        key: 'id',
+        item: { title: { path: 'title' } },
+      },
+      detail: [
+        {
+          kind: 'repeat',
+          query: { query: 'items' },
+          rows: 'items',
+          key: 'id',
+          body: [
+            {
+              kind: 'expand',
+              label: { path: 'from' },
+              query: { query: 'items' },
+              body: [
+                {
+                  kind: 'repeat',
+                  query: { query: 'items' },
+                  rows: 'items',
+                  key: 'id',
+                  body: [
+                    {
+                      kind: 'button',
+                      when: { path: 'artifactId', equals: null },
+                      action: { tool: 'demo.keep', label: 'Fetch', args: { id: { path: 'id' } } },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => parse([page({ body: [attachment] })], { queries: ['items'], tools: ['demo.keep'] })).not.toThrow();
   });
 
   it('refuses one that is deeper than a screen', () => {
     let body: unknown[] = [{ kind: 'notice', text: 'The bottom.' }];
     for (let i = 0; i < 12; i += 1) body = [{ kind: 'section', body }];
-    expect(() => parse([page({ body })])).toThrow(/nests deeper than 12|has more than 400 nodes/);
+    expect(() => parse([page({ body })])).toThrow(/nests components deeper than 12/);
   });
 
   it('refuses one that is bigger than a screen', () => {
@@ -388,6 +457,43 @@ describe('what a query must be', () => {
     expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ result: {} }) as never] })).toThrow(
       /page query q declares a `result` that is not a zod schema/,
     );
+  });
+});
+
+describe('the pool a query is handed', () => {
+  /** A pool that never answers: the installation is busy, not broken. */
+  const busy = { connect: () => new Promise<never>(() => {}) } as unknown as Pool;
+
+  it('gives up waiting for a connection rather than hanging', async () => {
+    const pool = readOnlyPool(busy, { acquireMs: 20 });
+    await expect(pool.query('select 1')).rejects.toThrow(/could not get a database connection in time/);
+  });
+
+  it('releases a client whose rollback failed with the error, so the pool drops it', async () => {
+    const released: unknown[] = [];
+    const client = {
+      query: (sql: string) => {
+        if (sql === 'rollback') return Promise.reject(new Error('connection went away'));
+        return Promise.resolve({ rows: [] });
+      },
+      release: (err?: unknown) => released.push(err),
+    };
+    const pool = readOnlyPool({ connect: async () => client } as unknown as Pool);
+    await pool.query('select 1');
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBeInstanceOf(Error);
+    expect((released[0] as Error).message).toBe('connection went away');
+  });
+
+  it('releases the client plainly when the rollback worked', async () => {
+    const released: unknown[] = [];
+    const client = {
+      query: async () => ({ rows: [] }),
+      release: (err?: unknown) => released.push(err),
+    };
+    const pool = readOnlyPool({ connect: async () => client } as unknown as Pool);
+    await pool.query('select 1');
+    expect(released).toEqual([undefined]);
   });
 });
 

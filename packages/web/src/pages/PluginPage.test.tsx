@@ -467,6 +467,21 @@ describe('the pieces a descriptor is made of', () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/p/demo/board'));
   });
 
+  it('keeps a pending approval when the decision itself failed', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    vi.mocked(api.decide).mockRejectedValue(new Error('the gateway is restarting'));
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    const card = (await screen.findByText('Send it now')).closest('.ui-card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(api.decide).toHaveBeenCalled());
+    // Nothing was decided: the card is still there, and so is what it was
+    // going to do next.
+    expect(await screen.findByText('Send it now')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('does not act on `then` when the approval was rejected', async () => {
     vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
     vi.mocked(api.decide).mockResolvedValue({
@@ -492,6 +507,44 @@ describe('the pieces a descriptor is made of', () => {
     expect(await screen.findByLabelText('Subject')).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
     expect(screen.getByText(/Send does not send/)).toBeInTheDocument();
+  });
+
+  it('draws no row it cannot key, and says which descriptor is at fault', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({
+        data:
+          query === 'items'
+            ? {
+                items: [
+                  { id: 'a1', title: 'The first thing', state: 'open', pinned: false },
+                  { title: 'A thing with no id', state: 'open', pinned: false },
+                  { id: 'a1', title: 'The same id again', state: 'open', pinned: false },
+                ],
+                older: [],
+              }
+            : DATA[query],
+      })) as typeof api.pageQuery);
+    draw('board');
+    expect(await screen.findByText('The first thing')).toBeInTheDocument();
+    // Neither the keyless row nor the repeated key is drawn — a row keyed by
+    // its position is how the owner ticks one thing and sends another.
+    expect(screen.queryByText('A thing with no id')).not.toBeInTheDocument();
+    expect(screen.queryByText('The same id again')).not.toBeInTheDocument();
+    const lines = warn.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => line.includes('plugin demo') && line.includes('page board') && line.includes('no value at'))).toBe(true);
+    expect(lines.some((line) => line.includes('two rows share the key "a1"'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('puts the editor\'s buttons in the order the house rule asks for', async () => {
+    draw('board', 'a1');
+    await openDraft();
+    const toolbar = (await screen.findByRole('button', { name: 'Save' })).closest('.ui-toolbar') as HTMLElement;
+    const labels = [...toolbar.querySelectorAll('button')].map((b) => b.textContent);
+    // Discard on the left, then Save, then Send: the thing that leaves the
+    // room is last, and the editor's own primary is under the thumb.
+    expect(labels).toEqual(['Discard', 'Save', 'Send']);
   });
 
   it('searches on demand and links each result', async () => {

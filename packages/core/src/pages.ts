@@ -31,7 +31,7 @@
  * client-side logic serves its own app through the developer proxy
  * (`docs/specs/developer.md`).
  */
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { z, type ZodTypeAny } from 'zod';
 import type { ToolContext } from './tools.js';
 import {
@@ -659,30 +659,56 @@ export const pageDescriptorSchema = z
  * overflow.
  * ------------------------------------------------------------------ */
 
-/** How big somebody else's descriptor may be before it is not a screen. */
+/**
+ * How big somebody else's descriptor may be before it is not a screen.
+ *
+ * `depth` counts **components inside components** — one per `body` level — and
+ * nothing else. Counting every object and array as a level made the ordinary
+ * one-block attachment shape (a list-detail holding a repeat holding an expand
+ * holding a repeat holding a button whose argument is a path) land at thirteen
+ * without a single surprising thing in it. A page can be twelve components
+ * deep; the arrays and the small objects that hold them are not nesting.
+ */
 export const PAGE_LIMITS = { depth: 12, nodes: 400, bytes: 64 * 1024 } as const;
 
 /** Refuse a descriptor that is too deep, too big, or not a tree at all. */
 function checkShape(raw: unknown, plugin: string, named: string): void {
-  const seen = new Set<object>();
+  /*
+   * Cycles are detected against the *ancestors* of the node being walked, not
+   * against everything seen so far: a descriptor that uses the same object
+   * literal in two places — the same toolbar action on two rows, one shared
+   * `ListItem` — is reuse, which is fine and rather sensible. Only a node that
+   * contains itself is a cycle. The node budget is what bounds the walk when
+   * reuse makes the graph wider than the tree it prints as.
+   */
+  const ancestors = new Set<object>();
   let nodes = 0;
-  const stack: Array<{ value: unknown; depth: number }> = [{ value: raw, depth: 0 }];
+  type Step = { enter: unknown; depth: number } | { leave: object };
+  const stack: Step[] = [{ enter: raw, depth: 0 }];
   while (stack.length > 0) {
-    const { value, depth } = stack.pop() as { value: unknown; depth: number };
-    if (typeof value !== 'object' || value === null) continue;
-    if (seen.has(value)) {
-      throw new Error(`plugin ${plugin}: page descriptor ${named} refers to itself; a descriptor is a tree`);
+    const step = stack.pop() as Step;
+    if ('leave' in step) {
+      ancestors.delete(step.leave);
+      continue;
     }
-    seen.add(value);
+    const { enter: value, depth } = step;
+    if (typeof value !== 'object' || value === null) continue;
+    if (ancestors.has(value)) {
+      throw new Error(`plugin ${plugin}: page descriptor ${named} contains itself; a descriptor is a tree`);
+    }
     nodes += 1;
     if (nodes > PAGE_LIMITS.nodes) {
       throw new Error(`plugin ${plugin}: page descriptor ${named} has more than ${PAGE_LIMITS.nodes} nodes`);
     }
-    if (depth > PAGE_LIMITS.depth) {
-      throw new Error(`plugin ${plugin}: page descriptor ${named} nests deeper than ${PAGE_LIMITS.depth}`);
+    // A component is a node with a `kind`; only those count as nesting.
+    const deeper = typeof (value as { kind?: unknown }).kind === 'string' ? depth + 1 : depth;
+    if (deeper > PAGE_LIMITS.depth) {
+      throw new Error(`plugin ${plugin}: page descriptor ${named} nests components deeper than ${PAGE_LIMITS.depth}`);
     }
+    ancestors.add(value);
+    stack.push({ leave: value });
     for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) {
-      stack.push({ value: child, depth: depth + 1 });
+      stack.push({ enter: child, depth: deeper });
     }
   }
   const size = JSON.stringify(raw)?.length ?? 0;
@@ -1033,6 +1059,53 @@ export function isReadOnlyStatement(sql: string): boolean {
 export const PAGE_QUERY_TIMEOUT_MS = 5_000;
 
 /**
+ * How long a page query waits for a connection before giving up.
+ *
+ * A pool with nothing free is a busy installation, not a broken one, and the
+ * honest answer is a sentence the owner can read — not a spinner that never
+ * ends because `pool.connect()` waits for ever by default.
+ */
+export const PAGE_POOL_ACQUIRE_MS = 5_000;
+
+/**
+ * A client, or a refusal — never a wait without end.
+ *
+ * The loser of the race is not abandoned: if the pool hands a client over
+ * after the deadline, it is released immediately, because a client nobody
+ * holds is a connection the pool never gets back.
+ */
+async function connectWithin(pool: Pool, ms: number): Promise<PoolClient> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pending = pool.connect();
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new ReadOnlyRefusal(
+                'a page query could not get a database connection in time; the installation is busy.',
+              ),
+            ),
+          ms,
+        );
+      }),
+    ]);
+  } catch (err) {
+    void pending.then(
+      (late) => late.release(),
+      () => {
+        /* the pool itself failed; there is nothing to give back */
+      },
+    );
+    throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
  * The pool a `PageQuery` is handed: the real one, in a transaction that cannot
  * write.
  *
@@ -1062,7 +1135,8 @@ export const PAGE_QUERY_TIMEOUT_MS = 5_000;
  * back; `connect()` throws, so a query never sees one and cannot open a
  * transaction of its own.
  */
-export function readOnlyPool(pool: Pool): Pool {
+export function readOnlyPool(pool: Pool, opts: { acquireMs?: number } = {}): Pool {
+  const acquireMs = opts.acquireMs ?? PAGE_POOL_ACQUIRE_MS;
   const run = async (config: unknown, values?: unknown): Promise<unknown> => {
     const text =
       typeof config === 'string'
@@ -1073,7 +1147,7 @@ export function readOnlyPool(pool: Pool): Pool {
     if (text === null || !isReadOnlyStatement(text)) {
       throw new ReadOnlyRefusal('a page query may only read: this statement is not a select.');
     }
-    const client = await pool.connect();
+    const client = await connectWithin(pool, acquireMs);
     try {
       await client.query('begin isolation level repeatable read read only');
       await client.query(`set local statement_timeout = ${PAGE_QUERY_TIMEOUT_MS}`);
@@ -1082,14 +1156,22 @@ export function readOnlyPool(pool: Pool): Pool {
         ...(values === undefined ? [] : [values]),
       );
     } finally {
-      // Always, and whatever happened: the transaction only ever read, so
-      // there is nothing to keep and nothing to lose by throwing it away.
+      /*
+       * Always, and whatever happened: the transaction only ever read, so
+       * there is nothing to keep and nothing to lose by throwing it away.
+       *
+       * A `rollback` that *fails* means this connection is in a state nobody
+       * here can describe — a broken socket, a server that went away
+       * mid-statement — so it is released **with** the error, which is how
+       * `pg` is told to destroy it rather than hand it to the next query
+       * still inside a transaction.
+       */
       try {
         await client.query('rollback');
-      } catch {
-        /* the connection is already gone; releasing it is what matters */
+        client.release();
+      } catch (err) {
+        client.release(err instanceof Error ? err : new Error(String(err)));
       }
-      client.release();
     }
   };
 

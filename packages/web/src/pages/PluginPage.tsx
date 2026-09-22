@@ -255,12 +255,22 @@ function useAct(): ActState {
   };
 
   const settle = (outcome?: { decision: 'approve' | 'reject'; state?: string }): void => {
+    /*
+     * Nothing was decided — the decision call itself failed — so nothing is
+     * settled: the card stays, and so does what it was going to do next. The
+     * owner can press again; the alternative is an approval that quietly
+     * disappears from the page while it is still pending on the server.
+     */
+    if (!outcome) {
+      scope.refresh();
+      return;
+    }
     const held = pending;
     setApprovalId(null);
     setPending(null);
     // Approved *and* executed is the only outcome in which the thing the
     // action was about has actually happened. Anything else just refreshes.
-    if (held && outcome?.decision === 'approve' && outcome.state === 'succeeded') {
+    if (held && outcome.decision === 'approve' && outcome.state === 'succeeded') {
       apply(held.then, undefined, held.onDone);
       return;
     }
@@ -657,6 +667,44 @@ function rowsOf(data: unknown, path: string): unknown[] {
   return Array.isArray(rows) ? rows : [];
 }
 
+/**
+ * The rows, each with what makes it itself — and never its position.
+ *
+ * A row keyed by its index collides across a grouped list, across the folded
+ * rows, and across two answers a moment apart: the owner ticks one thing and
+ * another is sent to the tool. So a row whose key is missing or repeated is
+ * *left out*, and the page says so in the console naming the plugin, the page
+ * and the component, because a plugin's descriptor and its query disagreeing
+ * is the plugin author's bug to find.
+ */
+function keyedRows(
+  rows: readonly unknown[],
+  keyPath: string | undefined,
+  where: { plugin: string; page: string; component: string },
+): Array<{ key: string; row: unknown }> {
+  const out: Array<{ key: string; row: unknown }> = [];
+  const seen = new Set<string>();
+  rows.forEach((row, index) => {
+    const raw = keyPath === undefined ? undefined : readPath(row, keyPath);
+    const key = raw === undefined || raw === null || raw === '' ? null : String(raw);
+    if (key === null) {
+      console.warn(
+        `buddi: plugin ${where.plugin}, page ${where.page}, ${where.component}: row ${index} has no value at "${keyPath ?? '(no key)'}" — not drawn`,
+      );
+      return;
+    }
+    if (seen.has(key)) {
+      console.warn(
+        `buddi: plugin ${where.plugin}, page ${where.page}, ${where.component}: two rows share the key "${key}" — the second is not drawn`,
+      );
+      return;
+    }
+    seen.add(key);
+    out.push({ key, row });
+  });
+  return out;
+}
+
 function ListPiece({
   component,
   data,
@@ -676,28 +724,38 @@ function ListPiece({
   const rows = rowsOf(query.data, component.rows);
   const folded = component.collapsed ? rowsOf(query.data, component.collapsed.rows) : [];
 
-  /** What makes a row itself. Never its position — a descriptor must say. */
-  const keyOf = (row: unknown): string => String(readPath(row, component.key ?? component.select?.key ?? '') ?? '');
+  /*
+   * What makes each row itself, decided once for the whole list — the shown
+   * rows and the folded ones together, so a key repeated across the two is
+   * caught as the collision it is.
+   */
+  const where = { plugin: scope.plugin, page: scope.page, component: `list "${component.title ?? component.rows}"` };
+  const keyed = keyedRows([...rows, ...folded], component.key ?? component.select?.key, where);
+  const keyByRow = new Map(keyed.map((entry) => [entry.row, entry.key]));
+  const drawable = new Set(keyed.map((entry) => entry.row));
   /** The rows the owner may act on: ticked, still present, and still enabled. */
   const enabled = new Set(
-    [...rows, ...folded].filter((row) => holds(row, component.select?.disabledWhen) === false || component.select?.disabledWhen === undefined).map(keyOf),
+    keyed
+      .filter(({ row }) => component.select?.disabledWhen === undefined || !holds(row, component.select.disabledWhen))
+      .map(({ key }) => key),
   );
   const actionable = selected.filter((key) => enabled.has(key));
 
   const groups = useMemo(() => {
-    if (!component.groupBy) return [{ label: null as string | null, rows }];
+    const shown = rows.filter((row) => drawable.has(row));
+    if (!component.groupBy) return [{ label: null as string | null, rows: shown }];
     const by = new Map<string, unknown[]>();
-    for (const row of rows) {
+    for (const row of shown) {
       const key = String(readPath(row, component.groupBy.key) ?? '');
       by.set(key, [...(by.get(key) ?? []), row]);
     }
     return [...by].map(([key, group]) => ({ label: component.groupBy?.labels?.[key] ?? key, rows: group }));
-  }, [rows, component.groupBy]);
+  }, [rows, component.groupBy, keyed.length]);
 
   const lines = (group: unknown[]): JSX.Element[] =>
     group.map((row) => {
       const drawn = itemRow(scope, component.item, row, onChoose);
-      const key = keyOf(row);
+      const key = keyByRow.get(row) as string;
       const disabled = component.select?.disabledWhen !== undefined && holds(row, component.select.disabledWhen);
       return (
         <ListRow
@@ -758,7 +816,7 @@ function ListPiece({
     <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
       <ErrorBanner message={query.error} />
       <ActOutcome act={act} />
-      {rows.length === 0 ? (
+      {groups.every((group) => group.rows.length === 0) ? (
         <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
       ) : (
         <List>
@@ -770,9 +828,9 @@ function ListPiece({
           ))}
         </List>
       )}
-      {component.collapsed && folded.length > 0 ? (
-        <Details summary={`${component.collapsed.label} (${folded.length})`}>
-          <List>{lines(folded)}</List>
+      {component.collapsed && folded.some((row) => drawable.has(row)) ? (
+        <Details summary={`${component.collapsed.label} (${folded.filter((row) => drawable.has(row)).length})`}>
+          <List>{lines(folded.filter((row) => drawable.has(row)))}</List>
         </Details>
       ) : null}
       {component.bulk && component.bulk.length > 0 ? (
@@ -1092,6 +1150,7 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
  * the component set could not express before.
  */
 function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unknown }): JSX.Element {
+  const scope = useScope();
   const query = usePageQuery(component.query, data);
   const rows = rowsOf(query.data, component.rows);
   return (
@@ -1101,8 +1160,12 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
         <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
       ) : (
         <Stack gap="lg" divided>
-          {rows.map((row, index) => (
-            <Section key={String(readPath(row, component.key) ?? index)}>
+          {keyedRows(rows, component.key, {
+            plugin: scope.plugin,
+            page: scope.page,
+            component: `repeat "${component.title ?? component.rows}"`,
+          }).map(({ key, row }) => (
+            <Section key={key}>
               <Stack>
                 {component.body.map((child, i) => (
                   <Piece key={i} component={child} data={row} />
@@ -1237,12 +1300,17 @@ function EditorBody({
           onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
         />
         <ActOutcome act={act} />
+        {/*
+          Discard on the left, then a spacer, then Save, then whatever else the
+          descriptor listed — the primary of the editor sits under the owner's
+          thumb, and the action that leaves the room (Send) is last.
+        */}
         {readOnly ? null : (
           <Toolbar align="end">
             {leading.map(button)}
             {leading.length > 0 ? <Spacer /> : null}
-            {trailing.map(button)}
             {button(component.save, -1)}
+            {trailing.map(button)}
           </Toolbar>
         )}
         {component.footnote ? <p className="ui-toolbar-note">{component.footnote}</p> : null}
