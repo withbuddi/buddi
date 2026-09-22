@@ -40,7 +40,7 @@ const DATA: Record<string, unknown> = {
   },
   search: { items: [{ id: 'a1', title: 'The first thing', sub: 'one@example.com' }], total: 9, note: 'The newest nine.' },
   nothing: { items: [], total: 0, note: 'The newest nine.' },
-  item: { id: 'a1', title: 'The first thing', state: 'open', at: '2026-09-22', approvalId: 'act-1' },
+  item: { id: 'a1', title: 'The first thing', state: 'open', at: '2026-09-22', approvalId: 'act-1', holder: 'ada' },
   body: { text: 'The body.', attachmentId: 'artifact-1' },
   messages: {
     messages: [
@@ -136,7 +136,12 @@ const board: Component[] = [
         title: 'The thing',
         query: { query: 'item', params: { id: { param: 'item' } } },
         fields: [{ label: 'State', value: { path: 'state' } }],
-        body: [{ kind: 'approval', path: 'approvalId', when: { path: 'state', in: ['open', 'waiting'] } }],
+        body: [
+          { kind: 'approval', path: 'approvalId', when: { path: 'state', in: ['open', 'waiting'] } },
+          // The one link that leaves the plugin: an agent's chat, named by a
+          // path into the data rather than by a URL the descriptor wrote.
+          { kind: 'link', label: 'The agent that holds it', to: { chat: { path: 'holder' } } },
+        ],
       },
       {
         kind: 'repeat',
@@ -416,6 +421,20 @@ describe('the pieces a descriptor is made of', () => {
     expect(await screen.findByText('Everything the demo plugin knows.')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Accounts and rules' });
     expect(link).toHaveAttribute('href', '#/settings/p.demo.settings');
+  });
+
+  /**
+   * The one route that leaves the plugin.
+   *
+   * `{ chat }` names an **agent id out of the data**, not a URL and not a page
+   * of anybody's: the descriptor says "whoever holds this", and the engine
+   * works out which conversation that is. Everything else about a link is
+   * unchanged — a plugin still cannot point the owner at a core screen.
+   */
+  it('links to an agent’s chat, from an id the data carries', async () => {
+    draw('board', 'a1');
+    const link = await screen.findByRole('link', { name: 'The agent that holds it' });
+    expect(link).toHaveAttribute('href', '#/chat/ada');
   });
 
   it('draws stats from their query, formatted by the unit the descriptor named', async () => {

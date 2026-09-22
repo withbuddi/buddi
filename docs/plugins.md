@@ -840,6 +840,12 @@ means, the page knows how to draw a line, and this says which is which.
 - **A link to a settings page is a tab.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
   a place of its own: the owner lands on Settings with that tab open.
+- **One link leaves the plugin: an agent's chat.** `{ chat: ValueRef }` in
+  place of `{ page }` names an **agent id read out of your data**, and the
+  dashboard opens that agent's conversation. It is the exception to "never
+  another plugin, never a core page", and it is narrow on purpose: it opens a
+  chat the owner already has, and a descriptor cannot write a URL. Use it for
+  something that belongs to an agent — a goal's holder — not as a way out.
 - **A tone is one of five.** `good`, `warning`, `critical`, `neutral` — and
   `accent`, for the thing this screen is *about*: a draft waiting on the
   owner is not good or bad. A figure never takes the accent; a pill and a
@@ -1024,6 +1030,12 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
 - **A link to a settings page is a tab.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
   a place of its own: the owner lands on Settings with that tab open.
+- **One link leaves the plugin: an agent's chat.** `{ chat: ValueRef }` in
+  place of `{ page }` names an **agent id read out of your data**, and the
+  dashboard opens that agent's conversation. It is the exception to "never
+  another plugin, never a core page", and it is narrow on purpose: it opens a
+  chat the owner already has, and a descriptor cannot write a URL. Use it for
+  something that belongs to an agent — a goal's holder — not as a way out.
 - **The rest of the set, in one line each.** `list-detail` has
   `selection: 'route' | 'local'` — `local` for a second level inside a detail
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
