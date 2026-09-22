@@ -21,6 +21,7 @@ import {
 } from '@buddi/core';
 import { describe, expect, it, vi } from 'vitest';
 import { TelegramApi, type FetchLike, type TelegramUpdate } from './api.js';
+import { OFFER_LAPSED_MESSAGE } from '@buddi/core';
 import {
   callbackKind,
   offerCallbackData,
@@ -54,6 +55,9 @@ function offer(id: string, label: string, prompt: string): Offer {
     takenAt: null,
     takenVia: null,
     takenJobId: null,
+    dismissedAt: null,
+    lapsedAt: null,
+    lapseReason: null,
   };
 }
 
@@ -76,6 +80,9 @@ class FakeDb implements Queryable {
       taken_at: o.takenAt,
       taken_via: o.takenVia,
       taken_job_id: o.takenJobId,
+      dismissed_at: o.dismissedAt,
+      lapsed_at: o.lapsedAt,
+      lapse_reason: o.lapseReason,
     };
   }
 
@@ -98,7 +105,9 @@ class FakeDb implements Queryable {
     }
 
     if (text.startsWith('update core.offers set taken_at')) {
-      const row = this.offers.find((o) => o.id === params[0] && o.takenAt === null);
+      const row = this.offers.find(
+        (o) => o.id === params[0] && o.takenAt === null && o.dismissedAt === null && o.lapsedAt === null,
+      );
       if (!row) return { rows: [] };
       row.takenAt = (params[1] as Date).toISOString();
       row.takenVia = params[2];
@@ -343,6 +352,48 @@ describe('a tap on an offered action', () => {
     expect(db.offers[0]?.takenAt).not.toBeNull();
     expect(db.offers[0]?.takenJobId).toBeNull();
     expect(sent.some((s) => s.method === 'answerCallbackQuery')).toBe(true);
+  });
+
+  /**
+   * The button is still drawn in the chat — Telegram messages do not change
+   * under the owner's thumb — so a tap on one whose conversation has moved on
+   * has to say what happened. Not "already on it" (nothing is running) and not
+   * "expired" (the clock had nothing to do with it): it lapsed.
+   */
+  it('tells a tap on a lapsed offer that it lapsed, and starts nothing', async () => {
+    const db = new FakeDb();
+    const stale = offer(ID_ONE, 'Draft a reply', 'Draft a reply to Dorothée and show it to me.');
+    stale.lapsedAt = '2026-09-15T10:00:00.000Z';
+    stale.lapseReason = 'owner-moved-on';
+    db.offers.push(stale);
+    let runs = 0;
+    const { surface, sent } = surfaceWith(db, async () => {
+      runs += 1;
+      return 'job-1';
+    });
+
+    await surface.handleOfferCallback(tap(ID_ONE));
+
+    expect(runs).toBe(0);
+    expect(db.offers[0]?.takenAt).toBeNull();
+    expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBe(OFFER_LAPSED_MESSAGE);
+    const chatMessages = sent.filter((s) => s.method === 'sendMessage');
+    expect(chatMessages).toHaveLength(1);
+    expect(chatMessages[0]?.body.text).toBe(OFFER_LAPSED_MESSAGE);
+    expect(OFFER_LAPSED_MESSAGE).toBe('That offer has lapsed.');
+    // Nothing is edited away: the message stays as it was written.
+    expect(sent.some((s) => s.method === 'editMessageReplyMarkup')).toBe(false);
+  });
+
+  it('also sends a durable chat message for an already dismissed offer', async () => {
+    const db = new FakeDb();
+    const dismissed = offer(ID_ONE, 'Draft a reply', 'Draft it');
+    dismissed.dismissedAt = '2026-09-15T10:00:00.000Z';
+    db.offers.push(dismissed);
+    const { surface, sent } = surfaceWith(db);
+    await surface.handleOfferCallback(tap(ID_ONE));
+    const callback = sent.find((item) => item.method === 'answerCallbackQuery')?.body.text;
+    expect(sent.find((item) => item.method === 'sendMessage')?.body.text).toBe(callback);
   });
 
   it('refuses an id that names nothing', async () => {

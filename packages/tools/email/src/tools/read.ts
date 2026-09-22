@@ -119,7 +119,7 @@ const readInput = z.object({
 export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   name: 'email.read',
   description:
-    'Read one message in full: every header that matters, the complete text body, and the attachments it carries (filename, type and size — the bytes are not downloaded). A body older than the retention window is no longer stored: the headers, the snippet and the triage decision still come back, with a note saying the body was purged. Reading never marks the message as read in the owner\'s mailbox.',
+    'Read one message in full: which conversation it belongs to, every header that matters, the complete text body, and the attachments it carries (filename, type and size — the bytes are not downloaded). A body older than the retention window is no longer stored: the headers, the snippet and the triage decision still come back, with a note saying the body was purged. Reading never marks the message as read in the owner\'s mailbox.',
   tier: 'auto',
   input: readInput,
   async execute(input, ctx) {
@@ -142,7 +142,11 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
       id: message.id,
       account: account.address,
       messageId: message.messageId,
+      // The conversation it belongs to: what email.read_thread and a thread
+      // rule are named by. `threadKey` is the raw header it was threaded on.
+      thread: message.threadId,
       threadKey: message.threadKey,
+      direction: message.direction,
       from: message.from,
       to: message.to,
       // Who else is on this message. It decides whether a reply to the sender

@@ -799,6 +799,46 @@ suite('the dashboard API', () => {
     expect(after.offers.map((o: any) => o.label)).toEqual(['Remind me tomorrow']);
   });
 
+  /**
+   * The answer the owner did not have. 65 offers had piled up on his
+   * installation because taking one was the only thing a click could do.
+   */
+  it('dismisses an offer, keeps it under the fold, and clears the rest in one go', async () => {
+    const client = await signedIn();
+    const stored = await offerActions(pool, {
+      agentId: 'demo-agent',
+      actions: [
+        { label: 'Send it', prompt: 'Send the reply I drafted.' },
+        { label: 'Edit it', prompt: 'Change the second paragraph.' },
+      ],
+      now: new Date(),
+    });
+    const id = stored[0]?.id as string;
+
+    const res = await client.post(`/api/offers/${id}/dismiss`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id });
+
+    const after = await client.json<any>('/api/offers');
+    // Gone from what is on the table, and readable under the fold with why.
+    expect(after.offers.map((o: any) => o.id)).not.toContain(id);
+    expect(after.closed.find((o: any) => o.id === id)).toMatchObject({ label: 'Send it' });
+    expect(after.closed.find((o: any) => o.id === id).dismissedAt).not.toBeNull();
+
+    // Taking a dismissed offer is refused, in words the page can show.
+    const late = await client.post(`/api/offers/${id}/take`);
+    expect(late.status).toBe(409);
+    expect(((await late.json()) as any).error).toMatch(/dismissed/i);
+
+    // And what is on the table can be cleared in one act: the page sends the
+    // ids it showed, and the count answered is exactly that many, never more.
+    const shown = (await client.json<any>('/api/offers')).offers.map((o: any) => o.id);
+    const all = await client.post('/api/offers/dismiss-all', { ids: shown });
+    expect(all.status).toBe(200);
+    expect(((await all.json()) as any).dismissed).toBe(shown.length);
+    expect((await client.json<any>('/api/offers')).offers).toEqual([]);
+  });
+
   /* ---------------- session lifetime ---------------- */
 
   /**

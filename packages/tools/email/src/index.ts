@@ -21,6 +21,7 @@ import { createRetentionSource } from './sources/retention.js';
 import { draftNew, draftReply } from './tools/drafts.js';
 import { listRecent, readMessage, search } from './tools/read.js';
 import { senderProfile } from './tools/sender.js';
+import { listThreads, muteThread, readThread } from './tools/threads.js';
 import { createSendTool } from './tools/send.js';
 import { listPolicies, revokeEmailPolicy, setPolicy } from './tools/policies.js';
 import { getSettings, setSettings } from './tools/settings.js';
@@ -80,6 +81,9 @@ export function createEmailManifest(
       readMessage,
       search,
       senderProfile,
+      listThreads,
+      readThread,
+      muteThread,
       triageRecord,
       draftReply,
       draftNew,
@@ -107,6 +111,47 @@ export default manifest;
 
 export { listRecent, readMessage, search } from './tools/read.js';
 export { senderProfile } from './tools/sender.js';
+export {
+  listThreads,
+  muteThread,
+  readThread,
+  renderMutePreview,
+  threadView,
+  DEFAULT_THREAD_MESSAGES,
+  STATE_WORDS,
+  type MuteEnvelope,
+} from './tools/threads.js';
+export {
+  findThread,
+  joinThread,
+  listThreadRows,
+  participantsOverflowOf,
+  participantsTotalOf,
+  participantsTotals,
+  setThreadState,
+  threadKeyOf,
+  threadMessages,
+  threadOfMessage,
+  toThread,
+  THREAD_COLUMNS,
+  THREAD_STATES,
+  type JoinThreadInput,
+  type ListThreadsFilter,
+  type ThreadMessage,
+  type ThreadRecord,
+  type ThreadState,
+} from './threads.js';
+export {
+  leafOf,
+  planFolders,
+  sentConfidence,
+  sentFolderOf,
+  isInbox,
+  FOLDER_KINDS,
+  GMAIL_SENT,
+  type FolderKind,
+  type FolderPlan,
+} from './folders.js';
 export { triageRecord } from './tools/triage.js';
 export { getSettings, setSettings } from './tools/settings.js';
 export {
@@ -116,8 +161,10 @@ export {
   revokeEmailPolicy,
   setPolicy,
   viewOf,
+  THREAD_CHOICES,
   type PolicyEnvelope,
   type PolicyView,
+  type ThreadChoice,
 } from './tools/policies.js';
 export {
   applyPolicies,
@@ -162,7 +209,10 @@ export {
   learnedProposal,
   learnFromVerdict,
   ownerHasRepliedTo,
+  ownerReplies,
+  REPLY_SAMPLE,
   senderVerdicts,
+  type OwnerReplies,
   type Proposal,
   type Verdict,
 } from './policies/learn.js';

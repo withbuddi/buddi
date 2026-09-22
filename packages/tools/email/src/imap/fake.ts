@@ -11,12 +11,15 @@ import type {
   FetchedMessage,
   ImapClient,
   ImapClientFactory,
+  MailboxInfo,
   MailboxStatus,
 } from '../ports.js';
 
 export interface FakeMailbox {
   uidValidity: number;
   messages: FetchedMessage[];
+  /** The SPECIAL-USE attribute this folder is listed with, e.g. `\\Sent`. */
+  specialUse?: string | null;
 }
 
 export class FakeImapServer {
@@ -25,6 +28,8 @@ export class FakeImapServer {
   readonly fetches: Array<{ mailbox: string; sinceUid: number; limit: number; returned: number }> = [];
   opens = 0;
   closes = 0;
+  /** How many times the folders were listed. Discovery happens once. */
+  lists = 0;
 
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
@@ -56,6 +61,20 @@ export class FakeImapServer {
     box.uidValidity = uidValidity;
   }
 
+  /** What a LIST would return: every folder this server holds, in order. */
+  listing(): MailboxInfo[] {
+    return [...this.mailboxes.entries()].map(([name, box]) => ({
+      name,
+      specialUse: box.specialUse ?? null,
+      flags: [],
+      status: {
+        uidValidity: box.uidValidity,
+        uidNext: Math.max(0, ...box.messages.map((m) => m.uid)) + 1,
+        exists: box.messages.length,
+      },
+    }));
+  }
+
   client(): ImapClient {
     return new FakeImapClient(this);
   }
@@ -69,6 +88,12 @@ class FakeImapClient implements ImapClient {
   #closed = false;
 
   constructor(private readonly server: FakeImapServer) {}
+
+  async listMailboxes(): Promise<MailboxInfo[]> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.lists += 1;
+    return this.server.listing();
+  }
 
   async open(mailbox: string): Promise<MailboxStatus> {
     this.server.opens += 1;
@@ -110,6 +135,7 @@ class FakeImapClient implements ImapClient {
 export function fakeMessage(over: Partial<FetchedMessage> = {}): Omit<FetchedMessage, 'uid'> & {
   uid?: number;
 } {
+  const date = over.date !== undefined ? over.date : new Date('2026-09-13T09:00:00Z');
   return {
     messageId: '<m1@example.test>',
     inReplyTo: null,
@@ -119,7 +145,11 @@ export function fakeMessage(over: Partial<FetchedMessage> = {}): Omit<FetchedMes
     to: ['owner@example.test'],
     cc: [],
     subject: 'Hello',
-    date: new Date('2026-09-13T09:00:00Z'),
+    date,
+    // Defaults to the same instant as `date` so a test that does not care
+    // about the distinction gets consistent ordering either way; a test about
+    // the distinction overrides one or the other explicitly.
+    internalDate: date,
     bodyText: 'Body text.',
     hasAttachments: false,
     attachments: [],

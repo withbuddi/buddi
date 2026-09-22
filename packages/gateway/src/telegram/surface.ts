@@ -2665,6 +2665,11 @@ export class TelegramSurface {
     const taken = await takeOffer(pool, { id: offerId, via: SURFACE, now: new Date(this.#now()) });
     if (!taken.ok) {
       await api.answerCallbackQuery(query.id, taken.message).catch(() => {});
+      if (taken.reason === 'lapsed' || taken.reason === 'dismissed') {
+        await api.sendMessage(chatId, taken.message).catch((err) => {
+          this.#log(`telegram: durable refusal for offer ${offerId} failed: ${message(err)}`);
+        });
+      }
       return;
     }
 

@@ -82,7 +82,7 @@ suite('email tools (postgres)', () => {
 
   /** Two ingested messages, through the real source path. */
   async function seed(): Promise<string[]> {
-    await pool.query('truncate email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade');
+    await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     await pool.query('delete from email.settings');
     await ensureGmailAccount(pool, ENV);
     const server = new FakeImapServer();
@@ -386,16 +386,30 @@ suite('email tools (postgres)', () => {
       });
     });
 
-    it('knows the owner has replied once a draft to that address has actually gone out', async () => {
-      const draft = await call('email.draft_reply', {
-        inReplyTo: ids[0],
-        bodyText: 'Noted, thank you.',
-      });
-      // A saved draft is not a reply: the owner has not sent anything yet.
+    it('knows the owner has replied from the Sent folder, whatever client he wrote in', async () => {
+      await call('email.draft_reply', { inReplyTo: ids[0], bodyText: 'Noted, thank you.' });
+      // A saved draft is not a reply, and — since the Sent folder is synced —
+      // a draft buddi itself sent is no longer the question either. What
+      // counts is the owner's own mail.
       let profile = await call('email.sender_profile', { address: 'alerts@bank.test' });
       expect(profile).toMatchObject({ ownerHasReplied: false, draftsWaiting: 1 });
 
-      await pool.query(`update email.drafts set sent_at = now() where id = $1`, [draft.id]);
+      // One message in the Sent folder, the way the poll stores one.
+      const { rows } = await pool.query(`select id from email.accounts limit 1`);
+      const { rows: folder } = await pool.query(
+        `insert into email.folders (account_id, name, kind, synced) values ($1, 'Sent', 'sent', true)
+         on conflict (account_id, name) do update set kind = 'sent' returning id`,
+        [rows[0].id],
+      );
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, from_addr, to_addrs, cc, subject,
+            date, direction, triage_enqueued_at)
+         values ($1, $2, 1, 900, '<mine@example.test>', 'owner@example.test',
+                 '["alerts@bank.test"]'::jsonb, '[]'::jsonb, 'Re: Direct debit returned',
+                 now(), 'out', now())`,
+        [rows[0].id, folder[0].id],
+      );
       profile = await call('email.sender_profile', { address: 'Alerts@BANK.test' });
       expect(profile).toMatchObject({ ownerHasReplied: true, messagesSent: 1 });
     });
@@ -658,10 +672,11 @@ suite('email tools (postgres)', () => {
       // The two policy tools are gated for a different reason: nothing leaves
       // this machine, but a standing rule decides every future message from a
       // sender with no model and no second chance to object, so the moment it
-      // is *written* is the moment the owner has to agree to it.
+      // is *written* is the moment the owner has to agree to it. Muting a
+      // conversation is the same kind of act, about one thread.
       const gated = registry.list().filter((t) => t.tier !== 'auto');
       expect(new Set(gated.map((t) => t.name))).toEqual(
-        new Set(['email.send', 'email.set_policy', 'email.revoke_policy']),
+        new Set(['email.send', 'email.set_policy', 'email.revoke_policy', 'email.mute_thread']),
       );
 
       // And drafting, the thing a tapped action actually does, sends nothing.

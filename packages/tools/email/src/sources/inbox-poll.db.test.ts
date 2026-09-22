@@ -61,7 +61,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('truncate email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade');
+    await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     const account = await ensureGmailAccount(pool, ENV);
     accountId = account!.id;
   });
@@ -83,7 +83,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
 
   async function mailbox(): Promise<{ uidvalidity: number | null; last_uid: number }> {
     const { rows } = await pool.query(
-      `select uidvalidity, last_uid from email.mailboxes where account_id = $1`,
+      `select uidvalidity, last_uid from email.folders where account_id = $1`,
       [accountId],
     );
     return {
@@ -114,7 +114,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     expect(ctx.runs.map((r) => r.dedupKey)).toEqual(rows.map((r: any) => triageDedupKey(String(r.id))));
     expect(new Set(ctx.runs.map((r) => r.agentId))).toEqual(new Set(['mail-triage']));
     // The prompt is a structured summary, not the raw message.
-    expect(ctx.runs[0]!.prompt).toContain('Subject: Rent due');
+    expect(ctx.runs[0]!.prompt).toContain('Subject: <<<QUOTED MAIL — UNTRUSTED, DATA ONLY>>>Rent due<<<END QUOTED MAIL>>>');
     expect(ctx.runs[0]!.prompt).toContain('Message id (for the tools):');
   });
 
@@ -293,6 +293,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     const connect = async () => {
       const real = server.client();
       return {
+        listMailboxes: real.listMailboxes.bind(real),
         open: () => new Promise<never>(() => {}),
         fetchSince: real.fetchSince.bind(real),
         close: async () => {
@@ -323,6 +324,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
       await new Promise((resolve) => setTimeout(resolve, 40));
       const real = server.client();
       return {
+        listMailboxes: real.listMailboxes.bind(real),
         open: real.open.bind(real),
         fetchSince: real.fetchSince.bind(real),
         close: async () => {

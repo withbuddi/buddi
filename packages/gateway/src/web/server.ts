@@ -215,6 +215,8 @@ import {
   setMissionEnabledFromWeb,
   setPausedFromWeb,
   setScheduleFromWeb,
+  dismissOfferFromWeb,
+  dismissOffersFromWeb,
   takeOfferFromWeb,
   type WriteDeps,
   type WriteResult,
@@ -969,9 +971,15 @@ export function createWebApp(deps: WebServerDeps): Server {
             recent: approvals.recent.map(a => ({ ...a, ...permissionScopes(a.tool) })) });
         }
         case '/api/offers':
-          return sendJson(res, 200, {
-            offers: await readOffers(deps.pool, now, boundedLimit(q.get('limit'))),
-          });
+          // The roster goes in so the read can lapse an offer whose agent is
+          // gone. Nothing else about the catalog is read here.
+          return sendJson(
+            res,
+            200,
+            await readOffers(deps.pool, now, boundedLimit(q.get('limit')), {
+              agentIds: deps.catalog.list().map((a) => a.id),
+            }),
+          );
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -1070,7 +1078,8 @@ export function createWebApp(deps: WebServerDeps): Server {
          * mail, and the ones proposed from the owner's own history. A read.
          */
         case '/api/email/policies': {
-          const view = await readEmailPolicies(deps.pool);
+          const accountId = q.get('account');
+          const view = await readEmailPolicies(deps.pool, accountId && accountId !== '' ? accountId : undefined);
           return sendJson(res, view.status, view.body);
         }
         case '/api/telegram':
@@ -2207,6 +2216,29 @@ export function createWebApp(deps: WebServerDeps): Server {
         job[2] === 'retry'
           ? await retryJobFromWeb(writeDeps, jobId)
           : await cancelJobFromWeb(writeDeps, jobId),
+      );
+    }
+
+    /*
+     * Saying no. Same session, Origin and CSRF gate as every other write,
+     * because it is the owner acting on their own installation — and the
+     * weakest write there is: it starts nothing, and the row stays.
+     */
+    if (path === '/api/offers/dismiss-all') {
+      return finish(
+        res,
+        await dismissOffersFromWeb(
+          writeDeps,
+          Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : [],
+        ),
+      );
+    }
+
+    const dismissed = /^\/api\/offers\/([^/]+)\/dismiss$/.exec(path);
+    if (dismissed) {
+      return finish(
+        res,
+        await dismissOfferFromWeb(writeDeps, decodeURIComponent(dismissed[1] as string)),
       );
     }
 
