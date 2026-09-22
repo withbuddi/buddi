@@ -33,6 +33,10 @@
       "types": "./dist/testing/database-url.d.ts",
       "default": "./dist/testing/database-url.js"
     },
+    "./testing/pages": {
+      "types": "./dist/pages/__fixtures__/demo.d.ts",
+      "default": "./dist/pages/__fixtures__/demo.js"
+    },
     "./testing/global-setup": {
       "types": "./dist/testing/global-setup.d.ts",
       "default": "./dist/testing/global-setup.js"

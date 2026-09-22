@@ -31,11 +31,14 @@ import {
   legacyRedirect,
   parseChatRoute,
   parseGroupChatRoute,
+  parsePluginPageRoute,
   parseWelcomeRoute,
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { GroupSheet } from './shell/GroupSheet';
+import { PluginPage } from './pages/PluginPage';
+import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
 import { Mail } from './views/Mail';
 import type { GroupView } from './chat/types';
@@ -140,6 +143,12 @@ export function App(): JSX.Element {
    * happens to be, and stops saying it the moment the checklist is finished.
    */
   const recovery = useRecovery();
+  /*
+   * The screens the installed plugins contribute. Read in the shell because
+   * three things need them — the rail, the settings tabs and the place itself
+   * — and an installation with none is served an empty list.
+   */
+  const pluginPages = usePluginPages();
   /** When each agent last spoke, for the roster's quiet line. */
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -339,6 +348,7 @@ export function App(): JSX.Element {
             onNavigate={navigate}
             theme={theme}
             onTheme={setTheme}
+            plugins={pluginPages.rail}
           />
 
           {onChat && !railNarrow ? (
@@ -383,6 +393,7 @@ export function App(): JSX.Element {
                 navigate={navigate}
                 agents={agents}
                 attention={attention}
+                pluginPages={pluginPages}
               />
             </main>
           )}
@@ -402,7 +413,27 @@ export interface PlaceProps {
   attention: ReturnType<typeof useAttention>;
 }
 
-function Place({ place, ...props }: PlaceProps & { place: string }): JSX.Element {
+function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; pluginPages: PluginPages }): JSX.Element {
+  /*
+   * A plugin's own place. The hash says which plugin and which page; the
+   * descriptor says what is on it. When the descriptors have not arrived yet —
+   * or name no such page — the owner gets Home rather than a blank window.
+   */
+  const located = parsePluginPageRoute(props.hash);
+  if (located) {
+    const page = pluginPages.find(located.plugin, located.page);
+    if (page) {
+      return (
+        <PluginPage
+          page={page}
+          item={located.item ?? null}
+          navigate={props.navigate}
+          timezone={props.timezone}
+        />
+      );
+    }
+    if (pluginPages.all.length === 0) return <></>;
+  }
   switch (place) {
     case AGENTS_ROUTE:
       return <Agents {...props} />;

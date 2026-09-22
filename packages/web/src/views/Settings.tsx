@@ -8,7 +8,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_SECTIONS, WELCOME_ROUTE, settingsRoute } from '../routes';
+import { SETTINGS_SECTIONS, WELCOME_ROUTE, parsePluginSettingsRoute, pluginSettingsRoute, pluginSettingsTab, settingsRoute } from '../routes';
+import { PluginSettingsPage } from '../pages/PluginPage';
+import { usePluginPages } from '../pages/usePages';
 import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
@@ -20,8 +22,16 @@ import { Memory } from './Memory';
 import { Plugins } from './Plugins';
 
 export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.Element {
-  const section = /^#\/settings\/([a-z]+)/.exec(hash)?.[1] ?? 'you';
+  const section = /^#\/settings\/([a-z0-9.-]+)/.exec(hash)?.[1] ?? 'you';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
+  /*
+   * A plugin's settings tab sits *after* the core sections, and is a tab like
+   * any other: one hash, one page, drawn from the descriptor. Nothing here
+   * knows which plugin it is.
+   */
+  const plugins = usePluginPages();
+  const located = parsePluginSettingsRoute(hash);
+  const pluginPage = located ? plugins.find(located.plugin, located.page) : undefined;
   return (
     <div className="ui-page">
       <header className="ui-page-head">
@@ -34,7 +44,17 @@ export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.
             {s.label}
           </Tab>
         ))}
+        {plugins.settings.map((page) => {
+          const id = pluginSettingsTab(page.plugin, page.id);
+          const route = pluginSettingsRoute(page.plugin, page.id);
+          return (
+            <Tab key={id} href={route} active={section === id} onClick={go(route)}>
+              {page.title}
+            </Tab>
+          );
+        })}
       </Tabs>
+      {pluginPage ? <PluginSettingsPage page={pluginPage} navigate={navigate} timezone={timezone} /> : null}
       {section === 'you' ? <You embedded /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}

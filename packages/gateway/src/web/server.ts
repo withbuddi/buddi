@@ -79,6 +79,13 @@ import {
   type EmailWebDeps,
 } from './email.js';
 import {
+  PAGE_ROUTE,
+  actOnPage,
+  listPageDescriptors,
+  runPageQuery,
+  type PagesDeps,
+} from './pages.js';
+import {
   discardEmailDraft,
   fetchEmailAttachment,
   readEmailDraft,
@@ -740,6 +747,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       log,
     });
+    /** What the plugin page routes need: the registry, and the owner's context. */
+    const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now });
     /** The same, for the version and upgrade routes. */
     const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
@@ -1025,6 +1034,14 @@ export function createWebApp(deps: WebServerDeps): Server {
         // definition of "waiting" in the installation — see attention.ts.
         case '/api/chat/attention':
           return sendJson(res, 200, await readAgentAttention(deps.pool, now));
+        /*
+         * The screens the installed plugins contribute, and nothing else: a
+         * rail entry, a settings tab, and the tree of generic components each
+         * is made of (docs/specs/plugin-pages.md). Descriptors are data, like
+         * views — no plugin code ever runs in the page.
+         */
+        case '/api/pages':
+          return reply(res, listPageDescriptors(pagesDeps()));
         case '/api/chat/views':
           // How the installed plugins want their tool output drawn. The page
           // owns the renderers and learns the domain mapping from here, so an
@@ -1188,6 +1205,16 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, deps.providerSettings.view());
         default:
           break;
+      }
+
+      /*
+       * One plugin page query. The parameters are checked by the query's own
+       * zod schema — 400 with the plugin's own sentence when they are wrong,
+       * 404 when nothing contributes a query by that name.
+       */
+      const pageQuery = PAGE_ROUTE.exec(path);
+      if (pageQuery) {
+        return reply(res, await runPageQuery(pagesDeps(), pageQuery[1] as string, pageQuery[2] as string, q));
       }
 
       const upgradeJob = /^\/api\/upgrade\/jobs\/([0-9a-f-]{36})$/i.exec(path);
@@ -2196,6 +2223,18 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (error instanceof TelegramWebError) return sendJson(res, error.status, { error: error.message });
         return sendJson(res, 500, { error: 'Telegram could not be set up from here.' });
       }
+    }
+
+    /*
+     * A write from a plugin's page: `{ tool, args }`, invoked as the owner
+     * through the registry. An `auto` tool executes and answers with its
+     * result; a `gated` one answers `{ approvalId }` and the page draws the
+     * approval card in place. Behind the same session, Origin and CSRF gate as
+     * every other write.
+     */
+    const pageAct = /^\/api\/pages\/([a-z][a-z0-9_-]{0,39})\/act$/.exec(path);
+    if (pageAct) {
+      return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body));
     }
 
     /*

@@ -171,18 +171,23 @@ import { z } from 'zod';
  */
 export const VIEW_PATH = /^(|\$|[A-Za-z_][A-Za-z0-9_]*(\[\d+\])*(\.[A-Za-z_][A-Za-z0-9_]*(\[\d+\])*)*)$/;
 
-const pathSchema = z
+/**
+ * Exported because `pages.ts` builds on the same grammar: a page descriptor's
+ * paths are view paths, and a second definition would be a second thing to
+ * keep in step.
+ */
+export const viewPathSchema = z
   .string()
   .max(200)
   .regex(VIEW_PATH, 'a view path is dotted field names with optional [n] indexes, or "$"');
 
-const valueRefSchema = z.union([
-  z.object({ path: pathSchema }).strict(),
+export const valueRefSchema = z.union([
+  z.object({ path: viewPathSchema }).strict(),
   z.object({ const: z.union([z.string(), z.number(), z.boolean(), z.null()]) }).strict(),
 ]);
 
-const unitSchema = z.enum(['number', 'currency', 'percent', 'text', 'date']);
-const toneSchema = z.enum(['good', 'warning', 'critical', 'neutral']);
+export const unitSchema = z.enum(['number', 'currency', 'percent', 'text', 'date']);
+export const toneSchema = z.enum(['good', 'warning', 'critical', 'neutral']);
 const columnTypeSchema = z.enum(['text', 'number', 'currency', 'date', 'percent']);
 
 const referenceLineSchema = z
@@ -191,9 +196,9 @@ const referenceLineSchema = z
 
 const timeseriesMapSchema = z
   .object({
-    points: pathSchema,
-    x: pathSchema,
-    y: pathSchema,
+    points: viewPathSchema,
+    x: viewPathSchema,
+    y: viewPathSchema,
     unit: unitSchema.optional(),
     currency: valueRefSchema.optional(),
     label: valueRefSchema.optional(),
@@ -202,20 +207,20 @@ const timeseriesMapSchema = z
     shadeBelow: valueRefSchema.optional(),
     events: z
       .object({
-        path: pathSchema.optional(),
-        parent: pathSchema.optional(),
-        at: pathSchema,
-        label: pathSchema,
-        amount: pathSchema.optional(),
+        path: viewPathSchema.optional(),
+        parent: viewPathSchema.optional(),
+        at: viewPathSchema,
+        label: viewPathSchema,
+        amount: viewPathSchema.optional(),
       })
       .strict()
       .optional(),
   })
   .strict();
 
-const columnMapSchema = z
+export const columnMapSchema = z
   .object({
-    key: pathSchema,
+    key: viewPathSchema,
     label: z.string().min(1),
     type: columnTypeSchema.optional(),
     currency: valueRefSchema.optional(),
@@ -244,11 +249,11 @@ const summaryFigureSchema = z
 
 const tableMapSchema = z
   .object({
-    rows: pathSchema,
+    rows: viewPathSchema,
     columns: z.array(columnMapSchema).min(1).max(24),
     summary: z.array(summaryFigureSchema).max(12).optional(),
     groupBy: z
-      .object({ key: pathSchema, labels: z.record(z.string()).optional() })
+      .object({ key: viewPathSchema, labels: z.record(z.string()).optional() })
       .strict()
       .optional(),
     empty: z.string().optional(),
@@ -257,9 +262,9 @@ const tableMapSchema = z
 
 const barsMapSchema = z
   .object({
-    bars: pathSchema,
-    category: pathSchema,
-    value: pathSchema,
+    bars: viewPathSchema,
+    category: viewPathSchema,
+    value: viewPathSchema,
     unit: unitSchema.optional(),
     currency: valueRefSchema.optional(),
   })
@@ -268,7 +273,7 @@ const barsMapSchema = z
 const keyValueMapSchema = z
   .object({
     pairs: z.array(summaryFigureSchema).max(24).optional(),
-    from: pathSchema.optional(),
+    from: viewPathSchema.optional(),
   })
   .strict()
   .refine(
@@ -279,8 +284,8 @@ const keyValueMapSchema = z
 const documentMapSchema = z
   .object({
     kind: valueRefSchema.optional(),
-    text: pathSchema.optional(),
-    src: pathSchema.optional(),
+    text: viewPathSchema.optional(),
+    src: viewPathSchema.optional(),
     title: valueRefSchema.optional(),
     metadata: z
       .array(
