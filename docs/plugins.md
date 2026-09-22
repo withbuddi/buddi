@@ -688,7 +688,10 @@ means, the page knows how to draw a line, and this says which is which.
 - **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
   of the form's *own values* first — a path that names a field on the form
   reads what the owner has just typed — and of the loaded data otherwise, so
-  ticking a box reveals or greys a field with no round trip. A select whose
+  ticking a box reveals or greys a field with no round trip. A field the form
+  is not asking for — hidden by `when`, greyed by `disabledWhen` — is **not
+  required** and is **not submitted**: two branches may each have their own
+  required field, and the owner only ever fills the one they are on. A select whose
   options are a read rather than a list takes
   `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
   form opens, and again whenever a field in `dependsOn` changes, with those
@@ -713,7 +716,9 @@ means, the page knows how to draw a line, and this says which is which.
   on the rows where it holds — Fetch, until there is a file.
 - **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
   may itself be a path, `ListItem.pills` draws several, and a table column with
-  `pill: { tone }` draws its cell as one. A `section` may carry `actions` — a
+  `pill: { tone }` draws its cell as one — and when that cell's value is an
+  array, each `{ value, tone }` item is its own pill, so "off" and "from .env"
+  are two facts in one column rather than a sentence. A `section` may carry `actions` — a
   link or a button — beside its heading.
 - **A link to a settings page is a tab.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to

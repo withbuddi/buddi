@@ -51,6 +51,7 @@ import {
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import type {
   ArgRef,
+  ColumnMap,
   Component,
   Field,
   ListComponent,
@@ -195,6 +196,8 @@ function resolveArgs(
     fields?: Record<string, unknown>;
     /** The field definitions behind those values, for what "empty" means. */
     shape?: Field[];
+    /** Field names the form is not asking for: hidden, or greyed. */
+    omit?: ReadonlySet<string>;
     selected?: string[];
     scope: PageScope;
   },
@@ -203,6 +206,9 @@ function resolveArgs(
   for (const [key, ref] of Object.entries(args ?? {})) {
     if ('row' in ref) out[key] = readPath(source.row, ref.row);
     else if ('field' in ref) {
+      // A field the owner cannot see or cannot change is a field they said
+      // nothing about: it is left out, and the tool's own default stands.
+      if (source.omit?.has(ref.field)) continue;
       const value = source.fields?.[ref.field];
       const field = source.shape?.find((f) => f.name === ref.field);
       /*
@@ -589,6 +595,40 @@ function numberOrText(raw: string): unknown {
   return Number.isFinite(value) ? value : raw;
 }
 
+/**
+ * What the form is asking *now*: its own values over the data behind it.
+ *
+ * A path that names a field reads what the owner has just typed; anything
+ * else reads what the query answered. One object, computed the same way
+ * wherever a field's conditions are asked, so what is drawn and what is
+ * submitted can never disagree.
+ */
+function askedOf(values: Values, data: unknown): Record<string, unknown> {
+  return { ...(typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}), ...values };
+}
+
+/**
+ * Fields the form is not really asking for: hidden by `when`, or greyed by
+ * `disabledWhen`.
+ *
+ * They are not required — a form that will not submit because of a field
+ * nobody can see is a dead end — and their values are not sent: the owner
+ * said nothing about them, and a tool must not be handed the leftovers of a
+ * branch that is not taken.
+ */
+function inactiveFields(fields: Field[], values: Values, data: unknown): Set<string> {
+  const asked = askedOf(values, data);
+  return new Set(
+    fields
+      .filter(
+        (field) =>
+          (field.when !== undefined && !holds(asked, field.when)) ||
+          (field.disabledWhen !== undefined && holds(asked, field.disabledWhen)),
+      )
+      .map((field) => field.name),
+  );
+}
+
 function Fields({
   fields,
   values,
@@ -605,13 +645,12 @@ function Fields({
   onChange: (name: string, value: unknown) => void;
 }): JSX.Element {
   /*
-   * The form's own values sit *over* the loaded data, so a path that names a
-   * field reads what the owner has just typed and anything else reads what
-   * the query answered. That is what makes "show the host fields when
-   * Advanced is ticked" work without a round trip — and it is why the values
-   * win: on this form, the field is the more recent truth about itself.
+   * The form's own values sit *over* the loaded data — see `askedOf`. That is
+   * what makes "show the host fields when Advanced is ticked" work without a
+   * round trip, and why the values win: on this form, the field is the more
+   * recent truth about itself.
    */
-  const asked = { ...(typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}), ...values };
+  const asked = askedOf(values, data);
   return (
     <Stack gap="sm">
       {fields
@@ -1082,9 +1121,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
                 {component.columns.map((column) => (
                   <td key={column.key}>
                     {column.pill ? (
-                      <Pill tone={pillTone(toneFrom(column.pill.tone, row))}>
-                        {fmtValue(readPath(row, column.key), column.type ?? 'text', null)}
-                      </Pill>
+                      <PillCell column={column} row={row} />
                     ) : (
                       fmtValue(readPath(row, column.key), column.type ?? 'text', null)
                     )}
@@ -1115,6 +1152,38 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
         </Table>
       )}
     </Section>
+  );
+}
+
+/**
+ * A cell drawn as state rather than as text.
+ *
+ * One pill for one value — in the tone the column named, which may itself be
+ * a path — and one pill *per item* when the cell holds an array of
+ * `{ value, tone }`: an account that is switched off and configured from the
+ * environment is two facts about it, not a sentence to be parsed.
+ */
+function PillCell({ column, row }: { column: ColumnMap; row: unknown }): JSX.Element {
+  const value = readPath(row, column.key);
+  if (Array.isArray(value)) {
+    return (
+      <>
+        {value.map((item, index) => {
+          const one = item as { value?: unknown; tone?: unknown };
+          const text = typeof one === 'object' && one !== null ? one.value : item;
+          if (text === undefined || text === null || text === '') return null;
+          const tone = typeof one === 'object' && one !== null ? one.tone : undefined;
+          return (
+            <Pill key={index} tone={pillTone(toneFrom(typeof tone === 'string' ? (tone as Tone) : undefined, row))}>
+              {fmtValue(text, column.type ?? 'text', null)}
+            </Pill>
+          );
+        })}
+      </>
+    );
+  }
+  return (
+    <Pill tone={pillTone(toneFrom(column.pill?.tone, row))}>{fmtValue(value, column.type ?? 'text', null)}</Pill>
   );
 }
 
@@ -1205,8 +1274,17 @@ function FormBody({
 }): JSX.Element {
   const scope = useScope();
   const [values, setValues] = useState<Values>(() => initialValues(component.fields, initialData));
+  /*
+   * A field the form is not asking for cannot hold it back: two required
+   * fields under opposite `when`s are two branches, and the owner only ever
+   * fills the one they are on.
+   */
+  const inactive = inactiveFields(component.fields, values, initialData);
   const missing = component.fields.some(
-    (field) => field.required && (values[field.name] === '' || values[field.name] === undefined),
+    (field) =>
+      field.required &&
+      !inactive.has(field.name) &&
+      (values[field.name] === '' || values[field.name] === undefined),
   );
   return (
     <Stack>
@@ -1220,7 +1298,13 @@ function FormBody({
       <Toolbar align="end">
         <ActionButton
           action={component.submit}
-          args={resolveArgs(component.submit.args, { data, fields: values, shape: component.fields, scope })}
+          args={resolveArgs(component.submit.args, {
+            data,
+            fields: values,
+            shape: component.fields,
+            omit: inactive,
+            scope,
+          })}
           disabled={act.busy || missing}
           running={act.running === component.submit.tool}
           onRun={(ref, args) => void act.run(ref, args, onDone)}
@@ -1522,6 +1606,8 @@ function EditorBody({
    * same answer the fields were filled from — never from a clock here.
    */
   const withVersion = { ...values, version: readPath(loaded, component.version) };
+  /** Hidden or greyed fields are not sent, here as on a form. */
+  const inactive = inactiveFields(component.fields, values, loaded);
   /** Nothing to press, and nothing to type: what it holds is a record now. */
   const readOnly = component.readOnlyWhen !== undefined && holds(loaded, component.readOnlyWhen);
   /** Discard on the left, then the spacer, then Save and Send on the right. */
@@ -1531,7 +1617,7 @@ function EditorBody({
     <ActionButton
       key={`${action.tool}-${index}`}
       action={action}
-      args={resolveArgs(action.args, { data, fields: withVersion, shape: component.fields, scope })}
+      args={resolveArgs(action.args, { data, fields: withVersion, shape: component.fields, omit: inactive, scope })}
       disabled={act.busy}
       running={act.running === action.tool}
       onRun={(ref, args) => void act.run(ref, args)}
