@@ -363,7 +363,10 @@ export function createFetchAttachmentTool(
 
         // The last layer, and the only one that cannot be lied to: a PE
         // renamed `invoice.pdf` passes both checks above and dies here.
-        const sniffed = bytesRefusal(bytes);
+        // The name and the declared type go in as *reasons to look harder* —
+        // a ZIP with a preamble is not detected by its first byte — never as
+        // something to trust.
+        const sniffed = bytesRefusal(bytes, { filename, mime: live.mime });
         if (sniffed) throw new Error(`email.fetch_attachment refuses: ${sniffed}`);
         const mime = mimeToStore(sniffMime(bytes), live.mime);
 

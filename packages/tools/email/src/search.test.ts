@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  booleanFilter,
   bounded,
   buildSearch,
   isCalendarDate,
@@ -105,6 +106,37 @@ describe('validateFilters', () => {
   it('refuses a range that cannot contain anything', () => {
     expect(validateFilters({ since: '2026-03-02', until: '2026-03-01' })).toMatch(/before `since`/);
   });
+
+  it('refuses a hasAttachments that is not a boolean, whatever the types say', () => {
+    // It arrives off a query string, where everything is a string until
+    // somebody decides otherwise.
+    expect(validateFilters({ hasAttachments: 'true' as unknown as boolean })).toMatch(
+      /true or false/,
+    );
+    expect(validateFilters({ hasAttachments: false })).toBeNull();
+  });
+});
+
+describe('booleanFilter', () => {
+  it('reads the two values a boolean has', () => {
+    expect(booleanFilter('hasAttachments', 'true')).toEqual({ ok: true, value: true });
+    expect(booleanFilter('hasAttachments', 'false')).toEqual({ ok: true, value: false });
+  });
+
+  it('treats absent and empty as no filter', () => {
+    expect(booleanFilter('hasAttachments', undefined)).toEqual({ ok: true, value: undefined });
+    expect(booleanFilter('hasAttachments', '  ')).toEqual({ ok: true, value: undefined });
+  });
+
+  it('refuses anything else rather than silently dropping it', () => {
+    // `?hasAttachments=yes` used to be quietly ignored, so the owner got a
+    // search that had not applied half of what they asked for.
+    for (const bad of ['yes', '1', 'TRUE', 'on', 'null']) {
+      const read = booleanFilter('hasAttachments', bad);
+      expect(read.ok, bad).toBe(false);
+      expect(read.ok === false && read.message).toMatch(/true or false/);
+    }
+  });
 });
 
 describe('buildSearch', () => {
@@ -148,6 +180,25 @@ describe('buildSearch', () => {
     expect(build({ query: 'invoice', since: '2020-01-01' }).windowed).toBe(false);
     expect(build({ query: 'invoice', from: 'acme.com' }).windowed).toBe(false);
     expect(build({ query: 'invoice', thread: THREAD }).windowed).toBe(false);
+  });
+
+  it('anchors the window on the owner’s calendar day, not on UTC’s', () => {
+    // 20:00 in New York is already tomorrow in UTC. The boundaries are read in
+    // the owner's zone, so an anchor from `toISOString()` would have put the
+    // window's edge on a different day from every other date in the query.
+    const lateEvening = new Date('2026-09-22T00:30:00Z'); // 21 Sep, 20:30 in New York
+    const here = buildSearch(ACCOUNTS, { query: 'invoice' }, {
+      now: lateEvening,
+      timezone: 'America/New_York',
+      limit: 20,
+    });
+    const utc = buildSearch(ACCOUNTS, { query: 'invoice' }, {
+      now: lateEvening,
+      timezone: 'UTC',
+      limit: 20,
+    });
+    expect(here.windowFrom).toBe('2026-06-23');
+    expect(utc.windowFrom).toBe('2026-06-24');
   });
 
   it('measures the window back from `until` when that is the only date given', () => {

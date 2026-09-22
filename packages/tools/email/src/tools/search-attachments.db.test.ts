@@ -31,6 +31,31 @@ const NOW = new Date('2026-09-22T12:00:00Z');
 /** The bytes the fake server will hand over for the invoice. */
 const INVOICE = Buffer.from('%PDF-1.4 the invoice itself\n');
 
+/**
+ * A ZIP carrying `vbaProject.bin`, with a hundred bytes in front of it.
+ *
+ * Legal — a self-extracting stub looks like this — and the shape that skips a
+ * check which only inspects a file whose first two bytes are `PK`.
+ */
+function paddedMacroZip(): Buffer {
+  const name = Buffer.from('word/vbaProject.bin', 'utf8');
+  const local = Buffer.alloc(30 + name.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(name.length, 26);
+  name.copy(local, 30);
+  const central = Buffer.alloc(46 + name.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(name.length, 28);
+  name.copy(central, 46);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(local.length, 16);
+  return Buffer.concat([Buffer.alloc(100, 0x41), local, central, eocd]);
+}
+
 suite('email search and attachments (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
@@ -570,6 +595,21 @@ suite('email search and attachments (postgres)', () => {
     expect(await refuse('email.fetch_attachment', { message, index: 0 })).toMatch(/\.exe/);
     expect(await refuse('email.fetch_attachment', { message, index: 1 })).toMatch(/\.xlsm/);
     expect(server.downloads).toHaveLength(0);
+  });
+
+  it('looks inside an archive that has something in front of it', async () => {
+    const message = await invoiceMessageId();
+    const uid = (await pool.query(`select uid from email.messages where id = $1`, [message]))
+      .rows[0].uid as number;
+    // A macro-carrying document with a hundred bytes of padding before the
+    // archive: legal, and invisible to a check that reads byte 0.
+    server.putPart('INBOX', Number(uid), '2', paddedMacroZip());
+    const why = await refuse('email.fetch_attachment', { message, index: 0 });
+    expect(why).toMatch(/macros/);
+    const count = await pool.query(
+      `select count(*)::int as n from core.artifacts where source_surface = 'email'`,
+    );
+    expect(count.rows[0].n).toBe(0);
   });
 
   it('calls an empty attachment empty, not missing', async () => {

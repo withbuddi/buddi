@@ -41,6 +41,7 @@
  * meaning changes under the agent is worse than a slow one. Full-text search
  * over archives is §11's later work, on purpose.
  */
+import { localDateString } from '@buddi/core';
 import { normalizeAddress } from './mail.js';
 
 /** The clock every date filter and every ordering here is written against. */
@@ -221,7 +222,32 @@ export function validateFilters(filters: SearchFilters): string | null {
   if (filters.direction !== undefined && filters.direction !== 'in' && filters.direction !== 'out') {
     return '`direction` is `in` or `out`.';
   }
+  // Runtime, not just at the type level: the route's value comes off a query
+  // string, where everything is a string until somebody decides otherwise.
+  if (filters.hasAttachments !== undefined && typeof filters.hasAttachments !== 'boolean') {
+    return '`hasAttachments` is true or false.';
+  }
   return null;
+}
+
+/**
+ * One `true`/`false` query parameter, as a filter.
+ *
+ * Shared, so the route and the tool agree on what a boolean is. An absent or
+ * empty value is "no filter"; `true` and `false` are themselves; **anything
+ * else is a refusal**, not a silent "no filter" — `?hasAttachments=yes` used
+ * to be quietly dropped, and a search that ignores half of what it was asked
+ * is worse than one that says it did not understand.
+ */
+export function booleanFilter(
+  name: string,
+  raw: string | undefined | null,
+): { ok: true; value: boolean | undefined } | { ok: false; message: string } {
+  const value = raw?.trim() ?? '';
+  if (value === '') return { ok: true, value: undefined };
+  if (value === 'true') return { ok: true, value: true };
+  if (value === 'false') return { ok: true, value: false };
+  return { ok: false, message: `\`${name}\` is true or false.` };
 }
 
 /**
@@ -369,7 +395,15 @@ export function buildSearch(
   const bodyWhere = [...base];
   let windowFrom: string | null = null;
   if (!bounded(filters)) {
-    const anchor = until !== '' ? until : new Date(opts.now).toISOString().slice(0, 10);
+    /*
+     * Today, as the owner's calendar has it — not as UTC has it. The
+     * boundaries below this line are read in the owner's zone, so an anchor
+     * taken from `toISOString()` would have put the window's edge on a
+     * different day from every other date in the same query: at 20:00 in New
+     * York it is already tomorrow in UTC, and the window would silently start
+     * a day late.
+     */
+    const anchor = until !== '' ? until : localDateString(opts.now, opts.timezone);
     windowFrom = dayBefore(anchor, DEFAULT_WINDOW_DAYS);
     params.push(windowFrom);
     bodyWhere.push(`${WHEN} >= ($${params.length}::date::timestamp at time zone $${tz()})`);

@@ -153,41 +153,165 @@ const MACHO_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca,
 ]);
 
-/** Where a ZIP's End Of Central Directory record starts, or -1. */
-function eocdOffset(bytes: Buffer): number {
-  // The EOCD is at the end, after a comment of at most 64 KiB.
-  const from = Math.max(0, bytes.length - (0xffff + 22));
-  for (let i = bytes.length - 22; i >= from; i -= 1) {
-    if (bytes.readUInt32LE(i) === 0x06054b50) return i;
+/* ---- ZIP containers, which is where a macro or a jar actually hides ---- */
+
+const EOCD_SIG = 0x06054b50;
+const CENTRAL_SIG = 0x02014b50;
+const LOCAL_SIG = 0x04034b50;
+/** The ZIP64 End Of Central Directory *Locator*, which sits just before the EOCD. */
+const ZIP64_LOCATOR_SIG = 0x07064b50;
+const ZIP64_EOCD_SIG = 0x06064b50;
+
+/** EOCD is 22 bytes plus a comment of at most 64 KiB. */
+const EOCD_MIN = 22;
+const EOCD_SEARCH = 0xffff + EOCD_MIN;
+
+/**
+ * What could be learned about a ZIP.
+ *
+ * Three answers rather than two, and the third is the point: "this is a ZIP
+ * and I could not read its index" is not the same as "this is not a ZIP", and
+ * treating it as the latter is how a ZIP64 archive or a deliberately truncated
+ * one walks past a check that only ever looks at entry names.
+ */
+export type ZipInspection =
+  | { kind: 'not-zip' }
+  | { kind: 'entries'; names: string[] }
+  | { kind: 'uninspectable'; why: string };
+
+/** Is there an EOCD signature anywhere it could legally be? Cheap, no parsing. */
+export function looksLikeZip(bytes: Buffer): boolean {
+  if (bytes.length >= 4 && bytes.readUInt32LE(0) === LOCAL_SIG) return true;
+  const from = Math.max(0, bytes.length - EOCD_SEARCH);
+  for (let i = bytes.length - EOCD_MIN; i >= from; i -= 1) {
+    if (bytes.readUInt32LE(i) === EOCD_SIG) return true;
+  }
+  return false;
+}
+
+/** Every EOCD *candidate*, newest first. A comment may contain the signature. */
+function eocdCandidates(bytes: Buffer): number[] {
+  const out: number[] = [];
+  if (bytes.length < EOCD_MIN) return out;
+  const from = Math.max(0, bytes.length - EOCD_SEARCH);
+  for (let i = bytes.length - EOCD_MIN; i >= from; i -= 1) {
+    if (bytes.readUInt32LE(i) === EOCD_SIG) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Where this archive's central directory really starts, or -1.
+ *
+ * Two ways, because both are legal and the second is the one that matters
+ * here. `cdOffset` is relative to the start of the *archive*, which is not the
+ * start of the file when something is prepended — a self-extracting stub, or a
+ * hundred bytes of padding put there precisely so a checker that reads byte 0
+ * decides this is not a ZIP. The directory always ends immediately before the
+ * EOCD, so `eocd - cdSize` finds it whatever the preamble; `cdOffset` is the
+ * fallback. Whichever is used is only accepted when the central-directory
+ * signature is actually there.
+ */
+function centralDirectoryStart(bytes: Buffer, eocd: number, cdSize: number, cdOffset: number): number {
+  const candidates = [eocd - cdSize, cdOffset];
+  for (const at of candidates) {
+    if (at < 0 || at + 4 > bytes.length || at > eocd) continue;
+    if (bytes.readUInt32LE(at) === CENTRAL_SIG) return at;
   }
   return -1;
 }
 
 /**
- * The names in a ZIP's central directory.
+ * The names in a ZIP's central directory, read properly.
  *
- * Read properly rather than by searching the whole buffer for a string,
- * because a `.docx` may perfectly well *contain* the text `vbaProject.bin`
- * inside a compressed part and a substring search would refuse it. Returns an
- * empty list when the directory cannot be read, which is a reason to fall back
- * to the declared type rather than to guess.
+ * Properly, and not by searching the whole buffer for `vbaProject.bin`,
+ * because a perfectly ordinary `.docx` may *contain* that text inside a
+ * compressed part and a substring search would refuse it.
+ *
+ * Every loop here is bounded by the buffer: a declared entry count is a number
+ * an attacker writes, and a parser that trusts it is a parser that hangs.
  */
-export function zipEntryNames(bytes: Buffer): string[] {
-  const eocd = eocdOffset(bytes);
-  if (eocd < 0 || eocd + 22 > bytes.length) return [];
-  const count = bytes.readUInt16LE(eocd + 10);
-  let at = bytes.readUInt32LE(eocd + 16);
-  const names: string[] = [];
-  for (let i = 0; i < count && at + 46 <= bytes.length; i += 1) {
-    if (bytes.readUInt32LE(at) !== 0x02014b50) break;
-    const nameLen = bytes.readUInt16LE(at + 28);
-    const extraLen = bytes.readUInt16LE(at + 30);
-    const commentLen = bytes.readUInt16LE(at + 32);
-    if (at + 46 + nameLen > bytes.length) break;
-    names.push(bytes.toString('utf8', at + 46, at + 46 + nameLen));
-    at += 46 + nameLen + extraLen + commentLen;
+export function inspectZip(bytes: Buffer): ZipInspection {
+  const candidates = eocdCandidates(bytes);
+  if (candidates.length === 0) {
+    // Local header but no end record: a ZIP whose index we cannot reach.
+    if (bytes.length >= 4 && bytes.readUInt32LE(0) === LOCAL_SIG) {
+      return { kind: 'uninspectable', why: 'its index is missing or truncated' };
+    }
+    return { kind: 'not-zip' };
   }
-  return names;
+
+  let truncated = false;
+  for (const eocd of candidates) {
+    const entries = bytes.readUInt16LE(eocd + 8);
+    const total = bytes.readUInt16LE(eocd + 10);
+    const cdSize = bytes.readUInt32LE(eocd + 12);
+    const cdOffset = bytes.readUInt32LE(eocd + 16);
+
+    /*
+     * ZIP64. The 32-bit fields saturate, and the real ones live in a record
+     * this parser does not read — so the honest answer is "I cannot inspect
+     * this", not "there is nothing in it". A ZIP64 locator sitting just before
+     * the EOCD says the same thing.
+     */
+    const zip64 =
+      total === 0xffff ||
+      entries === 0xffff ||
+      cdSize === 0xffffffff ||
+      cdOffset === 0xffffffff ||
+      (eocd >= 20 && bytes.readUInt32LE(eocd - 20) === ZIP64_LOCATOR_SIG) ||
+      (eocd >= 56 && bytes.readUInt32LE(eocd - 56) === ZIP64_EOCD_SIG);
+    if (zip64) {
+      return { kind: 'uninspectable', why: 'it is a ZIP64 archive, whose index this build cannot read' };
+    }
+
+    const start = centralDirectoryStart(bytes, eocd, cdSize, cdOffset);
+    if (start < 0) {
+      // A fake signature inside a comment lands here and the *real* EOCD,
+      // further back, is tried next.
+      continue;
+    }
+    if (start + cdSize > bytes.length || eocd + EOCD_MIN > bytes.length) {
+      truncated = true;
+      continue;
+    }
+
+    const names: string[] = [];
+    let at = start;
+    // Bounded twice over: by the declared count *and* by the buffer.
+    for (let i = 0; i < total && i < 0xffff; i += 1) {
+      if (at + 46 > bytes.length || bytes.readUInt32LE(at) !== CENTRAL_SIG) {
+        return { kind: 'uninspectable', why: 'its index is truncated or malformed' };
+      }
+      const nameLen = bytes.readUInt16LE(at + 28);
+      const extraLen = bytes.readUInt16LE(at + 30);
+      const commentLen = bytes.readUInt16LE(at + 32);
+      const nameEnd = at + 46 + nameLen;
+      if (nameEnd > bytes.length) {
+        return { kind: 'uninspectable', why: 'its index is truncated or malformed' };
+      }
+      names.push(bytes.toString('utf8', at + 46, nameEnd));
+      const next = nameEnd + extraLen + commentLen;
+      // A zero-or-backwards step would be an infinite loop on hostile input.
+      if (next <= at) {
+        return { kind: 'uninspectable', why: 'its index is malformed' };
+      }
+      at = next;
+    }
+    return { kind: 'entries', names };
+  }
+
+  if (truncated) return { kind: 'uninspectable', why: 'its index is truncated' };
+  if (bytes.length >= 4 && bytes.readUInt32LE(0) === LOCAL_SIG) {
+    return { kind: 'uninspectable', why: 'its index could not be read' };
+  }
+  return { kind: 'not-zip' };
+}
+
+/** Back-compatible view of `inspectZip`: the names, or none. */
+export function zipEntryNames(bytes: Buffer): string[] {
+  const found = inspectZip(bytes);
+  return found.kind === 'entries' ? found.names : [];
 }
 
 /** What the first bytes say this is, when they say anything. */
@@ -210,6 +334,27 @@ const ZIP_FAMILIES = [
   'application/epub+zip',
 ];
 
+/** Every type that says "there is a ZIP in here", precise or not. */
+const ZIP_MIMES = [
+  ...ZIP_FAMILIES,
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/java-archive',
+  'application/vnd.android.package-archive',
+];
+
+/** Extensions that are ZIP containers, whatever the sender declared. */
+const ZIP_EXTENSIONS = new Set([
+  'zip', 'jar', 'apk', 'docx', 'xlsx', 'pptx', 'docm', 'xlsm', 'pptm', 'xlam', 'dotm',
+  'odt', 'ods', 'odp', 'epub',
+]);
+
+function claimsZip(filename: string | null, mime: string): boolean {
+  const bare = bareMime(mime);
+  if (ZIP_MIMES.some((m) => bare === m || bare.startsWith(m))) return true;
+  return ZIP_EXTENSIONS.has(extensionOf(filename));
+}
+
 /**
  * The mime to store: what the bytes say, unless the sender said something more
  * precise about the same thing.
@@ -225,12 +370,35 @@ export function mimeToStore(sniffed: string | null, declared: string): string {
   return sniffed;
 }
 
+/** What is inside a ZIP that this build will not keep, by entry name. */
+function zipContentRefusal(names: readonly string[]): string | null {
+  if (names.some((n) => n.toLowerCase().endsWith('vbaproject.bin'))) {
+    return refusal('this attachment is an Office document carrying macros');
+  }
+  if (names.some((n) => n.toUpperCase() === 'META-INF/MANIFEST.MF')) {
+    return refusal('this attachment is a Java archive, whatever it is called');
+  }
+  return null;
+}
+
 /**
  * Why these bytes are refused, or null.
  *
  * The last layer, and the only one that cannot be lied to by renaming a file.
+ *
+ * The name and the declared type are passed in — not to be *trusted*, but
+ * because they are reasons to **look harder**. The ZIP inspection used to run
+ * only when byte 0 was `PK`, so a hundred bytes of padding in front of an
+ * archive skipped it entirely; now anything that calls itself a ZIP container,
+ * or carries an end-of-directory record anywhere it could legally be, is
+ * opened and read. And a ZIP that cannot be read — ZIP64, truncated, a
+ * malformed index — is refused rather than waved through, because "I could not
+ * see inside it" is not "there was nothing in it".
  */
-export function bytesRefusal(bytes: Buffer): string | null {
+export function bytesRefusal(
+  bytes: Buffer,
+  declared: { filename?: string | null; mime?: string } = {},
+): string | null {
   if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {
     return refusal('the bytes of this attachment are a Windows program, whatever it is called');
   }
@@ -243,13 +411,22 @@ export function bytesRefusal(bytes: Buffer): string | null {
   if (bytes.length >= 2 && bytes[0] === 0x23 && bytes[1] === 0x21) {
     return refusal('the bytes of this attachment are a script with a shebang line, whatever it is called');
   }
-  if (startsWith(bytes, 0x50, 0x4b, 0x03, 0x04)) {
-    const names = zipEntryNames(bytes);
-    if (names.some((n) => n.toLowerCase().endsWith('vbaproject.bin'))) {
-      return refusal('this attachment is an Office document carrying macros');
+  /*
+   * Look inside whenever there is a reason to: the sender called it a ZIP
+   * container, it is named like one, or there is an end-of-directory record
+   * where one would be. Each of those is cheap and none of them is trusted —
+   * a file that turns out not to be a ZIP simply answers `not-zip`.
+   */
+  if (claimsZip(declared.filename ?? null, declared.mime ?? '') || looksLikeZip(bytes)) {
+    const found = inspectZip(bytes);
+    if (found.kind === 'uninspectable') {
+      return refusal(
+        `this attachment is an archive buddi cannot look inside — ${found.why} — and an archive nobody can read is not one to keep`,
+      );
     }
-    if (names.some((n) => n.toUpperCase() === 'META-INF/MANIFEST.MF')) {
-      return refusal('this attachment is a Java archive, whatever it is called');
+    if (found.kind === 'entries') {
+      const inside = zipContentRefusal(found.names);
+      if (inside) return inside;
     }
   }
   return null;
