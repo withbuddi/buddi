@@ -231,6 +231,16 @@ export interface EmailPoliciesView {
   unavailable?: string;
 }
 
+/**
+ * What one bulk keep or revoke did. The two lists come back with it, so the
+ * page redraws from the answer instead of asking again.
+ */
+export interface EmailPoliciesBulk extends EmailPoliciesView {
+  kept: number;
+  revoked: number;
+  missing: number;
+}
+
 export interface EventRow {
   id: string;
   kind: string;
@@ -1346,6 +1356,12 @@ export const api = {
     sender?: string;
   }) => post<EmailPoliciesView>('/email/policies', body),
   keepEmailPolicy: (id: string) => post<EmailPoliciesView>('/email/policies', { keep: id }),
+  /**
+   * Keep or revoke a selection in one go. The ids are the ones the page is
+   * showing: the route applies exactly those and answers how many it touched.
+   */
+  bulkEmailPolicies: (action: 'keep' | 'revoke', ids: string[]) =>
+    post<EmailPoliciesBulk>('/email/policies/bulk', { action, ids }),
   revokeEmailPolicy: (id: string) =>
     del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),
   /* ---- plugins ---- */

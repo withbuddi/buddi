@@ -217,6 +217,72 @@ export async function revokePolicy(db: Db, id: string, now: Date): Promise<Polic
   return rows[0] ? toPolicy(rows[0]) : null;
 }
 
+/** What one bulk keep or revoke did. Counts, because the page shows counts. */
+export interface BulkPolicyResult {
+  /** Proposals that are now deciding. Zero for a revoke. */
+  kept: number;
+  /** Rules that now decide nothing. Zero for a keep. */
+  revoked: number;
+  /** Ids that matched no row this action could touch. */
+  missing: number;
+}
+
+/**
+ * Keep or revoke exactly the policies named, in one transaction.
+ *
+ * One statement per call rather than a loop of `keepPolicy`/`revokePolicy`:
+ * the owner ticking seventy-three proposals and tapping "Keep selected" made
+ * *one* decision, and half of it landing because the connection dropped in the
+ * middle would leave an installation nobody chose — some senders deciding,
+ * some still proposing, and no way to tell which tick failed.
+ *
+ * `missing` is the honest remainder: ids that named no row this action could
+ * touch, because the list the page was holding is older than the database.
+ * A keep only ever touches a live row; a revoke is idempotent, so revoking
+ * something already revoked counts as revoked rather than missing.
+ */
+export async function bulkPolicies(
+  pool: Pool,
+  action: 'keep' | 'revoke',
+  ids: readonly string[],
+  now: Date,
+): Promise<BulkPolicyResult> {
+  const unique = [...new Set(ids.map((id) => String(id ?? '').trim()).filter((id) => id !== ''))];
+  if (unique.length === 0) return { kept: 0, revoked: 0, missing: 0 };
+
+  const client = await pool.connect();
+  let touched = 0;
+  try {
+    await client.query('begin');
+    const { rows } =
+      action === 'keep'
+        ? await client.query(
+            `update email.policies set proposed = false
+              where id = any($1::uuid[]) and revoked_at is null
+              returning id`,
+            [unique],
+          )
+        : await client.query(
+            `update email.policies set revoked_at = coalesce(revoked_at, $2)
+              where id = any($1::uuid[])
+              returning id`,
+            [unique, now],
+          );
+    touched = rows.length;
+    await client.query('commit');
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  return {
+    kept: action === 'keep' ? touched : 0,
+    revoked: action === 'revoke' ? touched : 0,
+    missing: unique.length - touched,
+  };
+}
+
 /**
  * How far the gate got with this message.
  *

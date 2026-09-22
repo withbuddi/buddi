@@ -1,5 +1,6 @@
 /**
- * The three mail-policy routes: `GET`, `POST` and `DELETE /api/email/policies`.
+ * The mail-policy routes: `GET`, `POST` and `DELETE /api/email/policies`, and
+ * `POST /api/email/policies/bulk`.
  *
  * The rules live in the email plugin and are tested there. What is asserted
  * here is that the routes apply them — the same refusals, in the same words —
@@ -249,6 +250,64 @@ suite('the mail policy routes', () => {
     const res = await send('DELETE', '/api/email/policies/00000000-0000-0000-0000-000000000000');
     expect(res.status).toBe(404);
     expect((await send('POST', '/api/email/policies', { keep: '00000000-0000-0000-0000-000000000000' })).status).toBe(404);
+  });
+
+  /*
+   * Bulk keep and revoke, over HTTP.
+   *
+   * The selection is a list of ids, and the route applies exactly those — the
+   * one assertion worth making at this level, because the row it must not
+   * touch is a real row in a real table rather than a mock that would have
+   * been asked politely.
+   */
+  it('keeps and revokes exactly the ids the page sent, and nothing beside them', async () => {
+    const ids: string[] = [];
+    for (const matcher of ['one@shop.test', 'two@shop.test', 'three@shop.test']) {
+      const made = await createPolicy(
+        pool,
+        { scope: 'sender', matcher, action: 'ignore', origin: 'learned', proposed: true },
+        NOW,
+      );
+      ids.push(made.id);
+    }
+
+    const kept = await send('POST', '/api/email/policies/bulk', { action: 'keep', ids: [ids[0], ids[2]] });
+    expect(kept.status).toBe(200);
+    const afterKeep = (await kept.json()) as PoliciesBody & { kept: number; missing: number };
+    expect(afterKeep).toMatchObject({ kept: 2, revoked: 0, missing: 0 });
+    expect(afterKeep.applied.map((p) => p.matcher).sort()).toEqual(['one@shop.test', 'three@shop.test']);
+    // The one that was not in the selection is still only a proposal.
+    expect(afterKeep.proposed.map((p) => p.id)).toEqual([ids[1]]);
+
+    const gone = await send('POST', '/api/email/policies/bulk', { action: 'revoke', ids: [ids[0]] });
+    expect(gone.status).toBe(200);
+    const afterRevoke = (await gone.json()) as PoliciesBody & { revoked: number };
+    expect(afterRevoke).toMatchObject({ revoked: 1 });
+    expect(afterRevoke.applied.map((p) => p.id)).toEqual([ids[2]]);
+
+    const { rows } = await pool.query(
+      `select id, revoked_at, proposed from email.policies order by matcher`,
+    );
+    // Three rows still, and only the one that was named is revoked.
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.revoked_at !== null).map((r) => String(r.id))).toEqual([ids[0]]);
+  });
+
+  it('refuses a bulk body that is not a selection, and one without the CSRF pair', async () => {
+    const made = await createPolicy(
+      pool,
+      { scope: 'sender', matcher: 'news@shop.test', action: 'ignore', origin: 'learned', proposed: true },
+      NOW,
+    );
+    expect((await send('POST', '/api/email/policies/bulk', { action: 'burn', ids: [made.id] })).status).toBe(400);
+    expect((await send('POST', '/api/email/policies/bulk', { action: 'keep', ids: 'all' })).status).toBe(400);
+    expect((await send('POST', '/api/email/policies/bulk', { action: 'keep', ids: ['nope'] })).status).toBe(400);
+    expect(
+      (await send('POST', '/api/email/policies/bulk', { action: 'keep', ids: [made.id] }, { csrf: null })).status,
+    ).toBe(403);
+
+    const { rows } = await pool.query(`select proposed from email.policies where id = $1`, [made.id]);
+    expect(rows[0].proposed).toBe(true);
   });
 
   it('refuses a write without the CSRF pair, and one from another origin', async () => {
