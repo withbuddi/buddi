@@ -64,8 +64,8 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 Small, whenever a slot opens:
 
-- Agent avatar — an optional uploaded PNG or SVG on the agent record next to
-  the icon, size-capped and re-encoded on upload, served at
+- Agent avatar — an optional uploaded PNG, SVG or GIF on the agent record next to
+  the icon, kept in the database blob store (never in the agent file), size-capped and re-encoded on upload, served at
   `/api/agents/:id/avatar`, shown in the roster, chat header, delegation view
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
