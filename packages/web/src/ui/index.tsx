@@ -424,16 +424,24 @@ export function Details({
   boxed,
   open,
   className,
+  onToggle,
   children,
 }: {
   summary: ReactNode;
   boxed?: boolean;
   open?: boolean;
   className?: string;
+  /** Told when it opens or closes — for a body that is fetched when asked for. */
+  onToggle?: (open: boolean) => void;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <details className={cx('ui-details', className)} data-boxed={boxed ? 'true' : undefined} open={open}>
+    <details
+      className={cx('ui-details', className)}
+      data-boxed={boxed ? 'true' : undefined}
+      open={open}
+      onToggle={onToggle ? (event) => onToggle((event.currentTarget as HTMLDetailsElement).open) : undefined}
+    >
       <summary>{summary}</summary>
       {children}
     </details>

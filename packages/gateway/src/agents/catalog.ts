@@ -438,6 +438,7 @@ export function reloadableCatalog(
     get: (id) => inner.get(id),
     byHandle: (handle) => inner.byHandle(handle),
     list: () => inner.list(),
+    refused: () => inner.refused?.() ?? [],
     agentsWithRole: (role) => inner.agentsWithRole(role),
     agentForRole: (role) => inner.agentForRole(role),
     defaultAgent: () => inner.defaultAgent(),

@@ -45,6 +45,8 @@ export const DOCUMENTED: Record<string, string> = {
   SentinelContext: path.join('sentinels', 'types.ts'),
   Finding: path.join('sentinels', 'types.ts'),
   ViewDescriptor: 'views.ts',
+  PageDescriptor: 'pages.ts',
+  PageQuery: 'pages.ts',
 };
 
 /** One member of an interface: its name, and whether the type marks it optional. */

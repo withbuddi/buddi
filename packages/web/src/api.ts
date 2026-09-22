@@ -7,6 +7,7 @@
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
 import type { ViewDescriptor } from './canvas/types';
+import type { PageActResult, PluginPageDescriptor } from './pages/types';
 import type {
   AgentHoldBack,
   AgentsResponse,
@@ -1413,6 +1414,23 @@ export const api = {
    */
   bindBrain: (body: { accountId: string; model: string }) =>
     post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
+  /* ---- plugin pages: descriptors, reads, writes ---- */
+  /**
+   * The screens the installed plugins contribute. Data, like the canvas's
+   * views: the page owns the components and learns from here which of them go
+   * where — an installation without a plugin is served none of its screen.
+   */
+  pages: () => get<{ pages: PluginPageDescriptor[] }>('/pages'),
+  /** One plugin page query. Every parameter is a string; the plugin's schema decides. */
+  pageQuery: <T = unknown>(plugin: string, query: string, params: Record<string, string> = {}) =>
+    get<{ data: T }>(`/pages/${encodeURIComponent(plugin)}/${encodeURIComponent(query)}`, params),
+  /**
+   * One write from a plugin page: a tool of that plugin, invoked as the owner.
+   * An `auto` tool answers with its result; a `gated` one with the id of the
+   * approval the owner now has to decide.
+   */
+  pageAct: (plugin: string, body: { tool: string; args?: Record<string, unknown> }) =>
+    post<PageActResult>(`/pages/${encodeURIComponent(plugin)}/act`, body),
   /* ---- mail accounts ---- */
   emailAccounts: () => get<EmailAccountsView>('/email/accounts'),
   /** The five settings the mail watchers read (docs/specs/email.md §7). */
@@ -1451,7 +1469,11 @@ export const api = {
     // and value against what the action declared; nothing here is trusted.
     ownerChoices?: Record<string, string>,
   ) =>
-    post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(
+    post<{
+      action: ApprovalRow;
+      /** `result` is the tool's own output, when it ran and succeeded. */
+      execution: { state: string; message?: string; result?: unknown } | null;
+    }>(
       `/approvals/${encodeURIComponent(id)}/${decision}`,
       permissionScope || ownerChoices
         ? { ...(permissionScope ? { permissionScope } : {}), ...(ownerChoices ? { ownerChoices } : {}) }

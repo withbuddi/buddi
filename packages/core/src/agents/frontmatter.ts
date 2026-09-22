@@ -22,7 +22,9 @@ export class AgentFileError extends Error {
       | 'unterminated-frontmatter'
       | 'yaml-syntax'
       | 'invalid-frontmatter'
-      | 'id-mismatch',
+      | 'id-mismatch'
+      /** The id is one the installation already means something by. */
+      | 'reserved-id',
     message: string,
     readonly file?: string,
   ) {
@@ -34,6 +36,27 @@ export type YamlValue = string | number | boolean | string[];
 
 /** Ids and skill names share one shape: lowercase words joined by hyphens. */
 export const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Ids nothing may be called, because the installation already means something
+ * by them.
+ *
+ * `owner` is the owner themselves — it is the agent id a write made from a
+ * plugin page is recorded under, and the one `ownerOnly` checks — and `room`
+ * is the speaker a group's own turns are written as. Both share the namespace
+ * with agent ids in `core.actions.agent_id`, in artifacts' `createdBy` and in
+ * a transcript's speaker, so an agent called either would not merely slip past
+ * a gate: it would make the ledger ambiguous about who did something.
+ */
+export const RESERVED_AGENT_IDS: readonly string[] = ['owner', 'room'];
+
+/** Why an id is refused, in the one sentence every path uses. */
+export function reservedAgentIdMessage(id: string): string {
+  return (
+    `"${id}" is reserved: the installation already writes ${RESERVED_AGENT_IDS.map((r) => `"${r}"`).join(' and ')} ` +
+    'in the columns that say who did something — the owner, and a group\'s own voice. Choose another id.'
+  );
+}
 
 /**
  * A handle is the name the owner types: `@ledger`. Kebab-case like an id, but
@@ -148,7 +171,10 @@ export function parseYamlSubset(source: string, file?: string): Record<string, Y
  */
 export const agentFrontmatterSchema = z
   .object({
-    id: z.string().regex(KEBAB, 'id must be kebab-case'),
+    id: z
+      .string()
+      .regex(KEBAB, 'id must be kebab-case')
+      .refine((id) => !RESERVED_AGENT_IDS.includes(id), (id) => ({ message: reservedAgentIdMessage(id) })),
     /**
      * How the owner addresses this agent: `@ledger`. Required, because an agent
      * nobody can call by name is only half installed; uniqueness across the
@@ -240,6 +266,16 @@ export function parseAgentFile(
 ): ParsedAgentFile {
   const { frontmatter, body } = splitFrontmatter(source, opts.file);
   const raw = parseYamlSubset(frontmatter, opts.file);
+  /*
+   * Checked before the schema, and with its own code, because the catalog has
+   * something else to do about it: an installation that already has an agent
+   * called `owner` must not fail to start — that agent is held back and said
+   * so, exactly like one whose plugin is missing.
+   */
+  const declared = (raw as { id?: unknown }).id;
+  if (typeof declared === 'string' && RESERVED_AGENT_IDS.includes(declared)) {
+    throw new AgentFileError('reserved-id', reservedAgentIdMessage(declared), opts.file);
+  }
   const parsed = agentFrontmatterSchema.safeParse(raw);
   if (!parsed.success) {
     throw new AgentFileError(

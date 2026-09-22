@@ -12,6 +12,7 @@ import {
   generatedSection,
   MAX_LISTED_COLLEAGUES,
   type AgentRosterEntry,
+  type CatalogAgent,
   injectToday,
   loadAgentCatalog,
   resolveToolGrants,
@@ -170,6 +171,18 @@ describe('parseAgentFile', () => {
   it('refuses a non-kebab-case id', () => {
     const file = agentFile('id: Finance_Advisor\nhandle: xx\nname: X\ndescription: d\ntools: []');
     expect(() => parseAgentFile(file)).toThrow(/kebab-case/);
+  });
+
+  it('refuses an id the installation already means something by', () => {
+    // `owner` is the agent id a write from a plugin page is recorded under,
+    // and the one `ownerOnly` checks; `room` is a group's own voice. An agent
+    // called either would make the ledger ambiguous about who did something.
+    for (const reserved of ['owner', 'room']) {
+      const file = agentFile(`id: ${reserved}\nhandle: ${reserved}x\nname: X\ndescription: d\ntools: []`);
+      expect(() => parseAgentFile(file, { dirName: reserved, file: `/agents/${reserved}/agent.md` })).toThrow(
+        /is reserved/,
+      );
+    }
   });
 
   it('refuses a missing required field', () => {
@@ -544,6 +557,71 @@ describe('loadAgentCatalog', () => {
       expect(mailer.availability.ok).toBe(false);
       expect(mailer.availability.ok ? '' : mailer.availability.problem.code).toBe('missing-plugin');
       expect(mailer.unavailableReason).toBe('Needs a plugin providing the email tools.');
+    });
+
+    it('does not fail to start over an agent that predates the reserved ids', () => {
+      /*
+       * `owner` and `room` were reserved after some installations already had
+       * agents. Such a file must not stop the boot: it is said out loud, and
+       * it appears held back — with nothing granted and no way to be run.
+       */
+      const warned: string[] = [];
+      const file = agentFile('id: owner\nhandle: ownerly\nname: Owner\ndescription: An old agent.\ntools: []');
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ owner: file, concierge: CONCIERGE }),
+        registry: registryOf(),
+        env: { ANTHROPIC_API_KEY: 'k' },
+        log: (line) => warned.push(line),
+      });
+      expect(warned.some((line) => line.includes('/owner/agent.md') && line.includes('is reserved'))).toBe(true);
+      const held = (catalog.refused?.() ?? [])[0] as CatalogAgent;
+      expect(held.heldBack?.reason).toBe('reserved-id');
+      expect(held.available).toBe(false);
+      expect(held.tools).toEqual([]);
+      expect(held.availability.ok ? '' : held.availability.problem.code).toBe('reserved-id');
+      // And the installation still has the agents it can run.
+      expect(catalog.list().map((a) => a.id)).toContain('concierge');
+    });
+
+    it('keeps a refused file out of the roster, the handles and the default', () => {
+      const file = agentFile('id: owner\nhandle: ownerly\nname: Owner\ndescription: An old agent.\ntools: []');
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ owner: file, concierge: CONCIERGE }),
+        registry: registryOf(),
+        env: { ANTHROPIC_API_KEY: 'k' },
+        // Even recorded as the default, it cannot be it: it is not an agent.
+        defaultAgentId: 'owner',
+        log: () => {},
+      });
+      expect(catalog.list().map((a) => a.id)).toEqual(['concierge']);
+      expect(catalog.get('owner')).toBeUndefined();
+      expect(catalog.byHandle('ownerly')).toBeUndefined();
+      expect(() => catalog.resolve('@ownerly')).toThrow();
+      expect(catalog.defaultAgent().id).toBe('concierge');
+      expect(catalog.agentsWithRole('overview').map((a) => a.id)).not.toContain('owner');
+      // It exists in exactly one place: the list the Agents page reads.
+      const refused = catalog.refused?.() ?? [];
+      expect(refused.map((a) => a.id)).toEqual(['owner']);
+      expect(refused[0]?.heldBack?.reason).toBe('reserved-id');
+      expect(refused[0]?.tools).toEqual([]);
+    });
+
+    it('lets a real agent answer to a handle a refused file also invented', () => {
+      /*
+       * The stub's handle is made up from its directory, so it must take part
+       * in nothing — including the duplicate-handle check, which would
+       * otherwise refuse a perfectly good agent because of a file that was
+       * never loaded.
+       */
+      const refused = agentFile('id: owner\nhandle: owner\nname: Owner\ndescription: Old.\ntools: []');
+      const real = agentFile('id: front-desk\nhandle: owner\nname: Desk\ndescription: The desk.\ntools: []');
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ owner: refused, 'front-desk': real }),
+        registry: registryOf(),
+        env: { ANTHROPIC_API_KEY: 'k' },
+        log: () => {},
+      });
+      expect(catalog.byHandle('owner')?.id).toBe('front-desk');
     });
 
     it('names the plugin when the installation knows which one provides the family', () => {
