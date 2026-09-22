@@ -12,7 +12,7 @@
  */
 import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
-import { isUnread, quoted, UNTRUSTED_NOTICE } from '../mail.js';
+import { isUnread, quoted, UNREAD_SQL, UNTRUSTED_NOTICE } from '../mail.js';
 import {
   buildSearch,
   narrows,
@@ -88,7 +88,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
       where.push(`date >= $${params.length}::date`);
     }
     if (input.unreadOnly) {
-      where.push(`not (flags @> '["\\\\Seen"]'::jsonb)`);
+      where.push(UNREAD_SQL);
     }
     params.push(limit);
     const { rows } = await ctx.db.query(
