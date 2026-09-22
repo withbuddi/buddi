@@ -59,9 +59,17 @@ it reads the plugin's own workspace record for this agent:
 The `reason` is one sentence and it is appended to the approval's preview, so
 the card the owner reads says which rule matched (§5). The mode is read from
 the record on every call, so changing it on the agent's page changes the next
-call and not the run. Nothing else changes: `session` still needs a live owner
-request, an explicit grant and `delegationDepth` 0, so a delegate of a
-developer agent gets none of this (§10, acceptance 5).
+call and not the run.
+
+What `tierFor` does **not** do is widen anything. Every rule in it is a parser
+over words a model chose, so the registry keeps the declared tier as the floor:
+a declared-`session` tool is checked for a live owner request, an explicit
+grant, an agent, a conversation and `delegationDepth` 0 on *every* call,
+whatever the mode returned, before that answer is acted on at all. So a
+delegate of a developer agent gets `session-not-authorized` from
+`developer.run` even in `run` mode (§10, acceptance 5), a scheduled run with no
+owner request gets the same, and a command the §5 parser misreads costs the
+owner one unexpected card rather than an unapproved shell.
 
 ## 4. Tools
 
@@ -156,11 +164,12 @@ repository, since it is a plugin.
 A process started with `developer.start` that listens on a loopback port
 gets a preview, two ways, both ending when the process stops:
 
-- **Through buddi.** `https://<dashboard origin>/preview/developer/<process>/…`
-  is a reverse proxy from the gateway to that port, behind the dashboard's own
-  sign-in (a session, or Tailscale), nothing more: a device that is signed
-  in to the dashboard sees the app, anyone else gets the dashboard's 401 —
-  never a redirect, which would say that this preview exists.
+- **Through buddi.** `http://127.0.0.1:<previewPort>/preview/developer/<process>/…`
+  is a reverse proxy from the gateway to that port. It is **not** the dashboard's
+  origin: previews get a second loopback listener (the dashboard's port plus
+  one, or `BUDDI_PREVIEW_PORT`) that serves previews and nothing else, because
+  the app in the frame is code this agent wrote a minute ago and it must not be
+  able to read the dashboard's page, its cookies or its API.
   `developer.preview` (auto) returns the link. Websockets are proxied for
   hot reload. Apps that assume they live at the root of a host may break
   under a path prefix; the tool says so when the first response references
@@ -168,25 +177,32 @@ gets a preview, two ways, both ending when the process stops:
   in scope; if it is ever wanted it is a signed, expiring variant of the
   same link, a small addition.
 
-  As built (docs/plugins.md §2.5c), this is two routes and one manifest field.
-  The plugin declares `previews: { resolve(name, ctx) }`, which answers with
-  the port behind a process name or `null`; the gateway asks it on every
-  request. `GET|POST|… /preview/developer/<name>/<rest>` is the proxy —
-  method, path, query, body and headers except `cookie`, `authorization` and
-  the hop-by-hop ones, plus `x-forwarded-prefix`, with `Set-Cookie` scoped
-  back into the prefix and nothing in the body rewritten. `GET
-  /api/preview/developer/<name>/check` answers `{ ok, absoluteAssets }` from
-  what the proxy saw on the first HTML response, which is where
-  `developer.preview`'s warning comes from. The canvas panel is the `preview`
-  renderer (docs/plugins.md §2.5): `{ src, title?, output? }`, a sandboxed
-  frame of a `/preview/` URL beside the process's output, with "Open in a tab"
+  As built (docs/plugins.md §2.5c): the plugin declares
+  `previews: { resolve(name, ctx) }`, which answers with the port behind a
+  process name or `null`, asked on every request — and it must be a port the
+  plugin is really running that process on, since the gateway only refuses the
+  obviously wrong ones (privileged, 5432, its own two listeners). The way in is
+  an exchange, not the dashboard's cookie:
+  `GET /api/preview/developer/<name>/link` on the dashboard, behind the
+  dashboard's gate, answers `{ url }` with a single-use five-minute ticket on
+  it; opening that URL sets `buddi_preview` (HttpOnly, SameSite=Lax, scoped to
+  that one preview, 24 hours) and redirects to the clean path; every later
+  request and every upgrade needs that cookie, and anything else is a bodyless
+  401. `GET /api/preview/developer/<name>/check` answers
+  `{ ok, absoluteAssets }` from what the proxy saw on the first HTML response,
+  which is where `developer.preview`'s warning comes from. The canvas panel is
+  the `preview` renderer (docs/plugins.md §2.5): `{ src, title?, output? }`,
+  where `src` names the process as `/preview/developer/<name>/`; the panel
+  calls `link` itself and frames the answer, cross-origin, with "Open in a tab"
   for an app that refuses framing.
+
 - **A Tailscale route per port**, for those apps: when Tailscale is running
-  and the owner allowed it on Settings → Developer, buddi adds
-  `tailscale serve --https=<port> http://127.0.0.1:<port>` when the process
-  starts and removes it when it stops, giving a clean `https://<host>:<port>`
-  guarded by the tailnet alone. Off by default; the sentence on the page
-  says what it exposes.
+  and the owner allowed it on Settings → Developer, the plugin adds
+  `tailscale serve --https=<port> http://127.0.0.1:<previewPort>` when the
+  process starts and removes it when it stops, giving a clean
+  `https://<host>:<port>` guarded by the tailnet alone. It is the plugin's to
+  add and to take away — the gateway publishes only the dashboard — and it is
+  off by default; the sentence on the page says what it exposes.
 
 The canvas gets a **Preview** panel: the buddi-proxied app framed beside
 the process output, "Open in a tab" for apps that refuse framing, and a

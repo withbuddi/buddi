@@ -149,8 +149,6 @@ export class ExtensionEndpoint implements ExtensionBridge {
   #frames = new Map<string, (frame: HandFrame) => void>();
   /** Other upgrade paths on this server's one listener; see `attachPath`. */
   #routes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
-  /** Whole subtrees on the same listener; see `attachPrefix`. */
-  #prefixes = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => void>();
   /** Commands the extension was told to abandon, until it says it has. */
   #cancelling = new Map<string, NodeJS.Timeout>();
   #idle: Array<() => void> = [];
@@ -194,19 +192,6 @@ export class ExtensionEndpoint implements ExtensionBridge {
     this.#routes.set(pathname, handle);
   }
 
-  /**
-   * The same, for a whole *subtree* of paths.
-   *
-   * The preview proxy needs it: `/preview/<plugin>/<name>/…` is somebody
-   * else's app and its hot-reload socket is wherever that app put it. Exact
-   * paths are still matched first, so nothing here can shadow a path another
-   * caller claimed, and the prefixes are tried longest first so a narrower
-   * subtree wins over a wider one.
-   */
-  attachPrefix(prefix: string, handle: (req: IncomingMessage, socket: Duplex, head: Buffer) => void): void {
-    this.#prefixes.set(prefix, handle);
-  }
-
   #refuse(socket: Duplex, status: number, reason: string): void {
     socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
     socket.destroy();
@@ -216,11 +201,6 @@ export class ExtensionEndpoint implements ExtensionBridge {
     const pathname = (req.url ?? '').split('?')[0]?.replace(/\/+$/, '') || '/';
     const route = this.#routes.get(pathname);
     if (route) return route(req, socket, head);
-    for (const prefix of [...this.#prefixes.keys()].sort((a, b) => b.length - a.length)) {
-      if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
-        return this.#prefixes.get(prefix)!(req, socket, head);
-      }
-    }
     if (pathname !== EXTENSION_SOCKET_PATH) return this.#refuse(socket, 404, 'Not Found');
     // Loopback by the socket, never by a header: a proxy in front of this is
     // not this machine, whatever it says about itself.

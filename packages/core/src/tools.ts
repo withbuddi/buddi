@@ -441,17 +441,25 @@ export interface NetworkUse {
  * A plugin that has a process of its own listening on a loopback port, and can
  * say which port stands behind a given name.
  *
- * The gateway serves `/preview/<plugin>/<name>/…` from that port, behind the
- * dashboard's own sign-in and nothing else (docs/plugins.md §2.5c). The plugin
- * owns the process and the naming; core owns the gate. Neither knows the
- * other's half: this interface is the whole of the seam, and a plugin with no
- * long-lived processes simply has no `previews`.
+ * The gateway serves `/preview/<plugin>/<name>/…` from that port on its
+ * **preview origin** — a second loopback listener with a credential of its
+ * own, never the dashboard's, because the app behind the port is untrusted
+ * code (docs/plugins.md §2.5c). The plugin owns the process and the naming;
+ * core owns the gate. Neither knows the other's half: this interface is the
+ * whole of the seam, and a plugin with no long-lived processes simply has no
+ * `previews`.
  *
  * `resolve` is asked on **every** proxied request, not once per process, so
  * that a port that has stopped being this name's port stops being served the
  * moment it does. It is a lookup, not a launcher: it starts nothing, and
  * returning `null` is how a plugin says "there is no such preview", which the
  * gateway answers 404.
+ *
+ * It must answer with a port the plugin is *actually running that process on*.
+ * The gateway forces loopback and refuses the obviously wrong ports — its own
+ * two listeners, Postgres, anything privileged — but a plugin whose record an
+ * agent can influence is the one deciding where the owner's browser is
+ * pointed, and that is the plugin's half of the boundary.
  */
 export interface PreviewProvider {
   /** The port behind `/preview/<plugin>/<name>/`, or null when there is none. */
@@ -525,9 +533,9 @@ export interface PluginManifest {
    */
   skills?: SuggestedSkill[];
   /**
-   * A loopback process of this plugin's, served behind the dashboard's sign-in
-   * at `/preview/<plugin>/<name>/` (optional). See `PreviewProvider`; almost no
-   * plugin has one, and the field is absent when it does not.
+   * A loopback process of this plugin's, served on the gateway's preview
+   * origin at `/preview/<plugin>/<name>/` (optional). See `PreviewProvider`;
+   * almost no plugin has one, and the field is absent when it does not.
    */
   previews?: PreviewProvider;
   /**

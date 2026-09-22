@@ -1,43 +1,72 @@
 /**
  * `preview` — a process of the owner's, framed beside what it is printing.
  *
- * The frame is the gateway's proxy (`/preview/<plugin>/<name>/`), which is
- * behind the dashboard's own sign-in; the resolver has already refused any
- * `src` that is not under that prefix, so this file frames what it is handed
- * and nothing else. The frame is sandboxed all the same: the app in it is code
- * the owner is *writing*, which is to say code that is wrong most of the day.
+ * The frame points at **another origin**: previews are served on a second
+ * loopback listener with a credential of their own, precisely so that the app
+ * in the frame — code an agent wrote a minute ago — is not running on the
+ * dashboard's origin with the owner's session inside reach. This panel
+ * therefore cannot build the URL itself. It asks
+ * `GET /api/preview/<plugin>/<name>/link`, which mints a single-use ticket,
+ * and frames what comes back.
  *
- * "Open in a tab" is not a convenience. An app that sets `X-Frame-Options` or
- * a `frame-ancestors` policy cannot be framed at all and shows an empty box,
- * and the same link in a tab of its own works — so the link is always there,
- * beside the frame rather than under it.
+ * Two consequences worth stating, because they look like bugs otherwise:
+ *
+ *  - The frame is cross-origin, so nothing here can read its title, its
+ *    height or anything else about it. It gets a fixed box.
+ *  - "Open in a tab" opens the same ticketed URL. It is not a convenience:
+ *    an app that sets `X-Frame-Options` or a `frame-ancestors` policy of its
+ *    own cannot be framed at all and shows an empty box, and the same link in
+ *    a tab works.
  */
+import { useEffect, useState } from 'react';
+import { api } from '../../api';
 import type { PreviewProps } from '../types';
 
 export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
-  if (props.src === null) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const plugin = props.target?.plugin ?? null;
+  const name = props.target?.name ?? null;
+
+  useEffect(() => {
+    if (plugin === null || name === null) return undefined;
+    let live = true;
+    setUrl(null);
+    setError(null);
+    api
+      .previewLink(plugin, name)
+      .then((answer) => { if (live) setUrl(answer.url); })
+      .catch((err: unknown) => {
+        if (live) setError(err instanceof Error ? err.message : 'That preview could not be opened.');
+      });
+    return () => { live = false; };
+  }, [plugin, name]);
+
+  if (props.target === null) {
     return (
       <p className="wb-empty">
-        This preview has no address on this dashboard. A preview is served at
-        <code> /preview/…</code>, and nothing else is framed here.
+        This panel names no preview. A preview is <code>/preview/&lt;plugin&gt;/&lt;name&gt;/</code>,
+        and nothing else is framed here.
       </p>
     );
   }
+
   return (
     <div className="wb-preview">
       <div className="wb-row wb-preview-head">
         {props.title ? <h4 className="wb-doc-title">{props.title}</h4> : null}
-        <a className="wb-preview-open" href={props.src} target="_blank" rel="noreferrer">
-          Open in a tab
-        </a>
+        {url ? (
+          <a className="wb-preview-open" href={url} target="_blank" rel="noreferrer">
+            Open in a tab
+          </a>
+        ) : null}
       </div>
       <div className="wb-preview-body">
-        <iframe
-          className="wb-preview-frame"
-          src={props.src}
-          title={props.title ?? 'Preview'}
-          sandbox="allow-scripts allow-forms allow-same-origin"
-        />
+        {url ? (
+          <iframe className="wb-preview-frame" src={url} title={props.title ?? 'Preview'} />
+        ) : (
+          <p className="wb-empty wb-preview-frame">{error ?? 'Opening the preview…'}</p>
+        )}
         {props.output === null || props.output === '' ? null : (
           <pre className="wb-preview-output">{props.output}</pre>
         )}

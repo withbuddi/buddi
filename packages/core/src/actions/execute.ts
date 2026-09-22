@@ -98,6 +98,7 @@ export type ExecuteApprovedResult =
         | 'args-hash-mismatch'
         | 'effect-changed'
         | 'policy-version-mismatch'
+        | 'tier-not-executable'
         | 'unknown-tool'
         | 'invalid-args'
         | 'tool-error'
@@ -124,7 +125,7 @@ export async function executeApproved(
         and ap.state = 'approved'
         and a.expires_at > $3
       returning a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-                a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
+                a.canonical_args, a.envelope, a.choices, a.tier, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
                 ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at`,
@@ -147,12 +148,26 @@ export async function executeApproved(
       message: 'this approval predates full effect binding; propose the action again',
     });
   }
+  /*
+   * The tier the action was recorded under.
+   *
+   * Only `gated` ever produces an action, so anything else here is a defect
+   * upstream — a row written by hand, or a future tier that learned to record
+   * one. It settles without dispatch, because the whole promise of this path
+   * is that it runs only what an owner was asked about.
+   */
+  if (action.tier !== null && action.tier !== 'gated') {
+    return settleWithoutDispatch(pool, action, 'tier-not-executable', {
+      message: `this action was recorded under tier '${action.tier}'; only a gated call is executed from an approval`,
+    });
+  }
   const recomputed = hashAction(
     action.tool,
     action.toolVersion,
     action.canonicalArgs,
     action.envelope,
     action.choices,
+    action.tier,
   );
   if (recomputed !== action.argsHash) {
     return settleWithoutDispatch(pool, action, 'args-hash-mismatch', {
@@ -399,7 +414,13 @@ async function refuseClaim(
 async function settleWithoutDispatch(
   pool: Queryable,
   action: ActionRecord,
-  reason: 'args-hash-mismatch' | 'unknown-tool' | 'invalid-args' | 'effect-changed' | 'policy-version-mismatch',
+  reason:
+    | 'args-hash-mismatch'
+    | 'unknown-tool'
+    | 'invalid-args'
+    | 'effect-changed'
+    | 'policy-version-mismatch'
+    | 'tier-not-executable',
   detail: Record<string, unknown> & { message: string },
 ): Promise<ExecuteApprovedResult> {
   await settleApproval(pool, action, 'refused', { reason, ...detail });

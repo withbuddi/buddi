@@ -269,23 +269,39 @@ export function resolveDocument(output: unknown, map: DocumentMap): DocumentProp
 }
 
 /**
- * The one URL the canvas will frame: a path under `/preview/`.
+ * Which preview a descriptor named, or null.
  *
- * The frame runs on the dashboard's own origin, with the owner's session on
- * it, so what goes in it is not a matter of taste. `/preview/` is the prefix
- * the gateway proxies and the only one a plugin may point at; a descriptor
- * naming `/api/…`, another site, or a scheme of its own gets no frame at all.
- * Checked here, at render time, because this is the last place before the
- * `src` attribute exists.
+ * A preview is not a URL this page may construct: it is served on another
+ * origin, behind a credential the dashboard mints one link at a time. So what
+ * a descriptor says is *which* process — spelled as the path
+ * `/preview/<plugin>/<name>/`, which is the sentence the plugin already
+ * writes — and the panel asks the link route for the rest.
+ *
+ * Parsed through `URL` rather than matched as a string, so `/preview/a/../..`
+ * is read as the `/` it resolves to and refused, rather than passing a
+ * `startsWith` and framing the dashboard.
  */
-export function isPreviewPath(src: string): boolean {
-  return isSameOrigin(src) && src.startsWith('/preview/');
+export function previewTarget(src: string): { plugin: string; name: string } | null {
+  if (!isSameOrigin(src)) return null;
+  let pathname: string;
+  try {
+    // A `file:` base, not an http one: the resolution is the only thing wanted
+    // here, and this file may not name a host at all — the bundle test reads
+    // every source for one, because a page that reaches off-origin is the
+    // thing that must never ship.
+    pathname = new URL(src, 'file:///').pathname;
+  } catch {
+    return null;
+  }
+  const match = /^\/preview\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/?$/.exec(pathname);
+  if (!match) return null;
+  return { plugin: match[1] as string, name: match[2] as string };
 }
 
 export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
   const src = map.src ? asString(readPath(output, map.src)) : null;
   return {
-    src: src && isPreviewPath(src) ? src : null,
+    target: src ? previewTarget(src) : null,
     title: asString(readRef(output, map.title)),
     output: map.output ? asString(readPath(output, map.output)) : null,
   };

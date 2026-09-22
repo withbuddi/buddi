@@ -1,24 +1,26 @@
 /**
- * `/preview/<plugin>/<name>/…`, over the wire.
+ * Previews, over the wire, on the origin of their own.
  *
- * Everything here goes through a real gateway to a real http server on a
- * loopback port, because every property that matters is a property of the
- * bytes: which headers went up, which came back, what a browser would be
- * handed, and what somebody who is not signed in gets. A fake proxy would
- * assert the shape of a function call instead, which is the part that was
- * never in doubt.
+ * Everything here goes through a real gateway — both listeners — to a real
+ * http server on a loopback port, because every property that matters is a
+ * property of the bytes: which origin answered, which cookie was accepted,
+ * which headers went up, which came back. A fake proxy would assert the shape
+ * of a function call instead, which is the part that was never in doubt.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { ToolRegistry, type AgentCatalog, type PluginManifest, type ToolContext } from '@buddi/core';
 import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import {
+  PREVIEW_COOKIE,
+  PREVIEW_TICKET_TTL_MS,
+  forwardableCookies,
   forwardedRequestHeaders,
   parsePreviewPath,
-  resetPreviewScan,
+  returnedResponseHeaders,
   scanForAbsoluteAssets,
   scopeCookiePath,
 } from './preview.js';
@@ -26,7 +28,6 @@ import {
 const servers: WebServer[] = [];
 const upstreams: Server[] = [];
 
-beforeEach(() => resetPreviewScan());
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => s.close()));
   for (const server of upstreams.splice(0)) {
@@ -87,27 +88,53 @@ function pluginWith(resolve: (name: string) => Promise<{ port: number } | null>)
   };
 }
 
-/** A dashboard with that plugin installed. */
+/** The clock, movable from inside a test so a ticket can be made to expire. */
+interface Knobs {
+  now: Date;
+}
+
+/** A dashboard with that plugin installed, and its preview listener. */
 async function dashboard(
   manifest: PluginManifest | null,
   env: Record<string, string> = {},
-): Promise<WebServer> {
+): Promise<WebServer & { knobs: Knobs; origin: string; previewOrigin: string }> {
   const registry = new ToolRegistry();
   if (manifest) registry.register(manifest);
+  const knobs: Knobs = { now: new Date('2026-09-22T09:00:00Z') };
   const app = await startWebServer({
     pool: { query: async () => ({ rows: [] }) } as never,
     registry,
     catalog: { list: () => [] } as unknown as AgentCatalog,
     ctx: { ownerId: 'owner' } as ToolContext,
     timezone: 'UTC',
-    now: () => new Date('2026-09-22T09:00:00Z'),
+    now: () => knobs.now,
     config: { enabled: true, host: '127.0.0.1', port: 0 },
     token: 'fixture',
     env,
     log: () => {},
   });
   servers.push(app);
-  return app;
+  return Object.assign(app, {
+    knobs,
+    origin: `http://127.0.0.1:${app.port}`,
+    previewOrigin: `http://127.0.0.1:${app.previewPort}`,
+  });
+}
+
+/** Ask the dashboard for a link, then spend it: what a browser would do. */
+async function signIn(
+  web: WebServer & { origin: string },
+  plugin = 'developer',
+  name = 'web',
+): Promise<{ url: string; cookie: string }> {
+  const answer = await fetch(`${web.origin}/api/preview/${plugin}/${name}/link`);
+  expect(answer.status).toBe(200);
+  const { url } = (await answer.json()) as { url: string };
+  const exchanged = await fetch(url, { redirect: 'manual' });
+  expect(exchanged.status).toBe(302);
+  const cookie = exchanged.headers.getSetCookie()[0]?.split(';')[0] ?? '';
+  expect(cookie.startsWith(`${PREVIEW_COOKIE}=`)).toBe(true);
+  return { url, cookie };
 }
 
 /* ------------------------------------------------------------------ *
@@ -138,17 +165,22 @@ it('scopes a cookie into the prefix, whatever path the app asked for', () => {
   expect(scopeCookiePath('sid=1; Path=/session', '/preview/developer/web')).toBe(
     'sid=1; Path=/preview/developer/web/session',
   );
-  // An app that says nothing about a path would otherwise get the dashboard's.
+  // An app that says nothing about a path would otherwise get the whole origin.
   expect(scopeCookiePath('sid=1', '/preview/developer/web')).toBe('sid=1; Path=/preview/developer/web');
 });
 
-it('keeps the owner`s credentials on this side of the proxy', () => {
+it('keeps buddi`s own cookies on this side of the proxy, and passes the app`s', () => {
+  expect(forwardableCookies('buddi_session=a; sid=b; buddi_csrf=c; buddi_preview=d')).toBe('sid=b');
+  expect(forwardableCookies('buddi_session=a')).toBeUndefined();
   const headers = forwardedRequestHeaders(
     {
-      cookie: 'buddi_session=secret',
+      cookie: 'buddi_session=secret; theirs=1',
       authorization: 'Bearer secret',
       'x-buddi-csrf': 'secret',
-      connection: 'keep-alive',
+      // A `Connection` header nominates its own hop-by-hop fields; they go no
+      // further than this hop either (RFC 9110 §7.6.1).
+      connection: 'keep-alive, X-Private',
+      'x-private': 'do not forward',
       'accept-language': 'en',
       host: 'localhost:4317',
     },
@@ -157,9 +189,29 @@ it('keeps the owner`s credentials on this side of the proxy', () => {
   );
   expect(headers).toEqual({
     'accept-language': 'en',
+    cookie: 'theirs=1',
     host: '127.0.0.1:5173',
     'x-forwarded-prefix': '/preview/developer/web',
   });
+});
+
+it('drops an upstream cookie that is named after one of buddi`s', () => {
+  const headers = returnedResponseHeaders(
+    { 'set-cookie': ['buddi_session=junk; Path=/', 'theirs=1; Path=/'] },
+    '/preview/developer/web',
+    'http://127.0.0.1:4317',
+  );
+  expect(headers['set-cookie']).toEqual(['theirs=1; Path=/preview/developer/web']);
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['content-security-policy']).toBe('frame-ancestors http://127.0.0.1:4317');
+  // An app that has an opinion about its own framing keeps it.
+  expect(
+    returnedResponseHeaders(
+      { 'content-security-policy': "default-src 'self'" },
+      '/preview/developer/web',
+      'http://127.0.0.1:4317',
+    )['content-security-policy'],
+  ).toBe("default-src 'self'");
 });
 
 it('knows an app that assumes it owns the root of a host', () => {
@@ -173,23 +225,122 @@ it('knows an app that assumes it owns the root of a host', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Through the gateway
+ * The two origins
  * ------------------------------------------------------------------ */
 
-it('serves the app, and tells it where it is mounted', async () => {
+it('serves previews on a second port, and nothing else there', async () => {
+  const app = await upstream((req, res) => res.end('hello'));
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+  expect(web.previewPort).toEqual(expect.any(Number));
+  expect(web.previewPort).not.toBe(web.port);
+  // No dashboard, no API, no assets: this origin has one job.
+  for (const path of ['/api/session', '/', '/api/approvals', '/index.html']) {
+    expect((await fetch(`${web.previewOrigin}${path}`)).status, path).toBe(404);
+  }
+});
+
+it('mints no link for anyone the dashboard has not signed in', async () => {
+  const web = await dashboard(pluginWith(async () => ({ port: 1024 })), { BUDDI_WEB_REQUIRE_AUTH: '1' });
+  const res = await fetch(`${web.origin}/api/preview/developer/web/link`, { redirect: 'manual' });
+  expect(res.status).toBe(401);
+  expect(res.headers.get('location')).toBeNull();
+  expect(await res.text()).toBe('');
+});
+
+it('takes the preview port from the environment when it is told one', async () => {
+  // A port that was free a moment ago: opened, read, and closed again.
+  const scratch = await upstream((req, res) => res.end());
+  await new Promise<void>((resolve) => scratch.server.close(() => resolve()));
+  const web = await dashboard(pluginWith(async () => ({ port: 1024 })), {
+    BUDDI_PREVIEW_PORT: String(scratch.port),
+  });
+  expect(web.previewPort).toBe(scratch.port);
+});
+
+it('lets the dashboard mint a link, and the link buy a cookie', async () => {
   const app = await upstream((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end('<html><body>hello</body></html>');
   });
   const web = await dashboard(pluginWith(async (name) => (name === 'web' ? { port: app.port } : null)));
-  const res = await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/index.html?q=1`);
-  expect(res.status).toBe(200);
-  expect(await res.text()).toBe('<html><body>hello</body></html>');
-  expect(res.headers.get('cache-control')).toBe('no-store');
-  expect(app.seen[0]?.url).toBe('/index.html?q=1');
-  expect(app.seen[0]?.headers['x-forwarded-prefix']).toBe('/preview/developer/web');
-  // The session cookie the browser sent never reaches the dev server.
-  expect(app.seen[0]?.headers.cookie).toBeUndefined();
+
+  const answer = await fetch(`${web.origin}/api/preview/developer/web/link`);
+  const { url } = (await answer.json()) as { url: string };
+  expect(url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${web.previewPort}/preview/developer/web/\\?ticket=[0-9a-f]{64}$`));
+
+  // Spending it sets the cookie and sends the browser to the clean path.
+  const exchanged = await fetch(url, { redirect: 'manual' });
+  expect(exchanged.status).toBe(302);
+  expect(exchanged.headers.get('location')).toBe('/preview/developer/web/');
+  const set = exchanged.headers.getSetCookie()[0] ?? '';
+  expect(set).toMatch(/^buddi_preview=[0-9a-f]{64}/);
+  expect(set).toContain('HttpOnly');
+  expect(set).toContain('SameSite=Lax');
+  expect(set).toContain('Path=/preview/developer/web');
+
+  const cookie = set.split(';')[0] as string;
+  const served = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
+  expect(served.status).toBe(200);
+  expect(await served.text()).toBe('<html><body>hello</body></html>');
+});
+
+it('refuses a ticket that is used twice, expired, or for another preview', async () => {
+  const app = await upstream((req, res) => res.end('ok'));
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+
+  const { url } = await signIn(web);
+  // Single use: the second attempt is the same bit as a made-up one.
+  expect((await fetch(url, { redirect: 'manual' })).status).toBe(401);
+
+  const second = (await (await fetch(`${web.origin}/api/preview/developer/web/link`)).json()) as { url: string };
+  web.knobs.now = new Date(web.knobs.now.getTime() + PREVIEW_TICKET_TTL_MS + 1000);
+  expect((await fetch(second.url, { redirect: 'manual' })).status).toBe(401);
+
+  web.knobs.now = new Date('2026-09-22T09:00:00Z');
+  const third = (await (await fetch(`${web.origin}/api/preview/developer/other/link`)).json()) as { url: string };
+  const ticket = new URL(third.url).searchParams.get('ticket');
+  // A ticket names the preview it was minted for; it is not a key to another.
+  const elsewhere = await fetch(`${web.previewOrigin}/preview/developer/web/?ticket=${ticket}`, { redirect: 'manual' });
+  expect(elsewhere.status).toBe(401);
+});
+
+it('needs its own cookie, and never accepts the dashboard`s', async () => {
+  const app = await upstream((req, res) => res.end('ok'));
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+
+  // Nothing at all.
+  const bare = await fetch(`${web.previewOrigin}/preview/developer/web/`, { redirect: 'manual' });
+  expect(bare.status).toBe(401);
+  expect(bare.headers.get('location')).toBeNull();
+  expect(app.seen).toHaveLength(0);
+
+  // The dashboard's session cookie, which a browser really does send to this
+  // port — cookies do not distinguish them. It buys nothing here.
+  const session = await fetch(`${web.origin}/api/session`);
+  const dashboardCookies = session.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  expect(dashboardCookies).toContain('buddi_session=');
+  expect(
+    (await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: dashboardCookies } })).status,
+  ).toBe(401);
+  expect(app.seen).toHaveLength(0);
+
+  // A cookie for another preview is not a cookie for this one.
+  const { cookie } = await signIn(web, 'developer', 'other');
+  expect(
+    (await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } })).status,
+  ).toBe(401);
+});
+
+it('never lets the preview origin write to the dashboard', async () => {
+  const web = await dashboard(pluginWith(async () => ({ port: 1 })));
+  // The framed app's origin is not an origin this dashboard accepts a write
+  // from. This is the assertion that the two really are separate.
+  const res = await fetch(`${web.origin}/api/chat/x/messages`, {
+    method: 'POST',
+    headers: { Origin: web.previewOrigin, 'Content-Type': 'application/json' },
+    body: '{"text":"hi"}',
+  });
+  expect(res.status).toBe(403);
 });
 
 it('forwards a write with its body, and scopes the cookie it sets', async () => {
@@ -198,49 +349,52 @@ it('forwards a write with its body, and scopes the cookie it sets', async () => 
     res.end('{"saved":true}');
   });
   const web = await dashboard(pluginWith(async () => ({ port: app.port })));
-  const origin = `http://127.0.0.1:${web.port}`;
-  const res = await fetch(`${origin}/preview/developer/web/save`, {
+  const { cookie } = await signIn(web);
+  const res = await fetch(`${web.previewOrigin}/preview/developer/web/save?q=1`, {
     method: 'POST',
-    headers: { Origin: origin, 'Content-Type': 'application/json' },
+    headers: { Cookie: `${cookie}; theirs=2`, 'Content-Type': 'application/json' },
     body: '{"n":1}',
   });
   expect(res.status).toBe(201);
   expect(await res.text()).toBe('{"saved":true}');
-  expect(app.seen[0]).toMatchObject({ method: 'POST', url: '/save', body: '{"n":1}' });
+  expect(app.seen[0]).toMatchObject({ method: 'POST', url: '/save?q=1', body: '{"n":1}' });
+  // The app's own cookie crossed; the preview's credential did not.
+  expect(app.seen[0]?.headers.cookie).toBe('theirs=2');
+  expect(app.seen[0]?.headers['x-forwarded-prefix']).toBe('/preview/developer/web');
   expect(res.headers.getSetCookie()).toEqual(['sid=1; Path=/preview/developer/web']);
-});
-
-it('refuses a write another site started, without asking the app', async () => {
-  const app = await upstream((req, res) => res.end('ok'));
-  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
-  const res = await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/save`, {
-    method: 'POST',
-    headers: { Origin: 'https://evil.example' },
-    body: 'x',
-  });
-  expect(res.status).toBe(403);
-  expect(app.seen).toHaveLength(0);
-});
-
-it('answers 401, and not a redirect, when nobody is signed in', async () => {
-  const app = await upstream((req, res) => res.end('ok'));
-  const web = await dashboard(pluginWith(async () => ({ port: app.port })), {
-    BUDDI_WEB_REQUIRE_AUTH: '1',
-  });
-  const res = await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/`, { redirect: 'manual' });
-  expect(res.status).toBe(401);
-  expect(res.headers.get('location')).toBeNull();
-  expect(await res.text()).toBe('');
-  // And the app was never asked whether that name exists.
-  expect(app.seen).toHaveLength(0);
+  expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(res.headers.get('content-security-policy')).toContain('frame-ancestors');
+  expect(res.headers.get('cache-control')).toBe('no-store');
 });
 
 it('is 404 for a name nobody serves, and for a plugin with no previews', async () => {
   const web = await dashboard(pluginWith(async (name) => (name === 'web' ? { port: 1 } : null)));
-  expect((await fetch(`http://127.0.0.1:${web.port}/preview/developer/gone/`)).status).toBe(404);
-  expect((await fetch(`http://127.0.0.1:${web.port}/preview/finance/web/`)).status).toBe(404);
+  const { cookie } = await signIn(web, 'developer', 'gone');
+  expect((await fetch(`${web.previewOrigin}/preview/developer/gone/`, { headers: { Cookie: cookie } })).status).toBe(404);
+  // A plugin this installation does not have has no link to mint at all.
+  expect((await fetch(`${web.origin}/api/preview/finance/web/link`)).status).toBe(404);
   const plain = await dashboard(null);
-  expect((await fetch(`http://127.0.0.1:${plain.port}/preview/developer/web/`)).status).toBe(404);
+  expect((await fetch(`${plain.origin}/api/preview/developer/web/link`)).status).toBe(404);
+});
+
+it('refuses a port that is this gateway`s own, so a preview cannot loop', async () => {
+  const web = await dashboard(pluginWith(async () => ({ port: 0 })));
+  // Resolve to the preview listener itself: proxying it would recurse until
+  // the process ran out of sockets.
+  const looping = await dashboard(pluginWith(async () => ({ port: web.previewPort as number })));
+  const { cookie } = await signIn(looping);
+  // Also refused: a privileged port, and Postgres.
+  for (const port of [80, 5432]) {
+    const other = await dashboard(pluginWith(async () => ({ port })));
+    const signed = await signIn(other);
+    expect(
+      (await fetch(`${other.previewOrigin}/preview/developer/web/`, { headers: { Cookie: signed.cookie } })).status,
+      String(port),
+    ).toBe(404);
+  }
+  expect(
+    (await fetch(`${looping.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } })).status,
+  ).toBe(404);
 });
 
 it('is 502, in one sentence, when the port refuses', async () => {
@@ -248,7 +402,8 @@ it('is 502, in one sentence, when the port refuses', async () => {
   const dead = await upstream((req, res) => res.end('ok'));
   await new Promise<void>((resolve) => dead.server.close(() => resolve()));
   const web = await dashboard(pluginWith(async () => ({ port: dead.port })));
-  const res = await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/`);
+  const { cookie } = await signIn(web);
+  const res = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
   expect(res.status).toBe(502);
   expect((await res.json()) as { error: string }).toEqual({
     error: 'That preview is not answering: the process behind it may have stopped.',
@@ -261,30 +416,39 @@ it('tells the plugin when the app assumes it owns the root of a host', async () 
     res.end('<html><head><script src="/main.js"></script></head><body>hi</body></html>');
   });
   const web = await dashboard(pluginWith(async () => ({ port: app.port })));
-  const before = await fetch(`http://127.0.0.1:${web.port}/api/preview/developer/web/check`);
+  const before = await fetch(`${web.origin}/api/preview/developer/web/check`);
   expect(await before.json()).toEqual({ ok: true, absoluteAssets: false });
 
-  const served = await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/`);
+  const { cookie } = await signIn(web);
+  const served = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
   // Whatever the scan concluded, the browser gets the page unchanged.
   expect(await served.text()).toBe(
     '<html><head><script src="/main.js"></script></head><body>hi</body></html>',
   );
-  const after = await fetch(`http://127.0.0.1:${web.port}/api/preview/developer/web/check`);
+  const after = await fetch(`${web.origin}/api/preview/developer/web/check`);
   expect(await after.json()).toEqual({ ok: true, absoluteAssets: true });
 });
 
-it('says an app is fine when its assets are relative to the prefix', async () => {
+it('says an app is fine when its assets are relative to the prefix, and says nothing about one that is not there', async () => {
   const app = await upstream((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end('<html><script src="/preview/developer/web/main.js"></script></html>');
   });
-  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
-  await fetch(`http://127.0.0.1:${web.port}/preview/developer/web/`);
-  const check = await fetch(`http://127.0.0.1:${web.port}/api/preview/developer/web/check`);
-  expect(await check.json()).toEqual({ ok: true, absoluteAssets: false });
+  const web = await dashboard(pluginWith(async (name) => (name === 'web' ? { port: app.port } : null)));
+  const { cookie } = await signIn(web);
+  await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
+  expect(await (await fetch(`${web.origin}/api/preview/developer/web/check`)).json()).toEqual({
+    ok: true,
+    absoluteAssets: false,
+  });
+  // `ok` is a real question: nobody is serving this one.
+  expect(await (await fetch(`${web.origin}/api/preview/developer/gone/check`)).json()).toEqual({
+    ok: false,
+    absoluteAssets: false,
+  });
 });
 
-it('proxies the websocket hot reload lives on', async () => {
+it('proxies the websocket hot reload lives on, and refuses one with no cookie', async () => {
   const server = createServer();
   upstreams.push(server);
   const wss = new WebSocketServer({ server });
@@ -297,7 +461,13 @@ it('proxies the websocket hot reload lives on', async () => {
   const port = (server.address() as AddressInfo).port;
   const web = await dashboard(pluginWith(async () => ({ port })));
 
-  const client = new WebSocket(`ws://127.0.0.1:${web.port}/preview/developer/web/hmr`);
+  const refused = new WebSocket(`ws://127.0.0.1:${web.previewPort}/preview/developer/web/hmr`);
+  expect((await new Promise<Error>((resolve) => refused.on('error', resolve))).message).toMatch(/401/);
+
+  const { cookie } = await signIn(web);
+  const client = new WebSocket(`ws://127.0.0.1:${web.previewPort}/preview/developer/web/hmr`, {
+    headers: { Cookie: cookie },
+  });
   const echoed = await new Promise<string>((resolve, reject) => {
     client.on('open', () => client.send('reload'));
     client.on('message', (data) => resolve(String(data)));
@@ -307,13 +477,4 @@ it('proxies the websocket hot reload lives on', async () => {
   expect(sawPrefix).toBe('/preview/developer/web');
   client.close();
   wss.close();
-});
-
-it('refuses a websocket to a preview nobody is signed in to', async () => {
-  const web = await dashboard(pluginWith(async () => ({ port: 1 })), {
-    BUDDI_WEB_REQUIRE_AUTH: '1',
-  });
-  const client = new WebSocket(`ws://127.0.0.1:${web.port}/preview/developer/web/hmr`);
-  const failure = await new Promise<Error>((resolve) => client.on('error', resolve));
-  expect(failure.message).toMatch(/401/);
 });

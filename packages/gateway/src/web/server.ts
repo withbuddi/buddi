@@ -109,15 +109,7 @@ import {
   type WebChatDeps,
 } from './chat.js';
 import { readAgentAttention, streamAttention } from './attention.js';
-import {
-  PREVIEW_PREFIX,
-  parsePreviewCheckPath,
-  parsePreviewPath,
-  previewCheck,
-  proxyPreview,
-  upgradePreview,
-  type PreviewDeps,
-} from './preview.js';
+import { PreviewApp, PreviewTickets, parsePreviewApiPath } from './preview.js';
 import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from './config.js';
 import {
   TAILSCALE_SETTING_KEY,
@@ -307,6 +299,12 @@ export interface WebServer {
   /** The port actually bound — resolved after `listen`, so `0` works in tests. */
   port: number;
   url: string;
+  /**
+   * The port previews are served on: a second loopback listener, on a second
+   * origin, so that untrusted code the owner is looking at never runs on the
+   * dashboard's. Null when it could not be bound.
+   */
+  previewPort: number | null;
   /** The chat surface, when this process wired one. */
   chat?: WebChat | undefined;
   close(): Promise<void>;
@@ -320,6 +318,13 @@ export interface WebServer {
  * garbage-collected takes its queue with it.
  */
 const WEB_CHATS = new WeakMap<Server, WebChat>();
+
+/**
+ * Which preview listener belongs to which dashboard, for the same reason and
+ * in the same shape as `WEB_CHATS`: `startWebServer` binds it, `close` takes
+ * it down, and a caller that built a bare `createWebApp` is unaffected.
+ */
+const PREVIEW_APPS = new WeakMap<Server, PreviewApp>();
 
 /** The chat surface this server is running, if any. */
 /** The most of a text file a preview shows; the download has the whole. */
@@ -374,6 +379,11 @@ export function webChatOf(server: Server): WebChat | undefined {
   return WEB_CHATS.get(server);
 }
 
+/** The preview listener this dashboard owns, if any. */
+export function previewAppOf(server: Server): PreviewApp | undefined {
+  return PREVIEW_APPS.get(server);
+}
+
 /** The query parameter carrying a one-time ticket. */
 export const TICKET_PARAM = 't';
 
@@ -419,37 +429,28 @@ export function createWebApp(deps: WebServerDeps): Server {
       return session;
     },
   });
-  /** What the preview proxy needs: the manifests, and the owner's context. */
-  const previewDeps = (): PreviewDeps => ({ registry: deps.registry, ctx: deps.ctx, log });
-  /**
-   * The gate in front of a preview websocket: the dashboard's own, and no more.
-   *
-   * The same three ways in as any request — a live session cookie, a confirmed
-   * Tailscale identity, or a loopback binding that is open by definition — and
-   * the same refusal to let another site drive it: an Origin this server would
-   * not accept a write from is refused before the daemon is asked anything.
-   * There is no CSRF frame here because the app behind the proxy has never
-   * heard of this dashboard and cannot be asked to echo its token.
+  /*
+   * Previews live on their own origin (see `preview.ts`), so all this server
+   * owns of them is the link: a session-gated route that mints a single-use
+   * ticket for the other listener. Nothing of the dashboard is served there
+   * and nothing of it is served here.
    */
-  const previewAuthorized = async (req: IncomingMessage): Promise<boolean> => {
-    const at = deps.now();
-    const origin = requestOrigin(req);
-    if (origin !== undefined && !allowed().has(origin)) return false;
-    const scope = requestScope(req);
-    const session = sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE], scope, at);
-    if (session) {
-      if (session.via === 'tailscale') {
-        const confirmed = await identityOf(req, at);
-        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
-          sessions.destroy(session.id);
-          return false;
-        }
-      }
-      return true;
-    }
-    if (openAccess && scope === 'local') return true;
-    return (await identityOf(req, at)) !== null;
-  };
+  const previewTickets = new PreviewTickets(deps.now);
+  const previews: PreviewApp = new PreviewApp({
+    registry: deps.registry,
+    ctx: deps.ctx,
+    log,
+    tickets: previewTickets,
+    // Only the dashboard may frame a preview. The list is the same one a
+    // write's `Origin` is checked against, and it never contains the preview
+    // origin itself.
+    frameAncestors: () => [...allowed()],
+    ownPorts: (): number[] => {
+      const own = (server.address() as AddressInfo | null)?.port;
+      const preview: number | null = previews.port();
+      return [own, preview].filter((port): port is number => typeof port === 'number');
+    },
+  });
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -573,20 +574,11 @@ export function createWebApp(deps: WebServerDeps): Server {
   });
 
   if (chat) WEB_CHATS.set(server, chat);
+  PREVIEW_APPS.set(server, previews);
   // "Your browser": the only path this server ever upgrades. Attached here
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  /*
-   * Hot reload, on the same one listener.
-   *
-   * A whole subtree rather than a path, because the socket belongs to somebody
-   * else's dev server and it puts it wherever it likes. The gate is this
-   * server's, asked before a byte is forwarded.
-   */
-  extension.attachPrefix(PREVIEW_PREFIX, (req, socket, head) => {
-    void upgradePreview(previewDeps(), req, socket, head, previewAuthorized);
-  });
   server.once('close', () => { extension.shutdown(); hand.shutdown(); });
   return server;
 
@@ -725,31 +717,6 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const mutating = method !== 'GET' && method !== 'HEAD';
 
-    /*
-     * A plugin's own process, proxied (docs/plugins.md §2.5c).
-     *
-     * Here rather than in `api()` because it is not an API: it is somebody
-     * else's app, served on this origin, and everything below the prefix
-     * belongs to it — including methods and paths this server would otherwise
-     * answer 405. It sits *after* the session gate, so an unauthenticated
-     * caller has already had its empty 401 and learned nothing about which
-     * previews exist.
-     *
-     * A write keeps the Origin check, which is what stops another site from
-     * driving the owner's dev server through their session. It does not keep
-     * the CSRF header: the app behind the proxy has never heard of this
-     * dashboard and cannot echo a token it was never given. The frame is
-     * same-origin, so a form inside it carries the Origin this server wants.
-     */
-    const preview = parsePreviewPath(url.pathname);
-    if (preview) {
-      if (mutating) {
-        const origin = requestOrigin(req);
-        if (origin === undefined || !allowed().has(origin)) return sendEmpty(res, 403);
-      }
-      return proxyPreview(previewDeps(), preview, req, res, url.search);
-    }
-
     if (mutating) {
       const origin = requestOrigin(req);
       if (origin === undefined || !allowed().has(origin)) return sendEmpty(res, 403);
@@ -838,14 +805,34 @@ export function createWebApp(deps: WebServerDeps): Server {
        * only, owner only, never an agent tool. Origin is what the row says.
        */
       /*
-       * "Is my preview being served, and does it assume it owns a host?"
+       * The two things the dashboard owns about a preview.
        *
-       * The plugin's own question, answered from what the proxy saw on the
-       * first HTML response it forwarded. It is a warning for the owner —
-       * `developer.preview` prints it beside the link — and never a gate.
+       * `link` is the way in: this route is behind the dashboard's session
+       * gate, and what it hands back is a URL on the *other* origin carrying
+       * a single-use ticket. That exchange is the whole of how the owner's
+       * authority reaches a preview — no dashboard cookie is ever honoured
+       * there, so nothing else can.
+       *
+       * `check` is the plugin's own question — "is it being served, and does
+       * it assume it owns a host?" — answered from what the proxy saw on the
+       * first HTML response it forwarded. A warning for the owner that
+       * `developer.preview` prints beside the link, never a gate.
        */
-      const check = parsePreviewCheckPath(path);
-      if (check) return sendJson(res, 200, previewCheck(check.plugin, check.name));
+      const previewApi = parsePreviewApiPath(path);
+      if (previewApi?.what === 'check') {
+        return sendJson(res, 200, await previews.check(previewApi.plugin, previewApi.name));
+      }
+      if (previewApi?.what === 'link') {
+        if (!previews.serves(previewApi.plugin)) return sendJson(res, 404, { error: 'no such preview' });
+        const port = previews.port();
+        if (port === null) {
+          return sendJson(res, 503, { error: 'Previews are not being served: the preview port could not be bound.' });
+        }
+        const ticket = previewTickets.mintTicket(previewApi.plugin, previewApi.name);
+        return sendJson(res, 200, {
+          url: `http://127.0.0.1:${port}/preview/${previewApi.plugin}/${previewApi.name}/?ticket=${ticket}`,
+        });
+      }
 
       if (path === '/api/artifacts') {
         const origin = q.get('origin');
@@ -2473,15 +2460,61 @@ export async function startWebServer(
   });
   const address = server.address() as AddressInfo | null;
   const port = address?.port ?? deps.config.port;
+  const previews = previewAppOf(server);
+  const previewPort = previews ? await listenForPreviews(previews.server, port, deps) : null;
   return {
     server,
     port,
+    previewPort,
     url: webUrl({ host: deps.config.host, port }),
     chat: webChatOf(server),
     close: () =>
       new Promise<void>((resolve) => {
+        previews?.server.closeAllConnections?.();
+        previews?.server.close();
         server.close(() => resolve());
         server.closeAllConnections?.();
       }),
   };
+}
+
+/**
+ * Bind the preview listener, on loopback, beside the dashboard.
+ *
+ * The port is the dashboard's plus one — which is a guess, and guesses are
+ * wrong sometimes — or whatever `BUDDI_PREVIEW_PORT` says. An ephemeral
+ * dashboard port (`0`, which is every test) takes an ephemeral preview port,
+ * and a port already in use falls back to an ephemeral one with a line in the
+ * log rather than taking the dashboard down with it: a gateway that will not
+ * start because a *preview* port is busy is a bad trade.
+ */
+async function listenForPreviews(
+  server: Server,
+  dashboardPort: number,
+  deps: Omit<WebServerDeps, 'token'>,
+): Promise<number | null> {
+  const log = deps.log ?? ((line: string) => console.error(line));
+  const configured = Number((deps.env ?? process.env).BUDDI_PREVIEW_PORT ?? '');
+  const wanted = Number.isInteger(configured) && configured >= 0 && configured <= 65535
+    ? configured
+    : deps.config.port === 0 ? 0 : dashboardPort + 1;
+  const bind = (port: number): Promise<number | null> =>
+    new Promise((resolve) => {
+      const onError = (err: NodeJS.ErrnoException): void => resolve(null);
+      server.once('error', onError);
+      server.listen(port, '127.0.0.1', () => {
+        server.removeListener('error', onError);
+        const address = server.address() as AddressInfo | null;
+        resolve(address?.port ?? port);
+      });
+    });
+  const bound = await bind(wanted);
+  if (bound !== null) return bound;
+  const fallback = wanted === 0 ? null : await bind(0);
+  if (fallback === null) {
+    log(`web: previews are not being served — port ${wanted} could not be bound`);
+    return null;
+  }
+  log(`web: port ${wanted} is in use; previews are on ${fallback} instead`);
+  return fallback;
 }

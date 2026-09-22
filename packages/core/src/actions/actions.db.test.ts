@@ -123,6 +123,38 @@ suite('actions and approvals (postgres)', () => {
       expect(await listPendingActions(pool)).toHaveLength(1);
     });
 
+    it('records the tier the call was created under, and binds it into the hash', async () => {
+      const { manifest } = sendManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'Hi' }, ctx());
+      if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+      const action = await getAction(pool, res.actionId);
+      expect(action?.tier).toBe('gated');
+
+      // And the Executor will not run an action recorded under anything else.
+      // Writing the column by hand is what a future tier that learned to
+      // record one would look like, and the hash moves with it.
+      await pool.query(`update core.actions set tier = 'auto' where id = $1`, [res.actionId]);
+      const decided = await decideApproval(pool, {
+        actionId: res.actionId,
+        decision: 'approved',
+        by: 'owner',
+        via: 'test',
+      });
+      expect(decided.ok).toBe(true);
+      const executed = await executeApproved(pool, {
+        actionId: res.actionId,
+        registry,
+        ctx: ctx(),
+        worker: 'test',
+      });
+      expect(executed.ok).toBe(false);
+      if (executed.ok) throw new Error('unreachable');
+      expect(executed.reason).toBe('tier-not-executable');
+      expect(await listEffectAttempts(pool, res.actionId)).toEqual([]);
+    });
+
     it('falls back to canonical args when a tool describes nothing', async () => {
       const { manifest } = sendManifest({ describe: false });
       const registry = new ToolRegistry();
