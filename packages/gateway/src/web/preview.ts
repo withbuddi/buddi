@@ -30,8 +30,10 @@
  *      the dashboard's own gate, mints a single-use ticket good for five
  *      minutes and answers `{ url }` pointing at this listener.
  *   2. Opening that URL spends the ticket, sets `buddi_preview` (HttpOnly,
- *      SameSite=Lax, scoped by path to that one preview, 24 hours) and
- *      redirects to the clean path.
+ *      SameSite=Strict, scoped by path to that one preview, 24 hours) and
+ *      redirects to the clean path. A request that already holds a good
+ *      cookie needs no ticket, so the link keeps working after its own
+ *      ticket has been spent.
  *   3. Every later request and every websocket upgrade needs that cookie.
  *
  * What crosses the proxy, once past the gate:
@@ -184,6 +186,10 @@ interface Ticket {
   expiresAt: number;
 }
 
+/** At most this many unspent tickets, and this many live cookies, at once. */
+export const MAX_LIVE_TICKETS = 64;
+export const MAX_LIVE_COOKIES = 256;
+
 /**
  * The preview origin's own credentials, in memory.
  *
@@ -191,6 +197,13 @@ interface Ticket {
  * nothing here should outlive the gateway that minted it. A ticket is
  * single-use and short; the cookie it buys names the one preview it was
  * minted for, so a cookie for one process is not a key to another.
+ *
+ * Both maps are **bounded**, and swept on every call rather than only when
+ * something is minted. An owner who leaves a dashboard tab open for a month
+ * mints a ticket per panel render, and a reader that only ever grows is a slow
+ * leak with a public trigger. Over the bound, the oldest goes: a ticket lives
+ * five minutes and a cookie a day, so the oldest is the one nearest to being
+ * worthless anyway, and the cost of being wrong is one sign-in.
  */
 export class PreviewTickets {
   readonly #tickets = new Map<string, Ticket>();
@@ -203,11 +216,13 @@ export class PreviewTickets {
     this.#sweep();
     const id = randomBytes(32).toString('hex');
     this.#tickets.set(id, { plugin, name, expiresAt: this.now().getTime() + PREVIEW_TICKET_TTL_MS });
+    evictOldest(this.#tickets, MAX_LIVE_TICKETS);
     return id;
   }
 
   /** Spend one, or refuse. Wrong, expired and already-used are one answer. */
   spendTicket(id: string | null, plugin: string, name: string): boolean {
+    this.#sweep();
     if (!id) return false;
     const ticket = this.#tickets.get(id);
     if (!ticket) return false;
@@ -221,11 +236,13 @@ export class PreviewTickets {
     this.#sweep();
     const id = randomBytes(32).toString('hex');
     this.#cookies.set(id, { plugin, name, expiresAt: this.now().getTime() + PREVIEW_COOKIE_TTL_MS });
+    evictOldest(this.#cookies, MAX_LIVE_COOKIES);
     return id;
   }
 
   /** Is this cookie a live one, for this preview? */
   holds(id: string | undefined, plugin: string, name: string): boolean {
+    this.#sweep();
     if (!id) return false;
     const held = this.#cookies.get(id);
     if (!held) return false;
@@ -236,10 +253,25 @@ export class PreviewTickets {
     return held.plugin === plugin && held.name === name;
   }
 
+  /** What is live right now. For a test, and for nothing else. */
+  counts(): { tickets: number; cookies: number } {
+    this.#sweep();
+    return { tickets: this.#tickets.size, cookies: this.#cookies.size };
+  }
+
   #sweep(): void {
     const at = this.now().getTime();
     for (const [id, ticket] of this.#tickets) if (ticket.expiresAt <= at) this.#tickets.delete(id);
     for (const [id, held] of this.#cookies) if (held.expiresAt <= at) this.#cookies.delete(id);
+  }
+}
+
+/** A `Map` keeps insertion order, so the oldest key is the first one. */
+function evictOldest(map: Map<string, Ticket>, max: number): void {
+  while (map.size > max) {
+    const oldest = map.keys().next();
+    if (oldest.done) return;
+    map.delete(oldest.value);
   }
 }
 
@@ -476,9 +508,24 @@ export class PreviewApp {
     if (!target) return previewEmpty(res, 404);
 
     const method = (req.method ?? 'GET').toUpperCase();
+    const held = this.deps.tickets.holds(
+      parseCookies(req.headers.cookie)[PREVIEW_COOKIE],
+      target.plugin,
+      target.name,
+    );
     const ticket = url.searchParams.get(PREVIEW_TICKET_PARAM);
     if (ticket !== null && (method === 'GET' || method === 'HEAD')) {
-      if (!this.deps.tickets.spendTicket(ticket, target.plugin, target.name)) {
+      /*
+       * The cookie is asked first, and that is what makes a *link* work.
+       *
+       * The URL in the frame carries a ticket that was spent the moment the
+       * frame loaded it. Opening that same URL again — a bookmark, a reload,
+       * the browser restoring the tab — must not be a 401 for somebody who is
+       * already holding a good cookie for this preview. So a live cookie
+       * answers for the request and the stale ticket is simply dropped from
+       * the URL; only a request with no cookie has to spend one.
+       */
+      if (!held && !this.deps.tickets.spendTicket(ticket, target.plugin, target.name)) {
         // Wrong, expired and already spent are one answer and one bit.
         return previewEmpty(res, 401);
       }
@@ -486,21 +533,31 @@ export class PreviewApp {
       clean.searchParams.delete(PREVIEW_TICKET_PARAM);
       return previewEmpty(res, 302, {
         Location: `${clean.pathname}${clean.search}`,
-        'Set-Cookie': cookieHeader(PREVIEW_COOKIE, this.deps.tickets.mintCookie(target.plugin, target.name), {
-          httpOnly: true,
-          maxAgeSeconds: Math.floor(PREVIEW_COOKIE_TTL_MS / 1000),
-          // Lax, not Strict: the owner arrives here by following a link from
-          // the dashboard, and Strict would drop the cookie on that very
-          // navigation. Same-site is all it needs to be — this is not an API.
-          sameSite: 'Lax',
-          path: target.prefix,
-        }),
+        ...(held
+          ? {}
+          : {
+              'Set-Cookie': cookieHeader(PREVIEW_COOKIE, this.deps.tickets.mintCookie(target.plugin, target.name), {
+                httpOnly: true,
+                maxAgeSeconds: Math.floor(PREVIEW_COOKIE_TTL_MS / 1000),
+                /*
+                 * `Strict`, like every other cookie buddi sets.
+                 *
+                 * The navigation that matters — the dashboard's link, the
+                 * frame, the tab it opens — is *same-site*: `SameSite` is
+                 * decided by registrable domain and ignores the port, so
+                 * 127.0.0.1:4317 and 127.0.0.1:4318 are one site and the
+                 * cookie travels. What `Strict` refuses is a request that
+                 * started on somebody else's site, which is exactly the
+                 * request that has no business reaching a preview.
+                 */
+                sameSite: 'Strict',
+                path: target.prefix,
+              }),
+            }),
       });
     }
 
-    if (!this.deps.tickets.holds(parseCookies(req.headers.cookie)[PREVIEW_COOKIE], target.plugin, target.name)) {
-      return previewEmpty(res, 401);
-    }
+    if (!held) return previewEmpty(res, 401);
     return this.#proxy(target, req, res, url.search);
   }
 

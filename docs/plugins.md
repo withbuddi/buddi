@@ -808,8 +808,12 @@ means, the page knows how to draw a line, and this says which is which.
   process rather than being a URL the page may load. The panel reads the
   plugin and the name out of it, asks `GET /api/preview/<plugin>/<name>/link`
   (§2.5c), and frames the ticketed URL that comes back, with "Open in a tab"
-  beside the heading and the text at `output` next to the frame. The frame is
-  cross-origin, so nothing sizes it to its content. Anything else — another
+  beside the heading — which asks for a ticket of its own — and the text at
+  `output` next to the frame. The frame is cross-origin, so nothing sizes it
+  to its content, and it is sandboxed as well
+  (`allow-scripts allow-forms allow-same-origin allow-modals allow-downloads`):
+  the origin is what keeps the app out of the dashboard, the sandbox is what
+  keeps it from navigating the top window. Anything else — another
   path, another site, a path that resolves out of the prefix — names no
   process and is drawn as nothing: a descriptor is data from a plugin, and
   "put this URL in an iframe on the dashboard" is not a sentence a plugin gets
@@ -1047,7 +1051,8 @@ through it.
 it is what an agent wrote a minute ago, most likely from input somebody else
 chose. So it never shares the dashboard's origin, the dashboard's cookies or
 the dashboard's API. It is served from **a second loopback listener on a second
-port** (the dashboard's plus one, or `BUDDI_PREVIEW_PORT`), which serves
+port** (the dashboard's plus one, tried a few doors along when that is taken,
+or `BUDDI_PREVIEW_PORT`), which serves
 `/preview/<plugin>/<name>/…` and answers `404` to everything else — no `/api`,
 no assets, no session. An iframe `sandbox` attribute would not have done this
 job: with `allow-same-origin` the frame keeps the origin, without it most dev
@@ -1101,11 +1106,25 @@ answers `{ ok, absoluteAssets }`. `ok` is false when nothing serves that
 preview at all. Your tool reads it and warns the owner, with "Open in a tab" as
 the answer.
 
+**Knowing the port.** Do not compute it. "The dashboard plus one" is wrong the
+moment that port was taken, and a route built on a guess points at nothing. The
+gateway publishes the port it actually bound in two places, both of which say
+the same number:
+
+- `ctx.previewPort` on every `ToolContext` — a `number`, or absent when
+  previews are not being served;
+- `BUDDI_PREVIEW_PORT` in the process environment, set after the listener
+  binds, for a plugin that reads configuration rather than context.
+
+Neither is how a preview is *reached* — that is the link route, which mints a
+credential. They are the number, for building a URL that is not the gateway's
+to build.
+
 **On the tailnet.** The dashboard's own `tailscale serve` does not publish this
 port. A plugin that wants a preview reachable from the tailnet asks for it
-itself — `tailscale serve --https=<port> http://127.0.0.1:<previewPort>` — and
-owns turning it off again; buddi does not do it for you, and the sentence on
-the page that offers it should say what it exposes.
+itself — `tailscale serve --https=<port> http://127.0.0.1:${ctx.previewPort}` —
+and owns turning it off again; buddi does not do it for you, and the sentence
+on the page that offers it should say what it exposes.
 
 The `preview` renderer (§2.5) frames the link route's answer beside the
 process's output, which is how it reaches the canvas.
@@ -2348,6 +2367,7 @@ than guess.
 | `surface` | `SurfaceProfile` | no | The surface this run is answering on. Delegation's one reader. |
 | `nativeSearch` | `{ provider; maxUses }` | no | Set when the provider is searching the web itself, server-side, instead of a tool being dispatched. |
 | `jobId` | `string` | no | The durable job this run belongs to, when a job started it. |
+| `previewPort` | `number` | no | The port this gateway serves previews on, or absent when it is not serving them. For a plugin with `previews` that has to build a URL of its own — a `tailscale serve` target, a line in a result. Never compute it from the dashboard's port. See §2.5c. |
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
 | `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 

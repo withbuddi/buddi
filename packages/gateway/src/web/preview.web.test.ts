@@ -13,10 +13,13 @@ import { ToolRegistry, type AgentCatalog, type PluginManifest, type ToolContext 
 import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
 import { afterEach, expect, it } from 'vitest';
-import { startWebServer, type WebServer } from './server.js';
+import { PREVIEW_PORT_ATTEMPTS, startWebServer, type WebServer } from './server.js';
 import {
+  MAX_LIVE_COOKIES,
+  MAX_LIVE_TICKETS,
   PREVIEW_COOKIE,
   PREVIEW_TICKET_TTL_MS,
+  PreviewTickets,
   forwardableCookies,
   forwardedRequestHeaders,
   parsePreviewPath,
@@ -97,6 +100,7 @@ interface Knobs {
 async function dashboard(
   manifest: PluginManifest | null,
   env: Record<string, string> = {},
+  port = 0,
 ): Promise<WebServer & { knobs: Knobs; origin: string; previewOrigin: string }> {
   const registry = new ToolRegistry();
   if (manifest) registry.register(manifest);
@@ -108,7 +112,7 @@ async function dashboard(
     ctx: { ownerId: 'owner' } as ToolContext,
     timezone: 'UTC',
     now: () => knobs.now,
-    config: { enabled: true, host: '127.0.0.1', port: 0 },
+    config: { enabled: true, host: '127.0.0.1', port },
     token: 'fixture',
     env,
     log: () => {},
@@ -257,6 +261,95 @@ it('takes the preview port from the environment when it is told one', async () =
   expect(web.previewPort).toBe(scratch.port);
 });
 
+it('puts previews next door to the dashboard, and steps over a taken port', async () => {
+  // A fixed dashboard port, so "plus one" means something. The port is taken
+  // from the ephemeral range and released a moment before it is used, so the
+  // assertions are on the *window* the policy searches rather than on one
+  // number: another process on this machine may hold the next door, and
+  // taking the one after it is the behaviour under test, not a failure.
+  const scratch = await upstream((req, res) => res.end());
+  const base = scratch.port;
+  await new Promise<void>((resolve) => scratch.server.close(() => resolve()));
+
+  const first = await dashboard(pluginWith(async () => ({ port: 1024 })), {}, base);
+  expect(first.port).toBe(base);
+  expect(first.previewPort).toBeGreaterThanOrEqual(base + 1);
+  expect(first.previewPort).toBeLessThanOrEqual(base + PREVIEW_PORT_ATTEMPTS);
+
+  // Now the door next to the next dashboard is occupied for certain.
+  const blocker = createServer();
+  upstreams.push(blocker);
+  await new Promise<void>((resolve) => blocker.listen(base + 21, '127.0.0.1', () => resolve()));
+  const second = await dashboard(pluginWith(async () => ({ port: 1024 })), {}, base + 20);
+  expect(second.previewPort).not.toBe(base + 21);
+  expect(second.previewPort).toBeGreaterThan(base + 21);
+  expect(second.previewPort).toBeLessThanOrEqual(base + 20 + PREVIEW_PORT_ATTEMPTS);
+
+  // And closing the dashboard gives the preview port back — `close` waits for
+  // that listener too, or the next gateway up finds its own port taken.
+  const taken = first.previewPort as number;
+  await first.close();
+  servers.splice(servers.indexOf(first), 1);
+  const reclaim = createServer();
+  upstreams.push(reclaim);
+  await expect(
+    new Promise<void>((resolve, reject) => {
+      reclaim.once('error', reject);
+      reclaim.listen(taken, '127.0.0.1', () => resolve());
+    }),
+  ).resolves.toBeUndefined();
+});
+
+it('publishes the port it bound, so a plugin does not have to guess it', async () => {
+  const env: Record<string, string> = {};
+  const web = await dashboard(pluginWith(async () => ({ port: 1024 })), env);
+  // The developer plugin builds a `tailscale serve` target out of this. It
+  // used to guess "the dashboard plus one", which is wrong whenever that port
+  // was taken — and a fallback that nobody is told about is a route to
+  // nothing.
+  expect(env.BUDDI_PREVIEW_PORT).toBe(String(web.previewPort));
+
+  // And this process's own publication is not read back as the owner asking
+  // for that port: the next gateway binds its own.
+  const second = await dashboard(pluginWith(async () => ({ port: 1024 })), env);
+  expect(second.previewPort).not.toBe(web.previewPort);
+  expect(env.BUDDI_PREVIEW_PORT).toBe(String(second.previewPort));
+});
+
+it('bounds what it is holding, and sweeps on every call', () => {
+  let now = new Date('2026-09-22T09:00:00Z');
+  const tickets = new PreviewTickets(() => now);
+  const minted: string[] = [];
+  for (let i = 0; i < MAX_LIVE_TICKETS + 10; i += 1) minted.push(tickets.mintTicket('developer', 'web'));
+  expect(tickets.counts().tickets).toBe(MAX_LIVE_TICKETS);
+  // The oldest went; the newest are all still good.
+  expect(tickets.spendTicket(minted[0] as string, 'developer', 'web')).toBe(false);
+  expect(tickets.spendTicket(minted[minted.length - 1] as string, 'developer', 'web')).toBe(true);
+
+  const cookies: string[] = [];
+  for (let i = 0; i < MAX_LIVE_COOKIES + 5; i += 1) cookies.push(tickets.mintCookie('developer', 'web'));
+  expect(tickets.counts().cookies).toBe(MAX_LIVE_COOKIES);
+  expect(tickets.holds(cookies[0] as string, 'developer', 'web')).toBe(false);
+  expect(tickets.holds(cookies[cookies.length - 1] as string, 'developer', 'web')).toBe(true);
+
+  // And time alone empties it, with nothing minted to trigger the sweep.
+  now = new Date(now.getTime() + PREVIEW_TICKET_TTL_MS + 1000);
+  expect(tickets.counts().tickets).toBe(0);
+});
+
+it('holds one session to ten preview links a minute', async () => {
+  const web = await dashboard(pluginWith(async () => ({ port: 1024 })));
+  const session = await fetch(`${web.origin}/api/session`);
+  const cookie = session.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  const ask = (): Promise<number> =>
+    fetch(`${web.origin}/api/preview/developer/web/link`, { headers: { Cookie: cookie } }).then((r) => r.status);
+  for (let i = 0; i < 10; i += 1) expect(await ask()).toBe(200);
+  expect(await ask()).toBe(429);
+  // The window passes and the owner is not locked out of their own dashboard.
+  web.knobs.now = new Date(web.knobs.now.getTime() + 61_000);
+  expect(await ask()).toBe(200);
+});
+
 it('lets the dashboard mint a link, and the link buy a cookie', async () => {
   const app = await upstream((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -275,13 +368,33 @@ it('lets the dashboard mint a link, and the link buy a cookie', async () => {
   const set = exchanged.headers.getSetCookie()[0] ?? '';
   expect(set).toMatch(/^buddi_preview=[0-9a-f]{64}/);
   expect(set).toContain('HttpOnly');
-  expect(set).toContain('SameSite=Lax');
+  // Strict, like every cookie buddi sets. The dashboard-to-preview navigation
+  // is same-site — `SameSite` ignores the port — so it still travels.
+  expect(set).toContain('SameSite=Strict');
   expect(set).toContain('Path=/preview/developer/web');
 
   const cookie = set.split(';')[0] as string;
   const served = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
   expect(served.status).toBe(200);
   expect(await served.text()).toBe('<html><body>hello</body></html>');
+});
+
+it('serves a link whose ticket is spent, to a browser that already has the cookie', async () => {
+  // This is "Open in a tab" from a frame that has been sitting there for an
+  // hour, and a bookmark, and a restored tab: the URL's ticket went the
+  // moment the frame first loaded it, and the cookie is what answers now.
+  const app = await upstream((req, res) => res.end('ok'));
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+  const { url, cookie } = await signIn(web);
+
+  const again = await fetch(url, { redirect: 'manual', headers: { Cookie: cookie } });
+  expect(again.status).toBe(302);
+  expect(again.headers.get('location')).toBe('/preview/developer/web/');
+  // Nothing new was minted: the cookie it is already holding is the answer.
+  expect(again.headers.getSetCookie()).toEqual([]);
+
+  // And the same spent ticket without the cookie is still one bit of nothing.
+  expect((await fetch(url, { redirect: 'manual' })).status).toBe(401);
 });
 
 it('refuses a ticket that is used twice, expired, or for another preview', async () => {
@@ -308,7 +421,9 @@ it('needs its own cookie, and never accepts the dashboard`s', async () => {
   const app = await upstream((req, res) => res.end('ok'));
   const web = await dashboard(pluginWith(async () => ({ port: app.port })));
 
-  // Nothing at all.
+  // Nothing at all — which is also what a request from another site looks
+  // like, because the cookie is `SameSite=Strict` and a browser would not
+  // have attached it to one.
   const bare = await fetch(`${web.previewOrigin}/preview/developer/web/`, { redirect: 'manual' });
   expect(bare.status).toBe(401);
   expect(bare.headers.get('location')).toBeNull();

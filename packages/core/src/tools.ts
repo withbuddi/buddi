@@ -115,6 +115,21 @@ export interface ToolContext {
    */
   jobId?: string;
   /**
+   * The port this gateway serves previews on, when it is serving them.
+   *
+   * A plugin with `previews` needs it for one thing: building a URL that is
+   * not this process's to build — a `tailscale serve` target, a line in a log,
+   * a link in a tool result. It is *not* how a preview is reached from the
+   * dashboard; that is the link route, which mints a credential. This is only
+   * the number, and it is here rather than guessed as "the dashboard plus one"
+   * because that guess is wrong the moment the port next door was taken.
+   *
+   * Absent when previews could not be bound, and outside a gateway process.
+   * `BUDDI_PREVIEW_PORT` in the environment carries the same number, for a
+   * plugin that reads its configuration rather than its context.
+   */
+  previewPort?: number;
+  /**
    * The approved action a **gated** `execute` is running under, and therefore
    * its idempotency key. Only `executeApproved` sets it — it is the single
    * caller of a gated tool — so a tool that must not send the same thing twice
