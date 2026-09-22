@@ -80,7 +80,7 @@ import {
   type EmailWatcherSettings,
 } from '../api';
 import { fmtRelative } from '../format';
-import { EmailDraftsBlock } from './parts/EmailDrafts';
+import { MAIL_ROUTE } from '../routes';
 import {
   Button,
   Empty,
@@ -641,6 +641,15 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
   return (
     <PageFrame embedded={embedded} title="Email">
       <ErrorBanner message={view.error ?? policies.error ?? failed ?? policyFailed} />
+      {/*
+        * One line across to the working surface. This page is configuration —
+        * mailboxes, rules, watcher settings — and the conversations and the
+        * drafts waiting on them are a place of their own.
+        */}
+      <Notice>
+        Reading mail, and the drafts waiting on you, are under{' '}
+        <a href={MAIL_ROUTE}>Mail</a>.
+      </Notice>
       <Stack divided>
         <Section
           title="Mailboxes"
@@ -776,7 +785,6 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
           />
           </Stack>
         </Section>
-        <EmailDraftsBlock />
         <WatchersBlock />
       </Stack>
       {sheet === 'account' ? (

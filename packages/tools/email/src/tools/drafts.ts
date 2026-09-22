@@ -14,7 +14,8 @@
 import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 import {
-  insertDraftRow,
+  DraftWriteConflict,
+  insertLiveDraft,
   liveDraftForThread,
   listDraftsForThread,
   OWNER_EDITOR,
@@ -175,17 +176,30 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
       bodyText: input.bodyText,
     };
 
-    if (live && live.editedBy === OWNER_EDITOR) {
-      return {
-        ...draftView(live, identity, ownerEditedNote(live)),
-        wrote: false,
-        ownerEdited: true,
-        ownerDecision: null,
-      };
-    }
+    /*
+     * The owner-edit refusal, and where it is actually decided.
+     *
+     * The early return below is the *message*: it reads the row and produces
+     * the sentence that names `email.read_draft`. What enforces the rule is the
+     * predicate inside `updateDraftRow` (`edited_by is distinct from 'owner'`),
+     * because between this read and that write the owner can save — and a rule
+     * that protects the one thing in this plugin that cannot be recovered does
+     * not get to be a check that something else can overtake. Both paths end at
+     * the same result; only one of them can lose a race, and it is not the one
+     * that matters.
+     */
+    const refuseOwnerEdited = (edited: DraftRecord) => ({
+      ...draftView(edited, identity, ownerEditedNote(edited)),
+      wrote: false,
+      ownerEdited: true,
+      ownerDecision: null,
+    });
+    if (live && live.editedBy === OWNER_EDITOR) return refuseOwnerEdited(live);
 
-    const record = live
-      ? await updateDraftRow({
+    let record: DraftRecord;
+    if (live) {
+      try {
+        record = await updateDraftRow({
           db: ctx.db,
           draftId: live.id,
           ...fields,
@@ -193,8 +207,17 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
           byOwner: false,
           conversationId: ctx.conversationId ?? null,
           now: ctx.now(),
-        })
-      : await insertDraftRow({
+        });
+      } catch (err) {
+        // The owner saved in the window this exists to close.
+        if (err instanceof DraftWriteConflict && err.reason === 'owner-edited' && err.current) {
+          return refuseOwnerEdited(err.current);
+        }
+        throw err;
+      }
+    } else {
+      try {
+        record = await insertLiveDraft({
           db: ctx.db,
           accountId: account.id,
           inReplyTo: original.id,
@@ -204,6 +227,15 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
           conversationId: ctx.conversationId,
           now: ctx.now(),
         });
+      } catch (err) {
+        // The insert lost the race, and the winner is a draft the owner had
+        // already edited: the same refusal, from the other direction.
+        if (err instanceof DraftWriteConflict && err.reason === 'owner-edited' && err.current) {
+          return refuseOwnerEdited(err.current);
+        }
+        throw err;
+      }
+    }
 
     const draft = {
       ...draftView(record, identity),
@@ -329,7 +361,7 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
     // `draft_new` always creates. It answers nothing, so there is no thread to
     // hold a live draft, and two new messages to the same stranger are two
     // messages rather than one rewritten (docs/specs/email.md §8).
-    const record = await insertDraftRow({
+    const record = await insertLiveDraft({
       db: ctx.db,
       accountId: account.id,
       inReplyTo: null,

@@ -749,7 +749,12 @@ function toChatBlock(
         : undefined;
       const action = gateId ? approvals.get(gateId) : undefined;
       if (action && action.tool === toolNames.get(toolUseId)) {
-        const failed = ['rejected', 'expired', 'failed', 'unknown'].includes(action.state);
+        // Every state that is not a success, `refused` included. It is not a
+        // convenience list: a settled approval missing from it comes back
+        // `ok: true` and the transcript draws a green tick — so a send refused
+        // because the owner edited the draft under a standing approval would
+        // read, in the one place they are most likely to look, as a send.
+        const failed = ['rejected', 'expired', 'failed', 'refused', 'unknown'].includes(action.state);
         return {
           type: 'tool_result', toolUseId, name: action.tool, ok: !failed,
           approval: { id: action.id, state: action.state },

@@ -21,6 +21,7 @@ import {
   AGENTS_ROUTE,
   CHAT_ROUTE,
   FILES_ROUTE,
+  MAIL_ROUTE,
   HOME_ROUTE,
   PLACES,
   SETTINGS_ROUTE,
@@ -36,6 +37,7 @@ import {
 import { AgentRail } from './shell/AgentRail';
 import { GroupSheet } from './shell/GroupSheet';
 import { Files } from './views/Files';
+import { Mail } from './views/Mail';
 import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
 import { groupAgents, useAttention } from './shell/roster';
@@ -410,6 +412,8 @@ function Place({ place, ...props }: PlaceProps & { place: string }): JSX.Element
       return <Settings {...props} />;
     case FILES_ROUTE:
       return <Files {...props} />;
+    case MAIL_ROUTE:
+      return <Mail {...props} />;
     default:
       return <Home {...props} />;
   }

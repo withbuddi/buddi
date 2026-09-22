@@ -388,6 +388,14 @@ export function approvalOutcomeText(resume: ApprovalResume): string {
   if (resume.state === 'unknown') {
     return `${head}\nThe effect was dispatched and never confirmed. Do not retry it: say plainly that it is unresolved.`;
   }
+  if (resume.state === 'refused') {
+    // The whole reason `refused` exists beside `failed`: this one certainly did
+    // not happen, and an agent that reads it as a half-success would go looking
+    // for an effect that is not there — or worse, warn the owner about one.
+    return `${head}\nNothing was dispatched: the thing you proposed is no longer the thing that was approved.${
+      resume.error ? `\nerror: ${resume.error}` : ''
+    }\nSay so plainly, and propose it again only if it is still what the owner wants.`;
+  }
   return `${head}${resume.error ? `\nerror: ${resume.error}` : ''}`;
 }
 

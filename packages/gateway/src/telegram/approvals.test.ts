@@ -294,8 +294,8 @@ suite('TelegramApprovals (postgres)', () => {
     message: { message_id: 77, chat: { id: Number(OWNER_CHAT), type: 'private' } },
   });
 
-  it('maps the tapped index to the value the action declared, and runs with it', async () => {
-    const ran: Array<Record<string, string> | undefined> = [];
+  /** A registry whose one gated tool declares an identity choice. */
+  function choiceRegistry(ran: Array<Record<string, string> | undefined>): ToolRegistry {
     const manifest: PluginManifest = {
       name: 'mail',
       version: '1.0.0',
@@ -326,8 +326,14 @@ suite('TelegramApprovals (postgres)', () => {
         },
       ],
     };
-    const registry = new ToolRegistry();
-    registry.register(manifest);
+    const r = new ToolRegistry();
+    r.register(manifest);
+    return r;
+  }
+
+  it('maps the tapped index to the value the action declared, and runs with it', async () => {
+    const ran: Array<Record<string, string> | undefined> = [];
+    const registry = choiceRegistry(ran);
     const { approvals } = build({ registry });
     const action = await createAction(pool, {
       tool: 'mail.send',
@@ -355,6 +361,56 @@ suite('TelegramApprovals (postgres)', () => {
 
     expect((await getAction(pool, action.id))?.state).toBe('succeeded');
     expect(ran).toEqual([{ from: 'legal@work.test' }]);
+  });
+
+  it('refuses an option that does not resolve, rather than approving the default', async () => {
+    const ran: Array<Record<string, string> | undefined> = [];
+    const registry = choiceRegistry(ran);
+    const { api, approvals } = build({ registry });
+    const withChoices = await createAction(pool, {
+      tool: 'mail.send',
+      toolVersion: '1.0.0',
+      agentId: 'mailer',
+      canonicalArgs: { to: 'a@b.c' },
+      envelope: { to: ['a@b.c'] },
+      preview: 'Send to a@b.c',
+      choices: [
+        { key: 'from', label: 'Send as', options: ['owner@work.test', 'legal@work.test'], default: 'owner@work.test' },
+      ],
+    });
+    const withoutChoices = await pending();
+    const missing = '00000000-0000-4000-8000-000000000000';
+
+    for (const [actionId, data] of [
+      // An index past the end of the declared list.
+      [withChoices.id, `apr:${withChoices.id}:o9`],
+      // An option tap on an action that declares nothing to choose.
+      [withoutChoices.id, `apr:${withoutChoices.id}:o0`],
+      // An action that is not there at all.
+      [missing, `apr:${missing}:o0`],
+    ] as const) {
+      await approvals.handleCallback({
+        id: 'cb-1',
+        from: { id: Number(OWNER_USER) },
+        data,
+        message: { message_id: 77, chat: { id: Number(OWNER_CHAT), type: 'private' } },
+      });
+      if (actionId !== missing) {
+        // Nothing moved. The alternative — falling through to a plain approve —
+        // would authorize an effect the owner did not tap.
+        expect((await getAction(pool, actionId))?.state).toBe('pending');
+      }
+    }
+    expect(ran).toEqual([]);
+    expect(api.answers.every((a) => a.text?.includes('no longer matches'))).toBe(true);
+    expect(api.edits).toEqual([]);
+  });
+
+  it('says a refused approval was not sent, rather than "Approved"', () => {
+    const text = decidedText(sampleAction, 'refused', 'the draft was edited since you approved it');
+    expect(text).toContain('Not sent');
+    expect(text).not.toMatch(/^Approved/m);
+    expect(text).toContain('the draft was edited since you approved it');
   });
 
   it('posts the request with buttons bound to the action', async () => {

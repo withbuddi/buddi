@@ -282,6 +282,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  claim?(input: I, ctx: ToolContext): Promise<void>;  // hold it, just before dispatch
   timeoutMs?: number;
   reusableApproval?: boolean;   // the owner may remember their yes
   producesArtifacts?: boolean;  // its output names files it saved
@@ -382,18 +383,34 @@ if (!actionId) {
 }
 ```
 
-and then claim on it — atomically, in SQL, not in TypeScript. `email.send`'s
-claim is one statement:
+and then claim on it — atomically, in SQL, not in TypeScript, and in the `claim`
+hook so that a lost claim leaves no effect attempt behind. `email.send`'s claim
+is one statement:
 
 ```sql
-update email.drafts set sent_action_id = $2
- where id = $1 and sent_action_id is null
+update email.drafts set sent_action_id = $2, updated_at = $3
+ where id = $1
+   and sent_action_id is null
+   and status in ('draft', 'edited')     -- still live
+   and artifact_id = $4                  -- the version the envelope named
 returning ...
 ```
 
+Every clause is a race somebody can win against you. `sent_action_id is null`
+is the second executor; `status` is the owner discarding it while the card was
+open; `artifact_id` is the owner saving new text between the executor's
+re-description and this statement — the window `describe` cannot close, because
+`describe` reads and this writes.
+
 Zero rows back means someone else owns it: if the owner is the *same* action and
-the row is already sent, return the recorded receipt (`replayed: true`); if it is
-a different action, refuse. Re-dispatching is never the answer.
+the row is already sent, return the recorded receipt (`replayed: true`);
+otherwise throw, and the Executor settles the approval `refused` with no attempt
+recorded. Re-dispatching is never the answer.
+
+The other half of that guard belongs to everyone who writes the row: every
+editor of a claimable row carries `and sent_action_id is null` in its own
+predicate, so nothing can be edited out from under a dispatch that is already
+in flight.
 
 **`timeoutMs` and what `unknown` means.** The Executor waits `timeoutMs`
 (`DEFAULT_EFFECT_TIMEOUT_MS` when you declare none) and then records the attempt
@@ -1856,6 +1873,7 @@ this says what it is *for*.
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
 | `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
+| `claim` | `(input, ctx) => Promise<void>` | no | For a `gated` tool whose subject someone else can edit while the owner decides: take exclusive hold of it in one conditional statement, immediately before the ledger row. A throw settles the approval `refused` and records no effect attempt. |
 | `timeoutMs` | `number` | no | How long the Executor waits before recording the attempt as `unknown`. `DEFAULT_EFFECT_TIMEOUT_MS` when absent. |
 | `sequential` | `boolean` | no | Dependent calls in the same model turn are skipped after this one fails. |
 | `waitsForOwner` | `boolean` | no | A successful call leaves a decision with the owner: no more tools this run. |

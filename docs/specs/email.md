@@ -327,17 +327,47 @@ the owner's pick against the declared list and hands it to `execute` as
 `ctx.choices.from`. The identity on the wire changes; the mailbox that
 authenticates does not.
 
-**The Email page** carries the owner's half of this. Conversations are listed
-newest first, each with a small `draft` pill when one is waiting; opening one
-shows the thread's messages and, under them, its drafts. A live draft shows the
-agent that wrote it, its status, when it last changed, and editable
-To/Cc/Bcc/Subject/Body with **Save** (status `edited`, `edited_by = owner`, a
-new artifact version), **Discard** (status `discarded`) and **Send** — which
-does not send: it records the `email.send` action by the same path an agent
-takes and shows the approval card, alias select and all, for the owner to
-approve. The routes are `/api/email/threads` and `/api/email/drafts` (list per
-thread, get, put, discard, send), behind the same session and CSRF gate as the
-rest of `/api`.
+**The Mail page** (`#/email`) carries the owner's half of this, as a place of
+its own rather than a block under Settings → Email: that page is configuration,
+read once and then rarely, and this is a working surface with a message list, an
+editor and an approval card that dispatches mail. Conversations are listed
+newest first, each a link (`#/email/<threadId>`, so a draft can be linked to and
+come back to) with a small `draft` pill when one is waiting; opening one shows
+the thread's messages — snippets, with a body fetched only when a message is
+opened — and, under them, its drafts. A live draft shows the agent that wrote
+it, its status, when it last changed, and editable To/Cc/Bcc/Subject/Body with
+**Save** (status `edited`, `edited_by = owner`, a new artifact version),
+**Discard** (status `discarded`) and **Send** — which does not send: it records
+the `email.send` action by the same path an agent takes and shows the approval
+card, alias select and all, for the owner to approve. Settings → Email keeps one
+line pointing across. The routes are `/api/email/threads`,
+`/api/email/messages/:id` and `/api/email/drafts` (list per thread, get, put,
+discard, send), behind the same session and CSRF gate as the rest of `/api`.
+
+**Two writers, one row.** Every rule above is in the SQL predicate, not in a
+check above the write, because everything here has a second writer: an agent
+drafting while the owner edits, an owner editing while a send is dispatching,
+two runs drafting on one thread at once. So:
+
+- the live-draft index is **unique** per thread, and the insert path catches the
+  violation and retries as an update of the winner — "one conversation, one live
+  draft" is a fact about the database, not a hope about scheduling;
+- the agent's update carries `edited_by is distinct from 'owner'`, so the rule
+  that protects the owner's words cannot be overtaken by the save that made them
+  the owner's;
+- the owner's save carries the `updated_at` the editor loaded, and a mismatch is
+  a 409 carrying what is actually stored, which the editor redraws from;
+- **`email.send` claims the draft row** in `ToolDefinition.claim` — after the
+  Executor's re-description, before the effect ledger row — on `status`,
+  `sent_action_id is null` *and* the artifact version the approved envelope
+  named. A lost claim settles the approval `refused` with no attempt recorded,
+  because nothing was attempted;
+- every editor of a draft carries `sent_action_id is null`, so nothing can be
+  changed out from under a dispatch already in flight;
+- a draft that was claimed and never confirmed (`sent_action_id` set, `sent_at`
+  null) is not editable, not discardable, not sendable and never lapsed: it is
+  drawn as a critical notice saying the message may already be on the wire and
+  the mailbox needs checking. Hiding that is how the same letter goes out twice.
 
 ## 9. Search
 

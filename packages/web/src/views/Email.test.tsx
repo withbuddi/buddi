@@ -41,8 +41,6 @@ vi.mock('../api', async (load) => {
       bulkEmailPolicies: vi.fn(),
       emailWatchers: vi.fn(),
       setEmailWatchers: vi.fn(),
-      emailThreads: vi.fn(),
-      emailThread: vi.fn(),
     },
   };
 });
@@ -116,7 +114,6 @@ beforeEach(() => {
   vi.mocked(api.bulkEmailPolicies).mockResolvedValue({ ...VIEW, kept: 0, revoked: 0, missing: 0 });
   vi.mocked(api.emailWatchers).mockResolvedValue(WATCHERS);
   vi.mocked(api.setEmailWatchers).mockResolvedValue({ ...WATCHERS, waitingDays: 4 });
-  vi.mocked(api.emailThreads).mockResolvedValue({ threads: [] });
 });
 
 /** Open a drawer by the button on the right of its section header. */

@@ -352,7 +352,6 @@ export interface JobRow {
   updatedAt: string;
 }
 
-/** One control the tool offered the owner on this approval. */
 /** One conversation in the list. `hasLiveDraft` is the small "draft" pill. */
 export interface EmailThreadRow {
   id: string;
@@ -365,6 +364,7 @@ export interface EmailThreadRow {
   hasLiveDraft: boolean;
 }
 
+/** One message as the thread list draws it: headers and a snippet, no body. */
 export interface EmailThreadMessage {
   id: string;
   direction: 'in' | 'out';
@@ -373,7 +373,6 @@ export interface EmailThreadMessage {
   subject: string;
   date: string | null;
   snippet: string;
-  bodyText: string | null;
 }
 
 export interface EmailDraftRow {
@@ -393,6 +392,25 @@ export interface EmailDraftRow {
   createdAt: string | null;
   sentAt: string | null;
   live: boolean;
+  /** The approved action holding this draft, when one is. */
+  sentActionId: string | null;
+  sendError: string | null;
+  /** Dispatched and never confirmed: nothing may be done to it until checked. */
+  unresolved: boolean;
+}
+
+/** One message read in full, on request. */
+export interface EmailMessageBody {
+  id: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  date: string | null;
+  direction: 'in' | 'out';
+  /** Null once retention has purged it; the headers stay either way. */
+  bodyText: string | null;
+  purged: boolean;
 }
 
 export interface EmailThreadDetail {
@@ -1475,9 +1493,26 @@ export const api = {
   emailThread: (id: string) =>
     get<EmailThreadDetail>(`/email/threads/${encodeURIComponent(id)}`),
   emailDraft: (id: string) => get<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`),
+  /** One message's body, fetched when it is opened. The list ships snippets. */
+  emailMessage: (id: string) =>
+    get<{ message: EmailMessageBody }>(`/email/messages/${encodeURIComponent(id)}`),
   /** The owner's own save. It makes the words theirs; no agent writes over them. */
-  saveEmailDraft: (id: string, body: { to: string[]; cc: string[]; bcc: string[]; subject: string; bodyText: string }) =>
-    put<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`, body),
+  saveEmailDraft: (
+    id: string,
+    body: {
+      to: string[];
+      cc: string[];
+      bcc: string[];
+      subject: string;
+      bodyText: string;
+      /**
+       * The version the editor loaded. The route refuses with 409 and the
+       * current draft when it no longer matches, so a page left open while an
+       * agent rewrote the draft cannot save stale text over the new words.
+       */
+      updatedAt?: string | null;
+    },
+  ) => put<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`, body),
   discardEmailDraft: (id: string) =>
     post<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}/discard`, {}),
   /**

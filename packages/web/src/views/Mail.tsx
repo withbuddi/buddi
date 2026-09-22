@@ -1,34 +1,44 @@
 /**
- * Conversations, and the drafts waiting on them (docs/specs/email.md §8).
+ * Mail: the conversations, and the drafts waiting on them (docs/specs/email.md §8).
  *
- * This is the owner's half of the draft lifecycle. An agent writes a draft; the
- * owner reads the conversation it answers, edits it, throws it away, or sends
- * it — and "sends it" here means *proposes* it: Send records the `email.send`
- * action by the same path an agent takes, and the approval card appears with
- * the identity select on it. Nothing on this page reaches SMTP.
+ * A place of its own, not a block on the settings page. Everything under
+ * Settings → Email is configuration read once and then rarely; this is a
+ * working surface — a message list, an editor with five fields and a textarea,
+ * and an approval card that dispatches mail — and the owner opens it daily. The
+ * thread id lives in the address (`#/email/<threadId>`), so a conversation is
+ * something that can be linked to, come back to, and reached with the browser's
+ * own Back.
  *
- * The shape follows what is being read. A list of conversations on the left of
- * the reading order — subject, who is in it, when it last moved, and a small
- * **draft** pill when something is waiting — and, once one is chosen, the
- * conversation itself: its messages in order, and its drafts *under* them,
- * because a draft is an answer to what is above it. Sent, discarded and lapsed
- * drafts are folded away under "Older drafts": they are the record, not the
- * decision.
+ * The owner's half of the lifecycle is here. An agent writes a draft; the owner
+ * reads the conversation it answers, edits it, throws it away, or sends it —
+ * and "sends it" means *proposes* it: Send records the `email.send` action by
+ * the same path an agent takes, and the approval card appears with the identity
+ * select on it. Nothing on this page reaches SMTP.
  *
- * One rule shows up as a disabled field rather than as prose: a lapsed draft is
- * not editable. It is still readable, and the owner can still see exactly what
- * was proposed a fortnight ago — they just cannot send it as though it were
- * current.
+ * Three things the page has to say plainly, because each of them is a way mail
+ * goes wrong quietly:
+ *
+ *  - a **draft** pill on a conversation, so a reply waiting on the owner is
+ *    visible without opening anything;
+ *  - a draft whose dispatch was never confirmed is **not** an ordinary editable
+ *    draft. It is drawn as a critical notice with every action taken away: the
+ *    message may already be on the wire, and a second Send is how the same
+ *    letter goes out twice;
+ *  - a save that lost a race is shown as what is actually stored now, rather
+ *    than reported as saved.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ApiError,
   api,
   type ApprovalRow,
   type EmailDraftRow,
+  type EmailMessageBody,
   type EmailThreadRow,
-} from '../../api';
-import { fmtRelative } from '../../format';
+} from '../api';
+import { fmtRelative } from '../format';
+import { mailRoute, parseMailRoute, settingsRoute } from '../routes';
+import type { PlaceProps } from '../App';
 import {
   Button,
   Card,
@@ -38,14 +48,15 @@ import {
   List,
   ListRow,
   Notice,
+  PageFrame,
   Panel,
   Pill,
   Section,
   Stack,
   Toolbar,
   useAsync,
-} from '../../ui';
-import { ApprovalCard, useDecide } from './ApprovalCard';
+} from '../ui';
+import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 
 /** The fields of the editor. All of them, because a save writes all of them. */
 interface EditState {
@@ -95,9 +106,9 @@ export function draftStatusLine(draft: EmailDraftRow): string {
 /**
  * One live draft, editable.
  *
- * Save, Discard, and Send sit in one toolbar with Send last and on the right:
- * it is the act that leads somewhere irreversible, and the one the layout
- * should make deliberate rather than convenient.
+ * Discard, then a spacer, then Save and Send: the act that leads somewhere
+ * irreversible is right-most, and the caveat about it wraps below rather than
+ * crowding the button.
  */
 export function DraftEditor({
   draft,
@@ -112,15 +123,25 @@ export function DraftEditor({
   const [busy, setBusy] = useState<'save' | 'discard' | 'send' | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  /*
+   * What is on screen follows what is stored, whenever the stored version
+   * moves. Without this the editor keeps the text it mounted with — so a page
+   * left open while an agent rewrote the draft would show the old words, and
+   * Save would be the owner unknowingly putting them back. The route refuses
+   * that save on the version precondition; this is what stops it from being
+   * proposed in the first place.
+   */
+  useEffect(() => {
+    setEdit(editStateOf(draft));
+    setSaved(false);
+  }, [draft.updatedAt, draft.id]);
+
   const set = (patch: Partial<EditState>): void => {
     setSaved(false);
     setEdit((current) => ({ ...current, ...patch }));
   };
 
-  const run = (
-    what: 'save' | 'discard' | 'send',
-    call: () => Promise<unknown>,
-  ): void => {
+  const run = (what: 'save' | 'discard' | 'send', call: () => Promise<unknown>): void => {
     setBusy(what);
     setFailed(null);
     void call()
@@ -129,7 +150,13 @@ export function DraftEditor({
         if (what === 'send') onProposed((result as { actionId: string }).actionId);
         onChanged();
       })
-      .catch((err: unknown) => setFailed(err instanceof ApiError ? err.message : String(err)))
+      .catch((err: unknown) => {
+        setFailed(err instanceof ApiError ? err.message : String(err));
+        // A refusal is usually a race, and the answer carries what is really
+        // stored: reload so the editor redraws from it rather than from the
+        // text that lost.
+        onChanged();
+      })
       .finally(() => setBusy(null));
   };
 
@@ -146,13 +173,22 @@ export function DraftEditor({
       }
     >
       <ErrorBanner message={failed} />
+      {draft.unresolved ? (
+        <Notice tone="critical" role="alert" title="This was dispatched and never confirmed">
+          buddi handed this message to the mail server and never got an answer, so whether it went
+          out is genuinely unknown. Check the mailbox — the Sent folder and the recipient — before
+          sending anything like it again. Nothing here can be edited, discarded or sent until you
+          have.
+          {draft.sendError ? <> The server said: {draft.sendError}</> : null}
+        </Notice>
+      ) : null}
       {saved ? (
         <Notice tone="good" role="status">
           Saved. These are your words now — no agent will write over them, and a send you approved
           before this edit will refuse rather than go out with the old text.
         </Notice>
       ) : null}
-      {editable ? null : (
+      {editable || draft.unresolved ? null : (
         <Notice>
           This draft is {draft.status} and cannot be edited or sent. It is kept so you can read what
           was proposed.
@@ -160,31 +196,19 @@ export function DraftEditor({
       )}
       <Stack gap="sm">
         <Field label="To">
-          <input
-            value={edit.to}
-            disabled={!editable}
-            onChange={(event) => set({ to: event.target.value })}
-          />
+          <input value={edit.to} disabled={!editable} onChange={(e) => set({ to: e.target.value })} />
         </Field>
         <Field label="Cc">
-          <input
-            value={edit.cc}
-            disabled={!editable}
-            onChange={(event) => set({ cc: event.target.value })}
-          />
+          <input value={edit.cc} disabled={!editable} onChange={(e) => set({ cc: e.target.value })} />
         </Field>
         <Field label="Bcc" hint="Shown in full on the approval card before anything is sent.">
-          <input
-            value={edit.bcc}
-            disabled={!editable}
-            onChange={(event) => set({ bcc: event.target.value })}
-          />
+          <input value={edit.bcc} disabled={!editable} onChange={(e) => set({ bcc: e.target.value })} />
         </Field>
         <Field label="Subject">
           <input
             value={edit.subject}
             disabled={!editable}
-            onChange={(event) => set({ subject: event.target.value })}
+            onChange={(e) => set({ subject: e.target.value })}
           />
         </Field>
         <Field label="Body">
@@ -192,7 +216,7 @@ export function DraftEditor({
             rows={12}
             value={edit.bodyText}
             disabled={!editable}
-            onChange={(event) => set({ bodyText: event.target.value })}
+            onChange={(e) => set({ bodyText: e.target.value })}
           />
         </Field>
       </Stack>
@@ -216,6 +240,9 @@ export function DraftEditor({
                   bcc: addressesOf(edit.bcc),
                   subject: edit.subject,
                   bodyText: edit.bodyText,
+                  // The version this editor loaded. A save that lost a race is
+                  // refused rather than allowed to overwrite.
+                  updatedAt: draft.updatedAt,
                 }),
               )
             }
@@ -240,12 +267,74 @@ export function DraftEditor({
   );
 }
 
+/** One message, opened: the body arrives on request, not with the list. */
+function MessageRow({ id, from, snippet, direction, date, timezone }: {
+  id: string;
+  from: string;
+  snippet: string;
+  direction: 'in' | 'out';
+  date: string | null;
+  timezone: string;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState<EmailMessageBody | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const toggle = (): void => {
+    const next = !open;
+    setOpen(next);
+    if (next && !body) {
+      void api
+        .emailMessage(id)
+        .then((result) => setBody(result.message))
+        .catch((err: unknown) => setFailed(err instanceof ApiError ? err.message : String(err)));
+    }
+  };
+
+  return (
+    <ListRow
+      title={from}
+      sub={
+        open ? (
+          <>
+            <ErrorBanner message={failed} />
+            <span className="wb-doc">
+              {body === null
+                ? 'Loading…'
+                : body.purged
+                  ? 'The body of this message has been purged under your retention setting. Its headers are kept.'
+                  : (body.bodyText ?? '')}
+            </span>
+          </>
+        ) : (
+          snippet
+        )
+      }
+      side={
+        <>
+          <Pill tone={direction === 'out' ? 'good' : undefined}>
+            {direction === 'out' ? 'you wrote' : 'they wrote'}
+          </Pill>{' '}
+          <span className="muted" title={date ?? undefined}>
+            {date ? fmtRelative(date) : ''}
+          </span>{' '}
+          <Button variant="ghost" onClick={toggle} aria-expanded={open}>
+            {open ? 'Hide' : 'Read'}
+          </Button>
+        </>
+      }
+    />
+  );
+}
+
 /** One conversation: its messages, then the drafts answering them. */
 export function EmailThread({
   threadId,
+  timezone,
   onBack,
 }: {
   threadId: string;
+  timezone: string;
   onBack: () => void;
 }): JSX.Element {
   const view = useAsync(() => api.emailThread(threadId), [threadId]);
@@ -268,7 +357,11 @@ export function EmailThread({
     <Stack divided>
       <Section
         title={detail?.thread.subject || 'Conversation'}
-        aside={<Button variant="ghost" onClick={onBack}>Back to conversations</Button>}
+        aside={
+          <Button variant="ghost" onClick={onBack}>
+            All conversations
+          </Button>
+        }
       >
         <ErrorBanner message={view.error ?? decide.failure} />
         {!detail ? (
@@ -278,18 +371,14 @@ export function EmailThread({
         ) : (
           <List>
             {detail.messages.map((message) => (
-              <ListRow
+              <MessageRow
                 key={message.id}
-                title={message.from}
-                sub={message.snippet}
-                side={
-                  <>
-                    <Pill tone={message.direction === 'out' ? 'good' : undefined}>
-                      {message.direction === 'out' ? 'you wrote' : 'they wrote'}
-                    </Pill>{' '}
-                    <span className="muted">{message.date ? fmtRelative(message.date) : ''}</span>
-                  </>
-                }
+                id={message.id}
+                from={message.from}
+                snippet={message.snippet}
+                direction={message.direction}
+                date={message.date}
+                timezone={timezone}
               />
             ))}
           </List>
@@ -322,13 +411,19 @@ export function EmailThread({
             </Notice>
             <ApprovalCard
               action={proposed}
-              timezone="UTC"
+              timezone={timezone}
               busy={decide.busy === proposed.id}
-              onDecide={(id, decision, scope, choices) => void decide.decide(id, decision, scope, choices)}
+              onDecide={(id, decision, scope, choices) =>
+                void decide.decide(id, decision, scope, choices)
+              }
             />
           </Stack>
         ) : null}
-        {decide.note ? <Notice tone="good" role="status">{decide.note}</Notice> : null}
+        {decide.note ? (
+          <Notice tone="good" role="status">
+            {decide.note}
+          </Notice>
+        ) : null}
       </Section>
 
       {detail && detail.older.length > 0 ? (
@@ -358,34 +453,44 @@ export function EmailThread({
   );
 }
 
-/** The conversations, and the one the owner opened. */
-export function EmailDraftsBlock(): JSX.Element {
+/** The conversations, and whichever one the address names. */
+export function Mail({ hash, timezone, navigate }: PlaceProps): JSX.Element {
+  const route = parseMailRoute(hash);
+  const threadId = route?.threadId ?? null;
   const threads = useAsync(() => api.emailThreads(), []);
-  const [open, setOpen] = useState<string | null>(null);
 
-  if (open) {
+  if (threadId) {
     return (
-      <Section title="Conversations">
+      <PageFrame title="Mail">
         <Panel>
           <EmailThread
-            threadId={open}
+            threadId={threadId}
+            timezone={timezone}
             onBack={() => {
-              setOpen(null);
+              navigate(mailRoute());
               threads.reload();
             }}
           />
         </Panel>
-      </Section>
+      </PageFrame>
     );
   }
 
   const rows: EmailThreadRow[] = threads.data?.threads ?? [];
   return (
-    <Section title="Conversations">
+    <PageFrame
+      title="Mail"
+      actions={
+        <Button variant="ghost" onClick={() => navigate(settingsRoute('email'))}>
+          Mailboxes and rules
+        </Button>
+      }
+    >
       <Stack gap="lg">
         <Notice>
-          What buddi has read, newest first. A conversation with a reply waiting on it carries a
-          <Pill>draft</Pill> — open it to read, edit, discard or send what was written.
+          What buddi has read, newest first. A conversation with a reply waiting on it carries a{' '}
+          <Pill>draft</Pill> — open it to read, edit, discard or send what was written. Accounts,
+          rules and watcher settings live under Settings → Email.
         </Notice>
         <ErrorBanner message={threads.error} />
         <Panel>
@@ -398,6 +503,7 @@ export function EmailDraftsBlock(): JSX.Element {
               {rows.map((thread) => (
                 <ListRow
                   key={thread.id}
+                  href={mailRoute(thread.id)}
                   title={
                     <>
                       {thread.subject || '(no subject)'}{' '}
@@ -408,17 +514,17 @@ export function EmailDraftsBlock(): JSX.Element {
                   side={
                     <>
                       <Pill>{thread.state}</Pill>{' '}
-                      <span className="muted">{thread.lastAt ? fmtRelative(thread.lastAt) : ''}</span>{' '}
-                      <Button onClick={() => setOpen(thread.id)}>Open</Button>
+                      <span className="muted" title={thread.lastAt ?? undefined}>
+                        {thread.lastAt ? fmtRelative(thread.lastAt) : ''}
+                      </span>
                     </>
                   }
-                  onClick={() => setOpen(thread.id)}
                 />
               ))}
             </List>
           )}
         </Panel>
       </Stack>
-    </Section>
+    </PageFrame>
   );
 }
