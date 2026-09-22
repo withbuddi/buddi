@@ -107,7 +107,8 @@ interface Conformance {
   paramRef: Same<CoreParamRef, ParamRef>;
   argRef: Same<CoreArgRef, ArgRef>;
   queryRef: Exact<CoreQueryRef, QueryRef>;
-  routeRef: Exact<CoreRouteRef, RouteRef>;
+  /** A union of two shapes with no key in common, so keys cannot be compared. */
+  routeRef: Same<CoreRouteRef, RouteRef>;
   toolRef: Exact<CoreToolRef, ToolRef>;
   rowAction: Exact<CoreRowAction, RowAction>;
   bulkAction: Exact<CoreBulkAction, BulkAction>;

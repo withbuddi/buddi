@@ -133,7 +133,8 @@ interface OptionsFrom { query: QueryRef; rows: string; value: string; label: str
 
 interface QueryRef { query: string; params?: Record<string, ValueRef | { param: string } | { route: string }> }
 interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; done?: string | ValueRef; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
-interface RouteRef { page: string; item?: ValueRef }        // within the same plugin
+/** Within the same plugin — or, the one exception, one agent's chat. */
+type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef }
 interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef }
 interface Selection { key: string; disabledWhen?: Visibility }
 /** `label` and `confirm` may carry `{field}` placeholders read from the row. */
