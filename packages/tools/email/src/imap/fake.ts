@@ -114,6 +114,7 @@ export function fakeMessage(over: Partial<FetchedMessage> = {}): Omit<FetchedMes
     messageId: '<m1@example.test>',
     inReplyTo: null,
     references: [],
+    listId: null,
     from: 'sender@example.test',
     to: ['owner@example.test'],
     cc: [],

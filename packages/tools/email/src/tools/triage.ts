@@ -8,6 +8,8 @@
  */
 import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
+import type { PolicyRecord } from '../policies/gate.js';
+import { learnFromVerdict } from '../policies/learn.js';
 import { toTriage } from '../rows.js';
 import { CATEGORIES, PROCESSING_VERSION, requireMessage, URGENCIES, UUID } from './shared.js';
 
@@ -82,6 +84,49 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
     );
     const row = rows[0];
     if (!row) throw new Error('email.triage_record: insert returned no row');
-    return { ...toTriage(row), subject: message.subject, from: message.from };
+
+    /*
+     * A decision is made once (docs/email.md §2). With this verdict recorded,
+     * the sender may now have three consecutive consistent ones — which is what
+     * a policy is learned from. `learnFromVerdict` writes at most one row and
+     * usually writes none; everything it writes is a *proposal* the owner keeps
+     * or revokes on the settings page, except the one case §3 names.
+     *
+     * It must never break the recording. A verdict is the thing the agent was
+     * asked for; a proposal is a convenience on top of it, and a failure to
+     * propose is a logged disappointment, not a failed tool call.
+     */
+    let learned: PolicyRecord | null = null;
+    try {
+      learned = await learnFromVerdict(
+        ctx.db,
+        { from: message.from, accountId: message.accountId },
+        ctx.now(),
+      );
+    } catch (err) {
+      console.error(
+        `email.triage_record: could not propose a policy for ${message.from}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return {
+      ...toTriage(row),
+      subject: message.subject,
+      from: message.from,
+      ...(learned
+        ? {
+            learnedPolicy: {
+              id: learned.id,
+              action: learned.action,
+              matcher: learned.matcher,
+              proposed: learned.proposed,
+              note: learned.proposed
+                ? 'Proposed from this sender\'s last three verdicts. It decides nothing until the owner keeps it, under Settings → Email → Policies.'
+                : 'Applied from this sender\'s last three verdicts. The owner can revoke it under Settings → Email → Policies.',
+            },
+          }
+        : {}),
+    };
   },
 };

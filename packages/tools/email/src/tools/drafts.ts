@@ -15,7 +15,16 @@ import { saveArtifact, type ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 import { normalizeAddresses, replyRecipients, replySubject } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft } from '../rows.js';
-import { requireAccount, requireAgentId, requireMessage, UUID } from './shared.js';
+import {
+  ACCOUNT_ARG,
+  accountOf,
+  identityFor,
+  ownAddresses,
+  requireAgentId,
+  requireMessage,
+  requireOneAccount,
+  UUID,
+} from './shared.js';
 import type { Pool } from 'pg';
 
 const ADDRESS = z.string().min(3).describe('One email address.');
@@ -37,6 +46,8 @@ export function draftFilename(subject: string, at: Date): string {
 
 interface InsertDraftInput {
   db: Pool;
+  /** The mailbox this draft will leave from. Never inferred at send time. */
+  accountId: string;
   inReplyTo: string | null;
   to: string[];
   cc: string[];
@@ -46,6 +57,10 @@ interface InsertDraftInput {
   agentId: string;
   conversationId?: string | undefined;
   now: Date;
+  /** The account's address, for the result. */
+  accountAddress: string;
+  /** The identity this will be sent under: an alias, or the address itself. */
+  from: string;
 }
 
 async function insertDraft(input: InsertDraftInput) {
@@ -63,10 +78,11 @@ async function insertDraft(input: InsertDraftInput) {
 
   const { rows } = await input.db.query(
     `insert into email.drafts
-       (in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, created_at)
-     values ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9)
+       (account_id, in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, created_at)
+     values ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10)
      returning ${DRAFT_COLUMNS}`,
     [
+      input.accountId,
       input.inReplyTo,
       JSON.stringify(input.to),
       JSON.stringify(input.cc),
@@ -83,6 +99,8 @@ async function insertDraft(input: InsertDraftInput) {
   const draft = toDraft(row);
   return {
     id: draft.id,
+    from: input.from,
+    account: input.accountAddress,
     inReplyTo: draft.inReplyTo,
     to: draft.to,
     cc: draft.cc,
@@ -129,8 +147,13 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
   input: draftReplyInput,
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
-    const account = await requireAccount(ctx.db);
     const original = await requireMessage(ctx.db, input.inReplyTo);
+    // docs/email.md §4: "`send` and `draft_reply` take the account from the
+    // thread they answer". There is no argument for it and there must not be
+    // one — a reply leaves from the mailbox it arrived in, and an agent that
+    // could choose otherwise could answer a client from the owner's private
+    // address without anyone naming the swap.
+    const account = await accountOf(ctx.db, original.accountId);
 
     // Every rule about who may be on a reply lives in one pure function, so
     // the default cannot drift and the exclusions cannot be half-applied.
@@ -138,7 +161,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
       from: original.from,
       to: original.to,
       cc: original.cc,
-      owner: [account.address],
+      owner: ownAddresses(account),
       audience: input.audience,
       alsoTo: input.alsoTo,
       alsoCc: input.alsoCc,
@@ -151,6 +174,13 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
 
     const draft = await insertDraft({
       db: ctx.db,
+      accountId: account.id,
+      accountAddress: account.address,
+      // The account's own address. Never an alias picked off the original's
+      // To or Cc — those are headers the sender wrote (see `identityChoices`);
+      // the owner chooses an alias on the approval card, where the envelope
+      // lists them.
+      from: identityFor(account),
       inReplyTo: original.id,
       to: audience.to,
       cc: audience.cc,
@@ -248,6 +278,9 @@ function audienceNoteFor(
 }
 
 const draftNewInput = z.object({
+  account: ACCOUNT_ARG.describe(
+    'Which of the owner\'s mailboxes this leaves from, by its address or its id. Required: a new message has no thread to take an account from, and guessing which address the owner writes to a stranger as is not yours to do. Leave it out only when the installation has exactly one mailbox.',
+  ).optional(),
   to: z
     .union([ADDRESS, z.array(ADDRESS).min(1)])
     .describe('Recipient address, or a list of them.'),
@@ -264,16 +297,22 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
   name: 'email.draft_new',
   producesArtifacts: true,
   description:
-    'Write a new message and save it as a draft. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
+    'Write a new message and save it as a draft, from the mailbox you name in `account`. This sends nothing — a draft goes out only through email.send, which the owner has to approve first.',
   tier: 'auto',
   input: draftNewInput,
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_new');
-    await requireAccount(ctx.db);
+    // One account, named — or refused with the list to choose from. An
+    // installation with a single mailbox never has to say which.
+    const account = await requireOneAccount(ctx.db, input.account);
     const to = normalizeAddresses(Array.isArray(input.to) ? input.to : [input.to]);
     if (to.length === 0) throw new Error('email.draft_new: at least one recipient is required');
     return insertDraft({
       db: ctx.db,
+      accountId: account.id,
+      accountAddress: account.address,
+      // Nothing was addressed to an alias, so this is the account speaking.
+      from: account.address,
       inReplyTo: null,
       to,
       cc: normalizeAddresses(input.cc ?? []),

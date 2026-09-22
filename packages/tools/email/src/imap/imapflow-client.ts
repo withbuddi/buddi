@@ -164,7 +164,7 @@ class ImapFlowClient implements ImapClient {
         envelope: true,
         flags: true,
         bodyStructure: true,
-        headers: ['message-id', 'in-reply-to', 'references'],
+        headers: ['message-id', 'in-reply-to', 'references', 'list-id'],
       },
       { uid: true },
     )) {
@@ -200,6 +200,7 @@ class ImapFlowClient implements ImapClient {
           (envelope.inReplyTo as string | undefined) ?? headers['in-reply-to'],
         ),
         references: parseReferences(headers['references']),
+        listId: headers['list-id'] ?? null,
         from: addressList(envelope.from)[0] ?? '(unknown)',
         to: addressList(envelope.to),
         cc: addressList(envelope.cc),

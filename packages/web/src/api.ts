@@ -191,6 +191,34 @@ export interface Overview {
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
 }
 
+/** One standing decision about incoming mail. `/api/email/policies`. */
+export interface EmailPolicy {
+  id: string;
+  /** The mailbox it is about. Null is the explicit "every mailbox" choice. */
+  accountId: string | null;
+  scope: string;
+  matcher: string;
+  action: string;
+  params: Record<string, unknown>;
+  origin: string;
+  /** True while it is only a suggestion: it decides nothing until it is kept. */
+  proposed: boolean;
+  /** How many verdicts it was learned from. Zero when the owner wrote it. */
+  learnedFrom: number;
+  /** Triage runs it has skipped. Only `ignore` ever skips one. */
+  runsSaved: number;
+  decisions: number;
+  createdAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface EmailPoliciesView {
+  applied: EmailPolicy[];
+  proposed: EmailPolicy[];
+  /** Set when the email plugin is not installed on this machine. */
+  unavailable?: string;
+}
+
 export interface EventRow {
   id: string;
   kind: string;
@@ -389,6 +417,44 @@ export interface OllamaProbe {
   baseUrl: string;
   /** Where Ollama's hosted service answers, for the card that offers it. */
   cloudBaseUrl: string;
+}
+
+/**
+ * One mailbox this installation reads and sends as.
+ *
+ * `secretName` is the name of the vault entry holding its password, never the
+ * password: nothing on this route has ever carried one, and the page has no
+ * field that would show it.
+ */
+export interface EmailAccountView {
+  id: string;
+  address: string;
+  displayName: string | null;
+  aliases: string[];
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  secretName: string;
+  enabled: boolean;
+  addedVia: 'env' | 'page';
+  lastSyncAt: string | null;
+}
+
+export interface EmailAccountsView {
+  accounts: EmailAccountView[];
+}
+
+/** What the "Add an account" form sends. The password goes no further. */
+export interface NewEmailAccount {
+  address: string;
+  imapHost: string;
+  imapPort: number;
+  smtpHost: string;
+  smtpPort: number;
+  password: string;
+  displayName?: string | null;
+  aliases?: string[];
 }
 
 /** Telegram, as this installation stands: a token, a surface, a phone. */
@@ -1143,6 +1209,13 @@ export const api = {
    */
   bindBrain: (body: { accountId: string; model: string }) =>
     post<{ assistant: string | null; followed: string[] }>('/onboarding/brain', body),
+  /* ---- mail accounts ---- */
+  emailAccounts: () => get<EmailAccountsView>('/email/accounts'),
+  addEmailAccount: (body: NewEmailAccount) => post<EmailAccountView>('/email/accounts', body),
+  removeEmailAccount: (id: string) =>
+    del<{ removed: boolean; address: string | null; secretRemoved: boolean }>(
+      `/email/accounts/${encodeURIComponent(id)}`,
+    ),
   /* ---- Telegram, from the first-run thread ---- */
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
@@ -1211,6 +1284,29 @@ export const api = {
   setBackupSchedule: (schedule: BackupSchedule) => put<BackupSchedule>('/backups/schedule', schedule),
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
+  /* ---- mail policies ---- */
+  emailPolicies: () => get<EmailPoliciesView>('/email/policies'),
+  /**
+   * Write one, or keep a proposal. Both answer with the two lists.
+   *
+   * `accountId` or `allAccounts` is required, never neither: a rule with no
+   * mailbox decides for all of them, and that has to be something the owner
+   * ticked rather than something they left blank.
+   */
+  setEmailPolicy: (body: {
+    scope: string;
+    matcher: string;
+    action: string;
+    accountId?: string;
+    allAccounts?: boolean;
+    agentId?: string;
+    instruction?: string;
+    note?: string;
+    sender?: string;
+  }) => post<EmailPoliciesView>('/email/policies', body),
+  keepEmailPolicy: (id: string) => post<EmailPoliciesView>('/email/policies', { keep: id }),
+  revokeEmailPolicy: (id: string) =>
+    del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),

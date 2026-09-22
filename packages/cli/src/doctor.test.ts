@@ -3,6 +3,7 @@ import { DB_UNREACHABLE, DOCKER_DOWN } from './db-cmd.js';
 import {
   checkAgents,
   checkDatabaseExposure,
+  checkEmail,
   checkNodeVersion,
   checkPlugins,
   checkRecovery,
@@ -487,6 +488,64 @@ describe('checkDatabaseExposure', () => {
   });
 });
 
+
+describe('the email row', () => {
+  const now = new Date('2026-09-21T12:00:00Z');
+  const account = {
+    address: 'owner@example.test',
+    enabled: true,
+    secretName: 'GMAIL_APP_PASSWORD',
+    secretPresent: true,
+    lastSyncAt: '2026-09-21T11:00:00Z',
+  };
+
+  it('says so plainly when no mailbox is configured', () => {
+    const row = checkEmail([], now);
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('no mailbox configured');
+  });
+
+  it('names every account, its secret and when mail last landed', () => {
+    const row = checkEmail(
+      [
+        account,
+        {
+          address: 'owner@work.test',
+          enabled: true,
+          secretName: 'EMAIL_OWNER_WORK_TEST',
+          secretPresent: true,
+          lastSyncAt: null,
+        },
+      ],
+      now,
+    );
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('2 account(s)');
+    expect(row.detail).toContain('owner@example.test [GMAIL_APP_PASSWORD] last mail 1h ago');
+    expect(row.detail).toContain('owner@work.test [EMAIL_OWNER_WORK_TEST] never synced');
+  });
+
+  /**
+   * The state a single-account row could never show: one mailbox polling
+   * happily while another has had no password since the vault was rebuilt.
+   */
+  it('warns, and names which mailbox, when a password is not there', () => {
+    const row = checkEmail(
+      [account, { address: 'owner@work.test', enabled: true, secretName: 'EMAIL_OWNER_WORK_TEST', secretPresent: false, lastSyncAt: null }],
+      now,
+    );
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('EMAIL_OWNER_WORK_TEST MISSING');
+    expect(row.detail).toContain('owner@work.test cannot open');
+    expect(row.detail).toContain('Settings → Email');
+  });
+
+  it('says a disabled mailbox is off rather than silent, and does not warn about it', () => {
+    const row = checkEmail([{ ...account, enabled: false, secretPresent: false }], now);
+    expect(row.status).toBe('ok');
+    expect(row.detail).toContain('disabled');
+  });
+});
 
 describe('the plugins row', () => {
   const record = '/home/o/.buddi/plugins.json';

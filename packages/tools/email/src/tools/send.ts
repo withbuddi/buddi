@@ -25,24 +25,28 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { assertApprovedEffect } from '@buddi/core';
-import { currentAccount, resolveAuth, type EnvLike } from '../config.js';
+import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
-import { findMessage, requireDraft, UUID } from './shared.js';
+import { accountOf, findMessage, identityChoices, identityFor, requireDraft, UUID } from './shared.js';
 
 /**
  * The implementation version pinned into the action object.
  *
  * 0.2.0 added `replyAudience`: the envelope now states how a reply's audience
  * compares with the sender-only default, so the preview can say "four people
- * beyond the sender" rather than showing one longer list. It is the envelope's
- * own version and is recorded inside it; the approval is bound to the plugin
- * manifest's version, which has not moved, so approvals already waiting stay
- * valid.
+ * beyond the sender" rather than showing one longer list.
+ *
+ * 0.3.0 made the sending identity the owner's choice. `from` is the account's
+ * own address unless the owner picks otherwise, and `fromChoices` lists what
+ * they may pick: no alias is derived from the original's `To`/`Cc` any more,
+ * because those are headers the sender writes. It is the envelope's own version
+ * and is recorded inside it; the approval is bound to the plugin manifest's
+ * version, which has not moved, so approvals already waiting stay valid.
  */
-export const SEND_TOOL_VERSION = '0.2.0';
+export const SEND_TOOL_VERSION = '0.3.0';
 
 /** One dispatch's budget. Past it the Executor marks the attempt `unknown`. */
 export const SEND_TIMEOUT_MS = 60_000;
@@ -82,7 +86,14 @@ export interface SendEnvelope {
   toolVersion: string;
   draftId: string;
   accountAddress: string;
+  /**
+   * The identity this leaves under. The account's own address unless the owner
+   * chose one of `fromChoices` on the approval card — never an alias inferred
+   * from the original's headers.
+   */
   from: string;
+  /** Every identity the owner may choose here: the address, then its aliases. */
+  fromChoices: string[];
   to: string[];
   cc: string[];
   /** Blind recipients. Always present, always shown: a hidden one is the bug. */
@@ -108,7 +119,19 @@ function list(addresses: readonly string[]): string {
 /** The human preview. Rendered from the envelope; no model text reaches it. */
 export function renderPreview(envelope: SendEnvelope): string {
   const lines = [
-    `Send mail as ${envelope.from}`,
+    // The identity *and* the mailbox, because with several accounts they are
+    // two facts: an alias says who this is from, the account says which
+    // mailbox authenticates it and which Sent folder will hold it.
+    envelope.from === envelope.accountAddress
+      ? `Send mail as ${envelope.from}`
+      : `Send mail as ${envelope.from} (from the ${envelope.accountAddress} mailbox)`,
+    ...(envelope.fromChoices.filter((choice) => choice !== envelope.from).length > 0
+      ? [
+          `         or, if you choose it here, as ${envelope.fromChoices
+            .filter((choice) => choice !== envelope.from)
+            .join(' or ')}`,
+        ]
+      : []),
     '',
     `To:      ${list(envelope.to)}`,
     `Cc:      ${list(envelope.cc)}`,
@@ -162,16 +185,31 @@ function replyAudienceOf(from: string, draft: DraftRecord): ReplyAudienceSummary
   return { sender: from, beyondSender, widened: beyondSender.length > 0 };
 }
 
+/**
+ * The account a draft leaves from, from the draft's own row.
+ *
+ * Never "the configured account", and never the first one: with several
+ * mailboxes the sending identity is the one thing the owner is approving that
+ * a lookup could silently get wrong, so it is written at draft time and only
+ * read here. A draft whose account was removed since is refused rather than
+ * reassigned.
+ */
+async function sendingAccount(ctx: ToolContext, draft: DraftRecord) {
+  if (!draft.accountId) {
+    throw new Error(
+      `email.send: draft ${draft.id} does not say which mailbox it leaves from; draft the reply again`,
+    );
+  }
+  return accountOf(ctx.db, draft.accountId);
+}
+
 /** Build the envelope from rows. Pure with respect to the world. */
 export async function buildEnvelope(
   ctx: ToolContext,
   draftId: string,
 ): Promise<SendEnvelope> {
   const draft = await requireDraft(ctx.db, draftId);
-  const account = await currentAccount(ctx.db);
-  if (!account) {
-    throw new Error('no mail account is configured on this installation');
-  }
+  const account = await sendingAccount(ctx, draft);
   const original = draft.inReplyTo ? await findMessage(ctx.db, draft.inReplyTo) : null;
   const references = original?.threadKey
     ? original.messageId && original.messageId !== original.threadKey
@@ -186,7 +224,14 @@ export async function buildEnvelope(
     toolVersion: SEND_TOOL_VERSION,
     draftId: draft.id,
     accountAddress: account.address,
-    from: account.address,
+    // docs/email.md §4, identity: the account's own address, and one of its
+    // aliases only when the owner says so on the card. Nothing is read off the
+    // original's To or Cc — a sender can write any address there, including an
+    // alias of the owner's that the message never actually reached. Both the
+    // identity and the alternatives are in the envelope the approval is bound
+    // to, so the owner reads what will be on the wire and what else it could be.
+    from: identityFor(account),
+    fromChoices: identityChoices(account),
     to: draft.to,
     cc: draft.cc,
     bcc: draft.bcc,
@@ -281,8 +326,7 @@ export function createSendTool(
 
       // Configuration is resolved *before* the claim, so a missing secret or an
       // unimplemented auth mode never leaves a draft locked to a dead action.
-      const account = await currentAccount(ctx.db);
-      if (!account) throw new Error('email.send: no mail account is configured');
+      const account = await sendingAccount(ctx, draft);
       const auth = resolveAuth(account, opts.env ?? process.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 

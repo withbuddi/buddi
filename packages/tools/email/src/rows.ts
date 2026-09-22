@@ -7,7 +7,8 @@
 import type { AccountRecord, AttachmentInfo } from './ports.js';
 
 export const ACCOUNT_COLUMNS =
-  'id, address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name';
+  'id, address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, ' +
+  'aliases, display_name, enabled, added_via, created_at';
 
 export function toAccount(row: Record<string, any>): AccountRecord {
   return {
@@ -19,6 +20,13 @@ export function toAccount(row: Record<string, any>): AccountRecord {
     smtpPort: Number(row.smtp_port),
     authMode: row.auth_mode,
     secretName: row.secret_name,
+    // `text[]` comes back as a real array; a row read before the column existed
+    // reads as none, which is the same thing as "this account has no aliases".
+    aliases: stringArray(row.aliases),
+    displayName: row.display_name ?? null,
+    enabled: row.enabled !== false,
+    addedVia: row.added_via === 'page' ? 'page' : 'env',
+    createdAt: iso(row.created_at),
   };
 }
 
@@ -50,6 +58,8 @@ export interface MessageRecord {
   uid: number;
   messageId: string | null;
   threadKey: string | null;
+  /** The List-Id header, normalized, or null. Null on rows ingested before it. */
+  listId: string | null;
   from: string;
   to: string[];
   /** Who was copied. `[]` on rows ingested before the column existed. */
@@ -67,7 +77,7 @@ export interface MessageRecord {
 }
 
 export const MESSAGE_COLUMNS =
-  'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr, ' +
+  'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr, ' +
   'to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
   'body_purged_at';
 
@@ -89,6 +99,7 @@ export function toMessage(row: Record<string, any>): MessageRecord {
     uid: Number(row.uid),
     messageId: row.message_id ?? null,
     threadKey: row.thread_key ?? null,
+    listId: row.list_id ?? null,
     from: row.from_addr,
     to: stringArray(row.to_addrs),
     cc: stringArray(row.cc),
@@ -106,6 +117,12 @@ export function toMessage(row: Record<string, any>): MessageRecord {
 
 export interface DraftRecord {
   id: string;
+  /**
+   * The account this draft leaves from. Null only on a draft written before
+   * accounts were plural and whose account has since been removed; `email.send`
+   * refuses such a draft rather than picking a mailbox for it.
+   */
+  accountId: string | null;
   inReplyTo: string | null;
   to: string[];
   cc: string[];
@@ -123,12 +140,13 @@ export interface DraftRecord {
 }
 
 export const DRAFT_COLUMNS =
-  'id, in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, ' +
+  'id, account_id, in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, ' +
   'created_at, sent_action_id, sent_at, sent_message_id, sent_response, send_error';
 
 export function toDraft(row: Record<string, any>): DraftRecord {
   return {
     id: String(row.id),
+    accountId: row.account_id === null || row.account_id === undefined ? null : String(row.account_id),
     inReplyTo: row.in_reply_to === null || row.in_reply_to === undefined ? null : String(row.in_reply_to),
     to: stringArray(row.to_addrs),
     cc: stringArray(row.cc),

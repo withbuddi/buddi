@@ -168,6 +168,7 @@ describe('send preview', () => {
     draftId: 'd1',
     accountAddress: 'owner@x.test',
     from: 'owner@x.test',
+    fromChoices: ['owner@x.test'],
     to: ['a@x.test'],
     cc: ['c@x.test'],
     bcc: ['secret@x.test'],
