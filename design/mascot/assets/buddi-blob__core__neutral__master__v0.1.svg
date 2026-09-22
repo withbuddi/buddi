@@ -1,47 +1,78 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" width="400" height="440">
   <title>Buddi Blob, core, neutral</title>
-  <desc>Layered vector master: shadow, feet, arms, body with the signature bump, face. Colours from the character bible.</desc>
+  <desc>Layered vector master: shadow, feet, arms, body with the signature bump, soft shading, face. Colours from the character bible.</desc>
   <defs>
-    <radialGradient id="body" cx="40%" cy="30%" r="80%">
-      <stop offset="0" stop-color="#5FA4FF"/>
-      <stop offset="1" stop-color="#3F8EF7"/>
+    <radialGradient id="body" cx="38%" cy="28%" r="82%">
+      <stop offset="0" stop-color="#6AAAFF"/>
+      <stop offset="0.6" stop-color="#3F8EF7"/>
+      <stop offset="1" stop-color="#2F78DC"/>
     </radialGradient>
+    <linearGradient id="limb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A96F9"/>
+      <stop offset="1" stop-color="#2F78DC"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="belly" cx="50%" cy="100%" r="70%">
+      <stop offset="0" stop-color="#152642" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#152642" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="tip" cx="35%" cy="32%" r="70%">
+      <stop offset="0" stop-color="#FF9B90"/>
+      <stop offset="1" stop-color="#FF786A"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <filter id="softer" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <clipPath id="body-clip">
+      <path d="M186 74 C 226 60, 262 66, 288 46 C 302 36, 318 48, 306 64 C 296 78, 284 84, 282 96 C 314 126, 330 176, 328 232 C 326 300, 300 372, 226 384 C 142 396, 92 336, 88 254 C 84 178, 118 96, 186 74 Z"/>
+    </clipPath>
   </defs>
+
   <g id="shadow">
-    <ellipse cx="204" cy="404" rx="100" ry="12" fill="#152642" opacity="0.10"/>
+    <ellipse cx="206" cy="406" rx="104" ry="13" fill="#152642" opacity="0.14" filter="url(#soft)"/>
   </g>
   <g id="feet">
-    <ellipse cx="168" cy="392" rx="30" ry="14" fill="#3F8EF7"/>
-    <ellipse cx="248" cy="392" rx="30" ry="14" fill="#3F8EF7"/>
+    <ellipse cx="168" cy="392" rx="30" ry="14" fill="url(#limb)"/>
+    <ellipse cx="248" cy="392" rx="30" ry="14" fill="url(#limb)"/>
   </g>
   <g id="arm-left">
-    <path d="M100 262 C 66 254, 60 300, 92 306 C 112 310, 124 290, 114 274 Z" fill="#3F8EF7"/>
+    <path d="M100 262 C 66 254, 60 300, 92 306 C 112 310, 124 290, 114 274 Z" fill="url(#limb)"/>
   </g>
   <g id="body-main">
-    <!-- Taller than wide, heavier at the bottom, leaning slightly right; the bump is part of the outline. -->
-    <path d="M186 74
-             C 226 60, 262 66, 288 46
-             C 302 36, 318 48, 306 64
-             C 296 78, 284 84, 282 96
-             C 314 126, 330 176, 328 232
-             C 326 300, 300 372, 226 384
-             C 142 396, 92 336, 88 254
-             C 84 178, 118 96, 186 74 Z" fill="url(#body)"/>
+    <path d="M186 74 C 226 60, 262 66, 288 46 C 302 36, 318 48, 306 64 C 296 78, 284 84, 282 96 C 314 126, 330 176, 328 232 C 326 300, 300 372, 226 384 C 142 396, 92 336, 88 254 C 84 178, 118 96, 186 74 Z" fill="url(#body)"/>
+    <g clip-path="url(#body-clip)">
+      <ellipse cx="208" cy="372" rx="150" ry="70" fill="url(#belly)"/>
+      <ellipse cx="160" cy="130" rx="70" ry="44" fill="url(#sheen)" transform="rotate(-18 160 130)"/>
+      <!-- a faint shade below each eye so they sit in the surface -->
+      <ellipse cx="166" cy="240" rx="30" ry="10" fill="#152642" opacity="0.08" filter="url(#softer)"/>
+      <ellipse cx="254" cy="234" rx="31" ry="10" fill="#152642" opacity="0.08" filter="url(#softer)"/>
+    </g>
   </g>
   <g id="bump-tip">
-    <circle cx="308" cy="50" r="19" fill="#FF786A"/>
+    <ellipse cx="303" cy="72" rx="15" ry="6" fill="#152642" opacity="0.10" filter="url(#softer)"/>
+    <!-- an organic blob, not a circle: slightly wider than tall, a little heavier on the lower-left -->
+    <path d="M292 44 C 297 30, 318 28, 327 40 C 335 50, 330 66, 316 70 C 302 74, 286 66, 288 54 C 288 50, 290 47, 292 44 Z" fill="url(#tip)"/>
+    <ellipse cx="301" cy="43" rx="6" ry="4" fill="#FFFFFF" opacity="0.42" transform="rotate(-25 301 43)"/>
   </g>
   <g id="arm-right">
-    <path d="M318 256 C 350 250, 356 292, 328 300 C 308 306, 296 286, 306 270 Z" fill="#3F8EF7"/>
+    <path d="M318 256 C 350 250, 356 292, 328 300 C 308 306, 296 286, 306 270 Z" fill="url(#limb)"/>
   </g>
   <g id="face">
     <g id="eye-left">
       <ellipse cx="164" cy="212" rx="30" ry="37" fill="#FFF7E8"/>
+      <ellipse cx="164" cy="184" rx="26" ry="8" fill="#152642" opacity="0.06" filter="url(#softer)"/>
       <ellipse cx="170" cy="216" rx="17" ry="22" fill="#152642"/>
       <circle cx="177" cy="206" r="6" fill="#FFF7E8"/>
     </g>
     <g id="eye-right">
       <ellipse cx="252" cy="206" rx="31" ry="38" fill="#FFF7E8"/>
+      <ellipse cx="252" cy="178" rx="27" ry="8" fill="#152642" opacity="0.06" filter="url(#softer)"/>
       <ellipse cx="258" cy="210" rx="17" ry="22" fill="#152642"/>
       <circle cx="265" cy="200" r="6" fill="#FFF7E8"/>
     </g>
