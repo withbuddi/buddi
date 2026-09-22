@@ -216,8 +216,11 @@ function newerFirst(a: PolicyRecord, b: PolicyRecord): number {
  *     that is how the owner muting *this* thread or *this* list is stored — and
  *     the message is from that address; or
  *  2. the sender of this message independently matches a live **sender or
- *     domain** policy of the same account, which is the owner (or the learning)
- *     having said something about the address itself.
+ *     domain** policy of the same account whose own action is `ignore` — the
+ *     owner (or the learning) has said this address itself should be
+ *     ignored. A `wake` or `notify` sender/domain rule does *not* corroborate:
+ *     the owner asked to be woken for that address, and that instruction wins
+ *     over the thread/list-id ignore, which falls through instead.
  *
  * Nothing else changes: `notify`, `draft`, `wake` and `hand-to-agent` all still
  * start a run, so a forged header can at worst ask for the treatment the
@@ -233,7 +236,9 @@ function ignoreIsCorroborated(
   if (policy.action !== 'ignore') return true;
   const recorded = normalizeAddress(policy.params.sender ?? '');
   if (recorded !== '') return recorded === normalizeAddress(header.from);
-  return live.some((p) => (p.scope === 'sender' || p.scope === 'domain') && matches(p, header));
+  return live.some(
+    (p) => (p.scope === 'sender' || p.scope === 'domain') && p.action === 'ignore' && matches(p, header),
+  );
 }
 
 /**

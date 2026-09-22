@@ -210,12 +210,20 @@ describe('a thread or a list may not silence a message on its own', () => {
     expect(applyPolicies(muted, [thread]).action).toBe('none');
   });
 
-  it('applies when the sender independently matches a sender or domain policy', () => {
+  it('applies when the sender independently matches a live sender or domain ignore', () => {
     const list = policy({ scope: 'list-id', matcher: 'weekly.example.com', action: 'ignore' });
-    const domain = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
+    const domain = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'ignore' });
     const decision = applyPolicies(muted, [list, domain]);
     expect(decision.action).toBe('ignore');
     expect(decision.policy?.id).toBe(list.id);
+  });
+
+  it('does not corroborate from a wake or notify sender/domain rule — that rule wins instead', () => {
+    const list = policy({ scope: 'list-id', matcher: 'weekly.example.com', action: 'ignore' });
+    const wakeDomain = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
+    const decision = applyPolicies(muted, [list, wakeDomain]);
+    expect(decision.action).toBe('wake');
+    expect(decision.policy?.id).toBe(wakeDomain.id);
   });
 
   it('leaves every other action alone — only silence is bound to the sender', () => {
@@ -228,11 +236,10 @@ describe('a thread or a list may not silence a message on its own', () => {
   it('falls through to the next scope rather than swallowing the message', () => {
     const thread = policy({ scope: 'thread', matcher: THREAD_ID, action: 'ignore' });
     const domainWake = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
-    // The domain rule corroborates the sender *and* is what decides: the
-    // thread ignore applies once a sender rule exists, so use a header with no
-    // sender or domain rule to see the fall-through on its own.
+    // A `wake` domain rule does not corroborate the thread ignore, so the
+    // ignore falls through and the domain rule's own action decides instead.
     const alone = applyPolicies({ ...muted, listId: null }, [thread]);
     expect(alone.action).toBe('none');
-    expect(applyPolicies({ ...muted, listId: null }, [thread, domainWake]).action).toBe('ignore');
+    expect(applyPolicies({ ...muted, listId: null }, [thread, domainWake]).action).toBe('wake');
   });
 });

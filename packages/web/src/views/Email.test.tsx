@@ -328,22 +328,44 @@ describe('Settings → Email → Add a rule', () => {
     expect(screen.queryByLabelText('From this address')).toBeNull();
   });
 
-  it('picks a conversation by its subject rather than asking for a Message-ID', async () => {
+  it('picks a conversation by its subject rather than asking for a Message-ID, filtered and labelled by mailbox', async () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
+    // No mailbox chosen yet: the picker offers nothing rather than every
+    // account's conversations, and "for every mailbox" is off the table.
     const picker = screen.getByLabelText('Which conversation');
-    expect(within(picker).getByText(threadLabel(THREAD))).toBeInTheDocument();
+    expect(picker).toBeDisabled();
+    expect(screen.getByLabelText('For every mailbox')).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: ACCOUNT.id } });
+    expect(picker).toBeEnabled();
+    expect(
+      within(picker).getByText(threadLabel(THREAD, new Map([[ACCOUNT.id, ACCOUNT.displayName!]]))),
+    ).toBeInTheDocument();
 
     fireEvent.change(picker, { target: { value: THREAD.id } });
-    fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: ACCOUNT.id } });
     fireEvent.click(screen.getByRole('button', { name: 'Add the rule' }));
     await waitFor(() => expect(api.setEmailPolicy).toHaveBeenCalledTimes(1));
-    // The id, not the subject: it is what the gate matches.
+    // The id, not the subject: it is what the gate matches. The mailbox came
+    // along automatically, bound to the thread that was picked.
     expect(api.setEmailPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: 'thread', matcher: THREAD.id }),
+      expect.objectContaining({ scope: 'thread', matcher: THREAD.id, accountId: ACCOUNT.id }),
     );
+  });
+
+  it('offers no conversations from a mailbox other than the one chosen', async () => {
+    const otherAccount = { ...ACCOUNT, id: '33333333-3333-4333-8333-333333333333', address: 'owner@other.test', displayName: 'Other' };
+    vi.mocked(api.emailAccounts).mockResolvedValue({ accounts: [ACCOUNT, otherAccount] });
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
+    fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: otherAccount.id } });
+    // THREAD belongs to ACCOUNT, not otherAccount.
+    expect(screen.getByLabelText('Which conversation')).toHaveTextContent('Choose one…');
+    expect(within(screen.getByLabelText('Which conversation')).queryByText(/The quote/)).toBeNull();
   });
 
   it('sends the mailbox as one of two things, never as an omission', () => {

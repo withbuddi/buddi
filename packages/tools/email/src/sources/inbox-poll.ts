@@ -286,10 +286,10 @@ async function commitBatch(
       const { rows } = await client.query(
         `insert into email.messages
            (account_id, folder_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
-            to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags,
-            direction, triage_enqueued_at)
+            to_addrs, cc, subject, date, internal_date, snippet, body_text, has_attachments,
+            attachments, flags, direction, triage_enqueued_at)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15,
-                 $16::jsonb, $17::jsonb, $18, $19)
+                 $16, $17::jsonb, $18::jsonb, $19, $20)
          on conflict (account_id, folder_id, uidvalidity, uid) do nothing
          returning id`,
         [
@@ -305,6 +305,7 @@ async function commitBatch(
           JSON.stringify(message.cc),
           message.subject,
           message.date,
+          message.internalDate,
           message.snippet,
           message.bodyText,
           message.hasAttachments,
@@ -324,7 +325,12 @@ async function commitBatch(
         messageRowId,
         subject: message.subject,
         participants: [message.from, ...message.to, ...message.cc],
-        at: message.date,
+        // The ordering clock: INTERNALDATE, `now` (this poll's clock, which
+        // is what `fetched_at` would carry) when the server gave none. Never
+        // `message.date` — see threads.ts.
+        at: message.internalDate ?? now,
+        folderId: folder.id,
+        uid: message.uid,
         direction,
       });
       if (direction === 'out') continue;
@@ -540,17 +546,25 @@ async function pollFolder(
     // UIDNEXT-1 (minus the requested backfill) and the generation is persisted
     // on the spot, so a crash before the first real fetch still leaves a folder
     // that starts from now.
-    const startUid = Math.max(0, status.uidNext - 1 - backfill);
+    //
+    // `EMAIL_BACKFILL` is an inbox setting. Sent is discovered later than most
+    // installations' first boot — an account upgrading with years of inbox
+    // history and a large `EMAIL_BACKFILL` must not have that same depth
+    // applied to Sent the day it is first found: Sent's cursor always plants
+    // at UIDNEXT-1 exactly, so only mail sent from here on is ever pulled from
+    // it, regardless of what the inbox's backfill is set to.
+    const effectiveBackfill = folder.kind === 'sent' ? 0 : backfill;
+    const startUid = Math.max(0, status.uidNext - 1 - effectiveBackfill);
     current = await plantCursor(ctx.db, current.id, status.uidValidity, startUid);
     log(
       `email.inbox-poll: initial sync on ${account.address}/${name} — ` +
         `uidvalidity ${status.uidValidity}, uidnext ${status.uidNext}, ` +
         `${status.exists} message(s) in the folder; cursor planted at ${startUid}` +
-        (backfill > 0 ? ` (backfilling the newest ${backfill})` : ' (no history fetched)'),
+        (effectiveBackfill > 0 ? ` (backfilling the newest ${effectiveBackfill})` : ' (no history fetched)'),
     );
     // Nothing to backfill: skip the fetch entirely. The next poll picks up
     // whatever arrives after UIDNEXT-1, which is exactly "new mail".
-    if (backfill === 0) return [];
+    if (effectiveBackfill === 0) return [];
   }
 
   const fetched = await withDeadline('fetch', timeoutMs, client.fetchSince(name, current.lastUid, limit));
@@ -559,7 +573,7 @@ async function pollFolder(
     account,
     current,
     status.uidValidity,
-    fetched.map(prepareForIngest),
+    fetched.map((m) => prepareForIngest(m, ctx.now())),
     direction,
     ctx.now(),
   );

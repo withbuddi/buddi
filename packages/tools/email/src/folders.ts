@@ -42,7 +42,10 @@ const SENT_NAMES = new Set([
   'sent mail',
   'sent items',
   'sent messages',
-  'outbox',
+  // Not 'outbox': that folder can hold mail still queued to go out, or that
+  // failed to send. Recording it as Sent would stamp queued/failed mail as
+  // the owner's own outbound reply — `direction: out`, no gate, thread
+  // flipped to `waiting-on-them` — for something that was never sent.
   'gesendet',
   'gesendete elemente',
   'envoyés',
