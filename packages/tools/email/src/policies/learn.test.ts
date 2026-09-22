@@ -23,7 +23,7 @@ describe('learnedProposal', () => {
   });
 
   it('proposes — never applies — an ignore for three promo verdicts and no reply', () => {
-    // docs/email.md §3: until the Sent folder is synced, "no reply" is read
+    // docs/specs/email.md §3: until the Sent folder is synced, "no reply" is read
     // off drafts buddi itself sent, so it cannot silence anyone by itself.
     const proposal = learnedProposal(promo, false);
     expect(proposal).toMatchObject({ action: 'ignore', proposed: true });

@@ -1,6 +1,6 @@
 /**
  * The gate, tested without a database and without a model — which is the whole
- * reason it is a pure function (docs/email.md §5).
+ * reason it is a pure function (docs/specs/email.md §5).
  */
 import { describe, expect, it } from 'vitest';
 import {

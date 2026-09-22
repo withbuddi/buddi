@@ -224,7 +224,7 @@ export async function buildEnvelope(
     toolVersion: SEND_TOOL_VERSION,
     draftId: draft.id,
     accountAddress: account.address,
-    // docs/email.md §4, identity: the account's own address, and one of its
+    // docs/specs/email.md §4, identity: the account's own address, and one of its
     // aliases only when the owner says so on the card. Nothing is read off the
     // original's To or Cc — a sender can write any address there, including an
     // alias of the owner's that the message never actually reached. Both the

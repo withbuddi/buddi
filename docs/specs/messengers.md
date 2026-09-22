@@ -146,7 +146,7 @@ chat, and the approval card is where the owner catches an attempt.
 - No message text ever leaves the machine except to the model provider the
   agent uses, the same as email; the settings page repeats that sentence.
 - A stolen backup does not contain the session: the vault is not backed up
-  (docs/install.md §8.6).
+  (docs/operations.md, "What is deliberately NOT in a backup").
 
 ## 6. Later platforms, same tools
 

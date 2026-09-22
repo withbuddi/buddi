@@ -1,6 +1,6 @@
 # Install: one command, then the dashboard
 
-Status: reference, 2026-09-21
+Status: spec, partly built; see §12
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
@@ -92,7 +92,7 @@ encryption on and no vault is told so before anything stops.
 ## 3. Postgres without Docker
 
 Postgres stays. The queue's `skip locked` claims, the scheduler's locks, jsonb
-everywhere, 27 core migrations and every plugin's own schema make a port to
+everywhere, 32 core migrations and every plugin's own schema make a port to
 SQLite a rewrite, not an option.
 
 The install ships Postgres binaries for the platform through the
@@ -228,7 +228,7 @@ while the gateway is down. Maintenance therefore never needs the gateway:
   `POST /upgrade`, JSON in and out, with no token and no session: the
   filesystem is the credential, because only the owning user can open the
   socket. There is no second web surface to log in to.
-- `buddi upgrade`, `buddi backup restore` and `buddi db migrate` talk to the
+- `buddi upgrade`, `buddi backup restore` and `buddi migrate` talk to the
   supervisor over that socket: "stop the gateway, keep the database", do the
   work, "start the gateway". With no supervisor running (a headless developer
   checkout, or the service not installed) they start Postgres themselves for
@@ -352,136 +352,66 @@ should never be public.
 
 ## 8. Backup and restore
 
-`buddi backup` already exists with `create`, `list`, `verify`, `restore`,
-`prune` and `schedule`, and the archive is a plain `tar.gz` that opens without
-buddi: the database as text, the artifact files, `.env` with every secret removed,
-plugin migration records, and a manifest with per-file hashes, table counts
-and the version that wrote it. Restore verifies before it touches anything and
-refuses to overwrite a live database without the name typed back. This section
-keeps all of that and adds four things: the bundled cluster, the dashboard,
-encryption, and a copy off the machine.
+[operations.md](operations.md) is the owner-facing page for backup and restore
+and owns all of it: what an archive holds, the passphrase, the schedule, the
+Backup page, restore, the pre-restore snapshot and recovery mode. Read it
+first. This section keeps only what belongs to the install spec: why a packaged
+install cannot use `pg_dump`, the copy off the machine, and restore from the
+wizard.
 
-### 8.1 With the bundled cluster
+### 8.1 Why there is no `pg_dump`
 
-There is no `pg_dump`: the bundled Postgres (`@embedded-postgres/*`, and the
-zonky jars behind it) ships `initdb`, `pg_ctl` and `postgres` and nothing else,
-so an engine that shelled out to one would work only on a developer machine
-with Homebrew Postgres on it. Instead every table in the buddi-owned schemas
-(`core`, plus each plugin schema recorded in `core.migrations`) is copied out
-with `COPY … TO STDOUT` over the ordinary connection, inside one repeatable-read
-transaction so the whole archive is one snapshot of a live installation, and
-restore rebuilds the schema from our own migrations up to the level the dump
-recorded, loads the data back with `session_replication_role = replica`, resets
-the sequences and then applies the migrations the dump did not have. For a
-cross-version restore that means the *code* has to know the schema, not the
-server: any Postgres this build runs on can read any archive this build wrote,
-newer or older cluster alike, and `pg_upgrade` is never needed.
+The bundled Postgres (`@embedded-postgres/*`, and the zonky jars behind it)
+ships `initdb`, `pg_ctl` and `postgres` and nothing else, so an engine that
+shelled out to `pg_dump` would work only on a developer machine with Homebrew
+Postgres on it. The engine therefore reads and writes the database over the
+ordinary connection, from `packages/core/src/backup`, so the CLI, the
+supervisor and the dashboard all call the same one; the schema is rebuilt from
+our own migrations rather than by a server-side restore. The consequence that
+matters for a packaged install: the *code* has to know the schema, not the
+server, so any Postgres this build runs on can read any archive this build
+wrote, newer or older cluster alike, and `pg_upgrade` is never needed. The
+manifest records the `@buddi/core` version rather than a description of the
+checkout, which says nothing on a packaged install.
+[operations.md](operations.md) has the archive layout and the manifest fields.
 
-The engine is `packages/core/src/backup` so the CLI, the supervisor and the
-dashboard all call the same one. The manifest records the Postgres major
-version, the `@buddi/core` version that wrote the archive (never `git
-describe`, which says nothing on a packaged install) and the migration level of
-every schema. The upgrade command takes a backup before it migrates, as today.
+The archive also carries **the plugin record**: for each installed plugin its
+name, version, integrity hash and *source* — a registry name, a tarball path,
+or a directory — so restore can reinstall what it can and name what it cannot
+(a tarball that was on the old machine's disk is the owner's to supply again).
+That record exists because plugins arrive from npm in a packaged install (§7);
+the bundled Postgres binaries and the installed plugin packages are themselves
+never in an archive, since they are reinstalled.
 
-What an archive holds, so that a fresh machine comes back whole:
-
-- the database dump;
-- the artifact files;
-- the private agents and skills directories, as today;
-- `.env` with every secret value removed;
-- the plugin record: for each installed plugin, its name, version, integrity
-  hash and *source* — a registry name, a tarball path, or a directory — so
-  restore can reinstall what it can and name what it cannot (a tarball that
-  was on the old machine's disk is the owner's to supply again);
-- the manifest described in §8.3.
-
-### 8.2 In the dashboard
-
-Settings gains a Backup page: the schedule as a switch and a time, the list of
-archives with age, size and whether each verified, "Back up now", and
-"Restore…". Restore in the dashboard has the same guard as the CLI: the
-archive is verified first, the page shows what it holds and when it was taken,
-and overwriting a live installation asks for the database name typed back. It
-asks the supervisor (§6) to stop the gateway and keep the database, restores,
-and starts the gateway; the browser waits on the health route and reloads.
-
-**A restored installation starts in recovery mode.** The dump carries pending
-jobs, missions, approvals in flight, granted permissions and paired surfaces,
-none of which should act on a machine they were not granted on. Recovery mode
-is a flag in `core` set by restore and cleared only by the owner:
-
-- the scheduler does not tick, sources do not poll, the queue does not claim,
-  Telegram does not connect, and no mission runs; chat works;
-- the Backup page shows a checklist: secrets to paste again, by name, each a
-  link; plugins to reinstall or supply, from the plugin record; approvals and
-  jobs that were pending, with "drop" as the default; standing permission
-  grants, listed, with "keep" as a choice the owner makes per grant;
-- "Leave recovery mode" is one gated action at the end of the checklist. Until
-  it is taken, doctor and the Home page say the installation is in recovery.
-
-**Files after the database.** The database is restored first, then the
-artifact files and private directories. If any file step fails, restore rolls
-the database back to the snapshot it took of the *target* before starting
-(a plain backup of the live installation into `backups/pre-restore-<time>`), so a
-half-restore cannot exist; the pre-restore snapshot is kept and named in the
-report. `--force` skips nothing here either.
-
-### 8.3 Encryption
-
-An archive that leaves the machine is encrypted; one that stays may be. The
-scheme is `age` passphrase encryption, exactly as the age specification
-defines it (scrypt recipient stanza), with no buddi-specific key derivation
-in front of it, so `age -d` with the passphrase opens any archive without
-buddi:
-
-- At setup, buddi generates the passphrase (six words from a fixed list),
-  shows it once for the owner to write down, and stores it in the vault so
-  scheduled backups and same-machine restores never ask for it. A fresh
-  machine asks for it once. The owner may replace it with their own; the page
-  measures nothing and warns nothing, because the generated one is the
-  recommended path.
-- The whole tar is encrypted, manifest included. Filenames, agent names,
-  hosts and row counts are private too. Beside the encrypted archive sits a
-  minimal outer envelope, `<name>.json`: format version, creation time,
-  buddi version, byte size and a hash of the ciphertext. That is all `list`
-  shows without the passphrase, and it is treated as untrusted: after
-  decryption the inner manifest is authoritative and the envelope is checked
-  against it; a mismatch fails verification.
-- "Encrypt local backups" is a switch, off by default for the local
-  directory and forced on for every remote target. There is no way to send
-  an unencrypted archive off the machine.
-- Losing the passphrase loses encrypted backups. The Backup page says so
-  where the passphrase is shown, and once more when a remote target is
-  enabled.
-
-### 8.4 A copy off the machine
+### 8.2 A copy off the machine
 
 Two tiers, the first covering most of the value at almost no cost.
 
-**Tier one: a folder.** The owner points buddi at a directory that something
-else syncs: the Google Drive, Dropbox, iCloud Drive or OneDrive desktop
-client's folder, a Syncthing share, a mounted disk. After each scheduled
-backup, the encrypted archive and its manifest are copied there and pruned
-there by the same retention. No credentials, no API, no network code. The
-Backup page validates that the folder exists and is writable, and shows the
+**Tier one: a folder.** Built. The owner points buddi at a directory that
+something else syncs: the Google Drive, Dropbox, iCloud Drive or OneDrive
+desktop client's folder, a Syncthing share, a mounted disk. After each
+scheduled backup, the encrypted archive and its envelope are copied there and
+pruned there by the same retention. No credentials, no API, no network code.
+The Backup page validates that the folder exists and is writable, and shows the
 last copy's age. Restore from a folder is "pick the file".
 
-**Tier two: the provider's API.** Google Drive and Dropbox, through OAuth in
-the browser: buddi opens the consent page, receives the redirect on loopback,
-and keeps the refresh token in the vault. Scope is the narrowest each offers:
-Drive's per-application folder (`drive.appdata` or `drive.file`), Dropbox's
-app folder. After each backup the encrypted archive is uploaded; `list`,
-`verify` and `restore` work against the remote listing; retention prunes
-remotely. This is the tier that makes "restore on a brand-new machine from
-the wizard" possible without a desktop client. It adds two hosts to the
-network allowlist, both named on the Backup page, and a provider outage
+**Tier two: the provider's API.** Not built (§12). Google Drive and Dropbox,
+through OAuth in the browser: buddi opens the consent page, receives the
+redirect on loopback, and keeps the refresh token in the vault. Scope is the
+narrowest each offers: Drive's per-application folder (`drive.appdata` or
+`drive.file`), Dropbox's app folder. After each backup the encrypted archive is
+uploaded; `list`, `verify` and `restore` work against the remote listing;
+retention prunes remotely. This is the tier that makes "restore on a brand-new
+machine from the wizard" possible without a desktop client. It adds two hosts
+to the network allowlist, both named on the Backup page, and a provider outage
 degrades to "the copy is late", reported by doctor, never a failed backup.
 
 The provider layer is one interface (`put`, `list`, `get`, `delete`) behind
 both tiers; the folder is the first implementation and the reference for the
-tests. Adding a third provider is one file.
+tests. Adding a third provider is one file. Encryption is forced on for every
+remote target: there is no way to send an unencrypted archive off the machine.
 
-### 8.5 Restore in the wizard
+### 8.3 Restore in the wizard
 
 The welcome screen gains a second button: "I have a backup". It leads to a
 step before "You": choose the source (a file, a folder, or sign in to Drive
@@ -489,15 +419,8 @@ or Dropbox), pick the archive, enter the passphrase, see what it holds, and
 restore. The wizard then continues at the model step, since keys are never in
 a backup, and the "You" step is skipped because the profile came back. This
 is also how an owner moves from the developer checkout to the npm install,
-and from one machine to the next.
-
-### 8.6 What is never backed up
-
-The vault, on purpose: secrets are the owner's to re-enter, and a backup that
-holds them is a backup that can be used against the owner. The bundled
-Postgres binaries and the installed plugin packages, which are reinstalled
-from npm; the archive records their names and versions so restore can say
-what to reinstall. Logs.
+and from one machine to the next. The restored installation starts in recovery
+mode, as [operations.md](operations.md) describes.
 
 ---
 
@@ -508,25 +431,30 @@ tarball carries the unpacked extension at `<root>/extension`, the owner loads it
 through `chrome://extensions` → Developer mode → Load unpacked, and pairs it
 with a six-digit code in Computer & browser. Nothing about it is macOS-only.
 
-- **macOS**: the reference platform. Everything above; computer control
-  (browser plugin's computer mode) stays macOS-only as it is today.
-- **Linux**: full support. systemd user unit, Secret Service or file vault,
-  bundled Postgres. Browser automation through Playwright works, and so does
-  "Your browser" — the Chrome extension in `<root>/extension`, loaded unpacked
-  and paired from Settings; computer control does not, and says so.
-- **Windows**: the core loop, the dashboard, the bundled Postgres, Telegram,
-  email, memory and web plugins work. Host execution (`host.exec`) refuses on
-  Windows today and stays refused until it is written against PowerShell
-  with the same approval shape; browser automation via Playwright works, as
-  does "Your browser" through the Chrome extension. The
-  Task Scheduler service and Credential Manager vault are the new pieces.
-  Windows is supported for the generic install; plugins declare their own
-  platform support in the manifest, and the Plugins page shows it.
+- **macOS**: the reference platform, and today the only supported one.
+  Everything above; computer control (the browser plugin's computer mode)
+  stays macOS-only.
+- **Linux** — *planned*. The target is full support: a systemd user unit, a
+  Secret Service or file vault, the bundled Postgres. Browser automation
+  through Playwright will work, and so will "Your browser" — the Chrome
+  extension in `<root>/extension`, loaded unpacked and paired from Settings;
+  computer control will not, and will say so. Today only the data-directory
+  layout knows Linux (§12).
+- **Windows** — *planned*. The target is the core loop, the dashboard, the
+  bundled Postgres, Telegram, email, memory and web plugins. Host execution
+  (`host.exec`) refuses on Windows and will stay refused until it is written
+  against PowerShell with the same approval shape; browser automation via
+  Playwright is expected to work, as is "Your browser" through the Chrome
+  extension. The Task Scheduler service and the Credential Manager vault are
+  the pieces still to be written. Once Windows is supported for the generic
+  install, plugins will declare their own platform support in the manifest and
+  the Plugins page will show it.
 
-Anything platform-specific is behind one function with a stated fallback;
-`generic-install.test.ts` gains a run per platform in CI (macOS, Ubuntu,
-Windows runners) that installs the published package into a clean home,
-runs first-run headless, and asserts the gateway answers.
+Anything platform-specific is to sit behind one function with a stated
+fallback, and `generic-install.test.ts` is to gain a run per platform in CI
+(macOS, Ubuntu, Windows runners) that installs the published package into a
+clean home, runs first-run headless, and asserts the gateway answers. That CI
+job does not exist yet (§12).
 
 ---
 

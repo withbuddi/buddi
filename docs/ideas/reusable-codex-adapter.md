@@ -44,7 +44,7 @@ expand it into a generic multi-provider framework without a demonstrated need.
 
 ## Related work
 
-- [Codex experiment and contract](codex-app-server-experiment.md)
+- [Codex experiment and contract](../codex-accounts.md)
 - [Provider accounts](../providers.md), [roadmap](../ROADMAP.md)
 - Runtime: `packages/runtime/src/codex-app-server.ts`, `codex-session.ts`, and
   `codex-policy.ts`.
