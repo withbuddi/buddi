@@ -51,6 +51,8 @@ const TEST_DB = `buddi_email_drafts_routes_${process.pid}`;
 const TOKEN = 'a-test-dashboard-token-long-enough';
 const NOW = new Date('2026-09-21T12:00:00Z');
 const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+/** The bytes behind the one attachment the fixture carries. */
+const NOTICE = Buffer.from('%PDF-1.4 the returned-debit notice\n');
 
 const emptyCatalog = (): AgentCatalog =>
   ({
@@ -70,6 +72,12 @@ suite('the draft editor routes', () => {
   let base: string;
   let dataDir: string;
   let smtp: FakeSmtpServer;
+  /**
+   * One IMAP for the whole file. It is in the manifest as well as in the seed,
+   * because `email.fetch_attachment` talks to whatever the manifest was built
+   * with — a seed-local server would leave the route dialling a real host.
+   */
+  const imap = new FakeImapServer();
   let registry: ToolRegistry;
   let ctx: ToolContext;
   const cookies = new Map<string, string>();
@@ -113,7 +121,7 @@ suite('the draft editor routes', () => {
     dataDir = await mkdtemp(path.join(tmpdir(), 'buddi-drafts-routes-'));
     process.env.BUDDI_DATA_DIR = dataDir;
     smtp = new FakeSmtpServer();
-    const manifest = createEmailManifest({ send: smtp.factory(), env: ENV });
+    const manifest = createEmailManifest({ send: smtp.factory(), connect: imap.factory(), env: ENV });
     await runMigrations(pool, [manifest]);
     await ensureOwner(pool, 'owner');
     registry = new ToolRegistry();
@@ -153,9 +161,11 @@ suite('the draft editor routes', () => {
       'truncate email.drafts, email.triage, email.messages, email.threads, email.folders, email.accounts cascade',
     );
     await pool.query('truncate core.actions cascade');
+    await pool.query('delete from core.artifacts');
     await ensureGmailAccount(pool, ENV);
-    const server = new FakeImapServer();
-    server.add(
+    imap.mailboxes.clear();
+    imap.parts.clear();
+    const uid = imap.add(
       'INBOX',
       fakeMessage({
         messageId: '<bank-1@bank.test>',
@@ -164,10 +174,15 @@ suite('the draft editor routes', () => {
         subject: 'Direct debit returned',
         bodyText: 'Your direct debit was returned unpaid.',
         flags: [],
+        hasAttachments: true,
+        attachments: [
+          { filename: 'notice.pdf', mime: 'application/pdf', sizeBytes: NOTICE.length, part: '2' },
+        ],
         date: new Date('2026-09-20T08:00:00Z'),
       }),
     );
-    await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 }).poll({
+    imap.putPart('INBOX', uid, '2', NOTICE);
+    await createInboxPollSource({ connect: imap.factory(), env: ENV, backfill: 1_000 }).poll({
       db: pool,
       now: () => NOW,
       timezone: 'UTC',
@@ -396,6 +411,77 @@ suite('the draft editor routes', () => {
     });
     expect([413, 400]).toContain(res.status);
     expect(((await res.json()) as any).error).toMatch(/too long to keep as a draft|body/i);
+  });
+
+  /* ---- search, and attachments on request (docs/specs/email.md §9, §10) ---- */
+
+  it('searches the owner’s mail and links each hit to its conversation', async () => {
+    const { threadId } = await seed();
+    const res = await send('GET', '/api/email/search?q=returned%20unpaid');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      count: number;
+      messages: Array<{ subject: string; threadId: string; hasAttachments: boolean }>;
+      window?: string;
+    };
+    expect(body.count).toBe(1);
+    expect(body.messages[0]).toMatchObject({
+      subject: 'Direct debit returned',
+      threadId,
+      hasAttachments: true,
+    });
+    // Nothing narrowed it, so the answer says what it looked at.
+    expect(body.window).toMatch(/90 days/);
+  });
+
+  it('takes the filters on their own, with no text at all', async () => {
+    await seed();
+    const res = await send('GET', '/api/email/search?from=bank.test&hasAttachments=true');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).count).toBe(1);
+    // A date that is not one is refused before any SQL is built.
+    expect((await send('GET', '/api/email/search?since=last%20march')).status).toBe(400);
+    // And a search that is neither a phrase nor a filter is not a search.
+    expect((await send('GET', '/api/email/search')).status).toBe(400);
+  });
+
+  it('lists a message’s attachments, and fetches one into the library on request', async () => {
+    const { threadId } = await seed();
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    const messageId = thread.messages[0].id as string;
+
+    const before = (await (await send('GET', `/api/email/messages/${messageId}`)).json()) as any;
+    expect(before.message.attachments).toEqual([
+      { index: 0, filename: 'notice.pdf', mime: 'application/pdf', sizeBytes: NOTICE.length, artifactId: null },
+    ]);
+
+    const fetched = await send('POST', `/api/email/messages/${messageId}/attachments/0/fetch`, {});
+    expect(fetched.status).toBe(200);
+    const saved = (await fetched.json()) as { artifactId: string; filename: string };
+    expect(saved.filename).toBe('notice.pdf');
+
+    // It is the owner's file, and the row now says where it went.
+    const created = await pool.query(`select created_by from core.artifacts where id = $1`, [saved.artifactId]);
+    expect(created.rows[0].created_by).toBe('owner');
+    const after = (await (await send('GET', `/api/email/messages/${messageId}`)).json()) as any;
+    expect(after.message.attachments[0].artifactId).toBe(saved.artifactId);
+
+    // The same bytes again are the same file, not a second copy.
+    const again = await send('POST', `/api/email/messages/${messageId}/attachments/0/fetch`, {});
+    expect(((await again.json()) as any).artifactId).toBe(saved.artifactId);
+    // Only the mail ones: the seeded draft has an artifact of its own.
+    const count = await pool.query(
+      `select count(*)::int as n from core.artifacts where source_surface = 'email'`,
+    );
+    expect(count.rows[0].n).toBe(1);
+  });
+
+  it('hands back the tool’s own refusal when there is no such attachment', async () => {
+    const { threadId } = await seed();
+    const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
+    const res = await send('POST', `/api/email/messages/${thread.messages[0].id}/attachments/7/fetch`, {});
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toMatch(/1 attachment/);
   });
 
   it('refuses every new route without a session at all', async () => {

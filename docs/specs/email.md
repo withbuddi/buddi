@@ -376,15 +376,69 @@ two runs drafting on one thread at once. So:
 
 ## 9. Search
 
-`search` gains sender, date range, thread and account filters and a
-trigram index on subject and from; body search stays bounded. Threads are
-searchable by participant.
+**Built.** `email.search` takes a phrase, filters, or both, and needs at
+least one of the two.
+
+- `query` is a case-insensitive **substring** of the subject, the sender or
+  the body — the same promise it always made. The subject and the sender ride
+  trigram GIN indexes (migration `012_search.sql`, `pg_trgm`), which accelerate
+  `ilike '%…%'` directly; pg_trgm's `%` similarity operator was not used,
+  because it would quietly turn the search into a fuzzy word match and an agent
+  looking for `@acme.` in an address would stop finding it.
+- Filters, each optional and each narrowing: `from` (a whole address, matched
+  exactly, or a bare domain, which also matches its subdomains), `since` and
+  `until` (YYYY-MM-DD, against `coalesce(internal_date, fetched_at)` — the
+  server's clock, never the sender's `Date` header, and `until` includes the
+  whole of the day named), `thread`, `direction`, and `hasAttachments`.
+- **The body scan is bounded.** `body_text` has no index and is not getting
+  one. When a filter narrows the search, the filters bound it; when nothing
+  does, a **90-day window** on the ordering clock does, and the answer says so
+  in a sentence rather than silently returning less.
+- Every hit carries its conversation, its direction, which mailbox it arrived
+  in, its date, and its snippet **fenced** as quoted mail.
+
+`email.list_threads` takes `participant` (an address, whoever wrote — served
+by a GIN index over `threads.participants`) and the same `since`/`until`
+window, measured against `last_at`: the question "which conversations since
+March" is about the ones that are still alive, not about when they began.
+
+The Mail page has a search field above the conversation list — text, from,
+since, until, with attachments — over `GET /api/email/search`. The route and
+the tool share **one query builder** (`packages/tools/email/src/search.ts`), so
+the owner and their agents asking the same question get the same answer. Each
+result links to the conversation it is in.
 
 ## 10. Attachments
 
-`attachments` records names on ingest; `email.fetch_attachment` (auto,
-bounded at 25 MB) pulls one into the artifacts store on request, so an
-invoice PDF becomes a file the finance advisor can read.
+**Built.** Ingest records a *listing* — filename, type, size, and the IMAP
+body part each file is — and never downloads bytes. `email.fetch_attachment`
+(tier `auto`, `producesArtifacts`) pulls one on request: name the message, and
+the attachment by `index` or by `filename`. What comes back is saved through
+`saveArtifact`, so an invoice PDF becomes a file in the owner's library with a
+download link, and the finance advisor can read it.
+
+- **Content-addressed.** A second call for the same bytes returns the same
+  artifact; the artifact id is written back onto the message's listing, so the
+  page draws a link rather than a second Fetch.
+- **Bounded at 25 MB**, refused on the declared size *before* the download and
+  cut off on the stream if the server under-reported it.
+- **Executables are refused** — `.exe/.scr/.bat/.cmd/.js/.vbs` and friends by
+  name, `application/x-msdownload` and friends by type — with a sentence
+  saying why. Mail is where one arrives pretending to be an invoice.
+- **Mail that is no longer there is said plainly**: the mailbox was recreated
+  (UIDVALIDITY moved), or the message is gone, and if the body was purged under
+  retention the refusal says that buddi has no copy either.
+- Rows ingested before part ids were recorded re-read the body structure on
+  demand rather than refusing.
+- On the Mail page, an opened message lists its attachments with a Fetch per
+  row (`POST /api/email/messages/:id/attachments/:index/fetch`, the same
+  session and CSRF gate as every other write, the owner as `createdBy`), and
+  the row becomes a download link once the file is here.
+
+**Retention does not touch them.** The body of a message is purged on the
+owner's window; the artifact a fetch produced is the owner's own file, in their
+own library, and is never deleted by the mail sweep. The message row keeps its
+listing, artifact id included.
 
 ## 11. Later, on purpose
 
@@ -420,4 +474,4 @@ Gmail instead of app passwords.
    identity on the approval card. **Built.**
 6. The remaining four sentinels (`promised-reply`, `receipt-or-bill`,
    `suspicious-sender`, `unanswered-by-them`, §7); the search filters and the
-   trigram index (§9); attachments on request (§10).
+   trigram index (§9) — **built**; attachments on request (§10) — **built**.

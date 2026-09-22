@@ -32,10 +32,14 @@ import {
   ApiError,
   api,
   type ApprovalRow,
+  type EmailAttachment,
   type EmailDraftRow,
   type EmailMessageBody,
+  type EmailSearchHit,
+  type EmailSearchQuery,
   type EmailThreadRow,
 } from '../api';
+import { downloadUrl, formatBytes } from '../chat/attachments';
 import { fmtRelative } from '../format';
 import { mailRoute, parseMailRoute, settingsRoute } from '../routes';
 import type { PlaceProps } from '../App';
@@ -52,6 +56,7 @@ import {
   Panel,
   Pill,
   Section,
+  Spacer,
   Stack,
   Toolbar,
   useAsync,
@@ -268,6 +273,73 @@ export function DraftEditor({
   );
 }
 
+/**
+ * The attachments of an opened message (docs/specs/email.md §10).
+ *
+ * The bytes were never downloaded at ingest — what is stored is a listing —
+ * so each row is either a Fetch button or, once somebody has fetched it, a
+ * link to the file in the library. The button is on the right, where every
+ * other action on this page is, and a refusal (too big, a program, mail that
+ * is no longer on the server) is shown as the sentence the tool wrote rather
+ * than as a failed request.
+ */
+export function AttachmentList({
+  messageId,
+  attachments,
+}: {
+  messageId: string;
+  attachments: EmailAttachment[];
+}): JSX.Element | null {
+  const [held, setHeld] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  if (attachments.length === 0) return null;
+
+  const fetchOne = (index: number): void => {
+    setBusy(index);
+    setFailed(null);
+    void api
+      .fetchEmailAttachment(messageId, index)
+      .then((result) => {
+        if (result.artifactId) setHeld((current) => ({ ...current, [index]: result.artifactId as string }));
+      })
+      .catch((err: unknown) => setFailed(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <Section title={attachments.length === 1 ? 'Attachment' : 'Attachments'}>
+      <ErrorBanner message={failed} />
+      <List>
+        {attachments.map((attachment) => {
+          const artifactId = held[attachment.index] ?? attachment.artifactId;
+          return (
+            <ListRow
+              key={attachment.index}
+              title={attachment.filename ?? 'Unnamed file'}
+              sub={`${attachment.mime} · ${formatBytes(attachment.sizeBytes)}`}
+              side={
+                artifactId ? (
+                  <a href={downloadUrl(artifactId)}>Download</a>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    onClick={() => fetchOne(attachment.index)}
+                    disabled={busy === attachment.index}
+                  >
+                    {busy === attachment.index ? 'Fetching…' : 'Fetch'}
+                  </Button>
+                )
+              }
+            />
+          );
+        })}
+      </List>
+    </Section>
+  );
+}
+
 /** One message, opened: the body arrives on request, not with the list. */
 function MessageRow({ id, from, snippet, direction, date, timezone }: {
   id: string;
@@ -306,6 +378,7 @@ function MessageRow({ id, from, snippet, direction, date, timezone }: {
                   ? 'The body of this message has been purged under your retention setting. Its headers are kept.'
                   : (body.bodyText ?? '')}
             </span>
+            {body ? <AttachmentList messageId={id} attachments={body.attachments} /> : null}
           </>
         ) : (
           snippet
@@ -454,6 +527,148 @@ export function EmailThread({
   );
 }
 
+/**
+ * The search field over the conversation list (docs/specs/email.md §9).
+ *
+ * Four filters and a phrase, and not one more: from, since, until and "has
+ * attachments" are the ones that answer a question the owner actually has in
+ * front of a mailbox — "what did the accountant send me in March", "which of
+ * these had the invoice on it". `thread` and `direction` exist on the tool
+ * because an agent reasons with them; on this page the thread is what a result
+ * *opens*, so offering it as a filter would be a field for narrowing to the
+ * thing you are about to click.
+ *
+ * It searches on submit rather than on every keystroke. A substring search
+ * over bodies is not free, and a page that fires one per letter typed spends
+ * the mailbox's budget on prefixes nobody meant.
+ */
+export function MailSearch(): JSX.Element {
+  const [form, setForm] = useState<EmailSearchQuery>({});
+  const [hits, setHits] = useState<EmailSearchHit[] | null>(null);
+  const [windowed, setWindowed] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const set = (patch: Partial<EmailSearchQuery>): void =>
+    setForm((current) => ({ ...current, ...patch }));
+
+  const run = (): void => {
+    setBusy(true);
+    setFailed(null);
+    void api
+      .emailSearch(form)
+      .then((result) => {
+        setHits(result.messages);
+        setWindowed(result.window ?? null);
+      })
+      .catch((err: unknown) => {
+        setHits(null);
+        setFailed(err instanceof ApiError ? err.message : String(err));
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const clear = (): void => {
+    setForm({});
+    setHits(null);
+    setWindowed(null);
+    setFailed(null);
+  };
+
+  return (
+    <Panel>
+      <Section title="Search">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            run();
+          }}
+        >
+          <Toolbar valign="end">
+            <Field label="Text" grow>
+              <input
+                type="search"
+                value={form.q ?? ''}
+                placeholder="A word in the subject, the sender or the body"
+                aria-label="Search mail"
+                onChange={(e) => set({ q: e.target.value })}
+              />
+            </Field>
+            <Field label="From" hint="An address, or a domain like acme.com">
+              <input
+                type="text"
+                value={form.from ?? ''}
+                aria-label="From"
+                onChange={(e) => set({ from: e.target.value })}
+              />
+            </Field>
+            <Field label="Since">
+              <input
+                type="date"
+                value={form.since ?? ''}
+                aria-label="Since"
+                onChange={(e) => set({ since: e.target.value })}
+              />
+            </Field>
+            <Field label="Until">
+              <input
+                type="date"
+                value={form.until ?? ''}
+                aria-label="Until"
+                onChange={(e) => set({ until: e.target.value })}
+              />
+            </Field>
+            <Field label="With attachments" inline>
+              <input
+                type="checkbox"
+                checked={form.hasAttachments ?? false}
+                aria-label="Only messages with attachments"
+                onChange={(e) => set({ hasAttachments: e.target.checked })}
+              />
+            </Field>
+            <Spacer />
+            {hits !== null ? (
+              <Button variant="ghost" type="button" onClick={clear}>
+                Clear
+              </Button>
+            ) : null}
+            <Button variant="accent" type="submit" disabled={busy}>
+              {busy ? 'Searching…' : 'Search'}
+            </Button>
+          </Toolbar>
+        </form>
+        <ErrorBanner message={failed} />
+        {windowed ? <Notice>{windowed}</Notice> : null}
+        {hits === null ? null : hits.length === 0 ? (
+          <Empty>Nothing here matches that.</Empty>
+        ) : (
+          <List>
+            {hits.map((hit) => (
+              <ListRow
+                key={hit.id}
+                {...(hit.threadId ? { href: mailRoute(hit.threadId) } : {})}
+                title={hit.subject || '(no subject)'}
+                sub={`${hit.from} — ${hit.snippet}`}
+                side={
+                  <>
+                    {hit.hasAttachments ? <Pill>attachment</Pill> : null}{' '}
+                    <Pill tone={hit.direction === 'out' ? 'good' : undefined}>
+                      {hit.direction === 'out' ? 'you wrote' : 'they wrote'}
+                    </Pill>{' '}
+                    <span className="muted" title={hit.date ?? undefined}>
+                      {hit.date ? fmtRelative(hit.date) : ''}
+                    </span>
+                  </>
+                }
+              />
+            ))}
+          </List>
+        )}
+      </Section>
+    </Panel>
+  );
+}
+
 /** The conversations, and whichever one the address names. */
 export function Mail({ hash, timezone, navigate }: PlaceProps): JSX.Element {
   const route = parseMailRoute(hash);
@@ -494,6 +709,7 @@ export function Mail({ hash, timezone, navigate }: PlaceProps): JSX.Element {
           rules and watcher settings live under Settings → Email.
         </Notice>
         <ErrorBanner message={threads.error} />
+        <MailSearch />
         <Panel>
           {!threads.data ? (
             <Empty>Loading…</Empty>

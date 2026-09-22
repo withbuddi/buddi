@@ -12,7 +12,15 @@
  */
 import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
-import { isUnread } from '../mail.js';
+import { isUnread, quoted, UNTRUSTED_NOTICE } from '../mail.js';
+import {
+  buildSearch,
+  narrows,
+  qualify,
+  windowNote,
+  DATE_PATTERN,
+  WHEN,
+} from '../search.js';
 import { loadSettings, purgedBodyNote } from '../retention.js';
 import { MESSAGE_COLUMNS, toMessage } from '../rows.js';
 import {
@@ -174,47 +182,110 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   },
 };
 
+/**
+ * The filters, in one place, so the tool and the page share their words.
+ *
+ * Every one of them is optional and every one of them narrows — there is no
+ * filter here that widens the scope, which stays whatever `account` allows.
+ */
+const FROM_FILTER = z
+  .string()
+  .min(3)
+  .describe(
+    'Only mail from this sender: a whole address (an exact match) or a bare domain like `acme.com` (which also matches its subdomains).',
+  );
+
+const SINCE_FILTER = z
+  .string()
+  .regex(DATE_PATTERN, 'expected a YYYY-MM-DD date')
+  .describe('Only mail received on or after this day (YYYY-MM-DD).');
+
+const UNTIL_FILTER = z
+  .string()
+  .regex(DATE_PATTERN, 'expected a YYYY-MM-DD date')
+  .describe('Only mail received on or before this day (YYYY-MM-DD), the whole day included.');
+
 const searchInput = z.object({
   account: ACCOUNT_ARG.optional(),
   query: z
     .string()
     .min(2)
-    .describe('Text to look for in the subject, the sender, or the body. Case-insensitive.'),
+    .optional()
+    .describe(
+      'Text to look for in the subject, the sender, or the body. Case-insensitive substring. Optional when at least one filter is given.',
+    ),
+  from: FROM_FILTER.optional(),
+  since: SINCE_FILTER.optional(),
+  until: UNTIL_FILTER.optional(),
+  thread: UUID.optional().describe('Only messages in this conversation (the id from email.list_threads).'),
+  direction: z
+    .enum(['in', 'out'])
+    .optional()
+    .describe("'in' for mail that arrived, 'out' for mail the owner sent."),
+  hasAttachments: z
+    .boolean()
+    .optional()
+    .describe('True for messages that carry attachments, false for those that do not.'),
   limit: LIMIT.optional(),
 });
 
 export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
   name: 'email.search',
   description:
-    'Search ingested mail by a piece of text — a sender, a word in the subject, a phrase in the body. Case-insensitive substring match, newest first, across every mailbox unless you name one with `account`. Use it to find the earlier message a new one refers to.',
+    'Search ingested mail. Give `query` for a case-insensitive substring of the subject, the sender or the body, and narrow it with any of `from` (a whole address, or a bare domain which also matches its subdomains), `since` and `until` (YYYY-MM-DD, against when the mail was received), `thread` (one conversation), `direction` (`in` or `out`), and `hasAttachments`. `query` may be left out when at least one filter is given — `from: "acme.com", hasAttachments: true` is a search. Newest first, across every mailbox unless you name one with `account`. With a `query` and no filter at all only the last 90 days are searched, and the answer says so. Use it to find the earlier message a new one refers to.',
   tier: 'auto',
   input: searchInput,
   async execute(input, ctx) {
     const scope = await accountScope(ctx.db, input.account);
     const limit = boundedLimit(input.limit);
-    // Escape the LIKE metacharacters: a query containing % is a literal search
-    // for a percent sign, not a wildcard the model can widen.
-    const needle = `%${input.query.replace(/([\\%_])/g, '\\$1')}%`;
+    const filters = {
+      ...(input.query !== undefined ? { query: input.query } : {}),
+      ...(input.from !== undefined ? { from: input.from } : {}),
+      ...(input.since !== undefined ? { since: input.since } : {}),
+      ...(input.until !== undefined ? { until: input.until } : {}),
+      ...(input.thread !== undefined ? { thread: input.thread } : {}),
+      ...(input.direction !== undefined ? { direction: input.direction } : {}),
+      ...(input.hasAttachments !== undefined ? { hasAttachments: input.hasAttachments } : {}),
+    };
+    // A search with neither text nor a filter is "every message you have",
+    // which is what email.list_recent is for and says so.
+    if ((input.query ?? '').trim() === '' && !narrows(filters)) {
+      throw new Error(
+        'email.search needs either `query` or at least one filter (`from`, `since`, `until`, `thread`, `direction`, `hasAttachments`); use email.list_recent to see the newest mail.',
+      );
+    }
+    const built = buildSearch(scope.ids, filters, ctx.now());
     const { rows } = await ctx.db.query(
-      `select ${MESSAGE_COLUMNS} from email.messages
-        where account_id = any($1::uuid[])
-          and (subject ilike $2 escape '\\'
-               or from_addr ilike $2 escape '\\'
-               or body_text ilike $2 escape '\\')
-        order by date desc nulls last, uid desc
-        limit $3`,
-      [scope.ids, needle, limit],
+      `select ${qualify(MESSAGE_COLUMNS, 'm')} from email.messages m
+        where ${built.where}
+        order by ${WHEN} desc nulls last, m.uid desc
+        limit $${built.params.length + 1}`,
+      [...built.params, limit],
     );
     const messages = rows.map(toMessage).map((m) => ({
       id: m.id,
       account: scope.byId.get(m.accountId)?.address ?? null,
+      // The conversation this belongs to, so a hit can be read in context
+      // with email.read_thread rather than on its own.
+      thread: m.threadId,
+      direction: m.direction,
       from: m.from,
       subject: m.subject,
       date: m.date,
-      snippet: m.snippet,
+      // Fenced: a snippet is the sender's own words, and a search result is
+      // read by a model. See `quoted` in mail.ts.
+      snippet: quoted(m.snippet ?? ''),
       unread: isUnread(m.flags),
       hasAttachments: m.hasAttachments,
     }));
-    return { ...scopeSummary(scope), query: input.query, count: messages.length, messages };
+    return {
+      ...scopeSummary(scope),
+      query: input.query ?? null,
+      filters,
+      count: messages.length,
+      messages,
+      ...(built.windowed && built.windowFrom ? { window: windowNote(built.windowFrom) } : {}),
+      note: UNTRUSTED_NOTICE,
+    };
   },
 };

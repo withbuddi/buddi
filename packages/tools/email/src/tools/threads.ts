@@ -27,6 +27,7 @@ import {
   type ThreadRecord,
 } from '../threads.js';
 import { normalizeAddress } from '../mail.js';
+import { DATE_PATTERN } from '../search.js';
 import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
 import { ACCOUNT_ARG, accountScope, boundedLimit, DEFAULT_LIMIT, MAX_LIMIT, UUID } from './shared.js';
 
@@ -85,6 +86,16 @@ const listInput = z.object({
     .min(3)
     .optional()
     .describe('Only conversations this address is part of, whoever wrote.'),
+  since: z
+    .string()
+    .regex(DATE_PATTERN, 'expected a YYYY-MM-DD date')
+    .optional()
+    .describe('Only conversations that last moved on or after this day (YYYY-MM-DD).'),
+  until: z
+    .string()
+    .regex(DATE_PATTERN, 'expected a YYYY-MM-DD date')
+    .optional()
+    .describe('Only conversations that last moved on or before this day (YYYY-MM-DD), the whole day included.'),
   limit: z.number().int().positive().max(MAX_LIMIT).optional()
     .describe(`How many conversations to return (default ${DEFAULT_LIMIT}, most ${MAX_LIMIT}).`),
 });
@@ -92,7 +103,7 @@ const listInput = z.object({
 export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
   name: 'email.list_threads',
   description:
-    "The owner's mail as conversations rather than messages: subject, who is in it, how many messages, when it last moved, and which way — whether it is waiting on him or on them. The state is derived from who wrote last, the owner's Sent folder included, so a thread he answered from his phone says so. Filter by state to find what is waiting on him. Every mailbox unless you name one with `account`.",
+    "The owner's mail as conversations rather than messages: subject, who is in it, how many messages, when it last moved, and which way — whether it is waiting on him or on them. The state is derived from who wrote last, the owner's Sent folder included, so a thread he answered from his phone says so. Filters, all optional: `state` ('waiting-on-me', 'waiting-on-them', 'closed', 'muted'), `participant` (an address, whoever wrote), and `since`/`until` (YYYY-MM-DD, against when the conversation last moved). Most recently moved first, and every mailbox unless you name one with `account`. Use email.search to find a message; use this to see where the conversations stand.",
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
@@ -101,6 +112,8 @@ export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
       accountIds: scope.ids,
       ...(input.state ? { state: input.state } : {}),
       ...(input.participant ? { participant: normalizeAddress(input.participant) } : {}),
+      ...(input.since ? { since: input.since } : {}),
+      ...(input.until ? { until: input.until } : {}),
       limit: boundedLimit(input.limit),
     });
     const totals = await participantsTotals(ctx.db, threads);

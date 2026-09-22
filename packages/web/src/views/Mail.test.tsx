@@ -15,8 +15,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, type EmailDraftRow } from '../api';
-import { DraftEditor, Mail, addressesOf, draftStatusLine } from './Mail';
+import { ApiError, api, type EmailDraftRow } from '../api';
+import { AttachmentList, DraftEditor, Mail, addressesOf, draftStatusLine } from './Mail';
 import { mailRoute, parseMailRoute } from '../routes';
 
 vi.mock('../api', async (load) => ({
@@ -25,6 +25,8 @@ vi.mock('../api', async (load) => ({
     emailThreads: vi.fn(),
     emailThread: vi.fn(),
     emailMessage: vi.fn(),
+    emailSearch: vi.fn(),
+    fetchEmailAttachment: vi.fn(),
     saveEmailDraft: vi.fn(),
     discardEmailDraft: vi.fn(),
     sendEmailDraft: vi.fn(),
@@ -151,6 +153,7 @@ describe('the thread', () => {
         direction: 'in',
         bodyText: 'The whole body, fetched on demand.',
         purged: false,
+        attachments: [],
       },
     });
     render(place('#/email/t1'));
@@ -233,5 +236,100 @@ describe('the editor', () => {
       'c@x.test',
     ]);
     expect(addressesOf('   ')).toEqual([]);
+  });
+});
+
+/* ---- search, and attachments on request (docs/specs/email.md §9, §10) ---- */
+
+describe('the search field', () => {
+  it('searches on submit, not on every keystroke, and links each hit to its thread', async () => {
+    vi.mocked(api.emailSearch).mockResolvedValue({
+      count: 1,
+      messages: [
+        {
+          id: 'm9',
+          threadId: 't1',
+          accountId: 'a1',
+          direction: 'in',
+          from: 'billing@acme.test',
+          subject: 'Invoice 4102',
+          date: '2026-09-18T08:00:00.000Z',
+          snippet: 'The invoice for September is attached.',
+          hasAttachments: true,
+        },
+      ],
+      window: 'Only the last 90 days were searched.',
+    });
+    render(place('#/email'));
+    const field = await screen.findByLabelText('Search mail');
+    fireEvent.change(field, { target: { value: 'invoice' } });
+    // Nothing has gone out yet: a substring search over bodies is not free.
+    expect(api.emailSearch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(api.emailSearch).toHaveBeenCalledWith({ q: 'invoice' }));
+    const hit = await screen.findByText('Invoice 4102');
+    expect(hit.closest('a')).toHaveAttribute('href', mailRoute('t1'));
+    // The page says what the search actually looked at.
+    expect(screen.getByText(/Only the last 90 days/)).toBeInTheDocument();
+  });
+
+  it('sends the filters it was given, and clears back to nothing', async () => {
+    vi.mocked(api.emailSearch).mockResolvedValue({ count: 0, messages: [] });
+    render(place('#/email'));
+    fireEvent.change(await screen.findByLabelText('From'), { target: { value: 'acme.test' } });
+    fireEvent.change(screen.getByLabelText('Since'), { target: { value: '2026-03-01' } });
+    fireEvent.click(screen.getByLabelText('Only messages with attachments'));
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() =>
+      expect(api.emailSearch).toHaveBeenCalledWith({
+        from: 'acme.test',
+        since: '2026-03-01',
+        hasAttachments: true,
+      }),
+    );
+    expect(await screen.findByText('Nothing here matches that.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByText('Nothing here matches that.')).not.toBeInTheDocument();
+  });
+});
+
+describe('the attachments of an opened message', () => {
+  const PDF = { index: 0, filename: 'invoice.pdf', mime: 'application/pdf', sizeBytes: 2048, artifactId: null };
+
+  it('offers a Fetch per file, and draws a download link once it is here', async () => {
+    vi.mocked(api.fetchEmailAttachment).mockResolvedValue({
+      artifactId: 'af-1',
+      filename: 'invoice.pdf',
+      mime: 'application/pdf',
+      sizeBytes: 2048,
+      alreadyHeld: false,
+    });
+    render(<AttachmentList messageId="m1" attachments={[PDF]} />);
+    expect(screen.getByText('invoice.pdf')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    await waitFor(() => expect(api.fetchEmailAttachment).toHaveBeenCalledWith('m1', 0));
+    const link = await screen.findByRole('link', { name: 'Download' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('af-1'));
+  });
+
+  it('draws the link straight away for a file somebody already fetched', () => {
+    render(<AttachmentList messageId="m1" attachments={[{ ...PDF, artifactId: 'af-2' }]} />);
+    expect(screen.getByRole('link', { name: 'Download' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fetch' })).not.toBeInTheDocument();
+  });
+
+  it('shows the refusal the tool wrote rather than a failed request', async () => {
+    vi.mocked(api.fetchEmailAttachment).mockRejectedValue(
+      new ApiError(400, 'this attachment is a .exe file, which is a program rather than a document'),
+    );
+    render(<AttachmentList messageId="m1" attachments={[PDF]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    expect(await screen.findByText(/program rather than a document/)).toBeInTheDocument();
+  });
+
+  it('draws nothing at all for a message with no attachments', () => {
+    const { container } = render(<AttachmentList messageId="m1" attachments={[]} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
