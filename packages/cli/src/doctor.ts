@@ -61,6 +61,11 @@ export interface DoctorProbes {
    * Optional for the same reason `config` is.
    */
   browser?(): Promise<ProbeResult>;
+  /**
+   * The mailboxes this installation reads and sends as, and when each last
+   * saw mail. Optional for the same reason `config` is.
+   */
+  email?(): Promise<ProbeResult>;
   botToken(): Promise<ProbeResult>;
   pairedDevices(): Promise<ProbeResult>;
   /** The durable queue: paused or running, and how the jobs stand. */
@@ -115,6 +120,11 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // whose agents cannot open a website, which is a lost capability, not a
   // broken buddi.
   { name: 'browser', critical: false, probe: 'browser' },
+  // Never critical: an installation with no mailbox is one that does no mail,
+  // which is a capability the owner has not set up rather than a fault. What
+  // it is not is silent — an account whose password left the vault stops
+  // polling, and this is where that shows.
+  { name: 'email', critical: false, probe: 'email' },
   { name: 'telegram bot', critical: false, probe: 'botToken' },
   { name: 'paired devices', critical: false, probe: 'pairedDevices' },
   { name: 'queue', critical: false, probe: 'queue' },
@@ -695,6 +705,58 @@ export function checkPlugins(facts: PluginFacts): ProbeResult {
       'Its tools are absent from every agent: `buddi plugins list`, then rebuild it or ' +
       '`buddi plugins uninstall <name>`',
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * The mail row
+ * ------------------------------------------------------------------ */
+
+/** One mailbox, as the doctor's row names it. Never a password, only its name. */
+export interface EmailAccountFact {
+  address: string;
+  enabled: boolean;
+  /** The vault entry that holds this account's password. */
+  secretName: string;
+  /** True when that entry actually resolved on this boot. */
+  secretPresent: boolean;
+  /** When mail last landed for it, or null if none ever has. */
+  lastSyncAt: string | null;
+}
+
+/**
+ * Every mailbox, and when each last saw mail.
+ *
+ * Plural on purpose. "The mail account" was a row that could stay green while
+ * the second mailbox had been silent for a fortnight, because there was only
+ * ever one account to ask about; with accounts plural the only honest row is
+ * one line per account. A missing secret is a warning rather than a failure —
+ * the rest of buddi works, that mailbox does not — and it is named, because a
+ * mailbox that quietly stopped polling is exactly the state an owner can sit in
+ * for weeks.
+ */
+export function checkEmail(accounts: readonly EmailAccountFact[], now: Date): ProbeResult {
+  if (accounts.length === 0) {
+    return { status: 'ok', detail: 'no mailbox configured (Settings → Email adds one)' };
+  }
+  const line = (account: EmailAccountFact): string => {
+    const when = account.lastSyncAt === null
+      ? 'never synced'
+      : `last mail ${formatAgeShort(now.getTime() - new Date(account.lastSyncAt).getTime())} ago`;
+    const secret = account.secretPresent ? account.secretName : `${account.secretName} MISSING`;
+    return `${account.address} [${secret}] ${account.enabled ? when : 'disabled'}`;
+  };
+  const details = accounts.map(line).join('; ');
+  const broken = accounts.filter((a) => a.enabled && !a.secretPresent);
+  if (broken.length > 0) {
+    return {
+      status: 'warn',
+      detail:
+        `${accounts.length} account(s): ${details}. ` +
+        `${broken.map((a) => a.address).join(', ')} cannot open: the password is neither in the vault nor in the environment — ` +
+        'add the account again under Settings → Email',
+    };
+  }
+  return { status: 'ok', detail: `${accounts.length} account(s): ${details}` };
 }
 
 /* ------------------------------------------------------------------ *

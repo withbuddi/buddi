@@ -27,6 +27,12 @@ export interface FetchedMessage {
   messageId: string | null;
   inReplyTo: string | null;
   references: string[];
+  /**
+   * The List-Id header, as it arrived, or null when the message carried none.
+   * The gate's `list-id` scope is matched against it: a newsletter changes its
+   * From address far more readily than its list.
+   */
+  listId: string | null;
   from: Address;
   to: Address[];
   cc: Address[];
@@ -119,6 +125,19 @@ export interface AccountRecord {
   smtpPort: number;
   authMode: 'app-password' | 'xoauth2';
   secretName: string;
+  /**
+   * The other addresses this account receives as. Identity, not routing: a
+   * reply's From is the alias the original was addressed to when it is one of
+   * these, and `address` otherwise.
+   */
+  aliases: string[];
+  /** What the owner calls it. Null means the address is the name. */
+  displayName: string | null;
+  /** A disabled account keeps everything and is simply not polled or read. */
+  enabled: boolean;
+  /** 'env' is the GMAIL_USER seed; 'page' is one the owner added in Settings. */
+  addedVia: 'env' | 'page';
+  createdAt: string | null;
 }
 
 /** How a client is made for an account. Injected, so a test never dials out. */

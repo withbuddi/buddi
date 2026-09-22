@@ -58,6 +58,7 @@ import {
   resolveKey as resolveSearchKey,
   searchConfiguration,
 } from '@buddi/tool-web';
+import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
 import type { Pool } from 'pg';
 import { STALE_AFTER_MS, listArchives, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
@@ -67,6 +68,7 @@ import {
   checkBackups,
   checkConfig,
   checkDatabaseExposure,
+  checkEmail,
   checkRecovery,
   checkTailscale,
   checkNodeVersion,
@@ -463,6 +465,39 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
           `${forced ? ` (forced by ${PROVIDER_VAR}, on every provider)` : `; ${nativeNote}`}` +
           `${problem ? ` (${problem})` : ''}`,
       };
+    },
+
+    /**
+     * The mailboxes, and when each last saw mail.
+     *
+     * Read from the database rather than from the environment: accounts are
+     * plural and the addresses live in rows, not in variables. What the
+     * environment answers is the other half — whether each account's named
+     * secret actually resolved on this boot, which is the difference between
+     * a mailbox that is quiet and one that cannot open at all.
+     */
+    async email(): Promise<ProbeResult> {
+      const pool = await connected();
+      if (!pool) return { status: 'warn', detail: DB_UNREACHABLE };
+      let accounts: Awaited<ReturnType<typeof listAccounts>>;
+      try {
+        accounts = await listAccounts(pool, { enabledOnly: false });
+      } catch {
+        // No email schema on this installation: the plugin is not installed,
+        // which is a shape buddi runs in rather than a fault.
+        return { status: 'ok', detail: 'the mail plugin is not installed here' };
+      }
+      const synced = await lastSyncByAccount(pool).catch(() => new Map<string, string | null>());
+      return checkEmail(
+        accounts.map((account) => ({
+          address: account.address,
+          enabled: account.enabled,
+          secretName: account.secretName,
+          secretPresent: (env[account.secretName] ?? '').trim() !== '',
+          lastSyncAt: synced.get(account.id) ?? null,
+        })),
+        new Date(),
+      );
     },
 
     async botToken(): Promise<ProbeResult> {

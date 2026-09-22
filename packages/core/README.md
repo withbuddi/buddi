@@ -1,6 +1,6 @@
 # @buddi/core
 
-The contract a [buddi](https://github.com/amenophis1er/buddi) plugin is written
+The contract a [buddi](https://github.com/withbuddi/buddi) plugin is written
 against. A plugin package exports a `PluginManifest` and depends on this package
 as a **peer** dependency, so that the plugin and the installation it is loaded
 into share one registry, one pool and one set of approvals.
@@ -18,7 +18,7 @@ into share one registry, one pool and one set of approvals.
 Installing one is `buddi plugins install buddi-plugin-weather`. What that means,
 what a plugin may contribute, and what it is trusted with — a plugin runs inside
 buddi's process with everything buddi can do and is not sandboxed — is in
-[docs/plugins.md](https://github.com/amenophis1er/buddi/blob/main/docs/plugins.md).
+[docs/plugins.md](https://github.com/withbuddi/buddi/blob/main/docs/plugins.md).
 
 Core imports no plugin, ever. The dependency only points one way.
 
@@ -26,7 +26,7 @@ Core imports no plugin, ever. The dependency only points one way.
 
 If you only have this package, this is the whole shape of what you are writing.
 The guide is
-[docs/plugins.md](https://github.com/amenophis1er/buddi/blob/main/docs/plugins.md);
+[docs/plugins.md](https://github.com/withbuddi/buddi/blob/main/docs/plugins.md);
 its "Start here" chapter is ten minutes from nothing to a tool an agent can
 call, and `buddi plugins init <name>` writes the scaffold.
 

@@ -65,6 +65,16 @@ import {
   type TelegramControl,
   type TelegramWebDeps,
 } from './telegram.js';
+import {
+  EmailWebError,
+  addEmailAccount,
+  deleteEmailPolicy,
+  listEmailAccounts,
+  readEmailPolicies,
+  removeEmailAccount,
+  writeEmailPolicy,
+  type EmailWebDeps,
+} from './email.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -738,6 +748,15 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       return null;
     };
+    /**
+     * What the mail-account routes need: the pool the email schema lives in,
+     * and the live environment — which is where a password just added is kept
+     * for this process, so the next poll finds it without a restart.
+     */
+    const emailDeps = (): EmailWebDeps => ({
+      pool: deps.pool as never,
+      env: deps.env ?? process.env,
+    });
     /** What the two Telegram routes need. The environment is the live one. */
     const telegramDeps = (): TelegramWebDeps => ({
       pool: deps.pool,
@@ -1046,8 +1065,27 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
+        /*
+         * Settings → Email → Policies: the standing decisions about incoming
+         * mail, and the ones proposed from the owner's own history. A read.
+         */
+        case '/api/email/policies': {
+          const view = await readEmailPolicies(deps.pool);
+          return sendJson(res, view.status, view.body);
+        }
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
+        /*
+         * The mailboxes this installation reads and sends as. Names of vault
+         * entries, never their values: nothing on this route has ever held a
+         * password, and the page has no field that shows one.
+         */
+        case '/api/email/accounts':
+          try {
+            return sendJson(res, 200, await listEmailAccounts(emailDeps()));
+          } catch (error) {
+            return sendJson(res, 503, { error: `Mail accounts are unavailable: ${error instanceof Error ? error.message : String(error)}` });
+          }
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1292,6 +1330,31 @@ export function createWebApp(deps: WebServerDeps): Server {
       const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+      }
+      /*
+       * Revoke one mail policy. The row stays as the record that the owner once
+       * decided this; only its effect stops. Answers with both lists, so the
+       * page redraws from the reply rather than asking again.
+       */
+      const policyGone = /^\/api\/email\/policies\/([0-9a-f-]{36})$/i.exec(path);
+      if (policyGone) {
+        const reply = await deleteEmailPolicy(deps.pool, policyGone[1]!, deps.now());
+        return sendJson(res, reply.status, reply.body);
+      }
+      /*
+       * A mailbox the owner is done with: the row and the vault entry that
+       * opened it, together. A password left in the keychain after the account
+       * it belonged to is gone is a secret nobody is responsible for.
+       */
+      const accountGone = /^\/api\/email\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (accountGone) {
+        try {
+          const removed = await removeEmailAccount(emailDeps(), accountGone[1]!);
+          return removed.removed ? sendJson(res, 200, removed) : sendEmpty(res, 404);
+        } catch (error) {
+          if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
+          return sendJson(res, 500, { error: 'That mailbox could not be removed from here.' });
+        }
       }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
@@ -1972,6 +2035,22 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
+     * A mailbox, added from the page: the address, its hosts, and the app
+     * password. The password is tested against IMAP once, kept in the vault
+     * under a name derived from the address, and never written to the database
+     * or to a file. A login the server refuses answers 400 in plain words, and
+     * nothing is kept.
+     */
+    if (path === '/api/email/accounts') {
+      try {
+        return sendJson(res, 200, await addEmailAccount(emailDeps(), body));
+      } catch (error) {
+        if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
+        return sendJson(res, 500, { error: 'That mailbox could not be added from here.' });
+      }
+    }
+
+    /*
      * The owner's own profile. What an agent may write through owner.set_profile
      * the owner may write here directly; the same validation, the same row.
      */
@@ -1988,6 +2067,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
       const profile = await setOwnerProfile(deps.pool, patch);
       return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+    }
+
+    /*
+     * Write a mail policy, or keep one that was only proposed. The owner acting
+     * on their own settings page needs no approval card: the gate on
+     * `email.set_policy` exists because a *model* proposed the rule.
+     */
+    if (path === '/api/email/policies') {
+      const reply = await writeEmailPolicy(deps.pool, body, deps.now());
+      return sendJson(res, reply.status, reply.body);
     }
 
     /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */
