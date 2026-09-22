@@ -1,10 +1,13 @@
 # Email: accounts, threads, policies, watchers
 
-Status: steps 1 and 2 built on branch email-policies, 2026-09-21. The rest is
-still a specification for review; the current plugin had no document, and this
-is the one it should have had. What §13.1 asks for — policies, the gate, the
-backfill and the Learned list — is implemented, with three departures noted in
-§5, and §4's accounts are plural, added from the settings page.
+Status: in progress, 2 of 5 steps built; step 3 in progress, 2026-09-21
+
+Steps 1 and 2 of §13 are built and merged: policies and the gate seeded from
+history, with the Learned list on the settings page, and accounts plural with
+per-account identity and secrets in the vault from that page. Three departures
+from this document are noted in §5. Step 3 — threads and the Sent folder, with
+the triage run receiving the thread — is being built now on branch
+`email-threads`. Steps 4 and 5 are not started.
 
 ## 1. The verdict on today
 

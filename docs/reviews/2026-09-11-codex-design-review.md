@@ -1,6 +1,6 @@
 The five-layer structure is a good starting point, but **the design is not yet ready for implementation of autonomous side effects**. Its strongest ideas—central approval enforcement, catch-up execution, and provider isolation—are currently assertions rather than complete contracts.
 
-I reviewed [ARCHITECTURE.md](/Users/amen/Projects/personal/buddi/ARCHITECTURE.md) and the referenced Foreman provider implementation. Severity below means: **Critical** can defeat authorization; **High** can cause unintended actions, disclosure, or lost work; **Medium** creates substantial implementation or operational friction.
+I reviewed [ARCHITECTURE.md](../../ARCHITECTURE.md) and the referenced Foreman provider implementation. Severity below means: **Critical** can defeat authorization; **High** can cause unintended actions, disclosure, or lost work; **Medium** creates substantial implementation or operational friction.
 
 **1. Five layers and event routing — High: ownership and delivery semantics are missing.**
 

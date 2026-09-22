@@ -1,7 +1,6 @@
 # Learning: buddi proposes, the owner keeps
 
-Status: specification for review, 2026-09-21. Nothing here is built. The
-email plugin's learned policies are the first instance of the rule below.
+Status: accepted, not started, 2026-09-21
 
 ## 1. The rule
 

@@ -1,5 +1,7 @@
 # Host execution
 
+Status: reference, 2026-09-18
+
 Grant `host.status`, `host.exec`, and `host.stop` (or `host.*`) to an agent to let
 it process files using Bash, Python and installed utilities on the host. Tool
 availability is not execution permission: the initial command is gated.

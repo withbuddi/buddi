@@ -1,8 +1,6 @@
 # First run: you meet buddi
 
-Status: screen script, agreed 2026-09-20. Replaces the seven-screen wizard on
-branch `wizard`. The onboarding API (`/api/onboarding/*`) stays; only what the
-owner sees changes, plus the shipping fixes in §6.
+Status: reference, 2026-09-21
 
 The person opening this has just typed `npm install -g buddi` and `buddi`, or
 was sent a link by someone who did. They are not a developer. They are about to

@@ -1,7 +1,6 @@
 # buddi as an MCP server
 
-Status: parked, 2026-09-21. Cut to the one piece that earns it after review;
-nothing here is built. Ordered after Telegram parity.
+Status: idea, parked 2026-09-21
 
 The Model Context Protocol is how Claude Code, Claude Desktop, Cursor and
 the rest reach tools and data that live somewhere else. buddi already has

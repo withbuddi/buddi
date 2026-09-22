@@ -1,5 +1,7 @@
 # Operations — backup, restore, and where your data actually lives
 
+Status: reference, 2026-09-21
+
 This installation holds your financial history, your mail, the memories your agents
 have formed about you, and the personas you wrote. ARCHITECTURE.md promises that
 "rotation, backup/restore, and log redaction are specified" before you rely on the
@@ -514,16 +516,21 @@ learn to ignore.
 ## Keeping it up to date
 
 New code is four separate things — install, build, migrate, restart — and
-**migrations do not run themselves**. Three of the four ways to get that wrong
-are silent:
+**a start migrates**. Whatever brings the gateway up runs core's migrations and
+every installed plugin's first, and refuses to serve over a schema it could not
+move: `migrateAtStart` in `packages/gateway/src/plugins/migrate.ts`, called by
+`buddi serve` (`packages/gateway/src/serve.ts`) and by the packaged supervisor
+(`packages/install/src/supervisor.ts`). `buddi migrate` is still there for the
+owner who wants to migrate *without* starting.
+
+So the migration is no longer the step you can silently skip. Two are:
 
 | Skip | What you get |
 | --- | --- |
-| the build | the service keeps executing last month's code against this month's schema |
-| the migration | a tool fails hours later, at the moment an agent calls it, as a Postgres error in a log |
+| the build | the service keeps executing last month's code, and starts by migrating the schema to this month's |
 | the restart | everything looks upgraded until the next reboot disagrees |
 
-So the order is a command rather than a paragraph:
+The order is a command rather than a paragraph:
 
 ```sh
 git pull          # you do this
@@ -549,7 +556,10 @@ What it does, in this order:
    dependencies is worse than one that fails, because it succeeds.
 4. **`buddi migrate`**, which is core's migrations *and every installed
    plugin's*. A plugin's schema is never left a version behind the code that
-   reads it. A plugin that fails to migrate is named by its schema.
+   reads it. A plugin that fails to migrate is named by its schema. This is the
+   same function a start runs, in the same order, so an upgrade that skipped it
+   would be caught by step 5 anyway — it is explicit here so that a failure
+   stops the upgrade rather than a restart.
 5. **Starts the service again**, if it was running when the command arrived.
 6. **`buddi doctor`**, because the last word on whether an upgrade worked
    belongs to the thing that checks every moving part.
@@ -564,7 +574,7 @@ not happen:
 | --- | --- | --- |
 | backup | nothing was touched | `buddi doctor`, `buddi db up`, then run it again |
 | install / build | the database is untouched, the service is running again on the code it had | fix the build, run it again |
-| migrate | new code is built, the schema is partly migrated, **and the service is deliberately left down** | run `buddi migrate` until it succeeds, then `buddi service start`. That combination is the one to never leave running |
+| migrate | new code is built, the schema is partly migrated, **and the service is deliberately left down** | fix what the named migration is complaining about, then `buddi service start` — a start migrates, so it finishes the job and refuses to serve if it still cannot. `buddi migrate` first if you would rather see it separately |
 | doctor | the upgrade finished; a row wants attention | read the row. This is a configuration question, not a failed upgrade |
 
 By hand, if you would rather see each step:

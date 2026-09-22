@@ -1,8 +1,6 @@
 # Messengers: buddi speaks as you, Telegram first
 
-Status: specification for review, 2026-09-21. Nothing here is built. The
-first adapter is Telegram as the owner; the plugin shape is written so
-that iMessage and Slack follow without changing the tools.
+Status: accepted, not started, 2026-09-21
 
 ## 1. What this is, and is not
 

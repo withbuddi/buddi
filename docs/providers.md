@@ -1,5 +1,7 @@
 # Provider accounts
 
+Status: reference, 2026-09-21
+
 Open `#/providers` in the owner dashboard. Each account is an independent named
 connection, not a global preference. Add multiple accounts for the same provider,
 then use `#/agents` to explicitly select an account and model for each agent.
@@ -20,8 +22,16 @@ Supported connections:
 - [Experimental Claude OAuth accounts](anthropic-oauth.md), with browser consent,
   code paste, and coordinated vault-backed token refresh. Requires migration 020
   and `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT=1`.
-- [Experimental Codex ChatGPT accounts](codex-app-server-experiment.md), with native
-  device sign-in. Requires the pinned Codex client and `BUDDI_CODEX_EXPERIMENT=1`.
+- [Experimental Codex ChatGPT accounts](ideas/codex-app-server-experiment.md), with
+  native device sign-in. Requires the pinned Codex client and
+  `BUDDI_CODEX_EXPERIMENT=1`.
+
+**Context window.** Each account carries an optional "Context window" field,
+stored in `core.provider_accounts.context_window_tokens`. It overrides the
+built-in table of model windows for that endpoint, which is the only truth
+available for a locally served model whose window is whatever `num_ctx` the
+host was started with. [conversations.md](conversations.md) is what the number
+is used for.
 
 ## Storage and migration
 
