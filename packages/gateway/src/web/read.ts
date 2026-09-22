@@ -39,6 +39,7 @@ import {
   type HomeBlock,
   type Offer,
 } from '@buddi/core';
+import type { OwnerChoice } from '@buddi/core';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
@@ -558,6 +559,13 @@ export interface ApprovalView {
   /** The full effect envelope the approval is bound to. */
   envelope: unknown;
   canonicalArgs: unknown;
+  /**
+   * The controls the tool offered the owner, if any: one select per entry on
+   * the card, defaults preselected. Empty for almost every action.
+   */
+  choices: OwnerChoice[];
+  /** What the owner picked, once they have decided. Null while pending. */
+  ownerChoices: Record<string, string> | null;
   argsHash: string;
   policyVersion: number;
   state: string;
@@ -581,6 +589,8 @@ export function toApprovalView(action: ActionRecord): ApprovalView {
     preview: action.preview,
     envelope: action.envelope,
     canonicalArgs: action.canonicalArgs,
+    choices: action.choices,
+    ownerChoices: action.ownerChoices,
     argsHash: action.argsHash,
     policyVersion: action.policyVersion,
     state: action.state,
@@ -602,10 +612,10 @@ export async function readApprovals(
   const pending = await listPendingActions(pool, { now });
   const { rows } = await pool.query(
     `select a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-            a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+            a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
             a.policy_version, a.created_at,
             ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-            ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at
+            ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at
        from core.actions a
        join core.approvals ap on ap.action_id = a.id
       order by a.created_at desc

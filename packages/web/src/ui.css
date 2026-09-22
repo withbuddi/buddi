@@ -106,6 +106,13 @@ fieldset.ui-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap:
 fieldset.ui-fields[data-stack='true'] { flex-direction: column; align-items: stretch; }
 fieldset:disabled { opacity: 0.6; }
 
+/*
+ * The controls on an approval, between the preview and the buttons: what the
+ * owner sets on the effect before they authorize it. Above the buttons on
+ * purpose — a setting read after the decision is a setting nobody made.
+ */
+.ui-choices { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; }
+
 /* A row of controls. Space between rows belongs to the container. */
 .ui-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .ui-toolbar-spacer { flex: 1 1 auto; }

@@ -8,6 +8,7 @@
  * happens later is written to the approval row or the effect ledger.
  */
 import type { Queryable } from '../owner.js';
+import type { OwnerChoice } from '../tools.js';
 import {
   DEFAULT_APPROVAL_TTL_MS,
   POLICY_VERSION,
@@ -15,6 +16,7 @@ import {
   hashAction,
   toActionRecord,
   toAttemptRecord,
+  validateDeclaredChoices,
   type ActionRecord,
   type ApprovalState,
   type EffectAttemptRecord,
@@ -48,6 +50,8 @@ export interface CreateActionInput {
   envelope: unknown;
   /** Rendered from the envelope by the tool, never from model-written text. */
   preview: string;
+  /** What the tool offered the owner to decide. Part of the approved hash. */
+  choices?: readonly OwnerChoice[];
   /** Defaults to 24 hours from `now`. */
   ttlMs?: number;
   expiresAt?: Date;
@@ -61,10 +65,10 @@ export interface CreateActionInput {
  */
 const SELECT_ACTION = `
   select a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-         a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+         a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
          a.policy_version, a.created_at,
          ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-         ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at
+         ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at
     from core.actions a
     join core.approvals ap on ap.action_id = a.id`;
 
@@ -76,14 +80,17 @@ export async function createAction(
   const expiresAt =
     input.expiresAt ?? new Date(now.getTime() + (input.ttlMs ?? DEFAULT_APPROVAL_TTL_MS));
   const canonicalArgs = canonicalize(input.canonicalArgs);
-  const argsHash = hashAction(input.tool, input.toolVersion, canonicalArgs, input.envelope);
+  // Checked here, before anyone is asked: a menu whose default is not on it is
+  // a menu the owner cannot be honestly shown.
+  const choices = validateDeclaredChoices(input.choices ?? []);
+  const argsHash = hashAction(input.tool, input.toolVersion, canonicalArgs, input.envelope, choices);
 
   const { rows } = await pool.query(
     `with a as (
        insert into core.actions
          (tool, tool_version, agent_id, conversation_id, job_id, canonical_args,
-          envelope, args_hash, preview, expires_at, policy_version, created_at)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12)
+          envelope, args_hash, preview, expires_at, policy_version, created_at, choices)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb)
        returning *
      ), ap as (
        insert into core.approvals (action_id, state, updated_at)
@@ -91,11 +98,12 @@ export async function createAction(
        returning *
      )
      select a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-            a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+            a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
             a.policy_version, a.created_at,
             ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-            ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at
+            ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at
        from a, ap`,
+    // $13 is the declared choice list; $12 is `now`, used by both inserts.
     [
       input.tool,
       input.toolVersion,
@@ -109,6 +117,7 @@ export async function createAction(
       expiresAt,
       input.policyVersion ?? POLICY_VERSION,
       now,
+      JSON.stringify(choices),
     ],
   );
   const row = rows[0];

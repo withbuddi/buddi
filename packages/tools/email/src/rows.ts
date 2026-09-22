@@ -138,6 +138,24 @@ export function toMessage(row: Record<string, any>): MessageRecord {
   };
 }
 
+/**
+ * Where a draft is in its life (docs/specs/email.md §8).
+ *
+ * `draft` is the agent's words, `edited` the owner's over them, and the three
+ * after are ends: sent, said no to, or left alone long enough that nobody is
+ * waiting on it any more. `draft` and `edited` together are what "live" means
+ * everywhere below.
+ */
+export const DRAFT_STATUSES = ['draft', 'edited', 'sent', 'discarded', 'lapsed'] as const;
+export type DraftStatus = (typeof DRAFT_STATUSES)[number];
+
+/** The two statuses a draft can still be acted on from. */
+export const LIVE_DRAFT_STATUSES: readonly DraftStatus[] = ['draft', 'edited'];
+
+export function isLiveDraft(status: DraftStatus): boolean {
+  return LIVE_DRAFT_STATUSES.includes(status);
+}
+
 export interface DraftRecord {
   id: string;
   /**
@@ -155,6 +173,20 @@ export interface DraftRecord {
   artifactId: string | null;
   createdByAgent: string;
   createdAt: string | null;
+  /** Where this draft is in its life. `draft` on every row written before §8. */
+  status: DraftStatus;
+  /** When the body, the recipients or the status last moved. */
+  updatedAt: string | null;
+  discardedAt: string | null;
+  lapsedAt: string | null;
+  /**
+   * Who wrote the words currently in it: `owner` once the owner has saved over
+   * the agent's, null while they are still the agent's. It is what makes an
+   * owner-edited draft something no agent may overwrite.
+   */
+  editedBy: string | null;
+  /** The conversation this draft answers. Null for a `draft_new`. */
+  threadId: string | null;
   sentActionId: string | null;
   sentAt: string | null;
   sentMessageId: string | null;
@@ -163,8 +195,9 @@ export interface DraftRecord {
 }
 
 export const DRAFT_COLUMNS =
-  'id, account_id, in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, ' +
-  'created_at, sent_action_id, sent_at, sent_message_id, sent_response, send_error';
+  'id, account_id, in_reply_to, thread_id, to_addrs, cc, bcc, subject, body_text, artifact_id, ' +
+  'created_by_agent, created_at, status, updated_at, discarded_at, lapsed_at, edited_by, ' +
+  'sent_action_id, sent_at, sent_message_id, sent_response, send_error';
 
 export function toDraft(row: Record<string, any>): DraftRecord {
   return {
@@ -179,6 +212,14 @@ export function toDraft(row: Record<string, any>): DraftRecord {
     artifactId: row.artifact_id === null || row.artifact_id === undefined ? null : String(row.artifact_id),
     createdByAgent: row.created_by_agent,
     createdAt: iso(row.created_at),
+    status: (DRAFT_STATUSES as readonly string[]).includes(row.status)
+      ? (row.status as DraftStatus)
+      : 'draft',
+    updatedAt: iso(row.updated_at),
+    discardedAt: iso(row.discarded_at),
+    lapsedAt: iso(row.lapsed_at),
+    editedBy: row.edited_by ?? null,
+    threadId: row.thread_id === null || row.thread_id === undefined ? null : String(row.thread_id),
     sentActionId: row.sent_action_id === null || row.sent_action_id === undefined ? null : String(row.sent_action_id),
     sentAt: iso(row.sent_at),
     sentMessageId: row.sent_message_id ?? null,

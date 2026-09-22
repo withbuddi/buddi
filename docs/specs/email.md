@@ -1,6 +1,6 @@
 # Email: accounts, threads, policies, watchers
 
-Status: in progress, steps 1 to 4 of 5 built, 2026-09-21. Step 5 remains specification.
+Status: in progress, steps 1 to 5 of 6 built, 2026-09-22. Step 6 — the remaining sentinels, the search filters and attachments — remains specification.
 review; the current plugin had no document, and this is the one it should have
 had. What §13.1 asks for — policies, the gate, the backfill and the Learned
 list — is implemented, with three departures noted in §5; §4's accounts are
@@ -114,8 +114,11 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
   from the thread they answer; `draft_new` requires one.
 - Identity: an account may list aliases; a draft's `from` is **the
   account's address**, and one of its aliases only when the owner chooses
-  it on the approval card, which lists them beside the identity that will
-  be used. Nothing is derived from the original's `To` or `Cc`: those are
+  it on the approval card, where they are a **select** — one option per
+  identity, the account's own address preselected — rather than a line of
+  prose. The options come from the envelope the approval is bound to, and core
+  refuses a value that is not on it, so the owner picks among exactly what they
+  were shown. Nothing is derived from the original's `To` or `Cc`: those are
   headers the sender writes, and mail reaches a mailbox through Bcc,
   forwarding and catch-alls, so an alias appearing there says who typed it,
   not who was delivered to. When the delivery envelope is captured at
@@ -282,12 +285,59 @@ and are readable and writable from a chat through `email.get_settings` and
 
 ## 8. Drafts and sending
 
-A draft is a row with a lifecycle: `draft` → `edited` → `sent` or
-`discarded`. `draft_reply` on a thread that already has a draft updates
-it. The dashboard shows drafts on the message with an editor; the owner's
-edits are the draft. `send` sends exactly one draft, from the thread's
-account, with the approval card showing to, subject, the account it
-leaves from, and the body.
+**Built** (step 5, migration `010_drafts.sql`).
+
+A draft is a row with a lifecycle: `draft` → `edited` → `sent`,
+`discarded` or `lapsed`. `draft` is what an agent wrote, `edited` what the
+owner wrote over it, and the three after are ends.
+
+- **One conversation, one live draft.** `draft_reply` on a thread that already
+  has a live draft (`draft` or `edited`) **updates** it: a new artifact
+  version, a new `updated_at`, and back to `draft`. Tapping "Draft a reply"
+  twice edits one draft (§12.4). `draft_new` always creates — it answers
+  nothing, so it has no conversation to hold a draft on, and two new messages
+  to the same stranger are two messages.
+- **An owner-edited draft is not overwritten by an agent.** Once the owner has
+  saved over the words, `edited_by` is `owner`, and `draft_reply` refuses to
+  replace them: the result says so and names `email.read_draft`, a read tool
+  whose whole job is letting the agent see what the owner wrote before it
+  proposes anything else. This is the one rule in the lifecycle that protects
+  something that cannot be recovered — the owner's own writing.
+- **A body change is a new artifact version, always.** The send envelope
+  carries the artifact id and the body's hash, so a draft edited after a send
+  was approved makes that approval unusable *by construction*. The Executor
+  re-describes before dispatch; the tool compares the stored envelope against
+  the approved one and refuses in the owner's own terms ("this draft has been
+  edited since you approved it"). The action lands in **`refused`**, not
+  `failed`: nothing was dispatched, and an irreversible effect that certainly
+  did not happen must not read like one that might have.
+- **Lapse.** A live draft nobody has touched for fourteen days becomes
+  `lapsed`, on the plugin's own daily housekeeping pass (`email.retention`,
+  which originates no run and wakes nobody). A lapsed draft is not editable and
+  not sendable; it is kept, under the page's collapsed "Older drafts" list with
+  the sent and discarded ones.
+- **`email.send` refuses a discarded or lapsed draft at describe time**, before
+  an approval card is ever put in front of the owner.
+
+`send` sends exactly one draft, from the thread's account, with the approval
+card showing to, subject, the account it leaves from, the body — and, when the
+account has aliases, **a select for which of them it leaves under** (§4). That
+select is an `EffectDescription.choices` entry the tool declares; core validates
+the owner's pick against the declared list and hands it to `execute` as
+`ctx.choices.from`. The identity on the wire changes; the mailbox that
+authenticates does not.
+
+**The Email page** carries the owner's half of this. Conversations are listed
+newest first, each with a small `draft` pill when one is waiting; opening one
+shows the thread's messages and, under them, its drafts. A live draft shows the
+agent that wrote it, its status, when it last changed, and editable
+To/Cc/Bcc/Subject/Body with **Save** (status `edited`, `edited_by = owner`, a
+new artifact version), **Discard** (status `discarded`) and **Send** — which
+does not send: it records the `email.send` action by the same path an agent
+takes and shows the approval card, alias select and all, for the owner to
+approve. The routes are `/api/email/threads` and `/api/email/drafts` (list per
+thread, get, put, discard, send), behind the same session and CSRF gate as the
+rest of `/api`.
 
 ## 9. Search
 
@@ -331,5 +381,8 @@ Gmail instead of app passwords.
    page. **Built.**
 3. Threads and the Sent folder; the triage run receives the thread. **Built.**
 4. The first two sentinels: waiting-on-me and date-stated. **Built.**
-5. Draft lifecycle with the editor; the remaining sentinels; search
-   filters; attachments on request.
+5. Draft lifecycle with the editor, and the owner's choice of sending
+   identity on the approval card. **Built.**
+6. The remaining four sentinels (`promised-reply`, `receipt-or-bill`,
+   `suspicious-sender`, `unanswered-by-them`, §7); the search filters and the
+   trigram index (§9); attachments on request (§10).

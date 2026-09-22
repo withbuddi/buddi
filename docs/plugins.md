@@ -334,12 +334,13 @@ A defect never surfaces as success, and the model never sees a raw exception.
 
 ```ts
 export interface EffectDescription {
-  envelope: unknown;   // everything that decides what the world will see
-  preview: string;     // plain text, short, owner-facing
+  envelope: unknown;    // everything that decides what the world will see
+  preview: string;      // plain text, short, owner-facing
+  choices?: OwnerChoice[];  // what the owner may set when they approve it
 }
 ```
 
-Four rules, all of them load-bearing:
+Five rules, all of them load-bearing:
 
 1. **The envelope is complete.** Every recipient including BCC, the resolved
    account, the body and its hash, attachment hashes. `core.effect_attempts`
@@ -349,7 +350,13 @@ Four rules, all of them load-bearing:
    from text the model wrote. Plain text, no markdown.
 3. **`describe` is pure and read-only.** It runs *before* any approval exists. A
    `describe` that sent an email is the exact bug this boundary exists to stop.
-4. **If you omit it**, the registry falls back to the canonical arguments as the
+4. **A choice is picked, never typed.** `choices` is how a tool lets the owner
+   settle something at the moment they approve — which of their addresses a
+   send leaves from, say. The options come from the tool, before anyone is
+   asked; core validates the answer against them and fills an unanswered key in
+   from its default; `execute` reads `ctx.choices`. "What is approved is what is
+   shown" is untouched: the owner picks among what the envelope already listed.
+5. **If you omit it**, the registry falls back to the canonical arguments as the
    envelope and their JSON as the preview. Honest, complete, and plainly a
    fallback. `@buddi/tool-email` defines a `GatedToolDefinition` that makes
    `describe` required; copy that narrowing (`packages/tools/email/src/types.ts`).
@@ -411,11 +418,12 @@ interface ToolContext {
   delegationDepth?: number; // 0 or absent = the owner started this run
   jobId?: string;
   actionId?: string;        // gated execute only — your idempotency key
+  choices?: Readonly<Record<string, string>>;  // what the owner picked on the card
   signal?: AbortSignal;     // check it before each external operation
 }
 ```
 
-That is nine of eighteen fields; the rest are for the runtime's own tools
+That is ten of nineteen fields; the rest are for the runtime's own tools
 (`group`, `surface`, `ownerRequest`, `sessionTools`, `nativeSearch`,
 `approvedEffect`, `suspend`, `systemContext`, `toolUseId`) and §9 lists every
 one of them.
@@ -1868,6 +1876,7 @@ The tiers, as `packages/core/src/registry.ts` enforces them:
 | --- | --- | --- | --- |
 | `envelope` | `unknown` | yes | Everything that decides what the world will see — every recipient, the resolved account, the hashes. It is what `core.effect_attempts` hashes before dispatch. |
 | `preview` | `string` | yes | The short plain sentence the owner approves. Rendered from the envelope, never from model prose; no markdown. |
+| `choices` | `OwnerChoice[]` | no | Settings on this effect the *owner* decides when they approve it: `{ key, label, options, default }` each. Core refuses anything not on the declared list, and `execute` reads the result from `ctx.choices`. Declare one only when there is something to choose. |
 
 #### `ToolContext`
 
@@ -1896,6 +1905,7 @@ than guess.
 | `nativeSearch` | `{ provider; maxUses }` | no | Set when the provider is searching the web itself, server-side, instead of a tool being dispatched. |
 | `jobId` | `string` | no | The durable job this run belongs to, when a job started it. |
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
+| `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 
 #### `GroupContext`
 

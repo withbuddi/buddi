@@ -136,7 +136,8 @@ export function StatePill({ state }: { state: string }): JSX.Element {
   const tone: Tone | undefined =
     state === 'succeeded' || state === 'approved' || state === 'fired' || state === 'running' || state === 'leased'
       ? 'good'
-      : state === 'failed' || state === 'rejected' || state === 'unknown' || state === 'error'
+      : state === 'failed' || state === 'rejected' || state === 'unknown' || state === 'error' ||
+          state === 'refused'
         ? 'critical'
         : state === 'pending' || state === 'suspended' || state === 'expired' || state === 'paused'
           ? 'warning'

@@ -38,6 +38,7 @@ import {
   type ToolContext,
   type ToolRegistry,
   type PermissionScope,
+  type OwnerChoice,
   conversationGroup,
 } from '@buddi/core';
 import {
@@ -56,8 +57,20 @@ export const TELEGRAM_WORKER = 'telegram-approval';
 
 export type CallbackQuery = NonNullable<TelegramUpdate['callback_query']>;
 
-/** `apr:<actionId>:<approve|reject>` */
-export function approvalCallbackData(actionId: string, decision: 'approve' | 'reject' | 'conversation' | 'always'): string {
+/**
+ * `apr:<actionId>:<approve|reject|conversation|always>`, or `apr:<id>:o<N>` for
+ * "approve with option N of the first declared choice".
+ *
+ * The option travels as an **index into the stored list**, never as the value
+ * itself. Two reasons, and both are the same reason: 64 bytes is the whole
+ * budget for callback data, and an address does not reliably fit — and a
+ * payload that carried the value would be a string from the outside world
+ * arriving at the decision path, which is exactly what "the owner can only pick
+ * among options the envelope listed" exists to prevent. An index is resolved
+ * against the action's own declared list, server side, or it resolves to
+ * nothing at all.
+ */
+export function approvalCallbackData(actionId: string, decision: 'approve' | 'reject' | 'conversation' | 'always' | `o${number}`): string {
   const data = `${CALLBACK_PREFIX}:${actionId}:${decision}`;
   if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
     // A uuid keeps this well under the limit; anything that does not is a bug
@@ -71,6 +84,12 @@ export interface ParsedCallback {
   actionId: string;
   decision: Decision;
   permissionScope?: PermissionScope;
+  /**
+   * Which option of the action's first declared choice was tapped, when the
+   * button was an "Approve as …" one. Resolved to a value against the stored
+   * action, never trusted as one.
+   */
+  optionIndex?: number;
 }
 
 /**
@@ -81,18 +100,69 @@ export interface ParsedCallback {
  * approval callback and is treated as if it had never arrived.
  */
 export function parseApprovalCallback(data: string | undefined): ParsedCallback | undefined {
-  const m = /^apr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approve|reject|conversation|always)$/i.exec(
+  const m = /^apr:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(approve|reject|conversation|always|o[0-9]{1,2})$/i.exec(
     (data ?? '').trim(),
   );
   if (!m) return undefined;
+  const verb = (m[2] as string).toLowerCase();
+  const option = /^o([0-9]{1,2})$/.exec(verb);
   return {
     actionId: (m[1] as string).toLowerCase(),
-    decision: m[2]?.toLowerCase() === 'reject' ? 'rejected' : 'approved',
-    ...(['conversation', 'always'].includes(m[2]!.toLowerCase()) ? { permissionScope: m[2]!.toLowerCase() as PermissionScope } : {}),
+    decision: verb === 'reject' ? 'rejected' : 'approved',
+    ...(['conversation', 'always'].includes(verb) ? { permissionScope: verb as PermissionScope } : {}),
+    ...(option ? { optionIndex: Number(option[1]) } : {}),
   };
 }
 
-export function approvalKeyboard(actionId: string, host = false): InlineKeyboardMarkup {
+/**
+ * How many "Approve as …" buttons one keyboard may carry.
+ *
+ * Four, because a Telegram keyboard is read on a phone and a fifth row of
+ * near-identical buttons stops being a choice and becomes a wall. Past it the
+ * message offers the default and says plainly that the rest are on the
+ * dashboard — the owner is not silently given fewer options than exist.
+ */
+export const MAX_CHOICE_BUTTONS = 4;
+
+/** The first declared choice, which is the one the keyboard can express. */
+export function keyboardChoice(action: Pick<ActionRecord, 'choices'>): OwnerChoice | undefined {
+  return action.choices?.[0];
+}
+
+/** The line under the preview when the keyboard could not offer everything. */
+export function choiceOverflowLine(choice: OwnerChoice): string | undefined {
+  if (choice.options.length <= MAX_CHOICE_BUTTONS) return undefined;
+  const rest = choice.options.filter((o) => o !== choice.default);
+  return `${choice.label}: this approves as ${choice.default}. The other ${rest.length} (${rest.join(', ')}) are on the dashboard.`;
+}
+
+export function approvalKeyboard(
+  actionId: string,
+  host = false,
+  choice?: OwnerChoice | undefined,
+): InlineKeyboardMarkup {
+  /*
+   * An approval that offers the owner something offers it as buttons: one
+   * "Approve as <option>" per option, one per row so the whole value is
+   * readable. Past `MAX_CHOICE_BUTTONS` only the default is offered and
+   * `choiceOverflowLine` says where the rest are, rather than showing four of
+   * seven aliases as though they were all of them.
+   */
+  if (choice) {
+    const options =
+      choice.options.length <= MAX_CHOICE_BUTTONS ? choice.options : [choice.default];
+    return {
+      inline_keyboard: [
+        ...options.map((option) => [
+          {
+            text: `✅ Approve as ${option}`,
+            callback_data: approvalCallbackData(actionId, `o${choice.options.indexOf(option)}`),
+          },
+        ]),
+        [{ text: '✖ Reject', callback_data: approvalCallbackData(actionId, 'reject') }],
+      ],
+    };
+  }
   return {
     inline_keyboard: [
       [
@@ -117,10 +187,13 @@ export const NO_KEYBOARD: InlineKeyboardMarkup = { inline_keyboard: [] };
  * the tool rendered, and when the request stops standing.
  */
 export function approvalRequestText(action: ActionRecord, timezone: string): string {
+  const choice = keyboardChoice(action);
+  const overflow = choice ? choiceOverflowLine(choice) : undefined;
   return [
     `Approval needed — ${action.tool}`,
     '',
     action.preview,
+    ...(overflow ? ['', overflow] : []),
     '',
     // No `@`: Telegram links `@name` in bot text to a Telegram user that does
     // not exist, and tapping it errors. The agent is named plainly instead.
@@ -205,7 +278,13 @@ export class TelegramApprovals {
     return this.#opts.api.sendMessage(
       chatId,
       approvalRequestText(action, this.#opts.timezone),
-      { replyMarkup: approvalKeyboard(action.id, action.tool === 'host.exec') },
+      {
+        replyMarkup: approvalKeyboard(
+          action.id,
+          action.tool === 'host.exec',
+          keyboardChoice(action),
+        ),
+      },
     );
   }
 
@@ -259,6 +338,20 @@ export class TelegramApprovals {
       return;
     }
 
+    /*
+     * The tapped option, resolved into a value here rather than carried as one.
+     * The index is looked up in the action's own declared list; an index past
+     * the end resolves to nothing, and the decision then takes the declared
+     * default exactly as a keyboard with no options would.
+     */
+    let ownerChoices: Record<string, string> | undefined;
+    if (parsed.optionIndex !== undefined) {
+      const action = await getAction(pool, parsed.actionId);
+      const choice = action ? keyboardChoice(action) : undefined;
+      const value = choice?.options[parsed.optionIndex];
+      if (choice && value !== undefined) ownerChoices = { [choice.key]: value };
+    }
+
     const decision = await decideApproval(pool, {
       actionId: parsed.actionId,
       decision: parsed.decision,
@@ -267,6 +360,7 @@ export class TelegramApprovals {
       now: this.#now(),
       permissionScope: parsed.permissionScope,
       registry: this.#opts.registry,
+      ...(ownerChoices ? { ownerChoices } : {}),
     });
 
     if (!decision.ok) {
