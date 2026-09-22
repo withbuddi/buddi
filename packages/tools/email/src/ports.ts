@@ -68,6 +68,12 @@ export interface MailboxInfo {
   name: string;
   specialUse: string | null;
   flags: string[];
+  /**
+   * The mailbox boundary observed by LIST/STATUS. Discovery persists this for
+   * a newly found Sent folder before any SELECT can fail, so mail sent after
+   * discovery is never mistaken for pre-existing history on a later poll.
+   */
+  status?: MailboxStatus;
 }
 
 export interface MailboxStatus {

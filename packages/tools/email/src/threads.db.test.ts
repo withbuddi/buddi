@@ -223,7 +223,7 @@ suite('email threads (postgres + fake imap)', () => {
       expect(await threads()).toHaveLength(2);
     });
 
-    it('clamps hostile legacy Date headers and falls back to fetched_at', async () => {
+    it('clamps hostile legacy Date headers to one day after fetched_at', async () => {
       await fixture();
       await pool.query(
         `update email.messages
@@ -237,6 +237,25 @@ suite('email threads (postgres + fake imap)', () => {
         `select last_at from email.threads where thread_key = '<t1@work.test>'`,
       );
       expect(new Date(rows[0].last_at).toISOString()).toBe('2026-09-22T12:00:00.000Z');
+    });
+
+    it('uses fetched_at exactly for a separate legacy thread with a null Date', async () => {
+      await fixture();
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
+            subject, date, internal_date, fetched_at, snippet, body_text, triage_enqueued_at)
+         select $1, id, 1, 4, '<null-date@example.test>', '<null-date-thread@example.test>',
+                'sender@example.test', '["owner@example.test"]'::jsonb, 'No date', null, null, $2, '', '', now()
+           from email.folders where account_id = $1 and kind = 'inbox'`,
+        [accountId, NOW],
+      );
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      const { rows } = await pool.query(
+        `select first_at, last_at from email.threads where thread_key = '<null-date-thread@example.test>'`,
+      );
+      expect(new Date(rows[0].first_at).toISOString()).toBe(NOW.toISOString());
+      expect(new Date(rows[0].last_at).toISOString()).toBe(NOW.toISOString());
     });
 
     it('caps participants on backfill and records overflow from the uncapped distinct count', async () => {
@@ -274,17 +293,20 @@ suite('email threads (postgres + fake imap)', () => {
       await fixture();
       // A global thread policy naming the key both accounts' threads share.
       const { rows: gp } = await pool.query(
-        `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
-         values (null, 'thread', '<t1@work.test>', 'ignore', '{"sender":"client@work.test"}'::jsonb, 'owner', false)
+        `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed, created_at)
+         values (null, 'thread', '<t1@work.test>', 'ignore', '{"sender":"client@work.test"}'::jsonb, 'owner', false, $1)
          returning id`,
+        [new Date(NOW.getTime() - 86_400_000)],
       );
       const globalId = String(gp[0].id);
-      await pool.query(
+      const { rows: scopedRows } = await pool.query(
         `insert into email.policies
            (account_id, scope, matcher, action, params, origin, proposed, created_at)
-         values ($1, 'thread', '<t1@work.test>', 'wake', '{}'::jsonb, 'owner', false, $2)`,
-        [accountId, new Date(NOW.getTime() - 86_400_000)],
+         values ($1, 'thread', '<t1@work.test>', 'wake', '{}'::jsonb, 'owner', false, $2)
+         returning id`,
+        [accountId, new Date(NOW.getTime() - 2 * 86_400_000)],
       );
+      const scopedId = String(scopedRows[0].id);
       await pool.query(
         `insert into email.messages
            (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
@@ -296,6 +318,10 @@ suite('email threads (postgres + fake imap)', () => {
       );
 
       await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      await pool.query(
+        `update email.threads set policy_id = $1 where account_id = $2 and thread_key = '<t1@work.test>'`,
+        [scopedId, accountId],
+      );
       const expanded = await pool.query(`select email.expand_global_thread_policies() as n`);
       expect(Number(expanded.rows[0].n)).toBe(2);
 
@@ -317,9 +343,77 @@ suite('email threads (postgres + fake imap)', () => {
       expect(new Set(live.map((r: Record<string, unknown>) => String(r.account_id)))).toEqual(
         new Set([accountId, account2]),
       );
-      expect(live.find((r: Record<string, unknown>) => String(r.account_id) === accountId)?.action).toBe('wake');
+      expect(live.find((r: Record<string, unknown>) => String(r.account_id) === accountId)?.action).toBe('ignore');
+      const { rows: repaired } = await pool.query(
+        `select t.policy_id, p.action, old.revoked_at is not null as old_revoked
+           from email.threads t
+           left join email.policies p on p.id = t.policy_id
+           join email.policies old on old.id = $1
+          where t.account_id = $2 and t.thread_key = '<t1@work.test>'`,
+        [scopedId, accountId],
+      );
+      expect(repaired[0]).toMatchObject({ action: 'ignore', old_revoked: true });
+      expect(String(repaired[0].policy_id)).not.toBe(scopedId);
       const rerun = await pool.query(`select email.expand_global_thread_policies() as n`);
       expect(Number(rerun.rows[0].n)).toBe(0);
+    });
+
+    it('keeps an applied global decision ahead of a newer scoped proposal', async () => {
+      await fixture();
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      await pool.query(
+        `insert into email.policies
+           (account_id, scope, matcher, action, params, origin, proposed, created_at)
+         values
+           (null, 'thread', '<t1@work.test>', 'ignore', '{}'::jsonb, 'owner', false, $2),
+           ($1, 'thread', '<t1@work.test>', 'wake', '{}'::jsonb, 'learned', true, $3)`,
+        [accountId, new Date(NOW.getTime() - 86_400_000), NOW],
+      );
+
+      await pool.query(`select email.expand_global_thread_policies()`);
+      const { rows } = await pool.query(
+        `select p.action, p.proposed, p.matcher = t.id::text as points_at_thread,
+                t.policy_id = p.id as installed
+           from email.threads t
+           join email.policies p on p.account_id = t.account_id and p.matcher = t.id::text
+          where t.account_id = $1 and t.thread_key = '<t1@work.test>' and p.revoked_at is null`,
+        [accountId],
+      );
+      expect(rows).toEqual([
+        { action: 'ignore', proposed: false, points_at_thread: true, installed: true },
+      ]);
+      // The proposal about this thread is revoked, not carried forward: an
+      // applied decision holds the thread's one live slot, so there is nothing
+      // left for the owner to keep (docs/specs/email.md §3). The fixture's
+      // unrelated `sender` proposal is untouched, hence the scope filter.
+      const { rows: proposal } = await pool.query(
+        `select revoked_at is not null as revoked from email.policies
+          where account_id = $1 and scope = 'thread' and proposed = true`,
+        [accountId],
+      );
+      expect(proposal).toEqual([{ revoked: true }]);
+    });
+
+    it('clears a thread pointer when its revoked policy has no live replacement', async () => {
+      await fixture();
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      const { rows: threadRows } = await pool.query(
+        `select id from email.threads where account_id = $1 and thread_key = '<t1@work.test>'`,
+        [accountId],
+      );
+      const threadId = String(threadRows[0].id);
+      const { rows: policyRows } = await pool.query(
+        `insert into email.policies
+           (account_id, scope, matcher, action, params, origin, proposed, revoked_at)
+         values ($1, 'thread', $2, 'wake', '{}'::jsonb, 'owner', false, $3)
+         returning id`,
+        [accountId, threadId, NOW],
+      );
+      await pool.query(`update email.threads set policy_id = $1 where id = $2`, [policyRows[0].id, threadId]);
+
+      await pool.query(`select email.expand_global_thread_policies()`);
+      const { rows } = await pool.query(`select policy_id from email.threads where id = $1`, [threadId]);
+      expect(rows[0].policy_id).toBeNull();
     });
   });
 
@@ -397,7 +491,7 @@ suite('email threads (postgres + fake imap)', () => {
       });
     });
 
-    it('plants cursorless Sent before opening the inbox, so mail sent during inbox work is fetched next poll', async () => {
+    it('records the discovery boundary before INBOX work and fetches mail sent after it', async () => {
       const server = serverWithSent();
       const factory = async () => {
         const base = server.client();
@@ -415,9 +509,90 @@ suite('email threads (postgres + fake imap)', () => {
       };
       const src = createInboxPollSource({ connect: factory, env: ENV, backfill: FULL_SYNC });
       await src.poll(sourceContext());
-      expect(server.fetches.some((fetch) => fetch.mailbox === '[Gmail]/Sent Mail')).toBe(false);
-      await src.poll(sourceContext());
       expect(server.fetches.some((fetch) => fetch.mailbox === '[Gmail]/Sent Mail' && fetch.returned === 1)).toBe(true);
+    });
+
+    it('still polls INBOX when the first Sent open fails, then ingests mail above the discovery boundary', async () => {
+      const server = serverWithSent();
+      server.add('INBOX', fakeMessage({ messageId: '<inbox-survives@x>', subject: 'Inbox survives' }));
+      let failSent = true;
+      const logs: string[] = [];
+      const factory = async () => {
+        const base = server.client();
+        return {
+          listMailboxes: () => base.listMailboxes(),
+          fetchSince: (name: string, uid: number, limit: number) => base.fetchSince(name, uid, limit),
+          close: () => base.close(),
+          async open(name: string) {
+            if (name === '[Gmail]/Sent Mail' && failSent) {
+              failSent = false;
+              throw new Error('sent select failed');
+            }
+            return base.open(name);
+          },
+        };
+      };
+      const src = createInboxPollSource({ connect: factory, env: ENV, backfill: FULL_SYNC });
+      const first = sourceContext();
+      first.log = (line) => logs.push(line);
+      await expect(src.poll(first)).rejects.toThrow('sent select failed');
+      expect(first.runs).toHaveLength(1);
+      expect(logs.some((line) => line.includes('INBOX'))).toBe(true);
+
+      const { rows: boundary } = await pool.query(
+        `select uidvalidity, last_uid from email.folders
+          where account_id = $1 and name = '[Gmail]/Sent Mail'`,
+        [accountId],
+      );
+      expect({ uidvalidity: Number(boundary[0].uidvalidity), last_uid: Number(boundary[0].last_uid) })
+        .toEqual({ uidvalidity: 1, last_uid: 0 });
+
+      server.add('[Gmail]/Sent Mail', fakeMessage({ messageId: '<after-discovery@x>', subject: 'After discovery' }));
+      await src.poll(sourceContext());
+      expect(server.fetches.some(
+        (fetch) => fetch.mailbox === '[Gmail]/Sent Mail' && fetch.sinceUid === 0 && fetch.returned === 1,
+      )).toBe(true);
+      const { rows: sent } = await pool.query(
+        `select direction from email.messages where message_id = '<after-discovery@x>'`,
+      );
+      expect(sent).toEqual([{ direction: 'out' }]);
+    });
+
+    it('still polls INBOX when planting a legacy cursorless Sent row fails', async () => {
+      const server = serverWithSent();
+      server.add('INBOX', fakeMessage({ messageId: '<inbox-after-plant-failure@x>', subject: 'Inbox survives plant' }));
+      // Both rows, so this account counts as already discovered: discovery is
+      // what fills a Sent row's cursor from LIST/STATUS, and a legacy row from
+      // before Sent existed is exactly the one nothing has planted yet.
+      await pool.query(
+        `insert into email.folders (account_id, name, kind, synced)
+         values ($1, 'INBOX', 'inbox', true)`,
+        [accountId],
+      );
+      const { rows } = await pool.query(
+        `insert into email.folders (account_id, name, kind, synced)
+         values ($1, '[Gmail]/Sent Mail', 'sent', true) returning id`,
+        [accountId],
+      );
+      const sentFolderId = String(rows[0].id);
+      const failingDb = {
+        async query(text: string, params: unknown[] = []) {
+          if (/update email\.folders set uidvalidity/.test(text) && String(params[0]) === sentFolderId) {
+            throw new Error('sent cursor plant failed');
+          }
+          return pool.query(text, params);
+        },
+        connect: () => pool.connect(),
+      } as unknown as Pool;
+      const ctx = sourceContext();
+      ctx.db = failingDb;
+
+      await expect(source(server).poll(ctx)).rejects.toThrow('sent cursor plant failed');
+      expect(ctx.runs).toHaveLength(1);
+      const { rows: inbox } = await pool.query(
+        `select direction from email.messages where message_id = '<inbox-after-plant-failure@x>'`,
+      );
+      expect(inbox).toEqual([{ direction: 'in' }]);
     });
   });
 
@@ -787,15 +962,39 @@ suite('email threads (postgres + fake imap)', () => {
       await joinThread(pool, { accountId, threadKey: '<generation-tie>', messageRowId: newer, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 2, uid: 7, direction: 'out' });
       const result = await joinThread(pool, { accountId, threadKey: '<generation-tie>', messageRowId: older, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 1, uid: 7, direction: 'in' });
       expect(result.lastDirection).toBe('out');
+
+      const inboundId = await insertMessage({ folderId: folder, uid: 8, uidvalidity: 2, from: 'client@work.test', direction: 'in' });
+      const outboundId = await insertMessage({ folderId: folder, uid: 9, uidvalidity: 2, from: 'owner@example.test', direction: 'out' });
+      const sortedIds = [inboundId, outboundId].sort();
+      const lowerId = sortedIds[0]!;
+      const higherId = sortedIds[1]!;
+      const directionById = new Map([
+        [inboundId, 'in' as const],
+        [outboundId, 'out' as const],
+      ]);
+      await joinThread(pool, { accountId, threadKey: '<row-id-tie>', messageRowId: higherId, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 2, uid: 10, direction: directionById.get(higherId)! });
+      const exactTie = await joinThread(pool, { accountId, threadKey: '<row-id-tie>', messageRowId: lowerId, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 2, uid: 10, direction: directionById.get(lowerId)! });
+      expect(exactTie.lastDirection).toBe(directionById.get(higherId));
+      const { rows: rowTie } = await pool.query(
+        `select last_message_id from email.threads where account_id = $1 and thread_key = '<row-id-tie>'`,
+        [accountId],
+      );
+      expect(String(rowTie[0].last_message_id)).toBe(higherId);
     });
 
-    it('caps participants on the first insert and records distinct overflow', async () => {
+    it('caps participants and adds uncapped incoming participants to conflict overflow', async () => {
       const [folder] = await twoFolders();
       const id = await insertMessage({ folderId: folder, uid: 90, from: 'sender@example.test', direction: 'in' });
       const participants = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
-      const thread = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: id, subject: 'Crowd', participants: [...participants, participants[0]!], at: NOW, folderId: folder, uidValidity: 1, uid: 90, direction: 'in' });
-      expect(thread.participants).toHaveLength(50);
-      expect(thread.participantsOverflow).toBe(10);
+      const first = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: id, subject: 'Crowd', participants: [...participants, participants[0]!], at: NOW, folderId: folder, uidValidity: 1, uid: 90, direction: 'in' });
+      expect(first.participants).toHaveLength(50);
+      expect(first.participantsOverflow).toBe(10);
+
+      const secondId = await insertMessage({ folderId: folder, uid: 91, from: 'next@example.test', direction: 'in' });
+      const newcomers = Array.from({ length: 60 }, (_, i) => `new-${i}@example.test`);
+      const second = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: secondId, subject: 'Crowd', participants: newcomers, at: NOW, folderId: folder, uidValidity: 1, uid: 91, direction: 'in' });
+      expect(second.participants).toHaveLength(50);
+      expect(second.participantsOverflow).toBe(70);
     });
   });
 

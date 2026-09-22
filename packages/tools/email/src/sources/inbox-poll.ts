@@ -178,7 +178,9 @@ interface PendingTriage {
  *
  * `kind` and `synced` are written on insert and *refreshed* on conflict, so a
  * later discovery can promote a folder that was already there — the INBOX row
- * every installation has predates discovery entirely.
+ * every installation has predates discovery entirely. A Sent boundary from
+ * LIST/STATUS fills an uninitialised cursor but never replaces one already in
+ * use.
  */
 async function ensureFolder(
   db: Pool,
@@ -186,14 +188,26 @@ async function ensureFolder(
   name: string,
   kind: 'inbox' | 'sent' | 'other' = 'other',
   synced = false,
+  boundary?: { uidValidity: number; lastUid: number },
 ): Promise<FolderRecord> {
   const { rows } = await db.query(
-    `insert into email.folders (account_id, name, kind, synced)
-     values ($1, $2, $3, $4)
+    `insert into email.folders (account_id, name, kind, synced, uidvalidity, last_uid)
+     values ($1, $2, $3, $4, $5, $6)
      on conflict (account_id, name) do update
-        set kind = excluded.kind, synced = excluded.synced
+        set kind = excluded.kind,
+            synced = excluded.synced,
+            uidvalidity = case
+              when email.folders.uidvalidity is null and excluded.kind = 'sent'
+                then excluded.uidvalidity
+              else email.folders.uidvalidity
+            end,
+            last_uid = case
+              when email.folders.uidvalidity is null and excluded.kind = 'sent'
+                then excluded.last_uid
+              else email.folders.last_uid
+            end
      returning ${FOLDER_COLUMNS}`,
-    [account.id, name, kind, synced],
+    [account.id, name, kind, synced, boundary?.uidValidity ?? null, boundary?.lastUid ?? 0],
   );
   const row = rows[0];
   if (!row) throw new Error('email.inbox-poll: folder upsert returned no row');
@@ -240,7 +254,22 @@ async function discoverFolders(
     plan.unshift({ name: INBOX, kind: 'inbox', synced: true });
   }
   for (const folder of plan) {
-    await ensureFolder(db, account, folder.name, folder.kind, folder.synced);
+    const listed = listing.find((candidate) => candidate.name === folder.name);
+    const boundary = folder.kind === 'sent' && listed?.status
+      ? {
+          uidValidity: listed.status.uidValidity,
+          lastUid: Math.max(0, listed.status.uidNext - 1),
+        }
+      : undefined;
+    try {
+      await ensureFolder(db, account, folder.name, folder.kind, folder.synced, boundary);
+    } catch (err) {
+      if (folder.kind === 'inbox') throw err;
+      log(
+        `email.inbox-poll: could not record discovered folder ${account.address}/${folder.name}: ` +
+          `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
+      );
+    }
   }
   const sent = plan.find((f) => f.kind === 'sent');
   log(
@@ -465,26 +494,44 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
             ? [await ensureFolder(ctx.db, account, onlyFolder, 'inbox', true)]
             : (await discoverFolders(ctx.db, account, client, timeoutMs, log)).filter((f) => f.synced);
 
-          // Plant a newly discovered Sent cursor before the inbox can spend
-          // time fetching. Anything the owner sends after this point is then
-          // above the cursor and cannot be mistaken for pre-existing history.
-          const plantedSent = new Set<string>();
+          // New discovery persists Sent's LIST/STATUS boundary above. This
+          // loop is for an older or partially initialised row that still has
+          // no generation: try to plant it before INBOX work, but isolate a
+          // failed SELECT or cursor write so incoming mail still lands.
+          const attemptedSent = new Set<string>();
           for (const folder of folders.filter((f) => f.kind === 'sent' && f.uidValidity === null)) {
-            await pollFolder(ctx, account, client, folder, { timeoutMs, backfill, limit, log });
-            plantedSent.add(folder.id);
+            attemptedSent.add(folder.id);
+            try {
+              await pollFolder(ctx, account, client, folder, { timeoutMs, backfill, limit, log });
+            } catch (err) {
+              log(
+                `email.inbox-poll: could not initialize Sent folder ${account.address}/${folder.name}: ` +
+                  `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
+              );
+              failures.push(err);
+            }
           }
 
           // The inbox first: it is the one that wakes anybody, and a Sent
           // folder that times out must not cost the new mail its run.
-          for (const folder of [...folders].filter((f) => !plantedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
-            pending.push(
-              ...(await pollFolder(ctx, account, client, folder, {
-                timeoutMs,
-                backfill,
-                limit,
-                log,
-              })),
-            );
+          for (const folder of [...folders].filter((f) => !attemptedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
+            try {
+              pending.push(
+                ...(await pollFolder(ctx, account, client, folder, {
+                  timeoutMs,
+                  backfill,
+                  limit,
+                  log,
+                })),
+              );
+            } catch (err) {
+              if (folder.kind !== 'sent') throw err;
+              log(
+                `email.inbox-poll: could not poll Sent folder ${account.address}/${folder.name}: ` +
+                  `${err instanceof Error ? err.message : String(err)}; INBOX was still polled`,
+              );
+              failures.push(err);
+            }
           }
         } catch (err) {
           if (err instanceof ImapTimeoutError) {

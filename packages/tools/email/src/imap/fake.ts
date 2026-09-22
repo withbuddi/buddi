@@ -67,6 +67,11 @@ export class FakeImapServer {
       name,
       specialUse: box.specialUse ?? null,
       flags: [],
+      status: {
+        uidValidity: box.uidValidity,
+        uidNext: Math.max(0, ...box.messages.map((m) => m.uid)) + 1,
+        exists: box.messages.length,
+      },
     }));
   }
 

@@ -140,12 +140,15 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
                            else email.threads.subject end,
             -- The union: who is in a conversation only ever grows, capped.
             participants = email.merge_participants(
-              email.threads.participants, excluded.participants
+              email.threads.participants, $4::jsonb
             ),
             participants_overflow = greatest(
               email.threads.participants_overflow,
-              email.merge_participants_count(email.threads.participants, excluded.participants)
-                - email.participants_cap()
+              email.threads.participants_overflow + greatest(
+                0,
+                email.merge_participants_count(email.threads.participants, $4::jsonb)
+                  - email.participants_cap()
+              )
             ),
             first_at = least(
               coalesce(email.threads.first_at, excluded.first_at),

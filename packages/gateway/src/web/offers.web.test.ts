@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
-import type { JobControl, ToolContext, ToolRegistry } from '@buddi/core';
+import { OFFER_LAPSED_MESSAGE, type JobControl, type ToolContext, type ToolRegistry } from '@buddi/core';
 import {
   OFFER_EXPIRED,
   OFFER_TAKEN_ALREADY,
@@ -265,8 +265,10 @@ describe('dismissing an offer from the dashboard', () => {
       offerRow({ id: 'off-lapsed', lapsed_at: NOW, lapse_reason: 'owner-moved-on' }),
       offerRow({ id: 'off-expired', expires_at: new Date(NOW.getTime() - 1) }),
     ]);
-    expect((await dismissOfferFromWeb(deps(pool), 'off-lapsed')).status).toBe(409);
-    expect((await dismissOfferFromWeb(deps(pool), 'off-expired')).status).toBe(409);
+    const lapsed = await dismissOfferFromWeb(deps(pool), 'off-lapsed');
+    const expired = await dismissOfferFromWeb(deps(pool), 'off-expired');
+    expect(lapsed).toEqual({ ok: false, status: 409, body: { error: OFFER_LAPSED_MESSAGE } });
+    expect(expired).toEqual({ ok: false, status: 409, body: { error: OFFER_EXPIRED } });
     expect(rows.every((row) => row.dismissed_at === null)).toBe(true);
   });
 
