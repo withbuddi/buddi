@@ -65,6 +65,8 @@ export function normalizeMatcher(scope: PolicyScope, raw: string): string {
     case 'list-id':
       return normalizeListId(value) ?? '';
     case 'thread':
+      // The thread's row id (migration 007). Lowercased so the uuid a caller
+      // typed in capitals is the uuid the gate compares.
       return value.toLowerCase();
   }
 }

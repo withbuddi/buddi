@@ -36,10 +36,16 @@
  *    like to do. These decide nothing. Keep turns one on; Revoke says no.
  *
  * Revoke is on both lists on purpose: a rule that is on must be one tap from
- * off. Nothing learned is ever applied without being kept first — until the
- * Sent folder is synced, "you never wrote back" is an inference from the mail
- * buddi itself sent, and an inference does not get to silence anyone
- * (docs/email.md §3). The Learned list is where a proposal becomes a rule.
+ * off. Nothing learned is ever applied without being kept first: the Sent
+ * folder is synced from the day buddi arrived, so "you never wrote back" is
+ * still only as old as this installation, and a half-known history does not
+ * get to silence anyone (docs/email.md §3). The Learned list is where a
+ * proposal becomes a rule.
+ *
+ * One rule is not typed but *picked*: "One conversation". A thread is named in
+ * the database by the root Message-ID of its chain, which is not something an
+ * owner has, so the form offers the conversations buddi has seen, by subject,
+ * and sends the thread's id — which is what the gate matches.
  *
  * ## Writing one
  *
@@ -50,7 +56,13 @@
  * never a field somebody left empty.
  */
 import { useState } from 'react';
-import { ApiError, api, type EmailAccountView, type EmailPolicy } from '../api';
+import {
+  ApiError,
+  api,
+  type EmailAccountView,
+  type EmailPolicy,
+  type EmailThreadChoice,
+} from '../api';
 import { fmtRelative } from '../format';
 import {
   Button,
@@ -262,6 +274,7 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
 
   const applied = policies.data?.applied ?? [];
   const proposed = policies.data?.proposed ?? [];
+  const threads = policies.data?.threads ?? [];
   const saved = applied.reduce((n, p) => n + p.runsSaved, 0);
 
   const ruleReady =
@@ -483,13 +496,40 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
                       <option value="thread">One conversation</option>
                     </select>
                   </Field>
-                  <Field label={MATCHER_LABEL[rule.scope] ?? 'Matcher'}>
-                    <input
-                      type="text"
-                      value={rule.matcher}
-                      placeholder={MATCHER_HINT[rule.scope] ?? ''}
-                      onChange={(event) => setRuleField({ matcher: event.target.value })}
-                    />
+                  {/*
+                    * A conversation is picked, never typed. It is named in the
+                    * database by the root Message-ID of its thread, which is
+                    * not something an owner has or should have to find, and
+                    * the rule carries the thread's id. So the one scope that
+                    * cannot be a text field is a list of subjects.
+                    */}
+                  <Field
+                    label={MATCHER_LABEL[rule.scope] ?? 'Matcher'}
+                    {...(rule.scope === 'thread'
+                      ? { hint: 'The conversations buddi has seen, most recent first.' }
+                      : {})}
+                  >
+                    {rule.scope === 'thread' ? (
+                      <select
+                        aria-label="Which conversation"
+                        value={rule.matcher}
+                        onChange={(event) => setRuleField({ matcher: event.target.value })}
+                      >
+                        <option value="">Choose one…</option>
+                        {threads.map((thread) => (
+                          <option key={thread.id} value={thread.id}>
+                            {threadLabel(thread)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={rule.matcher}
+                        placeholder={MATCHER_HINT[rule.scope] ?? ''}
+                        onChange={(event) => setRuleField({ matcher: event.target.value })}
+                      />
+                    )}
                   </Field>
                   <Field label="Then">
                     <select
@@ -682,8 +722,15 @@ export const MATCHER_LABEL: Record<string, string> = {
   sender: 'Their address',
   domain: 'The domain',
   'list-id': 'The list id',
-  thread: 'The conversation key',
+  thread: 'Which conversation',
 };
+
+/** A conversation as the picker names it: its subject, and who it is with. */
+export function threadLabel(thread: EmailThreadChoice): string {
+  const subject = thread.subject.trim() === '' ? '(no subject)' : thread.subject.trim();
+  const others = thread.participants.slice(0, 2).join(', ');
+  return others === '' ? subject : `${subject} — ${others}`;
+}
 
 /** `Them <THEM@x.test>` -> `them@x.test`. The server normalises too; this is
  * so what the page sends is what the page showed. */
@@ -693,11 +740,11 @@ export function bareAddress(raw: string): string {
   return (angled?.[1] ?? trimmed).trim().toLowerCase();
 }
 
+/** Placeholders for the scopes that are typed. A thread is picked, not typed. */
 export const MATCHER_HINT: Record<string, string> = {
   sender: 'news@shop.example',
   domain: 'shop.example',
   'list-id': 'weekly.shop.example',
-  thread: '<thread-root@example.com>',
 };
 
 /**

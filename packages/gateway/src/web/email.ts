@@ -79,6 +79,7 @@ import {
   type PolicyParams,
   type PolicyScope,
   type PolicyView,
+  type ThreadChoice,
 } from '@buddi/tool-email';
 import type { Pool } from 'pg';
 
@@ -377,6 +378,12 @@ export async function removeEmailAccount(
 export interface EmailPoliciesView {
   applied: PolicyView[];
   proposed: PolicyView[];
+  /**
+   * The conversations the "one conversation" rule can be about, newest first.
+   * The page offers them by subject; the rule carries the id, because that is
+   * what the gate matches and a Message-ID is not something an owner has.
+   */
+  threads: ThreadChoice[];
 }
 
 export interface RouteReply {
@@ -393,7 +400,7 @@ export async function readEmailPolicies(pool: Pool): Promise<RouteReply> {
     // reads as "no policies" rather than as a broken section.
     return {
       status: 200,
-      body: { applied: [], proposed: [], unavailable: message(err) } satisfies Record<string, unknown>,
+      body: { applied: [], proposed: [], threads: [], unavailable: message(err) } satisfies Record<string, unknown>,
     };
   }
 }
@@ -492,6 +499,34 @@ export async function writeEmailPolicy(
     }
   }
 
+
+  /*
+   * A `thread` rule names a conversation this installation holds.
+   *
+   * The scope matches the thread's own id since step 3 (docs/email.md §3), so
+   * the page sends what it picked from the list rather than a Message-ID the
+   * owner would have had to find. A rule about a conversation that is not
+   * here, or is in another mailbox than the one chosen, is refused: it could
+   * only ever match nothing, and a rule that silently matches nothing is worse
+   * than no rule.
+   */
+  if (input.scope === 'thread') {
+    const { rows } = await pool
+      .query(`select account_id from email.threads where id = $1::uuid`, [
+        matcher.trim().toLowerCase(),
+      ])
+      .catch(() => ({ rows: [] as Array<{ account_id: string }> }));
+    const owner = rows[0]?.account_id ? String(rows[0].account_id) : null;
+    if (!owner) {
+      return { status: 400, body: { error: 'That conversation is not one of yours.' } };
+    }
+    if (!allAccounts && owner !== accountId) {
+      return {
+        status: 400,
+        body: { error: 'That conversation is in a different mailbox from the one you chose.' },
+      };
+    }
+  }
 
   try {
     await createPolicy(

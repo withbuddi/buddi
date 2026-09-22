@@ -326,10 +326,31 @@ export const revokeEmailPolicy: GatedToolDefinition<
   },
 };
 
-/** Exported for the settings route: the two lists and their counts. */
+/**
+ * One conversation, as the settings page offers it for a `thread` rule.
+ *
+ * The page cannot ask an owner for a thread *id*, and it must not ask for a
+ * thread *key* — a Message-ID off the wire is not something a person has. So
+ * the rule form picks a conversation by its subject and sends the id, which is
+ * what the gate matches (`gate.ts`).
+ */
+export interface ThreadChoice {
+  id: string;
+  accountId: string;
+  subject: string;
+  state: string;
+  participants: string[];
+  lastAt: string | null;
+}
+
+/** How many conversations the rule form offers. The most recent ones. */
+export const THREAD_CHOICES = 50;
+
+/** Exported for the settings route: the two lists, their counts, and the threads. */
 export async function policiesView(db: Parameters<typeof policyStats>[0]): Promise<{
   applied: PolicyView[];
   proposed: PolicyView[];
+  threads: ThreadChoice[];
 }> {
   const { rows } = await db.query(
     `select ${POLICY_COLUMNS} from email.policies where revoked_at is null
@@ -337,9 +358,23 @@ export async function policiesView(db: Parameters<typeof policyStats>[0]): Promi
   );
   const stats = await policyStats(db);
   const all = rows.map(toPolicy);
+  const { rows: threads } = await db.query(
+    `select id, account_id, subject, state, participants, last_at from email.threads
+      order by last_at desc nulls last, id desc limit $1`,
+    [THREAD_CHOICES],
+  );
   return {
     applied: all.filter((p) => !p.proposed).map((p) => viewOf(p, stats.get(p.id))),
     proposed: all.filter((p) => p.proposed).map((p) => viewOf(p, stats.get(p.id))),
+    threads: threads.map((row: Record<string, any>) => ({
+      id: String(row.id),
+      accountId: String(row.account_id),
+      subject: row.subject ?? '',
+      state: row.state,
+      participants: Array.isArray(row.participants) ? row.participants : [],
+      lastAt:
+        row.last_at instanceof Date ? row.last_at.toISOString() : (row.last_at ?? null),
+    })),
   };
 }
 

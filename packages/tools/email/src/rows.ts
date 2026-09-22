@@ -4,6 +4,7 @@
  * the safe integer range, so they are converted here, once, rather than being
  * compared as strings somewhere subtle.
  */
+import { FOLDER_KINDS, type FolderKind } from './folders.js';
 import type { AccountRecord, AttachmentInfo } from './ports.js';
 
 export const ACCOUNT_COLUMNS =
@@ -30,21 +31,31 @@ export function toAccount(row: Record<string, any>): AccountRecord {
   };
 }
 
-export interface MailboxRecord {
+/**
+ * One folder of one account: what it is, whether buddi polls it, and the
+ * cursor into it. The table was called `mailboxes` until threads arrived
+ * (migration 007); it is the same row with the two columns discovery needs.
+ */
+export interface FolderRecord {
   id: string;
   accountId: string;
   name: string;
+  kind: FolderKind;
+  /** True for the folders the poll walks: the inbox and Sent. */
+  synced: boolean;
   uidValidity: number | null;
   lastUid: number;
 }
 
-export const MAILBOX_COLUMNS = 'id, account_id, name, uidvalidity, last_uid';
+export const FOLDER_COLUMNS = 'id, account_id, name, kind, synced, uidvalidity, last_uid';
 
-export function toMailbox(row: Record<string, any>): MailboxRecord {
+export function toFolder(row: Record<string, any>): FolderRecord {
   return {
     id: String(row.id),
     accountId: String(row.account_id),
     name: row.name,
+    kind: (FOLDER_KINDS as readonly string[]).includes(row.kind) ? (row.kind as FolderKind) : 'other',
+    synced: row.synced === true,
     uidValidity: row.uidvalidity === null ? null : Number(row.uidvalidity),
     lastUid: Number(row.last_uid),
   };
@@ -53,7 +64,11 @@ export function toMailbox(row: Record<string, any>): MailboxRecord {
 export interface MessageRecord {
   id: string;
   accountId: string;
-  mailboxId: string;
+  folderId: string;
+  /** The conversation this message belongs to. Null only before the backfill. */
+  threadId: string | null;
+  /** `in` for mail that arrived, `out` for what the owner sent. */
+  direction: MessageDirection;
   uidValidity: number;
   uid: number;
   messageId: string | null;
@@ -76,8 +91,11 @@ export interface MessageRecord {
   bodyPurgedAt: string | null;
 }
 
+export const MESSAGE_DIRECTIONS = ['in', 'out'] as const;
+export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];
+
 export const MESSAGE_COLUMNS =
-  'id, account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr, ' +
+  'id, account_id, folder_id, thread_id, direction, uidvalidity, uid, message_id, thread_key, list_id, from_addr, ' +
   'to_addrs, cc, subject, date, snippet, body_text, has_attachments, attachments, flags, fetched_at, ' +
   'body_purged_at';
 
@@ -94,7 +112,9 @@ export function toMessage(row: Record<string, any>): MessageRecord {
   return {
     id: String(row.id),
     accountId: String(row.account_id),
-    mailboxId: String(row.mailbox_id),
+    folderId: String(row.folder_id),
+    threadId: row.thread_id === null || row.thread_id === undefined ? null : String(row.thread_id),
+    direction: row.direction === 'out' ? 'out' : 'in',
     uidValidity: Number(row.uidvalidity),
     uid: Number(row.uid),
     messageId: row.message_id ?? null,

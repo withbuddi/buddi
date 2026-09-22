@@ -15,7 +15,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type EmailPoliciesView, type EmailPolicy } from '../api';
-import { Email, EMPTY_RULE, KEYCHAIN_LINE, hostsFor, ruleBodyOf, subFor } from './Email';
+import {
+  Email,
+  EMPTY_RULE,
+  KEYCHAIN_LINE,
+  hostsFor,
+  ruleBodyOf,
+  subFor,
+  threadLabel,
+} from './Email';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -67,11 +75,21 @@ function policy(over: Partial<EmailPolicy> = {}): EmailPolicy {
   };
 }
 
+const THREAD = {
+  id: '22222222-2222-4222-8222-222222222222',
+  accountId: ACCOUNT.id,
+  subject: 'The quote',
+  state: 'waiting-on-me',
+  participants: ['client@work.test', 'owner@work.test'],
+  lastAt: '2026-09-20T09:00:00Z',
+};
+
 const VIEW: EmailPoliciesView = {
   applied: [policy()],
   proposed: [
     policy({ id: 'p2', matcher: 'maybe@shop.test', action: 'notify', proposed: true, runsSaved: 0 }),
   ],
+  threads: [THREAD],
 };
 
 beforeEach(() => {
@@ -308,6 +326,24 @@ describe('Settings → Email → Add a rule', () => {
     // And not for an action that only ever starts a run.
     fireEvent.change(screen.getByLabelText('What happens'), { target: { value: 'notify' } });
     expect(screen.queryByLabelText('From this address')).toBeNull();
+  });
+
+  it('picks a conversation by its subject rather than asking for a Message-ID', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
+    const picker = screen.getByLabelText('Which conversation');
+    expect(within(picker).getByText(threadLabel(THREAD))).toBeInTheDocument();
+
+    fireEvent.change(picker, { target: { value: THREAD.id } });
+    fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: ACCOUNT.id } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add the rule' }));
+    await waitFor(() => expect(api.setEmailPolicy).toHaveBeenCalledTimes(1));
+    // The id, not the subject: it is what the gate matches.
+    expect(api.setEmailPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'thread', matcher: THREAD.id }),
+    );
   });
 
   it('sends the mailbox as one of two things, never as an omission', () => {

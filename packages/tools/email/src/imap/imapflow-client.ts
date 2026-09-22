@@ -21,6 +21,7 @@ import type {
   FetchedMessage,
   ImapClient,
   ImapClientFactory,
+  MailboxInfo,
   MailboxStatus,
   AccountRecord,
 } from '../ports.js';
@@ -31,6 +32,7 @@ interface ImapFlowLike {
   connect(): Promise<void>;
   logout(): Promise<void>;
   mailboxOpen(path: string, opts?: { readOnly?: boolean }): Promise<Record<string, unknown>>;
+  list(): Promise<Array<Record<string, unknown>>>;
   fetch(
     range: string | Record<string, unknown>,
     query: Record<string, unknown>,
@@ -141,6 +143,22 @@ class ImapFlowClient implements ImapClient {
   #open: string | null = null;
 
   constructor(private readonly client: ImapFlowLike) {}
+
+  /**
+   * Every folder, with what the server says each is for.
+   *
+   * `imapflow`'s LIST reply carries `specialUse` when the server offers
+   * SPECIAL-USE and `flags` as a Set; both are handed over as they arrived and
+   * `folders.ts` is what decides what they mean.
+   */
+  async listMailboxes(): Promise<MailboxInfo[]> {
+    const listing = await this.client.list();
+    return listing.map((box) => ({
+      name: String(box.path ?? box.name ?? ''),
+      specialUse: typeof box.specialUse === 'string' ? box.specialUse : null,
+      flags: [...(box.flags instanceof Set ? box.flags : new Set<string>())].map(String),
+    })).filter((box) => box.name !== '');
+  }
 
   async open(mailbox: string): Promise<MailboxStatus> {
     // Read-only: the source observes the mailbox, it never curates it.

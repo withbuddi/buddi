@@ -91,6 +91,44 @@ describe('triage prompt', () => {
     expect(prompt).toContain('truncated');
     expect(prompt.length).toBeLessThan(600);
   });
+
+  it('carries the conversation: the state, the last turns quoted, the older ones a line each', () => {
+    const turn = (n: number, direction: 'in' | 'out') => ({
+      direction,
+      from: direction === 'out' ? 'owner@x.test' : 'them@x.test',
+      date: `2026-09-${String(n).padStart(2, '0')}T09:00:00.000Z`,
+      subject: 'The quote',
+      snippet: `line ${n}`,
+      bodyText: `body ${n} `.repeat(200),
+    });
+    const prompt = triagePrompt({
+      messageId: 'row-9',
+      from: 'them@x.test',
+      to: ['owner@x.test'],
+      subject: 'Re: The quote',
+      date: '2026-09-13T00:00:00.000Z',
+      hasAttachments: false,
+      attachments: [],
+      bodyText: 'and again',
+      thread: {
+        id: 'thread-1',
+        state: 'waiting-on-them',
+        messageCount: 5,
+        older: [turn(1, 'in'), turn(2, 'out')],
+        recent: [turn(3, 'in'), turn(4, 'out')],
+      },
+      history: { replies: { count: 4, lastAt: '2026-09-12T00:00:00.000Z', averageHours: 26 } },
+    });
+    expect(prompt).toContain('of 5 messages, currently waiting-on-them');
+    // The older ones are one line each, and say who wrote them.
+    expect(prompt).toContain('- 2026-09-01 — them@x.test: line 1');
+    expect(prompt).toContain('- 2026-09-02 — the owner (owner@x.test): line 2');
+    // The recent ones are quoted, and bounded.
+    expect(prompt).toContain('body 3');
+    expect(prompt.split('[… truncated]')).toHaveLength(3);
+    // The owner's habit, in words rather than in a number of seconds.
+    expect(prompt).toContain('The owner has written back 4 times, usually within 26 hours');
+  });
 });
 
 describe('prepareForIngest', () => {

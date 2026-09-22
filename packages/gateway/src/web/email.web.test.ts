@@ -99,6 +99,9 @@ function fakeConnect(refuse?: string): { connect: ImapClientFactory; opens: () =
     opens: () => opens,
     closes: () => closes,
     connect: (async () => ({
+      // The port lists folders as well as opening one; the account test only
+      // ever opens, so this is the one folder it can see.
+      listMailboxes: async () => [{ name: 'INBOX', specialUse: null, flags: [] }],
       open: async () => {
         if (refuse) throw new Error(refuse);
         opens += 1;
@@ -268,6 +271,7 @@ it('refuses a vault name another account already owns, before touching the vault
  * has to be something the owner ticked — not something they left blank.
  */
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
+const THREAD_ID = '44444444-4444-4444-8444-444444444444';
 
 function policyPool(): { pool: never; inserts: unknown[][] } {
   const inserts: unknown[][] = [];
@@ -275,6 +279,10 @@ function policyPool(): { pool: never; inserts: unknown[][] } {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       if (/from email\.accounts where id/.test(sql)) {
         return { rows: params[0] === ACCOUNT_ID ? [{ '?column?': 1 }] : [] };
+      }
+      // A thread rule names a conversation this installation holds, by its id.
+      if (/from email\.threads where id/.test(sql)) {
+        return { rows: params[0] === THREAD_ID ? [{ account_id: ACCOUNT_ID }] : [] };
       }
       if (/insert into email\.policies/.test(sql)) {
         inserts.push(params);
@@ -336,13 +344,13 @@ it('writes an installation-wide rule only for the explicit "every mailbox" choic
   expect(inserts[0]?.[0]).toBeNull();
 });
 
-it('records the sender a thread rule silences, because a thread key is the sender’s to write', async () => {
+it('records the sender a thread rule silences, because a thread is joined by a header the sender writes', async () => {
   const { pool, inserts } = policyPool();
   const reply = await writeEmailPolicy(
     pool,
     {
       scope: 'thread',
-      matcher: '<root@example.test>',
+      matcher: THREAD_ID,
       action: 'ignore',
       sender: 'Them <THEM@example.test>',
       accountId: ACCOUNT_ID,
@@ -351,4 +359,17 @@ it('records the sender a thread rule silences, because a thread key is the sende
   );
   expect(reply.status).toBe(200);
   expect(JSON.parse(String(inserts[0]?.[4]))).toMatchObject({ sender: 'them@example.test' });
+});
+
+it('refuses a thread rule about a conversation this installation does not hold', async () => {
+  const { pool, inserts } = policyPool();
+  // The page picks conversations from a list, so this is a hand-written body
+  // or a stale one: a rule that could only ever match nothing.
+  const reply = await writeEmailPolicy(
+    pool,
+    { scope: 'thread', matcher: '<root@example.test>', action: 'wake', accountId: ACCOUNT_ID },
+    NOW,
+  );
+  expect(reply).toMatchObject({ status: 400 });
+  expect(inserts).toHaveLength(0);
 });
