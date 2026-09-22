@@ -26,6 +26,9 @@ import {
   executeApproved,
   getAction,
   getMission,
+  dismissOffer,
+  getOffer,
+  dismissOffers,
   recordOfferJob,
   releaseOffer,
   resumeJobForAction,
@@ -379,6 +382,9 @@ export async function takeOfferFromWeb(
   if (!taken.ok) {
     // Expired is said in the page's own words: the store's sentence is written
     // for a chat ("just ask me instead"), and this one lands in a banner.
+    // Dismissed and lapsed already read as banners, so they come through as
+    // the store wrote them — a chip the owner refused must not come back
+    // claiming it expired.
     return fail(
       taken.reason === 'unknown' ? 404 : 409,
       taken.reason === 'expired' ? OFFER_EXPIRED : taken.message,
@@ -438,6 +444,51 @@ export async function takeOfferFromWeb(
     status: 200,
     body: { id: offer.id, label: offer.label, jobId },
   };
+}
+
+/**
+ * The owner said no to one chip.
+ *
+ * The cheapest possible write, and deliberately so: no run, no job, nothing
+ * reaches a model. The only thing it cannot do is dismiss an offer that is
+ * already running — that one started work, and a list that hid it would be
+ * lying about what the installation is doing.
+ */
+export async function dismissOfferFromWeb(
+  deps: WriteDeps,
+  offerId: string,
+): Promise<WriteResult<{ id: string; dismissedAt: string }>> {
+  const dismissed = await dismissOffer(deps.pool, { id: offerId, now: deps.now() });
+  if (dismissed) {
+    return { ok: true, status: 200, body: { id: dismissed.id, dismissedAt: dismissed.dismissedAt ?? '' } };
+  }
+  const existing = await getOffer(deps.pool, offerId);
+  if (!existing) return fail(404, 'That offer is no longer here.');
+  if (existing.takenAt !== null) return fail(409, OFFER_TAKEN_ALREADY);
+  // Already dismissed: the owner clicked twice, or two tabs did. Saying no
+  // twice is not an error, and a banner about it would be noise.
+  return { ok: true, status: 200, body: { id: existing.id, dismissedAt: existing.dismissedAt ?? '' } };
+}
+
+/** What the page is told when it tries to refuse something already running. */
+export const OFFER_TAKEN_ALREADY = 'That one is already running.';
+
+/**
+ * The owner cleared the list — everything, or one agent's.
+ *
+ * The count comes back because the page named a count in its confirmation and
+ * should be able to say what actually happened: a list that moved under the
+ * owner between the sentence and the click is normal, not an error.
+ */
+export async function dismissOffersFromWeb(
+  deps: WriteDeps,
+  agentId?: string | undefined,
+): Promise<WriteResult<{ dismissed: number }>> {
+  const dismissed = await dismissOffers(deps.pool, {
+    now: deps.now(),
+    ...(agentId ? { agentId } : {}),
+  });
+  return { ok: true, status: 200, body: { dismissed } };
 }
 
 /** Re-exported so the router does not have to reach into core for the cast. */

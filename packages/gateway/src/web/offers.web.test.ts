@@ -19,7 +19,15 @@
 import { describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import type { JobControl, ToolContext, ToolRegistry } from '@buddi/core';
-import { OFFER_EXPIRED, takeOfferFromWeb, type SendOfferTurn, type WriteDeps } from './write.js';
+import {
+  OFFER_EXPIRED,
+  OFFER_TAKEN_ALREADY,
+  dismissOfferFromWeb,
+  dismissOffersFromWeb,
+  takeOfferFromWeb,
+  type SendOfferTurn,
+  type WriteDeps,
+} from './write.js';
 
 const NOW = new Date('2026-09-21T10:00:00.000Z');
 const CONVERSATION = '11111111-1111-4111-8111-111111111111';
@@ -35,6 +43,9 @@ interface OfferRow {
   taken_at: Date | null;
   taken_via: string | null;
   taken_job_id: string | null;
+  dismissed_at: Date | null;
+  lapsed_at: Date | null;
+  lapse_reason: string | null;
 }
 
 function offerRow(over: Partial<OfferRow> = {}): OfferRow {
@@ -49,6 +60,9 @@ function offerRow(over: Partial<OfferRow> = {}): OfferRow {
     taken_at: null,
     taken_via: null,
     taken_job_id: null,
+    dismissed_at: null,
+    lapsed_at: null,
+    lapse_reason: null,
     ...over,
   };
 }
@@ -76,6 +90,21 @@ function stubPool(rows: OfferRow[]): { pool: Pool; statements: string[]; rows: O
       }
       if (/select .* from core\.offers where id = \$1/.test(text)) {
         return { rows: row ? [row] : [] };
+      }
+      if (/^\s*update core\.offers\s+set dismissed_at = \$2/.test(text)) {
+        if (!row || row.taken_at !== null || row.dismissed_at !== null) return { rows: [] };
+        row.dismissed_at = params[1] as Date;
+        return { rows: [row] };
+      }
+      if (/^\s*update core\.offers set dismissed_at = \$1/.test(text)) {
+        const at = params[0] as Date;
+        const agentId = params[1] === undefined ? null : String(params[1]);
+        const cleared = rows.filter(
+          (r) => r.taken_at === null && r.dismissed_at === null && r.lapsed_at === null
+            && r.expires_at > at && (agentId === null || r.agent_id === agentId),
+        );
+        for (const r of cleared) r.dismissed_at = at;
+        return { rows: cleared };
       }
       throw new Error(`the stub pool was asked something it does not hold: ${text}`);
     },
@@ -190,5 +219,63 @@ describe('taking an offer from the dashboard', () => {
     // The chip is on the table again: a take that started nothing must not
     // leave a button that is dead for everyone.
     expect(rows[0]!.taken_at).toBeNull();
+  });
+});
+
+/**
+ * The other answer.
+ *
+ * Every test above is about yes. These are about no, which is the half the
+ * page did not have: the owner could take an offer or wait a week, and on an
+ * installation with 65 of them that is not a choice.
+ */
+describe('dismissing an offer from the dashboard', () => {
+  it('records the refusal, starts nothing, and is idempotent', async () => {
+    const { pool, rows, statements } = stubPool([offerRow()]);
+
+    const result = await dismissOfferFromWeb(deps(pool), 'off-1');
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(rows[0]!.dismissed_at).toEqual(NOW);
+    // Nothing runs and nothing is queued: refusing is the cheapest write here.
+    expect(statements.some((s) => /core\.jobs/.test(s))).toBe(false);
+    expect(rows[0]!.taken_at).toBeNull();
+
+    // Two tabs, or a double click. Saying no twice is not an error.
+    const again = await dismissOfferFromWeb(deps(pool), 'off-1');
+    expect(again.ok).toBe(true);
+    expect(again.status).toBe(200);
+  });
+
+  it('refuses to hide one that is already running, and 404s an id that names nothing', async () => {
+    const { pool, rows } = stubPool([offerRow({ taken_at: NOW, taken_via: 'telegram' })]);
+
+    const running = await dismissOfferFromWeb(deps(pool), 'off-1');
+    expect(running.status).toBe(409);
+    expect((running as { body: { error: string } }).body.error).toBe(OFFER_TAKEN_ALREADY);
+    expect(rows[0]!.dismissed_at).toBeNull();
+
+    expect((await dismissOfferFromWeb(deps(pool), 'off-nope')).status).toBe(404);
+  });
+
+  it('clears the list and says how many it cleared', async () => {
+    const { pool, rows } = stubPool([
+      offerRow(),
+      offerRow({ id: 'off-2', label: 'Edit it' }),
+      offerRow({ id: 'off-3', agent_id: 'ledger', label: 'Pay it' }),
+      offerRow({ id: 'off-4', taken_at: NOW }),
+    ]);
+
+    const mine = await dismissOffersFromWeb(deps(pool), 'ledger');
+    expect((mine as { body: { dismissed: number } }).body.dismissed).toBe(1);
+
+    const all = await dismissOffersFromWeb(deps(pool));
+    expect((all as { body: { dismissed: number } }).body.dismissed).toBe(2);
+    // The one that is running is untouched: it started work.
+    expect(rows.find((r) => r.id === 'off-4')!.dismissed_at).toBeNull();
+
+    expect((await dismissOffersFromWeb(deps(pool))).ok).toBe(true);
+    expect(((await dismissOffersFromWeb(deps(pool))) as { body: { dismissed: number } }).body.dismissed).toBe(0);
   });
 });

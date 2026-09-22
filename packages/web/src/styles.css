@@ -2074,6 +2074,36 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .home-offer:hover { border-color: var(--accent); color: var(--accent); }
 
+/* The chip and the way out of it. The × is invisible until the chip is
+   hovered or something inside it has focus, so the row stays a row of things
+   to do rather than a row of things to close; a touch has neither hover nor
+   focus, which is why Home also dismisses on a long press. */
+.home-offer-chip { position: relative; display: inline-flex; }
+.home-offer-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.home-offer-chip:hover .home-offer-x,
+.home-offer-chip:focus-within .home-offer-x { opacity: 1; }
+.home-offer-x:hover { color: var(--critical); border-color: var(--critical); }
+.home-offer-x:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+.home-offer-x[disabled] { cursor: default; opacity: 0.5; }
+
 .home-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-5); align-items: start; }
 .home-foot { margin: 0; font-size: var(--text-sm); }
 

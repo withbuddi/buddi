@@ -35,6 +35,7 @@ import {
   listMissions,
   nextAfter,
   releaseStaleClaims,
+  sweepLapsedOffers,
   sweepOrphanUploads,
   resumeJob,
   runScheduler,
@@ -707,6 +708,27 @@ export async function main(): Promise<void> {
       await seedOwnerFromEnv(pool, process.env).catch((err) =>
         console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
     }
+
+    /*
+     * Offers whose moment passed while nothing was running.
+     *
+     * The dashboard lapses them on every read, which is enough for anyone
+     * looking at it and no use at all to Telegram: a button in a chat is drawn
+     * once and sits there, so an owner who never opens the dashboard would tap
+     * something from a conversation three rollovers ago. One sweep at start
+     * catches everything that went stale while the process was down, and after
+     * that the reads and the rollover path keep up on their own. No scheduler:
+     * an offer lapsing an hour late costs nothing, and a timer that has to be
+     * right forever costs plenty.
+     *
+     * The roster goes in so an offer from an agent the owner has since removed
+     * lapses too, rather than sitting there with nobody to take it.
+     */
+    void sweepLapsedOffers(pool, { now: now(), agentIds: wiring.catalog.list().map((a) => a.id) })
+      .then((lapsed) => {
+        if (lapsed > 0) console.error(`offers: ${lapsed} offer(s) had lapsed and are off the table`);
+      })
+      .catch((err) => console.error(`offers: the lapse sweep failed: ${err instanceof Error ? err.message : String(err)}`));
 
     // Uploads the dashboard stored eagerly and nobody sent: tombstoned once a
     // day old, at start and then hourly. Anything a message carries is kept.

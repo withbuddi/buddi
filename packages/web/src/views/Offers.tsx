@@ -13,15 +13,26 @@
  * than hidden behind the label: the owner can read exactly what they are about
  * to ask for, and anything that would then leave the machine still comes back
  * as an approval with the full preview.
+ *
+ * ## Both answers
+ *
+ * For a long time the only answer was yes. "Not now" is the other one, and it
+ * is the reason this page is readable at all: an offer the owner refuses stops
+ * appearing everywhere, immediately, and nothing runs. It is recorded rather
+ * than deleted — under the fold below, with everything that lapsed on its own,
+ * for a week — because "I said no to that" is worth being able to check.
  */
 import { useState } from 'react';
-import { api } from '../api';
+import { api, lapseSentence, type OfferRow } from '../api';
 import { fmtRelative } from '../format';
-import { Button, Card, Empty, ErrorBanner, Notice, PageFrame, Pill, Stack, useAsync } from '../ui';
+import { Button, Card, Details, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Panel, Pill, Stack, Toolbar, useAsync } from '../ui';
+import { DismissAll } from './parts/DismissOffers';
 
-export function Offers({ embedded, agentId }: { timezone?: string; embedded?: boolean; agentId?: string }): JSX.Element {
+export function Offers({ embedded, agentId, agentName }: { timezone?: string; embedded?: boolean; agentId?: string; agentName?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.offers(), [], 20_000);
-  const rows = (data?.offers ?? []).filter((o) => !agentId || o.agentId === agentId);
+  const mine = (o: OfferRow): boolean => !agentId || o.agentId === agentId;
+  const rows = (data?.offers ?? []).filter(mine);
+  const closed = (data?.closed ?? []).filter(mine);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [taken, setTaken] = useState<string | null>(null);
@@ -44,6 +55,20 @@ export function Offers({ embedded, agentId }: { timezone?: string; embedded?: bo
     }
   };
 
+  const dismiss = async (id: string, label: string): Promise<void> => {
+    setFailure(null);
+    setBusy(id);
+    try {
+      await api.dismissOffer(id);
+      setTaken(`Dismissed — ${label}. It will not come back.`);
+      reload();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <PageFrame
       embedded={embedded}
@@ -55,6 +80,17 @@ export function Offers({ embedded, agentId }: { timezone?: string; embedded?: bo
         <Notice tone="good" role="status">
           {taken}
         </Notice>
+      ) : null}
+      {rows.length > 0 ? (
+        <Toolbar>
+          <span className="ui-toolbar-spacer" />
+          <DismissAll
+            count={rows.length}
+            agentId={agentId}
+            agentName={agentName}
+            onDone={() => { setTaken(null); reload(); }}
+          />
+        </Toolbar>
       ) : null}
       {!data || rows.length === 0 ? (
         <Empty>Nothing is on offer.</Empty>
@@ -72,9 +108,16 @@ export function Offers({ embedded, agentId }: { timezone?: string; embedded?: bo
                 </>
               }
               actions={
-                <Button variant="accent" size="sm" disabled={busy === offer.id} onClick={() => take(offer.id, offer.label)}>
-                  Take
-                </Button>
+                <>
+                  {/* "Not now" beside "Take": both answers in the same place,
+                      because an offer with only one answer is a chore. */}
+                  <Button size="sm" variant="ghost" disabled={busy === offer.id} onClick={() => void dismiss(offer.id, offer.label)}>
+                    Not now
+                  </Button>
+                  <Button variant="accent" size="sm" disabled={busy === offer.id} onClick={() => void take(offer.id, offer.label)}>
+                    Take
+                  </Button>
+                </>
               }
             >
               <p className="ui-card-meta">{offer.prompt}</p>
@@ -82,6 +125,23 @@ export function Offers({ embedded, agentId }: { timezone?: string; embedded?: bo
           ))}
         </Stack>
       )}
+      {closed.length > 0 ? (
+        <Details summary={`Dismissed and lapsed (${closed.length})`} boxed>
+          <Panel flush>
+            <List>
+              {closed.map((offer) => (
+                <ListRow
+                  key={offer.id}
+                  title={offer.label}
+                  sub={`${offer.agentId} — ${lapseSentence(offer)}`}
+                  side={fmtRelative(offer.dismissedAt ?? offer.lapsedAt ?? offer.createdAt)}
+                />
+              ))}
+            </List>
+          </Panel>
+          <p className="muted">These stop being shown a week after they closed.</p>
+        </Details>
+      ) : null}
     </PageFrame>
   );
 }
