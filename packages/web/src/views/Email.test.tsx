@@ -92,8 +92,23 @@ const THREAD = {
 const WATCHERS = {
   waitingDays: 2,
   dateConfidence: 0.6,
-  defaults: { waitingDays: 2, dateConfidence: 0.6 },
-  limits: { waitingDays: { min: 1, max: 60 }, dateConfidence: { min: 0.1, max: 0.99 } },
+  promisedDays: 3,
+  receiptConfidence: 0.7,
+  nudgeDays: 5,
+  defaults: {
+    waitingDays: 2,
+    dateConfidence: 0.6,
+    promisedDays: 3,
+    receiptConfidence: 0.7,
+    nudgeDays: 5,
+  },
+  limits: {
+    waitingDays: { min: 1, max: 60 },
+    dateConfidence: { min: 0.1, max: 0.99 },
+    promisedDays: { min: 1, max: 60 },
+    receiptConfidence: { min: 0.1, max: 0.99 },
+    nudgeDays: { min: 1, max: 60 },
+  },
 };
 
 const VIEW: EmailPoliciesView = {
@@ -656,19 +671,20 @@ describe('Settings → Email → Watchers', () => {
     return within(block as HTMLElement).getByRole('button', { name: 'Save' });
   }
 
-  it('shows the two settings the mail watchers read, with their defaults said out loud', async () => {
+  it('shows the five settings the mail watchers read, with their defaults said out loud', async () => {
     render(<Email />);
     expect(await screen.findByText('Watchers')).toBeInTheDocument();
-    const days = await screen.findByLabelText('Waiting longer than');
-    const confidence = screen.getByLabelText('Date confidence');
-    expect(days).toHaveValue(2);
-    expect(confidence).toHaveValue(0.6);
+    expect(await screen.findByLabelText('Waiting longer than')).toHaveValue(2);
+    expect(screen.getByLabelText('Date confidence')).toHaveValue(0.6);
+    expect(screen.getByLabelText('Unkept promise after')).toHaveValue(3);
+    expect(screen.getByLabelText('Receipt confidence')).toHaveValue(0.7);
+    expect(screen.getByLabelText('Nudge after')).toHaveValue(5);
     expect(screen.getByText(/2 by default; a week or more is always urgent/)).toBeInTheDocument();
-    // Neither watcher ever sends anything, and the page says so.
-    expect(screen.getByText(/Neither ever sends anything/)).toBeInTheDocument();
+    // None of the six ever sends anything, and the page says so.
+    expect(screen.getByText(/None of them ever sends anything/)).toBeInTheDocument();
   });
 
-  it('saves nothing until something is changed, then saves both together', async () => {
+  it('saves nothing until something is changed, then saves them all together', async () => {
     render(<Email />);
     const save = await watchersSave();
     expect(save).toBeDisabled();
@@ -678,7 +694,13 @@ describe('Settings → Email → Watchers', () => {
     fireEvent.click(save);
 
     await waitFor(() =>
-      expect(api.setEmailWatchers).toHaveBeenCalledWith({ waitingDays: 4, dateConfidence: 0.6 }),
+      expect(api.setEmailWatchers).toHaveBeenCalledWith({
+        waitingDays: 4,
+        dateConfidence: 0.6,
+        promisedDays: 3,
+        receiptConfidence: 0.7,
+        nudgeDays: 5,
+      }),
     );
     expect(await screen.findByText(/Saved\. The watchers use it on their next run\./)).toBeInTheDocument();
   });
