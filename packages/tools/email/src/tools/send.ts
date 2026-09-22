@@ -452,6 +452,11 @@ export function createSendTool(
       const auth = resolveAuth(account, opts.env ?? process.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
       const envelope = await buildEnvelope(ctx, input.draftId);
+      // The tool's own sentence first — "this draft has been edited since you
+      // approved it" — because the generic hash refusal underneath is true of a
+      // subject, a recipient and a whole rewritten letter alike, and the owner
+      // is about to be told their mail did not go.
+      assertUnchangedSinceApproval(envelope, ctx);
       assertApprovedEffect(ctx, envelope);
 
       await claimDraftForSend({

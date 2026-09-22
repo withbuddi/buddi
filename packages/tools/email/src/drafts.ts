@@ -161,6 +161,8 @@ export async function insertLiveDraft(input: InsertDraftInput): Promise<DraftRec
       bodyText: input.bodyText,
       editedBy: input.agentId,
       byOwner: false,
+      // The version this writer just read, a moment after losing the insert.
+      expectedArtifactId: winner.artifactId,
       conversationId: input.conversationId ?? null,
       now: input.now,
     });
@@ -223,7 +225,7 @@ export interface UpdateDraftInput {
   /** True when `editedBy` is the owner rather than an agent. */
   byOwner: boolean;
   /**
-   * The `updated_at` the writer believes it is editing, when it has one.
+   * The `updated_at` the writer believes it is editing.
    *
    * The owner's editor carries it: a page left open while an agent rewrote the
    * draft would otherwise save the stale text that is on screen over the new
@@ -231,6 +233,16 @@ export interface UpdateDraftInput {
    * what is actually there.
    */
   expectedUpdatedAt?: string | null;
+  /**
+   * The artifact version the writer read, when it has one.
+   *
+   * An agent's rewrite carries it, and needs to: two runs can both read the
+   * same draft and both rewrite it, and without a version in the predicate the
+   * second silently replaces work the first had already done. `updated_at` is
+   * the owner's token because that is what their editor holds; the artifact id
+   * is the agent's, because that is what `draft_reply` read.
+   */
+  expectedArtifactId?: string | null;
   conversationId?: string | null;
   now: Date;
 }
@@ -261,7 +273,12 @@ export class DraftWriteConflict extends Error {
  * sentence the owner or the agent reads. Reading the row again cannot be
  * racy in a way that matters: the write already failed.
  */
-async function refusalFor(db: Pool, draftId: string, byOwner: boolean): Promise<DraftWriteConflict> {
+async function refusalFor(
+  db: Pool,
+  draftId: string,
+  byOwner: boolean,
+  expectedArtifactId?: string | null,
+): Promise<DraftWriteConflict> {
   const { rows } = await db.query(`select ${DRAFT_COLUMNS} from email.drafts where id = $1`, [draftId]);
   const current = rows[0] ? toDraft(rows[0]) : null;
   if (!current) {
@@ -286,6 +303,16 @@ async function refusalFor(db: Pool, draftId: string, byOwner: boolean): Promise<
       'owner-edited',
       current,
       `draft ${draftId} has been edited by the owner; read it before rewriting it`,
+    );
+  }
+  if (!byOwner && expectedArtifactId !== undefined && current.artifactId !== expectedArtifactId) {
+    // Another agent got there first. Same answer as an owner edit, and for the
+    // same reason: whatever is in the draft now was written by somebody who has
+    // seen something this writer has not.
+    return new DraftWriteConflict(
+      'stale',
+      current,
+      `draft ${draftId} was rewritten while you were composing; read it before rewriting it`,
     );
   }
   return new DraftWriteConflict(
@@ -334,6 +361,7 @@ export async function updateDraftRow(input: UpdateDraftInput): Promise<DraftReco
         and sent_action_id is null
         and ($12::boolean or edited_by is distinct from '${OWNER_EDITOR}')
         and ($13::timestamptz is null or updated_at = $13::timestamptz)
+        and ($14::uuid is null or artifact_id is not distinct from $14::uuid)
       returning ${DRAFT_COLUMNS}`,
     [
       input.draftId,
@@ -349,10 +377,13 @@ export async function updateDraftRow(input: UpdateDraftInput): Promise<DraftReco
       [...LIVE_DRAFT_STATUSES],
       input.byOwner,
       input.expectedUpdatedAt ?? null,
+      input.expectedArtifactId ?? null,
     ],
   );
   const row = rows[0];
-  if (!row) throw await refusalFor(input.db, input.draftId, input.byOwner);
+  if (!row) {
+    throw await refusalFor(input.db, input.draftId, input.byOwner, input.expectedArtifactId);
+  }
   return toDraft(row);
 }
 

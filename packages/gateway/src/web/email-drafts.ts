@@ -331,12 +331,25 @@ export async function writeEmailDraft(
     };
   }
 
-  // The version the editor loaded. Without it a page left open while an agent
-  // rewrote the draft saves the stale text that is still on screen over the
-  // new words — and the editor shows exactly that stale text, so nothing about
-  // the screen would say anything was lost.
-  const expectedUpdatedAt =
-    typeof input.updatedAt === 'string' && input.updatedAt.trim() !== '' ? input.updatedAt : null;
+  /*
+   * The version the editor loaded. **Required**, and that is the whole point:
+   * an optional precondition is not one. A client that omits it — an old
+   * bundle, a hand-made request, a future caller that forgot — would get the
+   * unguarded write back, and the guard would be a thing that protects the
+   * careful and not the careless. Without it, a page left open while an agent
+   * rewrote the draft saves the stale text that is still on screen over the
+   * new words, and the screen says nothing about what was lost.
+   */
+  if (typeof input.updatedAt !== 'string' || Number.isNaN(Date.parse(input.updatedAt))) {
+    return {
+      status: 400,
+      body: {
+        error:
+          '`updatedAt` must be the timestamp of the draft you loaded. Reload the draft and save again.',
+      },
+    };
+  }
+  const expectedUpdatedAt = input.updatedAt;
 
   const subject = typeof input.subject === 'string' ? input.subject : draft.subject;
   const bodyText = typeof input.bodyText === 'string' ? input.bodyText : draft.bodyText;

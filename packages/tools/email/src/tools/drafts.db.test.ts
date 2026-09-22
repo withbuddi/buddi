@@ -34,6 +34,7 @@ import { FakeSmtpServer } from '../smtp/fake.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { createRetentionSource } from '../sources/retention.js';
 import { SEND_TOOL_VERSION } from './send.js';
+import { ownerEditedNote } from './drafts.js';
 import {
   claimDraftForSend,
   discardDraftRow,
@@ -44,6 +45,7 @@ import {
   OWNER_EDITOR,
   updateDraftRow,
 } from '../drafts.js';
+import type { DraftRecord } from '../rows.js';
 import type { ToolContext } from '../types.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
@@ -368,6 +370,99 @@ suite('the draft lifecycle (postgres)', () => {
       expect(live?.bodyText).toBe('Second, by the agent.');
     });
 
+    it('refuses the second of two agent rewrites that read the same version', async () => {
+      const first = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Original.' });
+      // Both runs have read this draft and are about to rewrite it.
+      const seen = (await liveDraftForThread(pool, first.threadId as string)) as NonNullable<
+        Awaited<ReturnType<typeof liveDraftForThread>>
+      >;
+
+      const rewrite = (body: string, expectedArtifactId: string | null) =>
+        updateDraftRow({
+          db: pool,
+          draftId: first.id,
+          to: first.to,
+          cc: [],
+          bcc: [],
+          subject: first.subject,
+          bodyText: body,
+          editedBy: 'mail-triage',
+          byOwner: false,
+          expectedArtifactId,
+          now: new Date(NOW.getTime() + 1000),
+        });
+
+      const winner = await rewrite('The first agent’s words.', seen.artifactId);
+      expect(winner.bodyText).toBe('The first agent’s words.');
+
+      // The second run's write is against the version it read, which is gone.
+      // Without the predicate it would silently replace work it never saw.
+      await expect(rewrite('The second agent’s words.', seen.artifactId)).rejects.toMatchObject({
+        reason: 'stale',
+      });
+      const live = await liveDraftForThread(pool, first.threadId as string);
+      expect(live?.bodyText).toBe('The first agent’s words.');
+    });
+
+    it('tells the losing agent to read the draft before rewriting it', async () => {
+      const first = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Original.' });
+      // Another run rewrites it between this run's read and its write.
+      await updateDraftRow({
+        db: pool,
+        draftId: first.id,
+        to: first.to,
+        cc: [],
+        bcc: [],
+        subject: first.subject,
+        bodyText: 'Somebody else got there first.',
+        editedBy: 'other-agent',
+        byOwner: false,
+        now: new Date(NOW.getTime() + 1000),
+      });
+
+      // `draft_reply` reads the live draft and writes against what it read, so
+      // driving it again is the whole interleaving.
+      const again = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Mine.' });
+      expect(again.wrote).toBe(true);
+      expect(again.bodyText).toBe('Mine.');
+
+      // And when the version it read is already gone, it is refused rather than
+      // overwriting — the same answer an owner edit gets.
+      const stale = await liveDraftForThread(pool, first.threadId as string);
+      await updateDraftRow({
+        db: pool,
+        draftId: first.id,
+        to: first.to,
+        cc: [],
+        bcc: [],
+        subject: first.subject,
+        bodyText: 'And again.',
+        editedBy: 'other-agent',
+        byOwner: false,
+        now: new Date(NOW.getTime() + 2000),
+      });
+      await expect(
+        updateDraftRow({
+          db: pool,
+          draftId: first.id,
+          to: first.to,
+          cc: [],
+          bcc: [],
+          subject: first.subject,
+          bodyText: 'Too late.',
+          editedBy: 'mail-triage',
+          byOwner: false,
+          expectedArtifactId: stale?.artifactId ?? null,
+          now: new Date(NOW.getTime() + 3000),
+        }),
+      ).rejects.toMatchObject({ reason: 'stale' });
+      // The sentence the loser reads names the tool that shows it what is
+      // there — and does not claim the owner wrote it when another agent did.
+      const note = ownerEditedNote({ ...(stale as DraftRecord), editedBy: null });
+      expect(note).toContain('email.read_draft');
+      expect(note).toContain('another run');
+    });
+
     it('keeps one live draft per conversation when two agents insert at once', async () => {
       const original = await pool.query(`select id, thread_id from email.messages where id = $1`, [messageId]);
       const threadId = String(original.rows[0].thread_id);
@@ -422,6 +517,140 @@ suite('the draft lifecycle (postgres)', () => {
       await expect(claim(draft.id, approvedArtifact, '11111111-1111-4111-8111-111111111111')).rejects.toThrow(
         /edited while you were deciding/,
       );
+      const { rows } = await pool.query(`select sent_action_id from email.drafts where id = $1`, [draft.id]);
+      expect(rows[0].sent_action_id).toBeNull();
+    });
+
+    it('refuses through the Executor, with nothing in the ledger, when the save lands after the re-description', async () => {
+      /*
+       * The same race as above, but driven end to end the way production does
+       * it — `executeApproved`, not the store function — because that is the
+       * path where the claim hook has to actually be reached. What this asserts
+       * beyond "refused" is the **empty ledger**: an effect attempt says the
+       * message may have gone out, and this one certainly did not.
+       */
+      const draft = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Approved text.' });
+      const proposal = await registry.invoke('email.send', { draftId: draft.id }, ctx);
+      if (proposal.ok || proposal.reason !== 'approval-required') throw new Error('expected an approval');
+      await decideApproval(pool, {
+        actionId: proposal.actionId,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+        now: NOW,
+      });
+
+      // The owner saves. The body moves, and so does the artifact version the
+      // approved envelope named.
+      await updateDraftRow({
+        db: pool,
+        draftId: draft.id,
+        to: draft.to,
+        cc: [],
+        bcc: [],
+        subject: draft.subject,
+        bodyText: 'Edited after approving.',
+        editedBy: OWNER_EDITOR,
+        byOwner: true,
+        now: new Date(NOW.getTime() + 1000),
+      });
+
+      const before = smtp.sent.length;
+      const out = await executeApproved(pool, {
+        actionId: proposal.actionId,
+        registry,
+        ctx,
+        worker: 'w1',
+        now: NOW,
+      });
+      expect(out).toMatchObject({ ok: false, state: 'refused' });
+      expect(smtp.sent).toHaveLength(before);
+      expect(out.ok ? '' : out.message).toContain('edited');
+      const { rows: ledger } = await pool.query(
+        `select count(*)::int as n from core.effect_attempts where action_id = $1`,
+        [proposal.actionId],
+      );
+      expect(ledger[0].n).toBe(0);
+      // And the draft is still the owner's, unclaimed, for them to send again.
+      const { rows } = await pool.query(
+        `select sent_action_id, body_text from email.drafts where id = $1`,
+        [draft.id],
+      );
+      expect(rows[0]).toMatchObject({ sent_action_id: null, body_text: 'Edited after approving.' });
+    });
+
+    it('refuses in the claim itself when the save lands after the re-description', async () => {
+      /*
+       * The window nothing else can close.
+       *
+       * The Executor re-describes and compares hashes, then claims. A save that
+       * lands *between* those two — which is what a real clock makes possible —
+       * passes the hash check, because the re-description happened before it.
+       * Only the claim's own predicate can catch that, and only if the hook is
+       * actually reached.
+       *
+       * The interleaving is forced by a `describe` that answers from before the
+       * save and performs the save on its way out. Everything else — the claim,
+       * the executor, the ledger — is the production path.
+       */
+      const draft = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Approved text.' });
+      const proposal = await registry.invoke('email.send', { draftId: draft.id }, ctx);
+      if (proposal.ok || proposal.reason !== 'approval-required') throw new Error('expected an approval');
+      await decideApproval(pool, {
+        actionId: proposal.actionId,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+        now: NOW,
+      });
+
+      const real = registry.lookup('email.send') as NonNullable<ReturnType<ToolRegistry['lookup']>>;
+      let saved = false;
+      const interleaving = {
+        lookup: () => ({
+          ...real,
+          describe: async (input: unknown, c: ToolContext) => {
+            const described = await real.describe!(input, c);
+            if (!saved) {
+              saved = true;
+              // The owner saves, now — after the envelope was read and before
+              // the claim is taken.
+              await updateDraftRow({
+                db: pool,
+                draftId: draft.id,
+                to: draft.to,
+                cc: [],
+                bcc: [],
+                subject: draft.subject,
+                bodyText: 'Saved in the window.',
+                editedBy: OWNER_EDITOR,
+                byOwner: true,
+                now: new Date(NOW.getTime() + 1000),
+              });
+            }
+            return described;
+          },
+        }),
+      };
+
+      const before = smtp.sent.length;
+      const out = await executeApproved(pool, {
+        actionId: proposal.actionId,
+        registry: interleaving as never,
+        ctx,
+        worker: 'w1',
+        now: NOW,
+      });
+      expect(out).toMatchObject({ ok: false, state: 'refused' });
+      // The owner's own sentence, not the generic hash one.
+      expect(out.ok ? '' : out.message).toContain('has been edited since you approved it');
+      expect(smtp.sent).toHaveLength(before);
+      // The ledger is empty: nothing was attempted, so nothing may say it was.
+      const { rows: ledger } = await pool.query(
+        `select count(*)::int as n from core.effect_attempts where action_id = $1`,
+        [proposal.actionId],
+      );
+      expect(ledger[0].n).toBe(0);
       const { rows } = await pool.query(`select sent_action_id from email.drafts where id = $1`, [draft.id]);
       expect(rows[0].sent_action_id).toBeNull();
     });

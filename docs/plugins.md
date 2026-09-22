@@ -410,7 +410,16 @@ recorded. Re-dispatching is never the answer.
 The other half of that guard belongs to everyone who writes the row: every
 editor of a claimable row carries `and sent_action_id is null` in its own
 predicate, so nothing can be edited out from under a dispatch that is already
-in flight.
+in flight — and every writer that read a version before writing carries that
+version too, so two writers who read the same row cannot silently replace each
+other.
+
+The Executor reaches `claim` through `ToolRegistry.lookup`, which builds the
+executable view of a tool field by field. A field it does not copy is a hook
+that silently never runs, and for this one the symptom is invisible in the happy
+path: the effect still refuses, one step later, as `failed` with an attempt row
+claiming it may have happened. `actions.db.test.ts` asserts `lookup(...).claim`
+is a function for exactly that reason.
 
 **`timeoutMs` and what `unknown` means.** The Executor waits `timeoutMs`
 (`DEFAULT_EFFECT_TIMEOUT_MS` when you declare none) and then records the attempt

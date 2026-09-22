@@ -191,7 +191,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
     const refuseOwnerEdited = (edited: DraftRecord) => ({
       ...draftView(edited, identity, ownerEditedNote(edited)),
       wrote: false,
-      ownerEdited: true,
+      ownerEdited: edited.editedBy === OWNER_EDITOR,
       ownerDecision: null,
     });
     if (live && live.editedBy === OWNER_EDITOR) return refuseOwnerEdited(live);
@@ -205,12 +205,23 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
           ...fields,
           editedBy: agentId,
           byOwner: false,
+          // The version this run read. Two agents can reach the same live
+          // draft and both rewrite it; without a version in the predicate the
+          // second silently replaces work the first had already done, and
+          // neither the owner nor either agent would ever know.
+          expectedArtifactId: live.artifactId,
           conversationId: ctx.conversationId ?? null,
           now: ctx.now(),
         });
       } catch (err) {
-        // The owner saved in the window this exists to close.
-        if (err instanceof DraftWriteConflict && err.reason === 'owner-edited' && err.current) {
+        // Somebody wrote in the window this exists to close: the owner
+        // (`owner-edited`) or another agent (`stale`). Either way the answer is
+        // the same — read what is there first.
+        if (
+          err instanceof DraftWriteConflict &&
+          (err.reason === 'owner-edited' || err.reason === 'stale') &&
+          err.current
+        ) {
           return refuseOwnerEdited(err.current);
         }
         throw err;
@@ -392,11 +403,15 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
  * with a slightly different sentence.
  */
 export function ownerEditedNote(draft: DraftRecord): string {
+  const when = draft.updatedAt ? ` (last changed ${draft.updatedAt})` : '';
+  const who =
+    draft.editedBy === OWNER_EDITOR
+      ? `The owner has edited this draft${when}, so nothing was written over it: their words are not yours to replace.`
+      : `This draft was rewritten${when} while you were composing — by another run, working from something you have not seen — so nothing was written over it.`;
   return (
-    `The owner has edited this draft${draft.updatedAt ? ` (last changed ${draft.updatedAt})` : ''}, ` +
-    'so nothing was written over it: their words are not yours to replace. ' +
+    `${who} ` +
     `Read what is there with email.read_draft { draftId: "${draft.id}" }, and if a change is still needed, ` +
-    'say what you would change and let the owner decide — on the Email page they can edit it themselves, or discard it and ask you for a new one.'
+    'say what you would change and let the owner decide — on the Mail page they can edit it themselves, or discard it and ask you for a new one.'
   );
 }
 

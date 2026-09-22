@@ -227,6 +227,7 @@ suite('the draft editor routes', () => {
       bcc: [],
       subject: 'Re: Direct debit returned',
       bodyText: 'Actually, I have already paid it.',
+      updatedAt: ((await (await send('GET', `/api/email/drafts/${draftId}`)).json()) as any).draft.updatedAt,
     });
     expect(res.status).toBe(200);
     const saved = ((await res.json()) as any).draft;
@@ -237,9 +238,31 @@ suite('the draft editor routes', () => {
     expect(String(post[0].artifact_id)).not.toBe(String(pre[0].artifact_id));
   });
 
+  it('refuses a save that carries no version at all', async () => {
+    const { draftId } = await seed();
+    /*
+     * An optional precondition is not one. A client that omits it — an old
+     * bundle, a hand-made request, a future caller that forgot — would
+     * otherwise get the unguarded write back, and the guard would protect only
+     * the careful.
+     */
+    for (const body of [
+      { bodyText: 'No version at all.' },
+      { bodyText: 'Not a timestamp.', updatedAt: 'yesterday' },
+      { bodyText: 'Null.', updatedAt: null },
+    ]) {
+      const res = await send('PUT', `/api/email/drafts/${draftId}`, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(((await res.json()) as any).error).toMatch(/`updatedAt`/);
+    }
+    const { rows } = await pool.query(`select body_text from email.drafts where id = $1`, [draftId]);
+    expect(rows[0].body_text).toBe('I will cover it today.');
+  });
+
   it('refuses a save with no recipient rather than storing an unsendable draft', async () => {
     const { draftId } = await seed();
-    const res = await send('PUT', `/api/email/drafts/${draftId}`, { to: [] });
+    const loaded = ((await (await send('GET', `/api/email/drafts/${draftId}`)).json()) as any).draft;
+    const res = await send('PUT', `/api/email/drafts/${draftId}`, { to: [], updatedAt: loaded.updatedAt });
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).error).toMatch(/recipient/i);
   });
@@ -324,7 +347,14 @@ suite('the draft editor routes', () => {
     const thread = (await (await send('GET', `/api/email/threads/${threadId}`)).json()) as any;
     expect(thread.drafts[0]).toMatchObject({ live: false, unresolved: true });
 
-    expect((await send('PUT', `/api/email/drafts/${draftId}`, { bodyText: 'nope' })).status).toBe(409);
+    expect(
+      (
+        await send('PUT', `/api/email/drafts/${draftId}`, {
+          bodyText: 'nope',
+          updatedAt: new Date(NOW).toISOString(),
+        })
+      ).status,
+    ).toBe(409);
     expect((await send('POST', `/api/email/drafts/${draftId}/discard`, {})).status).toBe(409);
     const sendAgain = await send('POST', `/api/email/drafts/${draftId}/send`, {});
     expect(sendAgain.status).toBe(409);
@@ -355,12 +385,14 @@ suite('the draft editor routes', () => {
     // well over a 32k byte one. The owner should read the sentence about
     // drafts, not the one about request sizes.
     const long = '\u4e2d'.repeat(20_000);
+    const loaded = ((await (await send('GET', `/api/email/drafts/${draftId}`)).json()) as any).draft;
     const res = await send('PUT', `/api/email/drafts/${draftId}`, {
       to: ['alerts@bank.test'],
       cc: [],
       bcc: [],
       subject: 'Long',
       bodyText: long,
+      updatedAt: loaded.updatedAt,
     });
     expect([413, 400]).toContain(res.status);
     expect(((await res.json()) as any).error).toMatch(/too long to keep as a draft|body/i);
