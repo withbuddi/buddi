@@ -36,9 +36,13 @@ export interface ThreadRecord {
   accountId: string;
   threadKey: string;
   subject: string;
+  /**
+   * Everyone in the conversation, capped at `email.participants_cap()` (50).
+   * How many there are in total is *not* stored — it is counted from the
+   * thread's own messages by `participantsTotals`, which is the only way it
+   * cannot drift.
+   */
   participants: string[];
-  /** How many more distinct participants there are beyond the 50 kept. */
-  participantsOverflow: number;
   firstAt: string | null;
   lastAt: string | null;
   state: ThreadState;
@@ -48,7 +52,7 @@ export interface ThreadRecord {
 }
 
 export const THREAD_COLUMNS =
-  'id, account_id, thread_key, subject, participants, participants_overflow, first_at, last_at, ' +
+  'id, account_id, thread_key, subject, participants, first_at, last_at, ' +
   'state, policy_id, message_count, last_direction, last_folder_id, last_uidvalidity, last_uid, last_message_id';
 
 function iso(value: unknown): string | null {
@@ -65,7 +69,6 @@ export function toThread(row: Record<string, any>): ThreadRecord {
     participants: Array.isArray(row.participants)
       ? row.participants.filter((p: unknown): p is string => typeof p === 'string')
       : [],
-    participantsOverflow: Number(row.participants_overflow ?? 0),
     firstAt: iso(row.first_at),
     lastAt: iso(row.last_at),
     state: (THREAD_STATES as readonly string[]).includes(row.state)
@@ -128,11 +131,10 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
 
   const { rows } = await db.query(
     `insert into email.threads
-       (account_id, thread_key, subject, participants, participants_overflow, first_at, last_at,
+       (account_id, thread_key, subject, participants, first_at, last_at,
         message_count, last_direction, last_folder_id, last_uidvalidity, last_uid, last_message_id, state)
      values (
        $1, $2, $3, email.merge_participants('[]'::jsonb, $4::jsonb),
-       greatest(0, email.merge_participants_count('[]'::jsonb, $4::jsonb) - email.participants_cap()),
        $5, $5, 1, $6, $8, $9, $10, $11, $7
      )
      on conflict (account_id, thread_key) do update
@@ -141,14 +143,6 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
             -- The union: who is in a conversation only ever grows, capped.
             participants = email.merge_participants(
               email.threads.participants, $4::jsonb
-            ),
-            participants_overflow = greatest(
-              email.threads.participants_overflow,
-              email.threads.participants_overflow + greatest(
-                0,
-                email.merge_participants_count(email.threads.participants, $4::jsonb)
-                  - email.participants_cap()
-              )
             ),
             first_at = least(
               coalesce(email.threads.first_at, excluded.first_at),
@@ -249,6 +243,69 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
     thread.id,
   ]);
   return thread;
+}
+
+/**
+ * How many distinct people are in each of these conversations.
+ *
+ * `threads.participants` is capped (50), and "and N more" needs the uncapped
+ * number. That number is *counted*, here, at read time, from the thread's own
+ * messages — the distinct normalised addresses over From, To and Cc — rather
+ * than accumulated in a column as messages arrive. A running counter was the
+ * bug this replaces: it was incremented per upsert by how many addresses past
+ * the cap that message brought, so the same fifty people writing twice counted
+ * their overflow twice and the owner was told about people who did not exist.
+ * A count over rows can be wrong about nothing.
+ *
+ * `email.address_of` is the same normalisation the stored array uses
+ * (`normalizeAddress`): the bare address inside a header, lowercased, quotes
+ * and surrounding space stripped.
+ *
+ * Retention deletes messages while the thread and its participant array stay
+ * (docs/email.md §7), so the count is clamped to what is stored: a total lower
+ * than the array is a thread whose evidence has aged out, not fewer people.
+ */
+export async function participantsTotals(
+  db: Db,
+  threads: readonly ThreadRecord[],
+): Promise<Map<string, number>> {
+  const totals = new Map<string, number>();
+  for (const thread of threads) totals.set(thread.id, thread.participants.length);
+  if (threads.length === 0) return totals;
+  const { rows } = await db.query(
+    `select m.thread_id as thread_id, count(distinct p.addr)::int as total
+       from email.messages m,
+            lateral (
+              select email.address_of(btrim(m.from_addr)) as addr
+              union all
+              select email.address_of(btrim(x))
+                from jsonb_array_elements_text(coalesce(m.to_addrs, '[]'::jsonb)) as x
+              union all
+              select email.address_of(btrim(x))
+                from jsonb_array_elements_text(coalesce(m.cc, '[]'::jsonb)) as x
+            ) p
+      where m.thread_id = any($1::uuid[])
+        and p.addr is not null and btrim(p.addr) <> ''
+      group by m.thread_id`,
+    [threads.map((thread) => thread.id)],
+  );
+  for (const row of rows) {
+    const id = String(row.thread_id);
+    const kept = totals.get(id) ?? 0;
+    totals.set(id, Math.max(kept, Number(row.total ?? 0)));
+  }
+  return totals;
+}
+
+/** The same count, for one conversation. */
+export async function participantsTotalOf(db: Db, thread: ThreadRecord): Promise<number> {
+  const totals = await participantsTotals(db, [thread]);
+  return totals.get(thread.id) ?? thread.participants.length;
+}
+
+/** How many participants a thread has beyond the ones it kept. Never negative. */
+export function participantsOverflowOf(thread: ThreadRecord, total: number): number {
+  return Math.max(0, total - thread.participants.length);
 }
 
 export async function findThread(db: Db, id: string): Promise<ThreadRecord | null> {

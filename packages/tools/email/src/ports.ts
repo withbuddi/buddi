@@ -173,6 +173,13 @@ export interface AccountRecord {
   enabled: boolean;
   /** 'env' is the GMAIL_USER seed; 'page' is one the owner added in Settings. */
   addedVia: 'env' | 'page';
+  /**
+   * When folder discovery last completed: every folder the plan named was
+   * persisted, the Sent folder included. Null means it has not completed — a
+   * new account, one whose Sent row failed to insert, or a server with no Sent
+   * folder at all — and the next poll lists the mailbox again.
+   */
+  foldersDiscoveredAt: string | null;
   createdAt: string | null;
 }
 

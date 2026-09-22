@@ -28,7 +28,12 @@ import { FakeImapServer, fakeMessage } from './imap/fake.js';
 import { manifest } from './index.js';
 import { ownerHasRepliedTo, ownerReplies } from './policies/learn.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
-import { joinThread } from './threads.js';
+import {
+  findThread,
+  joinThread,
+  participantsTotalOf,
+  participantsTotals,
+} from './threads.js';
 import { policiesView } from './tools/policies.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
 import type { SourceContext, ToolContext } from './types.js';
@@ -258,7 +263,7 @@ suite('email threads (postgres + fake imap)', () => {
       expect(new Date(rows[0].last_at).toISOString()).toBe(NOW.toISOString());
     });
 
-    it('caps participants on backfill and records overflow from the uncapped distinct count', async () => {
+    it('caps the participants it stores on backfill, and counts the rest from the messages', async () => {
       await fixture();
       const addresses = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
       await pool.query(
@@ -267,10 +272,19 @@ suite('email threads (postgres + fake imap)', () => {
       );
       await pool.query(`select email.backfill_threads($1)`, [NOW]);
       const { rows } = await pool.query(
-        `select jsonb_array_length(participants) as kept, participants_overflow
+        `select id, jsonb_array_length(participants) as kept
            from email.threads where thread_key = '<t1@work.test>'`,
       );
-      expect(rows[0]).toEqual({ kept: 50, participants_overflow: 12 });
+      expect(rows[0].kept).toBe(50);
+      // Sixty recipients, the client who wrote and the owner who answered: 62
+      // distinct people, counted from the messages rather than from a column.
+      const thread = await findThread(pool, String(rows[0].id));
+      expect(await participantsTotalOf(pool, thread!)).toBe(62);
+      const view = (await readThread.execute({ thread: thread!.id }, toolContext())) as any;
+      expect({ total: view.participantsTotal, more: view.participantsMore }).toEqual({
+        total: 62,
+        more: 12,
+      });
     });
 
     it('expands a global thread policy into one account-scoped copy per matching thread, and revokes the global row', async () => {
@@ -561,14 +575,18 @@ suite('email threads (postgres + fake imap)', () => {
     it('still polls INBOX when planting a legacy cursorless Sent row fails', async () => {
       const server = serverWithSent();
       server.add('INBOX', fakeMessage({ messageId: '<inbox-after-plant-failure@x>', subject: 'Inbox survives plant' }));
-      // Both rows, so this account counts as already discovered: discovery is
-      // what fills a Sent row's cursor from LIST/STATUS, and a legacy row from
-      // before Sent existed is exactly the one nothing has planted yet.
+      // Both rows and the discovery stamp, so this account is already
+      // discovered: discovery is what fills a Sent row's cursor from
+      // LIST/STATUS, and a legacy row from before Sent existed is exactly the
+      // one nothing has planted yet.
       await pool.query(
         `insert into email.folders (account_id, name, kind, synced)
          values ($1, 'INBOX', 'inbox', true)`,
         [accountId],
       );
+      await pool.query(`update email.accounts set folders_discovered_at = now() where id = $1`, [
+        accountId,
+      ]);
       const { rows } = await pool.query(
         `insert into email.folders (account_id, name, kind, synced)
          values ($1, '[Gmail]/Sent Mail', 'sent', true) returning id`,
@@ -593,6 +611,114 @@ suite('email threads (postgres + fake imap)', () => {
         `select direction from email.messages where message_id = '<inbox-after-plant-failure@x>'`,
       );
       expect(inbox).toEqual([{ direction: 'in' }]);
+    });
+
+    it('does not record discovery when the Sent row fails to insert, and gets it on the next poll', async () => {
+      const server = serverWithSent();
+      server.add('INBOX', fakeMessage({ messageId: '<inbox-during-partial@x>', subject: 'Inbox lands anyway' }));
+      let failSentInsert = true;
+      const logs: string[] = [];
+      const failingDb = {
+        async query(text: string, params: unknown[] = []) {
+          if (
+            failSentInsert &&
+            /insert into email\.folders/.test(text) &&
+            params[1] === '[Gmail]/Sent Mail'
+          ) {
+            failSentInsert = false;
+            throw new Error('sent folder insert failed');
+          }
+          return pool.query(text, params);
+        },
+        connect: () => pool.connect(),
+      } as unknown as Pool;
+
+      const src = source(server);
+      const first = sourceContext();
+      first.db = failingDb;
+      first.log = (line) => logs.push(line);
+      await src.poll(first);
+
+      // The inbox was polled regardless — a lost Sent row is not a reason to
+      // sit on the mail.
+      expect(first.runs).toHaveLength(1);
+      expect(logs.some((line) => line.includes('[Gmail]/Sent Mail'))).toBe(true);
+      const after = await pool.query(
+        `select (select count(*)::int from email.folders where account_id = $1 and kind = 'sent') as sent,
+                (select folders_discovered_at from email.accounts where id = $1) as stamped`,
+        [accountId],
+      );
+      expect(after.rows[0].sent).toBe(0);
+      // Nothing was written down as done, so the next poll tries again.
+      expect(after.rows[0].stamped).toBeNull();
+
+      await src.poll(sourceContext());
+      expect(server.lists).toBe(2);
+      const { rows } = await pool.query(
+        `select f.name, f.kind, f.synced, a.folders_discovered_at is not null as stamped
+           from email.folders f join email.accounts a on a.id = f.account_id
+          where f.account_id = $1 and f.kind = 'sent'`,
+        [accountId],
+      );
+      expect(rows).toEqual([
+        { name: '[Gmail]/Sent Mail', kind: 'sent', synced: true, stamped: true },
+      ]);
+    });
+
+    it('discovers an account that already recorded another folder but has no Sent row', async () => {
+      // The state the old trigger could never leave: more than one folder row,
+      // so "this account has been listed" looked true, and no Sent row at all.
+      const server = serverWithSent();
+      server.mailbox('[Gmail]/All Mail').specialUse = '\\All';
+      await pool.query(
+        `insert into email.folders (account_id, name, kind, synced)
+         values ($1, 'INBOX', 'inbox', true), ($1, '[Gmail]/All Mail', 'other', false)`,
+        [accountId],
+      );
+
+      await source(server).poll(sourceContext());
+
+      const { rows } = await pool.query(
+        `select name, kind, synced from email.folders where account_id = $1 order by name`,
+        [accountId],
+      );
+      expect(rows).toEqual([
+        { name: '[Gmail]/All Mail', kind: 'other', synced: false },
+        { name: '[Gmail]/Sent Mail', kind: 'sent', synced: true },
+        { name: 'INBOX', kind: 'inbox', synced: true },
+      ]);
+      const { rows: account } = await pool.query(
+        `select folders_discovered_at is not null as stamped from email.accounts where id = $1`,
+        [accountId],
+      );
+      expect(account[0].stamped).toBe(true);
+    });
+
+    it('leaves discovery unrecorded, and keeps listing, while there is no Sent folder to find', async () => {
+      // A server with no Sent folder is a running state — but it is also the
+      // only way a Sent folder the owner creates later is ever noticed, so the
+      // stamp stays null and the listing repeats.
+      const server = new FakeImapServer();
+      server.mailbox('INBOX');
+      server.mailbox('Projects');
+      const src = source(server);
+      await src.poll(sourceContext());
+      const { rows: first } = await pool.query(
+        `select folders_discovered_at from email.accounts where id = $1`,
+        [accountId],
+      );
+      expect(first[0].folders_discovered_at).toBeNull();
+
+      server.mailbox('[Gmail]/Sent Mail').specialUse = '\\Sent';
+      await src.poll(sourceContext());
+      expect(server.lists).toBe(2);
+      const { rows } = await pool.query(
+        `select f.kind, a.folders_discovered_at is not null as stamped
+           from email.folders f join email.accounts a on a.id = f.account_id
+          where f.account_id = $1 and f.kind = 'sent'`,
+        [accountId],
+      );
+      expect(rows).toEqual([{ kind: 'sent', stamped: true }]);
     });
   });
 
@@ -754,11 +880,22 @@ suite('email threads (postgres + fake imap)', () => {
       from: string;
       direction: 'in' | 'out';
       uidvalidity?: number;
+      /** Who it was addressed to — what a participant count is counted over. */
+      to?: readonly string[];
     }): Promise<string> {
       const { rows } = await pool.query(
-        `insert into email.messages (account_id, folder_id, uidvalidity, uid, from_addr, direction)
-         values ($1, $2, $3, $4, $5, $6) returning id`,
-        [accountId, over.folderId, over.uidvalidity ?? 1, over.uid, over.from, over.direction],
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, from_addr, direction, to_addrs)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb) returning id`,
+        [
+          accountId,
+          over.folderId,
+          over.uidvalidity ?? 1,
+          over.uid,
+          over.from,
+          over.direction,
+          JSON.stringify(over.to ?? []),
+        ],
       );
       return String(rows[0].id);
     }
@@ -982,19 +1119,41 @@ suite('email threads (postgres + fake imap)', () => {
       expect(String(rowTie[0].last_message_id)).toBe(higherId);
     });
 
-    it('caps participants and adds uncapped incoming participants to conflict overflow', async () => {
+    it('caps the participants it stores, and counts the same people once however often they write', async () => {
       const [folder] = await twoFolders();
-      const id = await insertMessage({ folderId: folder, uid: 90, from: 'sender@example.test', direction: 'in' });
-      const participants = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
-      const first = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: id, subject: 'Crowd', participants: [...participants, participants[0]!], at: NOW, folderId: folder, uidValidity: 1, uid: 90, direction: 'in' });
+      const crowd = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
+      const id = await insertMessage({ folderId: folder, uid: 90, from: crowd[0]!, to: crowd, direction: 'in' });
+      const first = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: id, subject: 'Crowd', participants: [...crowd, crowd[0]!], at: NOW, folderId: folder, uidValidity: 1, uid: 90, direction: 'in' });
       expect(first.participants).toHaveLength(50);
-      expect(first.participantsOverflow).toBe(10);
+      expect(await participantsTotalOf(pool, first)).toBe(60);
 
-      const secondId = await insertMessage({ folderId: folder, uid: 91, from: 'next@example.test', direction: 'in' });
-      const newcomers = Array.from({ length: 60 }, (_, i) => `new-${i}@example.test`);
-      const second = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: secondId, subject: 'Crowd', participants: newcomers, at: NOW, folderId: folder, uidValidity: 1, uid: 91, direction: 'in' });
-      expect(second.participants).toHaveLength(50);
-      expect(second.participantsOverflow).toBe(70);
+      // The same sixty people again. A running counter used to add their
+      // overflow a second time and claim 70 more; a count over the messages
+      // cannot, because nobody new wrote.
+      const againId = await insertMessage({ folderId: folder, uid: 91, from: crowd[0]!, to: crowd, direction: 'in' });
+      const again = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: againId, subject: 'Crowd', participants: crowd, at: NOW, folderId: folder, uidValidity: 1, uid: 91, direction: 'in' });
+      expect(again.participants).toHaveLength(50);
+      expect(await participantsTotalOf(pool, again)).toBe(60);
+      const view = (await readThread.execute({ thread: again.id }, toolContext())) as any;
+      expect({ total: view.participantsTotal, more: view.participantsMore }).toEqual({
+        total: 60,
+        more: 10,
+      });
+    });
+
+    it('counts a partly overlapping recipient list as distinct people only', async () => {
+      const [folder] = await twoFolders();
+      const crowd = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
+      // Thirty of the sixty, plus ten who have not written before: seventy.
+      const overlapping = [...crowd.slice(0, 30), ...Array.from({ length: 10 }, (_, i) => `new-${i}@example.test`)];
+      const id = await insertMessage({ folderId: folder, uid: 92, from: crowd[0]!, to: crowd, direction: 'in' });
+      await joinThread(pool, { accountId, threadKey: '<overlap>', messageRowId: id, subject: 'Overlap', participants: crowd, at: NOW, folderId: folder, uidValidity: 1, uid: 92, direction: 'in' });
+      const nextId = await insertMessage({ folderId: folder, uid: 93, from: overlapping[0]!, to: overlapping, direction: 'in' });
+      const thread = await joinThread(pool, { accountId, threadKey: '<overlap>', messageRowId: nextId, subject: 'Overlap', participants: overlapping, at: NOW, folderId: folder, uidValidity: 1, uid: 93, direction: 'in' });
+      expect(thread.participants).toHaveLength(50);
+      expect(await participantsTotalOf(pool, thread)).toBe(70);
+      const totals = await participantsTotals(pool, [thread]);
+      expect(totals.get(thread.id)).toBe(70);
     });
   });
 
