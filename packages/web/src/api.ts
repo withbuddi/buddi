@@ -399,6 +399,45 @@ export interface EmailDraftRow {
   unresolved: boolean;
 }
 
+/** One attachment of a message: the listing, and where it went if fetched. */
+export interface EmailAttachment {
+  index: number;
+  filename: string | null;
+  mime: string;
+  sizeBytes: number;
+  /** The artifact it became, once somebody fetched it. Null until then. */
+  artifactId: string | null;
+}
+
+/** One search hit (docs/specs/email.md §9). Opens the conversation it is in. */
+export interface EmailSearchHit {
+  id: string;
+  threadId: string | null;
+  accountId: string;
+  direction: 'in' | 'out';
+  from: string;
+  subject: string;
+  date: string | null;
+  snippet: string;
+  hasAttachments: boolean;
+}
+
+export interface EmailSearchResult {
+  count: number;
+  messages: EmailSearchHit[];
+  /** Set when nothing narrowed the search and only 90 days were looked at. */
+  window?: string;
+}
+
+/** What the search field holds. Every field optional; at least one is needed. */
+export interface EmailSearchQuery {
+  q?: string;
+  from?: string;
+  since?: string;
+  until?: string;
+  hasAttachments?: boolean;
+}
+
 /** One message read in full, on request. */
 export interface EmailMessageBody {
   id: string;
@@ -411,6 +450,8 @@ export interface EmailMessageBody {
   /** Null once retention has purged it; the headers stay either way. */
   bodyText: string | null;
   purged: boolean;
+  /** Its attachments, by name and size. The bytes come on request.  */
+  attachments: EmailAttachment[];
 }
 
 export interface EmailThreadDetail {
@@ -1496,6 +1537,23 @@ export const api = {
   /** One message's body, fetched when it is opened. The list ships snippets. */
   emailMessage: (id: string) =>
     get<{ message: EmailMessageBody }>(`/email/messages/${encodeURIComponent(id)}`),
+  /* ---- search, and attachments on request (docs/specs/email.md §9, §10) ---- */
+  emailSearch: (query: EmailSearchQuery) =>
+    get<EmailSearchResult>('/email/search', {
+      ...(query.q ? { q: query.q } : {}),
+      ...(query.from ? { from: query.from } : {}),
+      ...(query.since ? { since: query.since } : {}),
+      ...(query.until ? { until: query.until } : {}),
+      ...(query.hasAttachments ? { hasAttachments: 'true' } : {}),
+    }),
+  /**
+   * Pull one attachment into the library. The owner is the one asking, so the
+   * file is recorded to them; the answer carries the artifact it became.
+   */
+  fetchEmailAttachment: (messageId: string, index: number) =>
+    post<{ artifactId: string | null; filename: string | null; mime: string; sizeBytes: number; alreadyHeld: boolean }>(
+      `/email/messages/${encodeURIComponent(messageId)}/attachments/${index}/fetch`,
+    ),
   /** The owner's own save. It makes the words theirs; no agent writes over them. */
   saveEmailDraft: (
     id: string,

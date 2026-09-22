@@ -25,6 +25,7 @@
  *    holds for the tools too.
  */
 import {
+  buildSearch,
   discardDraftRow,
   findThread,
   listAccounts,
@@ -36,8 +37,16 @@ import {
   DraftWriteConflict,
   DRAFT_COLUMNS,
   LIVE_DRAFT_STATUSES,
+  booleanFilter,
+  narrows,
   toDraft,
+  toSearchRow,
+  validateFilters,
+  windowNote,
+  type AttachmentInfo,
   type DraftRecord,
+  type SearchFilters,
+  type SearchRow,
   type ThreadRecord,
 } from '@buddi/tool-email';
 import type { ToolContext, ToolRegistry } from '@buddi/core';
@@ -61,6 +70,12 @@ export const MAX_DRAFT_BODY = 32_000;
 
 export interface EmailDraftsDeps {
   pool: Pool;
+  /**
+   * The owner's IANA zone. Search reads its day boundaries in it: "since
+   * 2026-03-01" is midnight where the owner lives, not midnight on the
+   * server, which on the bundled Postgres is UTC.
+   */
+  timezone: string;
   /** Needed only by Send: the registry that owns `email.send`. */
   registry?: ToolRegistry | undefined;
   /** The context a tool call runs with. Send needs it; nothing else does. */
@@ -249,7 +264,7 @@ export async function readEmailMessage(
 ): Promise<RouteReply> {
   const { rows } = await deps.pool.query(
     `select m.id, m.from_addr, m.to_addrs, m.cc, m.subject, m.date, m.direction,
-            m.body_text, m.body_purged_at
+            m.body_text, m.body_purged_at, m.attachments
        from email.messages m
        join email.accounts a on a.id = m.account_id
       where m.id = $1::uuid`,
@@ -272,6 +287,10 @@ export async function readEmailMessage(
         // not, and the page says so rather than drawing an empty message.
         bodyText: row.body_purged_at ? null : (row.body_text ?? ''),
         purged: row.body_purged_at !== null,
+        // The listing, not the bytes. Each row says whether somebody has
+        // already fetched it, so the page draws a link rather than a button
+        // for a file that is already in the library.
+        attachments: attachmentViews(row.attachments),
       },
     },
   };
@@ -490,4 +509,186 @@ export async function sendEmailDraft(deps: EmailDraftsDeps, id: string): Promise
     return { status: 400, body: { error: result.message } };
   }
   return { status: 200, body: { actionId: result.actionId, preview: result.preview } };
+}
+
+/* ------------------------------------------------------------------ *
+ * Search, and attachments on request (docs/specs/email.md §9, §10)
+ * ------------------------------------------------------------------ */
+
+/** How many hits the search field shows. The owner narrows rather than pages. */
+export const SEARCH_LIMIT = 30;
+
+/** One attachment as the page draws it: the listing, plus where it went. */
+export interface EmailAttachmentView {
+  index: number;
+  filename: string | null;
+  mime: string;
+  sizeBytes: number;
+  /** The artifact it became, once somebody fetched it. Null until then. */
+  artifactId: string | null;
+}
+
+export function attachmentViews(raw: unknown): EmailAttachmentView[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry, index) => {
+    const a = (entry ?? {}) as AttachmentInfo;
+    return {
+      index,
+      filename: a.filename ?? null,
+      mime: a.mime ?? 'application/octet-stream',
+      sizeBytes: Number(a.sizeBytes ?? 0),
+      artifactId: a.artifactId ?? null,
+    };
+  });
+}
+
+/** One search hit. Enough to recognise the message and open its conversation. */
+export interface EmailSearchHit {
+  id: string;
+  threadId: string | null;
+  accountId: string;
+  direction: 'in' | 'out';
+  from: string;
+  subject: string;
+  date: string | null;
+  snippet: string;
+  hasAttachments: boolean;
+}
+
+/**
+ * The owner's search over their own mail.
+ *
+ * The WHERE clause is `buildSearch` — the same builder `email.search` uses —
+ * on purpose and not for tidiness: the owner and their agents have to be able
+ * to say the same thing and get the same answer, and "from this domain, with
+ * an attachment, since March" is a sentence with enough corners in it
+ * (subdomains, the whole of the last day, which clock a date is against) that
+ * a second implementation would disagree with the first within a month.
+ *
+ * The snippet is **not** fenced here as it is in the tool: this answer is read
+ * by a browser and drawn as text, never by a model, and a page full of
+ * `<<<QUOTED MAIL>>>` markers would be noise with no reader.
+ */
+export async function searchEmail(
+  deps: EmailDraftsDeps,
+  params: {
+    q?: string | undefined;
+    from?: string | undefined;
+    since?: string | undefined;
+    until?: string | undefined;
+    thread?: string | undefined;
+    direction?: string | undefined;
+    /** Raw, as it came off the query string: `true`, `false`, or a refusal. */
+    hasAttachments?: string | undefined;
+    accountId?: string | undefined;
+    limit?: number | undefined;
+  },
+): Promise<RouteReply> {
+  const attachments = booleanFilter('hasAttachments', params.hasAttachments);
+  if (!attachments.ok) return { status: 400, body: { error: attachments.message } };
+  const filters: SearchFilters = {
+    ...(params.q && params.q.trim() !== '' ? { query: params.q.trim() } : {}),
+    ...(params.from && params.from.trim() !== '' ? { from: params.from.trim() } : {}),
+    ...(params.since && params.since !== '' ? { since: params.since } : {}),
+    ...(params.until && params.until !== '' ? { until: params.until } : {}),
+    ...(params.thread && params.thread !== '' ? { thread: params.thread } : {}),
+    ...(params.direction && params.direction !== ''
+      ? { direction: params.direction as SearchFilters['direction'] }
+      : {}),
+    ...(attachments.value !== undefined ? { hasAttachments: attachments.value } : {}),
+  };
+  /*
+   * The same check the tool makes, from the same function. A malformed
+   * argument is a sentence the owner can read and act on; it used to be a
+   * `22P02` raised inside `pool.query` on its way to becoming a blank 500.
+   */
+  const wrong = validateFilters(filters);
+  if (wrong) return { status: 400, body: { error: wrong } };
+  if ((filters.query ?? '') === '' && !narrows(filters)) {
+    return {
+      status: 400,
+      body: { error: 'Type something to search for, or set one of the filters.' },
+    };
+  }
+
+  const accounts = await listAccounts(deps.pool, { enabledOnly: false });
+  const ids = (params.accountId ? accounts.filter((a) => a.id === params.accountId) : accounts).map(
+    (a) => a.id,
+  );
+  if (ids.length === 0) return { status: 200, body: { messages: [], count: 0 } };
+
+  const built = buildSearch(ids, filters, {
+    now: deps.now(),
+    timezone: deps.timezone,
+    limit: Math.min(Math.max(1, params.limit ?? SEARCH_LIMIT), 100),
+  });
+  const { rows } = await deps.pool.query(built.text, built.params);
+  const messages: EmailSearchHit[] = rows.map(toSearchRow).map((m: SearchRow) => ({
+    id: m.id,
+    threadId: m.threadId,
+    accountId: m.accountId,
+    direction: m.direction,
+    from: m.from,
+    subject: m.subject,
+    date: m.date,
+    snippet: m.snippet,
+    hasAttachments: m.hasAttachments,
+  }));
+  return {
+    status: 200,
+    body: {
+      count: messages.length,
+      messages,
+      ...(built.windowed && built.windowFrom ? { window: windowNote(built.windowFrom) } : {}),
+    },
+  };
+}
+
+/**
+ * Fetch one attachment into the library.
+ *
+ * It goes through `registry.invoke('email.fetch_attachment')` rather than
+ * doing the IMAP work here, for the same reason Send goes through the
+ * registry: there is one implementation of what fetching an attachment means —
+ * the uidvalidity check, the 25 MB cap, the refusal of executables, the
+ * content-addressed save — and a second one written for the page would be the
+ * one that forgets a rule. The owner is the agent of record, so the artifact
+ * is theirs.
+ */
+export async function fetchEmailAttachment(
+  deps: EmailDraftsDeps,
+  messageId: string,
+  index: number,
+): Promise<RouteReply> {
+  if (!deps.registry || !deps.ctx) {
+    return { status: 503, body: { error: 'This process cannot fetch attachments.' } };
+  }
+  const result = await deps.registry.invoke(
+    'email.fetch_attachment',
+    { message: messageId, index },
+    { ...deps.ctx, agentId: 'owner' },
+  );
+  if (!result.ok) {
+    // Every refusal this tool makes is a sentence written for a person — too
+    // big, a program, no longer on the server — so it is handed over as it is
+    // rather than flattened into "could not fetch".
+    return { status: 400, body: { error: result.message } };
+  }
+  const output = result.output as {
+    artifacts: Array<{ id: string }>;
+    filename: string | null;
+    mime: string;
+    sizeBytes: number;
+    alreadyHeld: boolean;
+  };
+  return {
+    status: 200,
+    body: {
+      artifactId: output.artifacts[0]?.id ?? null,
+      filename: output.filename,
+      mime: output.mime,
+      sizeBytes: output.sizeBytes,
+      alreadyHeld: output.alreadyHeld,
+    },
+  };
 }

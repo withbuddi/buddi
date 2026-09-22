@@ -80,11 +80,13 @@ import {
 } from './email.js';
 import {
   discardEmailDraft,
+  fetchEmailAttachment,
   readEmailDraft,
   readEmailDrafts,
   readEmailMessage,
   readEmailThread,
   readEmailThreads,
+  searchEmail,
   sendEmailDraft,
   writeEmailDraft,
   type EmailDraftsDeps,
@@ -782,6 +784,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       pool: deps.pool,
       registry: deps.registry,
       ctx: deps.ctx,
+      // Search reads its day boundaries in the owner's zone, not the server's.
+      timezone: deps.timezone,
       now: deps.now,
     });
     /** What the two Telegram routes need. The environment is the live one. */
@@ -1110,6 +1114,27 @@ export function createWebApp(deps: WebServerDeps): Server {
           const account = q.get('account');
           const view = await readEmailThreads(draftDeps(), {
             ...(account && account.trim() !== '' ? { accountId: account.trim() } : {}),
+          });
+          return sendJson(res, view.status, view.body);
+        }
+        /*
+         * The search field above the conversation list (docs/specs/email.md
+         * §9). Same query builder as `email.search`, so the owner and their
+         * agents ask the same question of the same table.
+         */
+        case '/api/email/search': {
+          // Every value goes through as it arrived: `searchEmail` validates
+          // them with the same function the tool uses, so a malformed one is
+          // a sentence rather than something quietly dropped.
+          const view = await searchEmail(draftDeps(), {
+            q: q.get('q') ?? undefined,
+            from: q.get('from') ?? undefined,
+            since: q.get('since') ?? undefined,
+            until: q.get('until') ?? undefined,
+            thread: q.get('thread') ?? undefined,
+            direction: q.get('direction') ?? undefined,
+            hasAttachments: q.get('hasAttachments') ?? undefined,
+            ...(q.get('account') ? { accountId: (q.get('account') as string).trim() } : {}),
           });
           return sendJson(res, view.status, view.body);
         }
@@ -2242,6 +2267,25 @@ export function createWebApp(deps: WebServerDeps): Server {
     const draftDiscard = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/discard$/i.exec(path);
     if (draftDiscard) {
       const view = await discardEmailDraft(draftDeps(), draftDiscard[1] as string);
+      return sendJson(res, view.status, view.body);
+    }
+    /*
+     * One attachment, into the library (docs/specs/email.md §10). It proposes
+     * nothing and approves nothing: `email.fetch_attachment` is tier `auto`,
+     * and this route is the owner asking for a file their own server already
+     * delivered. The tool does the refusing — size, executables, mail that is
+     * no longer there — and its sentence is what comes back.
+     */
+    const attachmentFetch =
+      /^\/api\/email\/messages\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/attachments\/(\d{1,3})\/fetch$/i.exec(
+        path,
+      );
+    if (attachmentFetch) {
+      const view = await fetchEmailAttachment(
+        draftDeps(),
+        attachmentFetch[1] as string,
+        Number(attachmentFetch[2]),
+      );
       return sendJson(res, view.status, view.body);
     }
     const draftSend = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/send$/i.exec(path);

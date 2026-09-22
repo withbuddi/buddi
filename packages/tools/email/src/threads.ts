@@ -395,6 +395,25 @@ export interface ListThreadsFilter {
   accountIds: readonly string[];
   state?: ThreadState | undefined;
   participant?: string | undefined;
+  /**
+   * The date window, as YYYY-MM-DD days, against `last_at` — when the
+   * conversation last moved.
+   *
+   * `email.search` windows on each message's own clock; a thread has no single
+   * date, and the one a caller means when they say "conversations since March"
+   * is the one that says whether it is still alive. `first_at` would answer a
+   * different question (when it began) and would hide a five-year-old thread
+   * somebody replied to this morning.
+   */
+  since?: string | undefined;
+  until?: string | undefined;
+  /**
+   * The owner's IANA zone, in which those two days are read. Without it
+   * `$n::date` is resolved against the *session* TimeZone — UTC on the
+   * bundled server — and "since 1 March" starts eight hours late in
+   * Los Angeles and thirteen hours early in Auckland.
+   */
+  timezone?: string | undefined;
   limit: number;
 }
 
@@ -412,6 +431,19 @@ export async function listThreadRows(
   if (filter.participant) {
     params.push(JSON.stringify([filter.participant]));
     where.push(`participants @> $${params.length}::jsonb`);
+  }
+  if (filter.since || filter.until) {
+    params.push(filter.timezone ?? 'UTC');
+    const tz = params.length;
+    if (filter.since) {
+      params.push(filter.since);
+      where.push(`last_at >= ($${params.length}::date::timestamp at time zone $${tz})`);
+    }
+    if (filter.until) {
+      params.push(filter.until);
+      // The whole of the day named, not the instant it began.
+      where.push(`last_at < (($${params.length}::date + interval '1 day') at time zone $${tz})`);
+    }
   }
   params.push(filter.limit);
   const { rows } = await db.query(

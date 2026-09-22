@@ -345,6 +345,11 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
         listMailboxes: real.listMailboxes.bind(real),
         open: () => new Promise<never>(() => {}),
         fetchSince: real.fetchSince.bind(real),
+        // The two attachment methods the port gained in step 6b: delegation,
+        // since this stub is about the timeout on `open`/`fetchSince`.
+        listAttachments: (name: string, uid: number) => real.listAttachments(name, uid),
+        downloadAttachment: (name: string, uid: number, part: string, max: number) =>
+          real.downloadAttachment(name, uid, part, max),
         close: async () => {
           closed += 1;
           await real.close();
@@ -376,6 +381,11 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
         listMailboxes: real.listMailboxes.bind(real),
         open: real.open.bind(real),
         fetchSince: real.fetchSince.bind(real),
+        // The two attachment methods the port gained in step 6b: delegation,
+        // since this stub is about the timeout on `open`/`fetchSince`.
+        listAttachments: (name: string, uid: number) => real.listAttachments(name, uid),
+        downloadAttachment: (name: string, uid: number, part: string, max: number) =>
+          real.downloadAttachment(name, uid, part, max),
         close: async () => {
           closed += 1;
           await real.close();

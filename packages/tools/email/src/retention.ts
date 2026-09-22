@@ -97,9 +97,22 @@ export function purgeLogLine(outcome: PurgeOutcome): string {
  * twice in a minute purges nothing the second time — and the batch keeps one
  * pass over a decade of mail from being one enormous statement.
  *
- * Attachments are listings only (filename, mime, size — the bytes were never
- * ingested), so there is no attachment *content* to purge; the listing is
- * header-shaped and is kept like the headers.
+ * ## Attachments are not touched, and that is deliberate
+ *
+ * The stored listing (filename, mime, size, the body part, the artifact id) is
+ * header-shaped and is kept like the headers. The *bytes* were never ingested,
+ * so for a message nobody fetched anything from there is nothing to purge at
+ * all.
+ *
+ * And when somebody did fetch one — `email.fetch_attachment`, §10 — the file
+ * that came back is an **artifact**, not a piece of this message. It is in the
+ * owner's library beside everything else they or their agents made, it has its
+ * own row, its own download link and possibly a finance report built on top of
+ * it. A mail retention window is a statement about how long buddi keeps the
+ * bulky, attacker-controlled text of somebody else's letters; it is not a
+ * statement about the owner's own invoice. So this pass never deletes an
+ * artifact and never clears the `artifactId` that points at one: the body goes,
+ * the file stays, and the row still says which file it was.
  */
 export async function purgeBodies(
   db: Pool,
