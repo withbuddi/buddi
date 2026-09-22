@@ -1,7 +1,6 @@
 # Groups: a team of agents in one conversation
 
-Status: implementation contract, agreed 2026-09-20. First version built on the
-`groups` branch the same day; see *What the first version does* at the end.
+Status: reference, 2026-09-21
 
 A group is a persistent conversation with a chosen team of agents. You create
 "Household finances", add Concierge, Ledger and Finance Advisor, and say
