@@ -23,6 +23,7 @@ import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolCont
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery } from './pages.js';
 import type { HomeContribution } from './home.js';
+import { parseMetrics, type RegisteredMetric } from './metrics.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -255,6 +256,8 @@ export class ToolRegistry {
   readonly #pages = new Map<string, PageDescriptor[]>();
   readonly #queries = new Map<string, PageQuery[]>();
   readonly #pageTools = new Map<string, Set<string>>();
+  /** Per plugin, the metrics `parseMetrics` checked and made strict. */
+  readonly #metrics = new Map<string, RegisteredMetric[]>();
 
   register(manifest: PluginManifest): void {
     if (this.#manifests.has(manifest.name)) {
@@ -308,7 +311,20 @@ export class ToolRegistry {
             tools: manifest.tools.map((t) => t.name),
           })
         : undefined;
+    /*
+     * Metrics are checked here for the same reason pages are: a goal set on a
+     * badly declared metric is a thing that fails silently on a Tuesday six
+     * weeks from now, and the only moment the plugin can still be named is
+     * this one. Nothing is stored until every one of them has passed.
+     */
+    const metrics =
+      manifest.metrics === undefined
+        ? undefined
+        : parseMetrics(manifest.name, manifest.metrics, (id) =>
+            [...this.#metrics.values()].some((list) => list.some((m) => m.id === id)),
+          );
     this.#manifests.set(manifest.name, manifest);
+    if (metrics) this.#metrics.set(manifest.name, metrics);
     if (contributions) {
       this.#pages.set(manifest.name, contributions.pages);
       this.#queries.set(manifest.name, contributions.queries);
@@ -389,6 +405,25 @@ export class ToolRegistry {
   /** Every Home block the installed plugins contribute, in registration order. */
   home(): HomeContribution[] {
     return [...this.#manifests.values()].flatMap((m) => m.home ?? []);
+  }
+
+  /**
+   * Every metric the installed plugins contribute, each carrying its plugin,
+   * in registration order. The model of `home()`: this is what `goal.metrics`
+   * lists, so an installation with no finance plugin offers no debt to watch
+   * and no agent has any idea one could exist.
+   */
+  metrics(): RegisteredMetric[] {
+    return [...this.#metrics.values()].flat();
+  }
+
+  /** One metric by its namespaced id, or undefined. What `measureMetric` asks. */
+  metric(id: string): RegisteredMetric | undefined {
+    for (const list of this.#metrics.values()) {
+      const found = list.find((m) => m.id === id);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   has(name: string): boolean {

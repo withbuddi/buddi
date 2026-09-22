@@ -615,6 +615,9 @@ export async function main(): Promise<void> {
         // this tick: an agent given the role at lunchtime speaks this
         // afternoon, with no restart.
         sentinelAgentForRole(wiring.catalog),
+        // The same owner every other part of this process runs as: core's
+        // goal watcher builds a ToolContext from it to measure a metric.
+        wiring.ctx.ownerId,
       );
       for (const outcome of outcomes) {
         if (!outcome.ran) continue;

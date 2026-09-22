@@ -259,6 +259,7 @@ export interface PluginManifest {
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
   home?: HomeContribution[];  // read-only blocks on the dashboard's Home page
+  metrics?: MetricDefinition[];  // numbers a GOAL can watch — see §2.3a
   pages?: PageDescriptor[];   // screens of your own: a rail place, a settings tab
   queries?: PageQuery[];      // the read-only functions those screens draw from
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
@@ -673,6 +674,53 @@ Two more things that hold in practice:
   `projectCashflow.execute` instead of writing its own projection, so the
   sentinel and the agent can never quote the owner two different numbers for the
   same week.
+
+### 2.3a A number a goal can watch
+
+A **goal** is core's object: a target, a deadline, an agent that holds it, and
+a rhythm of checks that runs whether or not anybody is talking to buddi
+(`docs/specs/goals.md`). What can be *measured* is not core's: it comes from
+here.
+
+```ts
+export interface MetricDefinition {
+  id: string;            // 'finance.total_debt' — namespaced under your plugin
+  description: string;   // a sentence an agent reads before naming it
+  unit: 'number' | 'currency' | 'percent' | 'count' | 'minutes';
+  direction: 'down' | 'up';   // which way is better
+  params?: z.ZodObject<any>;  // optional narrowing, made strict for you
+  measure(params: unknown, ctx: ToolContext): Promise<{
+    value: number; currency?: string; asOf: Date; note?: string;
+  } | null>;
+}
+```
+
+Three things to know before you write one:
+
+- **It only reads.** `measure` is always handed a context whose `db` is the
+  read-only pool — the same Postgres read-only transaction a page query runs
+  in (§2.5b) — so it cannot write even through a volatile function of your
+  own. Nothing you do gets you a writable pool here, and nothing needs to: a
+  metric answers a number.
+- **`null` is an answer, not a failure.** "No data yet", "the account has not
+  synced", "the thing this counts does not exist here": return `null` and the
+  check records *not measurable* with your `note`, and the goal shows "not
+  measured since …" rather than a made-up figure. A `measure` that throws is
+  treated the same way, with the message kept as the note — one plugin's bad
+  afternoon must not stop the other eleven goals being checked.
+- **The holder is the agent in `ctx`.** `ctx.agentId` is whichever agent holds
+  the goal being checked, not the owner, so a metric that scopes to an agent
+  scopes to the right one. `ctx.ownerId` and `ctx.timezone` are the
+  installation's, as everywhere else.
+
+Ids are validated at `register()`: `<your plugin>.<name>`, lowercase, unique
+across the installation, `unit` and `direction` in the enums, and `params` an
+object schema, which core makes strict for you. A bad one is a startup error
+naming your plugin, not a goal that quietly stops being checked six weeks
+later.
+
+Agents see your metrics through `goal.metrics` and nowhere else, and an
+installation without your plugin has no idea the number could exist.
 
 ### 2.4 Suggested missions
 
@@ -2288,6 +2336,7 @@ this says what it is *for*.
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
+| `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
@@ -2418,9 +2467,21 @@ than guess.
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
 | `db` | `Pool` | yes | The pool. |
+| `ownerId` | `string` | yes | The owner this installation belongs to. A sentinel that only reads its own rows never needs it; one that calls something written for a *tool* does — `measureMetric` takes a `ToolContext`, and a `ToolContext` has an owner. |
 | `now` | `() => Date` | yes | The clock. |
 | `timezone` | `string` | yes | The owner's IANA zone, for a sentinel that needs a *day*. |
 | `agentForRole` | `(role: string) => string \| undefined` | yes | The id of the agent that answers for a role — the first *runnable* agent holding it in roster order, held-back and unbound agents skipped — or `undefined` when nobody does. The only supported way to address a finding. |
+
+#### `MetricDefinition`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | Namespaced under your plugin and stable: `finance.total_debt`. Lowercase, `<plugin>.<name>`, unique across the installation; checked at `register()`. |
+| `description` | `string` | yes | A sentence: "Everything you owe across cards and loans, in your currency." It is what an agent reads before naming it in a goal. |
+| `unit` | `MetricUnit` | yes | `'number' \| 'currency' \| 'percent' \| 'count' \| 'minutes'`. It decides how the goal's numbers are rendered on the card and in the wake. |
+| `direction` | `MetricDirection` | yes | `'down'` or `'up'`: which way is better. A goal's target, its milestones and "on track" are all checked against it. |
+| `params` | `z.ZodObject<any>` | no | Optional narrowing — `{ account?: string }`. Core makes it strict, so unknown keys are refused by the framework and not by you remembering `.strict()`. |
+| `measure` | `(params, ctx) => Promise<{value, currency?, asOf, note?} \| null>` | yes | The value now, under the read-only pool, as the goal's holder. `null` means "cannot measure right now"; a throw is treated the same way, with the message kept as the check's note. |
 
 #### `Finding`
 
@@ -2431,6 +2492,7 @@ than guess.
 | `title` | `string` | yes | One line. |
 | `detail` | `string` | yes | The evidence, in prose the owner can act on. |
 | `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
+| `wake` | `boolean` | no | An `info` finding that wakes its agent **once**, when it is first raised, instead of taking a digest line. For good news with a short shelf life — a milestone crossed, a target reached. Every later fire of that key behaves like any other `info`. Ignored on `urgent`, which already wakes. |
 | `data` | `unknown` | no | Structured evidence, handed to that agent verbatim. |
 
 ### Suggestions

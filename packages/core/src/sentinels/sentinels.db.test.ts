@@ -227,6 +227,70 @@ suite('sentinels (postgres)', () => {
     });
   });
 
+  describe('an info finding that asks to wake once', () => {
+    const once: Finding = { ...info, key: 'goal.g-1.milestone.-10000', wake: true };
+
+    it('wakes on the first raise instead of taking a digest line', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[once]]));
+
+      const [outcome] = await runSentinels(pool, manifests, T0, 'UTC');
+      expect(outcome?.fired).toBe(1);
+
+      const queued = await wakes();
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.payload.finding).toMatchObject({ key: once.key, severity: 'info' });
+      // Instead of, not as well as: the owner is not told the same good news
+      // twice, once on the phone and again on Sunday.
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+      expect((await getFinding(pool, once.key))?.cooldownUntil?.getTime()).toBe(
+        T0.getTime() + INFO_COOLDOWN_MS,
+      );
+    });
+
+    it('wakes once and once only — the same fact is the same fact', async () => {
+      await wakeMission();
+      const manifests = pluginWith(scripted('w', [[once]]));
+
+      await runSentinels(pool, manifests, T0, 'UTC');
+      await runSentinels(pool, manifests, at(60_000), 'UTC');
+      expect(await wakes()).toHaveLength(1);
+
+      // Past the info cooldown it speaks again, and now it is ordinary news.
+      const [outcome] = await runSentinels(pool, manifests, at(INFO_COOLDOWN_MS + 1), 'UTC');
+      expect(outcome?.fired).toBe(1);
+      expect(await wakes()).toHaveLength(1);
+      expect(await pendingDigestItems(pool)).toHaveLength(1);
+    });
+
+    it('is ignored on an urgent finding, which already wakes', async () => {
+      await wakeMission();
+      await runSentinels(pool, pluginWith(scripted('w', [[{ ...urgent, wake: true }]])), T0, 'UTC');
+      expect(await wakes()).toHaveLength(1);
+      expect((await getFinding(pool, urgent.key))?.cooldownUntil?.getTime()).toBe(
+        T0.getTime() + URGENT_COOLDOWN_MS,
+      );
+    });
+  });
+
+  describe('the owner id a sentinel is given', () => {
+    it('is core‘s own by default, and whatever the host passes otherwise', async () => {
+      const seen: string[] = [];
+      const watcher: Sentinel = {
+        id: 'owner-watcher',
+        description: 'records the owner it was run for',
+        every: 60,
+        async run(ctx) {
+          seen.push(ctx.ownerId);
+          return [];
+        },
+      };
+      await runSentinels(pool, pluginWith(watcher), T0, 'UTC');
+      await runSentinels(pool, pluginWith(watcher), at(60_000), 'UTC', () => undefined, 'someone-else');
+      expect(seen).toEqual(['owner', 'someone-else']);
+    });
+  });
+
   describe('resolution', () => {
     it('marks a finding resolved when the sentinel stops reporting it', async () => {
       await wakeMission();

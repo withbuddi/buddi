@@ -1,6 +1,7 @@
 # Goals: a target with a clock, that buddi keeps
 
-Status: specified 2026-09-22, not started. Core feature, agent-neutral: any
+Status: step 1 built 2026-09-22 (metrics, tables, tools, sentinel, docs).
+Steps 2 and 3 not started. Core feature, agent-neutral: any
 agent with a metric can hold a goal, and the finance plugin is only the first
 plugin to declare one.
 
@@ -92,6 +93,11 @@ interface Goal {
 Tables in core: `core.goals`, `core.goal_checks (goal_id, at, value, note,
 onTrack boolean, paceNeeded numeric, projected numeric)`, migration 037.
 
+As built, a check also carries `currency` — a currency metric's number means
+nothing without it, and the wake is rendered from the check row alone.
+`milestones` are on the target's own scale: deltas when the target is a delta
+(which is how §8 writes them), absolutes when it is absolute.
+
 ## 5. Tools
 
 - `goal.metrics` (auto): the metrics this installation can measure, with
@@ -110,6 +116,22 @@ onTrack boolean, paceNeeded numeric, projected numeric)`, migration 037.
 - `goal.list` (auto): every open goal, any holder (read).
 
 An agent that is not the holder gets `goal.list`/`goal.status` only.
+
+As built: a gated tool is gated on every call (the registry refuses a `tierFor`
+that narrows it), so every refusal before the card — a delegate, a deadline in
+the past, a metric nobody installed, a metric that cannot be measured — is a
+throw out of `describe`, which runs before any action exists. Nothing is
+recorded and the model is handed the sentence.
+
+"The baseline the owner saw is the baseline stored" is the platform's own rule
+rather than a copy kept aside: the executor re-describes before it dispatches
+and refuses anything that changed (`effect-changed`), so a number that moved
+between the card and the yes voids the approval and the agent proposes again.
+The envelope's `baseline.asOf` is the description clock, not the reading's own
+`asOf` — the executor freezes that clock at the action's creation, and a metric
+that answers `asOf: new Date()`, which is the obvious way to write one, would
+otherwise void every approval a second after it was made. The reading's own
+`asOf` is kept on the first check row instead.
 
 ## 6. The check
 
@@ -138,6 +160,17 @@ Findings, keyed per goal and per event so each is one fact that resolves:
 The wake prompt carries the goal, the last four checks and the instruction:
 verify with your own tools, then report or propose a change through
 `goal.update`; never change the goal silently.
+
+As built, "due" has a four-hour margin — no check in the last 20 h (daily) or
+6 d 20 h (weekly) — because a strict 24 h makes a goal checked at 09:04 slip
+an hour every day until a morning goal is a midnight one. The cost is that a
+daily goal *can* take two checks in one calendar day, so §2's "one check per
+goal per day at most" is a near-miss rather than an invariant; it is one extra
+row and never a second wake, because findings dedup by key. `Finding.wake` is
+the new core field that makes the "yes, once" column work: an `info` finding
+that wakes its agent on its first raise instead of taking a digest line. The
+milestone event is keyed per milestone (`goal.<id>.milestone.<n>`), since one
+key per goal could only ever fire once for the whole list.
 
 ## 7. Where it shows
 
@@ -188,7 +221,10 @@ stated as such).
 
 1. Core: metrics contribution, `core.goals` tables, the tools with cards,
    the sentinel and its findings, the wake prompt, docs (`docs/plugins.md`
-   gains `metrics`), tests. (2 days)
+   gains `metrics`), tests. (2 days) — **built**. The tools live in
+   `packages/gateway/src/missions/goals.ts`, beside the reminder and schedule
+   manifests, for the same reason they do: nothing there owns a schema, and
+   `createGoalManifest` takes the registry because a goal watches a metric.
 2. Home block, Goals page, chat view, Telegram parity. (1 day)
 3. Metrics in finance (`total_debt`, `card_balance`, `cash_available`) and
    email (`inbox_unread`, `waiting_on_me`); the developer plugin's
