@@ -48,7 +48,9 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-Nothing at the moment; the next item below is the developer plugin.
+- [Plugin pages](specs/plugin-pages.md) — a plugin's screens as data: rail
+  entries and settings tabs from descriptors, reads as queries, writes as
+  tools. The proof is porting Mail and Settings → Email to it.
 
 ## Next, in order
 
