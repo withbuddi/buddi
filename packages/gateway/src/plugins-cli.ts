@@ -47,7 +47,7 @@ import {
   recordFile,
   type LoadedPlugins,
 } from './plugins/load.js';
-import { InstallRefusal, renderAgentDrift } from './plugins/install.js';
+import { acceptAgentSteps, InstallRefusal, renderAgentDrift } from './plugins/install.js';
 import { applyUninstall, planUninstall, UninstallRefusal } from './plugins/uninstall.js';
 import { approveStaged } from './plugins/approve.js';
 import {
@@ -469,13 +469,10 @@ async function approveAndReport(
   console.log('');
   console.log('Its tools are registered the next time a buddi process starts. If `buddi serve` is');
   console.log('running, restart it: `buddi service restart`.');
-  if (outcome.plan.contribution.agents.length > 0) {
+  const steps = acceptAgentSteps(outcome.record.name, outcome.plan.contribution.agents);
+  if (steps.length > 0) {
     console.log('');
-    console.log('It proposes agents. Nothing was created — ask your agent for one by name, for example:');
-    for (const agent of outcome.plan.contribution.agents) {
-      console.log(`  "accept the ${agent.id} agent from the ${outcome.record.name} plugin"`);
-    }
-    console.log('You will be shown the whole tool grant and asked to approve it.');
+    for (const line of steps) console.log(line);
   }
   if (outcome.plan.contribution.missions.length > 0) {
     console.log('');

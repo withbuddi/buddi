@@ -27,6 +27,7 @@ import { pipeline } from 'node:stream/promises';
 import type { Pool } from 'pg';
 import {
   contributionOf,
+  OWNER_AGENT_ID,
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
@@ -36,14 +37,16 @@ import { agentSearchPath, AGENTS_DIR, builtInManifests, installedManifests } fro
 import { CANVAS_PLUGIN } from '../agents/canvas.js';
 import { AGENT_PLUGIN } from '../agents/delegation.js';
 import { OWNER_PLUGIN } from '../agents/owner-tools.js';
-import { PLATFORM_PLUGIN } from '../agents/platform.js';
+import { PLATFORM_PLUGIN, pluginAgentProposals } from '../agents/platform.js';
 import { REMINDER_PLUGIN, SCHEDULE_PLUGIN } from '../missions/reminders.js';
 import { SYSTEM_PLUGIN } from '../system-context.js';
 import * as engine from '../plugins/index.js';
+import { acceptAgentSteps } from '../plugins/install.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
 import { RECORD_ITSELF } from '../plugins/load.js';
 import { incomingRoot } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
+import type { PagesDeps } from './pages.js';
 
 /** A refusal in the shape the router sends. Same contract as `backups.ts`. */
 export interface RouteReply {
@@ -580,6 +583,8 @@ export async function approveRoute(
         installed: outcome.record,
         restartNeeded: true,
         migrations: outcome.migrations,
+        // The same lines the CLI prints: what was proposed, and who to ask.
+        nextSteps: acceptAgentSteps(outcome.record.name, outcome.plan.contribution?.agents ?? []),
         ...(outcome.migrationProblem === undefined ? {} : { migrationProblem: outcome.migrationProblem }),
       },
     };
@@ -669,4 +674,48 @@ export async function uninstallRoute(
   } catch (err) {
     return refusalReply(err);
   }
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Accepting an agent a plugin proposes
+ * ------------------------------------------------------------------ */
+
+/**
+ * `POST /api/plugins/<name>/agents/<id>/accept` — the owner accepting a
+ * proposal from the page that told them it exists.
+ *
+ * Reading "1 agent proposed" and then being told to go and say a sentence to
+ * another agent is an instruction, not a button, and most owners never
+ * followed it. So the button is here, and it does exactly what the sentence
+ * did: `platform.accept_plugin_agent`, invoked as the owner, which is gated
+ * and therefore records the same immutable action an agent's call would. The
+ * page draws the approval card in place and the owner approves it there —
+ * there is no path here that writes an agent file without that.
+ *
+ * Nothing about the account is sent: with no agent of its own behind it, the
+ * tool falls back to where the default agent speaks, which is what this page
+ * would have had to look up anyway.
+ */
+export async function acceptAgentRoute(
+  deps: PagesDeps,
+  plugin: string,
+  agentId: string,
+): Promise<RouteReply> {
+  const proposal = pluginAgentProposals(deps.registry).find(
+    (p) => p.plugin === plugin && p.agent.id.toLowerCase() === agentId.toLowerCase(),
+  );
+  if (!proposal) {
+    return { status: 404, body: { error: `No installed plugin proposes an agent "${agentId}" under "${plugin}".` } };
+  }
+  const result = await deps.registry.invoke(
+    'platform.accept_plugin_agent',
+    { plugin: proposal.plugin, agent: proposal.agent.id },
+    { ...deps.ctx, agentId: OWNER_AGENT_ID, now: deps.now },
+  );
+  if (result.ok) return { status: 200, body: { result: result.output } };
+  if (result.reason === 'approval-required') {
+    return { status: 200, body: { approvalId: result.actionId, preview: result.preview } };
+  }
+  return { status: result.reason === 'unknown-tool' ? 404 : 400, body: { error: result.message } };
 }

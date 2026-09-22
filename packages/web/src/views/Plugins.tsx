@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ApiError,
   api,
+  type ApprovalRow,
   type BuiltInPluginView,
   type InstalledPluginView,
   type PluginJob,
@@ -42,10 +43,12 @@ import {
   Panel,
   Pill,
   Section,
+  Spacer,
   Stack,
   Toolbar,
   useAsync,
 } from '../ui';
+import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 
 /** How often a running stage is asked where it has got to. */
 const JOB_POLL_MS = 1_500;
@@ -662,32 +665,91 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
  * One installed plugin
  * ------------------------------------------------------------------ */
 
-/** The agents a plugin proposes, and where the owner's copy stands. */
-function Unlocks({ unlocks }: { unlocks: PluginUnlock[] }): JSX.Element | null {
+/**
+ * The agents a plugin proposes, and where the owner's copy stands.
+ *
+ * `plugin` is the installed plugin's name, and it is what makes each row
+ * actionable: a staged package proposes agents too, but nothing of it is
+ * installed yet, so there those rows are a list and nothing more.
+ */
+function Unlocks({ plugin, unlocks }: { plugin?: string; unlocks: PluginUnlock[] }): JSX.Element | null {
   if (unlocks.length === 0) return null;
   return (
     <Section title="Agents it would unlock">
-      <Stack gap="sm">
-        <KV
-          items={unlocks.map((unlock) => ({
-            key: unlock.id,
-            label: <span className="mono">@{unlock.handle}</span>,
-            value: (
-              <span>
-                <Pill tone={unlock.drift.state === 'up-to-date' ? 'good' : 'warning'}>{unlock.drift.state}</Pill>{' '}
-                {unlock.drift.message}
-              </span>
-            ),
-          }))}
-        />
-        {/* Accepting one is an approval with the whole grant in front of you,
-            and that happens where every other agent decision happens. */}
+      <Stack gap="sm" divided>
+        {unlocks.map((unlock) => (
+          <Unlock key={unlock.id} plugin={plugin} unlock={unlock} />
+        ))}
+        {/* Accepting one is an approval with the whole grant in front of you.
+            It can happen here now, and it still happens on the Agents page. */}
         <p className="ui-card-meta">
-          Nothing here is created by installing. <a href={AGENTS_ROUTE}>Accept them on the Agents page</a>,
-          one at a time, seeing the whole grant.
+          Nothing here is created by installing. Accepting one shows you the whole tool grant and waits
+          for your approval — here, or <a href={AGENTS_ROUTE}>on the Agents page</a>.
         </p>
       </Stack>
     </Section>
+  );
+}
+
+/** One proposed agent: what it is, and the button that starts the approval. */
+function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [approvalId, setApprovalId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const accepted = unlock.drift.state !== 'not-accepted';
+  const accept = (): void => {
+    if (!plugin) return;
+    setBusy(true);
+    setFailure(null);
+    api
+      .acceptPluginAgent(plugin, unlock.id)
+      .then((answer) => setApprovalId(answer.approvalId ?? null))
+      .catch((error: unknown) => setFailure(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Stack gap="sm">
+      <Toolbar>
+        <span className="mono">@{unlock.handle}</span>
+        <Pill tone={unlock.drift.state === 'up-to-date' ? 'good' : 'warning'}>{unlock.drift.state}</Pill>
+        <span className="ui-card-meta">{unlock.drift.message}</span>
+        <Spacer />
+        {plugin && !accepted ? (
+          <Button size="sm" disabled={busy || approvalId !== null} onClick={accept}>
+            Accept
+          </Button>
+        ) : null}
+      </Toolbar>
+      <ErrorBanner message={failure} />
+      {approvalId ? <Approval id={approvalId} onDecided={() => setApprovalId(null)} /> : null}
+    </Stack>
+  );
+}
+
+/**
+ * The approval the Accept button produced, drawn where it was asked for.
+ *
+ * The very card Home draws, from the same route: a decision made here and a
+ * decision made there are the same row, and the same race.
+ */
+function Approval({ id, onDecided }: { id: string; onDecided: () => void }): JSX.Element {
+  const action = useAsync<ApprovalRow>(() => api.approval(id), [id]);
+  const { busy, note, failure, decide } = useDecide(() => onDecided());
+  if (action.error) return <ErrorBanner message={action.error} />;
+  if (!action.data) return <Empty>Loading the approval…</Empty>;
+  return (
+    <Stack gap="sm">
+      <ApprovalCard
+        action={action.data}
+        timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+        busy={busy === id}
+        onDecide={(actionId, decision, scope, choices) => {
+          void decide(actionId, decision, scope, choices);
+        }}
+      />
+      {note ? <Notice tone="good" role="status">{note}</Notice> : null}
+      <ErrorBanner message={failure} />
+    </Stack>
   );
 }
 
@@ -751,7 +813,7 @@ function Installed({
               },
             ]}
           />
-          <Unlocks unlocks={plugin.unlocks} />
+          <Unlocks plugin={plugin.name} unlocks={plugin.unlocks} />
         </Stack>
       </Card>
       {removing ? (

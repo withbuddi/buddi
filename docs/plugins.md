@@ -1163,7 +1163,7 @@ writes an agent file because a plugin was installed. What exists instead:
 | | |
 | --- | --- |
 | `platform.plugin_agents` | tier `auto`. Every agent and shared skill the installed plugins propose, with the grant each asks for and whether the owner has accepted it. |
-| `platform.accept_plugin_agent` | tier **`gated`**. Builds exactly the envelope `platform.create_agent` builds, from your proposal's fields. |
+| `platform.accept_plugin_agent` | tier **`gated`**. Builds exactly the envelope `platform.create_agent` builds, from your proposal's fields. Your proposal names no provider account — it cannot know what this installation has — so unless the owner names one it is given the account the accepting agent speaks through, and the preview says so. |
 | `platform.accept_plugin_skill` | tier **`gated`**. The same, for a shared skill. |
 
 Accepting reuses `create_agent` wholesale, which is the point — your proposal
