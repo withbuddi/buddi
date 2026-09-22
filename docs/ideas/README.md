@@ -15,6 +15,7 @@ conversations and can be reviewed alongside the code.
 | [Voice](voice.md) | Proposed | Voice notes on Telegram, press-to-talk and read-aloud on the dashboard. |
 | [Owner secrets](owner-secrets.md) | Proposed | Site passwords the agent can fill but never see. |
 | [Queued input](queued-input.md) | Proposed | Send while the agent works: queued, shown at once, injected as an interjection. |
+| [Learning](../learning.md) | Proposed | buddi proposes skills, policies and changes with provenance; the owner keeps. |
 | [Anthropic subscription login](anthropic-subscription-login.md) | Accepted | [Implementation](../anthropic-oauth.md) on the dedicated OAuth branch. |
 
 Existing tracked work remains in the [provider roadmap](../provider-roadmap.md);
