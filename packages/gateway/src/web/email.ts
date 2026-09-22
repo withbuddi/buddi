@@ -39,8 +39,9 @@
  *
  * ## Policies (docs/specs/email.md §5)
  *
- * Three routes and nothing clever: read the two lists, write or keep one rule,
- * take one back. The rules themselves live in the email plugin — this file
+ * Four routes and nothing clever: read the two lists, write or keep one rule,
+ * take one back, and keep or revoke a whole selection in one transaction. The
+ * rules themselves live in the email plugin — this file
  * translates between the dashboard's JSON and that plugin's functions, and owes
  * the page one thing the tools do not: the *owner* is the one acting here, so
  * there is no approval card in the way. The gate on the tool exists because a
@@ -59,6 +60,7 @@ import { createVault, type Vault } from '@buddi/core';
 import {
   ACCOUNT_COLUMNS,
   INBOX,
+  bulkPolicies,
   createPolicy,
   keepPolicy,
   lastSyncByAccount,
@@ -550,6 +552,55 @@ export async function writeEmailPolicy(
   }
   return { status: 200, body: await policiesView(pool) };
 }
+
+/**
+ * POST /api/email/policies/bulk: keep or revoke exactly the ids given.
+ *
+ * The page can hold seventy-odd proposals, and going through them one tap at a
+ * time is how an owner ends up not going through them at all. So the selection
+ * travels as one list and lands in one transaction (`bulkPolicies`): what the
+ * owner ticked is one decision, and it either holds or it does not.
+ *
+ * The route is deliberately literal — it applies *these* ids and nothing else.
+ * There is no "everything proposed" flag, because the page's idea of what is
+ * proposed can be older than the database's, and a flag would then revoke rows
+ * nobody was looking at. "Revoke all" is the page sending every id it is
+ * showing.
+ */
+export const BULK_POLICY_LIMIT = 500;
+
+export async function bulkEmailPolicies(
+  pool: Pool,
+  body: unknown,
+  now: Date,
+): Promise<RouteReply> {
+  const input = (body ?? {}) as Record<string, unknown>;
+  const action = input.action;
+  if (action !== 'keep' && action !== 'revoke') {
+    return { status: 400, body: { error: '`action` must be "keep" or "revoke"' } };
+  }
+  if (!Array.isArray(input.ids)) {
+    return { status: 400, body: { error: '`ids` must be an array of policy ids' } };
+  }
+  if (input.ids.length > BULK_POLICY_LIMIT) {
+    return {
+      status: 400,
+      body: { error: `That is more than ${BULK_POLICY_LIMIT} rules at once. Do it in a few passes.` },
+    };
+  }
+  const ids: string[] = [];
+  for (const id of input.ids) {
+    if (typeof id !== 'string' || !UUID_RE.test(id.trim())) {
+      return { status: 400, body: { error: 'Every id must be a policy id.' } };
+    }
+    ids.push(id.trim());
+  }
+
+  const result = await bulkPolicies(pool, action, ids, now);
+  return { status: 200, body: { ...result, ...(await policiesView(pool)) } };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** DELETE: take one back. Revoking something already revoked is still 200. */
 export async function deleteEmailPolicy(
