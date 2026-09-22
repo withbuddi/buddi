@@ -1,5 +1,7 @@
 # Built-in system context
 
+Status: reference, 2026-09-18
+
 Every agent run through the shared gateway wiring receives a turn-start clock
 snapshot and a bounded host summary, including Dashboard, Telegram, CLI,
 scheduled runs and delegates. No agent-file edits or approval grants are needed.

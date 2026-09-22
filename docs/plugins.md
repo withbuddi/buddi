@@ -1,5 +1,7 @@
 # Writing a plugin
 
+Status: reference, 2026-09-21
+
 Everything an agent can actually *do* is a plugin. This document is the guide to
 writing one: the ten-minute path from nothing to a tool an agent can call, the
 contract, the things a plugin can contribute, the rules that bite, a complete

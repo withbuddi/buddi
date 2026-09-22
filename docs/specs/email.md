@@ -1,6 +1,6 @@
 # Email: accounts, threads, policies, watchers
 
-Status: steps 1 to 3 built, 2026-09-21. The rest is still a specification for
+Status: in progress, steps 1 to 3 of 5 built, 2026-09-21. Steps 4 and 5 remain specification.
 review; the current plugin had no document, and this is the one it should have
 had. What §13.1 asks for — policies, the gate, the backfill and the Learned
 list — is implemented, with three departures noted in §5; §4's accounts are

@@ -1,5 +1,7 @@
 # Codex App Server experiment
 
+Status: idea, experiment behind `BUDDI_CODEX_EXPERIMENT=1`, as it stood 2026-09-19
+
 Branch: `experiment/codex-app-server`. Existing accounts and live bindings are unchanged.
 
 ## Current result

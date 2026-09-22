@@ -1,5 +1,7 @@
 # Computer use — what the ground looks like, 2026-09-16
 
+Status: reference, 2026-09-18
+
 > Historical survey. The implementation has changed since this document was
 > written. As of 2026-09-18, native macOS control is the default and Playwright is
 > an explicit alternative. See [current setup, boundaries and verification](browser.md).
