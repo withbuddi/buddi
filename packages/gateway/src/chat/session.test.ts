@@ -1140,3 +1140,77 @@ describe('a conversation has a lifetime here too', () => {
     expect(JSON.stringify(history[2])).toContain('Dorothee');
   });
 });
+
+/**
+ * A line typed at the prompt is the owner's request, exactly as a line typed
+ * into the dashboard is — so a `session`-tier tool, which exists only while the
+ * owner is asking, works in an ordinary terminal turn. The terminal used to
+ * hand every run the bare context, and every such call came back
+ * `session-not-authorized`.
+ */
+describe('a session-tier tool at the prompt', () => {
+  /** Records the context the tool was actually reached with. */
+  const seen: Array<ToolContext> = [];
+
+  function sessionRegistry(): ToolRegistry {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'dev',
+      version: '0.1.0',
+      schema: 'dev',
+      migrationsDir: '',
+      tools: [
+        {
+          name: 'dev.run',
+          description: 'Do something only a live owner request may reach.',
+          tier: 'session',
+          input: z.object({ what: z.string() }),
+          async execute(_args, ctx: ToolContext) {
+            seen.push(ctx);
+            return { did: 'it' };
+          },
+        },
+      ],
+    });
+    return registry;
+  }
+
+  const maker = catalogAgent('dev-agent', 'dev', 'Dev', true, ['dev.run']);
+
+  it('runs in an ordinary turn, on the owner request that turn is', async () => {
+    seen.length = 0;
+    const h = harness({
+      agents: [maker, SCOUT],
+      registry: sessionRegistry(),
+      responses: [toolResponse('dev.run', { what: 'look' }), textResponse('Looked.')],
+    });
+
+    await h.session.handle('look at the repository');
+
+    expect(seen).toHaveLength(1);
+    const ctx = seen[0] as ToolContext;
+    // The request is the owner's own words, and it stands for twenty minutes.
+    expect(ctx.ownerRequest?.text).toBe('look at the repository');
+    expect(ctx.ownerRequest?.expiresAt).toBeGreaterThan(Date.now());
+    expect(ctx.sessionTools).toContain('dev.run');
+    expect(h.text()).toContain('Looked.');
+  });
+
+  it('does not extend that standing to a delegate', async () => {
+    seen.length = 0;
+    const registry = sessionRegistry();
+    const h = harness({
+      agents: [maker, SCOUT],
+      registry,
+      responses: [toolResponse('dev.run', { what: 'look' }), textResponse('Looked.')],
+    });
+    await h.session.handle('look at the repository');
+    const ctx = seen[0] as ToolContext;
+
+    seen.length = 0;
+    // Same context, one step down: the owner's standing is the owner's.
+    const delegated = await registry.invoke('dev.run', { what: 'look' }, { ...ctx, delegationDepth: 1 });
+    expect(delegated).toMatchObject({ ok: false, reason: 'session-not-authorized' });
+    expect(seen).toHaveLength(0);
+  });
+});

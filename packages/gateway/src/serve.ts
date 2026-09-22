@@ -506,7 +506,7 @@ export async function main(): Promise<void> {
       gate,
       resumeGroup: async (action, resume) => {
         if (!dashboardChat) return false;
-        dashboardChat.resumeHost({ agentId: action.agentId, conversationId: action.conversationId }, resume);
+        dashboardChat.resumeHost({ agentId: action.agentId, conversationId: action.conversationId, tool: action.tool }, resume);
         return true;
       },
       // The queue this process runs. An approval decided in a chat wakes the
