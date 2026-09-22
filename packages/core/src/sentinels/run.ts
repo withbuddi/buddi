@@ -17,6 +17,7 @@
  */
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
+import { OWNER_ID } from '../owner.js';
 import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
 import type { PluginManifest } from '../tools.js';
 import {
@@ -100,6 +101,12 @@ export async function runSentinels(
    * findings name no agent and fall to the wake mission's agent.
    */
   agentForRole: (role: string) => string | undefined = () => undefined,
+  /**
+   * The owner this installation belongs to, for a sentinel that has to build a
+   * `ToolContext` (core's goal watcher measures a metric). Defaults to core's
+   * own `OWNER_ID`, which is what every single-owner process already runs as.
+   */
+  ownerId: string = OWNER_ID,
 ): Promise<SentinelOutcome[]> {
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
@@ -136,7 +143,7 @@ export async function runSentinels(
       outcomes.push({ sentinelId: sentinel.id, ran: false, findings: 0, fired: 0, resolved: 0 });
       continue;
     }
-    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole));
+    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId));
   }
   return outcomes;
 }
@@ -147,10 +154,11 @@ async function runOne(
   now: Date,
   timezone: string,
   agentForRole: (role: string) => string | undefined,
+  ownerId: string,
 ): Promise<SentinelOutcome> {
   let result: SentinelResult;
   try {
-    result = await sentinel.run({ db: pool, now: () => now, timezone, agentForRole });
+    result = await sentinel.run({ db: pool, ownerId, now: () => now, timezone, agentForRole });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordRun(pool, sentinel.id, now, message);
@@ -271,14 +279,35 @@ async function upsertAndMaybeFire(
     await dropPendingDigestItem(pool, finding.key);
   }
 
+  /*
+   * `wake` is the third delivery, between the two: an `info` fact that is only
+   * news the first time — a milestone crossed, a target reached — and that is
+   * stale by next Sunday. It wakes exactly once, *instead of* taking a digest
+   * line, so the owner is not told the same good news twice.
+   *
+   * "Once" is "once it has actually been queued", not "on the first tick that
+   * saw it". A wake that could not be enqueued — no `sentinel-wake` mission
+   * yet, an instant that could not be allocated — leaves the cooldown clear
+   * (see below), and a clear cooldown is precisely this module's existing
+   * record of "this key has never successfully spoken". So a row that exists
+   * but has never fired still wakes; a row that has fired is past its one
+   * chance, and its next fire after the seven-day cooldown is an ordinary
+   * digest note. A fact that resolved and came back gets a fresh chance,
+   * because resolution clears the cooldown too — which is right: that is a new
+   * episode, not the same news.
+   */
+  const neverSpoke = existing === null || existing.cooldownUntil === null;
+  const wakesOnce = finding.severity === 'info' && finding.wake === true && neverSpoke;
   const delivery =
-    finding.severity === 'urgent'
+    finding.severity === 'urgent' || wakesOnce
       ? await enqueueWake(pool, sentinelId, finding, now)
       : await noteInDigest(pool, finding);
 
   if (!delivery.ok) {
     // Nowhere to put it yet (the wake mission is not registered). Leave the
-    // cooldown clear so it fires on the tick after `buddi missions add-defaults`.
+    // cooldown clear: that is what makes the next tick try again, both for an
+    // urgent and for a `wake` info finding — see `neverSpoke` above. It fires
+    // on the tick after `buddi missions add-defaults`.
     await appendEvent(pool, 'sentinel.finding', {
       sentinelId,
       key: finding.key,

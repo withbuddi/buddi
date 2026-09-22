@@ -199,6 +199,7 @@ suite('email watchers (postgres)', () => {
   function ctx(over: Partial<SentinelContext> = {}): SentinelContext {
     return {
       db: pool,
+      ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentForRole: () => undefined,

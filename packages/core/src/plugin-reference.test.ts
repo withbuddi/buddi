@@ -42,6 +42,7 @@ export const DOCUMENTED: Record<string, string> = {
   SuggestedAgent: 'tools.ts',
   NetworkUse: 'tools.ts',
   PreviewProvider: 'tools.ts',
+  MetricDefinition: 'metrics.ts',
   Sentinel: path.join('sentinels', 'types.ts'),
   SentinelContext: path.join('sentinels', 'types.ts'),
   Finding: path.join('sentinels', 'types.ts'),
