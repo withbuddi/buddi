@@ -377,9 +377,21 @@ describe('a tap on an offered action', () => {
     expect(runs).toBe(0);
     expect(db.offers[0]?.takenAt).toBeNull();
     expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBe(OFFER_LAPSED_MESSAGE);
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(OFFER_LAPSED_MESSAGE);
     expect(OFFER_LAPSED_MESSAGE).toBe('That offer has lapsed.');
     // Nothing is edited away: the message stays as it was written.
     expect(sent.some((s) => s.method === 'editMessageReplyMarkup')).toBe(false);
+  });
+
+  it('also sends a durable chat message for an already dismissed offer', async () => {
+    const db = new FakeDb();
+    const dismissed = offer(ID_ONE, 'Draft a reply', 'Draft it');
+    dismissed.dismissedAt = '2026-09-15T10:00:00.000Z';
+    db.offers.push(dismissed);
+    const { surface, sent } = surfaceWith(db);
+    await surface.handleOfferCallback(tap(ID_ONE));
+    const callback = sent.find((item) => item.method === 'answerCallbackQuery')?.body.text;
+    expect(sent.find((item) => item.method === 'sendMessage')?.body.text).toBe(callback);
   });
 
   it('refuses an id that names nothing', async () => {

@@ -85,8 +85,7 @@ export function Offers({ embedded, agentId, agentName }: { timezone?: string; em
         <Toolbar>
           <span className="ui-toolbar-spacer" />
           <DismissAll
-            count={rows.length}
-            agentId={agentId}
+            ids={rows.map((offer) => offer.id)}
             agentName={agentName}
             onDone={() => { setTaken(null); reload(); }}
           />

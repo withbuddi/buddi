@@ -29,6 +29,7 @@ import { manifest } from './index.js';
 import { ownerHasRepliedTo, ownerReplies } from './policies/learn.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { joinThread } from './threads.js';
+import { policiesView } from './tools/policies.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
 import type { SourceContext, ToolContext } from './types.js';
 
@@ -222,6 +223,37 @@ suite('email threads (postgres + fake imap)', () => {
       expect(await threads()).toHaveLength(2);
     });
 
+    it('clamps hostile legacy Date headers and falls back to fetched_at', async () => {
+      await fixture();
+      await pool.query(
+        `update email.messages
+            set date = case when uid = 1 then '2099-01-01'::timestamptz else null end,
+                fetched_at = $1
+          where thread_key = '<t1@work.test>'`,
+        [NOW],
+      );
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      const { rows } = await pool.query(
+        `select last_at from email.threads where thread_key = '<t1@work.test>'`,
+      );
+      expect(new Date(rows[0].last_at).toISOString()).toBe('2026-09-22T12:00:00.000Z');
+    });
+
+    it('caps participants on backfill and records overflow from the uncapped distinct count', async () => {
+      await fixture();
+      const addresses = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
+      await pool.query(
+        `update email.messages set to_addrs = $1::jsonb where uid = 1`,
+        [JSON.stringify(addresses)],
+      );
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      const { rows } = await pool.query(
+        `select jsonb_array_length(participants) as kept, participants_overflow
+           from email.threads where thread_key = '<t1@work.test>'`,
+      );
+      expect(rows[0]).toEqual({ kept: 50, participants_overflow: 12 });
+    });
+
     it('expands a global thread policy into one account-scoped copy per matching thread, and revokes the global row', async () => {
       // A second account with a thread that shares the exact same root
       // Message-ID as the first account's — a global policy naming that key
@@ -248,6 +280,12 @@ suite('email threads (postgres + fake imap)', () => {
       );
       const globalId = String(gp[0].id);
       await pool.query(
+        `insert into email.policies
+           (account_id, scope, matcher, action, params, origin, proposed, created_at)
+         values ($1, 'thread', '<t1@work.test>', 'wake', '{}'::jsonb, 'owner', false, $2)`,
+        [accountId, new Date(NOW.getTime() - 86_400_000)],
+      );
+      await pool.query(
         `insert into email.messages
            (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
             subject, date, snippet, body_text, triage_enqueued_at)
@@ -268,10 +306,10 @@ suite('email threads (postgres + fake imap)', () => {
       expect(revoked[0].revoked).toBe(true);
 
       const { rows: live } = await pool.query(
-        `select p.account_id, p.matcher = t.id::text as points_at_thread
+        `select p.account_id, p.action, p.matcher = t.id::text as points_at_thread
            from email.policies p
            join email.threads t on t.thread_key = '<t1@work.test>' and t.account_id = p.account_id
-          where p.scope = 'thread' and p.revoked_at is null and p.action = 'ignore'
+          where p.scope = 'thread' and p.revoked_at is null
           order by p.account_id`,
       );
       expect(live).toHaveLength(2);
@@ -279,6 +317,9 @@ suite('email threads (postgres + fake imap)', () => {
       expect(new Set(live.map((r: Record<string, unknown>) => String(r.account_id)))).toEqual(
         new Set([accountId, account2]),
       );
+      expect(live.find((r: Record<string, unknown>) => String(r.account_id) === accountId)?.action).toBe('wake');
+      const rerun = await pool.query(`select email.expand_global_thread_policies() as n`);
+      expect(Number(rerun.rows[0].n)).toBe(0);
     });
   });
 
@@ -354,6 +395,29 @@ suite('email threads (postgres + fake imap)', () => {
         last_uid: 5,
         has_generation: true,
       });
+    });
+
+    it('plants cursorless Sent before opening the inbox, so mail sent during inbox work is fetched next poll', async () => {
+      const server = serverWithSent();
+      const factory = async () => {
+        const base = server.client();
+        return {
+          listMailboxes: () => base.listMailboxes(),
+          fetchSince: (name: string, uid: number, limit: number) => base.fetchSince(name, uid, limit),
+          close: () => base.close(),
+          async open(name: string) {
+            if (name === 'INBOX' && server.mailbox('[Gmail]/Sent Mail').messages.length === 0) {
+              server.add('[Gmail]/Sent Mail', fakeMessage({ messageId: '<during-poll@x>', subject: 'Sent during poll' }));
+            }
+            return base.open(name);
+          },
+        };
+      };
+      const src = createInboxPollSource({ connect: factory, env: ENV, backfill: FULL_SYNC });
+      await src.poll(sourceContext());
+      expect(server.fetches.some((fetch) => fetch.mailbox === '[Gmail]/Sent Mail')).toBe(false);
+      await src.poll(sourceContext());
+      expect(server.fetches.some((fetch) => fetch.mailbox === '[Gmail]/Sent Mail' && fetch.returned === 1)).toBe(true);
     });
   });
 
@@ -470,7 +534,13 @@ suite('email threads (postgres + fake imap)', () => {
       await source(server).poll(sourceContext());
       expect(await ownerHasRepliedTo(pool, accountId, 'Client <CLIENT@work.test>')).toBe(true);
 
-      // And how fast: nine hours, inside the thread.
+      // Hostile Date headers do not alter reply timing; INTERNALDATE is nine
+      // hours apart even when the sender claims 2099 and the reply claims 1900.
+      await pool.query(
+        `update email.messages
+            set date = case direction when 'in' then '2099-01-01'::timestamptz
+                                           else '1900-01-01'::timestamptz end`,
+      );
       const replies = await ownerReplies(pool, accountId, 'client@work.test');
       expect(replies.count).toBe(1);
       expect(Math.round(replies.averageHours ?? 0)).toBe(9);
@@ -708,6 +778,43 @@ suite('email threads (postgres + fake imap)', () => {
       // must win both times.
       expect(forward.lastDirection).toBe(backward.lastDirection);
     });
+
+    it('uses UIDVALIDITY and then message id to break otherwise exact ties', async () => {
+      const [folder] = await twoFolders();
+      const at = new Date('2026-09-20T09:00:00Z');
+      const older = await insertMessage({ folderId: folder, uid: 7, uidvalidity: 1, from: 'client@work.test', direction: 'in' });
+      const newer = await insertMessage({ folderId: folder, uid: 7, uidvalidity: 2, from: 'owner@example.test', direction: 'out' });
+      await joinThread(pool, { accountId, threadKey: '<generation-tie>', messageRowId: newer, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 2, uid: 7, direction: 'out' });
+      const result = await joinThread(pool, { accountId, threadKey: '<generation-tie>', messageRowId: older, subject: 'Tie', participants: [], at, folderId: folder, uidValidity: 1, uid: 7, direction: 'in' });
+      expect(result.lastDirection).toBe('out');
+    });
+
+    it('caps participants on the first insert and records distinct overflow', async () => {
+      const [folder] = await twoFolders();
+      const id = await insertMessage({ folderId: folder, uid: 90, from: 'sender@example.test', direction: 'in' });
+      const participants = Array.from({ length: 60 }, (_, i) => `person-${i}@example.test`);
+      const thread = await joinThread(pool, { accountId, threadKey: '<crowd>', messageRowId: id, subject: 'Crowd', participants: [...participants, participants[0]!], at: NOW, folderId: folder, uidValidity: 1, uid: 90, direction: 'in' });
+      expect(thread.participants).toHaveLength(50);
+      expect(thread.participantsOverflow).toBe(10);
+    });
+  });
+
+  it('returns fifty thread choices for the requested account, independent of busier accounts', async () => {
+    const { rows: second } = await pool.query(
+      `insert into email.accounts
+         (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name)
+       values ('choice@example.test', 'imap.example.test', 993, 'smtp.example.test', 465, 'app-password', 'CHOICE_SECRET') returning id`,
+    );
+    const account2 = String(second[0].id);
+    await pool.query(
+      `insert into email.threads (account_id, thread_key, subject, last_at)
+       select a, 'thread-' || n, 'subject-' || n, $3::timestamptz + n * interval '1 minute'
+         from unnest(array[$1::uuid, $2::uuid]) a cross join generate_series(1, 60) n`,
+      [accountId, account2, NOW],
+    );
+    const view = await policiesView(pool, account2);
+    expect(view.threads).toHaveLength(50);
+    expect(view.threads.every((thread) => thread.accountId === account2)).toBe(true);
   });
 
   // ----------------------------------------------------------------- tools

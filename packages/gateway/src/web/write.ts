@@ -40,6 +40,7 @@ import {
   toActionRecord,
   getActiveSchedule,
   MISFIRE_POLICIES,
+  OFFER_LAPSED_MESSAGE,
   type ApprovalState,
   type Decision,
   type JobControl,
@@ -465,6 +466,8 @@ export async function dismissOfferFromWeb(
   const existing = await getOffer(deps.pool, offerId);
   if (!existing) return fail(404, 'That offer is no longer here.');
   if (existing.takenAt !== null) return fail(409, OFFER_TAKEN_ALREADY);
+  if (existing.lapsedAt !== null) return fail(409, OFFER_LAPSED_MESSAGE);
+  if (new Date(existing.expiresAt).getTime() <= deps.now().getTime()) return fail(409, OFFER_EXPIRED);
   // Already dismissed: the owner clicked twice, or two tabs did. Saying no
   // twice is not an error, and a banner about it would be noise.
   return { ok: true, status: 200, body: { id: existing.id, dismissedAt: existing.dismissedAt ?? '' } };
@@ -482,11 +485,11 @@ export const OFFER_TAKEN_ALREADY = 'That one is already running.';
  */
 export async function dismissOffersFromWeb(
   deps: WriteDeps,
-  agentId?: string | undefined,
+  ids: readonly string[],
 ): Promise<WriteResult<{ dismissed: number }>> {
   const dismissed = await dismissOffers(deps.pool, {
     now: deps.now(),
-    ...(agentId ? { agentId } : {}),
+    ids,
   });
   return { ok: true, status: 200, body: { dismissed } };
 }

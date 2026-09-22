@@ -92,16 +92,17 @@ function stubPool(rows: OfferRow[]): { pool: Pool; statements: string[]; rows: O
         return { rows: row ? [row] : [] };
       }
       if (/^\s*update core\.offers\s+set dismissed_at = \$2/.test(text)) {
-        if (!row || row.taken_at !== null || row.dismissed_at !== null) return { rows: [] };
+        const now = params[1] as Date;
+        if (!row || row.taken_at !== null || row.dismissed_at !== null || row.lapsed_at !== null || row.expires_at <= now) return { rows: [] };
         row.dismissed_at = params[1] as Date;
         return { rows: [row] };
       }
       if (/^\s*update core\.offers set dismissed_at = \$1/.test(text)) {
         const at = params[0] as Date;
-        const agentId = params[1] === undefined ? null : String(params[1]);
+        const ids = params[1] as string[];
         const cleared = rows.filter(
           (r) => r.taken_at === null && r.dismissed_at === null && r.lapsed_at === null
-            && r.expires_at > at && (agentId === null || r.agent_id === agentId),
+            && r.expires_at > at && ids.includes(r.id),
         );
         for (const r of cleared) r.dismissed_at = at;
         return { rows: cleared };
@@ -259,6 +260,16 @@ describe('dismissing an offer from the dashboard', () => {
     expect((await dismissOfferFromWeb(deps(pool), 'off-nope')).status).toBe(404);
   });
 
+  it('reports a stale offer as lapsed or expired instead of rewriting it as refused', async () => {
+    const { pool, rows } = stubPool([
+      offerRow({ id: 'off-lapsed', lapsed_at: NOW, lapse_reason: 'owner-moved-on' }),
+      offerRow({ id: 'off-expired', expires_at: new Date(NOW.getTime() - 1) }),
+    ]);
+    expect((await dismissOfferFromWeb(deps(pool), 'off-lapsed')).status).toBe(409);
+    expect((await dismissOfferFromWeb(deps(pool), 'off-expired')).status).toBe(409);
+    expect(rows.every((row) => row.dismissed_at === null)).toBe(true);
+  });
+
   it('clears the list and says how many it cleared', async () => {
     const { pool, rows } = stubPool([
       offerRow(),
@@ -267,15 +278,15 @@ describe('dismissing an offer from the dashboard', () => {
       offerRow({ id: 'off-4', taken_at: NOW }),
     ]);
 
-    const mine = await dismissOffersFromWeb(deps(pool), 'ledger');
+    const mine = await dismissOffersFromWeb(deps(pool), ['off-3']);
     expect((mine as { body: { dismissed: number } }).body.dismissed).toBe(1);
 
-    const all = await dismissOffersFromWeb(deps(pool));
+    const all = await dismissOffersFromWeb(deps(pool), ['off-1', 'off-2']);
     expect((all as { body: { dismissed: number } }).body.dismissed).toBe(2);
     // The one that is running is untouched: it started work.
     expect(rows.find((r) => r.id === 'off-4')!.dismissed_at).toBeNull();
 
-    expect((await dismissOffersFromWeb(deps(pool))).ok).toBe(true);
-    expect(((await dismissOffersFromWeb(deps(pool))) as { body: { dismissed: number } }).body.dismissed).toBe(0);
+    expect((await dismissOffersFromWeb(deps(pool), ['off-1', 'off-2'])).ok).toBe(true);
+    expect(((await dismissOffersFromWeb(deps(pool), ['off-1', 'off-2'])) as { body: { dismissed: number } }).body.dismissed).toBe(0);
   });
 });

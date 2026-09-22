@@ -310,20 +310,35 @@ suite('saying no to an offer (postgres)', () => {
     expect((await getOffer(pool, id))?.dismissedAt).toBeNull();
   });
 
-  it('clears the whole list, or one agent\'s', async () => {
-    await offerIn(null, 'mail-triage', 'One');
-    await offerIn(null, 'mail-triage', 'Two');
-    await offerIn(null, 'ledger', 'Three');
+  it('never rewrites a lapsed or expired offer as an owner refusal', async () => {
+    const lapsed = await offerIn(null, 'mail-triage', 'Lapsed');
+    await pool.query(
+      `update core.offers set lapsed_at = $2, lapse_reason = 'owner-moved-on' where id = $1`,
+      [lapsed, later(1000)],
+    );
+    const expired = await offerIn(null, 'mail-triage', 'Expired');
+    expect(await dismissOffer(pool, { id: lapsed, now: later(2000) })).toBeNull();
+    expect(await dismissOffer(pool, { id: expired, now: later(3 * 24 * 60 * 60_000) })).toBeNull();
+    expect((await getOffer(pool, lapsed))?.dismissedAt).toBeNull();
+    expect((await getOffer(pool, expired))?.dismissedAt).toBeNull();
+  });
 
-    expect(await dismissOffers(pool, { now: later(1000), agentId: 'ledger' })).toBe(1);
+  it('clears only the displayed ids', async () => {
+    const one = await offerIn(null, 'mail-triage', 'One');
+    const two = await offerIn(null, 'mail-triage', 'Two');
+    const three = await offerIn(null, 'ledger', 'Three');
+
+    expect(await dismissOffers(pool, { now: later(1000), ids: [three] })).toBe(1);
     expect((await listOpenOffers(pool, { now: later(1000) })).map((o) => o.agentId)).toEqual([
       'mail-triage',
       'mail-triage',
     ]);
-    expect(await dismissOffers(pool, { now: later(2000) })).toBe(2);
+    expect(await dismissOffers(pool, { now: later(2000), ids: [one] })).toBe(1);
+    expect((await listOpenOffers(pool, { now: later(2000) })).map((o) => o.id)).toEqual([two]);
+    expect(await dismissOffers(pool, { now: later(2000), ids: [two] })).toBe(1);
     expect(await listOpenOffers(pool, { now: later(2000) })).toEqual([]);
     // Nothing left to clear, and asking again is not an error.
-    expect(await dismissOffers(pool, { now: later(3000) })).toBe(0);
+    expect(await dismissOffers(pool, { now: later(3000), ids: [one, two, three] })).toBe(0);
   });
 
   /* ---------------- the three ways a moment passes ---------------- */
@@ -343,15 +358,15 @@ suite('saying no to an offer (postgres)', () => {
     });
   });
 
-  it('lapses an offer whose conversation rolled over, and one whose group was archived', async () => {
+  it('keeps unrelated newer conversations live, and lapses one whose group was archived', async () => {
     const conv = await conversation('mail-triage', NOW);
     const id = await offerIn(conv);
-    // A rollover is a newer conversation for the same agent, which is exactly
-    // what the lifetime rule makes when a thread ends.
+    // Agents may have concurrent conversations; a newer one proves nothing
+    // about this one's lifetime.
     await conversation('mail-triage', later(60_000));
 
-    expect(await sweepLapsedOffers(pool, { now: later(120_000) })).toBe(1);
-    expect((await getOffer(pool, id))?.lapseReason).toBe('rolled-over');
+    expect(await sweepLapsedOffers(pool, { now: later(120_000) })).toBe(0);
+    expect((await getOffer(pool, id))?.lapseReason).toBeNull();
 
     // Archived, by the group the conversation belongs to.
     const { rows } = await pool.query(

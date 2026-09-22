@@ -29,16 +29,15 @@ export function dismissAllSentence(count: number, agentName?: string): string {
  * should not offer to clear them.
  */
 export function DismissAll({
-  count,
-  agentId,
+  ids,
   agentName,
   onDone,
 }: {
-  count: number;
-  agentId?: string | undefined;
+  ids: readonly string[];
   agentName?: string | undefined;
   onDone: () => void;
 }): JSX.Element | null {
+  const count = ids.length;
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -60,7 +59,7 @@ export function DismissAll({
         onClick={() => {
           setBusy(true);
           void api
-            .dismissOffers(agentId)
+            .dismissOffers(ids)
             .then(() => { setAsking(false); onDone(); })
             .finally(() => setBusy(false));
         }}

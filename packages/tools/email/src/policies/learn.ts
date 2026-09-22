@@ -226,7 +226,7 @@ export async function ownerReplies(
   if (matcher === '' || !accountId) return { count: 0, lastAt: null, averageHours: null };
   const { rows } = await db.query(
     `with sent as (
-       select m.thread_id, coalesce(m.date, m.fetched_at) as at
+       select m.thread_id, coalesce(m.internal_date, m.fetched_at) as at
          from email.messages m
         where m.account_id = $2::uuid
           and m.direction = 'out'
@@ -241,12 +241,12 @@ export async function ownerReplies(
      ),
      paired as (
        select s.at,
-              (select max(coalesce(i.date, i.fetched_at))
+              (select max(coalesce(i.internal_date, i.fetched_at))
                  from email.messages i
                 where i.thread_id = s.thread_id
                   and i.direction = 'in'
                   and email.address_of(i.from_addr) = $1
-                  and coalesce(i.date, i.fetched_at) <= s.at) as asked_at
+                  and coalesce(i.internal_date, i.fetched_at) <= s.at) as asked_at
          from sent s
      )
      select count(*)::int as n,

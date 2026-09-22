@@ -106,13 +106,19 @@ create table if not exists threads (
   -- The folder and uid of the message that decided `last_direction` and
   -- `last_at`. Not shown anywhere; it exists only so that two messages
   -- landing with the *same* ordering clock (see `internal_date` below) have a
-  -- deterministic winner — folder, then uid — instead of whichever one this
-  -- poll happened to process last.
+  -- deterministic winner — folder, UIDVALIDITY, uid, then message row id —
+  -- instead of whichever one this poll happened to process last.
   last_folder_id uuid null references folders (id) on delete set null,
+  last_uidvalidity bigint null,
   last_uid bigint null,
+  last_message_id uuid null references messages (id) on delete set null,
   created_at timestamptz not null default now(),
   unique (account_id, thread_key)
 );
+
+-- Keep the migration itself re-runnable while these winner columns evolve.
+alter table threads add column if not exists last_uidvalidity bigint null;
+alter table threads add column if not exists last_message_id uuid null references messages (id) on delete set null;
 
 create index if not exists threads_state_idx on threads (account_id, state, last_at desc nulls last);
 create index if not exists threads_last_at_idx on threads (last_at desc nulls last);
@@ -178,13 +184,16 @@ $$ language sql immutable;
 -- Does the newly arrived message decide who wrote last? By the ordering
 -- clock (`threads.ts`'s `at`, built from INTERNALDATE with a `fetched_at`
 -- fallback — never the sender's `Date` header). When two messages carry the
--- exact same clock value, the winner is decided by folder then uid, always
+-- exact same clock value, the winner is decided by folder, generation, uid
+-- and immutable message row id, always
 -- the same way for the same two messages, rather than by whichever one this
 -- particular poll happened to write last.
 create or replace function newer_wins(
   new_at timestamptz, old_at timestamptz,
   new_folder uuid, old_folder uuid,
-  new_uid bigint, old_uid bigint
+  new_uidvalidity bigint, old_uidvalidity bigint,
+  new_uid bigint, old_uid bigint,
+  new_message uuid, old_message uuid
 ) returns boolean as $$
   select case
     when new_at is null then false
@@ -194,9 +203,15 @@ create or replace function newer_wins(
     when old_folder is null then true
     when new_folder is null then false
     when new_folder::text <> old_folder::text then new_folder::text > old_folder::text
+    when old_uidvalidity is null then true
+    when new_uidvalidity is null then false
+    when new_uidvalidity <> old_uidvalidity then new_uidvalidity > old_uidvalidity
     when old_uid is null then true
     when new_uid is null then false
-    else new_uid > old_uid
+    when new_uid <> old_uid then new_uid > old_uid
+    when old_message is null then true
+    when new_message is null then false
+    else new_message::text > old_message::text
   end;
 $$ language sql immutable;
 
@@ -247,20 +262,18 @@ begin
            m.uid,
            m.folder_id,
            -- The ordering clock. Preferred: INTERNALDATE, when this row has
-           -- one. For everything backfilled here, it never will — the column
-           -- did not exist when these rows were stored — so this one-time
-           -- migration falls back to the header `date` before `fetched_at`:
-           -- unlike live ingest (`threads.ts`), there is no sender actively
-           -- trying to game a backfill of mail already sitting in the
-           -- database, and `date` is the only signal that carries these
-           -- rows' real chronology at all.
-           coalesce(m.internal_date, m.date, m.fetched_at) as at
+           -- one. Legacy rows fall back to the header date only within one
+           -- day of fetched_at; an already-stored hostile far-future Date
+           -- must not pin a thread's state for years.
+           coalesce(m.internal_date, least(m.date, m.fetched_at + interval '1 day'), m.fetched_at) as at,
+           m.uidvalidity
       from email.messages m
   ),
   parts as (
     select g.account_id,
            g.tkey,
-           jsonb_agg(distinct p.addr) as participants
+           email.merge_participants('[]'::jsonb, jsonb_agg(distinct p.addr)) as participants,
+           count(distinct p.addr)::int as participant_count
       from msgs g,
            lateral (
              select email.address_of(g.from_addr) as addr
@@ -271,18 +284,20 @@ begin
      group by g.account_id, g.tkey
   ),
   rolled as (
-    -- Ties on `at` are broken deterministically — folder, then uid — rather
-    -- than by whatever order the rows happened to come out of the table in.
+    -- Ties on `at` are broken deterministically — folder, UIDVALIDITY, uid,
+    -- then message row id — rather than by table output order.
     select account_id,
            tkey,
-           (array_agg(subject order by at asc, folder_id asc, uid asc))[1] as subject,
+           (array_agg(subject order by at asc, folder_id asc, uidvalidity asc, uid asc, id asc))[1] as subject,
            min(at) as first_at,
            max(at) as last_at,
            count(*)::int as message_count,
-           (array_agg(direction order by at desc, folder_id desc, uid desc))[1] as last_direction,
-           (array_agg(email.address_of(from_addr) order by at desc, folder_id desc, uid desc))[1] as last_sender,
-           (array_agg(folder_id order by at desc, folder_id desc, uid desc))[1] as last_folder_id,
-           (array_agg(uid order by at desc, folder_id desc, uid desc))[1] as last_uid
+           (array_agg(direction order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_direction,
+           (array_agg(email.address_of(from_addr) order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_sender,
+           (array_agg(folder_id order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_folder_id,
+           (array_agg(uidvalidity order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_uidvalidity,
+           (array_agg(uid order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_uid,
+           (array_agg(id order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc))[1] as last_message_id
       from msgs
      group by account_id, tkey
   ),
@@ -291,12 +306,15 @@ begin
          r.tkey as thread_key,
          coalesce(r.subject, '') as subject,
          coalesce(p.participants, '[]'::jsonb) as participants,
+         greatest(0, coalesce(p.participant_count, 0) - email.participants_cap()) as participants_overflow,
          r.first_at,
          r.last_at,
          r.message_count,
          r.last_direction,
          r.last_folder_id,
+         r.last_uidvalidity,
          r.last_uid,
+         r.last_message_id,
          case
            when r.message_count = 1
             and r.last_direction = 'in'
@@ -318,10 +336,10 @@ begin
   ),
   written as (
     insert into email.threads
-      (account_id, thread_key, subject, participants, first_at, last_at,
-       message_count, last_direction, last_folder_id, last_uid, state, created_at)
-    select account_id, thread_key, subject, participants, first_at, last_at,
-           message_count, last_direction, last_folder_id, last_uid, state, seeded_at
+      (account_id, thread_key, subject, participants, participants_overflow, first_at, last_at,
+       message_count, last_direction, last_folder_id, last_uidvalidity, last_uid, last_message_id, state, created_at)
+    select account_id, thread_key, subject, participants, participants_overflow, first_at, last_at,
+           message_count, last_direction, last_folder_id, last_uidvalidity, last_uid, last_message_id, state, seeded_at
       from rebuilt
     -- Idempotent: a thread that already exists keeps what ingest has been
     -- maintaining, which is newer than anything this function could rebuild.
@@ -371,38 +389,54 @@ select backfill_threads();
 create or replace function expand_global_thread_policies() returns integer as $$
 declare
   expanded integer;
+  target record;
+  winner record;
 begin
-  with inserted as (
-    insert into email.policies
-      (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at)
-    select t.account_id, 'thread', t.id::text, p.action, p.params, p.origin, p.proposed, p.created_from,
-           p.created_at
+  expanded := 0;
+  -- Reconcile one account/thread at a time. An account-scoped decision is
+  -- more specific than a global one; among equally specific decisions the
+  -- newest is the gate's winner. Losers are revoked before the winner is
+  -- pointed at the UUID, so the live-policy unique index is never crossed.
+  for target in
+    select distinct t.id, t.account_id, t.thread_key
+      from email.threads t
+      join email.policies p
+        on p.scope = 'thread' and p.revoked_at is null
+       and (lower(p.matcher) = lower(t.thread_key) or p.matcher = t.id::text)
+       and (p.account_id is null or p.account_id = t.account_id)
+  loop
+    select p.* into winner
       from email.policies p
-      join email.threads t on lower(t.thread_key) = lower(p.matcher)
-     where p.scope = 'thread'
-       and p.revoked_at is null
-       and p.account_id is null
-    on conflict do nothing
-    returning 1
-  )
-  select count(*)::int into expanded from inserted;
+     where p.scope = 'thread' and p.revoked_at is null
+       and (lower(p.matcher) = lower(target.thread_key) or p.matcher = target.id::text)
+       and (p.account_id is null or p.account_id = target.account_id)
+     order by (p.account_id is not null) desc, p.created_at desc, p.id desc
+     limit 1;
 
-  update email.policies p
-     set revoked_at = now()
-   where p.scope = 'thread'
-     and p.revoked_at is null
-     and p.account_id is null
+    update email.policies p set revoked_at = now()
+     where p.scope = 'thread' and p.revoked_at is null
+       and p.account_id = target.account_id
+       and (lower(p.matcher) = lower(target.thread_key) or p.matcher = target.id::text)
+       and p.id <> winner.id;
+
+    if winner.account_id is null then
+      insert into email.policies
+        (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at)
+      values
+        (target.account_id, 'thread', target.id::text, winner.action, winner.params,
+         winner.origin, winner.proposed, winner.created_from, winner.created_at);
+      expanded := expanded + 1;
+    elsif winner.matcher <> target.id::text then
+      update email.policies set matcher = target.id::text where id = winner.id;
+      expanded := expanded + 1;
+    end if;
+  end loop;
+
+  -- A global row is superseded only after every account it covered has its
+  -- winning scoped row. A rerun sees UUID-scoped rows only and changes none.
+  update email.policies p set revoked_at = now()
+   where p.scope = 'thread' and p.revoked_at is null and p.account_id is null
      and exists (select 1 from email.threads t where lower(t.thread_key) = lower(p.matcher));
-
-  -- What remains after the expansion above is already account-scoped:
-  -- re-point it at the thread it was always about.
-  update email.policies p
-     set matcher = t.id::text
-    from email.threads t
-   where p.scope = 'thread'
-     and p.revoked_at is null
-     and lower(p.matcher) = lower(t.thread_key)
-     and p.account_id = t.account_id;
 
   update email.threads t
      set policy_id = p.id

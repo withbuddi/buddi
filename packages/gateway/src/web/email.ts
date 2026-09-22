@@ -391,9 +391,9 @@ export interface RouteReply {
   body: unknown;
 }
 
-export async function readEmailPolicies(pool: Pool): Promise<RouteReply> {
+export async function readEmailPolicies(pool: Pool, accountId?: string): Promise<RouteReply> {
   try {
-    return { status: 200, body: await policiesView(pool) };
+    return { status: 200, body: await policiesView(pool, accountId) };
   } catch (err) {
     // The email plugin may not be installed, or its migrations may not have
     // run. That is not an error the owner can act on from this page, so it

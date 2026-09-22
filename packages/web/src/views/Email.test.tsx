@@ -340,6 +340,7 @@ describe('Settings → Email → Add a rule', () => {
     expect(screen.getByLabelText('For every mailbox')).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: ACCOUNT.id } });
+    await waitFor(() => expect(api.emailPolicies).toHaveBeenCalledWith(ACCOUNT.id));
     expect(picker).toBeEnabled();
     expect(
       within(picker).getByText(threadLabel(THREAD, new Map([[ACCOUNT.id, ACCOUNT.displayName!]]))),
