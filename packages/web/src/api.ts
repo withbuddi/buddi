@@ -1506,11 +1506,12 @@ export const api = {
       subject: string;
       bodyText: string;
       /**
-       * The version the editor loaded. The route refuses with 409 and the
-       * current draft when it no longer matches, so a page left open while an
-       * agent rewrote the draft cannot save stale text over the new words.
+       * The version the editor loaded. Required: the route refuses with 409 and
+       * the current draft when it no longer matches, and with 400 when it is
+       * missing — an optional precondition is not one, and a save with no
+       * version is exactly the stale overwrite this exists to stop.
        */
-      updatedAt?: string | null;
+      updatedAt: string;
     },
   ) => put<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`, body),
   discardEmailDraft: (id: string) =>

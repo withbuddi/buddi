@@ -354,9 +354,14 @@ two runs drafting on one thread at once. So:
   draft" is a fact about the database, not a hope about scheduling;
 - the agent's update carries `edited_by is distinct from 'owner'`, so the rule
   that protects the owner's words cannot be overtaken by the save that made them
-  the owner's;
-- the owner's save carries the `updated_at` the editor loaded, and a mismatch is
-  a 409 carrying what is actually stored, which the editor redraws from;
+  the owner's — **and** the artifact version it read, so two runs rewriting one
+  draft cannot silently replace each other's work; a loser is told to read the
+  draft with `email.read_draft` first, exactly as it would be after an owner
+  edit;
+- the owner's save carries the `updated_at` the editor loaded. It is
+  **required**: an optional precondition is not one, and a `PUT` without it is a
+  400 rather than an unguarded write. A mismatch is a 409 carrying what is
+  actually stored, which the editor redraws from;
 - **`email.send` claims the draft row** in `ToolDefinition.claim` — after the
   Executor's re-description, before the effect ledger row — on `status`,
   `sent_action_id is null` *and* the artifact version the approved envelope

@@ -174,6 +174,11 @@ describe('the editor', () => {
         expect.objectContaining({ updatedAt: DRAFT.updatedAt }),
       ),
     );
+    // The route refuses a save with no version, so the editor must never make
+    // one: the field is required, not merely usually present.
+    const [, body] = vi.mocked(api.saveEmailDraft).mock.calls[0] as [string, { updatedAt: string }];
+    expect(typeof body.updatedAt).toBe('string');
+    expect(body.updatedAt).not.toBe('');
   });
 
   it('follows the stored draft when somebody else rewrites it', async () => {

@@ -186,6 +186,99 @@ suite('actions and approvals (postgres)', () => {
     return { manifest, ran };
   }
 
+  describe('the claim hook', () => {
+    /**
+     * A gated tool that holds something somebody else can edit.
+     *
+     * `claim` is the last moment at which nothing has happened. What this
+     * suite is really about is the *ledger*: a refusal here must leave no
+     * effect attempt, because an attempt row says "this may have gone out" and
+     * a lost claim says the opposite.
+     */
+    function claimingManifest(opts: { claim: () => Promise<void> }): {
+      manifest: PluginManifest;
+      claimed: number;
+      ran: unknown[];
+    } {
+      const state = { claimed: 0, ran: [] as unknown[] };
+      const manifest: PluginManifest = {
+        name: 'mail',
+        version: '1.2.3',
+        schema: 'mail',
+        migrationsDir: '/tmp/mail',
+        tools: [
+          {
+            name: 'mail.send',
+            description: 'Send an email.',
+            tier: 'gated',
+            input: z.object({ to: z.string(), subject: z.string() }),
+            describe: (input: any) => ({
+              envelope: { to: [input.to], subject: input.subject },
+              preview: `Send "${input.subject}" to ${input.to}`,
+            }),
+            claim: async () => {
+              state.claimed += 1;
+              await opts.claim();
+            },
+            execute: async (input: any) => {
+              state.ran.push(input);
+              return { messageId: 'mid-1' };
+            },
+          },
+        ],
+      };
+      return { manifest, get claimed() { return state.claimed; }, get ran() { return state.ran; } } as never;
+    }
+
+    const approvedWith = async (registry: ToolRegistry): Promise<string> => {
+      const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'Hi' }, ctx());
+      if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+      const decided = await decideApproval(pool, {
+        actionId: res.actionId,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+      });
+      expect(decided.ok).toBe(true);
+      return res.actionId;
+    };
+
+    it('is actually called — the registry hands it to the Executor', async () => {
+      const tool = claimingManifest({ claim: async () => {} });
+      const registry = new ToolRegistry();
+      registry.register(tool.manifest);
+      // The registry builds the executable view of a tool by hand; a field it
+      // forgets to copy is a hook that silently never runs.
+      expect(registry.lookup('mail.send')?.claim).toBeTypeOf('function');
+
+      const id = await approvedWith(registry);
+      const out = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(out.ok).toBe(true);
+      expect(tool.claimed).toBe(1);
+      expect(tool.ran).toHaveLength(1);
+    });
+
+    it('settles refused with nothing in the ledger when the claim is lost', async () => {
+      const tool = claimingManifest({
+        claim: async () => {
+          throw new Error('somebody edited it while you were deciding');
+        },
+      });
+      const registry = new ToolRegistry();
+      registry.register(tool.manifest);
+      const id = await approvedWith(registry);
+
+      const out = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(out).toMatchObject({ ok: false, state: 'refused' });
+      expect(out.ok ? '' : out.message).toContain('somebody edited it while you were deciding');
+      // Never dispatched, and the ledger says so by holding nothing at all: an
+      // attempt row would claim the effect may have happened.
+      expect(tool.ran).toEqual([]);
+      expect(await listEffectAttempts(pool, id)).toHaveLength(0);
+      expect((await getAction(pool, id))?.state).toBe('refused');
+    });
+  });
+
   describe('owner choices on an approval', () => {
     const proposed = async (): Promise<{ id: string; registry: ToolRegistry; ran: Array<Record<string, string> | undefined> }> => {
       const { manifest, ran } = choiceManifest();

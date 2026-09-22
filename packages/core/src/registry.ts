@@ -325,6 +325,12 @@ export class ToolRegistry {
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
       ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
+      // `claim` travels with the rest. A tool declares it so that a lost race
+      // settles `refused` with nothing in the effect ledger; a lookup that
+      // dropped it would leave the hook silently never called, and the
+      // executor would go on to record an attempt for something that was
+      // never attempted.
+      ...(tool.claim ? { claim: (input: unknown, ctx: ToolContext) => tool.claim!(input, ctx) } : {}),
       execute: (input: unknown, ctx: ToolContext) => tool.execute(input, ctx),
     };
   }

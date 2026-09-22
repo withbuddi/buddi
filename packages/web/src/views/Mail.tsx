@@ -241,8 +241,9 @@ export function DraftEditor({
                   subject: edit.subject,
                   bodyText: edit.bodyText,
                   // The version this editor loaded. A save that lost a race is
-                  // refused rather than allowed to overwrite.
-                  updatedAt: draft.updatedAt,
+                  // refused rather than allowed to overwrite; the route refuses
+                  // a save that carries no version at all.
+                  updatedAt: draft.updatedAt ?? '',
                 }),
               )
             }
