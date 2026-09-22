@@ -186,6 +186,7 @@ export {
   type PolicyScope,
 } from './policies/gate.js';
 export {
+  bulkPolicies,
   createPolicy,
   findPolicy,
   keepPolicy,
@@ -201,6 +202,7 @@ export {
   toPolicy,
   PolicyRefusal,
   POLICY_COLUMNS,
+  type BulkPolicyResult,
   type CreatePolicyInput,
   type GateEvent,
 } from './policies/store.js';

@@ -19,6 +19,7 @@ import {
   Email,
   EMPTY_RULE,
   KEYCHAIN_LINE,
+  confirmLine,
   hostsFor,
   ruleBodyOf,
   subFor,
@@ -37,6 +38,7 @@ vi.mock('../api', async (load) => {
       keepEmailPolicy: vi.fn(),
       revokeEmailPolicy: vi.fn(),
       setEmailPolicy: vi.fn(),
+      bulkEmailPolicies: vi.fn(),
     },
   };
 });
@@ -99,7 +101,14 @@ beforeEach(() => {
   vi.mocked(api.emailPolicies).mockResolvedValue(VIEW);
   vi.mocked(api.keepEmailPolicy).mockResolvedValue(VIEW);
   vi.mocked(api.revokeEmailPolicy).mockResolvedValue(VIEW);
+  vi.mocked(api.bulkEmailPolicies).mockResolvedValue({ ...VIEW, kept: 0, revoked: 0, missing: 0 });
 });
+
+/** Open a drawer by the button on the right of its section header. */
+async function openDrawer(name: 'Add an account' | 'Add a rule'): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name }));
+  await screen.findByRole('dialog');
+}
 
 describe('Settings → Email → Accounts', () => {
   it('knows the common providers, and falls back to the domain for the rest', () => {
@@ -124,12 +133,16 @@ describe('Settings → Email → Accounts', () => {
     expect(screen.getByText('EMAIL_OWNER_WORK_TEST_3f2a9c41')).toBeInTheDocument();
     expect(screen.getByText('invoices@work.test')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+    // The form is behind the button, and the sentence about the password with it.
+    expect(screen.queryByText(KEYCHAIN_LINE)).toBeNull();
+    await openDrawer('Add an account');
     expect(screen.getByText(KEYCHAIN_LINE)).toBeInTheDocument();
   });
 
   it('fills the hosts in from the address, and sends exactly what was typed', async () => {
     render(<Email />);
     await screen.findByText('owner@work.test');
+    await openDrawer('Add an account');
 
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'owner@gmail.com' } });
     expect(screen.getByLabelText('IMAP host')).toHaveValue('imap.gmail.com');
@@ -153,14 +166,19 @@ describe('Settings → Email → Accounts', () => {
       displayName: null,
       aliases: ['hello@gmail.com', 'contact@gmail.com'],
     });
+    // Saved, so the drawer is closed and the list is read again.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.emailAccounts).toHaveBeenCalledTimes(2);
     // The field is emptied once it is away: the page never holds a password it
     // no longer needs, and never shows one back.
-    await waitFor(() => expect(screen.getByLabelText('App password')).toHaveValue(''));
+    await openDrawer('Add an account');
+    expect(screen.getByLabelText('App password')).toHaveValue('');
   });
 
   it('stops guessing hosts once one has been typed by hand', async () => {
     render(<Email />);
     await screen.findByText('owner@work.test');
+    await openDrawer('Add an account');
     fireEvent.change(screen.getByLabelText('IMAP host'), { target: { value: 'mail.mine.test' } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'owner@gmail.com' } });
     expect(screen.getByLabelText('IMAP host')).toHaveValue('mail.mine.test');
@@ -169,6 +187,7 @@ describe('Settings → Email → Accounts', () => {
   it('will not send an incomplete form', async () => {
     render(<Email />);
     await screen.findByText('owner@work.test');
+    await openDrawer('Add an account');
     expect(screen.getByRole('button', { name: 'Add the account' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'owner@gmail.com' } });
     expect(screen.getByRole('button', { name: 'Add the account' })).toBeDisabled();
@@ -277,6 +296,7 @@ describe('Settings → Email → Add a rule', () => {
   it('will not write a rule until a mailbox is chosen', async () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+    await openDrawer('Add a rule');
 
     const add = screen.getByRole('button', { name: 'Add the rule' });
     expect(add).toBeDisabled();
@@ -302,6 +322,8 @@ describe('Settings → Email → Add a rule', () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
 
+    await openDrawer('Add a rule');
+
     fireEvent.change(screen.getByLabelText('Their address'), { target: { value: 'news@shop.test' } });
     fireEvent.click(screen.getByLabelText('For every mailbox'));
     expect(screen.getByLabelText('Which mailbox')).toBeDisabled();
@@ -320,6 +342,8 @@ describe('Settings → Email → Add a rule', () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
 
+    await openDrawer('Add a rule');
+
     expect(screen.queryByLabelText('From this address')).toBeNull();
     fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
     expect(screen.getByLabelText('From this address')).toBeInTheDocument();
@@ -331,6 +355,8 @@ describe('Settings → Email → Add a rule', () => {
   it('picks a conversation by its subject rather than asking for a Message-ID, filtered and labelled by mailbox', async () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+
+    await openDrawer('Add a rule');
 
     fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
     // No mailbox chosen yet: the picker offers nothing rather than every
@@ -362,6 +388,8 @@ describe('Settings → Email → Add a rule', () => {
     render(<Email embedded />);
     await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
 
+    await openDrawer('Add a rule');
+
     fireEvent.change(screen.getByLabelText('What the rule is about'), { target: { value: 'thread' } });
     fireEvent.change(screen.getByLabelText('Which mailbox'), { target: { value: otherAccount.id } });
     // THREAD belongs to ACCOUNT, not otherAccount.
@@ -386,5 +414,219 @@ describe('Settings → Email → Add a rule', () => {
     expect(
       ruleBodyOf({ ...EMPTY_RULE, matcher: 'a@b.test', sender: 'them@x.test', accountId: 'acc-1' }),
     ).not.toHaveProperty('sender');
+  });
+});
+
+/*
+ * Seventy-three proposals is the case this page has to survive.
+ *
+ * What is pinned here is that the selection is what travels — the exact ids
+ * the owner ticked, in one request — and that "all" says how many that is
+ * before it happens. A bulk action that sent a flag instead of ids, or that
+ * asked "are you sure?" without the number, would be the page deciding for
+ * the owner on a list they cannot see the end of.
+ */
+describe('Settings → Email → keeping and revoking in bulk', () => {
+  const P1 = policy({ id: 'q1', matcher: 'one@shop.test', proposed: true, runsSaved: 0 });
+  const P2 = policy({ id: 'q2', matcher: 'two@shop.test', proposed: true, runsSaved: 0 });
+  const P3 = policy({ id: 'q3', matcher: 'three@shop.test', proposed: true, runsSaved: 0 });
+  const MANY: EmailPoliciesView = {
+    applied: [policy({ id: 'a1', matcher: 'kept@shop.test' })],
+    proposed: [P1, P2, P3],
+    threads: [],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.emailPolicies).mockResolvedValue(MANY);
+    vi.mocked(api.bulkEmailPolicies).mockResolvedValue({ ...MANY, kept: 0, revoked: 0, missing: 0 });
+  });
+
+  /** The panel one of the two lists is drawn in. */
+  function panel(title: 'Applied' | 'Learned, proposed'): HTMLElement {
+    return screen.getByText(title).closest('.ui-panel') as HTMLElement;
+  }
+
+  it('says in each header how many rules the list holds', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+    expect(within(panel('Learned, proposed')).getByText('3 proposed')).toBeInTheDocument();
+    expect(within(panel('Applied')).getByText('1 applied')).toBeInTheDocument();
+  });
+
+  it('keeps exactly the rows that were ticked', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Select one@shop.test'));
+    fireEvent.click(screen.getByLabelText('Select three@shop.test'));
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Keep selected' }));
+
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledTimes(1));
+    expect(api.bulkEmailPolicies).toHaveBeenCalledWith('keep', ['q1', 'q3']);
+    // And the lists are read again, from the server rather than from hope.
+    await waitFor(() => expect(api.emailPolicies).toHaveBeenCalledTimes(2));
+  });
+
+  it('revokes exactly the rows that were ticked', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('two@shop.test')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Select two@shop.test'));
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Revoke selected' }));
+
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledWith('revoke', ['q2']));
+  });
+
+  it('offers nothing to do until something is ticked', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+    const head = panel('Learned, proposed');
+    expect(within(head).getByRole('button', { name: 'Keep selected' })).toBeDisabled();
+    expect(within(head).getByRole('button', { name: 'Revoke selected' })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Select one@shop.test'));
+    expect(within(head).getByRole('button', { name: 'Keep selected' })).toBeEnabled();
+  });
+
+  it('ticks every row shown from the header box', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Select all proposed'));
+    expect(screen.getByLabelText('Select two@shop.test')).toBeChecked();
+
+    // And untick again: the box is the whole list, both ways.
+    fireEvent.click(screen.getByLabelText('Select all proposed'));
+    expect(screen.getByLabelText('Select two@shop.test')).not.toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('Select all proposed'));
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Keep selected' }));
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledWith('keep', ['q1', 'q2', 'q3']));
+  });
+
+  it('asks once before keeping all of them, and names the count', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep all (3)' }));
+    expect(screen.getByText(confirmLine('keep', 3))).toBeInTheDocument();
+    expect(screen.getByText(/3 rules\?/)).toBeInTheDocument();
+    expect(api.bulkEmailPolicies).not.toHaveBeenCalled();
+
+    // And it can be called off without touching anything.
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(confirmLine('keep', 3))).toBeNull();
+    expect(api.bulkEmailPolicies).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep all (3)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep all (3)' }));
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledWith('keep', ['q1', 'q2', 'q3']));
+  });
+
+  it('asks the same way before revoking all of them, on both lists', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+
+    // The proposed list.
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Revoke all (3)' }));
+    expect(screen.getByText(confirmLine('revoke', 3))).toBeInTheDocument();
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Revoke all (3)' }));
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledWith('revoke', ['q1', 'q2', 'q3']));
+
+    // And the applied one, which offers no Keep at all: it is already kept.
+    const kept = panel('Applied');
+    expect(within(kept).queryByRole('button', { name: /Keep/ })).toBeNull();
+    fireEvent.click(within(kept).getByRole('button', { name: 'Revoke all (1)' }));
+    expect(within(kept).getByText(confirmLine('revoke', 1))).toBeInTheDocument();
+    // One rule, so the line is singular. A count is not a plural by default.
+    expect(confirmLine('revoke', 1)).toContain('1 rule?');
+    fireEvent.click(within(kept).getByRole('button', { name: 'Revoke all (1)' }));
+    await waitFor(() => expect(api.bulkEmailPolicies).toHaveBeenCalledWith('revoke', ['a1']));
+  });
+
+  it('shows the failure rather than pretending the selection went through', async () => {
+    vi.mocked(api.bulkEmailPolicies).mockRejectedValue(new Error('That policy is no longer there.'));
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('one@shop.test')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Select one@shop.test'));
+    fireEvent.click(within(panel('Learned, proposed')).getByRole('button', { name: 'Keep selected' }));
+    await waitFor(() =>
+      expect(screen.getByText('That policy is no longer there.')).toBeInTheDocument(),
+    );
+  });
+
+  it('has no bulk actions on a list with nothing in it', async () => {
+    vi.mocked(api.emailPolicies).mockResolvedValue({ applied: [], proposed: [] });
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText(/three verdicts running/)).toBeInTheDocument());
+    expect(screen.queryByLabelText('Select all proposed')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Keep all/ })).toBeNull();
+    expect(screen.getByText('0 proposed')).toBeInTheDocument();
+  });
+});
+
+/*
+ * The drawers.
+ *
+ * A form is behind a button and the page is a list of what exists. The one
+ * thing that must not happen is the drawer eating what was typed into it: it
+ * is the same state as before, held by the page, so a lid closed by mistake is
+ * a lid, and only a reload throws the draft away.
+ */
+describe('Settings → Email → the drawers', () => {
+  it('opens the account form, closes on Escape, and keeps the draft', async () => {
+    render(<Email />);
+    await screen.findByText('owner@work.test');
+    await openDrawer('Add an account');
+
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'owner@gmail.com' } });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await openDrawer('Add an account');
+    expect(screen.getByLabelText('Address')).toHaveValue('owner@gmail.com');
+    expect(screen.getByLabelText('IMAP host')).toHaveValue('imap.gmail.com');
+  });
+
+  it('closes the account form on Close, and keeps the draft', async () => {
+    render(<Email />);
+    await screen.findByText('owner@work.test');
+    await openDrawer('Add an account');
+
+    fireEvent.change(screen.getByLabelText('Name for it'), { target: { value: 'Side project' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await openDrawer('Add an account');
+    expect(screen.getByLabelText('Name for it')).toHaveValue('Side project');
+  });
+
+  it('opens the rule form, closes on Escape, and keeps the draft', async () => {
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+    await openDrawer('Add a rule');
+
+    fireEvent.change(screen.getByLabelText('Their address'), { target: { value: 'half@typed.test' } });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await openDrawer('Add a rule');
+    expect(screen.getByLabelText('Their address')).toHaveValue('half@typed.test');
+  });
+
+  it('closes the rule drawer once the rule is written, and reads the list again', async () => {
+    vi.mocked(api.setEmailPolicy).mockResolvedValue(VIEW);
+    render(<Email embedded />);
+    await waitFor(() => expect(screen.getByText('news@shop.test')).toBeInTheDocument());
+    await openDrawer('Add a rule');
+
+    fireEvent.change(screen.getByLabelText('Their address'), { target: { value: 'news@shop.test' } });
+    fireEvent.click(screen.getByLabelText('For every mailbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add the rule' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.emailPolicies).toHaveBeenCalledTimes(2);
+    // Written and gone: the drawer opens empty next time.
+    await openDrawer('Add a rule');
+    expect(screen.getByLabelText('Their address')).toHaveValue('');
   });
 });

@@ -19,7 +19,7 @@ import { listPolicies, revokeEmailPolicy, setPolicy, policiesView } from '../too
 import { triageRecord } from '../tools/triage.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { SourceContext, ToolContext } from '../types.js';
-import { createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
+import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
 
 const FULL_SYNC = 10_000;
 const databaseUrl = await testDatabaseUrl();
@@ -599,6 +599,70 @@ suite('email policies (postgres + fake imap)', () => {
       expect(view.applied).toHaveLength(1);
       expect(view.applied[0]).toMatchObject({ id: policy.id, runsSaved: 4, decisions: 4 });
       expect(view.proposed).toHaveLength(0);
+    });
+  });
+
+  /*
+   * Keeping and revoking a whole selection.
+   *
+   * The settings page can hold seventy-odd proposals, and the owner ticking
+   * them made one decision — so it lands as one statement in one transaction,
+   * and it touches the ids it was handed and no others. That last part is the
+   * whole test: a bulk action that reached one row further than the selection
+   * would be the page deciding something nobody chose.
+   */
+  describe('a whole selection at once', () => {
+    async function three(): Promise<string[]> {
+      const ids: string[] = [];
+      for (const matcher of ['one@shop.test', 'two@shop.test', 'three@shop.test']) {
+        const policy = await createPolicy(
+          pool,
+          { accountId, scope: 'sender', matcher, action: 'ignore', origin: 'learned', proposed: true },
+          NOW,
+        );
+        ids.push(policy.id);
+      }
+      return ids;
+    }
+
+    it('keeps only the proposals named, and leaves the rest proposals', async () => {
+      const [first, second, third] = await three();
+      const result = await bulkPolicies(pool, 'keep', [first!, third!], NOW);
+      expect(result).toEqual({ kept: 2, revoked: 0, missing: 0 });
+
+      const view = await policiesView(pool);
+      expect(view.applied.map((p) => p.matcher).sort()).toEqual(['one@shop.test', 'three@shop.test']);
+      expect(view.proposed.map((p) => p.id)).toEqual([second]);
+    });
+
+    it('revokes only the rules named, and the others keep deciding', async () => {
+      const [first, second, third] = await three();
+      const result = await bulkPolicies(pool, 'revoke', [second!], NOW);
+      expect(result).toEqual({ kept: 0, revoked: 1, missing: 0 });
+
+      const live = (await loadPolicies(pool, accountId)).map((p) => p.id).sort();
+      expect(live).toEqual([first, third].sort());
+    });
+
+    it('counts an id it could not touch as missing rather than failing the lot', async () => {
+      const [first] = await three();
+      await bulkPolicies(pool, 'revoke', [first!], NOW);
+      // A revoked row is no longer something a keep can act on; the other id
+      // is not a policy at all. Neither stops the one that is.
+      const result = await bulkPolicies(
+        pool,
+        'keep',
+        [first!, '00000000-0000-0000-0000-000000000000', (await three())[1]!],
+        NOW,
+      );
+      expect(result).toMatchObject({ kept: 1, missing: 2 });
+    });
+
+    it('is idempotent, and does nothing for an empty selection', async () => {
+      const [first] = await three();
+      expect(await bulkPolicies(pool, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
+      expect(await bulkPolicies(pool, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
+      expect(await bulkPolicies(pool, 'keep', [], NOW)).toEqual({ kept: 0, revoked: 0, missing: 0 });
     });
   });
 

@@ -2656,6 +2656,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 /* A box, its label, and enough room between them to hit either. */
 .recovery-check,
 .plugin-check,
+.policy-check,
 .backup-check {
   display: flex;
   align-items: flex-start;
@@ -2665,7 +2666,12 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .recovery-check input,
 .plugin-check input,
+.policy-check input,
 .backup-check input { margin-top: 2px; }
+/* In a panel head, the box that ticks every row shown. No indent: it is a
+   control on a row of controls, not a line of prose. */
+.policy-check { align-items: center; font-size: var(--text-sm); color: var(--text-muted); }
+.policy-check input { margin-top: 0; }
 
 /* The one command that has to be run on this machine, on its own line with the
    button that copies it. The command scrolls rather than wrapping, because a
