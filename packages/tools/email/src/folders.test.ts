@@ -26,6 +26,11 @@ describe('recognising the Sent folder', () => {
     expect(sentConfidence(box('Archive'))).toBe(0);
   });
 
+  it('never guesses Outbox is Sent — it can hold mail still queued or that failed to send', () => {
+    expect(sentConfidence(box('Outbox'))).toBe(0);
+    expect(sentConfidence(box('INBOX.Outbox'))).toBe(0);
+  });
+
   it('takes the last segment of a path, whatever separator the server uses', () => {
     expect(leafOf('INBOX.Sent')).toBe('sent');
     expect(leafOf('[Gmail]/Sent Mail')).toBe('sent mail');

@@ -130,6 +130,7 @@ class FakeImapClient implements ImapClient {
 export function fakeMessage(over: Partial<FetchedMessage> = {}): Omit<FetchedMessage, 'uid'> & {
   uid?: number;
 } {
+  const date = over.date !== undefined ? over.date : new Date('2026-09-13T09:00:00Z');
   return {
     messageId: '<m1@example.test>',
     inReplyTo: null,
@@ -139,7 +140,11 @@ export function fakeMessage(over: Partial<FetchedMessage> = {}): Omit<FetchedMes
     to: ['owner@example.test'],
     cc: [],
     subject: 'Hello',
-    date: new Date('2026-09-13T09:00:00Z'),
+    date,
+    // Defaults to the same instant as `date` so a test that does not care
+    // about the distinction gets consistent ordering either way; a test about
+    // the distinction overrides one or the other explicitly.
+    internalDate: date,
     bodyText: 'Body text.',
     hasAttachments: false,
     attachments: [],
