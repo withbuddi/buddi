@@ -11,12 +11,12 @@
  *    one dissenting judgement resets it.
  *  - **Nothing applies itself.** A proposal is a row with `proposed = true`;
  *    the gate does not read it, and the settings page shows it under "Learned,
- *    proposed" with Keep and Revoke. Promo is no exception: until the Sent
- *    folder is synced (docs/email.md §13.3), "the owner never wrote back" is
- *    derived from drafts *buddi* sent, so a sender answered from a phone or
- *    from Gmail looks unanswered here. A rule learned from a half-known history
- *    may be suggested; it may not silence anybody by itself. The Learned list
- *    on the settings page is where the owner applies it.
+ *    proposed" with Keep and Revoke. Promo is no exception. Since step 3 the
+ *    Sent folder is synced, so "the owner never wrote back" is read off his own
+ *    mail rather than inferred from drafts buddi sent — but a mailbox is synced
+ *    from *now*, not from its beginning, and a sender answered before buddi
+ *    arrived still looks unanswered. Silencing somebody on a history this
+ *    installation has only part of stays the owner's tap to make.
  *  - **The owner writing back vetoes silence.** Any proposal that would stop a
  *    run is refused for a sender the owner has actually sent mail to. A person
  *    who gets answers is not a newsletter, whatever the categories say.
@@ -76,9 +76,9 @@ export function learnedProposal(
   const allLow = run.every((v) => v.urgency === 'low');
 
   // Marketing, three times running, never answered. It is the strongest case
-  // there is for silence — and it is still only a proposal: what "never
-  // answered" is derived from is drafts buddi itself sent, which is not the
-  // owner's Sent folder.
+  // there is for silence — and it is still only a proposal: "never answered"
+  // is now read from the owner's own Sent folder, but a folder synced from the
+  // day buddi arrived cannot speak for the years before it.
   if (sameCategory && category === 'promo' && !ownerHasReplied) {
     return {
       action: 'ignore',
@@ -154,11 +154,19 @@ export async function senderVerdicts(
 /**
  * Has the owner ever actually sent anything to this address *from this account*?
  *
- * Per account for the same reason the verdicts are: a reply sent from the
- * personal mailbox is not evidence about the work one. And, whatever the
- * answer, it is only evidence about mail sent *through buddi* — the Sent folder
- * is not synced yet, which is the whole reason nothing learned here applies
- * itself.
+ * Answered from the **Sent folder** since step 3: a message with
+ * `direction: out` addressed to them. That is the owner's own mail, whatever
+ * client he wrote it in, and it replaces the old inference from buddi's drafts
+ * — which could only ever see the replies buddi itself had sent, and therefore
+ * called a correspondent of ten years "never answered" if the answers were
+ * typed on a phone.
+ *
+ * The `drafts` table stays what it always was: what buddi drafted and sent
+ * through its own tool. It is a record of this machine's actions, not of the
+ * owner's correspondence, and the two questions are no longer the same one.
+ *
+ * Per account, still: a reply sent from the personal mailbox is not evidence
+ * about the work one.
  */
 export async function ownerHasRepliedTo(
   db: Db,
@@ -168,16 +176,93 @@ export async function ownerHasRepliedTo(
   const matcher = normalizeAddress(address);
   if (matcher === '' || !accountId) return false;
   const { rows } = await db.query<{ n: string }>(
-    `select count(*)::int as n from email.drafts d
-      where d.sent_at is not null
-        and d.account_id = $2::uuid
-        and exists (
-          select 1 from jsonb_array_elements_text(d.to_addrs) as a(addr)
-           where email.address_of(a.addr) = $1
+    `select count(*)::int as n from email.messages m
+      where m.account_id = $2::uuid
+        and m.direction = 'out'
+        and (
+          exists (
+            select 1 from jsonb_array_elements_text(m.to_addrs) as a(addr)
+             where email.address_of(a.addr) = $1
+          )
+          or exists (
+            select 1 from jsonb_array_elements_text(m.cc) as a(addr)
+             where email.address_of(a.addr) = $1
+          )
         )`,
     [matcher, accountId],
   );
   return Number(rows[0]?.n ?? 0) > 0;
+}
+
+/** How many recent outbound messages are counted when measuring a habit. */
+export const REPLY_SAMPLE = 50;
+
+export interface OwnerReplies {
+  /** How many of the owner's messages went to this address (recent sample). */
+  count: number;
+  lastAt: string | null;
+  /**
+   * Mean hours between their message and the owner's answer in the same
+   * thread, over the replies where both ends are known. Null when none are.
+   */
+  averageHours: number | null;
+}
+
+/**
+ * How often the owner writes back to this address, and how quickly.
+ *
+ * docs/email.md §6 asks a triage run to be told *«how many times the owner
+ * replied and how fast»*. "How fast" is measured the only way that means
+ * anything: inside a thread, from their message to the owner's next one. A
+ * reply with nothing before it in the thread is counted as a reply and left
+ * out of the average rather than guessed at.
+ */
+export async function ownerReplies(
+  db: Db,
+  accountId: string,
+  address: string,
+): Promise<OwnerReplies> {
+  const matcher = normalizeAddress(address);
+  if (matcher === '' || !accountId) return { count: 0, lastAt: null, averageHours: null };
+  const { rows } = await db.query(
+    `with sent as (
+       select m.thread_id, coalesce(m.internal_date, m.fetched_at) as at
+         from email.messages m
+        where m.account_id = $2::uuid
+          and m.direction = 'out'
+          and (
+            exists (select 1 from jsonb_array_elements_text(m.to_addrs) as a(addr)
+                     where email.address_of(a.addr) = $1)
+            or exists (select 1 from jsonb_array_elements_text(m.cc) as a(addr)
+                        where email.address_of(a.addr) = $1)
+          )
+        order by at desc
+        limit $3
+     ),
+     paired as (
+       select s.at,
+              (select max(coalesce(i.internal_date, i.fetched_at))
+                 from email.messages i
+                where i.thread_id = s.thread_id
+                  and i.direction = 'in'
+                  and email.address_of(i.from_addr) = $1
+                  and coalesce(i.internal_date, i.fetched_at) <= s.at) as asked_at
+         from sent s
+     )
+     select count(*)::int as n,
+            max(at) as last_at,
+            avg(extract(epoch from (at - asked_at)) / 3600.0)
+              filter (where asked_at is not null) as hours
+       from paired`,
+    [matcher, accountId, REPLY_SAMPLE],
+  );
+  const row = rows[0] ?? {};
+  const hours = row.hours === null || row.hours === undefined ? null : Number(row.hours);
+  return {
+    count: Number(row.n ?? 0),
+    lastAt: row.last_at instanceof Date ? row.last_at.toISOString() : (row.last_at ?? null),
+    averageHours: hours === null || !Number.isFinite(hours) ? null : hours,
+  };
 }
 
 /**

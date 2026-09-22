@@ -140,7 +140,7 @@ suite('email accounts, plural (postgres)', () => {
 
   /** Both accounts, both mailboxes polled in one pass. */
   async function seed(): Promise<{ personalId: string; workId: string }> {
-    await pool.query('truncate email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade');
+    await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     await ensureGmailAccount(pool, ENV);
     await pool.query(
       `insert into email.accounts
@@ -184,7 +184,7 @@ suite('email accounts, plural (postgres)', () => {
       { address: PERSONAL, n: 1 },
       { address: WORK, n: 1 },
     ]);
-    const { rows: boxes } = await pool.query(`select count(*)::int as n from email.mailboxes`);
+    const { rows: boxes } = await pool.query(`select count(*)::int as n from email.folders`);
     expect(boxes[0].n).toBe(2);
   });
 
@@ -311,7 +311,7 @@ suite('email accounts, plural (postgres)', () => {
 
   describe('the env-seeded account, alone, exactly as before', () => {
     beforeEach(async () => {
-      await pool.query('truncate email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade');
+      await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     });
 
     it('seeds one account from GMAIL_USER, with no aliases and no page provenance', async () => {
@@ -390,7 +390,7 @@ suite('email accounts, plural (postgres)', () => {
       });
       expect(lines.join('\n')).toContain(`no secret named ${WORK_SECRET}`);
       const { rows } = await pool.query(
-        `select a.address from email.mailboxes m join email.accounts a on a.id = m.account_id`,
+        `select a.address from email.folders m join email.accounts a on a.id = m.account_id`,
       );
       expect(rows.map((r: any) => r.address)).toEqual([PERSONAL]);
     });

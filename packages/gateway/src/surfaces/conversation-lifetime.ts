@@ -66,11 +66,13 @@
  *    decides, whichever conversation the chat has moved on to. A boundary can
  *    no more strand an approval than `/reset` could.
  *  - **Offers do not.** An offer belongs to the turn that made it — the rule
- *    `withdrawOffers` already keeps within a conversation — and a boundary is
- *    the strongest possible version of "the owner moved on". So the old
- *    conversation's open offers are withdrawn as the new one starts, and a tap
- *    on one afterwards gets the ordinary "that option has expired — just ask me
- *    instead" rather than a run against a thread nobody is in.
+ *    `lapseConversationOffers` already keeps within a conversation — and a
+ *    boundary is the strongest version of "the owner moved on". So the old
+ *    conversation's open offers **lapse** as the new one starts, and a tap on
+ *    one afterwards is told the offer has lapsed rather than starting a run
+ *    against a thread nobody is in. Lapsed, not expired and not refused: it
+ *    says what happened, and the dashboard's fold can still show it for a
+ *    week.
  *  - **A pending question does not straddle one either.** It is a claim on the
  *    owner's *next message*, lives fifteen minutes, and belongs to the turn
  *    that asked. A surface answering one passes `continuation: true` so the
@@ -92,7 +94,7 @@
  * The mechanics are untouched: the rollover happens, `start(boundary)` is
  * called, the carry-over is written, and the log still records every boundary.
  */
-import { withdrawOffers, type Queryable } from '@buddi/core';
+import { lapseConversationOffers, type Queryable } from '@buddi/core';
 import { projectedTranscriptTokens, transcriptBudget } from './context-budget.js';
 
 /** Silence longer than this ends a conversation. Three hours: a new sitting. */
@@ -293,12 +295,19 @@ export async function conversationForTurn(
   if (reason === null) return { conversationId: current };
 
   // The old conversation's buttons described a decision in a thread that is
-  // over. Withdrawing is expiry, not deletion — a tap gets "that option has
-  // expired" — and it is never allowed to cost the owner their answer.
+  // over. They have not expired and the owner did not refuse them: the thread
+  // rolled over underneath them, which is what lapsing records — a tap
+  // afterwards is told "that offer has lapsed", and the fold on the dashboard
+  // can still show what was on the table when the conversation ended. Never
+  // allowed to cost the owner their answer.
   try {
-    await withdrawOffers(pool, { conversationId: current, now: input.now });
+    await lapseConversationOffers(pool, {
+      conversationId: current,
+      reason: 'rolled-over',
+      now: input.now,
+    });
   } catch (err) {
-    input.log?.(`conversation lifetime: withdrawing offers of ${current} failed: ${errorText(err)}`);
+    input.log?.(`conversation lifetime: lapsing offers of ${current} failed: ${errorText(err)}`);
   }
 
   const conversationId = await input.start({ previousConversationId: current, reason });

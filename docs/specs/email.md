@@ -1,13 +1,12 @@
 # Email: accounts, threads, policies, watchers
 
-Status: in progress, 2 of 5 steps built; step 3 in progress, 2026-09-21
-
-Steps 1 and 2 of §13 are built and merged: policies and the gate seeded from
-history, with the Learned list on the settings page, and accounts plural with
-per-account identity and secrets in the vault from that page. Three departures
-from this document are noted in §5. Step 3 — threads and the Sent folder, with
-the triage run receiving the thread — is being built now on branch
-`email-threads`. Steps 4 and 5 are not started.
+Status: in progress, steps 1 to 3 of 5 built, 2026-09-21. Steps 4 and 5 remain specification.
+review; the current plugin had no document, and this is the one it should have
+had. What §13.1 asks for — policies, the gate, the backfill and the Learned
+list — is implemented, with three departures noted in §5; §4's accounts are
+plural, added from the settings page; and §13.3's threads, Sent folder and
+thread-shaped triage prompt are in, which is what §3's `threads` and `folders`
+below now describe rather than propose.
 
 ## 1. The verdict on today
 
@@ -40,10 +39,16 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect.
 
 New:
 
-- `threads`: per account, `thread_key`, subject, participants, first and
-  last message time, `state` in {waiting-on-me, waiting-on-them, closed,
+- `threads` (built): per account, `thread_key`, subject, participants, first
+  and last message time, `state` in {waiting-on-me, waiting-on-them, closed,
   muted}, derived from who wrote last including the Sent folder, and
-  `policy_id` when a thread has one.
+  `policy_id` when a thread has one. Every message carries its `thread_id` and
+  a `direction` — `in` for what arrived, `out` for what the owner sent — and
+  the thread is maintained as each message lands: `muted` is sticky and new
+  mail never lifts it. `email.list_threads`, `email.read_thread` and the gated
+  `email.mute_thread` are how the conversation is read and silenced, and the
+  gate's `thread` scope matches the thread's **id**, not the `thread_key` a
+  sender writes.
 - `policies`: `scope` in {sender, domain, thread, list-id}, the matcher,
   `action` in {ignore, archive, label, notify, draft, hand-to-agent,
   wake}, parameters (label name, agent id, Telegram yes or no, and — on a
@@ -51,25 +56,38 @@ New:
   `origin` in {owner, learned, plugin}, `created_from` (the verdicts it
   was learned from), `revoked_at`. **A policy with `origin: learned` is
   proposed, not applied, until the owner keeps it. There is no
-  exception**, promo included: "and no reply" is derived from drafts buddi
-  itself sent, and until the Sent folder is synced (step 3) a sender
-  answered from a phone or from the web client looks here like one who was
-  never answered. Silencing somebody on that inference is not a decision
-  buddi gets to make on its own. The Learned list on the settings page is
-  where the owner applies them, one tap each, and the same page revokes
-  them. Verdicts, and the reply history read from drafts, are counted per
-  account: three promos in the personal mailbox say nothing about the work
-  one.
-- `folders`: discovered per account; **INBOX today, Sent in step 3**;
-  others on request; labels applied through IMAP flags or Gmail labels.
+  exception**, promo included: "and no reply" used to be derived from drafts
+  buddi itself sent, so a sender answered from a phone or from the web client
+  looked here like one who was never answered. Since step 3 it is read from
+  the **Sent folder** — but a mailbox is synced from the day buddi arrived,
+  not from the day it was made, so the history is still only partly known and
+  silencing somebody on it is not a decision buddi gets to make on its own.
+  The Learned list on the settings page is where the owner applies them, one
+  tap each, and the same page revokes them. Verdicts, and the reply history,
+  are counted per account: three promos in the personal mailbox say nothing
+  about the work one.
+- `folders` (built): discovered per account, once, from the server's own LIST.
+  Completion is recorded on the account (`accounts.folders_discovered_at`),
+  not inferred from how many folder rows there are: a pass that lost the Sent
+  row to a transient error leaves it null and the next poll lists again.
+  **INBOX and Sent are synced**, each with its own UIDVALIDITY and cursor;
+  every other folder is recorded and polled on request (§11). Sent is
+  recognised by its SPECIAL-USE `\Sent` attribute, then by Gmail's
+  `[Gmail]/Sent Mail`, then by name; an account with no Sent folder keeps
+  working and simply never hears the owner's side — and keeps being listed, so
+  a Sent folder created later is found. Labels applied through IMAP
+  flags or Gmail labels remain future work — the port is peek-only (§5).
 - `attachments`: name, type, size, and, when fetched, the artifact id.
 - `events`: what the policy engine did to each message (skipped a run,
   archived, labelled, notified), so the owner can audit the silence.
 
-Migration: a backfill builds `threads` from the stored `thread_key`, sets
-state from the newest message's direction, and seeds learned `ignore`
-policies — as proposals, for the reason above — from the existing
-verdicts; 855 messages, a second's work.
+Migration: the backfill (`007_threads.sql`) builds `threads` from the stored
+`thread_key` per account, sets each message's `direction` from whether the From
+is the account's address or one of its aliases, and takes each thread's state
+from the newest message's direction — `closed` only for a conversation that is
+not one: a single inbound message older than 30 days from a sender there is
+already an `ignore` rule about. `004`'s seed of learned `ignore` policies —
+proposals, for the reason above — is unchanged. 855 messages, a second's work.
 
 ## 4. Accounts
 
@@ -147,9 +165,12 @@ adding a second one.
 Three departures, as built:
 
 - **Nothing learned applies itself.** §3 said `ignore` after three promo
-  verdicts with no reply would apply at once. It does not, and will not
-  until the Sent folder is synced: see §3. It is proposed, and the Learned
-  list is one tap from applying it.
+  verdicts with no reply would apply at once. It does not. The Sent folder is
+  synced now, so "no reply" is read from the owner's own mail rather than from
+  buddi's drafts — but it is synced from the day buddi arrived, and a rule
+  learned from a history that starts last month may not silence a
+  correspondent of ten years. It is proposed, and the Learned list is one tap
+  from applying it.
 
 - **`archive` and `label` are refused, not performed.** The IMAP port is
   peek-only by construction — reading mail must not mutate it — so both are
@@ -170,6 +191,12 @@ who wrote each, the thread state, the sender's profile (past verdicts,
 policy if any, how many times the owner replied and how fast), the
 account, and the owner's standing instructions. Bodies are bounded; older
 ones summarised to one line the way browser observations are.
+
+Built in step 3. The prompt carries the conversation's id, its state and its
+length; the last three turns before this message quoted and bounded, the ones
+before those one line each; and the owner's own habit with this sender —
+how many times he has written back and how quickly — measured inside the
+thread, from the Sent folder rather than from buddi's drafts.
 
 ## 7. Watchers, as sentinels
 
@@ -240,10 +267,10 @@ Gmail instead of app passwords.
 ## 13. Order of work
 
 1. Policies and the gate, seeded from history, with the Learned list on
-   the settings page.
+   the settings page. **Built.**
 2. Accounts plural, per-account identity, secrets in the vault from the
-   page.
-3. Threads and the Sent folder; the triage run receives the thread.
+   page. **Built.**
+3. Threads and the Sent folder; the triage run receives the thread. **Built.**
 4. The first two sentinels: waiting-on-me and date-stated.
 5. Draft lifecycle with the editor; the remaining sentinels; search
    filters; attachments on request.

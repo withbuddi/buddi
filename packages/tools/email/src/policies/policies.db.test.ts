@@ -54,12 +54,12 @@ suite('email policies (postgres + fake imap)', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'truncate email.events, email.policies, email.drafts, email.triage, email.messages, email.mailboxes, email.accounts cascade',
+      'truncate email.events, email.policies, email.drafts, email.triage, email.messages, email.folders, email.accounts cascade',
     );
     const account = await ensureGmailAccount(pool, ENV);
     accountId = account!.id;
     const { rows } = await pool.query(
-      `insert into email.mailboxes (account_id, name) values ($1, 'INBOX') returning id`,
+      `insert into email.folders (account_id, name) values ($1, 'INBOX') returning id`,
       [accountId],
     );
     mailboxId = String(rows[0].id);
@@ -106,7 +106,7 @@ suite('email policies (postgres + fake imap)', () => {
     uid += 1;
     const { rows } = await pool.query(
       `insert into email.messages
-         (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
+         (account_id, folder_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
           to_addrs, subject, date, snippet, body_text, triage_enqueued_at)
        values ($1, $2, 1, $3, $4, $4, $5, $6, '["owner@example.test"]'::jsonb, $7, $8, '', '', now())
        returning id`,
@@ -472,7 +472,7 @@ suite('email policies (postgres + fake imap)', () => {
       );
       const otherAccount = String(rows[0].id);
       const { rows: mb } = await pool.query(
-        `insert into email.mailboxes (account_id, name) values ($1, 'INBOX') returning id`,
+        `insert into email.folders (account_id, name) values ($1, 'INBOX') returning id`,
         [otherAccount],
       );
       const otherMailbox = String(mb[0].id);
@@ -487,7 +487,7 @@ suite('email policies (postgres + fake imap)', () => {
       }
       const { rows: far } = await pool.query(
         `insert into email.messages
-           (account_id, mailbox_id, uidvalidity, uid, message_id, thread_key, from_addr,
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr,
             to_addrs, subject, date, snippet, body_text, triage_enqueued_at)
          values ($1, $2, 1, 9001, '<far@example.test>', '<far@example.test>', 'news@shop.test',
                  '["other@example.test"]'::jsonb, 'Subject', '2026-09-03T09:00:00Z', '', '', now())
@@ -635,7 +635,7 @@ suite('email policies (postgres + fake imap)', () => {
     // The same day again, once the three newsletters have been learned.
     await pool.query('truncate email.events, email.triage, email.messages cascade');
     // A fresh mailbox: same uids, same headers, nothing remembered but the rules.
-    await pool.query('update email.mailboxes set uidvalidity = null, last_uid = 0');
+    await pool.query('update email.folders set uidvalidity = null, last_uid = 0');
     for (const sender of newsletters) {
       await createPolicy(
         pool,

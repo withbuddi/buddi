@@ -155,15 +155,21 @@ class FakeDb implements Queryable {
         taken_at: null,
         taken_via: null,
         taken_job_id: null,
+        dismissed_at: null,
+        lapsed_at: null,
+        lapse_reason: null,
       };
       this.offers.push(row);
       return { rows: [row] };
     }
-    if (text.startsWith('update core.offers set expires_at')) {
+    if (text.startsWith('update core.offers set lapsed_at')) {
       const stale = this.offers.filter(
-        (o) => o.conversation_id === params[0] && o.taken_at === null,
+        (o) => o.conversation_id === params[0] && o.taken_at === null && o.lapsed_at == null,
       );
-      for (const row of stale) row.expires_at = params[1];
+      for (const row of stale) {
+        row.lapsed_at = params[1];
+        row.lapse_reason = params[2];
+      }
       this.withdrawn.push(...stale.map((o) => o.id as string));
       return { rows: stale.map((o) => ({ id: o.id })) };
     }
@@ -1027,7 +1033,7 @@ describe('a turn that offers the owner something to do, at a prompt', () => {
     expect(h.db.offers).toEqual([]);
   });
 
-  it('withdraws the previous turn’s offers when the owner says something else', async () => {
+  it('lapses the previous turn’s offers when the owner says something else', async () => {
     const h = harness({
       responses: [
         offerCall([{ label: 'Send it', prompt: 'send the reply I drafted' }]),
@@ -1042,7 +1048,9 @@ describe('a turn that offers the owner something to do, at a prompt', () => {
     // turn that retires what the last one left on the table.
     await h.session.handle('what is my balance?');
     expect(h.db.withdrawn).toContain('offer-1');
-    expect(h.db.offers[0]?.expires_at).toEqual(new Date('2026-09-14T12:00:00Z'));
+    // Lapsed, with the reason: they said the next thing instead of tapping.
+    expect(h.db.offers[0]?.lapsed_at).toEqual(new Date('2026-09-14T12:00:00Z'));
+    expect(h.db.offers[0]?.lapse_reason).toBe('owner-moved-on');
   });
 });
 

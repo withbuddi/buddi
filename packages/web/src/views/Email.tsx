@@ -36,10 +36,16 @@
  *    like to do. These decide nothing. Keep turns one on; Revoke says no.
  *
  * Revoke is on both lists on purpose: a rule that is on must be one tap from
- * off. Nothing learned is ever applied without being kept first — until the
- * Sent folder is synced, "you never wrote back" is an inference from the mail
- * buddi itself sent, and an inference does not get to silence anyone
- * (docs/email.md §3). The Learned list is where a proposal becomes a rule.
+ * off. Nothing learned is ever applied without being kept first: the Sent
+ * folder is synced from the day buddi arrived, so "you never wrote back" is
+ * still only as old as this installation, and a half-known history does not
+ * get to silence anyone (docs/email.md §3). The Learned list is where a
+ * proposal becomes a rule.
+ *
+ * One rule is not typed but *picked*: "One conversation". A thread is named in
+ * the database by the root Message-ID of its chain, which is not something an
+ * owner has, so the form offers the conversations buddi has seen, by subject,
+ * and sends the thread's id — which is what the gate matches.
  *
  * ## Writing one
  *
@@ -50,7 +56,13 @@
  * never a field somebody left empty.
  */
 import { useState } from 'react';
-import { ApiError, api, type EmailAccountView, type EmailPolicy } from '../api';
+import {
+  ApiError,
+  api,
+  type EmailAccountView,
+  type EmailPolicy,
+  type EmailThreadChoice,
+} from '../api';
 import { fmtRelative } from '../format';
 import {
   Button,
@@ -235,11 +247,19 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
 
 
   /*
-   * The policies half. Its own fetch and its own busy id, so a tap on one
-   * panel never greys out the other: adding a mailbox and revoking a rule are
-   * unrelated acts that happen to share a page.
+   * The new-rule form. `allAccounts` is a tick, not a default: the route
+   * refuses a policy that names neither one mailbox nor all of them.
    */
-  const policies = useAsync(() => api.emailPolicies(), []);
+  const [rule, setRule] = useState<RuleForm>(EMPTY_RULE);
+  const setRuleField = (patch: Partial<RuleForm>): void =>
+    setRule((current) => ({ ...current, ...patch }));
+
+  /*
+   * Policies and the selected mailbox's thread choices share one response.
+   * Passing the mailbox to the read makes the 50-row cap account-local.
+   */
+  const policyAccount = rule.scope === 'thread' && rule.accountId !== '' ? rule.accountId : undefined;
+  const policies = useAsync(() => api.emailPolicies(policyAccount), [policyAccount]);
   const [policyBusy, setPolicyBusy] = useState<string | null>(null);
   const [policyFailed, setPolicyFailed] = useState<string | null>(null);
 
@@ -252,17 +272,23 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
       .finally(() => setPolicyBusy(null));
   };
 
-  /*
-   * The new-rule form. `allAccounts` is a tick, not a default: the route
-   * refuses a policy that names neither one mailbox nor all of them.
-   */
-  const [rule, setRule] = useState<RuleForm>(EMPTY_RULE);
-  const setRuleField = (patch: Partial<RuleForm>): void =>
-    setRule((current) => ({ ...current, ...patch }));
-
   const applied = policies.data?.applied ?? [];
   const proposed = policies.data?.proposed ?? [];
+  const threads = policies.data?.threads ?? [];
   const saved = applied.reduce((n, p) => n + p.runsSaved, 0);
+
+  // A short name for each mailbox, for the thread picker's labels.
+  const accountLabels = new Map(
+    accounts.map((a) => [a.id, a.displayName ? a.displayName : a.address] as const),
+  );
+  // The conversations on offer for a `thread` rule: only the chosen
+  // mailbox's. Empty (not "every mailbox") until one is chosen.
+  const threadChoices =
+    rule.scope === 'thread'
+      ? rule.accountId === ''
+        ? []
+        : threads.filter((t) => t.accountId === rule.accountId)
+      : threads;
 
   const ruleReady =
     rule.matcher.trim() !== '' && (rule.allAccounts || rule.accountId !== '');
@@ -469,13 +495,71 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
 
           <Panel title="Add a rule">
             <Stack divided>
+              <Section title="Which mailbox">
+                <Stack gap="sm">
+                  {/*
+                    * The mailbox first: a conversation lives in exactly one of
+                    * them, so the picker below can only ever offer that one's
+                    * threads once this is answered — never all 50 most-recent
+                    * threads across every account, which could hand a busy
+                    * mailbox's conversations to a rule meant for a quiet one.
+                    */}
+                  <Field label="Mailbox">
+                    <select
+                      aria-label="Which mailbox"
+                      value={rule.accountId}
+                      disabled={rule.allAccounts}
+                      onChange={(event) =>
+                        setRuleField({
+                          accountId: event.target.value,
+                          // A conversation picked for the old mailbox is not
+                          // one of this mailbox's; stale choice, cleared.
+                          ...(rule.scope === 'thread' ? { matcher: '' } : {}),
+                        })
+                      }
+                    >
+                      <option value="">Choose one…</option>
+                      {accounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.displayName ? `${account.displayName} — ` : ''}
+                          {account.address}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <label className="backup-check">
+                    <input
+                      type="checkbox"
+                      checked={rule.allAccounts}
+                      disabled={rule.scope === 'thread'}
+                      onChange={(event) =>
+                        setRuleField({ allAccounts: event.target.checked, accountId: '' })
+                      }
+                    />
+                    <span>For every mailbox</span>
+                  </label>
+                  <p className="ui-card-meta">
+                    {rule.scope === 'thread'
+                      ? 'A conversation lives in one mailbox, so a rule about one is never "every mailbox".'
+                      : 'The same sender can matter in one inbox and not in another, so a rule says which one it is about — unless you tick the box, and then it says all of them.'}
+                  </p>
+                </Stack>
+              </Section>
               <Section>
                 <Stack gap="sm">
                   <Field label="About">
                     <select
                       aria-label="What the rule is about"
                       value={rule.scope}
-                      onChange={(event) => setRuleField({ scope: event.target.value })}
+                      onChange={(event) => {
+                        const scope = event.target.value;
+                        setRuleField({
+                          scope,
+                          matcher: '',
+                          // "Every mailbox" is meaningless for one conversation.
+                          ...(scope === 'thread' ? { allAccounts: false } : {}),
+                        });
+                      }}
                     >
                       <option value="sender">One sender</option>
                       <option value="domain">Everyone at a domain</option>
@@ -483,13 +567,56 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
                       <option value="thread">One conversation</option>
                     </select>
                   </Field>
-                  <Field label={MATCHER_LABEL[rule.scope] ?? 'Matcher'}>
-                    <input
-                      type="text"
-                      value={rule.matcher}
-                      placeholder={MATCHER_HINT[rule.scope] ?? ''}
-                      onChange={(event) => setRuleField({ matcher: event.target.value })}
-                    />
+                  {/*
+                    * A conversation is picked, never typed. It is named in the
+                    * database by the root Message-ID of its thread, which is
+                    * not something an owner has or should have to find, and
+                    * the rule carries the thread's id. So the one scope that
+                    * cannot be a text field is a list of subjects — filtered to
+                    * the mailbox chosen above, and labelled with it too, so a
+                    * conversation from another mailbox is never on offer.
+                    */}
+                  <Field
+                    label={MATCHER_LABEL[rule.scope] ?? 'Matcher'}
+                    {...(rule.scope === 'thread'
+                      ? {
+                          hint:
+                            rule.accountId === ''
+                              ? 'Choose a mailbox above first.'
+                              : 'The conversations buddi has seen in this mailbox, most recent first.',
+                        }
+                      : {})}
+                  >
+                    {rule.scope === 'thread' ? (
+                      <select
+                        aria-label="Which conversation"
+                        value={rule.matcher}
+                        disabled={rule.accountId === ''}
+                        onChange={(event) => {
+                          const chosen = threadChoices.find((t) => t.id === event.target.value);
+                          setRuleField({
+                            matcher: event.target.value,
+                            // The thread's own mailbox, bound automatically —
+                            // never left to disagree with what was picked.
+                            ...(chosen ? { accountId: chosen.accountId } : {}),
+                          });
+                        }}
+                      >
+                        <option value="">Choose one…</option>
+                        {threadChoices.map((thread) => (
+                          <option key={thread.id} value={thread.id}>
+                            {threadLabel(thread, accountLabels)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={rule.matcher}
+                        placeholder={MATCHER_HINT[rule.scope] ?? ''}
+                        onChange={(event) => setRuleField({ matcher: event.target.value })}
+                      />
+                    )}
                   </Field>
                   <Field label="Then">
                     <select
@@ -516,40 +643,6 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
                       />
                     </Field>
                   ) : null}
-                </Stack>
-              </Section>
-              <Section title="Which mailbox">
-                <Stack gap="sm">
-                  <Field label="Mailbox">
-                    <select
-                      aria-label="Which mailbox"
-                      value={rule.accountId}
-                      disabled={rule.allAccounts}
-                      onChange={(event) => setRuleField({ accountId: event.target.value })}
-                    >
-                      <option value="">Choose one…</option>
-                      {accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.displayName ? `${account.displayName} — ` : ''}
-                          {account.address}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <label className="backup-check">
-                    <input
-                      type="checkbox"
-                      checked={rule.allAccounts}
-                      onChange={(event) =>
-                        setRuleField({ allAccounts: event.target.checked, accountId: '' })
-                      }
-                    />
-                    <span>For every mailbox</span>
-                  </label>
-                  <p className="ui-card-meta">
-                    The same sender can matter in one inbox and not in another, so a rule says which
-                    one it is about — unless you tick the box, and then it says all of them.
-                  </p>
                   <Toolbar align="end">
                     <Button
                       variant="accent"
@@ -682,8 +775,25 @@ export const MATCHER_LABEL: Record<string, string> = {
   sender: 'Their address',
   domain: 'The domain',
   'list-id': 'The list id',
-  thread: 'The conversation key',
+  thread: 'Which conversation',
 };
+
+/**
+ * A conversation as the picker names it: its mailbox, its subject, and who it
+ * is with. The mailbox is named even though the list is already filtered to
+ * one account — the label should say what it is, on its own, not rely on
+ * whatever the picker above it happens to be set to.
+ */
+export function threadLabel(
+  thread: EmailThreadChoice,
+  accountLabels?: ReadonlyMap<string, string>,
+): string {
+  const subject = thread.subject.trim() === '' ? '(no subject)' : thread.subject.trim();
+  const others = thread.participants.slice(0, 2).join(', ');
+  const mailbox = accountLabels?.get(thread.accountId);
+  const base = others === '' ? subject : `${subject} — ${others}`;
+  return mailbox ? `[${mailbox}] ${base}` : base;
+}
 
 /** `Them <THEM@x.test>` -> `them@x.test`. The server normalises too; this is
  * so what the page sends is what the page showed. */
@@ -693,11 +803,11 @@ export function bareAddress(raw: string): string {
   return (angled?.[1] ?? trimmed).trim().toLowerCase();
 }
 
+/** Placeholders for the scopes that are typed. A thread is picked, not typed. */
 export const MATCHER_HINT: Record<string, string> = {
   sender: 'news@shop.example',
   domain: 'shop.example',
   'list-id': 'weekly.shop.example',
-  thread: '<thread-root@example.com>',
 };
 
 /**

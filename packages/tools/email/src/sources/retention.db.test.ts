@@ -58,12 +58,12 @@ suite('email.retention (postgres)', () => {
 
   /** `n` messages, the i-th dated `ageDays[i]` days before NOW. */
   async function seed(ageDays: number[]): Promise<string[]> {
-    await pool.query('truncate email.triage, email.messages, email.mailboxes, email.accounts cascade');
+    await pool.query('truncate email.triage, email.messages, email.folders, email.accounts cascade');
     await pool.query('delete from email.settings');
     const account = await ensureGmailAccount(pool, ENV);
     accountId = String(account?.id);
     const { rows } = await pool.query(
-      `insert into email.mailboxes (account_id, name, uidvalidity, last_uid)
+      `insert into email.folders (account_id, name, uidvalidity, last_uid)
        values ($1, 'INBOX', 1, 0) returning id`,
       [accountId],
     );
@@ -74,7 +74,7 @@ suite('email.retention (postgres)', () => {
       const date = new Date(NOW.getTime() - age * 86_400_000);
       const { rows: inserted } = await pool.query(
         `insert into email.messages
-           (account_id, mailbox_id, uidvalidity, uid, message_id, from_addr, to_addrs, subject,
+           (account_id, folder_id, uidvalidity, uid, message_id, from_addr, to_addrs, subject,
             date, snippet, body_text, has_attachments, attachments, flags)
          values ($1, $2, 1, $3, $4, 'sender@bank.test', '["owner@example.test"]'::jsonb, $5,
                  $6, $7, $8, false, '[]'::jsonb, '[]'::jsonb)

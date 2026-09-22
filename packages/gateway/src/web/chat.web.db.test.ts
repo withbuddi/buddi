@@ -1118,7 +1118,7 @@ suite('the dashboard chat API', () => {
       expect(rows[0].n).toBe(0);
     });
 
-    it('withdraws them when the conversation moves on, and a late click is refused', async () => {
+    it('lapses them when the conversation moves on, and a late click is refused', async () => {
       const client = await signedIn();
       provider.script = [
         declare([{ label: 'Send it', prompt: 'send the reply I drafted' }]),
@@ -1140,10 +1140,16 @@ suite('the dashboard chat API', () => {
       expect(await offersOf(client, conversationId)).toEqual([]);
       const late = await client.post(`/api/offers/${offer.id}/take`);
       expect(late.status).toBe(409);
-      expect(((await late.json()) as any).error).toMatch(/expired/i);
-      // Withdrawn, not deleted: the row is still there, unclaimed, for the record.
-      const { rows } = await pool.query('select taken_at from core.offers where id = $1', [offer.id]);
+      // Lapsed, which is what happened: they moved on. Not "expired" — the
+      // clock had nothing to do with it — and not "already taken".
+      expect(((await late.json()) as any).error).toMatch(/lapsed/i);
+      // Recorded, not deleted: the row is still there, unclaimed, with why.
+      const { rows } = await pool.query(
+        'select taken_at, lapse_reason from core.offers where id = $1',
+        [offer.id],
+      );
       expect(rows[0].taken_at).toBeNull();
+      expect(rows[0].lapse_reason).toBe('owner-moved-on');
     });
 
     it('takes a tapped "Send it" through the ordinary approval, with the whole body', async () => {
