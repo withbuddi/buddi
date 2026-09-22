@@ -40,6 +40,7 @@ import {
   MIN_DATE_CONFIDENCE,
   clampConfidence,
 } from './dates.js';
+import { RECEIPT_CONFIDENCE_CEILING } from './phrases.js';
 
 type Db = Pool | PoolClient;
 
@@ -89,7 +90,25 @@ export const WARNING_PROMISED_DAYS = 7;
 /** How sure the classifier must be that a message is a receipt or a bill. */
 export const DEFAULT_RECEIPT_CONFIDENCE = 0.7;
 export const MIN_RECEIPT_CONFIDENCE = MIN_DATE_CONFIDENCE;
-export const MAX_RECEIPT_CONFIDENCE = MAX_DATE_CONFIDENCE;
+
+/**
+ * The ceiling is the **classifier's**, not the date parser's.
+ *
+ * It used to alias `MAX_DATE_CONFIDENCE` (0.99), so the settings page offered
+ * a threshold of 0.96 that nothing the classifier can produce ever reaches:
+ * the owner would have switched the watcher off believing he had tightened it.
+ * A bound that cannot be met is not a bound, it is a trapdoor.
+ */
+export const MAX_RECEIPT_CONFIDENCE = RECEIPT_CONFIDENCE_CEILING;
+
+/** The receipt threshold has its own clamp, because it has its own ceiling. */
+export function clampReceiptConfidence(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RECEIPT_CONFIDENCE;
+  return Math.min(
+    MAX_RECEIPT_CONFIDENCE,
+    Math.max(MIN_RECEIPT_CONFIDENCE, Math.round(value * 100) / 100),
+  );
+}
 
 /**
  * How long the owner waits for an answer before a nudge is worth offering.
@@ -115,6 +134,25 @@ export const SUSPICION_WINDOW_DAYS = 7;
 
 /** `email.unanswered-by-them`: the owner's own mail of the last month. */
 export const NUDGE_WINDOW_DAYS = 30;
+
+/** How much room a history window leaves above the setting it must contain. */
+export const WINDOW_HEADROOM_DAYS = 7;
+
+/**
+ * The history window a watcher whose floor is a *setting* must actually use.
+ *
+ * The two are different numbers and one contains the other: the setting is
+ * "older than this is worth mentioning", the window is "older than this is
+ * history". Pinning the window at thirty days while letting the setting go to
+ * sixty made the watcher silently report nothing at all above thirty — a
+ * number the settings page offered, saved without complaint, and that switched
+ * the watcher off. So the window is computed from the setting and always has a
+ * week of room above it: a setting of 31 days reports mail between 31 and 38
+ * days old, which is a week of news rather than none.
+ */
+export function historyWindowDays(settingDays: number, floor: number): number {
+  return Math.max(floor, Math.trunc(settingDays) + WINDOW_HEADROOM_DAYS);
+}
 
 /** The confidence above which an ask wakes somebody rather than being noted. */
 export const ASK_URGENT_ABOVE = 0.8;
@@ -186,7 +224,11 @@ export async function loadWatcherSettings(db: Db): Promise<WatcherSettings> {
     waitingDays: read(WAITING_DAYS_KEY, DEFAULT_WAITING_DAYS, clampWaitingDays),
     dateConfidence: read(DATE_CONFIDENCE_KEY, DEFAULT_DATE_CONFIDENCE, clampConfidence),
     promisedDays: read(PROMISED_DAYS_KEY, DEFAULT_PROMISED_DAYS, clampPromisedDays),
-    receiptConfidence: read(RECEIPT_CONFIDENCE_KEY, DEFAULT_RECEIPT_CONFIDENCE, clampConfidence),
+    receiptConfidence: read(
+      RECEIPT_CONFIDENCE_KEY,
+      DEFAULT_RECEIPT_CONFIDENCE,
+      clampReceiptConfidence,
+    ),
     nudgeDays: read(NUDGE_DAYS_KEY, DEFAULT_NUDGE_DAYS, clampNudgeDays),
   };
 }
@@ -217,7 +259,7 @@ export async function setWatcherSettings(
     writes.push([PROMISED_DAYS_KEY, clampPromisedDays(patch.promisedDays)]);
   }
   if (patch.receiptConfidence !== undefined) {
-    writes.push([RECEIPT_CONFIDENCE_KEY, clampConfidence(patch.receiptConfidence)]);
+    writes.push([RECEIPT_CONFIDENCE_KEY, clampReceiptConfidence(patch.receiptConfidence)]);
   }
   if (patch.nudgeDays !== undefined) {
     writes.push([NUDGE_DAYS_KEY, clampNudgeDays(patch.nudgeDays)]);
@@ -418,8 +460,15 @@ export function promisedKey(threadId: string, messageId: string): string {
   return `email.promised-reply:${threadId}:${messageId}`;
 }
 
-export function promisedDraftKey(threadId: string, draftId: string): string {
-  return `email.promised-reply:${threadId}:draft:${draftId}`;
+/**
+ * `threadId` may be null: `drafts.thread_id` is nullable (`010_drafts.sql`),
+ * and a draft written for a message that has not been threaded yet is still a
+ * reply nobody sent. `none` keeps the key's shape — three colon-separated
+ * parts after the sentinel id — so a draft that acquires a thread later is a
+ * new fact and the old one resolves, which is exactly right: it moved.
+ */
+export function promisedDraftKey(threadId: string | null, draftId: string): string {
+  return `email.promised-reply:${threadId ?? 'none'}:draft:${draftId}`;
 }
 
 /** A promise the query shaped, before anything is decided about it. */
@@ -437,7 +486,7 @@ export interface PromisedReply {
 
 /** A live draft nobody has sent, on a conversation that is waiting for it. */
 export interface PromisedDraft {
-  threadId: string;
+  threadId: string | null;
   draftId: string;
   subject: string;
   to: string;
@@ -446,17 +495,27 @@ export interface PromisedDraft {
   ageDays: number;
 }
 
+/**
+ * `data` is ids and numbers, and nothing else.
+ *
+ * It is handed to a model verbatim, so two kinds of thing are kept out of it.
+ * Sender-controlled text, for the obvious reason — the words are in `title`
+ * and `detail`, already fenced. And *our own* names for things: a `watcher`
+ * tag or a `suggestedAction` token is the sentinel telling a model what to do
+ * in a vocabulary the model has to be taught, where the detail says the same
+ * thing in the owner's language and the sentinel id says which watcher spoke.
+ * Both used to be here; both are in the prose now.
+ */
 export interface PromisedFinding {
   key: string;
   severity: 'urgent' | 'info';
   title: string;
   detail: string;
   data: {
-    threadId: string;
+    threadId: string | null;
     messageId?: string;
     draftId?: string;
     ageDays: number;
-    watcher: 'promised-reply';
   };
 }
 
@@ -486,7 +545,6 @@ export function promisedFinding(promise: PromisedReply): PromisedFinding {
       threadId: promise.threadId,
       messageId: promise.messageId,
       ageDays: promise.ageDays,
-      watcher: 'promised-reply',
     },
   };
 }
@@ -506,7 +564,6 @@ export function promisedDraftFinding(draft: PromisedDraft): PromisedFinding {
       threadId: draft.threadId,
       draftId: draft.draftId,
       ageDays: draft.ageDays,
-      watcher: 'promised-reply',
     },
   };
 }
@@ -543,8 +600,6 @@ export interface ReceiptFinding {
     confidence: number;
     amount: number | null;
     currency: string | null;
-    suggestedActions: ['hand-to-overview', 'record'];
-    watcher: 'receipt-or-bill';
   };
 }
 
@@ -592,8 +647,6 @@ export function receiptFinding(hit: ReceiptHit): ReceiptFinding {
       confidence: hit.confidence,
       amount: hit.amount,
       currency: hit.currency,
-      suggestedActions: ['hand-to-overview', 'record'],
-      watcher: 'receipt-or-bill',
     },
   };
 }
@@ -607,9 +660,6 @@ export function suspiciousKey(messageId: string): string {
   return `email.suspicious-sender:${messageId}`;
 }
 
-/** Which of §7's two tests fired. Both may. */
-export type SuspicionTest = 'look-alike' | 'ask';
-
 export interface Suspicion {
   messageId: string;
   threadId: string | null;
@@ -619,8 +669,16 @@ export interface Suspicion {
   firstLine: string;
   /** True when the display name is somebody the owner writes to elsewhere. */
   lookAlike: boolean;
-  /** The ask, when there is one. */
-  ask: { kind: string; confidence: number; phrase: string } | null;
+  /**
+   * The ask, when there is one — a kind and a number, and **no phrase**.
+   *
+   * The matched words are the fraud's own prose, and this finding already
+   * carries one fenced line of it. Two quotations of a message that is being
+   * described as an attempt to manipulate the reader is one more than the
+   * point can bear, so the phrase stays in `email.suspicions` where the owner
+   * can check the classifier and no model reads it as prose.
+   */
+  ask: { kind: string; confidence: number } | null;
 }
 
 export interface SuspiciousFinding {
@@ -631,9 +689,7 @@ export interface SuspiciousFinding {
   data: {
     messageId: string;
     threadId: string | null;
-    tests: SuspicionTest[];
     confidence: number | null;
-    watcher: 'suspicious-sender';
   };
 }
 
@@ -660,9 +716,14 @@ function suspicionReasons(s: Suspicion): string[] {
     );
   }
   if (s.ask !== null) {
+    const asked =
+      s.ask.kind === 'gift-card'
+        ? 'a gift card'
+        : s.ask.kind === 'wire'
+          ? 'a transfer'
+          : 'a credential';
     reasons.push(
-      `The message asks for ${s.ask.kind === 'gift-card' ? 'a gift card' : s.ask.kind === 'wire' ? 'a transfer' : 'a credential'}` +
-        ` — it matched ${quoted(s.ask.phrase)}, confidence ${s.ask.confidence.toFixed(2)}.`,
+      `The message asks for ${asked}, read from its own words at confidence ${s.ask.confidence.toFixed(2)}.`,
     );
   }
   return reasons;
@@ -677,10 +738,6 @@ function suspicionReasons(s: Suspicion): string[] {
  */
 export function suspiciousFinding(s: Suspicion): SuspiciousFinding {
   const subject = s.subject.trim() === '' ? '(no subject)' : s.subject.trim();
-  const tests: SuspicionTest[] = [
-    ...(s.lookAlike ? (['look-alike'] as const) : []),
-    ...(s.ask !== null ? (['ask'] as const) : []),
-  ];
   const detail = [
     ...suspicionReasons(s),
     s.firstLine === '' ? '' : `It begins: ${quoted(s.firstLine)}`,
@@ -699,9 +756,7 @@ export function suspiciousFinding(s: Suspicion): SuspiciousFinding {
     data: {
       messageId: s.messageId,
       threadId: s.threadId,
-      tests,
       confidence: s.ask?.confidence ?? null,
-      watcher: 'suspicious-sender',
     },
   };
 }
@@ -735,8 +790,6 @@ export interface NudgeFinding {
     threadId: string;
     messageId: string;
     ageDays: number;
-    suggestedAction: 'draft-a-nudge';
-    watcher: 'unanswered-by-them';
   };
 }
 
@@ -762,8 +815,6 @@ export function nudgeFinding(ask: UnansweredAsk): NudgeFinding {
       threadId: ask.threadId,
       messageId: ask.messageId,
       ageDays: ask.ageDays,
-      suggestedAction: 'draft-a-nudge',
-      watcher: 'unanswered-by-them',
     },
   };
 }

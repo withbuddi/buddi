@@ -40,7 +40,7 @@
  * Folding
  * ------------------------------------------------------------------ */
 
-const COMBINING = /[̀-ͯ]/g;
+const COMBINING = /[\u0300-\u036f]/g;
 
 /**
  * One character, folded — and folded to **one character** or not at all.
@@ -50,13 +50,28 @@ const COMBINING = /[̀-ͯ]/g;
  * character whose lowercase or decomposition is longer than itself (Turkish
  * dotted I, a ligature) is left exactly as it was rather than quietly shifting
  * every phrase after it by one.
+ *
+ * Which is also why `fold` cannot handle **decomposed** text on its own: a
+ * standalone combining acute is a character of its own, and dropping it would
+ * move every phrase after it. So the text is put into NFC *first*, by `nfc`
+ * below, and every entry point here does that before it folds — otherwise
+ * `Votre reçu` typed on a Mac reads as `votre rec u` and matches nothing.
  */
 function foldChar(raw: string): string {
-  const ch = raw === '’' || raw === 'ʼ' ? "'" : raw;
+  const ch = raw === '\u2019' || raw === '\u02bc' ? "'" : raw;
   const stripped = ch.normalize('NFD').replace(COMBINING, '');
   const base = stripped.length === ch.length ? stripped : ch;
   const lower = base.toLowerCase();
   return lower.length === base.length ? lower : base;
+}
+
+/**
+ * Composed text. Every entry point normalises with this before it folds, and
+ * the phrase a caller gets back is sliced out of *this* copy — so what the
+ * owner is shown is the composed spelling of what the sender wrote.
+ */
+export function nfc(text: string): string {
+  return text.normalize('NFC');
 }
 
 /** A copy of `text` that matches case-, accent- and apostrophe-insensitively. */
@@ -66,19 +81,135 @@ export function fold(text: string): string {
   return out;
 }
 
+/* ---- the name key, and the one algorithm both sides implement ---- */
+
 /**
- * The same fold, collapsed to a comparison key: whitespace and punctuation out.
+ * Letters no decomposition will take apart, and what they are worth as ASCII.
  *
- * This is what `email.suspicious-sender` compares two display names with, so
- * `Jean-Paul Meyer`, `jean paul meyer` and `MEYER, Jean-Paul` are one name.
- * The SQL side of that test has the same function (`email.name_key`), and the
- * two are held to the same answers by `phrases.test.ts` and the DB suite.
+ * NFKD turns `é` into `e` plus a mark, but it does nothing at all to `ø`, `æ`
+ * or `ß`: they are letters in their own right, not decorated ones. Without
+ * this table `Søren Kjær` and `Soren Kjaer` are two different people, which is
+ * a look-alike test that misses the Scandinavian half of a contact list.
+ *
+ * The expansions are two characters long, which is why the name key — unlike
+ * `fold` — is not index-preserving. It never needs to be: nothing is sliced
+ * out of it, it is only ever compared.
+ */
+export const LETTER_FOLDINGS: ReadonlyArray<[string, string]> = [
+  ['\u00e6', 'ae'],
+  ['\u0153', 'oe'],
+  ['\u00df', 'ss'],
+  ['\u00fe', 'th'],
+  ['\u00f0', 'd'],
+  ['\u00f8', 'o'],
+  ['\u0111', 'd'],
+  ['\u0142', 'l'],
+  ['\u0131', 'i'],
+];
+
+/**
+ * The homoglyphs, Cyrillic and Greek, mapped onto the Latin letter they are
+ * drawn as.
+ *
+ * This is the whole of what makes the look-alike test worth running against
+ * somebody who is *trying*: `Аna Rios` with a Cyrillic А is a different string
+ * from `Ana Rios` in every comparison a database does by default, and it is
+ * the same name to the only reader that matters. The table is pinned, short,
+ * and one-directional — Latin is the target alphabet because the addresses
+ * these names sit beside are ASCII.
+ *
+ * It is not a general confusables table and does not try to be: it is the
+ * lowercase Cyrillic and Greek letters that are drawn like a Latin one, and
+ * nothing else.
+ */
+export const CONFUSABLES: ReadonlyArray<[string, string]> = [
+  // Cyrillic
+  ['\u0430', 'a'], ['\u0432', 'b'], ['\u0435', 'e'], ['\u043a', 'k'], ['\u043c', 'm'],
+  ['\u043d', 'h'], ['\u043e', 'o'], ['\u0440', 'p'], ['\u0441', 'c'], ['\u0442', 't'],
+  ['\u0443', 'y'], ['\u0445', 'x'], ['\u0456', 'i'], ['\u0458', 'j'], ['\u0455', 's'],
+  ['\u04bb', 'h'], ['\u0501', 'd'], ['\u051b', 'q'], ['\u0261', 'g'],
+  // Greek
+  ['\u03b1', 'a'], ['\u03b2', 'b'], ['\u03b5', 'e'], ['\u03b7', 'n'], ['\u03b9', 'i'],
+  ['\u03ba', 'k'], ['\u03bd', 'v'], ['\u03bf', 'o'], ['\u03c1', 'p'], ['\u03c3', 'o'],
+  ['\u03c4', 't'], ['\u03c5', 'u'], ['\u03c7', 'x'], ['\u03bc', 'u'], ['\u03b3', 'y'],
+];
+
+/**
+ * Display names too generic to identify anybody.
+ *
+ * The look-alike test asks "is this a name the owner writes to, at another
+ * address?". `Support` is a name the owner writes to at a dozen addresses, and
+ * so are the rest of these — so every one of them would be an urgent warning
+ * about the second shop he ever bought anything from. The list is of *name
+ * keys*, so it is already normalised and token-sorted, and it is matched
+ * whatever the token count: `Service Client` is two tokens and is no more a
+ * person than `Support` is.
+ */
+export const GENERIC_NAMES: readonly string[] = [
+  'admin',
+  'billing',
+  'client service',
+  'contact',
+  'hello',
+  'hr',
+  'info',
+  'no reply',
+  'notifications',
+  'payments',
+  'sales',
+  'security',
+  'support',
+  'team',
+];
+
+/**
+ * One display name, reduced to what two display names have in common or do not.
+ *
+ * The algorithm, in the order it runs — and `email.name_key` in migration
+ * `011_receipts.sql` runs exactly the same one, which `step6.db.test.ts` pins
+ * with a table of names asserted equal across the two:
+ *
+ *  1. **NFKD**, which takes `é` apart into `e` and a mark, and also folds the
+ *     compatibility forms (a fullwidth `Ａ`, a ligature `ﬁ`) onto their
+ *     ordinary letters;
+ *  2. **drop the combining marks**, so the accent goes and the letter stays —
+ *     removed, never replaced by a space, or `Ríos` becomes two tokens;
+ *  3. **lowercase**, which also brings Cyrillic and Greek down to the case the
+ *     tables below are written in;
+ *  4. **the letter foldings and the confusables**, which are the two tables
+ *     no decomposition will do for us;
+ *  5. **everything that is not a letter or a digit becomes a space**, so
+ *     apostrophes, hyphens, dots and commas stop being differences;
+ *  6. **sort the tokens**, which is what makes `MEYER, Jean-Paul` and
+ *     `Jean-Paul Meyer` one name — the comma-first form every corporate
+ *     directory produces.
  */
 export function nameKey(text: string): string {
-  return fold(text)
-    .replace(/["'`]/g, '')
+  let out = (text ?? '')
+    .normalize('NFKD')
+    .replace(COMBINING, '')
+    .toLowerCase();
+  for (const [from, to] of LETTER_FOLDINGS) out = out.split(from).join(to);
+  for (const [from, to] of CONFUSABLES) out = out.split(from).join(to);
+  return out
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .filter((token) => token !== '')
+    .sort()
+    .join(' ');
+}
+
+/**
+ * Is this display name worth comparing at all?
+ *
+ * Empty is not a name — an impostor with no display name is imitating nothing.
+ * Neither is one of `GENERIC_NAMES`. `email.discriminating_name` is the same
+ * test in SQL, and the DB suite holds the two to the same answers.
+ */
+export function discriminatingName(text: string): boolean {
+  const key = nameKey(text);
+  return key !== '' && !GENERIC_NAMES.includes(key);
 }
 
 /** The lines of a message that are its own: quoted history dropped. */
@@ -107,9 +238,16 @@ export interface PhraseHit {
   phrase: string;
 }
 
-/** Find the first of these patterns in `text`, and slice the original for it. */
-function firstMatch(text: string, patterns: readonly RegExp[]): PhraseHit | null {
-  const folded = fold(text);
+/**
+ * Find the first of these patterns in `text`, and slice the composed copy.
+ *
+ * `at` is where the match started, which is what lets a caller ask a question
+ * about the *sentence* the phrase sits in rather than about the whole message
+ * — `classifyAsk` needs exactly that.
+ */
+function firstMatch(text: string, patterns: readonly RegExp[]): (PhraseHit & { at: number }) | null {
+  const source = nfc(text);
+  const folded = fold(source);
   let best: { index: number; length: number } | null = null;
   for (const pattern of patterns) {
     const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
@@ -120,7 +258,38 @@ function firstMatch(text: string, patterns: readonly RegExp[]): PhraseHit | null
     }
   }
   if (best === null) return null;
-  return { phrase: text.slice(best.index, best.index + best.length).trim() };
+  return {
+    phrase: source.slice(best.index, best.index + best.length).trim(),
+    at: best.index,
+  };
+}
+
+/**
+ * Where one sentence ends and the next begins.
+ *
+ * A full stop is only a full stop when something follows it that ends a word:
+ * whitespace, a closing quote or bracket, or the end of the text. The `.` in
+ * `x.test` and the `?` in `a?utm=1` are not sentence breaks, and treating them
+ * as such is how a quoted "question the owner asked" came out as `test/a?`.
+ */
+const SENTENCE_BREAK = String.raw`[.!?](?=[\s"')\]]|$)|\n`;
+
+/** The start of the sentence `at` falls in. */
+function sentenceStart(folded: string, at: number): number {
+  const re = new RegExp(SENTENCE_BREAK, 'gu');
+  let start = 0;
+  for (let m = re.exec(folded); m !== null && m.index < at; m = re.exec(folded)) {
+    start = m.index + m[0].length;
+  }
+  return start;
+}
+
+/** The sentence `at` falls in, as a fold. */
+function sentenceAround(folded: string, at: number): string {
+  const re = new RegExp(SENTENCE_BREAK, 'gu');
+  re.lastIndex = at;
+  const end = re.exec(folded);
+  return folded.slice(sentenceStart(folded, at), end === null ? folded.length : end.index + 1);
 }
 
 /* ------------------------------------------------------------------ *
@@ -186,8 +355,17 @@ export const RECEIPT_HEADER_BOOST = 0.2;
 /** What an amount beside the word "total" adds. */
 export const RECEIPT_AMOUNT_BOOST = 0.2;
 
-/** Nothing is certain: this is evidence for an agent, not a fact. */
-export const MAX_RECEIPT_CONFIDENCE = 0.95;
+/**
+ * The highest score the classifier will ever give: nothing is certain, and
+ * this is evidence for an agent rather than a fact.
+ *
+ * Named a *ceiling* rather than a maximum because it is not the bound of the
+ * owner's setting — it is the bound of what the classifier can produce, and
+ * the two being one identifier is how `receiptConfidence` came to accept 0.96
+ * and switch the watcher off without saying so. `watchers.ts` imports this one
+ * as the setting's upper bound, so the two cannot drift apart again.
+ */
+export const RECEIPT_CONFIDENCE_CEILING = 0.95;
 
 /**
  * The words a receipt uses, with what each is worth on its own.
@@ -233,6 +411,18 @@ export const CURRENCIES: ReadonlyArray<{ re: RegExp; code: 'EUR' | 'USD' | 'GBP'
 /** How far from the word "total" an amount still counts as that total. */
 export const TOTAL_WINDOW = 40;
 
+/**
+ * The largest total this will report, which is `email.receipts.amount`'s own
+ * range (`numeric(14,2)`).
+ *
+ * A string of digits longer than that is an order number, a VAT id or a
+ * malformed table, not money — and reading it as money would make the *insert*
+ * throw, which under the transactional stamp (see `receipts-store.ts`) costs
+ * the whole message its reading. So an absurd number is "no amount", quietly,
+ * which is what it is.
+ */
+export const MAX_AMOUNT = 9_999_999_999.99;
+
 const TOTAL_WORD = /\b(?:total|montant|amount due|balance|net a payer|a payer)\b/giu;
 /**
  * A number the way both continents write one: `1 234,56`, `1,299.99`, `45,00`.
@@ -275,7 +465,8 @@ function amountValue(raw: string): number | null {
  * the same line. A currency amount with no such word near it is not read at
  * all — every marketing mail carries a price.
  */
-export function findAmount(text: string): Amount | null {
+export function findAmount(raw: string): Amount | null {
+  const text = nfc(raw);
   const folded = fold(text);
   TOTAL_WORD.lastIndex = 0;
   for (let word = TOTAL_WORD.exec(folded); word !== null; word = TOTAL_WORD.exec(folded)) {
@@ -285,7 +476,7 @@ export function findAmount(text: string): Amount | null {
     const hit = AMOUNT.exec(window);
     if (hit === null) continue;
     const value = amountValue(hit[1] ?? hit[2] ?? '');
-    if (value === null) continue;
+    if (value === null || value > MAX_AMOUNT) continue;
     const currency = CURRENCIES.find((c) => new RegExp(c.re.source, 'iu').test(hit[0]));
     if (currency === undefined) continue;
     const at = from + hit.index;
@@ -324,22 +515,29 @@ function round2(value: number): number {
  * is not a receipt however many euros it mentions.
  */
 export function classifyReceipt(input: ReceiptInput): ReceiptReading | null {
-  const header = `${input.subject}\n${input.from}`;
-  const whole = `${header}\n${input.body}`;
+  const header = nfc(`${input.subject}\n${input.from}`);
+  const whole = `${header}\n${nfc(input.body)}`;
   const foldedHeader = fold(header);
-  let best: { weight: number; phrase: string } | null = null;
-  let inHeader = false;
+  let best: { weight: number; phrase: string; inHeader: boolean } | null = null;
   for (const { re, weight } of RECEIPT_PHRASES) {
     const hit = firstMatch(whole, [re]);
     if (hit === null) continue;
-    if (best === null || weight > best.weight) best = { weight, phrase: hit.phrase };
-    if (new RegExp(re.source, 'iu').test(foldedHeader)) inHeader = true;
+    if (best !== null && weight <= best.weight) continue;
+    /*
+     * The boost belongs to the phrase that scored, not to any phrase.
+     * Otherwise `your order` in a subject lends its fifth to `invoice` found
+     * in the body, and a mail that merely mentions an invoice scores as one
+     * announced in its own subject line.
+     */
+    best = { weight, phrase: hit.phrase, inHeader: new RegExp(re.source, 'iu').test(foldedHeader) };
   }
   if (best === null) return null;
   const amount = findAmount(whole);
   const confidence = Math.min(
-    MAX_RECEIPT_CONFIDENCE,
-    round2(best.weight + (inHeader ? RECEIPT_HEADER_BOOST : 0) + (amount ? RECEIPT_AMOUNT_BOOST : 0)),
+    RECEIPT_CONFIDENCE_CEILING,
+    round2(
+      best.weight + (best.inHeader ? RECEIPT_HEADER_BOOST : 0) + (amount ? RECEIPT_AMOUNT_BOOST : 0),
+    ),
   );
   return { confidence, phrase: best.phrase, amount };
 }
@@ -351,48 +549,86 @@ export function classifyReceipt(input: ReceiptInput): ReceiptReading | null {
 /** What this file calls the three things a fraud asks for. */
 export type AskKind = 'credentials' | 'wire' | 'gift-card';
 
-/** What "urgently" adds to any of them. §7's *«a password reset "urgently"»*. */
+/** What "urgently" adds — when it is in the same sentence as the ask. */
 export const URGENCY_BOOST = 0.25;
 
 export const MAX_ASK_CONFIDENCE = 0.95;
 
 /**
- * The three asks, with what each is worth before urgency.
+ * The confidence an ask that does not actually ask for the thing is capped at.
+ *
+ * Equal to `ASK_URGENT_ABOVE` in `watchers.ts`, and severity is *strictly*
+ * above that line, so a reading capped here is `info` by construction and no
+ * arithmetic below can push it over.
+ */
+export const BOILERPLATE_CEILING = 0.8;
+
+/**
+ * The three asks, with what each is worth before urgency, and whether the
+ * phrase is somebody **demanding the thing** or merely naming it.
  *
  * The order is the order of how little else they could mean. Nobody legitimate
  * asks by mail for a gift card; a wire instruction arriving unasked is at
  * least unusual; a password prompt is the shape every real service's mail also
- * has, so it starts lowest and needs the urgency to wake anybody.
+ * has — which is the point of `demand`.
+ *
+ * ## Why `demand` exists
+ *
+ * "Reset your password" is in every real password-reset mail ever sent, and
+ * the boilerplate of that genre is "if this wasn't you, contact us
+ * immediately". Scored like a request *for* the password, the owner resetting
+ * his own password produced an urgent wake, hourly, for a week — in the one
+ * watcher an `ignore` policy may not silence. So a phrase that only names the
+ * credential is capped at `BOILERPLATE_CEILING` and can never be more than a
+ * notice; only a phrase in which somebody asks to be *given* it, or to be paid,
+ * can wake anybody.
  *
  * Deliberately absent: **"click here"**, **"verify"** on its own, **"account"**
  * — they are in every newsletter footer, and a watcher that cried at them would
  * be off by Tuesday.
  */
-export const ASK_PATTERNS: ReadonlyArray<{ kind: AskKind; weight: number; re: RegExp }> = [
-  { kind: 'gift-card', weight: 0.8, re: /\bgift cards?\b/u },
-  { kind: 'gift-card', weight: 0.8, re: /\bcartes? cadeaux?\b/u },
-  { kind: 'gift-card', weight: 0.8, re: /\b(?:itunes|google play|amazon) cards?\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bwire transfer\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bbank transfer\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bvirement (?:bancaire|urgent|immediat)\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bchange (?:of|our) bank (?:details|account)\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bnouvelles? coordonnees bancaires\b/u },
-  { kind: 'wire', weight: 0.7, re: /\bnouvel iban\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\b(?:confirm|verify|update) your password\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\breset your password\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\bsend (?:me |us )?your password\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\bverify your (?:account|identity|credentials)\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\bvotre mot de passe\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\bidentifiants? de connexion\b/u },
-  { kind: 'credentials', weight: 0.6, re: /\bverifiez votre compte\b/u },
+export const ASK_PATTERNS: ReadonlyArray<{
+  kind: AskKind;
+  weight: number;
+  demand: boolean;
+  re: RegExp;
+}> = [
+  { kind: 'gift-card', weight: 0.8, demand: true, re: /\bgift cards?\b/u },
+  { kind: 'gift-card', weight: 0.8, demand: true, re: /\bcartes? cadeaux?\b/u },
+  { kind: 'gift-card', weight: 0.8, demand: true, re: /\b(?:itunes|google play|amazon) cards?\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bwire transfer\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bbank transfer\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bvirement (?:bancaire|urgent|immediat)\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bchange (?:of|our) bank (?:details|account)\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bnouvelles? coordonnees bancaires\b/u },
+  { kind: 'wire', weight: 0.7, demand: true, re: /\bnouvel iban\b/u },
+  // Somebody asking to be given the credential. This is the phishing half.
+  { kind: 'credentials', weight: 0.6, demand: true, re: /\bsend (?:me |us )?(?:your |the )?password\b/u },
+  { kind: 'credentials', weight: 0.6, demand: true, re: /\breply with your (?:password|code|credentials)\b/u },
+  { kind: 'credentials', weight: 0.6, demand: true, re: /\bshare your (?:password|credentials|login)\b/u },
+  { kind: 'credentials', weight: 0.6, demand: true, re: /\benvoyez(?:-| )(?:moi|nous) votre mot de passe\b/u },
+  // The vocabulary of every real reset mail. Named, not demanded: capped.
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\b(?:confirm|verify|update) your password\b/u },
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\breset your password\b/u },
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\bverify your (?:account|identity|credentials)\b/u },
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\bvotre mot de passe\b/u },
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\bidentifiants? de connexion\b/u },
+  { kind: 'credentials', weight: 0.6, demand: false, re: /\bverifiez votre compte\b/u },
 ];
 
-/** The words that turn any of the three into an emergency. */
-export const URGENCY = /\b(?:urgent(?:ly|e|es)?|immediately|immediatement|right away|within 24 hours|sous 24 ?h|dans les 24 heures|au plus vite|as soon as possible|asap|today|aujourd'hui)\b/u;
+/**
+ * The words that turn an ask into an emergency — **in its own sentence**.
+ *
+ * `today`, `aujourd'hui` and `asap` used to be here and are gone: they are not
+ * emergency language in transactional mail, they are what a link's expiry is
+ * written with. What is left is somebody insisting, and it only counts when it
+ * insists about the thing being asked for, which is what the sentence test is.
+ */
+export const URGENCY = /\b(?:urgent(?:ly|e|es)?|immediately|immediatement|right away|within 24 hours|sous 24 ?h|dans les 24 heures|au plus vite|as soon as possible)\b/u;
 
 export interface AskReading {
   kind: AskKind;
-  /** 0–0.95. Above 0.8 wakes somebody; §7. */
+  /** 0–0.95. Above `ASK_URGENT_ABOVE` wakes somebody; §7. */
   confidence: number;
   phrase: string;
   urgent: boolean;
@@ -405,20 +641,26 @@ export interface AskReading {
  * "look at this" forward is a conversation about a fraud, not one.
  */
 export function classifyAsk(text: string | null | undefined): AskReading | null {
-  const own = ownText(text);
+  const own = nfc(ownText(text));
   if (own.trim() === '') return null;
   const folded = fold(own);
-  let best: { kind: AskKind; weight: number; phrase: string } | null = null;
-  for (const { kind, weight, re } of ASK_PATTERNS) {
+  let best: { kind: AskKind; weight: number; phrase: string; demand: boolean; at: number } | null =
+    null;
+  for (const { kind, weight, demand, re } of ASK_PATTERNS) {
     const hit = firstMatch(own, [re]);
     if (hit === null) continue;
-    if (best === null || weight > best.weight) best = { kind, weight, phrase: hit.phrase };
+    if (best !== null && weight <= best.weight) continue;
+    best = { kind, weight, phrase: hit.phrase, demand, at: hit.at };
   }
   if (best === null) return null;
-  const urgent = new RegExp(URGENCY.source, 'iu').test(folded);
+  // The urgency has to be about *this*: in the sentence the ask is in, not
+  // three paragraphs down in a signature or a link-expiry notice.
+  const urgent = new RegExp(URGENCY.source, 'iu').test(sentenceAround(folded, best.at));
+  const raw = round2(best.weight + (urgent ? URGENCY_BOOST : 0));
+  const ceiling = best.demand ? MAX_ASK_CONFIDENCE : BOILERPLATE_CEILING;
   return {
     kind: best.kind,
-    confidence: Math.min(MAX_ASK_CONFIDENCE, round2(best.weight + (urgent ? URGENCY_BOOST : 0))),
+    confidence: Math.min(ceiling, raw),
     phrase: best.phrase,
     urgent,
   };
@@ -435,6 +677,10 @@ export function classifyAsk(text: string | null | undefined): AskReading | null 
  * nothing is not one. A question mark is the strongest signal and needs no
  * table; these are the polite English and French ways of asking without one.
  *
+ * `merci de` carries an infinitive: `merci de me renvoyer le contrat` is a
+ * request and `merci de votre commande` is a thank-you, and without the verb
+ * every receipt in the mailbox reads as a question the owner asked.
+ *
  * Deliberately absent: **"thanks in advance"** and **"merci d'avance"** —
  * they close a request that is already in the message and would double-count,
  * and they also close half the messages that ask for nothing at all.
@@ -448,26 +694,49 @@ export const QUESTION_PATTERNS: readonly RegExp[] = [
   /\bpourriez-?vous\b/u,
   /\bpouvez-?vous\b/u,
   /\bpeux-?tu\b/u,
-  /\bmerci de\b/u,
+  /\bmerci de (?:bien vouloir |m'|me |nous |lui |leur )?[a-z]+er\b/u,
   /\bdis-?moi\b/u,
   /\btiens-?moi au courant\b/u,
 ];
 
-/** A sentence that ends in a question mark, if there is one. */
-function questionSentence(text: string): PhraseHit | null {
+/**
+ * A sentence that really ends in a question mark.
+ *
+ * Three rules, and every one of them is a URL that used to read as a question
+ * the owner asked — `https://x.test/a?utm=1` scored, and the fenced phrase the
+ * agent was shown was `test/a?`:
+ *
+ *  - the `?` must be **preceded by a word character**, so `a?utm` is out only
+ *    by the next rule but `(?)` and `??` are out here;
+ *  - it must be **followed by whitespace, a closing mark, or the end** — a
+ *    query string has more of the URL after it;
+ *  - the **token it sits in** must not look like a URL or a parameter: no
+ *    `://`, no `=`.
+ *
+ * And a rejected `?` does not end the search: a message can carry a link and
+ * then ask something.
+ */
+function questionSentence(text: string): (PhraseHit & { at: number }) | null {
   const folded = fold(text);
-  const at = folded.indexOf('?');
-  if (at < 0) return null;
-  const start = Math.max(
-    0,
-    ...['.', '!', '?', '\n'].map((mark) => folded.lastIndexOf(mark, at - 1) + 1),
-  );
-  const phrase = text.slice(start, at + 1).trim();
-  return phrase === '?' ? null : { phrase };
+  for (let at = folded.indexOf('?'); at >= 0; at = folded.indexOf('?', at + 1)) {
+    const before = folded[at - 1] ?? '';
+    const after = folded[at + 1] ?? '';
+    if (!/[\p{L}\p{N}]/u.test(before)) continue;
+    if (after !== '' && !/[\s"')\]]/u.test(after)) continue;
+    const start = sentenceStart(folded, at);
+    const slice = folded.slice(start, at + 1);
+    // The word the mark is attached to, to rule out a URL or a parameter.
+    const token = slice.split(/\s+/).pop() ?? '';
+    if (token.includes('://') || token.includes('=')) continue;
+    const phrase = text.slice(start, at + 1).trim();
+    if (phrase === '?') continue;
+    return { phrase, at: start };
+  }
+  return null;
 }
 
 /** The question this message asks, in the owner's own words, or null. */
 export function findQuestion(text: string | null | undefined): PhraseHit | null {
-  const own = ownText(text);
+  const own = nfc(ownText(text));
   return questionSentence(own) ?? firstMatch(own, QUESTION_PATTERNS);
 }

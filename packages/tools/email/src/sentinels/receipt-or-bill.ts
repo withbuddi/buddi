@@ -29,9 +29,8 @@ import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/
 import {
   RECEIPT_SCAN_BATCH,
   receiptsSince,
-  recordReceipt,
   scanMessageReceipt,
-  skipReceipt,
+  stampOldReceipts,
   unscannedReceipts,
 } from '../receipts-store.js';
 import {
@@ -69,24 +68,43 @@ export function createReceiptOrBillSentinel(): Sentinel {
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.db);
       const now = ctx.now();
+      const since = new Date(now.getTime() - RECEIPT_WINDOW_DAYS * 86_400_000);
 
-      // Catch-up first, so a receipt found this tick raises its finding in the
-      // same tick rather than waiting an hour for the next one.
-      for (const message of await unscannedReceipts(ctx.db, RECEIPT_SCAN_BATCH)) {
-        if (message.ignored) {
-          await skipReceipt(ctx.db, message.id, now);
-          continue;
-        }
+      /*
+       * Catch-up first, so a receipt found this tick raises its finding in the
+       * same tick rather than waiting an hour for the next one — and bounded
+       * by the *window*, not only by the batch. A mailbox taking in more than
+       * a batch an hour would otherwise have its sweep walking a decade of
+       * backlog oldest-first for ever, and this watcher would be silent about
+       * exactly the fortnight it exists for. What ages out unread is stamped
+       * in one statement instead.
+       */
+      await stampOldReceipts(ctx.db, since, now);
+      let failed = 0;
+      let firstError = '';
+      for (const message of await unscannedReceipts(ctx.db, since, RECEIPT_SCAN_BATCH)) {
         try {
           await scanMessageReceipt(ctx.db, message, now);
-        } catch {
-          // One unreadable message must not cost the tick its findings. It is
-          // stamped with no row so the sweep moves on rather than looping.
-          await recordReceipt(ctx.db, message.id, null, now).catch(() => {});
+        } catch (err) {
+          /*
+           * Nothing is stamped: the reading and the stamp are one statement
+           * (`recordReceipt`), so a message that could not be stored is read
+           * again next tick rather than marked read with nothing stored. It
+           * cannot loop for ever — the window moves, and `stampOldReceipts`
+           * takes it once it ages out.
+           */
+          failed += 1;
+          if (firstError === '') firstError = err instanceof Error ? err.message : String(err);
         }
       }
+      // Once per tick, not once per message: a broken column would otherwise
+      // write two hundred identical lines an hour into the owner's log.
+      if (failed > 0) {
+        console.warn(
+          `email.receipt-or-bill: ${failed} message(s) could not be read this tick: ${firstError}`,
+        );
+      }
 
-      const since = new Date(now.getTime() - RECEIPT_WINDOW_DAYS * 86_400_000);
       const hits = await receiptsSince(ctx.db, since, settings.receiptConfidence);
       const agentId = receiptAgent(ctx);
 

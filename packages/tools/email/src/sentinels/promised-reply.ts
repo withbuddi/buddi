@@ -30,6 +30,7 @@ import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/
 import { findPromise } from '../phrases.js';
 import {
   PROMISE_WINDOW_DAYS,
+  historyWindowDays,
   loadWatcherSettings,
   promisedDraftFinding,
   promisedFinding,
@@ -80,12 +81,16 @@ const PROMISES_SQL = `
        and t.state <> 'muted'
        and coalesce(m.internal_date, m.fetched_at) <= $1::timestamptz - make_interval(days => $2::int)
        and coalesce(m.internal_date, m.fetched_at) >= $1::timestamptz - make_interval(days => $3::int)
+       -- "Something followed" compares (instant, row id) as one value rather
+       -- than the instant alone: INTERNALDATE has second resolution and two
+       -- messages sent in the same second would otherwise each be the other's
+       -- follower, or neither, depending on nothing.
        and not exists (
          select 1 from email.messages later
           where later.thread_id = m.thread_id
             and later.direction = 'out'
-            and coalesce(later.internal_date, later.fetched_at)
-                > coalesce(m.internal_date, m.fetched_at)
+            and (coalesce(later.internal_date, later.fetched_at), later.id)
+                > (coalesce(m.internal_date, m.fetched_at), m.id)
        )
   )
   select id, thread_id, subject, body_text, to_addrs,
@@ -94,16 +99,25 @@ const PROMISES_SQL = `
    where not ${IGNORED_RECIPIENT}
    order by at desc, id asc`;
 
-/** Live drafts nobody has touched for longer than the setting. */
+/**
+ * Live drafts nobody has touched for longer than the setting.
+ *
+ * A **left** join on the thread: `drafts.thread_id` is nullable
+ * (`010_drafts.sql`), and a draft written on a conversation the poll has not
+ * threaded yet is still a reply the owner has not sent. An inner join dropped
+ * exactly those — the newest ones, which is the wrong half to lose. With no
+ * thread there is no mute to respect, so the `coalesce` reads as the default
+ * state rather than silencing it.
+ */
 const DRAFTS_SQL = `
   with rows as (
     select d.id, d.account_id, d.thread_id, d.subject, d.to_addrs, d.cc, d.created_by_agent,
            d.updated_at as at
       from email.drafts d
-      join email.threads t on t.id = d.thread_id
+      left join email.threads t on t.id = d.thread_id
      where d.status in ('draft', 'edited')
        and d.sent_action_id is null
-       and t.state <> 'muted'
+       and coalesce(t.state, 'waiting-on-me') <> 'muted'
        and d.updated_at <= $1::timestamptz - make_interval(days => $2::int)
        and d.updated_at >= $1::timestamptz - make_interval(days => $3::int)
   )
@@ -129,32 +143,39 @@ export function createPromisedReplySentinel(): Sentinel {
     every: EVERY_12H,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.db);
-      const bounds = [ctx.now(), settings.promisedDays, PROMISE_WINDOW_DAYS];
+      /*
+       * The history window contains the setting rather than being pinned
+       * beside it: a `promisedDays` of 45 against a fixed thirty-day ceiling
+       * reported nothing at all, which is a settings page that offers a number
+       * and switches the watcher off when it is chosen. See
+       * `historyWindowDays`.
+       */
+      const window = historyWindowDays(settings.promisedDays, PROMISE_WINDOW_DAYS);
+      const bounds = [ctx.now(), settings.promisedDays, window];
       const agentId = mailAgent(ctx);
 
-      /*
-       * Both halves are shaped the same way: every row that is still true goes
-       * into `keys`, and only the first `MAX_PROMISED_FINDINGS` become
-       * findings. Core resolves every open key a tick did not name, so a
-       * promise pushed past the cap has to be named or it reads as kept.
-       */
-      const keys: string[] = [];
-      const findings: Finding[] = [];
-      const add = (finding: Finding): void => {
-        keys.push(finding.key);
-        if (findings.length < MAX_PROMISED_FINDINGS) {
-          findings.push({ ...finding, ...(agentId ? { agentId } : {}) });
-        }
-      };
+      const [promises, drafts] = await Promise.all([
+        ctx.db.query(PROMISES_SQL, bounds),
+        ctx.db.query(DRAFTS_SQL, bounds),
+      ]);
 
-      const promises = await ctx.db.query(PROMISES_SQL, bounds);
+      /*
+       * One list, not two. Promises used to be shaped and capped first and
+       * drafts appended after, so a mailbox with twenty stale promises in it
+       * never raised a single draft finding — and the twenty it did raise were
+       * the *newest*, which under a severity rule means the three-day notices
+       * crowding out the week-old warnings. So both halves are shaped, then
+       * ordered urgent-first and newest-first, and the cap is applied to the
+       * one ordered list.
+       */
+      const shaped: Array<ReturnType<typeof promisedFinding>> = [];
       for (const row of promises.rows as Array<Record<string, any>>) {
         // The judgement is `phrases.ts`'s, over the owner's own words, and it
         // is made here rather than in SQL because a regular expression in a
         // query is a rule nobody can test without a database.
         const promise = findPromise(row.body_text ?? '');
         if (promise === null) continue;
-        const shaped: PromisedReply = {
+        const shapedPromise: PromisedReply = {
           threadId: String(row.thread_id),
           messageId: String(row.id),
           subject: row.subject ?? '',
@@ -162,22 +183,40 @@ export function createPromisedReplySentinel(): Sentinel {
           phrase: promise.phrase,
           ageDays: Math.max(0, Number(row.age_days ?? 0)),
         };
-        add(promisedFinding(shaped));
+        shaped.push(promisedFinding(shapedPromise));
       }
-
-      const drafts = await ctx.db.query(DRAFTS_SQL, bounds);
       for (const row of drafts.rows as Array<Record<string, any>>) {
-        const shaped: PromisedDraft = {
-          threadId: String(row.thread_id),
+        const shapedDraft: PromisedDraft = {
+          threadId: row.thread_id === null || row.thread_id === undefined ? null : String(row.thread_id),
           draftId: String(row.id),
           subject: row.subject ?? '',
           to: firstRecipient(row.to_addrs),
           agent: row.created_by_agent ?? 'an agent',
           ageDays: Math.max(0, Number(row.age_days ?? 0)),
         };
-        add(promisedDraftFinding(shaped));
+        shaped.push(promisedDraftFinding(shapedDraft));
       }
+      // Urgent first, then newest — the same order `email.waiting-on-me`
+      // reports in, and for the same reason: what the cap truncates should be
+      // the least pressing thing, and what it truncates must not be mistaken
+      // for something that was dealt with (which `keys` below prevents).
+      shaped.sort((a, b) => {
+        if (a.severity !== b.severity) return a.severity === 'urgent' ? -1 : 1;
+        return a.data.ageDays - b.data.ageDays;
+      });
 
+      /*
+       * Every key that is still true, cap or no cap. Core resolves every open
+       * key a tick did not name, so a promise pushed past the cap has to be
+       * named here or it reads as kept.
+       */
+      const keys: string[] = [];
+      const findings: Finding[] = [];
+      for (const finding of shaped) {
+        keys.push(finding.key);
+        if (findings.length >= MAX_PROMISED_FINDINGS) continue;
+        findings.push({ ...finding, ...(agentId ? { agentId } : {}) });
+      }
       return { findings, keys };
     },
   };

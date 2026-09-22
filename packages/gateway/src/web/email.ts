@@ -764,7 +764,15 @@ export async function writeEmailWatchers(
   for (const key of WATCHER_SETTINGS) {
     if (input[key] === undefined) continue;
     const bounds = WATCHER_BOUNDS[key];
-    const value = Number(input[key]);
+    const raw = input[key];
+    /*
+     * A number, and only a number. `Number(raw)` used to do this, and it reads
+     * `true` as 1, `null` and `''` as 0 and `[]` as 0 — so a malformed client,
+     * or a typo in a script, could set the waiting window to one day and be
+     * told 200. A setting the owner cannot see being wrong is worse than a
+     * refusal he can.
+     */
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number.NaN;
     const ok = bounds.whole ? Number.isInteger(value) : Number.isFinite(value);
     if (!ok || value < bounds.min || value > bounds.max) {
       return {
