@@ -25,8 +25,9 @@
  * query only looks at the last `STALE_WAITING_DAYS` — a conversation nobody
  * has touched in a month is history, not an alarm — and reports the *newest*
  * waiting threads first, so the raise cap truncates the least urgent rows
- * rather than the most recent ones. The rows past the cap are still returned
- * as keys, so core does not mistake them for answered.
+ * rather than the most recent ones. Every qualifying thread is still returned
+ * as a key, capped by nothing, so core does not mistake one it did not hear
+ * about for one that was answered.
  */
 import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
 import {
@@ -44,17 +45,6 @@ export const EVERY_12H = 12 * 60 * 60;
 /** At most this many findings in one tick. A backlog is a report, not an alarm. */
 export const MAX_WAITING_FINDINGS = 20;
 
-/**
- * How many waiting threads one tick *looks* at, past the raise cap.
- *
- * The cap above is about how much the owner hears; this is about what the
- * watcher knows. Core resolves every open finding a run did not return, so a
- * thread truncated by the cap would read as answered and come back as news on
- * the next tick — the rows between the two numbers are reported as still true
- * (`SentinelReport.keys`) without being raised again.
- */
-export const MAX_WAITING_SCANNED = 500;
-
 /** Who speaks about mail: whoever holds `mail`, else `triage`, else nobody. */
 export function mailAgent(ctx: SentinelContext): string | undefined {
   return ctx.agentForRole('mail') ?? ctx.agentForRole('triage');
@@ -64,12 +54,18 @@ export function mailAgent(ctx: SentinelContext): string | undefined {
  * The query: threads waiting on the owner, with the last inbound message, its
  * age, and whether the owner has ever written to that sender from that account.
  *
- * It is one statement because every part of it is a fact about the same row,
- * and splitting it would mean deciding in TypeScript what Postgres can decide
- * in the join — but nothing here *judges*: the severity and the words are
- * `watchers.ts`'s, over the rows this returns.
+ * Every condition is a fact about the same row, so it is one statement, and
+ * nothing in it *judges*: the severity and the words are `watchers.ts`'s, over
+ * the rows it returns.
+ *
+ * Two statements read this one source, because there are two questions.
+ * *What is still true* has no cap — core resolves every open finding a run did
+ * not name, so a key left out of the answer would read as answered and come
+ * back as news on the next tick; it is bounded by the thirty-day ceiling and
+ * returns two ids per row. *What the owner hears* is capped at twenty, newest
+ * first.
  */
-const WAITING_SQL = `
+const WAITING_SOURCE = `
   with last_inbound as (
     select distinct on (m.thread_id)
            m.thread_id, m.id, m.from_addr, m.subject, m.body_text, m.snippet, m.account_id,
@@ -79,13 +75,14 @@ const WAITING_SQL = `
      where m.direction = 'in'
        and t.state = 'waiting-on-me'
      order by m.thread_id, coalesce(m.internal_date, m.fetched_at) desc, m.id desc
-  )
-  select t.id as thread_id, t.subject as thread_subject,
-         li.id as message_id, li.from_addr, li.subject, li.body_text, li.snippet,
-         floor(extract(epoch from ($1::timestamptz - li.at)) / 86400.0)::int as age_days
-    from last_inbound li
-    join email.threads t on t.id = li.thread_id
-   where t.state = 'waiting-on-me'
+  ),
+  waiting as (
+    select t.id as thread_id, t.subject as thread_subject,
+           li.id as message_id, li.from_addr, li.subject, li.body_text, li.snippet, li.at,
+           floor(extract(epoch from ($1::timestamptz - li.at)) / 86400.0)::int as age_days
+      from last_inbound li
+      join email.threads t on t.id = li.thread_id
+     where t.state = 'waiting-on-me'
      and li.at <= $1::timestamptz - make_interval(days => $2::int)
      -- ...and not so old that it is history rather than news. See
      -- STALE_WAITING_DAYS above: a mailbox arrives with years of inbound-last
@@ -119,7 +116,16 @@ const WAITING_SQL = `
                 and p.matcher = split_part(email.address_of(li.from_addr), '@', 2))
           )
      )
-   order by li.at desc, t.id asc
+  )`;
+
+/** Every key that is still true. No cap: see `WAITING_SOURCE`. */
+const WAITING_KEYS_SQL = `${WAITING_SOURCE} select thread_id, message_id from waiting`;
+
+/** The rows worth raising this tick: newest first, capped. */
+const WAITING_ROWS_SQL = `${WAITING_SOURCE}
+  select thread_id, thread_subject, message_id, from_addr, subject, body_text, snippet, age_days
+    from waiting
+   order by at desc, thread_id asc
    limit $4`;
 
 export function createWaitingOnMeSentinel(): Sentinel {
@@ -131,19 +137,15 @@ export function createWaitingOnMeSentinel(): Sentinel {
     every: EVERY_12H,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.db);
-      const { rows } = await ctx.db.query(WAITING_SQL, [
-        ctx.now(),
-        settings.waitingDays,
-        STALE_WAITING_DAYS,
-        MAX_WAITING_SCANNED,
-      ]);
-      const agentId = mailAgent(ctx);
-      // Every row is a fact that is still true; only the newest few are raised.
-      const keys = rows.map((row: Record<string, any>) =>
+      const bounds = [ctx.now(), settings.waitingDays, STALE_WAITING_DAYS];
+      // Everything that is still true, and then the few worth saying out loud.
+      const all = await ctx.db.query(WAITING_KEYS_SQL, bounds);
+      const keys = all.rows.map((row: Record<string, any>) =>
         waitingKey(String(row.thread_id), String(row.message_id)),
       );
+      const { rows } = await ctx.db.query(WAITING_ROWS_SQL, [...bounds, MAX_WAITING_FINDINGS]);
+      const agentId = mailAgent(ctx);
       const findings: Finding[] = rows
-        .slice(0, MAX_WAITING_FINDINGS)
         .map((row: Record<string, any>) => {
           const thread: WaitingThread = {
             threadId: String(row.thread_id),

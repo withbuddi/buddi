@@ -230,7 +230,12 @@ visible and switchable on the Watchers page:
   resolve inside a year is stored when the message is read, and the fortnight
   is applied later, against the owner's clock — otherwise a date announced a
   month out, or a backlog message swept up long after it arrived, would be
-  dropped by the only pass that will ever look at it. A pending reminder for that day on that thread silences it, and
+  dropped by the only pass that will ever look at it. A date that names its
+  year (`2027-07-05`, `30 septembre 2026`) is kept up to a year ahead; a date
+  that does not (`15 September`, `22/09`) is only rolled into next year when
+  that lands within a hundred and eighty days, because a day that has just
+  gone by is somebody talking about last week, not booking the same day in
+  twelve months' time. A pending reminder for that day on that thread silences it, and
   so do a muted thread, an `ignore` policy on the sender, and quoted (`>`)
   lines. The finding offers "set a reminder"; the agent creates it with
   `reminder.set` after reading the message. What the parser does and refuses to

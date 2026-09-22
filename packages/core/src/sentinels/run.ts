@@ -260,6 +260,17 @@ async function upsertAndMaybeFire(
 
   if (!shouldFire) return false;
 
+  /*
+   * An escalation takes its own digest item with it. The same key was noted as
+   * `info` on day two, in day-two's words, and is now waking somebody as
+   * `urgent`; leaving the old line pending would have the weekly recap repeat
+   * the mild version of a thing the owner was already interrupted about.
+   * Undelivered only — an item already read out is history.
+   */
+  if (escalated && finding.severity === 'urgent') {
+    await dropPendingDigestItem(pool, finding.key);
+  }
+
   const delivery =
     finding.severity === 'urgent'
       ? await enqueueWake(pool, sentinelId, finding, now)
@@ -347,6 +358,13 @@ async function enqueueWake(
   return { ok: false, reason: 'could not allocate a wake occurrence instant' };
 }
 
+/** Take a key's still-unread digest line out of the queue. */
+async function dropPendingDigestItem(pool: Pool, key: string): Promise<void> {
+  await pool.query(`delete from core.digest_items where finding_key = $1 and consumed_at is null`, [
+    key,
+  ]);
+}
+
 /** An info finding waits for the weekly recap. One unconsumed item per key. */
 async function noteInDigest(pool: Pool, finding: Finding): Promise<Delivery> {
   const { rows } = await pool.query<{ id: string }>(
@@ -374,23 +392,35 @@ async function resolveMissing(
   let resolved = 0;
   for (const finding of open) {
     if (seen.has(finding.key)) continue;
-    await pool.query(
-      `update core.sentinel_findings
-       set resolved_at = $2, cooldown_until = null, snoozed_at = null
-       where key = $1 and resolved_at is null`,
-      [finding.key, now.toISOString()],
-    );
     /*
-     * And it leaves the queue. An `info` finding waits in `core.digest_items`
-     * for the weekly recap; once the fact has stopped being true — answered,
-     * or a reminder now covers the date — reading it out next Sunday would be
-     * reporting something that is no longer so. Undelivered only: an item
-     * already consumed is history and stays in the record.
+     * Resolving and un-queueing are one act, so they are one transaction.
+     * An `info` finding waits in `core.digest_items` for the weekly recap;
+     * once the fact has stopped being true — answered, or a reminder now
+     * covers the date — reading it out next Sunday would be reporting
+     * something that is no longer so. A crash between the two statements
+     * would leave exactly that. Undelivered items only: one already consumed
+     * is history and stays in the record.
      */
-    await pool.query(
-      `delete from core.digest_items where finding_key = $1 and consumed_at is null`,
-      [finding.key],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      await client.query(
+        `update core.sentinel_findings
+         set resolved_at = $2, cooldown_until = null, snoozed_at = null
+         where key = $1 and resolved_at is null`,
+        [finding.key, now.toISOString()],
+      );
+      await client.query(
+        `delete from core.digest_items where finding_key = $1 and consumed_at is null`,
+        [finding.key],
+      );
+      await client.query('commit');
+    } catch (err) {
+      await client.query('rollback').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
     await appendEvent(pool, 'sentinel.resolved', {
       sentinelId,
       key: finding.key,
