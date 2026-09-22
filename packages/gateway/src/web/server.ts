@@ -1078,7 +1078,8 @@ export function createWebApp(deps: WebServerDeps): Server {
          * mail, and the ones proposed from the owner's own history. A read.
          */
         case '/api/email/policies': {
-          const view = await readEmailPolicies(deps.pool);
+          const accountId = q.get('account');
+          const view = await readEmailPolicies(deps.pool, accountId && accountId !== '' ? accountId : undefined);
           return sendJson(res, view.status, view.body);
         }
         case '/api/telegram':
@@ -2228,7 +2229,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         res,
         await dismissOffersFromWeb(
           writeDeps,
-          typeof body.agentId === 'string' && body.agentId !== '' ? body.agentId : undefined,
+          Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : [],
         ),
       );
     }

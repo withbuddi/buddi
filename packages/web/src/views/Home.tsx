@@ -155,7 +155,7 @@ export function Home({
           aside={
             <span className="ui-row">
               {moreOffers > 0 ? <a href={`${AGENTS_ROUTE}?tab=offers`} onClick={go(`${AGENTS_ROUTE}?tab=offers`)}>{moreOffers} more</a> : null}
-              <DismissAll count={allOffers.length} onDone={() => offers.reload()} />
+              <DismissAll ids={allOffers.map((offer) => offer.id)} onDone={() => offers.reload()} />
             </span>
           }
         >

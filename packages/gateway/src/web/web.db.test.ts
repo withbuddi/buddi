@@ -830,12 +830,12 @@ suite('the dashboard API', () => {
     expect(late.status).toBe(409);
     expect(((await late.json()) as any).error).toMatch(/dismissed/i);
 
-    // And the list can be cleared in one act, which answers with the count.
-    const all = await client.post('/api/offers/dismiss-all');
+    // And what is on the table can be cleared in one act: the page sends the
+    // ids it showed, and the count answered is exactly that many, never more.
+    const shown = (await client.json<any>('/api/offers')).offers.map((o: any) => o.id);
+    const all = await client.post('/api/offers/dismiss-all', { ids: shown });
     expect(all.status).toBe(200);
-    // Whatever else the suite left on the table goes with it; the count is
-    // what the page's confirmation would have named.
-    expect(((await all.json()) as any).dismissed).toBeGreaterThanOrEqual(1);
+    expect(((await all.json()) as any).dismissed).toBe(shown.length);
     expect((await client.json<any>('/api/offers')).offers).toEqual([]);
   });
 

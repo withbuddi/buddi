@@ -277,6 +277,7 @@ export async function dismissOffer(
     `update core.offers
         set dismissed_at = $2
       where id = $1 and taken_at is null and dismissed_at is null
+        and lapsed_at is null and expires_at > $2
       returning ${OFFER_COLUMNS}`,
     [input.id, input.now],
   );
@@ -284,25 +285,24 @@ export async function dismissOffer(
 }
 
 /**
- * The owner said no to all of them, or to one agent's.
+ * The owner said no to the offers the page actually displayed.
  *
  * The honest bulk action: the owner looked at a list of things they are never
- * going to do and cleared it. Scoped by agent on an agent's page, unscoped on
- * Home, and the count it returns is the count the page's confirmation named.
+ * going to do and cleared it. IDs bind the write to that exact displayed
+ * snapshot, so a concurrently-created or undisplayed row is never swept in.
  */
 export async function dismissOffers(
   pool: Queryable,
-  input: { now: Date; agentId?: string | undefined },
+  input: { now: Date; ids: readonly string[] },
 ): Promise<number> {
-  const params: unknown[] = [input.now];
-  const where = ['taken_at is null', 'dismissed_at is null', 'lapsed_at is null', 'expires_at > $1'];
-  if (input.agentId !== undefined && input.agentId !== '') {
-    params.push(input.agentId);
-    where.push(`agent_id = $${params.length}`);
-  }
+  const ids = [...new Set(input.ids.filter((id) => id !== ''))];
+  if (ids.length === 0) return 0;
   const { rows } = await pool.query(
-    `update core.offers set dismissed_at = $1 where ${where.join(' and ')} returning id`,
-    params,
+    `update core.offers set dismissed_at = $1
+      where id = any($2::uuid[]) and taken_at is null and dismissed_at is null
+        and lapsed_at is null and expires_at > $1
+      returning id`,
+    [input.now, ids],
   );
   return rows.length;
 }
@@ -347,10 +347,8 @@ export async function lapseConversationOffers(
  *  1. **The owner moved on.** A message of theirs in the offer's conversation,
  *     written after the offer was. They answered in words; the buttons under
  *     the previous turn describe a decision that is no longer the live one.
- *  2. **The conversation ended.** Either its group was archived, or that agent
- *     has started a newer conversation since — which is what a lifetime
- *     rollover looks like from here, and what "the thread this belonged to is
- *     not the thread any more" means in general.
+ *  2. **The conversation ended.** Its group was archived. Lifetime rollover
+ *     is explicit at the point that creates the successor conversation.
  *  3. **The agent was removed.** Only checked when the caller knows the roster
  *     (`agentIds`): a reader that cannot name the installed agents must not
  *     conclude that all of them are gone.
@@ -380,11 +378,7 @@ export async function sweepLapsedOffers(
         select 1 from core.conversations c
           left join core.groups g on g.id = c.group_id
          where c.id = o.conversation_id
-           and (g.archived_at is not null
-                or exists (select 1 from core.conversations n
-                            where n.agent_id = c.agent_id
-                              and n.created_at > o.created_at
-                              and n.id <> c.id)))`;
+           and g.archived_at is not null)`;
   const { rows } = await pool.query(
     `update core.offers o
         set lapsed_at = $1,

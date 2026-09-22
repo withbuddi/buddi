@@ -138,7 +138,7 @@ describe('Home, "On offer"', () => {
     expect(api.dismissOffers).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss 3' }));
-    await waitFor(() => expect(api.dismissOffers).toHaveBeenCalledWith(undefined));
+    await waitFor(() => expect(api.dismissOffers).toHaveBeenCalledWith(three.map((item) => item.id)));
   });
 
   it('lets the owner back out of clearing the list', async () => {
@@ -179,7 +179,7 @@ describe('the Offers tab', () => {
     expect(api.dismissOffers).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss 2' }));
-    await waitFor(() => expect(api.dismissOffers).toHaveBeenCalledWith('postman'));
+    await waitFor(() => expect(api.dismissOffers).toHaveBeenCalledWith(['off-1', 'off-2']));
   });
 
   it('keeps what was refused and what lapsed under a fold, with why', async () => {

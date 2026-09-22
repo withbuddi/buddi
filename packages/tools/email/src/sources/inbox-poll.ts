@@ -330,6 +330,7 @@ async function commitBatch(
         // `message.date` — see threads.ts.
         at: message.internalDate ?? now,
         folderId: folder.id,
+        uidValidity,
         uid: message.uid,
         direction,
       });
@@ -464,9 +465,18 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
             ? [await ensureFolder(ctx.db, account, onlyFolder, 'inbox', true)]
             : (await discoverFolders(ctx.db, account, client, timeoutMs, log)).filter((f) => f.synced);
 
+          // Plant a newly discovered Sent cursor before the inbox can spend
+          // time fetching. Anything the owner sends after this point is then
+          // above the cursor and cannot be mistaken for pre-existing history.
+          const plantedSent = new Set<string>();
+          for (const folder of folders.filter((f) => f.kind === 'sent' && f.uidValidity === null)) {
+            await pollFolder(ctx, account, client, folder, { timeoutMs, backfill, limit, log });
+            plantedSent.add(folder.id);
+          }
+
           // The inbox first: it is the one that wakes anybody, and a Sent
           // folder that times out must not cost the new mail its run.
-          for (const folder of [...folders].sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
+          for (const folder of [...folders].filter((f) => !plantedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
             pending.push(
               ...(await pollFolder(ctx, account, client, folder, {
                 timeoutMs,

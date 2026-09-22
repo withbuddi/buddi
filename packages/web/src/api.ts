@@ -1204,9 +1204,9 @@ export const api = {
   /** The owner said no to one. Starts nothing; the row stays for the record. */
   dismissOffer: (id: string) =>
     post<{ id: string; dismissedAt: string }>(`/offers/${encodeURIComponent(id)}/dismiss`, {}),
-  /** The owner cleared the list — everything, or one agent's. */
-  dismissOffers: (agentId?: string) =>
-    post<{ dismissed: number }>('/offers/dismiss-all', agentId ? { agentId } : {}),
+  /** The owner cleared exactly the displayed offers. */
+  dismissOffers: (ids: readonly string[]) =>
+    post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
@@ -1325,7 +1325,8 @@ export const api = {
   backupPassphrase: () => get<{ passphrase: string }>('/backups/passphrase'),
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
   /* ---- mail policies ---- */
-  emailPolicies: () => get<EmailPoliciesView>('/email/policies'),
+  emailPolicies: (accountId?: string) =>
+    get<EmailPoliciesView>('/email/policies', accountId ? { account: accountId } : {}),
   /**
    * Write one, or keep a proposal. Both answer with the two lists.
    *

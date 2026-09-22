@@ -347,7 +347,7 @@ export interface ThreadChoice {
 export const THREAD_CHOICES = 50;
 
 /** Exported for the settings route: the two lists, their counts, and the threads. */
-export async function policiesView(db: Parameters<typeof policyStats>[0]): Promise<{
+export async function policiesView(db: Parameters<typeof policyStats>[0], accountId?: string): Promise<{
   applied: PolicyView[];
   proposed: PolicyView[];
   threads: ThreadChoice[];
@@ -358,11 +358,24 @@ export async function policiesView(db: Parameters<typeof policyStats>[0]): Promi
   );
   const stats = await policyStats(db);
   const all = rows.map(toPolicy);
-  const { rows: threads } = await db.query(
-    `select id, account_id, subject, state, participants, last_at from email.threads
-      order by last_at desc nulls last, id desc limit $1`,
-    [THREAD_CHOICES],
-  );
+  const { rows: threads } = accountId
+    ? await db.query(
+        `select id, account_id, subject, state, participants, last_at from email.threads
+          where account_id = $1::uuid
+          order by last_at desc nulls last, id desc limit $2`,
+        [accountId, THREAD_CHOICES],
+      )
+    : await db.query(
+        `select id, account_id, subject, state, participants, last_at
+           from (
+             select id, account_id, subject, state, participants, last_at,
+                    row_number() over (partition by account_id order by last_at desc nulls last, id desc) as rn
+               from email.threads
+           ) per_account
+          where rn <= $1
+          order by last_at desc nulls last, id desc`,
+        [THREAD_CHOICES],
+      );
   return {
     applied: all.filter((p) => !p.proposed).map((p) => viewOf(p, stats.get(p.id))),
     proposed: all.filter((p) => p.proposed).map((p) => viewOf(p, stats.get(p.id))),

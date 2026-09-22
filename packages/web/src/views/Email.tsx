@@ -247,11 +247,19 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
 
 
   /*
-   * The policies half. Its own fetch and its own busy id, so a tap on one
-   * panel never greys out the other: adding a mailbox and revoking a rule are
-   * unrelated acts that happen to share a page.
+   * The new-rule form. `allAccounts` is a tick, not a default: the route
+   * refuses a policy that names neither one mailbox nor all of them.
    */
-  const policies = useAsync(() => api.emailPolicies(), []);
+  const [rule, setRule] = useState<RuleForm>(EMPTY_RULE);
+  const setRuleField = (patch: Partial<RuleForm>): void =>
+    setRule((current) => ({ ...current, ...patch }));
+
+  /*
+   * Policies and the selected mailbox's thread choices share one response.
+   * Passing the mailbox to the read makes the 50-row cap account-local.
+   */
+  const policyAccount = rule.scope === 'thread' && rule.accountId !== '' ? rule.accountId : undefined;
+  const policies = useAsync(() => api.emailPolicies(policyAccount), [policyAccount]);
   const [policyBusy, setPolicyBusy] = useState<string | null>(null);
   const [policyFailed, setPolicyFailed] = useState<string | null>(null);
 
@@ -263,14 +271,6 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
       .catch((err: unknown) => setPolicyFailed(err instanceof Error ? err.message : String(err)))
       .finally(() => setPolicyBusy(null));
   };
-
-  /*
-   * The new-rule form. `allAccounts` is a tick, not a default: the route
-   * refuses a policy that names neither one mailbox nor all of them.
-   */
-  const [rule, setRule] = useState<RuleForm>(EMPTY_RULE);
-  const setRuleField = (patch: Partial<RuleForm>): void =>
-    setRule((current) => ({ ...current, ...patch }));
 
   const applied = policies.data?.applied ?? [];
   const proposed = policies.data?.proposed ?? [];
