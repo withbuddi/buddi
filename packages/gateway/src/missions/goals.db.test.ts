@@ -45,7 +45,8 @@ import { localDateString } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createGoalManifest, GOALS_SENTINEL_ID, goalKey } from './goals.js';
+import { createGoalManifest, GOALS_SENTINEL_ID, GOAL_WAKE_INSTRUCTION, goalKey } from './goals.js';
+import { FINDING_CLOSE, FINDING_OPEN, findingOf, renderFinding } from './sentinel-wake.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -876,6 +877,44 @@ suite('goals (postgres)', () => {
     expect(passed?.detail).toContain('Verify with your own tools');
     expect((await wakes()).map((w) => w.key)).toContain(passedKey);
     expect((await wakes()).every((w) => w.agentId === HOLDER)).toBe(true);
+  });
+
+  /**
+   * Telegram parity (§7): a goal wake travels the way every finding travels.
+   *
+   * There is no goal-shaped path to a phone and there must not be one. A goal
+   * finding becomes a pending occurrence of `sentinel-wake` carrying the
+   * finding as its payload; the mission executor reads it with `findingOf`,
+   * runs it **as the goal's holder** rather than as the wake mission's own
+   * agent, and appends `renderFinding`'s fenced block to the prompt. What the
+   * holder then says with `mission.report` goes wherever its surface sends it
+   * — Telegram included — and nothing on that path knows the word "goal". So
+   * this asserts the join: the occurrence a goal produces is the occurrence
+   * that machinery already consumes.
+   */
+  it('reaches Telegram the way any finding does: one wake occurrence, addressed to the holder', async () => {
+    const goal = await weeklyGoal({ deadline: new Date(T0.getTime() + WEEK) });
+    scripted = 95;
+    await tick(new Date(T0.getTime() + WEEK + HOUR));
+
+    const { rows } = await pool.query<{ payload: unknown }>(
+      `select payload from core.occurrences where mission_id = $1 and state = 'pending' order by scheduled_at`,
+      [SENTINEL_WAKE_MISSION_ID],
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const finding = findingOf(rows[rows.length - 1]?.payload);
+    expect(finding).not.toBeNull();
+    // Addressed, so the executor resolves the holder and not the overview agent.
+    expect(finding?.agentId).toBe(HOLDER);
+    expect(finding?.sentinelId).toBe(GOALS_SENTINEL_ID);
+    expect(finding?.severity).toBe('urgent');
+    expect(finding?.key).toBe(goalKey(goal.id, 'deadline-passed'));
+
+    // And it renders into the prompt fenced as untrusted data, like any other.
+    const block = renderFinding(finding as NonNullable<typeof finding>);
+    expect(block).toContain(FINDING_OPEN);
+    expect(block).toContain(FINDING_CLOSE);
+    expect(block).toContain(GOAL_WAKE_INSTRUCTION);
   });
 
   it('is a watcher like any other: a goal whose plugin is gone shows no number, ever', async () => {

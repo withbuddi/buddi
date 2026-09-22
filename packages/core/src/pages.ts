@@ -153,12 +153,19 @@ export type ArgRef =
   | { row: string }
   | { selected: true };
 
-/** Somewhere else in the same plugin. Never another plugin, never a core page. */
-export interface RouteRef {
-  /** A page id of this plugin. */
-  page: string;
-  item?: ValueRef;
-}
+/**
+ * Where a link goes: another page of this same plugin, or one agent's chat.
+ *
+ * `{ page }` is the rule it has always been — never another plugin, never a
+ * core screen. `{ chat }` is the one exception, and it is narrow on purpose:
+ * it names an **agent id read out of the data**, and the dashboard turns it
+ * into that agent's conversation. A goal belongs to the agent that holds it
+ * and the only useful thing to do about one is to go and say so, which is a
+ * sentence no page of the `goal` plugin can be. It is a *conversation*, not a
+ * core page with state of its own: the widest thing a plugin can do with it is
+ * open a chat the owner already has in their rail.
+ */
+export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef };
 
 /** A write: a tool of this plugin, invoked as the owner. */
 export interface ToolRef {
@@ -479,9 +486,14 @@ const queryRefSchema = z
   })
   .strict();
 
-const routeRefSchema = z
-  .object({ page: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'), item: valueRefSchema.optional() })
-  .strict();
+const routeRefSchema = z.union([
+  z
+    .object({ page: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'), item: valueRefSchema.optional() })
+    .strict(),
+  // An agent's chat. `chat` is a value read out of the data — an agent id the
+  // query answered — never a page id and never a URL the descriptor wrote.
+  z.object({ chat: valueRefSchema }).strict(),
+]);
 
 const TOOL_NAME = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 

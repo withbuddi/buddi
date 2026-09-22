@@ -38,26 +38,28 @@ import {
   createGoal,
   getGoal,
   checkMetricParams,
+  STANDING_CHECKS,
   lastCheck,
   lastMeasuredCheck,
   listGoals,
   localDateString,
   measureMetricResult,
+  measuredChecks,
   metricParamsSchema,
   milestoneValue,
   milestonesCrossed,
-  onTrack,
   paceNeeded,
   parseReminderWhen,
-  progress,
-  projection,
   reached,
   recentChecks,
   recordCheck,
   settleGoal,
+  standingOf,
   targetValue,
   updateGoal,
   type Finding,
+  type GoalStanding,
+  type GoalVerdict,
   type Goal,
   type GoalCadence,
   type GoalCheck,
@@ -72,12 +74,29 @@ import {
   type ToolDefinition,
 } from '@buddi/core';
 import { z } from 'zod';
+import { GOALS_SENTINEL_ID, checkLines, formatPace, formatValue, goalKey, goalLine } from './goals-format.js';
+import {
+  CHART_CHECKS,
+  chartOf,
+  createGoalHome,
+  createGoalOwnerClose,
+  createGoalQueries,
+  goalViews,
+  goalsPage,
+  type GoalChart,
+} from './goals-page.js';
 
 /** Plugin family name for the goal tools. The rows live in core's schema. */
 export const GOAL_PLUGIN = 'goal';
 
-/** The watcher's id. Core's own, like the goals it reads. */
-export const GOALS_SENTINEL_ID = 'core.goals';
+/**
+ * The watcher's id and its finding keys, re-exported from `goals-format.ts`.
+ *
+ * They live there because the page reads findings back by the very same id and
+ * prefix the watcher writes them under, and two copies of that string is one
+ * rename away from a page quietly showing another plugin's findings.
+ */
+export { GOALS_SENTINEL_ID, goalKey } from './goals-format.js';
 
 /** How often the watcher looks. Hourly; what is *due* is decided per goal. */
 export const GOALS_SENTINEL_EVERY_S = 3600;
@@ -114,107 +133,14 @@ export const GOAL_WAKE_INSTRUCTION =
 
 /* ------------------------------------------------------------------ *
  * Rendering
+ *
+ * The words for a goal's numbers live in `goals-format.ts` and are re-exported
+ * here, where every caller and every test has always found them: the Goals
+ * page and the Home block need the same sentences, and a third module both
+ * they and this one import is what keeps those two out of a cycle.
  * ------------------------------------------------------------------ */
 
-/**
- * A metric's number, in its own unit. Already formatted, like a Home stat.
- *
- * A `currency` metric that answered no currency prints the bare number. The
- * alternative — defaulting to dollars — puts a `$` in front of a euro balance
- * on a card the owner is about to approve, which is a worse answer than no
- * symbol at all: a missing symbol is visibly missing, a wrong one is not.
- */
-export function formatValue(
-  value: number | null,
-  unit: MetricUnit,
-  currency?: string | null,
-): string {
-  if (value === null || !Number.isFinite(value)) return 'not measured';
-  if (unit === 'currency') {
-    if (!currency) return new Intl.NumberFormat('en-US').format(round(value, 2));
-    try {
-      return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency,
-        maximumFractionDigits: 0,
-      }).format(value);
-    } catch {
-      return `${new Intl.NumberFormat('en-US').format(round(value, 2))} ${currency}`;
-    }
-  }
-  if (unit === 'percent') return `${new Intl.NumberFormat('en-US').format(round(value, 1))}%`;
-  if (unit === 'minutes') return `${new Intl.NumberFormat('en-US').format(Math.round(value))} min`;
-  return new Intl.NumberFormat('en-US').format(round(value, 2));
-}
-
-function round(value: number, places: number): number {
-  const factor = 10 ** places;
-  return Math.round(value * factor) / factor;
-}
-
-/**
- * A pace, in the owner's words: the size of the weekly move, and which way.
- *
- * The direction has to be in the sentence. "$1,540 a week" reads identically
- * for a debt coming down and a debt going up, and the sign of the number is
- * not something anybody reads off a card at seven in the morning — so the
- * magnitude carries the size and the word carries the direction.
- */
-export function formatPace(
-  pace: number | null,
-  unit: MetricUnit,
-  direction: MetricDirection,
-  currency?: string | null,
-): string {
-  if (pace === null) return 'no time left';
-  return `${formatValue(Math.abs(pace), unit, currency)} a week ${direction}`;
-}
-
-/** One goal, on one line: what `goal.list` prints and what a wake carries. */
-export function goalLine(
-  goal: Goal,
-  unit: MetricUnit,
-  last: GoalCheck | null,
-  timezone: string,
-): string {
-  // The goal's own currency, not the last check's: an unmeasured check carries
-  // none, and a line that loses its currency the week the bank is down is a
-  // line that prints a different number than the week before.
-  const currency = goal.currency ?? last?.currency ?? null;
-  const at = last?.value ?? null;
-  const pct = at === null ? null : progress(goal, at);
-  return (
-    `${goal.title} — ${goal.metric} ${formatValue(at, unit, currency)} ` +
-    `toward ${formatValue(targetValue(goal), unit, currency)} by ${localDateString(goal.deadline, timezone)}` +
-    `${pct === null ? '' : ` (${Math.round(pct * 100)}%)`}, ` +
-    `checked ${goal.cadence}, held by @${goal.agentId}`
-  );
-}
-
-/** The last four checks, oldest first, one line each. Evidence, not prose. */
-export function checkLines(
-  checks: readonly GoalCheck[],
-  unit: MetricUnit,
-  timezone: string,
-  currency: string | null = null,
-): string[] {
-  return [...checks]
-    .sort((a, b) => a.at.getTime() - b.at.getTime())
-    .map((check) => {
-      const money = currency ?? check.currency;
-      const parts = [`${localDateString(check.at, timezone)}: ${formatValue(check.value, unit, money)}`];
-      // What the number was true *of*, when that is not the day buddi looked.
-      if (check.asOf !== null && localDateString(check.asOf, timezone) !== localDateString(check.at, timezone)) {
-        parts.push(`reading as of ${localDateString(check.asOf, timezone)}`);
-      }
-      if (check.onTrack !== null) parts.push(check.onTrack ? 'on track' : 'off track');
-      if (check.projected !== null) {
-        parts.push(`projected ${formatValue(check.projected, unit, money)}`);
-      }
-      if (check.note) parts.push(check.note);
-      return `  ${parts.join(' · ')}`;
-    });
-}
+export { checkLines, formatPace, formatValue, goalLine } from './goals-format.js';
 
 /** What a goal envelope says will happen. Hashed before the owner sees it. */
 export interface GoalSetEnvelope {
@@ -457,6 +383,63 @@ const statusInput = z
 type Refusal = { ok: false; reason: string; message: string };
 
 const refusal = (reason: string, message: string): Refusal => ({ ok: false, reason, message });
+
+/** One check, as `goal.status` prints it. */
+export interface GoalStatusCheck {
+  at: string;
+  asOf: string | null;
+  value: number | null;
+  valueFormatted: string;
+  note: string | null;
+  onTrack: boolean | null;
+  paceNeeded: number | null;
+  projected: number | null;
+}
+
+/**
+ * One goal, as `goal.status` answers it.
+ *
+ * Written out rather than left as `Record<string, unknown>` because the
+ * timeseries descriptor maps paths into this shape: a field renamed here and
+ * not in `goalViews` is a chart that silently draws nothing, and the compiler
+ * is the only reader that will notice before the owner does.
+ */
+export interface GoalStatusGoal {
+  id: string;
+  title: string;
+  agentId: string;
+  metric: string;
+  params: Record<string, unknown>;
+  unit: MetricUnit;
+  target: GoalTarget;
+  targetValue: number;
+  baseline: { value: number; asOf: string };
+  deadline: string;
+  deadlineLocal: string;
+  cadence: GoalCadence;
+  currency: string | null;
+  milestones: number[];
+  state: Goal['state'];
+  closedAt: string | null;
+  closedNote: string | null;
+  value: number | null;
+  valueFormatted: string;
+  progress: number | null;
+  paceNeeded: number | null;
+  paceNeededInWords: string | null;
+  projected: number | null;
+  onTrack: boolean | null;
+  verdict: GoalVerdict;
+  line: string;
+  checks: GoalStatusCheck[];
+}
+
+/** What `goal.status` returns: the goals, and the chart when there is one. */
+export interface GoalStatusResult {
+  goals: GoalStatusGoal[];
+  /** Only when the answer holds exactly one goal. See `goalViews`. */
+  chart?: GoalChart;
+}
 
 /* ------------------------------------------------------------------ *
  * The manifest
@@ -763,7 +746,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       });
       return {
         ok: true,
-        goal: renderGoal(created.goal, unitOf(envelope.metric), ctx.timezone, [], ctx.now()),
+        goal: renderGoal(created.goal, unitOf(envelope.metric), ctx.timezone, unchecked(created.goal, ctx.now()), [], ctx.now()),
       };
     },
   };
@@ -914,7 +897,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       if (!updated.ok) return refusal(updated.reason, updated.message);
       return {
         ok: true,
-        goal: renderGoal(updated.goal, unitOf(updated.goal.metric), ctx.timezone, [], ctx.now()),
+        goal: renderGoal(updated.goal, unitOf(updated.goal.metric), ctx.timezone, unchecked(updated.goal, ctx.now()), [], ctx.now()),
       };
     },
   };
@@ -946,28 +929,44 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       }
       return {
         ok: true,
-        goal: renderGoal(closed, unitOf(closed.metric), ctx.timezone, [], ctx.now()),
+        goal: renderGoal(closed, unitOf(closed.metric), ctx.timezone, unchecked(closed, ctx.now()), [], ctx.now()),
       };
     },
   };
 
-  /** A goal and its arithmetic, as a tool result. Numbers, and the words for them. */
+  /**
+   * The standing of a goal nobody has looked at in this call.
+   *
+   * `goal.set`, `goal.update` and `goal.close` answer with the goal they just
+   * wrote, not with its history: there is nothing to project over and no
+   * verdict to give, and saying "not measured" is the honest form of that.
+   */
+  const unchecked = (goal: Goal, now: Date): GoalStanding =>
+    standingOf(goal, directionOf(goal.metric), [], now);
+
+  /**
+   * A goal and its arithmetic, as a tool result. Numbers, and the words for them.
+   *
+   * The arithmetic is `standing`, decided by `standingOf` over the same four
+   * measured checks Home and the Goals page read, so this tool and those
+   * screens cannot answer the same question two ways. `checks` is only what
+   * gets *printed* — the last four rows, failed looks included, because "the
+   * bank did not answer on Monday" is something the holder should say.
+   */
   function renderGoal(
     goal: Goal,
     unit: MetricUnit,
     timezone: string,
+    standing: GoalStanding,
     checks: GoalCheck[],
     /** The run's clock. Never `new Date()`: `goal.status` is read under one. */
     now: Date,
-  ): Record<string, unknown> {
+  ): GoalStatusGoal {
     const currency = goal.currency;
-    const measured = checks.filter((c) => c.value !== null);
-    const latest = measured[0] ?? null;
+    const latest = standing.latest;
     const value = latest?.value ?? null;
-    const projected = projection(
-      goal,
-      measured.map((c) => ({ at: c.at, value: c.value as number })),
-    );
+    const projected = standing.projected;
+    void now;
     return {
       id: goal.id,
       title: goal.title,
@@ -988,18 +987,22 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       closedNote: goal.closedNote,
       value,
       valueFormatted: formatValue(value, unit, currency),
-      progress: value === null ? null : progress(goal, value),
-      paceNeeded: value === null ? null : paceNeeded(goal, value, now),
+      progress: standing.progress,
+      paceNeeded: standing.paceNeeded,
       paceNeededInWords:
-        value === null ? null : formatPace(paceNeeded(goal, value, now), unit, directionOf(goal.metric), currency),
+        value === null ? null : formatPace(standing.paceNeeded, unit, directionOf(goal.metric), currency),
       projected,
-      onTrack: onTrack(goal, directionOf(goal.metric), projected),
+      onTrack: standing.onTrack,
+      verdict: standing.verdict,
       line: goalLine(goal, unit, latest, timezone),
       checks: checks.map((check) => ({
         at: check.at.toISOString(),
         asOf: check.asOf?.toISOString() ?? null,
         value: check.value,
-        valueFormatted: formatValue(check.value, unit, currency ?? check.currency),
+        // The goal's own currency, never the row's: a check taken while the
+        // metric answered no code must not print a different unit two lines
+        // under the stats that used the goal's.
+        valueFormatted: formatValue(check.value, unit, currency),
         note: check.note,
         onTrack: check.onTrack,
         paceNeeded: check.paceNeeded,
@@ -1008,7 +1011,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     };
   }
 
-  const status: ToolDefinition<z.infer<typeof statusInput>, unknown> = {
+  const status: ToolDefinition<z.infer<typeof statusInput>, GoalStatusResult | Refusal> = {
     name: 'goal.status',
     description:
       'Where a goal stands: the last four checks, how far along it is, what is needed per week from here, ' +
@@ -1028,21 +1031,50 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       if (input.id !== undefined && goals.length === 0) {
         return refusal('not-found', `no goal ${input.id}`);
       }
-      const out = [];
+      const out: GoalStatusGoal[] = [];
+      /*
+       * The chart the canvas draws, and the reason it is out here rather than
+       * on each goal: a descriptor is one mapping per tool, so `chart` is
+       * present **only when this answer holds exactly one goal** — with an id,
+       * or when the agent happens to hold one. With several, the points
+       * resolve to none and there is nothing to draw the first goal's history
+       * under the title of all of them.
+       */
+      let chart: GoalChart | null = null;
       for (const goal of goals) {
-        const checks = await recentChecks(ctx.db, goal.id, 4);
         /*
-         * The last four rows may all be unmeasured, and "not measured" is then
-         * a fact about the last four *looks*, not about the goal. The newest
-         * row that carried a number comes from the whole history, so a goal
-         * whose plugin went missing on Friday still shows Thursday's number.
+         * Two reads, and they answer different questions. The four rows are
+         * what gets *printed* — failed looks included, because "the bank did
+         * not answer on Monday" is something the holder should say. The four
+         * *measured* checks are what the arithmetic is done over, which is the
+         * same window Home and the Goals page use, so this tool cannot
+         * contradict them after a look fails.
          */
-        const measured = await lastMeasuredCheck(ctx.db, goal.id);
-        const withValue =
-          measured !== null && !checks.some((c) => c.id === measured.id) ? [...checks, measured] : checks;
-        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, withValue, ctx.now()));
+        const printed = await recentChecks(ctx.db, goal.id, 4);
+        const standing = standingOf(
+          goal,
+          directionOf(goal.metric),
+          await measuredChecks(ctx.db, goal.id, STANDING_CHECKS),
+          ctx.now(),
+        );
+        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, standing, printed, ctx.now()));
+        if (goals.length === 1) {
+          /*
+           * The chart is the goal's *history*, not its last four looks: a
+           * six-month goal drawn from four points is four dots, and a
+           * milestone crossed in week two would have no event on it. Its own
+           * read, so the printed rows stay four.
+           */
+          chart = chartOf(
+            goal,
+            unitOf(goal.metric),
+            directionOf(goal.metric),
+            await recentChecks(ctx.db, goal.id, CHART_CHECKS),
+            ctx.timezone,
+          );
+        }
       }
-      return { goals: out };
+      return chart === null ? { goals: out } : { goals: out, chart };
     },
   };
 
@@ -1079,8 +1111,15 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     // core concept and this manifest only exposes it to a model.
     schema: 'core',
     migrationsDir: '',
-    tools: [metrics, set, update, close, status, list],
+    tools: [metrics, set, update, close, status, list, createGoalOwnerClose()],
     sentinels: [createGoalsSentinel(source)],
+    // Where a goal shows (§7): a block on Home, a rail page, and one way of
+    // drawing `goal.status` on the canvas. All three are in `goals-page.ts`;
+    // none of them measures anything.
+    home: [createGoalHome(source)],
+    pages: [goalsPage],
+    queries: createGoalQueries(source),
+    views: goalViews,
   };
 }
 
@@ -1092,11 +1131,6 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
 export function cadenceDue(cadence: GoalCadence, lastAt: Date | null, now: Date): boolean {
   if (lastAt === null) return true;
   return now.getTime() - lastAt.getTime() >= (cadence === 'daily' ? DAILY_DUE_MS : WEEKLY_DUE_MS);
-}
-
-/** `goal.<id>.<event>` — one fact, one key, so each resolves on its own. */
-export function goalKey(goalId: string, event: string): string {
-  return `goal.${goalId}.${event}`;
 }
 
 /**
@@ -1149,42 +1183,57 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
         const deadlineUnmeasured =
           pastDeadline && (lastAt === null || lastAt.getTime() < goal.deadline.getTime());
         if (deadlineUnmeasured || cadenceDue(goal.cadence, lastAt, now)) {
-          const measured = await measureMetricResult(source, goal.metric, goal.params, goalToolContext(goal, ctx));
-          const value = measured.ok ? measured.reading.value : null;
-          const points = checks
-            .filter((c) => c.value !== null)
-            .map((c) => ({ at: c.at, value: c.value as number }));
-          if (value !== null) points.push({ at: now, value });
-          const projected = projection(goal, points);
+          const reading = await measureMetricResult(source, goal.metric, goal.params, goalToolContext(goal, ctx));
+          const value = reading.ok ? reading.reading.value : null;
+          /*
+           * The arithmetic of the row about to be written, over the same
+           * window every other surface reads — with this tick's number stood
+           * in front of it, because it is not a row yet. `standingOf` is what
+           * the page and `goal.status` call afterwards, so the number stored
+           * here is the number they will read back.
+           */
+          const before = await measuredChecks(ctx.db, goal.id, STANDING_CHECKS);
+          const pending: GoalCheck = {
+            id: '',
+            goalId: goal.id,
+            at: now,
+            asOf: null,
+            value,
+            currency: null,
+            note: null,
+            onTrack: null,
+            paceNeeded: null,
+            projected: null,
+          };
+          const prospective = standingOf(goal, direction, [pending, ...before], now);
           await recordCheck(ctx.db, {
             goalId: goal.id,
             at: now,
-            asOf: measured.ok ? (measured.reading.asOf ?? null) : null,
+            asOf: reading.ok ? (reading.reading.asOf ?? null) : null,
             value,
-            currency: measured.ok ? (measured.reading.currency ?? null) : null,
+            currency: reading.ok ? (reading.reading.currency ?? null) : null,
             // The reason it could not be measured is the check's note, so
             // "the plugin is gone" and "the bank has not synced" stay
             // different facts a week later.
-            note: measured.ok ? (measured.reading.note ?? null) : (measured.note ?? null),
-            onTrack: onTrack(goal, direction, projected),
-            paceNeeded: value === null ? null : paceNeeded(goal, value, now),
-            projected,
+            note: reading.ok ? (reading.reading.note ?? null) : (reading.note ?? null),
+            onTrack: prospective.onTrack,
+            paceNeeded: value === null ? null : prospective.paceNeeded,
+            projected: prospective.projected,
           });
           checks = await recentChecks(ctx.db, goal.id, 4);
         }
 
         /*
-         * Every verdict below is read off *measured* checks. A look that
-         * failed is not evidence about the goal — it is evidence about the
-         * plugin — and letting a null row answer "is this off track?" makes a
-         * timed-out metric look like a recovery.
+         * Every verdict below is read off *measured* checks, over the same
+         * four-row window Home, the Goals page and `goal.status` use — which
+         * is the whole reason `standingOf` exists. A look that failed is not
+         * evidence about the goal but about the plugin, and letting a null row
+         * answer "is this off track?" makes a timed-out metric look like a
+         * recovery.
          */
-        const measuredChecks = checks.filter((c) => c.value !== null);
-        const latest =
-          measuredChecks[0] ??
-          // The last four rows can all be unmeasured on a long outage; the
-          // newest number in the whole history is still the goal's number.
-          (await lastMeasuredCheck(ctx.db, goal.id));
+        const measured = await measuredChecks(ctx.db, goal.id, STANDING_CHECKS);
+        const standing = standingOf(goal, direction, measured, now);
+        const latest = standing.latest;
         const detail = (lead: string): string =>
           [
             lead,
@@ -1267,12 +1316,14 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
          * wakes once and resolves on the next tick.
          */
         if (latest !== null && latest.id !== beforeThisTick?.id) {
-          const crossedNow = milestonesCrossed(goal, direction, latest.value as number);
+          // What the goal's current number is past — `standingOf`'s answer, off
+          // the newest measured value rather than off any window — against what
+          // the number before this tick was past.
           const crossedBefore =
             beforeThisTick === null
               ? []
               : milestonesCrossed(goal, direction, beforeThisTick.value as number);
-          for (const milestone of crossedNow.filter((m) => !crossedBefore.includes(m))) {
+          for (const milestone of standing.milestonesCrossed.filter((m) => !crossedBefore.includes(m))) {
             findings.push({
               ...base,
               key: goalKey(goal.id, `milestone.${milestone}`),
@@ -1288,10 +1339,10 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
 
         // 5. Off track twice running is the one thing that interrupts; coming
         //    back is news for the recap, not for a phone. Both read the last
-        //    two *measured* checks, so a failed look leaves an open off-track
-        //    finding exactly as it was.
-        const [newest, previous] = measuredChecks;
-        if (newest?.onTrack === false && previous?.onTrack === false) {
+        //    two *measured* checks — `standingOf`'s `offTrackRuns` — so a
+        //    failed look leaves an open off-track finding exactly as it was.
+        const newest = standing.latest;
+        if (standing.offTrackRuns >= 2 && newest !== null) {
           findings.push({
             ...base,
             key: goalKey(goal.id, 'off-track'),
@@ -1305,7 +1356,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
                 `From here it needs ${formatPace(newest.paceNeeded, unit, direction, currency)}.`,
             ),
           });
-        } else if (newest?.onTrack === true && previous?.onTrack === false) {
+        } else if (newest?.onTrack === true && measured[1]?.onTrack === false) {
           findings.push({
             ...base,
             key: goalKey(goal.id, 'back-on-track'),

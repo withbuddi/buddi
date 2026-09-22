@@ -24,7 +24,7 @@ import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
 import { readPath, readRef } from '../canvas/resolve';
-import { pluginPageRoute, pluginSettingsRoute } from '../routes';
+import { chatRoute, pluginPageRoute, pluginSettingsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
@@ -135,6 +135,16 @@ export function holds(data: unknown, condition: Visibility | undefined): boolean
  * engine works out which hash that is.
  */
 function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
+  /*
+   * The one link that leaves the plugin: an agent's chat. `chat` is a value
+   * read out of the data — an agent id a query answered — so what a descriptor
+   * says is "the holder", not a URL. An id the data does not carry is no link
+   * at all rather than a route to nowhere.
+   */
+  if ('chat' in to) {
+    const agentId = readRef(data, to.chat);
+    return agentId === null || agentId === undefined ? '' : chatRoute(String(agentId));
+  }
   const target = scope.pages.find((page) => page.id === to.page);
   if (target?.place === 'settings') return pluginSettingsRoute(scope.plugin, to.page);
   const item = to.item === undefined ? null : readRef(data, to.item);
@@ -283,7 +293,11 @@ function useAct(): ActState {
   const apply = (then: ToolRef['then'], result: unknown, onDone?: () => void): void => {
     const what = then ?? 'refresh';
     if (typeof what === 'object') {
-      scope.navigate(routeOf(scope, what.route, result));
+      // A route the data could not answer — `{ chat }` over a null id — is no
+      // route: refreshing where the owner is beats navigating to nowhere.
+      const to = routeOf(scope, what.route, result);
+      if (to === '') scope.refresh();
+      else scope.navigate(to);
       return;
     }
     if (what === 'close') onDone?.();
@@ -779,9 +793,15 @@ function Piece({
 
 type Of<K extends Component['kind']> = Extract<Component, { kind: K }>;
 
-function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }): JSX.Element {
+function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }): JSX.Element | null {
   const scope = useScope();
   const href = routeOf(scope, component.to, data);
+  /*
+   * No route, no link. `{ chat }` reads an agent id out of the data, and a
+   * query that answered null for it has said there is nobody to go to — a
+   * button that navigates to the empty hash is worse than no button.
+   */
+  if (href === '') return null;
   return (
     <Toolbar>
       <ButtonLink
