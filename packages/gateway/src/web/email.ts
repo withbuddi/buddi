@@ -75,10 +75,19 @@ import {
   loadWatcherSettings,
   setWatcherSettings,
   DEFAULT_DATE_CONFIDENCE,
+  DEFAULT_NUDGE_DAYS,
+  DEFAULT_PROMISED_DAYS,
+  DEFAULT_RECEIPT_CONFIDENCE,
   DEFAULT_WAITING_DAYS,
   MAX_DATE_CONFIDENCE,
+  MAX_NUDGE_DAYS,
+  MAX_PROMISED_DAYS,
+  MAX_RECEIPT_CONFIDENCE,
   MAX_WAITING_DAYS,
   MIN_DATE_CONFIDENCE,
+  MIN_NUDGE_DAYS,
+  MIN_PROMISED_DAYS,
+  MIN_RECEIPT_CONFIDENCE,
   MIN_WAITING_DAYS,
   PolicyRefusal,
   POLICY_ACTIONS,
@@ -626,32 +635,92 @@ export async function deleteEmailPolicy(
  * ------------------------------------------------------------------ */
 
 /**
- * The two settings the mail watchers read, and the limits the page shows.
+ * The five settings the mail watchers read, and the limits the page shows.
  *
  * They are the owner's preferences over this plugin's own rows — there is no
  * secret, no effect and nothing to approve, so the page writes them directly.
  * The clamps live in the plugin (`watchers.ts`); the route's job is to refuse
  * what is not a number at all, rather than to quietly turn it into one.
+ *
+ * One entry per number, so the page never has to know which watcher a field
+ * belongs to in order to draw its bounds.
  */
-export interface EmailWatcherSettingsView {
-  waitingDays: number;
-  dateConfidence: number;
-  defaults: { waitingDays: number; dateConfidence: number };
-  limits: {
-    waitingDays: { min: number; max: number };
-    dateConfidence: { min: number; max: number };
-  };
+export type EmailWatcherSetting =
+  | 'waitingDays'
+  | 'dateConfidence'
+  | 'promisedDays'
+  | 'receiptConfidence'
+  | 'nudgeDays';
+
+export type EmailWatcherNumbers = Record<EmailWatcherSetting, number>;
+
+export interface EmailWatcherSettingsView extends EmailWatcherNumbers {
+  defaults: EmailWatcherNumbers;
+  limits: Record<EmailWatcherSetting, { min: number; max: number }>;
 }
 
-function watcherView(settings: { waitingDays: number; dateConfidence: number }): EmailWatcherSettingsView {
+/** What each setting is: whole days or a fraction, and the range it lives in. */
+const WATCHER_BOUNDS: Record<
+  EmailWatcherSetting,
+  { whole: boolean; min: number; max: number; default: number; noun: string }
+> = {
+  waitingDays: {
+    whole: true,
+    min: MIN_WAITING_DAYS,
+    max: MAX_WAITING_DAYS,
+    default: DEFAULT_WAITING_DAYS,
+    noun: 'The waiting window is a whole number of days',
+  },
+  dateConfidence: {
+    whole: false,
+    min: MIN_DATE_CONFIDENCE,
+    max: MAX_DATE_CONFIDENCE,
+    default: DEFAULT_DATE_CONFIDENCE,
+    noun: 'The date confidence is a number',
+  },
+  promisedDays: {
+    whole: true,
+    min: MIN_PROMISED_DAYS,
+    max: MAX_PROMISED_DAYS,
+    default: DEFAULT_PROMISED_DAYS,
+    noun: 'The promise window is a whole number of days',
+  },
+  receiptConfidence: {
+    whole: false,
+    min: MIN_RECEIPT_CONFIDENCE,
+    max: MAX_RECEIPT_CONFIDENCE,
+    default: DEFAULT_RECEIPT_CONFIDENCE,
+    noun: 'The receipt confidence is a number',
+  },
+  nudgeDays: {
+    whole: true,
+    min: MIN_NUDGE_DAYS,
+    max: MAX_NUDGE_DAYS,
+    default: DEFAULT_NUDGE_DAYS,
+    noun: 'The nudge window is a whole number of days',
+  },
+};
+
+const WATCHER_SETTINGS = Object.keys(WATCHER_BOUNDS) as EmailWatcherSetting[];
+
+function watcherDefaults(): EmailWatcherNumbers {
+  return Object.fromEntries(
+    WATCHER_SETTINGS.map((key) => [key, WATCHER_BOUNDS[key].default]),
+  ) as EmailWatcherNumbers;
+}
+
+function watcherView(settings: EmailWatcherNumbers): EmailWatcherSettingsView {
   return {
-    waitingDays: settings.waitingDays,
-    dateConfidence: settings.dateConfidence,
-    defaults: { waitingDays: DEFAULT_WAITING_DAYS, dateConfidence: DEFAULT_DATE_CONFIDENCE },
-    limits: {
-      waitingDays: { min: MIN_WAITING_DAYS, max: MAX_WAITING_DAYS },
-      dateConfidence: { min: MIN_DATE_CONFIDENCE, max: MAX_DATE_CONFIDENCE },
-    },
+    ...(Object.fromEntries(
+      WATCHER_SETTINGS.map((key) => [key, settings[key]]),
+    ) as EmailWatcherNumbers),
+    defaults: watcherDefaults(),
+    limits: Object.fromEntries(
+      WATCHER_SETTINGS.map((key) => [
+        key,
+        { min: WATCHER_BOUNDS[key].min, max: WATCHER_BOUNDS[key].max },
+      ]),
+    ) as Record<EmailWatcherSetting, { min: number; max: number }>,
   };
 }
 
@@ -670,13 +739,7 @@ export async function readEmailWatchers(pool: Pool): Promise<RouteReply> {
      * would reasonably believe he had read his own settings.
      */
     if ((err as { code?: string } | null)?.code === '42P01') {
-      return {
-        status: 200,
-        body: watcherView({
-          waitingDays: DEFAULT_WAITING_DAYS,
-          dateConfidence: DEFAULT_DATE_CONFIDENCE,
-        }),
-      };
+      return { status: 200, body: watcherView(watcherDefaults()) };
     }
     return {
       status: 503,
@@ -689,46 +752,38 @@ export async function readEmailWatchers(pool: Pool): Promise<RouteReply> {
   }
 }
 
-/** POST: change one or both. Out of range is refused, not clamped silently. */
+/** POST: change any of them. Out of range is refused, not clamped silently. */
 export async function writeEmailWatchers(
   pool: Pool,
   body: unknown,
   now: Date,
 ): Promise<RouteReply> {
   const input = (body ?? {}) as Record<string, unknown>;
-  const patch: { waitingDays?: number; dateConfidence?: number } = {};
+  const patch: Partial<EmailWatcherNumbers> = {};
 
-  if (input.waitingDays !== undefined) {
-    const days = Number(input.waitingDays);
-    if (!Number.isInteger(days) || days < MIN_WAITING_DAYS || days > MAX_WAITING_DAYS) {
+  for (const key of WATCHER_SETTINGS) {
+    if (input[key] === undefined) continue;
+    const bounds = WATCHER_BOUNDS[key];
+    const raw = input[key];
+    /*
+     * A number, and only a number. `Number(raw)` used to do this, and it reads
+     * `true` as 1, `null` and `''` as 0 and `[]` as 0 — so a malformed client,
+     * or a typo in a script, could set the waiting window to one day and be
+     * told 200. A setting the owner cannot see being wrong is worse than a
+     * refusal he can.
+     */
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number.NaN;
+    const ok = bounds.whole ? Number.isInteger(value) : Number.isFinite(value);
+    if (!ok || value < bounds.min || value > bounds.max) {
       return {
         status: 400,
-        body: {
-          error: `The waiting window is a whole number of days between ${MIN_WAITING_DAYS} and ${MAX_WAITING_DAYS}.`,
-        },
+        body: { error: `${bounds.noun} between ${bounds.min} and ${bounds.max}.` },
       };
     }
-    patch.waitingDays = days;
+    patch[key] = value;
   }
 
-  if (input.dateConfidence !== undefined) {
-    const confidence = Number(input.dateConfidence);
-    if (
-      !Number.isFinite(confidence) ||
-      confidence < MIN_DATE_CONFIDENCE ||
-      confidence > MAX_DATE_CONFIDENCE
-    ) {
-      return {
-        status: 400,
-        body: {
-          error: `The date confidence is a number between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}.`,
-        },
-      };
-    }
-    patch.dateConfidence = confidence;
-  }
-
-  if (patch.waitingDays === undefined && patch.dateConfidence === undefined) {
+  if (Object.keys(patch).length === 0) {
     return { status: 400, body: { error: 'Name at least one setting to change.' } };
   }
 
