@@ -273,6 +273,14 @@ fieldset:disabled { opacity: 0.6; }
   border-radius: var(--radius-sm);
   padding: 2px 7px;
 }
+/* What can be done to what the panel holds: controls, right of the head. */
+.ui-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-left: auto;
+}
 
 /* One record — an agent, a mission, an account, an approval — as a card whose
    left rule says what state it is in. */

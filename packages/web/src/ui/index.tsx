@@ -268,24 +268,33 @@ export function Section({
   );
 }
 
-/** A raised box. `flush` lets a table inside it meet the edges. */
+/**
+ * A raised box. `flush` lets a table inside it meet the edges.
+ *
+ * `tool` is a fact about the panel — a count, a stamp — and reads as a small
+ * badge. `actions` is what can be *done* to what the panel holds, and sits on
+ * the right of the head as controls, because a button in a badge is neither.
+ */
 export function Panel({
   title,
   tool,
+  actions,
   flush,
   children,
 }: {
   title?: ReactNode;
   tool?: ReactNode;
+  actions?: ReactNode;
   flush?: boolean;
   children: ReactNode;
 }): JSX.Element {
   return (
     <section className="ui-panel" data-flush={flush ? 'true' : undefined}>
-      {title || tool ? (
+      {title || tool || actions ? (
         <header className="ui-panel-head">
           {title ? <h3 className="ui-panel-title">{title}</h3> : <span />}
           {tool ? <span className="ui-panel-tool">{tool}</span> : null}
+          {actions ? <div className="ui-panel-actions">{actions}</div> : null}
         </header>
       ) : null}
       {children}

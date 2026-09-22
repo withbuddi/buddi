@@ -68,6 +68,7 @@ import {
 import {
   EmailWebError,
   addEmailAccount,
+  bulkEmailPolicies,
   deleteEmailPolicy,
   listEmailAccounts,
   readEmailPolicies,
@@ -2085,6 +2086,16 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     if (path === '/api/email/policies') {
       const reply = await writeEmailPolicy(deps.pool, body, deps.now());
+      return sendJson(res, reply.status, reply.body);
+    }
+
+    /*
+     * Keep or revoke a whole selection, in one transaction. The ids are the
+     * page's, exactly: there is no "all proposed" flag here, because the list
+     * the page is showing can be older than the table.
+     */
+    if (path === '/api/email/policies/bulk') {
+      const reply = await bulkEmailPolicies(deps.pool, body, deps.now());
       return sendJson(res, reply.status, reply.body);
     }
 

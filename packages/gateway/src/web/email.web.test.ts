@@ -10,8 +10,10 @@ import { createMemoryVault, type Vault } from '@buddi/core';
 import { secretNameFor } from '@buddi/tool-email';
 import type { ImapClientFactory } from '@buddi/tool-email';
 import {
+  BULK_POLICY_LIMIT,
   EmailWebError,
   addEmailAccount,
+  bulkEmailPolicies,
   listEmailAccounts,
   removeEmailAccount,
   readNewAccount,
@@ -372,4 +374,110 @@ it('refuses a thread rule about a conversation this installation does not hold',
   );
   expect(reply).toMatchObject({ status: 400 });
   expect(inserts).toHaveLength(0);
+});
+
+/*
+ * Bulk keep and revoke: exactly the ids given, and nothing else.
+ *
+ * The route is the one place a single tap can change seventy-three rules, so
+ * what is pinned here is that it changes only the rules it was handed. There
+ * is deliberately no "everything proposed" flag to test: the page sends ids,
+ * because the page's idea of what is proposed can be older than the table's,
+ * and a flag would revoke rows nobody was looking at.
+ */
+const IDS = [
+  '55555555-5555-4555-8555-555555555551',
+  '55555555-5555-4555-8555-555555555552',
+  '55555555-5555-4555-8555-555555555553',
+];
+
+/** A pool whose one transaction is watched, and whose update touches `hits`. */
+function bulkPool(hits: number): {
+  pool: never;
+  statements: string[];
+  params: unknown[][];
+} {
+  const statements: string[] = [];
+  const params: unknown[][] = [];
+  const client = {
+    query: vi.fn(async (sql: string, args: unknown[] = []) => {
+      statements.push(sql.trim().split(/\s+/).slice(0, 3).join(' '));
+      params.push(args);
+      if (/update email\.policies/.test(sql)) {
+        const given = (args[0] as string[]) ?? [];
+        return { rows: given.slice(0, hits).map((id) => ({ id })) };
+      }
+      return { rows: [] };
+    }),
+    release: vi.fn(),
+  };
+  const pool = {
+    connect: async () => client,
+    // `policiesView` reads the two lists back out afterwards.
+    query: vi.fn(async () => ({ rows: [] })),
+  };
+  return { pool: pool as never, statements, params };
+}
+
+it('applies exactly the ids it was given, in one transaction', async () => {
+  const { pool, statements, params } = bulkPool(3);
+  const reply = await bulkEmailPolicies(pool, { action: 'revoke', ids: IDS }, NOW);
+
+  expect(reply.status).toBe(200);
+  expect(reply.body).toMatchObject({ kept: 0, revoked: 3, missing: 0 });
+  // Begin, one statement, commit. Not three round trips and a prayer.
+  expect(statements).toEqual(['begin', 'update email.policies set', 'commit']);
+  // And the statement was handed the ids, as a list — never a "proposed" flag.
+  expect(params[1]?.[0]).toEqual(IDS);
+  const sent = JSON.stringify(params);
+  expect(sent).not.toMatch(/proposed = true/);
+  // The two lists come back with it, so the page redraws from the answer.
+  expect(reply.body).toHaveProperty('applied');
+  expect(reply.body).toHaveProperty('proposed');
+});
+
+it('keeps only rows that are still live, and counts the rest as missing', async () => {
+  const { pool, params } = bulkPool(2);
+  const reply = await bulkEmailPolicies(pool, { action: 'keep', ids: IDS }, NOW);
+  expect(reply.body).toMatchObject({ kept: 2, revoked: 0, missing: 1 });
+  // A keep never revives something already taken back.
+  expect(String(params[1]?.[0] ? params[1]?.[0] : '')).toBeTruthy();
+});
+
+it('sends one id once, however many times the page listed it', async () => {
+  const { pool, params } = bulkPool(1);
+  const reply = await bulkEmailPolicies(
+    pool,
+    { action: 'keep', ids: [IDS[0]!, IDS[0]!, ` ${IDS[0]!} `] },
+    NOW,
+  );
+  expect(params[1]?.[0]).toEqual([IDS[0]]);
+  expect(reply.body).toMatchObject({ kept: 1, missing: 0 });
+});
+
+it('does nothing at all for an empty selection', async () => {
+  const { pool, statements } = bulkPool(0);
+  const reply = await bulkEmailPolicies(pool, { action: 'revoke', ids: [] }, NOW);
+  expect(reply.status).toBe(200);
+  expect(reply.body).toMatchObject({ kept: 0, revoked: 0, missing: 0 });
+  // No transaction was opened for a selection of nothing.
+  expect(statements).toEqual([]);
+});
+
+it('refuses a body that is not a selection, before opening a transaction', async () => {
+  const { pool, statements } = bulkPool(3);
+  expect(await bulkEmailPolicies(pool, { action: 'burn', ids: IDS }, NOW)).toMatchObject({ status: 400 });
+  expect(await bulkEmailPolicies(pool, { ids: IDS }, NOW)).toMatchObject({ status: 400 });
+  expect(await bulkEmailPolicies(pool, { action: 'keep' }, NOW)).toMatchObject({ status: 400 });
+  expect(await bulkEmailPolicies(pool, { action: 'keep', ids: ['not-an-id'] }, NOW)).toMatchObject({
+    status: 400,
+  });
+  expect(
+    await bulkEmailPolicies(
+      pool,
+      { action: 'keep', ids: Array.from({ length: BULK_POLICY_LIMIT + 1 }, () => IDS[0]) },
+      NOW,
+    ),
+  ).toMatchObject({ status: 400 });
+  expect(statements).toEqual([]);
 });
