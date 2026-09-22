@@ -88,6 +88,7 @@ describe('the renderer registry', () => {
       'document',
       'envelope',
       'keyvalue',
+      'preview',
       'structured',
       'table',
       'timeseries',

@@ -19,7 +19,7 @@ import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
-import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
+import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolContext, ToolDefinition } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery } from './pages.js';
 import type { HomeContribution } from './home.js';
@@ -29,6 +29,15 @@ export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
 
 /** Tiers that become an action and wait for the owner. */
 export const GATED_TIERS: readonly Tier[] = ['gated'];
+
+/**
+ * The tiers a tool may choose per call (`ToolDefinition.tierFor`).
+ *
+ * `draft` is missing on purpose: it is a statement about what a tool *is* —
+ * something this build does not execute at all — and a tool that decided to be
+ * a draft one call in three would be a tool nobody could reason about.
+ */
+export const PER_CALL_TIERS: readonly Tier[] = ['auto', 'gated', 'session'];
 
 /** A page descriptor, and the plugin whose route it lives under. */
 export type RegisteredPage = PageDescriptor & { plugin: string };
@@ -334,6 +343,19 @@ export class ToolRegistry {
     return this.#tools.get(name)?.plugin;
   }
 
+  /**
+   * The preview provider this plugin registered, if it has one.
+   *
+   * By plugin name because that is what the route carries: `/preview/<plugin>/
+   * <name>/` names the plugin first, and a name is only ever resolved by the
+   * plugin that owns it. Undefined for every plugin that ships no processes,
+   * which the gateway answers 404 — the same answer a name nobody knows gets,
+   * and for the same reason.
+   */
+  previews(plugin: string): PreviewProvider | undefined {
+    return this.#manifests.get(plugin)?.previews;
+  }
+
   /** Every Home block the installed plugins contribute, in registration order. */
   home(): HomeContribution[] {
     return [...this.#manifests.values()].flatMap((m) => m.home ?? []);
@@ -435,25 +457,66 @@ export class ToolRegistry {
       };
     }
 
-    if (GATED_TIERS.includes(tool.tier)) {
+    /*
+     * The tier this call runs under.
+     *
+     * `tool.tier` unless the tool decides per call, which it may only do once
+     * the arguments have been validated — a rule read off unparsed input is a
+     * rule read off whatever the model happened to send. A throw is a refusal:
+     * a tool that cannot work out what its own call costs has not established
+     * that it costs nothing. See `ToolDefinition.tierFor`.
+     */
+    let tier: Tier = tool.tier;
+    let tierReason: string | undefined;
+    if (tool.tierFor) {
+      let decided: { tier: Tier; reason?: string };
+      try {
+        decided = await tool.tierFor(parsed.data, ctx);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} could not decide what this call needs: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+      if (!PER_CALL_TIERS.includes(decided?.tier as Tier)) {
+        // A tier outside the three is a defect in the plugin, and the safe
+        // reading of a defect is that nothing runs.
+        return {
+          ok: false,
+          reason: 'tool-error',
+          message: `${tool.name} asked for tier '${String(decided?.tier)}' on this call; only ${PER_CALL_TIERS.join(
+            ', ',
+          )} may be decided per call`,
+        };
+      }
+      tier = decided.tier;
+      if (typeof decided.reason === 'string' && decided.reason.trim() !== '') {
+        tierReason = decided.reason.trim();
+      }
+    }
+
+    if (GATED_TIERS.includes(tier)) {
       if (tool.reusableApproval && (ctx.delegationDepth ?? 0) > 0) {
         return { ok: false, reason: 'tool-error', message: 'Host execution requires a direct owner conversation; delegates do not inherit host permissions.' };
       }
-      return this.#requestApproval(tool, version, parsed.data, ctx);
+      return this.#requestApproval(tool, version, parsed.data, ctx, tierReason);
     }
 
-    if (tool.tier === 'session' && (!ctx.ownerRequest ||
+    if (tier === 'session' && (!ctx.ownerRequest ||
       ctx.ownerRequest.expiresAt <= Date.now() || !ctx.sessionTools?.includes(name) ||
       !ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0)) {
       return { ok: false, reason: 'session-not-authorized',
         message: 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
     }
 
-    if (tool.tier !== 'session' && !EXECUTABLE_TIERS.includes(tool.tier)) {
+    if (tier !== 'session' && !EXECUTABLE_TIERS.includes(tier)) {
       return {
         ok: false,
         reason: 'tier-not-executable',
-        message: `tool ${name} is tier '${tool.tier}'; only ${EXECUTABLE_TIERS.join(
+        message: `tool ${name} is tier '${tier}'; only ${EXECUTABLE_TIERS.join(
           ', ',
         )} executes in this build`,
       };
@@ -483,6 +546,8 @@ export class ToolRegistry {
     version: string,
     args: unknown,
     ctx: ToolContext,
+    /** Why this call is gated, when a `tierFor` decided it and said so. */
+    tierReason?: string,
   ): Promise<InvokeResult> {
     let described: EffectDescription;
     try {
@@ -501,6 +566,19 @@ export class ToolRegistry {
       };
     }
 
+    /*
+     * The rule that made this gated, on the card.
+     *
+     * The owner is being asked about *this* call and not the tool in general,
+     * so the sentence that explains the difference belongs in the preview —
+     * which is also the only text an approval surface is allowed to render.
+     * Appended rather than substituted: the tool's own account of the effect
+     * is still what is being approved.
+     */
+    const preview = tierReason
+      ? `${described.preview.replace(/\s+$/, '')} — ${tierReason}`
+      : described.preview;
+
     try {
       const action = await createAction(ctx.db, {
         tool: tool.name,
@@ -510,7 +588,7 @@ export class ToolRegistry {
         jobId: ctx.jobId ?? null,
         canonicalArgs: args,
         envelope: described.envelope,
-        preview: described.preview,
+        preview,
         // The controls the tool offered the owner. They are part of what was
         // shown, so they are recorded on the action and hashed with it.
         ...(described.choices && described.choices.length > 0 ? { choices: described.choices } : {}),

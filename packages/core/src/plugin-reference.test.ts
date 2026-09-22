@@ -41,6 +41,7 @@ export const DOCUMENTED: Record<string, string> = {
   SuggestedSkill: 'tools.ts',
   SuggestedAgent: 'tools.ts',
   NetworkUse: 'tools.ts',
+  PreviewProvider: 'tools.ts',
   Sentinel: path.join('sentinels', 'types.ts'),
   SentinelContext: path.join('sentinels', 'types.ts'),
   Finding: path.join('sentinels', 'types.ts'),

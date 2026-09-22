@@ -41,8 +41,27 @@ never by the agent:
   For a project the owner would let Claude Code run freely in.
 
 The mode is what the `session` tier was made for: the runtime resolves the
-agent's session grants from the mode at run start, so a delegate never
-inherits them.
+agent's session grants from the *declared* tier at run start, so a delegate
+never inherits them.
+
+How the mode becomes a tier: every tool here declares `tier: 'session'` — the
+strictest it will ever need, and what the grant is checked against — and
+narrows each call with `ToolDefinition.tierFor` (docs/plugins.md §2.1). It is
+called after the arguments are validated and before the tier is acted on, and
+it reads the plugin's own workspace record for this agent:
+
+- no workspace for this agent, or a path that resolves outside it: `gated`,
+  with the reason naming the rule;
+- a command matching §5: `gated`, whatever the mode, with the rule named;
+- otherwise the mode decides — `ask` gates everything, `edit` gates commands
+  and lets reads and writes through as `auto`, `run` lets commands through too.
+
+The `reason` is one sentence and it is appended to the approval's preview, so
+the card the owner reads says which rule matched (§5). The mode is read from
+the record on every call, so changing it on the agent's page changes the next
+call and not the run. Nothing else changes: `session` still needs a live owner
+request, an explicit grant and `delegationDepth` 0, so a delegate of a
+developer agent gets none of this (§10, acceptance 5).
 
 ## 4. Tools
 
@@ -137,16 +156,31 @@ repository, since it is a plugin.
 A process started with `developer.start` that listens on a loopback port
 gets a preview, two ways, both ending when the process stops:
 
-- **Through buddi.** `https://<dashboard origin>/preview/<process>/…` is a
-  reverse proxy from the gateway to that port, behind the dashboard's own
+- **Through buddi.** `https://<dashboard origin>/preview/developer/<process>/…`
+  is a reverse proxy from the gateway to that port, behind the dashboard's own
   sign-in (a session, or Tailscale), nothing more: a device that is signed
-  in to the dashboard sees the app, anyone else gets the dashboard's 401.
+  in to the dashboard sees the app, anyone else gets the dashboard's 401 —
+  never a redirect, which would say that this preview exists.
   `developer.preview` (auto) returns the link. Websockets are proxied for
   hot reload. Apps that assume they live at the root of a host may break
   under a path prefix; the tool says so when the first response references
   absolute assets. Sharing a preview with someone who has no access is not
   in scope; if it is ever wanted it is a signed, expiring variant of the
   same link, a small addition.
+
+  As built (docs/plugins.md §2.5c), this is two routes and one manifest field.
+  The plugin declares `previews: { resolve(name, ctx) }`, which answers with
+  the port behind a process name or `null`; the gateway asks it on every
+  request. `GET|POST|… /preview/developer/<name>/<rest>` is the proxy —
+  method, path, query, body and headers except `cookie`, `authorization` and
+  the hop-by-hop ones, plus `x-forwarded-prefix`, with `Set-Cookie` scoped
+  back into the prefix and nothing in the body rewritten. `GET
+  /api/preview/developer/<name>/check` answers `{ ok, absoluteAssets }` from
+  what the proxy saw on the first HTML response, which is where
+  `developer.preview`'s warning comes from. The canvas panel is the `preview`
+  renderer (docs/plugins.md §2.5): `{ src, title?, output? }`, a sandboxed
+  frame of a `/preview/` URL beside the process's output, with "Open in a tab"
+  for an app that refuses framing.
 - **A Tailscale route per port**, for those apps: when Tailscale is running
   and the owner allowed it on Settings → Developer, buddi adds
   `tailscale serve --https=<port> http://127.0.0.1:<port>` when the process

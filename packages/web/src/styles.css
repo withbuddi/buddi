@@ -1650,6 +1650,38 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-doc-image { border-radius: var(--radius); }
 .wb-doc-pdf { width: 100%; height: 70vh; border-radius: var(--radius); border: 1px solid var(--line); }
 
+/* ---- a running process, framed beside its output ---- */
+.wb-preview-head { justify-content: space-between; margin-bottom: var(--space-2); }
+.wb-preview-head .wb-doc-title { margin: 0; }
+.wb-preview-open { margin-left: auto; }
+.wb-preview-body { display: flex; gap: var(--space-3); align-items: stretch; }
+.wb-preview-frame {
+  flex: 2 1 0;
+  min-width: 0;
+  height: 70vh;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.wb-preview-output {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  height: 70vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: var(--text-sm);
+}
+@media (max-width: 900px) {
+  .wb-preview-body { flex-direction: column; }
+  .wb-preview-frame, .wb-preview-output { height: 50vh; }
+}
+
 /* ---- the chart ---- */
 
 .wb-chart { width: 100%; height: auto; display: block; overflow: visible; }

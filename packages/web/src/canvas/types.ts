@@ -18,6 +18,7 @@ export type RendererName =
   | 'bars'
   | 'keyvalue'
   | 'document'
+  | 'preview'
   | 'envelope'
   | 'structured';
 
@@ -90,12 +91,22 @@ export interface DocumentMap {
   metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
 }
 
+/** A loopback process of the owner's, framed beside what it is printing. */
+export interface PreviewMap {
+  /** Path to a same-origin URL that must start with `/preview/`. */
+  src: string;
+  title?: ValueRef;
+  /** Path to the process's recent output text. */
+  output?: string;
+}
+
 export type ViewMap =
   | TimeseriesMap
   | TableMap
   | BarsMap
   | KeyValueMap
   | DocumentMap
+  | PreviewMap
   | Record<string, never>;
 
 export interface ViewDescriptor {
@@ -155,6 +166,18 @@ export interface DocumentProps {
   src: string | null;
   title: string | null;
   metadata: Array<{ label: string; value: unknown; unit: Unit }>;
+}
+
+export interface PreviewProps {
+  /**
+   * Where the frame points. Already checked to start with `/preview/`, so the
+   * panel never frames anything but a process this gateway is proxying; null
+   * when the descriptor named something else, or nothing.
+   */
+  src: string | null;
+  title: string | null;
+  /** What the process has printed lately, shown beside the frame. */
+  output: string | null;
 }
 
 export interface EnvelopeProps {

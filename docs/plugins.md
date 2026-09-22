@@ -281,6 +281,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   name: string;            // namespaced: 'finance.project_cashflow'
   description: string;     // shown to the model
   tier: Tier;              // 'auto' | 'draft' | 'gated' | 'session'
+  tierFor?(input: I, ctx: ToolContext): Promise<{ tier: Tier; reason?: string }>;
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
@@ -319,12 +320,52 @@ export const GATED_TIERS: readonly Tier[] = ['gated'];
 The rule of thumb: if you would want to read the arguments before it happened,
 it is `gated`.
 
+**When the tier is a property of the *arguments*: `tierFor`.** `rm -rf .` and
+`ls` are both "run a command", and only the first is the reason approvals
+exist. A tool whose cost cannot be read off its name declares the strictest
+tier it will ever need and narrows each call:
+
+```ts
+// The developer plugin. The mode is the owner's, set on the agent's page and
+// never by the agent; the always-gated rules (docs/specs/developer.md §5) are
+// a parser over the command's own words.
+tier: 'session',
+async tierFor(input, ctx) {
+  const workspace = await workspaceFor(ctx);          // the plugin's own record
+  if (!workspace) return { tier: 'gated', reason: 'This agent has no workspace yet.' };
+  const rule = alwaysGated(input.command);
+  if (rule) return { tier: 'gated', reason: rule };    // "npm install reaches the network."
+  return workspace.mode === 'run' ? { tier: 'auto' } : { tier: 'gated', reason: 'This agent runs commands in edit mode.' };
+},
+```
+
+`registry.invoke` calls it once, after zod has validated the arguments and
+before the tier is acted on, and what it returns replaces `tier` **for that
+call only**. Four things are worth knowing:
+
+- It may return `auto`, `gated` or `session`, and nothing else. A fourth value
+  is a defect in your plugin and the call is refused `tool-error`.
+- A throw is a refusal (`tool-error`). A rule that could not be evaluated is
+  not a rule that passed.
+- `reason` is one plain sentence naming the rule that decided. When the call is
+  gated it is appended to the preview, so the card the owner reads says why it
+  is being asked.
+- `tier` itself is still what the tool *is*: it is what the model is shown,
+  what an agent's grant is checked against, and — for `session` — what the
+  runtime resolves the session grant from. A tool that returns `session` from
+  `tierFor` but declares `auto` is refused `session-not-authorized`, because no
+  grant for it was ever resolved. Declare the strictest, narrow from there.
+
+Nothing calls `tierFor` again later: an approved action executes what it
+recorded, under the tier it was created with.
+
 **`invoke` fails closed.** The refusals, in the order they are decided:
 
 | Situation | `reason` |
 | --- | --- |
 | Name not registered | `unknown-tool` |
 | Zod rejects the arguments | `invalid-args` |
+| `tierFor` threw, or asked for a tier that is not one of the three | `tool-error` |
 | Tier `gated` | *not a refusal* — `approval-required` plus an `actionId` |
 | Tier `gated` with `reusableApproval`, called by a delegate | `tool-error` — a delegate never inherits a standing approval |
 | Tier `session` with no live owner request, no session grant, or inside a delegation | `session-not-authorized` |
@@ -664,7 +705,7 @@ owner accepting the suggestion.
 export interface ViewDescriptor {
   tool: string;        // 'weather.forecast'
   renderer: 'timeseries' | 'table' | 'bars' | 'keyvalue' | 'document'
-          | 'envelope' | 'structured';
+          | 'preview' | 'envelope' | 'structured';
   title?: string;      // the canvas panel's heading
   map: ViewMap;        // declarative: paths, columns, formats. Never a function.
 }
@@ -742,6 +783,14 @@ means, the page knows how to draw a line, and this says which is which.
   descriptor that *contains itself* is refused. Nesting is counted in
   components — each `body` level — up to twelve; the arrays and the small
   objects between them are not levels.
+- **A running process is a renderer too.** `preview` takes
+  `{ src, title?, output? }`: `src` is a path into your result, and what it
+  finds must start with `/preview/` — the prefix the gateway proxies (§2.5c).
+  The panel draws a sandboxed frame of it, an "Open in a tab" link beside the
+  heading for an app that refuses framing, and the text at `output` next to
+  the frame. A `src` that is anything else is refused **at render time** and
+  the panel says so: a descriptor is data from a plugin, and "put this URL in
+  an iframe on the dashboard's origin" is not a sentence a plugin gets to say.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   with zod (`packages/core/src/views.ts`), checks the renderer against its own
   map shape, and refuses a descriptor naming a tool your manifest does not
@@ -950,6 +999,57 @@ through. It was compiled into `packages/web` until this existed, which is why
 it is worth reading: a list-detail with a URL per conversation, a `repeat` of
 editors, a gated Send whose approval card is drawn in place, a drawer that
 takes a password, and two lists with bulk actions over a selection.
+
+---
+
+### 2.5c A process the owner can see
+
+```ts
+export interface PluginManifest {
+  previews?: PreviewProvider;
+}
+
+export interface PreviewProvider {
+  /** The port behind `/preview/<plugin>/<name>/`, or null when there is none. */
+  resolve(name: string, ctx: ToolContext): Promise<{ port: number; host?: '127.0.0.1' } | null>;
+}
+```
+
+A plugin that starts long-lived processes — the developer plugin's
+`developer.start`, a dev server, a docs site — has something running on a
+loopback port that only that machine can reach. `previews` is the one door
+through it: the gateway serves `/preview/<plugin>/<name>/…` from that port.
+
+- **The gate is the dashboard's own, and nothing more.** A signed-in session
+  cookie, or a Tailscale identity the local daemon confirms. Anything else gets
+  the dashboard's empty `401` — never a redirect to a sign-in page, which would
+  tell an anonymous caller that this exact preview exists. A write additionally
+  needs an `Origin` this dashboard would accept, so another site cannot drive
+  the owner's dev server through their session; it does **not** need the CSRF
+  header, because the app behind the proxy has never heard of this dashboard.
+- **`resolve` is asked on every request.** It is a lookup, not a launcher: it
+  starts nothing, and a `null` — or a throw, or a plugin with no `previews` —
+  is answered `404`. A port that refuses the connection is `502` with one
+  sentence. The host is always `127.0.0.1`, whatever you return.
+- **What crosses.** Up: the method, the path below the prefix, the query, the
+  body, and every header except `cookie`, `authorization` and the hop-by-hop
+  ones, plus `x-forwarded-prefix: /preview/<plugin>/<name>`. Down: the status,
+  the headers, and the body byte for byte, with each `Set-Cookie`'s `Path`
+  scoped into the prefix and `Cache-Control: no-store`. Both directions stream;
+  nothing is buffered.
+- **Websockets are proxied** on the same listener, so hot reload works.
+- **Nothing in the body is rewritten.** An app that assumes it owns the root of
+  a host — `<script src="/main.js">` — breaks under a path prefix, and an HTML
+  rewriter that is wrong is worse than an app that is plainly broken. So the
+  proxy *scans* the first 64 KB of the first HTML response for `src="/…"` and
+  `href="/…"` outside the prefix, and
+  `GET /api/preview/<plugin>/<name>/check` answers
+  `{ ok, absoluteAssets: boolean }`. Your tool reads that and warns the owner,
+  with "Open in a tab" as the answer; a framework that can be told its base
+  path should be told it, from `x-forwarded-prefix`.
+
+The `preview` renderer (§2.5) frames the same URL beside the process's output,
+which is how it reaches the canvas.
 
 ---
 
@@ -2114,8 +2214,15 @@ this says what it is *for*.
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
+| `previews` | `PreviewProvider` | no | A loopback process of yours, served behind the dashboard's sign-in at `/preview/<plugin>/<name>/`. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
+
+#### `PreviewProvider`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `resolve` | `(name, ctx) => Promise<{port, host?}\|null>` | yes | The loopback port behind `/preview/<plugin>/<name>/`, asked on every proxied request. A lookup, never a launcher: `null` — or a throw — is a `404`. The host is `127.0.0.1` whatever you return. See §2.5c. |
 
 ### Tools
 
@@ -2126,6 +2233,7 @@ this says what it is *for*.
 | `name` | `string` | yes | Namespaced to the plugin: `finance.project_cashflow`. A collision with an already-registered name throws at `register()`. |
 | `description` | `string` | yes | What the model reads. Say *when* to use it, in the second person. |
 | `tier` | `Tier` | yes | `'auto' \| 'draft' \| 'gated' \| 'session'` — see the table below. |
+| `tierFor` | `(input, ctx) => Promise<{tier, reason?}>` | no | Decide this one call's tier from its arguments, after zod and before the tier is acted on. May return `auto`, `gated` or `session`; a throw or anything else refuses the call `tool-error`. `reason` is one sentence, appended to the preview when the call is gated. `tier` above still decides what the model is shown and what a grant is checked against. See §2.1. |
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0`. |
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
@@ -2295,7 +2403,7 @@ than guess.
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
 | `tool` | `string` | yes | The tool whose result this draws. Naming a tool your manifest does not contribute is a startup error. |
-| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| envelope \| structured`. Shapes, never domains. |
+| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| preview \| envelope \| structured`. Shapes, never domains. |
 | `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
 | `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
 
