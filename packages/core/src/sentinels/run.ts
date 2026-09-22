@@ -17,6 +17,7 @@
  */
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
+import { OWNER_ID } from '../owner.js';
 import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
 import type { PluginManifest } from '../tools.js';
 import {
@@ -100,6 +101,12 @@ export async function runSentinels(
    * findings name no agent and fall to the wake mission's agent.
    */
   agentForRole: (role: string) => string | undefined = () => undefined,
+  /**
+   * The owner this installation belongs to, for a sentinel that has to build a
+   * `ToolContext` (core's goal watcher measures a metric). Defaults to core's
+   * own `OWNER_ID`, which is what every single-owner process already runs as.
+   */
+  ownerId: string = OWNER_ID,
 ): Promise<SentinelOutcome[]> {
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
@@ -136,7 +143,7 @@ export async function runSentinels(
       outcomes.push({ sentinelId: sentinel.id, ran: false, findings: 0, fired: 0, resolved: 0 });
       continue;
     }
-    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole));
+    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId));
   }
   return outcomes;
 }
@@ -147,10 +154,11 @@ async function runOne(
   now: Date,
   timezone: string,
   agentForRole: (role: string) => string | undefined,
+  ownerId: string,
 ): Promise<SentinelOutcome> {
   let result: SentinelResult;
   try {
-    result = await sentinel.run({ db: pool, now: () => now, timezone, agentForRole });
+    result = await sentinel.run({ db: pool, ownerId, now: () => now, timezone, agentForRole });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordRun(pool, sentinel.id, now, message);
@@ -271,8 +279,17 @@ async function upsertAndMaybeFire(
     await dropPendingDigestItem(pool, finding.key);
   }
 
+  /*
+   * `wake` is the third delivery, between the two: an `info` fact that is only
+   * news the first time — a milestone crossed, a target reached — and that is
+   * stale by next Sunday. It wakes exactly once, on the raise that created the
+   * row, *instead of* taking a digest line, so the owner is not told the same
+   * good news twice. Every later fire of that key (after the seven-day
+   * cooldown, or after it resolved and came back) is an ordinary digest note.
+   */
+  const wakesOnce = finding.severity === 'info' && finding.wake === true && isNew;
   const delivery =
-    finding.severity === 'urgent'
+    finding.severity === 'urgent' || wakesOnce
       ? await enqueueWake(pool, sentinelId, finding, now)
       : await noteInDigest(pool, finding);
 

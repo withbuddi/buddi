@@ -9,6 +9,7 @@ import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
 import type { HomeContribution } from './home.js';
+import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery } from './pages.js';
 import type { SystemContext } from './system-context.js';
 
@@ -522,6 +523,13 @@ export interface PluginManifest {
    * `home.ts`. Read-only, already formatted, and absent for most plugins.
    */
   home?: HomeContribution[];
+  /**
+   * Numbers this plugin can answer (optional). A metric is the same shape as a
+   * Home block — a named read-only function — and it is what a *goal* watches.
+   * Core never learns the domain: it learns that `finance.total_debt` is a
+   * currency that should go `down`. See `metrics.ts`. Most plugins have none.
+   */
+  metrics?: MetricDefinition[];
   /**
    * Screens this plugin puts in the dashboard (optional): a rail entry, a
    * settings tab. Descriptors are **data**, exactly like `views` — a tree of

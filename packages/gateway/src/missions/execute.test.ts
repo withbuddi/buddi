@@ -531,6 +531,48 @@ describe('a sentinel wake', () => {
     prompt: 'Verify the finding.',
   };
 
+  /**
+   * A goal's finding, which always names its holder: a goal belongs to one
+   * agent and a different one may read it but never speak for it.
+   */
+  const goalOccurrence: Occurrence = {
+    ...wakeOccurrence,
+    id: 'occ-goal',
+    payload: {
+      finding: {
+        key: 'goal.g-1.off-track',
+        sentinelId: 'core.goals',
+        severity: 'urgent',
+        title: 'Off track: Debt down by 40k',
+        detail:
+          'Two checks running, the pace of the last four lands short.\n\n' +
+          'Verify with your own tools, then report; to change the goal propose `goal.update`, never change it silently.',
+        agentId: 'goal-holder',
+        data: { goalId: 'g-1', metric: 'finance.total_debt' },
+      },
+    },
+  };
+
+  it('runs as the agent the finding names, not the one the mission is bound to', async () => {
+    const { db, deps: d } = deps();
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'urgent', text: 'It is off track.' }),
+    });
+    // The wake mission is bound to the overview agent, as `sentinelWakeMission`
+    // binds it. The goal is held by somebody else, and the holder must be the
+    // one whose conversation this happens in.
+    expect(wakeMission.agentId).toBe(MISSION_AGENT);
+    await execute(goalOccurrence, wakeMission);
+    expect(db.conversations.map((c) => c.agent_id)).toEqual(['goal-holder']);
+
+    // And the goal's own instruction reaches it, inside the finding fence —
+    // the generic wake prompt says nothing about goals.
+    const first = db.messages[0]?.content as { type: string; text: string }[];
+    expect(first[0]?.text).toContain('never change it silently');
+    expect(first[0]?.text).toContain('core.goals');
+  });
+
   it('hands the finding to the agent as part of the prompt', async () => {
     const { db, deps: d } = deps();
     const execute = createMissionExecutor({
