@@ -248,6 +248,18 @@ suite('the plugin page routes', () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/sneaky/);
   });
 
+  it('passes a query\'s own refusal to the owner, and keeps a defect generic', async () => {
+    // `QueryRefusal` is the query answering — the owner followed a link to
+    // something that is not there — so its sentence is the reply.
+    const refused = await new Client(base).get('/api/pages/demo/item?id=nope');
+    expect(refused.status).toBe(400);
+    expect(((await refused.json()) as { error: string }).error).toBe('No thing here has that id.');
+    // A defect is still one generic sentence and a reference in the log.
+    const broken = await new Client(base).get('/api/pages/demo/unserialisable');
+    expect(broken.status).toBe(502);
+    expect(((await broken.json()) as { error: string }).error).toBe('The demo plugin could not answer unserialisable.');
+  });
+
   it('is 404 for a query nobody contributes', async () => {
     const res = await new Client(base).get('/api/pages/demo/nope');
     expect(res.status).toBe(404);

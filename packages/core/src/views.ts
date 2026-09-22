@@ -94,6 +94,12 @@ export interface ColumnMap {
     max: ValueRef;
     thresholds?: Array<{ atLeast: number; tone: Tone }>;
   };
+  /**
+   * Draw this cell as a pill rather than as text — a state, not a number.
+   * `tone` may be a path within the row, so a row that already says
+   * `"critical"` colours itself and the descriptor lists nothing.
+   */
+  pill?: { tone?: Tone | ValueRef };
 }
 
 export interface TableMap {
@@ -234,6 +240,7 @@ export const columnMapSchema = z
       })
       .strict()
       .optional(),
+    pill: z.object({ tone: z.union([toneSchema, valueRefSchema]).optional() }).strict().optional(),
   })
   .strict();
 

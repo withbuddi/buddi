@@ -159,7 +159,65 @@ describe('page descriptors', () => {
         ],
         { tools: ['demo.write'] },
       ),
-    ).toThrow(/a select field needs `options`/);
+    ).toThrow(/a select field needs `options` or `optionsFrom`/);
+  });
+
+  it('takes a select whose options are a query instead of a list', () => {
+    expect(() =>
+      parse(
+        [
+          page({
+            body: [
+              {
+                kind: 'form',
+                fields: [
+                  {
+                    name: 'a',
+                    label: 'A',
+                    type: 'select',
+                    optionsFrom: { query: { query: 'items' }, rows: 'items', value: 'id', label: 'title' },
+                  },
+                ],
+                submit: { tool: 'demo.write', label: 'Go' },
+              },
+            ],
+          }),
+        ],
+        { tools: ['demo.write'], queries: ['items'] },
+      ),
+    ).not.toThrow();
+  });
+
+  it('checks the query a select reads its options from', () => {
+    expect(() =>
+      parse(
+        [
+          page({
+            body: [
+              {
+                kind: 'form',
+                fields: [
+                  {
+                    name: 'a',
+                    label: 'A',
+                    type: 'select',
+                    optionsFrom: { query: { query: 'nope' }, rows: 'items', value: 'id', label: 'title' },
+                  },
+                ],
+                submit: { tool: 'demo.write', label: 'Go' },
+              },
+            ],
+          }),
+        ],
+        { tools: ['demo.write'], queries: ['items'] },
+      ),
+    ).toThrow(/no query called nope/);
+  });
+
+  it('refuses a section header action that is not a link or a button', () => {
+    expect(() =>
+      parse([page({ body: [{ kind: 'section', actions: [{ kind: 'notice', text: 'No.' }], body: [] }] })]),
+    ).toThrow(/header actions are links and buttons/);
   });
 
   it('refuses a list-detail whose list is not a list', () => {

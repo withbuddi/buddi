@@ -25,7 +25,14 @@
  *     approval card in place. There is no third path.
  */
 import { randomUUID } from 'node:crypto';
-import { OWNER_AGENT_ID, pageQueryContext, ReadOnlyRefusal, type ToolContext, type ToolRegistry } from '@buddi/core';
+import {
+  OWNER_AGENT_ID,
+  QueryRefusal,
+  ReadOnlyRefusal,
+  pageQueryContext,
+  type ToolContext,
+  type ToolRegistry,
+} from '@buddi/core';
 
 /** What these routes need. Nothing that is not already in the server's deps. */
 export interface PagesDeps {
@@ -198,6 +205,13 @@ export async function runPageQuery(
     produced = await query.produce(parsed.data, pageQueryContext(deps.ctx));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    /*
+     * A `QueryRefusal` is the query *answering*: the owner asked for a thread
+     * that is not there, and the plugin's own sentence is the useful thing to
+     * show them. Everything else is a defect, and a defect says one generic
+     * sentence here and the whole of itself to the log.
+     */
+    if (error instanceof QueryRefusal) return { status: 400, body: { error: detail } };
     return failed(
       deps,
       plugin,

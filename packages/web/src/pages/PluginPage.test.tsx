@@ -33,12 +33,13 @@ const DATA: Record<string, unknown> = {
   counts: { items: 3, open: 1, state: 'ready', headline: 'Three things, one of them open.' },
   items: {
     items: [
-      { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', pinned: false },
-      { id: 'a2', title: 'The second thing', sub: 'two@example.com', state: 'done', pinned: true },
+      { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', tone: 'warning', pinned: false },
+      { id: 'a2', title: 'The second thing', sub: 'two@example.com', state: 'done', tone: 'good', pinned: true },
     ],
     older: [{ id: 'a0', title: 'An older thing', sub: 'zero@example.com', state: 'done', pinned: false }],
   },
   search: { items: [{ id: 'a1', title: 'The first thing', sub: 'one@example.com' }], total: 9, note: 'The newest nine.' },
+  nothing: { items: [], total: 0, note: 'The newest nine.' },
   item: { id: 'a1', title: 'The first thing', state: 'open', at: '2026-09-22', approvalId: 'act-1' },
   body: { text: 'The body.', attachmentId: 'artifact-1' },
   messages: {
@@ -49,7 +50,12 @@ const DATA: Record<string, unknown> = {
   },
   drafts: { drafts: [{ id: 'd1', subject: 'A reply', state: 'draft' }] },
   draft: { id: 'd1', subject: 'A reply', body: 'Nearly done.', updatedAt: '2026-09-22T09:05:00.000Z', locked: false },
-  accounts: { accounts: [{ id: 'acc-1', address: 'owner@example.com', state: 'ready' }] },
+  accounts: {
+    accounts: [
+      { id: 'acc-1', address: 'owner@example.com', state: 'ready', tone: 'good' },
+      { id: 'acc-2', address: 'old@example.com', state: 'locked', tone: 'critical' },
+    ],
+  },
   settings: { everyMinutes: 15, keepDays: 30 },
 };
 
@@ -90,7 +96,8 @@ const board: Component[] = [
       item: {
         title: { path: 'title' },
         sub: { path: 'sub' },
-        pill: { value: { path: 'state' } },
+        pill: { value: { path: 'state' }, tone: { path: 'tone' } },
+        pills: [{ value: { path: 'sub' }, tone: 'neutral' }],
         to: { page: 'board', item: { path: 'id' } },
       },
       select: { key: 'id', disabledWhen: { path: 'pinned', equals: true } },
@@ -98,8 +105,9 @@ const board: Component[] = [
       bulk: [
         {
           tool: 'demo.keep_many',
-          label: 'Keep selected',
-          confirm: 'Keep {count} things?',
+          all: true,
+          label: 'Keep {count} {thing|things}',
+          confirm: 'Keep {count} {thing|things}?',
           args: { ids: { selected: true } },
         },
       ],
@@ -196,6 +204,7 @@ const settings: Component[] = [
     kind: 'section',
     title: 'Accounts',
     note: 'What this installation reads.',
+    actions: [{ kind: 'link', label: 'The board', to: { page: 'board' } }],
     body: [
       {
         kind: 'table',
@@ -203,14 +212,15 @@ const settings: Component[] = [
         rows: 'accounts',
         columns: [
           { key: 'address', label: 'Address' },
-          { key: 'state', label: 'State' },
+          { key: 'state', label: 'State', pill: { tone: { path: 'tone' } } },
         ],
         actions: [
           {
             tool: 'demo.remove_account',
             label: 'Remove',
             tone: 'danger',
-            confirm: 'Remove this account?',
+            confirm: 'Remove {address}?',
+            when: { path: 'state', equals: 'ready' },
             args: { id: { row: 'id' } },
           },
         ],
@@ -221,12 +231,15 @@ const settings: Component[] = [
         fields: [
           { name: 'address', label: 'Address', type: 'email', required: true },
           { name: 'password', label: 'Password', type: 'secret', required: true },
+          { name: 'advanced', label: 'Give the hosts myself', type: 'checkbox' },
+          { name: 'imapHost', label: 'IMAP host', type: 'text', when: { path: 'advanced', equals: true } },
         ],
         submit: {
           tool: 'demo.add_account',
           label: 'Add',
           tone: 'accent',
-          args: { address: { field: 'address' }, password: { field: 'password' } },
+          done: 'The mailbox was added.',
+          args: { address: { field: 'address' }, password: { field: 'password' }, imapHost: { field: 'imapHost' } },
           then: 'close',
         },
       },
@@ -254,10 +267,61 @@ const settings: Component[] = [
   },
   {
     kind: 'form',
+    title: 'Rules',
+    drawer: { title: 'Add a rule', button: 'Add a rule' },
+    fields: [
+      {
+        name: 'account',
+        label: 'Mailbox',
+        type: 'select',
+        required: true,
+        optionsFrom: { query: { query: 'accounts' }, rows: 'accounts', value: 'id', label: 'address' },
+      },
+      {
+        name: 'state',
+        label: 'State',
+        type: 'select',
+        options: [
+          { value: 'open', label: 'Open' },
+          { value: 'done', label: 'Done' },
+        ],
+      },
+      {
+        name: 'thing',
+        label: 'Thing',
+        type: 'select',
+        required: true,
+        optionsFrom: {
+          query: { query: 'items' },
+          rows: 'items',
+          value: 'id',
+          label: 'title',
+          dependsOn: ['state'],
+        },
+      },
+    ],
+    submit: {
+      tool: 'demo.add_rule',
+      label: 'Add',
+      tone: 'accent',
+      done: { path: 'message' },
+      args: { account: { field: 'account' }, thing: { field: 'thing' } },
+      then: 'close',
+    },
+  },
+  {
+    kind: 'form',
     title: 'Watchers',
     initial: { query: 'settings' },
     fields: [
-      { name: 'everyMinutes', label: 'Check every', type: 'number', from: 'everyMinutes' },
+      { name: 'pause', label: 'Pause the watchers', type: 'checkbox' },
+      {
+        name: 'everyMinutes',
+        label: 'Check every',
+        type: 'number',
+        from: 'everyMinutes',
+        disabledWhen: { path: 'pause', equals: true },
+      },
       { name: 'keepDays', label: 'Keep for', type: 'number' },
     ],
     submit: {
@@ -301,7 +365,15 @@ const APPROVAL: ApprovalRow = {
 const navigate = vi.fn();
 
 const draw = (id: 'board' | 'settings', item?: string): ReturnType<typeof render> =>
-  render(<PluginPage page={page(id)} item={item ?? null} navigate={navigate} timezone="UTC" />);
+  render(
+    <PluginPage
+      page={page(id)}
+      item={item ?? null}
+      navigate={navigate}
+      timezone="UTC"
+      siblings={[page('board'), page('settings')]}
+    />,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -317,7 +389,7 @@ describe('the pieces a descriptor is made of', () => {
     draw('board');
     expect(await screen.findByText('Everything the demo plugin knows.')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Accounts and rules' });
-    expect(link).toHaveAttribute('href', '#/p/demo/settings');
+    expect(link).toHaveAttribute('href', '#/settings/p.demo.settings');
   });
 
   it('draws stats from their query, formatted by the unit the descriptor named', async () => {
@@ -348,13 +420,14 @@ describe('the pieces a descriptor is made of', () => {
 
   it('selects rows and acts on the selection, refusing the ones it may not', async () => {
     draw('board');
+    // The first box is the header's select-all; then one per row.
     const boxes = await screen.findAllByRole('checkbox');
-    expect(boxes[1]).toBeDisabled(); // pinned
-    fireEvent.click(boxes[0] as HTMLElement);
-    fireEvent.click(screen.getByRole('button', { name: 'Keep selected' }));
-    // The sentence counts what is actually selected.
-    expect(screen.getByText('Keep 1 things?')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Yes, keep selected/i }));
+    expect(boxes[2]).toBeDisabled(); // pinned
+    fireEvent.click(boxes[1] as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep 1 thing' }));
+    // The sentence counts what is actually selected, and says "thing" for one.
+    expect(screen.getByText('Keep 1 thing?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Yes, keep 1 thing/i }));
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.keep_many', args: { ids: ['a1'] } }),
     );
@@ -438,6 +511,27 @@ describe('the pieces a descriptor is made of', () => {
         args: { id: 'd1', subject: 'A better reply', version: '2026-09-22T09:05:00.000Z' },
       }),
     );
+  });
+
+  it('shows what is there now under the sentence saying why the save was refused', async () => {
+    let subject = 'A reply';
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({
+        data: query === 'draft' ? { ...(DATA.draft as object), subject } : DATA[query],
+      })) as typeof api.pageQuery);
+    vi.mocked(api.pageAct).mockRejectedValue(new Error('That draft has moved on since you opened it.'));
+    draw('board', 'a1');
+    await openDraft();
+    // Somebody else edits it while the owner is typing.
+    subject = 'What it actually says now';
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    // The refusal stays on the page…
+    expect(await screen.findByText('That draft has moved on since you opened it.')).toBeInTheDocument();
+    // …and the editor re-reads, so the owner sees what they are up against.
+    await waitFor(() =>
+      expect((screen.getByLabelText('Subject') as HTMLInputElement).value).toBe('What it actually says now'),
+    );
+    expect(screen.getByText('That draft has moved on since you opened it.')).toBeInTheDocument();
   });
 
   it('draws the approval a gated write answered with, rather than claiming it happened', async () => {
@@ -547,6 +641,50 @@ describe('the pieces a descriptor is made of', () => {
     expect(labels).toEqual(['Discard', 'Save', 'Send']);
   });
 
+  it('draws every pill a row carries, in the tone the row itself names', async () => {
+    draw('board');
+    const row = (await screen.findByText('The first thing')).closest('.ui-list-row') as HTMLElement;
+    const pills = [...row.querySelectorAll('.ui-pill')];
+    expect(pills.map((p) => p.textContent)).toEqual(['open', 'one@example.com']);
+    expect(pills[0]).toHaveAttribute('data-tone', 'warning');
+  });
+
+  it('ticks every row at once, and offers a bulk action over all of them', async () => {
+    draw('board');
+    /*
+     * Nothing ticked: `all` makes the button about every row the owner may
+     * act on — the two unpinned ones, the folded one included — and the words
+     * agree with the number.
+     */
+    expect(await screen.findByRole('button', { name: 'Keep 2 things' })).toBeEnabled();
+    expect(screen.getByText('2 to choose from')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select every row' }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep 2 things' }));
+    expect(screen.getByText('Keep 2 things?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Yes, keep 2 things/i }));
+    await waitFor(() =>
+      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.keep_many', args: { ids: ['a1', 'a0'] } }),
+    );
+  });
+
+  it('says "1 thing" when there is one of it', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({
+        data: query === 'items' ? { items: (DATA.items as { items: unknown[] }).items, older: [] } : DATA[query],
+      })) as typeof api.pageQuery);
+    draw('board');
+    expect(await screen.findByRole('button', { name: 'Keep 1 thing' })).toBeInTheDocument();
+  });
+
+  it('links to a page that lives in Settings as the tab it is', async () => {
+    draw('board');
+    expect(await screen.findByRole('link', { name: 'Accounts and rules' })).toHaveAttribute(
+      'href',
+      '#/settings/p.demo.settings',
+    );
+  });
+
   it('searches on demand and links each result', async () => {
     draw('board');
     const words = (await screen.findByLabelText('Words')) as HTMLInputElement;
@@ -558,6 +696,17 @@ describe('the pieces a descriptor is made of', () => {
     // The count and the caveat the query answered with.
     expect(await screen.findByText(/9 in all/)).toBeInTheDocument();
     expect(screen.getByText(/The newest nine/)).toBeInTheDocument();
+  });
+
+  it('says what the answer is, even when the answer is nothing', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({ data: query === 'search' ? DATA.nothing : DATA[query] })) as typeof api.pageQuery);
+    draw('board');
+    fireEvent.change(await screen.findByLabelText('Words'), { target: { value: 'nothing' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    // The caveat is as true of an empty answer as of a full one.
+    expect(await screen.findByText(/The newest nine/)).toBeInTheDocument();
+    expect(screen.getByText('Nothing matches.')).toBeInTheDocument();
   });
 
   it('draws what the page\'s own read says, and hides what it does not', async () => {
@@ -576,15 +725,79 @@ describe('a settings page', () => {
     expect(await screen.findByText('owner@example.com')).toBeInTheDocument();
   });
 
+  it('offers a row action only where the descriptor says, and names the row', async () => {
+    draw('settings');
+    // Two accounts, one of them locked: one Remove, and it says which.
+    const removes = await screen.findAllByRole('button', { name: 'Remove' });
+    expect(removes).toHaveLength(1);
+    const cells = [...document.querySelectorAll('.ui-table tbody tr')].map((tr) => tr.textContent);
+    expect(cells[1]).toContain('old@example.com');
+    expect(cells[1]).not.toContain('Remove');
+    // And the state is a pill in the tone the row carried.
+    const pill = document.querySelector('.ui-table .ui-pill') as HTMLElement;
+    expect(pill.textContent).toBe('ready');
+    expect(pill).toHaveAttribute('data-tone', 'good');
+  });
+
+  it('draws a section\'s own action beside its heading', async () => {
+    draw('settings');
+    const head = (await screen.findByText('Accounts')).closest('.ui-section-head') as HTMLElement;
+    expect(within(head).getByRole('link', { name: 'The board' })).toHaveAttribute('href', '#/p/demo/board');
+  });
+
   it('asks before a confirmed action, and only then writes', async () => {
     draw('settings');
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
-    expect(screen.getByText('Remove this account?')).toBeInTheDocument();
+    expect(screen.getByText('Remove owner@example.com?')).toBeInTheDocument();
     expect(api.pageAct).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Yes, remove/i }));
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.remove_account', args: { id: 'acc-1' } }),
     );
+  });
+
+  it('reveals a field as the box beside it is ticked, with no round trip', async () => {
+    draw('settings');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add an account' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByLabelText('IMAP host')).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByLabelText('Give the hosts myself'));
+    expect(within(dialog).getByLabelText('IMAP host')).toBeInTheDocument();
+  });
+
+  it('disables a field from the form\'s own values, live', async () => {
+    draw('settings');
+    await waitFor(() => expect(screen.getByLabelText('Check every')).toBeEnabled());
+    fireEvent.click(screen.getByLabelText('Pause the watchers'));
+    expect(screen.getByLabelText('Check every')).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Pause the watchers'));
+    expect(screen.getByLabelText('Check every')).toBeEnabled();
+  });
+
+  it('reads a select\'s options from a query, and again when what it depends on changes', async () => {
+    draw('settings');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a rule' }));
+    const dialog = await screen.findByRole('dialog');
+    const mailbox = within(dialog).getByLabelText('Mailbox');
+    await waitFor(() => expect(within(mailbox).getByText('owner@example.com')).toBeInTheDocument());
+    // The dependent select asked with no state to begin with…
+    await waitFor(() => expect(api.pageQuery).toHaveBeenCalledWith('demo', 'items', {}));
+    fireEvent.change(within(dialog).getByLabelText('State'), { target: { value: 'done' } });
+    // …and again with the value the owner chose.
+    await waitFor(() => expect(api.pageQuery).toHaveBeenCalledWith('demo', 'items', { state: 'done' }));
+  });
+
+  it('says what a write did, in the tool\'s own words', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { message: 'Rule added for a1.' } });
+    draw('settings');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a rule' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('Mailbox')).toBeInTheDocument());
+    fireEvent.change(within(dialog).getByLabelText('Mailbox'), { target: { value: 'acc-1' } });
+    await waitFor(() => expect(within(dialog).getByLabelText('Thing')).toBeInTheDocument());
+    fireEvent.change(within(dialog).getByLabelText('Thing'), { target: { value: 'a1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    expect(await screen.findByText('Rule added for a1.')).toBeInTheDocument();
   });
 
   it('opens a drawer form, refuses to submit until it is filled, and closes on `then`', async () => {
@@ -599,7 +812,7 @@ describe('a settings page', () => {
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', {
         tool: 'demo.add_account',
-        args: { address: 'owner@example.com', password: 'hunter2' },
+        args: { address: 'owner@example.com', password: 'hunter2', imapHost: '' },
       }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

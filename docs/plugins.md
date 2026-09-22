@@ -685,6 +685,38 @@ means, the page knows how to draw a line, and this says which is which.
   `cards[0].name`. If a descriptor needs arithmetic, the *tool* should be
   returning the number — the owner cannot audit a calculation that happens in a
   chart.
+- **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
+  of the form's *own values* first — a path that names a field on the form
+  reads what the owner has just typed — and of the loaded data otherwise, so
+  ticking a box reveals or greys a field with no round trip. A select whose
+  options are a read rather than a list takes
+  `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
+  form opens, and again whenever a field in `dependsOn` changes, with those
+  fields' values as the query's parameters (mailbox, then what is in it).
+- **Say what happened.** `ToolRef.done` is the sentence shown after a write
+  worked — a string, or a `ValueRef` read out of the tool's own result. A
+  gated tool says it once the approval has executed, because that is when it
+  is true. A write that *failed* leaves its sentence on the page and re-reads
+  the component's query underneath it, so a save refused because the draft
+  moved on shows the refusal and the draft as it now stands.
+- **A query may refuse in words.** Throw `QueryRefusal` from `produce` and the
+  owner gets that sentence with a 400 — "No conversation here has that id."
+  Anything else you throw is a defect: one generic sentence, and the detail in
+  the log.
+- **Rows the owner acts on.** A `list` with `select` draws a select-all box
+  over the rows they may act on, and a `BulkAction` with `all: true` is about
+  every one of them when nothing is ticked. `{count}` in a label or a
+  confirmation is that number, `{one|many}` is the word that goes with it, and
+  a `RowAction`'s label and confirmation may carry `{field}` placeholders read
+  from the row ("Remove {address}?"). A `RowAction.when` offers the action only
+  on the rows where it holds — Fetch, until there is a file.
+- **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
+  may itself be a path, `ListItem.pills` draws several, and a table column with
+  `pill: { tone }` draws its cell as one. A `section` may carry `actions` — a
+  link or a button — beside its heading.
+- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+  `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
+  a place of its own: the owner lands on Settings with that tab open.
 - **The rest of the set, in one line each.** `list-detail` has
   `selection: 'route' | 'local'` — `local` for a second level inside a detail
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
@@ -816,6 +848,38 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
 - **Text is a constant or a value.** `notice.text` and `expand.label` accept a
   `ValueRef` as well as a string, and `ToolRef.confirm` may contain `{count}`,
   replaced by the size of the selection.
+- **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
+  of the form's *own values* first — a path that names a field on the form
+  reads what the owner has just typed — and of the loaded data otherwise, so
+  ticking a box reveals or greys a field with no round trip. A select whose
+  options are a read rather than a list takes
+  `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
+  form opens, and again whenever a field in `dependsOn` changes, with those
+  fields' values as the query's parameters (mailbox, then what is in it).
+- **Say what happened.** `ToolRef.done` is the sentence shown after a write
+  worked — a string, or a `ValueRef` read out of the tool's own result. A
+  gated tool says it once the approval has executed, because that is when it
+  is true. A write that *failed* leaves its sentence on the page and re-reads
+  the component's query underneath it, so a save refused because the draft
+  moved on shows the refusal and the draft as it now stands.
+- **A query may refuse in words.** Throw `QueryRefusal` from `produce` and the
+  owner gets that sentence with a 400 — "No conversation here has that id."
+  Anything else you throw is a defect: one generic sentence, and the detail in
+  the log.
+- **Rows the owner acts on.** A `list` with `select` draws a select-all box
+  over the rows they may act on, and a `BulkAction` with `all: true` is about
+  every one of them when nothing is ticked. `{count}` in a label or a
+  confirmation is that number, `{one|many}` is the word that goes with it, and
+  a `RowAction`'s label and confirmation may carry `{field}` placeholders read
+  from the row ("Remove {address}?"). A `RowAction.when` offers the action only
+  on the rows where it holds — Fetch, until there is a file.
+- **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
+  may itself be a path, `ListItem.pills` draws several, and a table column with
+  `pill: { tone }` draws its cell as one. A `section` may carry `actions` — a
+  link or a button — beside its heading.
+- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+  `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
+  a place of its own: the owner lands on Settings with that tab open.
 - **The rest of the set, in one line each.** `list-detail` has
   `selection: 'route' | 'local'` — `local` for a second level inside a detail
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
@@ -2225,8 +2289,18 @@ than guess.
 | --- | --- | --- | --- |
 | `name` | `string` | yes | `threads`, `accounts`. Lower_snake_case, unique in your plugin; it is the `<query>` of `GET /api/pages/<plugin>/<query>`. |
 | `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
-| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. |
+| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
 | `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
+
+#### `OptionsFrom`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `query` | `QueryRef` | yes | The read behind a select's options, checked at load like any other reference. |
+| `rows` | `string` | yes | Path to the array of rows in the answer. |
+| `value` | `string` | yes | Path within a row to what a choice submits. |
+| `label` | `string` | yes | Path within a row to the words the owner reads. |
+| `dependsOn` | `string[]` | no | Field names whose current value is sent as a parameter of the same name, and whose change re-reads the options. An empty one is left out. |
 
 #### `NetworkUse`
 

@@ -24,7 +24,7 @@ import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
 import { readPath, readRef } from '../canvas/resolve';
-import { pluginPageRoute } from '../routes';
+import { pluginPageRoute, pluginSettingsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
@@ -59,8 +59,10 @@ import type {
   PluginPageDescriptor,
   QueryRef,
   RouteRef,
+  PillRef,
   Tone,
   ToolRef,
+  ValueRef,
   Visibility,
 } from './types';
 
@@ -71,6 +73,8 @@ import type {
 interface PageScope {
   plugin: string;
   page: string;
+  /** This plugin's pages, so a link knows whether its target is a tab. */
+  pages: PluginPageDescriptor[];
   /** The item segment of the route, when the page is showing one. */
   item: string | null;
   /** Named parameters: the list-detail's item, a search's fields. */
@@ -115,10 +119,45 @@ export function holds(data: unknown, condition: Visibility | undefined): boolean
   return condition.not === true ? !matched : matched;
 }
 
-/** Where a route reference points, inside this plugin. */
+/**
+ * Where a route reference points, inside this plugin.
+ *
+ * A page that lives in Settings is a *tab*, not a place: linking to it with
+ * `#/p/<plugin>/<page>` would open a page with no tabs around it and no way
+ * back to the rest of the settings. So the descriptor says `{ page }` and the
+ * engine works out which hash that is.
+ */
 function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
+  const target = scope.pages.find((page) => page.id === to.page);
+  if (target?.place === 'settings') return pluginSettingsRoute(scope.plugin, to.page);
   const item = to.item === undefined ? null : readRef(data, to.item);
   return pluginPageRoute(scope.plugin, to.page, item === null || item === undefined ? null : String(item));
+}
+
+/**
+ * The words on a button, with its blanks filled.
+ *
+ * `{count}` is how many rows the action is about, `{one|many}` is the word
+ * that goes with it, and `{field}` is read out of the row — "Remove
+ * {address}?" asks about the thing in front of the owner. Anything the data
+ * does not answer is left as an empty string rather than printed raw.
+ */
+export function fill(text: string, source: { count?: number; row?: unknown }): string {
+  return text
+    .replace(/\{count\}/g, String(source.count ?? 0))
+    .replace(/\{([^{}|]+)\|([^{}|]+)\}/g, (_all, one: string, many: string) => ((source.count ?? 0) === 1 ? one : many))
+    .replace(/\{([A-Za-z_][A-Za-z0-9_.]*)\}/g, (_all, path: string) => {
+      const value = readPath(source.row, path);
+      return value === undefined || value === null ? '' : String(value);
+    });
+}
+
+/** A tone the descriptor named, or one the row carries. */
+function toneFrom(tone: Tone | ValueRef | undefined, row: unknown): Tone | undefined {
+  if (tone === undefined) return undefined;
+  if (typeof tone === 'string') return tone;
+  const value = readRef(row, tone);
+  return value === 'good' || value === 'warning' || value === 'critical' || value === 'neutral' ? value : undefined;
 }
 
 /** A query's parameters, resolved against the data, the route and the page. */
@@ -195,6 +234,8 @@ interface ActState {
   running: string | null;
   busy: boolean;
   error: string | null;
+  /** What the descriptor said to say once it worked. */
+  done: string | null;
   approvalId: string | null;
   /** Decided: apply what the pending action's `then` asked for, or let it go. */
   settle: (outcome?: { decision: 'approve' | 'reject'; state?: string }) => void;
@@ -213,9 +254,18 @@ function useAct(): ActState {
   const scope = useScope();
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
   /** What a gated action asked to happen *after* — held until it has. */
-  const [pending, setPending] = useState<{ then: ToolRef['then']; onDone?: () => void } | null>(null);
+  const [pending, setPending] = useState<{ then: ToolRef['then']; ref: ToolRef; onDone?: () => void } | null>(null);
+
+  /** The sentence for a write that worked, from the descriptor or the result. */
+  const saidDone = (ref: ToolRef, result: unknown): string | null => {
+    if (ref.done === undefined) return null;
+    if (typeof ref.done === 'string') return ref.done;
+    const value = readRef(result, ref.done);
+    return value === undefined || value === null ? null : String(value);
+  };
 
   /** Do what `then` says. Only ever called when something actually happened. */
   const apply = (then: ToolRef['then'], result: unknown, onDone?: () => void): void => {
@@ -231,6 +281,7 @@ function useAct(): ActState {
   const run = async (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void): Promise<void> => {
     setRunning(ref.tool);
     setError(null);
+    setDone(null);
     try {
       const out = await api.pageAct(scope.plugin, { tool: ref.tool, args });
       if (out.approvalId) {
@@ -241,14 +292,22 @@ function useAct(): ActState {
          * only once the decision has executed.
          */
         setApprovalId(out.approvalId);
-        setPending({ then: ref.then, ...(onDone ? { onDone } : {}) });
+        setPending({ then: ref.then, ref, ...(onDone ? { onDone } : {}) });
         return;
       }
       setApprovalId(null);
       setPending(null);
+      setDone(saidDone(ref, out.result));
       apply(ref.then, out.result, onDone);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      /*
+       * A write that failed usually failed *about* something: a draft
+       * somebody else has already moved past, a row that is gone. So the
+       * component re-reads while the banner stays — the owner sees the
+       * sentence and, underneath it, what is actually there now.
+       */
+      scope.refresh();
     } finally {
       setRunning(null);
     }
@@ -271,13 +330,15 @@ function useAct(): ActState {
     // Approved *and* executed is the only outcome in which the thing the
     // action was about has actually happened. Anything else just refreshes.
     if (held && outcome.decision === 'approve' && outcome.state === 'succeeded') {
+      // Only now is the sentence true: the effect has happened.
+      setDone(saidDone(held.ref, undefined));
       apply(held.then, undefined, held.onDone);
       return;
     }
     scope.refresh();
   };
 
-  return { running, busy: running !== null, error, approvalId, settle, run };
+  return { running, busy: running !== null, error, done, approvalId, settle, run };
 }
 
 /**
@@ -293,6 +354,7 @@ function ActionButton({
   disabled,
   running,
   count,
+  row,
   onRun,
 }: {
   action: ToolRef;
@@ -300,15 +362,19 @@ function ActionButton({
   disabled?: boolean;
   /** This action is the one in flight: it says so instead of its label. */
   running?: boolean;
-  /** How many rows a bulk action is about, for `{count}` in the sentence. */
+  /** How many rows this is about, for `{count}` and `{one|many}`. */
   count?: number;
+  /** The row it sits on, for `{field}` in its words. */
+  row?: unknown;
   onRun: (ref: ToolRef, args: Record<string, unknown>) => void;
 }): JSX.Element {
   const [asking, setAsking] = useState(false);
+  const words = (text: string): string => fill(text, { ...(count === undefined ? {} : { count }), row });
+  const label = words(action.label);
   if (asking && action.confirm) {
     return (
       <>
-        <span className="ui-toolbar-note">{action.confirm.replace('{count}', String(count ?? 0))}</span>
+        <span className="ui-toolbar-note">{words(action.confirm)}</span>
         <Button variant="ghost" onClick={() => setAsking(false)}>
           Cancel
         </Button>
@@ -320,7 +386,7 @@ function ActionButton({
             onRun(action, args);
           }}
         >
-          Yes, {action.label.toLowerCase()}
+          Yes, {label.toLowerCase()}
         </Button>
       </>
     );
@@ -331,7 +397,7 @@ function ActionButton({
       disabled={disabled}
       onClick={() => (action.confirm ? setAsking(true) : onRun(action, args))}
     >
-      {running && action.busy ? action.busy : action.label}
+      {running && action.busy ? action.busy : label}
     </Button>
   );
 }
@@ -378,6 +444,13 @@ function ApprovalById({
 function ActOutcome({ act }: { act: ActState }): JSX.Element | null {
   if (act.error) return <ErrorBanner message={act.error} />;
   if (act.approvalId) return <ApprovalById id={act.approvalId} onDecided={act.settle} />;
+  if (act.done) {
+    return (
+      <Notice tone="good" role="status">
+        {act.done}
+      </Notice>
+    );
+  }
   return null;
 }
 
@@ -398,24 +471,72 @@ function initialValues(fields: Field[], data: unknown): Values {
   return values;
 }
 
+/**
+ * A select's options, when a query rather than the descriptor knows them.
+ *
+ * Read when the form opens and again whenever one of `dependsOn` changes,
+ * with those fields' current values as the parameters — which is how "the
+ * mailbox, then the conversations in it" is one form and not two screens.
+ * Unconditionally a hook: a field with no `optionsFrom` simply asks nothing.
+ */
+function useFieldOptions(
+  field: Field,
+  values: Values,
+  data: unknown,
+): { options: Array<{ value: string; label: string }>; loading: boolean } {
+  const scope = useScope();
+  const from = field.optionsFrom;
+  const params = from
+    ? {
+        ...resolveParams(from.query.params, data, scope),
+        ...Object.fromEntries(
+          (from.dependsOn ?? [])
+            .map((name) => [name, String(values[name] ?? '')] as const)
+            .filter(([, value]) => value !== ''),
+        ),
+      }
+    : {};
+  const key = JSON.stringify([from?.query.query ?? null, params, scope.version]);
+  const state = useAsync<unknown>(
+    () =>
+      from ? api.pageQuery(scope.plugin, from.query.query, params).then((body) => body.data) : Promise.resolve(undefined),
+    [key],
+  );
+  if (!from) return { options: field.options ?? [], loading: false };
+  return {
+    options: rowsOf(state.data, from.rows).map((row) => ({
+      value: String(readPath(row, from.value) ?? ''),
+      label: String(readPath(row, from.label) ?? ''),
+    })),
+    loading: state.loading,
+  };
+}
+
 function FieldControl({
   field,
   value,
+  values,
+  data,
   disabled,
   onChange,
 }: {
   field: Field;
   value: unknown;
+  /** Every value on this form, for `optionsFrom.dependsOn`. */
+  values: Values;
+  /** What the query answered, for a `ValueRef` in the options' parameters. */
+  data: unknown;
   disabled?: boolean;
   onChange: (value: unknown) => void;
 }): JSX.Element {
+  const choices = useFieldOptions(field, values, data);
   const shared = { id: `f-${field.name}`, required: field.required, name: field.name, disabled };
   if (field.type === 'select') {
     return (
       <FieldBox label={field.label} hint={field.hint}>
         <select {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
-          <option value="">—</option>
-          {(field.options ?? []).map((option) => (
+          <option value="">{choices.loading ? 'Loading…' : '—'}</option>
+          {choices.options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -470,23 +591,35 @@ function Fields({
 }: {
   fields: Field[];
   values: Values;
-  /** What `disabledWhen` is asked of. */
+  /** What `when` and `disabledWhen` are asked of, under the form's own values. */
   data?: unknown;
   /** Every field at once: an editor the descriptor says is read-only. */
   disabled?: boolean;
   onChange: (name: string, value: unknown) => void;
 }): JSX.Element {
+  /*
+   * The form's own values sit *over* the loaded data, so a path that names a
+   * field reads what the owner has just typed and anything else reads what
+   * the query answered. That is what makes "show the host fields when
+   * Advanced is ticked" work without a round trip — and it is why the values
+   * win: on this form, the field is the more recent truth about itself.
+   */
+  const asked = { ...(typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {}), ...values };
   return (
     <Stack gap="sm">
-      {fields.map((field) => (
-        <FieldControl
-          key={field.name}
-          field={field}
-          value={values[field.name]}
-          disabled={disabled === true || holds(data, field.disabledWhen) === (field.disabledWhen !== undefined)}
-          onChange={(value) => onChange(field.name, value)}
-        />
-      ))}
+      {fields
+        .filter((field) => field.when === undefined || holds(asked, field.when))
+        .map((field) => (
+          <FieldControl
+            key={field.name}
+            field={field}
+            value={values[field.name]}
+            values={values}
+            data={data}
+            disabled={disabled === true || (field.disabledWhen !== undefined && holds(asked, field.disabledWhen))}
+            onChange={(value) => onChange(field.name, value)}
+          />
+        ))}
     </Stack>
   );
 }
@@ -523,8 +656,29 @@ function Piece({
   switch (component.kind) {
     case 'section':
       return (
-        <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+        <Section
+          title={component.title}
+          aside={
+            /*
+             * The right of the heading: where this section's own way out
+             * goes — "Mailboxes and rules" — rather than a button lost at
+             * the bottom of a list.
+             */
+            component.actions && component.actions.length > 0 ? (
+              <Toolbar align="end">
+                {component.actions.map((action, index) => (
+                  <Piece key={index} component={action} data={data} />
+                ))}
+              </Toolbar>
+            ) : component.note ? (
+              <span className="muted">{component.note}</span>
+            ) : undefined
+          }
+        >
           <Stack gap="lg">
+            {component.note && component.actions && component.actions.length > 0 ? (
+              <p className="ui-card-meta">{component.note}</p>
+            ) : null}
             {component.body.map((child, index) => (
               <Piece key={index} component={child} data={data} />
             ))}
@@ -636,6 +790,7 @@ function itemRow(
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
   const href = item.to && !local ? routeOf(scope, item.to, row) : null;
+  const pills: PillRef[] = [...(item.pill ? [item.pill] : []), ...(item.pills ?? [])];
   return {
     text,
     href,
@@ -655,7 +810,15 @@ function itemRow(
     sub: item.sub ? String(readRef(row, item.sub) ?? '') : null,
     side: (
       <>
-        {item.pill ? <Pill tone={pillTone(item.pill.tone)}>{String(readRef(row, item.pill.value) ?? '')}</Pill> : null}
+        {pills.map((pill, index) => {
+          const value = readRef(row, pill.value);
+          if (value === undefined || value === null || value === '') return null;
+          return (
+            <Pill key={index} tone={pillTone(toneFrom(pill.tone, row))}>
+              {String(value)}
+            </Pill>
+          );
+        })}
         {meta.length > 0 ? <span className="muted"> {meta.join(' · ')}</span> : null}
       </>
     ),
@@ -757,6 +920,7 @@ function ListPiece({
       const drawn = itemRow(scope, component.item, row, onChoose);
       const key = keyByRow.get(row) as string;
       const disabled = component.select?.disabledWhen !== undefined && holds(row, component.select.disabledWhen);
+      const actions = (component.actions ?? []).filter((action) => holds(row, action.when));
       return (
         <ListRow
           key={key}
@@ -796,13 +960,14 @@ function ListPiece({
           side={
             <>
               {drawn.side}
-              {(component.actions ?? []).map((action, i) => (
+              {actions.map((action, i) => (
                 <ActionButton
                   key={i}
                   action={action}
                   args={resolveArgs(action.args, { data: query.data, row, scope })}
                   disabled={act.busy}
                   running={act.running === action.tool}
+                  row={row}
                   onRun={(ref, args) => void act.run(ref, args)}
                 />
               ))}
@@ -820,6 +985,20 @@ function ListPiece({
         <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
       ) : (
         <List>
+          {component.select ? (
+            <ListRow
+              lead={
+                <input
+                  type="checkbox"
+                  aria-label="Select every row"
+                  checked={enabled.size > 0 && actionable.length === enabled.size}
+                  disabled={enabled.size === 0}
+                  onChange={(e) => setSelected(e.target.checked ? [...enabled] : [])}
+                />
+              }
+              title={<span className="muted">{enabled.size} to choose from</span>}
+            />
+          ) : null}
           {groups.map((group, index) => (
             <div key={index}>
               {group.label ? <div className="ui-list-group">{group.label}</div> : null}
@@ -836,25 +1015,33 @@ function ListPiece({
       {component.bulk && component.bulk.length > 0 ? (
         <Toolbar align="end">
           <span className="ui-toolbar-note">{actionable.length} selected</span>
-          {component.bulk.map((action, index) => (
-            <ActionButton
-              key={index}
-              action={action}
-              /*
-               * The selection as it stands *now*: a row that was ticked and
-               * has since gone, or become one the owner may not act on, is not
-               * sent to the tool.
-               */
-              args={resolveArgs(action.args, { data: query.data, selected: actionable, scope })}
-              count={actionable.length}
-              disabled={act.busy || actionable.length === 0}
-              running={act.running === action.tool}
-              onRun={(ref, args) => {
-                setSelected([]);
-                void act.run(ref, args);
-              }}
-            />
-          ))}
+          {component.bulk.map((action, index) => {
+            /*
+             * With nothing ticked, an `all` action is about every row the
+             * owner may act on — a button that says "Keep all 12" and means
+             * it, rather than one that is there and does nothing.
+             */
+            const over = actionable.length > 0 || action.all !== true ? actionable : [...enabled];
+            return (
+              <ActionButton
+                key={index}
+                action={action}
+                /*
+                 * The selection as it stands *now*: a row that was ticked and
+                 * has since gone, or become one the owner may not act on, is
+                 * not sent to the tool.
+                 */
+                args={resolveArgs(action.args, { data: query.data, selected: over, scope })}
+                count={over.length}
+                disabled={act.busy || over.length === 0}
+                running={act.running === action.tool}
+                onRun={(ref, args) => {
+                  setSelected([]);
+                  void act.run(ref, args);
+                }}
+              />
+            );
+          })}
         </Toolbar>
       ) : null}
     </Section>
@@ -886,21 +1073,32 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
             {rows.map((row, index) => (
               <tr key={index}>
                 {component.columns.map((column) => (
-                  <td key={column.key}>{fmtValue(readPath(row, column.key), column.type ?? 'text', null)}</td>
+                  <td key={column.key}>
+                    {column.pill ? (
+                      <Pill tone={pillTone(toneFrom(column.pill.tone, row))}>
+                        {fmtValue(readPath(row, column.key), column.type ?? 'text', null)}
+                      </Pill>
+                    ) : (
+                      fmtValue(readPath(row, column.key), column.type ?? 'text', null)
+                    )}
+                  </td>
                 ))}
                 {component.actions && component.actions.length > 0 ? (
                   <td>
                     <Toolbar align="end">
-                      {component.actions.map((action, i) => (
-                        <ActionButton
-                          key={i}
-                          action={action}
-                          args={resolveArgs(action.args, { data: query.data, row, scope })}
-                          disabled={act.busy}
-                          running={act.running === action.tool}
-                          onRun={(ref, args) => void act.run(ref, args)}
-                        />
-                      ))}
+                      {component.actions
+                        .filter((action) => holds(row, action.when))
+                        .map((action, i) => (
+                          <ActionButton
+                            key={i}
+                            action={action}
+                            args={resolveArgs(action.args, { data: query.data, row, scope })}
+                            disabled={act.busy}
+                            running={act.running === action.tool}
+                            row={row}
+                            onRun={(ref, args) => void act.run(ref, args)}
+                          />
+                        ))}
                     </Toolbar>
                   </td>
                 ) : null}
@@ -965,6 +1163,12 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
   }
   return (
     <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+      {/*
+        What the write said, on the page rather than in the sheet: a form whose
+        `then` is `close` has no sheet left to say it in, and "Rule added" is
+        the one thing the owner is waiting to read.
+      */}
+      <ActOutcome act={act} />
       <Toolbar align="end">
         <Button variant="accent" onClick={() => setOpen(true)}>
           {component.drawer.button}
@@ -1005,7 +1209,7 @@ function FormBody({
         data={initialData}
         onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
       />
-      <ActOutcome act={act} />
+      {component.drawer ? null : <ActOutcome act={act} />}
       <Toolbar align="end">
         <ActionButton
           action={component.submit}
@@ -1059,17 +1263,22 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
           </Toolbar>
         )}
         <ErrorBanner message={query.error} />
+        {/*
+          What the answer says about itself — "the newest 500" — is as true of
+          an empty answer as of a full one, and on an empty one it is the whole
+          explanation. So it is drawn above the results, either way.
+        */}
+        {asked && (count !== undefined || note !== undefined) ? (
+          <p className="ui-card-meta">
+            {count === undefined ? '' : `${fmtValue(count, 'number', null)} in all. `}
+            {note === undefined ? '' : String(note)}
+          </p>
+        ) : null}
         {asked ? (
           rows.length === 0 ? (
             <Empty>{query.loading ? 'Searching…' : (component.empty ?? 'Nothing matches.')}</Empty>
           ) : (
             <>
-              {count !== undefined || note !== undefined ? (
-                <p className="ui-card-meta">
-                  {count === undefined ? '' : `${fmtValue(count, 'number', null)} in all. `}
-                  {note === undefined ? '' : String(note)}
-                </p>
-              ) : null}
               <List>
                 {rows.map((row, index) => {
                   // `results.to` when the row says where it goes, else the
@@ -1244,15 +1453,21 @@ function ArtifactPiece({ component, data }: { component: Of<'artifact'>; data: u
 
 function EditorPiece({ component, data }: { component: Of<'editor'>; data: unknown }): JSX.Element {
   const query = usePageQuery(component.query, data);
+  /*
+   * The write lives *here*, outside the body that remounts when the answer
+   * changes. A save refused because somebody else moved the draft on refreshes
+   * this query; if the banner lived in the body it would be wiped by the very
+   * reload it asked for, and the owner would see a changed draft with no
+   * explanation.
+   */
+  const act = useAct();
   if (query.error) return <ErrorBanner message={query.error} />;
   if (query.data === undefined) return <Empty>{component.empty ?? 'Loading…'}</Empty>;
   return (
-    <EditorBody
-      key={JSON.stringify(query.data)}
-      component={component}
-      data={data}
-      loaded={query.data}
-    />
+    <>
+      <ActOutcome act={act} />
+      <EditorBody key={JSON.stringify(query.data)} component={component} data={data} loaded={query.data} act={act} />
+    </>
   );
 }
 
@@ -1260,13 +1475,14 @@ function EditorBody({
   component,
   data,
   loaded,
+  act,
 }: {
   component: Of<'editor'>;
   data: unknown;
   loaded: unknown;
+  act: ActState;
 }): JSX.Element {
   const scope = useScope();
-  const act = useAct();
   const [values, setValues] = useState<Values>(() => initialValues(component.fields, loaded));
   /*
    * The version travels with the save as the implicit field `version`: it is
@@ -1299,7 +1515,6 @@ function EditorBody({
           disabled={readOnly}
           onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
         />
-        <ActOutcome act={act} />
         {/*
           Discard on the left, then a spacer, then Save, then whatever else the
           descriptor listed — the primary of the editor sits under the owner's
@@ -1329,6 +1544,7 @@ export function PluginPage({
   navigate,
   timezone,
   embedded,
+  siblings,
 }: {
   page: PluginPageDescriptor;
   /** The item segment of the route, when there is one. */
@@ -1337,12 +1553,19 @@ export function PluginPage({
   timezone: string;
   /** Inside a settings tab: no page header, no page gap. */
   embedded?: boolean;
+  /**
+   * This plugin's other pages. A link to one whose place is `settings` has to
+   * become a settings tab rather than a place of its own, and only the
+   * descriptors know which is which.
+   */
+  siblings?: PluginPageDescriptor[];
 }): JSX.Element {
   const [params, setParamsState] = useState<Record<string, string>>({});
   const [version, setVersion] = useState(0);
   const scope: PageScope = {
     plugin: page.plugin,
     page: page.id,
+    pages: siblings ?? [page],
     item: item ?? null,
     // The item of the route is a page parameter under whichever name the
     // list-detail gave it, and under `item` besides.
@@ -1414,6 +1637,7 @@ export function PluginSettingsPage(props: {
   page: PluginPageDescriptor;
   navigate: (route: string, replace?: boolean) => void;
   timezone: string;
+  siblings?: PluginPageDescriptor[];
 }): JSX.Element {
   return <PluginPage {...props} embedded />;
 }

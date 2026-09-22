@@ -57,7 +57,14 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           );
         })}
       </Tabs>
-      {pluginPage ? <PluginSettingsPage page={pluginPage} navigate={navigate} timezone={timezone} /> : null}
+      {pluginPage ? (
+        <PluginSettingsPage
+          page={pluginPage}
+          navigate={navigate}
+          timezone={timezone}
+          siblings={plugins.all.filter((p) => p.plugin === pluginPage.plugin)}
+        />
+      ) : null}
       {section === 'you' ? <You embedded /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}

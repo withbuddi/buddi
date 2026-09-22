@@ -102,11 +102,12 @@ invert — one condition rather than one component per value.
 
 ```ts
 type Component =
-  | { kind: 'section'; title?: string; note?: string; body: Component[] }
+  | { kind: 'section'; title?: string; note?: string; actions?: Array<{ kind: 'link' | 'button' }>; body: Component[] }
   | { kind: 'notice'; text: string | ValueRef; tone?: Tone }
   | { kind: 'link'; label: string; to: RouteRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
+  /** A column may carry `pill: { tone }` — a state, in the tone the row names. */
   | { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] }
   | { kind: 'detail'; query: QueryRef; fields: Array<{ label: string; value: ValueRef; unit?: Unit }>; body: Component[] }
   | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string } }
@@ -122,15 +123,26 @@ type Component =
   | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string };
 
 interface Visibility { path: string; equals?: unknown; in?: unknown[]; not?: true }
+/** A word about state; `tone` may itself be a path within the row. */
+interface PillRef { value: ValueRef; tone?: Tone | ValueRef }
+/** A select's options, read rather than written. */
+interface OptionsFrom { query: QueryRef; rows: string; value: string; label: string; dependsOn?: string[] }
 
 interface QueryRef { query: string; params?: Record<string, ValueRef | { param: string } | { route: string }> }
-interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
+interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; done?: string | ValueRef; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
 interface RouteRef { page: string; item?: ValueRef }        // within the same plugin
-interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: { value: ValueRef; tone?: Tone }; to?: RouteRef }
+interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef }
 interface Selection { key: string; disabledWhen?: Visibility }
-interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }> }
-interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }> }
-interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; disabledWhen?: Visibility }
+/** `label` and `confirm` may carry `{field}` placeholders read from the row. */
+interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
+/** `all` offers it over every enabled row when nothing is ticked. */
+interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }>; all?: true }
+interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility }
+
+// `when` and `disabledWhen` on a Field are asked of the form's own values
+// first — a path naming a field reads what the owner has just typed — and of
+// the loaded data otherwise.
+
 ```
 
 What each one is for, in email's terms:
