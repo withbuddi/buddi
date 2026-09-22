@@ -259,6 +259,8 @@ export interface PluginManifest {
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
   home?: HomeContribution[];  // read-only blocks on the dashboard's Home page
+  pages?: PageDescriptor[];   // screens of your own: a rail place, a settings tab
+  queries?: PageQuery[];      // the read-only functions those screens draw from
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
   skills?: SuggestedSkill[];  // shared procedures you propose
   description?: string;       // one line, shown before anyone installs you
@@ -715,26 +717,84 @@ plugin by name, and a plugin ships no page code.
 | Home, blocks | A read-only card in your own units (a balance, a count, a date) | `home` (`HomeContribution[]`) |
 | Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
 | Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
+| **The rail** | **A place of your own, with its own URL and a pinned icon** | **`pages` with `place: 'rail'` (§2.5b)** |
+| **Settings** | **A tab of your own, after the core sections** | **`pages` with `place: 'settings'` (§2.5b)** |
 | Approval card, everywhere | The envelope your gated tool described, and any `choices` it declared | a gated tool's `describe` (§2.1) |
 | Watchers | One row per sentinel: description, cadence, last run, on/off switch | `sentinels` (§2.3); the switch is core's |
 | Agents, "Proposed" | An agent or skill you suggest, awaiting the owner's approval | `agents`, `skills` (§2.6) |
 | Plugins | Your name, version, source, provenance, the hosts you reach, what you proposed | the manifest itself, `network` |
 | Weekly recap | A finding that did not wake anyone, read out once | any `info` finding (§2.3) |
 
-Not available to a plugin today, on purpose:
+Not available to a plugin, on purpose:
 
-- **A page of its own, or a rail entry.** The Mail page and the Settings →
-  Email section are compiled into the dashboard, not contributed by the email
-  plugin; the email plugin is a plugin for its tools, watchers and data, and a
-  built-in for its screens. A plugin that needs its own screen will get it
-  through the developer spec's proxy (`docs/specs/developer.md`): the plugin
-  serves its own app, buddi proxies it behind the dashboard's session, and the
-  rail links to it. Until that lands, a plugin's settings are tools
-  (`email.get_settings`/`set_settings` are the pattern), reachable from a chat.
-- **A settings section.** Same answer, same reason.
-- **Code in the page.** No plugin JavaScript ever runs in the dashboard; a
-  view descriptor is data the page interprets.
+- **Code in the page.** No plugin JavaScript ever runs in the dashboard. A
+  view descriptor and a page descriptor are *data* the page interprets, and
+  that is the whole boundary: a page is a tree of the components below, and
+  the set does not grow to fit one plugin's wish.
+- **Free layout, custom styling, your own components.** The dashboard draws
+  your page with its own primitives, in the owner's theme. A plugin that needs
+  its own interface serves its own app through the developer proxy
+  (`docs/specs/developer.md`): buddi proxies it behind the dashboard's session
+  and the rail links to it.
+- **A place inside a core page.** You add *beside* Home, Settings and the rail,
+  never inside them. Home blocks and view descriptors remain the way into Home
+  and the canvas.
 
+### 2.5b Pages: a screen of your own
+
+```ts
+export interface PageDescriptor {
+  id: string;                  // 'mail', 'settings' — unique in your plugin
+  title: string;
+  place: 'rail' | 'settings';
+  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file'
+       | 'chart' | 'bell' | 'plug' | 'key' | 'globe';
+  order?: number;
+  body: Component[];           // the tree, from the fixed component set
+}
+
+export interface PageQuery {
+  name: string;                // 'threads', 'accounts'
+  params: z.ZodTypeAny;        // validated; unknown keys refused
+  produce(params: unknown, ctx: ToolContext): Promise<unknown>;
+  result?: z.ZodTypeAny;       // validated before it leaves, when given
+}
+```
+
+A page is `pages` plus `queries`, and it follows the same rule views do: **a
+screen is data the page interprets; no plugin code runs in the browser.** The
+full contract is `docs/specs/plugin-pages.md`; the shape of it is:
+
+- **Reads are queries, writes are tools.** A component that shows something
+  names one of your `queries`; a button that changes something names one of
+  your `tools` and is invoked as the owner. An `auto` tool executes; a `gated`
+  tool yields an approval and the page draws the card in place, choices and
+  all. There is no third path, so everything the owner can do from your screen
+  is something an agent could be granted, audited the same way.
+- **A query cannot write.** `produce` is handed a `ToolContext` whose `db` is a
+  read-only wrapper: anything that is not a `select` (or a `with … select`)
+  throws, including `select … for update`. That is enforcement, not etiquette.
+- **Every parameter arrives as a string**, because a query string is strings.
+  Write `z.coerce.number()` for a number and `z.enum(['true','false'])` for a
+  flag; a parameter your schema does not declare is refused, not ignored.
+- **The components are a fixed set**, each a shape: `section`, `notice`,
+  `link`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
+  `expand`, `approval`, `artifact`, `editor`. Every one may carry `when`
+  (`{ path, equals }` against its data), `title`, `note` and `empty`. Paths are
+  view paths, exactly as in §2.5.
+- **It is validated at load.** `ToolRegistry.register` parses every descriptor
+  and checks every reference: a query name you do not contribute, a tool that
+  is not yours, a link to a page that does not exist. A typo is a startup error
+  naming the plugin, the page and the field path.
+- **Your routes are yours.** A rail page is `#/p/<plugin>/<page>`, an item
+  inside a `list-detail` is `#/p/<plugin>/<page>/<itemId>`, and a settings page
+  is the tab `#/settings/<plugin>` (or `#/settings/<plugin>.<page>` when you
+  ship several).
+
+A tool the owner may run from a page but no model should ever see carries
+`ownerOnly: true` (§2.1): the registry leaves it out of the list every provider
+and every agent grant is built from, and `invoke` refuses it for anyone but the
+owner's own path. A tool that stores a secret is the case it exists for.
 
 ---
 
@@ -1895,6 +1955,8 @@ this says what it is *for*.
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
+| `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
+| `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: the pool a query is handed refuses anything but a `select`. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
@@ -1910,6 +1972,7 @@ this says what it is *for*.
 | `description` | `string` | yes | What the model reads. Say *when* to use it, in the second person. |
 | `tier` | `Tier` | yes | `'auto' \| 'draft' \| 'gated' \| 'session'` — see the table below. |
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0`. |
+| `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
@@ -2080,6 +2143,26 @@ than guess.
 | `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| envelope \| structured`. Shapes, never domains. |
 | `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
 | `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
+
+#### `PageDescriptor`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | `mail`, `settings`. Lower-kebab-case, unique in your plugin, and the `<page>` of its route. |
+| `title` | `string` | yes | The rail entry's word, the settings tab's word, the page's heading. |
+| `place` | `'rail' \| 'settings'` | yes | A place of its own on the rail, or a tab after the core settings sections. |
+| `icon` | `PageIcon` | no | One of a pinned set the dashboard draws — `mail`, `money`, `calendar`, `people`, `file`, `chart`, `bell`, `plug`, `key`, `globe`. Never an image you supply. Defaults to the plug. |
+| `order` | `number` | no | Where you sit among the *plugin* entries. The core places are fixed. |
+| `body` | `Component[]` | yes | The tree: the fixed component set of §2.5b, each bound to a query for its data and a tool for its writes. |
+
+#### `PageQuery`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `name` | `string` | yes | `threads`, `accounts`. Lower_snake_case, unique in your plugin; it is the `<query>` of `GET /api/pages/<plugin>/<query>`. |
+| `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
+| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` refuses anything but a `select`, so a query that tries to write fails loudly rather than writing something nobody approved. |
+| `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
 
 #### `NetworkUse`
 

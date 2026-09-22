@@ -11,7 +11,8 @@
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
 import type { ReactNode } from 'react';
-import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, MAIL_ROUTE } from '../routes';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, MAIL_ROUTE, pluginPageRoute } from '../routes';
+import type { PageIcon, PluginPageDescriptor } from '../pages/types';
 import { nextTheme, themeLabel, type ThemeChoice } from '../theme';
 
 export function Rail({
@@ -20,6 +21,7 @@ export function Rail({
   onNavigate,
   theme,
   onTheme,
+  plugins = [],
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -27,6 +29,12 @@ export function Rail({
   onNavigate: (route: string) => void;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  /**
+   * The rail pages the installed plugins contribute, in their own order. They
+   * come *after* the core places: a plugin adds beside them, never inside
+   * them, and the rail knows nothing about any of them but the descriptor.
+   */
+  plugins?: PluginPageDescriptor[];
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -46,6 +54,22 @@ export function Rail({
           {ICONS[entry.route]}
         </RailLink>
       ))}
+
+      {plugins.map((page) => {
+        const route = pluginPageRoute(page.plugin, page.id);
+        return (
+          <RailLink
+            key={route}
+            label={page.title}
+            href={route}
+            active={place === route}
+            badge={0}
+            onClick={() => onNavigate(route)}
+          >
+            {PLUGIN_ICONS[page.icon ?? 'plug']}
+          </RailLink>
+        );
+      })}
 
       <div className="rail-spacer" />
 
@@ -156,6 +180,62 @@ const ICONS: Record<string, JSX.Element> = {
       <circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" />
       <circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" />
       <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
+    </svg>
+  ),
+};
+
+/**
+ * The pinned icon set a plugin page may ask for.
+ *
+ * Drawn here, in the same hand as the core places, and never an image the
+ * plugin supplies: a rail of twenty strangers' logos is not a rail. A page
+ * that names none of them gets the plug.
+ */
+const PLUGIN_ICONS: Record<PageIcon, JSX.Element> = {
+  mail: ICONS[MAIL_ROUTE] as JSX.Element,
+  money: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <rect x="2.6" y="5.2" width="14.8" height="9.6" rx="1.6" />
+      <circle cx="10" cy="10" r="2.2" />
+      <path d="M5.4 10h.5M14.1 10h.5" />
+    </svg>
+  ),
+  calendar: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <rect x="3" y="4.4" width="14" height="12.2" rx="1.6" />
+      <path d="M3 8.2h14M6.8 2.9v2.6M13.2 2.9v2.6" />
+    </svg>
+  ),
+  people: ICONS[AGENTS_ROUTE] as JSX.Element,
+  file: ICONS[FILES_ROUTE] as JSX.Element,
+  chart: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M3.2 16.4V8.6M8.4 16.4V3.9M13.6 16.4v-5.8M3.2 16.4h13.6" />
+    </svg>
+  ),
+  bell: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M5.4 13.6V9a4.6 4.6 0 0 1 9.2 0v4.6l1.2 1.7H4.2Z" />
+      <path d="M8.4 17.1a1.8 1.8 0 0 0 3.2 0" />
+    </svg>
+  ),
+  plug: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <path d="M7.4 2.8v3.4M12.6 2.8v3.4" />
+      <path d="M5 6.2h10v3.1a5 5 0 0 1-10 0Z" />
+      <path d="M10 14.3v3" />
+    </svg>
+  ),
+  key: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <circle cx="6.6" cy="10" r="3.2" />
+      <path d="M9.8 10h7.2M14.4 10v2.6M16.6 10v1.8" />
+    </svg>
+  ),
+  globe: (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
+      <circle cx="10" cy="10" r="7.1" />
+      <path d="M2.9 10h14.2M10 2.9c3.4 3.7 3.4 10.5 0 14.2-3.4-3.7-3.4-10.5 0-14.2Z" />
     </svg>
   ),
 };

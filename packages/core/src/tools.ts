@@ -9,6 +9,7 @@ import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
 import type { HomeContribution } from './home.js';
+import type { PageDescriptor, PageQuery } from './pages.js';
 import type { SystemContext } from './system-context.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -195,6 +196,19 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   tier: Tier;
   /** Opt-in only: owner may remember approval for this tool/agent/version. */
   reusableApproval?: boolean;
+  /**
+   * The owner may call this from one of the plugin's pages; no model ever
+   * sees it. `ToolRegistry.list()` leaves it out, which is the one place a
+   * provider's tool list and an agent's grant are both built from, so a
+   * glob in an agent file cannot reach it and a suggested agent naming it is
+   * refused at install. `registry.invoke` still runs it for `agentId: 'owner'`
+   * — the act route — and refuses it for anyone else as an unknown tool,
+   * which is what a model would have been told anyway.
+   *
+   * For a write that is the owner's to make and nobody else's:
+   * `email.add_account` stores a secret, and is the first one.
+   */
+  ownerOnly?: boolean;
   /**
    * This tool saves files and names them in its output as `artifacts: [{ id }]`.
    * Only a tool that says so here has its outputs recorded as produced; a
@@ -437,6 +451,19 @@ export interface PluginManifest {
    * `home.ts`. Read-only, already formatted, and absent for most plugins.
    */
   home?: HomeContribution[];
+  /**
+   * Screens this plugin puts in the dashboard (optional): a rail entry, a
+   * settings tab. Descriptors are **data**, exactly like `views` — a tree of
+   * generic components bound to this plugin's `queries` and tools, serialised
+   * to the browser, with no plugin code running in the page. See `pages.ts`.
+   */
+  pages?: PageDescriptor[];
+  /**
+   * The reads those pages are drawn from (optional). Read-only by
+   * enforcement: a query is handed a pool that refuses anything but a
+   * `select`. A plugin with `pages` needs these; nothing else uses them.
+   */
+  queries?: PageQuery[];
   /**
    * Agents this plugin proposes (optional). Proposals only, exactly like
    * `missions`: installing a plugin never creates a principal. The owner
