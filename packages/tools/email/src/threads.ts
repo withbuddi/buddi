@@ -37,6 +37,8 @@ export interface ThreadRecord {
   threadKey: string;
   subject: string;
   participants: string[];
+  /** How many more distinct participants there are beyond the 50 kept. */
+  participantsOverflow: number;
   firstAt: string | null;
   lastAt: string | null;
   state: ThreadState;
@@ -46,8 +48,8 @@ export interface ThreadRecord {
 }
 
 export const THREAD_COLUMNS =
-  'id, account_id, thread_key, subject, participants, first_at, last_at, state, policy_id, ' +
-  'message_count, last_direction';
+  'id, account_id, thread_key, subject, participants, participants_overflow, first_at, last_at, ' +
+  'state, policy_id, message_count, last_direction, last_folder_id, last_uid';
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -63,6 +65,7 @@ export function toThread(row: Record<string, any>): ThreadRecord {
     participants: Array.isArray(row.participants)
       ? row.participants.filter((p: unknown): p is string => typeof p === 'string')
       : [],
+    participantsOverflow: Number(row.participants_overflow ?? 0),
     firstAt: iso(row.first_at),
     lastAt: iso(row.last_at),
     state: (THREAD_STATES as readonly string[]).includes(row.state)
@@ -96,8 +99,15 @@ export interface JoinThreadInput {
   subject: string;
   /** Everyone on this message: From, To and Cc, in any form. */
   participants: readonly string[];
-  /** When it was sent or received. */
+  /**
+   * The ordering clock: IMAP INTERNALDATE, with `fetched_at` as the fallback
+   * a caller uses when the server gave none. Never the sender's `Date`
+   * header — see the module doc.
+   */
   at: Date | string | null;
+  /** The folder this message landed in, and its uid there — the tie-break. */
+  folderId: string;
+  uid: number;
   direction: MessageDirection;
 }
 
@@ -117,15 +127,24 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
 
   const { rows } = await db.query(
     `insert into email.threads
-       (account_id, thread_key, subject, participants, first_at, last_at, message_count,
-        last_direction, state)
-     values ($1, $2, $3, $4::jsonb, $5, $5, 1, $6, $7)
+       (account_id, thread_key, subject, participants, participants_overflow, first_at, last_at,
+        message_count, last_direction, last_folder_id, last_uid, state)
+     values (
+       $1, $2, $3, $4::jsonb,
+       greatest(0, jsonb_array_length($4::jsonb) - email.participants_cap()),
+       $5, $5, 1, $6, $8, $9, $7
+     )
      on conflict (account_id, thread_key) do update
         set subject = case when email.threads.subject = '' then excluded.subject
                            else email.threads.subject end,
-            -- The union: who is in a conversation only ever grows.
+            -- The union: who is in a conversation only ever grows, capped.
             participants = email.merge_participants(
               email.threads.participants, excluded.participants
+            ),
+            participants_overflow = greatest(
+              email.threads.participants_overflow,
+              email.merge_participants_count(email.threads.participants, excluded.participants)
+                - email.participants_cap()
             ),
             first_at = least(
               coalesce(email.threads.first_at, excluded.first_at),
@@ -137,23 +156,59 @@ export async function joinThread(db: Db, input: JoinThreadInput): Promise<Thread
             ),
             message_count = email.threads.message_count + 1,
             -- Who wrote last, by the clock: a message fetched late but dated
-            -- before the newest one does not change whose turn it is.
+            -- before the newest one does not change whose turn it is. Equal
+            -- clocks are broken deterministically — folder then uid, via
+            -- newer_wins() — rather than by poll arrival order.
             last_direction = case
-              when excluded.last_at is null then email.threads.last_direction
-              when email.threads.last_at is null then excluded.last_direction
-              when excluded.last_at >= email.threads.last_at then excluded.last_direction
+              when email.newer_wins(
+                     excluded.last_at, email.threads.last_at,
+                     excluded.last_folder_id, email.threads.last_folder_id,
+                     excluded.last_uid, email.threads.last_uid
+                   )
+                then excluded.last_direction
               else email.threads.last_direction
+            end,
+            last_folder_id = case
+              when email.newer_wins(
+                     excluded.last_at, email.threads.last_at,
+                     excluded.last_folder_id, email.threads.last_folder_id,
+                     excluded.last_uid, email.threads.last_uid
+                   )
+                then excluded.last_folder_id
+              else email.threads.last_folder_id
+            end,
+            last_uid = case
+              when email.newer_wins(
+                     excluded.last_at, email.threads.last_at,
+                     excluded.last_folder_id, email.threads.last_folder_id,
+                     excluded.last_uid, email.threads.last_uid
+                   )
+                then excluded.last_uid
+              else email.threads.last_uid
             end,
             state = case
               -- The owner's decision. New mail is not an argument against it.
               when email.threads.state = 'muted' then 'muted'
-              when excluded.last_at is not null
-               and email.threads.last_at is not null
-               and excluded.last_at < email.threads.last_at then email.threads.state
-              else excluded.state
+              when email.newer_wins(
+                     excluded.last_at, email.threads.last_at,
+                     excluded.last_folder_id, email.threads.last_folder_id,
+                     excluded.last_uid, email.threads.last_uid
+                   )
+                then excluded.state
+              else email.threads.state
             end
      returning ${THREAD_COLUMNS}`,
-    [input.accountId, key, input.subject ?? '', JSON.stringify(participants), at, input.direction, state],
+    [
+      input.accountId,
+      key,
+      input.subject ?? '',
+      JSON.stringify(participants),
+      at,
+      input.direction,
+      state,
+      input.folderId,
+      input.uid,
+    ],
   );
   const row = rows[0];
   if (!row) throw new Error('joinThread: upsert returned no row');
@@ -212,13 +267,16 @@ export async function threadMessages(
     `select id, direction, from_addr, to_addrs, subject, date, snippet, body_text
        from (
          select id, direction, from_addr, to_addrs, subject, date, snippet, body_text,
-                coalesce(date, fetched_at) as at, uid
+                -- The ordering clock: INTERNALDATE, fetched_at as fallback —
+                -- never the sender's Date header. folder then uid breaks a
+                -- tie deterministically.
+                coalesce(internal_date, fetched_at) as at, folder_id, uid
            from email.messages
           where thread_id = $1::uuid
-          order by at desc, uid desc
+          order by at desc, folder_id desc, uid desc
           limit $2
        ) newest
-      order by at asc, uid asc`,
+      order by at asc, folder_id asc, uid asc`,
     [threadId, limit],
   );
   return rows.map((row: Record<string, any>) => ({

@@ -182,6 +182,7 @@ class ImapFlowClient implements ImapClient {
         envelope: true,
         flags: true,
         bodyStructure: true,
+        internalDate: true,
         headers: ['message-id', 'in-reply-to', 'references', 'list-id'],
       },
       { uid: true },
@@ -224,6 +225,9 @@ class ImapFlowClient implements ImapClient {
         cc: addressList(envelope.cc),
         subject: String(envelope.subject ?? ''),
         date: envelope.date ? new Date(envelope.date as string) : null,
+        // The server's own record of when the message arrived — sender-
+        // controlled `date` is never used for thread ordering (threads.ts).
+        internalDate: msg.internalDate ? new Date(msg.internalDate as string | Date) : null,
         bodyText,
         hasAttachments: attachments.length > 0,
         attachments,

@@ -28,6 +28,7 @@ import { FakeImapServer, fakeMessage } from './imap/fake.js';
 import { manifest } from './index.js';
 import { ownerHasRepliedTo, ownerReplies } from './policies/learn.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
+import { joinThread } from './threads.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
 import type { SourceContext, ToolContext } from './types.js';
 
@@ -164,8 +165,11 @@ suite('email threads (postgres + fake imap)', () => {
           ],
         );
       };
-      // A conversation with a client, answered by the owner — from his phone,
-      // so nothing buddi did records the reply.
+      // A conversation with a client. The second row's From happens to be the
+      // owner's own address, but it was written into INBOX — the only folder
+      // ever polled before this migration — and the backfill trusts folder
+      // provenance only, never a From header, so it stays inbound rather than
+      // being guessed as the owner's reply.
       await write({ uid: 1, from: 'Client <client@work.test>', to: 'owner@example.test', subject: 'The quote', threadKey: '<t1@work.test>', at: '2026-09-18T09:00:00Z' });
       await write({ uid: 2, from: 'Owner <owner@example.test>', to: 'client@work.test', subject: 'Re: The quote', threadKey: '<t1@work.test>', at: '2026-09-18T18:00:00Z' });
       // A newsletter, months old, with an ignore rule about its sender.
@@ -190,13 +194,14 @@ suite('email threads (postgres + fake imap)', () => {
         // A single old newsletter from a sender there is an ignore rule about:
         // nothing is expected back, so it is closed rather than waiting.
         { id: expect.any(String), subject: 'Weekend sale', state: 'closed', n: 1, last: 'in' },
-        // The owner wrote last, and the Sent-folder rule says so even though
-        // the reply was found in the inbox's own history.
-        { id: expect.any(String), subject: 'The quote', state: 'waiting-on-them', n: 2, last: 'out' },
+        // Both rows came through INBOX, so both stay inbound: the backfill
+        // does not infer "the owner wrote last" from a From header, even
+        // though this row's From happens to be the owner's own address.
+        { id: expect.any(String), subject: 'The quote', state: 'waiting-on-me', n: 2, last: 'in' },
       ]);
     });
 
-    it('marks the owner\'s own messages as outbound, and points every message at its thread', async () => {
+    it('leaves direction exactly as the folder recorded it — nothing is guessed from From, and every message points at its thread', async () => {
       await fixture();
       await pool.query(`select email.backfill_threads($1)`, [NOW]);
       const { rows } = await pool.query(
@@ -204,7 +209,7 @@ suite('email threads (postgres + fake imap)', () => {
       );
       expect(rows.map((r: Record<string, unknown>) => [Number(r.uid), r.direction, r.threaded])).toEqual([
         [1, 'in', true],
-        [2, 'out', true],
+        [2, 'in', true],
         [3, 'in', true],
       ]);
     });
@@ -215,6 +220,65 @@ suite('email threads (postgres + fake imap)', () => {
       const { rows } = await pool.query(`select email.backfill_threads($1) as n`, [NOW]);
       expect(Number(rows[0].n)).toBe(0);
       expect(await threads()).toHaveLength(2);
+    });
+
+    it('expands a global thread policy into one account-scoped copy per matching thread, and revokes the global row', async () => {
+      // A second account with a thread that shares the exact same root
+      // Message-ID as the first account's — a global policy naming that key
+      // must not resolve to only one of the two, arbitrarily.
+      const { rows: acct2 } = await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name)
+         values ('second@example.test', 'imap.example.test', 993, 'smtp.example.test', 465,
+                 'app-password', 'SECOND_ACCOUNT_SECRET')
+         returning id`,
+      );
+      const account2 = String(acct2[0].id);
+      await pool.query(
+        `insert into email.folders (account_id, name, kind, synced) values ($1, 'INBOX', 'inbox', true)`,
+        [account2],
+      );
+
+      await fixture();
+      // A global thread policy naming the key both accounts' threads share.
+      const { rows: gp } = await pool.query(
+        `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
+         values (null, 'thread', '<t1@work.test>', 'ignore', '{"sender":"client@work.test"}'::jsonb, 'owner', false)
+         returning id`,
+      );
+      const globalId = String(gp[0].id);
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
+            subject, date, snippet, body_text, triage_enqueued_at)
+         select $1, id, 1, 99, '<other@work.test>', '<t1@work.test>', 'client@work.test',
+                '["second@example.test"]'::jsonb, 'Also the quote', '2026-09-01T09:00:00Z', '', '', now()
+           from email.folders where account_id = $1`,
+        [account2],
+      );
+
+      await pool.query(`select email.backfill_threads($1)`, [NOW]);
+      const expanded = await pool.query(`select email.expand_global_thread_policies() as n`);
+      expect(Number(expanded.rows[0].n)).toBe(2);
+
+      const { rows: revoked } = await pool.query(
+        `select revoked_at is not null as revoked from email.policies where id = $1`,
+        [globalId],
+      );
+      expect(revoked[0].revoked).toBe(true);
+
+      const { rows: live } = await pool.query(
+        `select p.account_id, p.matcher = t.id::text as points_at_thread
+           from email.policies p
+           join email.threads t on t.thread_key = '<t1@work.test>' and t.account_id = p.account_id
+          where p.scope = 'thread' and p.revoked_at is null and p.action = 'ignore'
+          order by p.account_id`,
+      );
+      expect(live).toHaveLength(2);
+      expect(live.every((r: Record<string, unknown>) => r.points_at_thread)).toBe(true);
+      expect(new Set(live.map((r: Record<string, unknown>) => String(r.account_id)))).toEqual(
+        new Set([accountId, account2]),
+      );
     });
   });
 
@@ -254,6 +318,42 @@ suite('email threads (postgres + fake imap)', () => {
       expect(ctx.runs).toHaveLength(1);
       const { rows } = await pool.query(`select count(*)::int as n from email.threads`);
       expect(rows[0].n).toBe(1);
+    });
+
+    it('plants a newly discovered Sent folder at UIDNEXT-1 even with a large EMAIL_BACKFILL already in force for the inbox', async () => {
+      // An installation that has been running a while: INBOX has a cursor
+      // already, and this test's `source()` uses a full-history backfill
+      // throughout, exactly the "large EMAIL_BACKFILL" upgrade case.
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ messageId: '<a@x>', subject: 'Only mail' }));
+      await source(server).poll(sourceContext());
+      const before = await pool.query(`select count(*)::int as n from email.messages`);
+
+      // Sent is discovered on a later poll, arriving with years of history
+      // already in it — mail buddi never sent and must not import.
+      const sent = server.mailbox('[Gmail]/Sent Mail');
+      sent.specialUse = '\\Sent';
+      for (let i = 0; i < 5; i += 1) {
+        server.add('[Gmail]/Sent Mail', fakeMessage({ messageId: `<old-${i}@x>`, subject: 'Old sent mail' }));
+      }
+      const ctx = sourceContext();
+      await source(server).poll(ctx);
+
+      // None of the five old Sent messages were imported.
+      const after = await pool.query(`select count(*)::int as n from email.messages`);
+      expect(after.rows[0].n).toBe(before.rows[0].n);
+      expect(ctx.runs).toHaveLength(0);
+
+      const { rows } = await pool.query(
+        `select last_uid, uidvalidity is not null as has_generation from email.folders
+          where account_id = $1 and name = '[Gmail]/Sent Mail'`,
+        [accountId],
+      );
+      // The cursor sits at UIDNEXT-1 (5 messages already exist), not at 0.
+      expect({ last_uid: Number(rows[0].last_uid), has_generation: rows[0].has_generation }).toEqual({
+        last_uid: 5,
+        has_generation: true,
+      });
     });
   });
 
@@ -400,6 +500,216 @@ suite('email threads (postgres + fake imap)', () => {
     });
   });
 
+  // --------------------------------------------------------- thread ordering
+  describe('thread ordering (INTERNALDATE, not the Date header)', () => {
+    /** A minimal message row, for tests that drive `joinThread` directly. */
+    async function insertMessage(over: {
+      folderId: string;
+      uid: number;
+      from: string;
+      direction: 'in' | 'out';
+      uidvalidity?: number;
+    }): Promise<string> {
+      const { rows } = await pool.query(
+        `insert into email.messages (account_id, folder_id, uidvalidity, uid, from_addr, direction)
+         values ($1, $2, $3, $4, $5, $6) returning id`,
+        [accountId, over.folderId, over.uidvalidity ?? 1, over.uid, over.from, over.direction],
+      );
+      return String(rows[0].id);
+    }
+
+    async function twoFolders(): Promise<[string, string]> {
+      const { rows } = await pool.query(
+        `insert into email.folders (account_id, name, kind, synced)
+         values ($1, 'FolderA', 'other', false), ($1, 'FolderB', 'other', false)
+         returning id`,
+        [accountId],
+      );
+      return [String(rows[0].id), String(rows[1].id)];
+    }
+
+    it('does not flip state for a message fetched late but dated older by INTERNALDATE', async () => {
+      const server = serverWithSent();
+      // Establish the folders and their cursors first — a newly discovered
+      // Sent folder starts at UIDNEXT-1 regardless of backfill (its own
+      // fix), so the reply below has to arrive *after* this poll to be seen.
+      await source(server).poll(sourceContext());
+
+      // The owner's reply lands first, with the later INTERNALDATE.
+      server.add(
+        '[Gmail]/Sent Mail',
+        fakeMessage({
+          messageId: '<out-1@x>',
+          references: [],
+          from: 'Owner <owner@example.test>',
+          to: ['client@work.test'],
+          date: new Date('2026-09-20T18:00:00Z'),
+          internalDate: new Date('2026-09-20T18:00:00Z'),
+        }),
+      );
+      await source(server).poll(sourceContext());
+      expect(await threads()).toEqual([
+        { id: expect.any(String), subject: 'Hello', state: 'waiting-on-them', n: 1, last: 'out' },
+      ]);
+
+      // A client message with the *same* thread key is fetched afterwards —
+      // but its INTERNALDATE (when the server actually received it) is
+      // before the reply's, e.g. a message the polling missed earlier. It
+      // must not flip whose turn it is.
+      server.add(
+        'INBOX',
+        fakeMessage({
+          messageId: '<in-late@x>',
+          references: ['<out-1@x>'],
+          from: 'Client <client@work.test>',
+          to: ['owner@example.test'],
+          date: new Date('2026-09-20T09:00:00Z'),
+          internalDate: new Date('2026-09-20T09:00:00Z'),
+        }),
+      );
+      const ctx = sourceContext();
+      await source(server).poll(ctx);
+
+      // It still gets triaged — arriving mail always does — but it does not
+      // change whose turn the *thread* is on: it is older by the clock that
+      // matters, so the reply already there still stands as the last word.
+      expect(ctx.runs).toHaveLength(1);
+      expect(await threads()).toEqual([
+        { id: expect.any(String), subject: 'Hello', state: 'waiting-on-them', n: 2, last: 'out' },
+      ]);
+    });
+
+    it('is not fooled by a future-dated Date header, and clamps it in storage', async () => {
+      const server = serverWithSent();
+      const now = NOW; // 2026-09-21T12:00:00Z
+      server.add(
+        'INBOX',
+        fakeMessage({
+          messageId: '<future@x>',
+          references: [],
+          from: 'Client <client@work.test>',
+          to: ['owner@example.test'],
+          // A forged or clock-skewed header, decades out.
+          date: new Date('2099-01-01T00:00:00Z'),
+          // The server's own clock is sane; ordering follows this.
+          internalDate: now,
+        }),
+      );
+      const ctx = sourceContext();
+      await source(server).poll(ctx);
+
+      expect(ctx.runs).toHaveLength(1);
+      expect(await threads()).toEqual([
+        { id: expect.any(String), subject: 'Hello', state: 'waiting-on-me', n: 1, last: 'in' },
+      ]);
+      const { rows } = await pool.query(`select date from email.messages where message_id = '<future@x>'`);
+      const stored = new Date(rows[0].date as string);
+      // Pulled back to at most a day past the ingest clock, not stored verbatim.
+      expect(stored.getTime()).toBeLessThanOrEqual(now.getTime() + 25 * 60 * 60 * 1000);
+      expect(stored.getTime()).toBeGreaterThan(now.getTime());
+    });
+
+    it('falls back to the poll clock when the server gives no INTERNALDATE', async () => {
+      const server = serverWithSent();
+      server.add(
+        'INBOX',
+        fakeMessage({
+          messageId: '<no-internal@x>',
+          references: [],
+          from: 'Client <client@work.test>',
+          to: ['owner@example.test'],
+          date: new Date('2026-09-18T09:00:00Z'),
+          internalDate: null,
+        }),
+      );
+      const ctx = sourceContext();
+      await source(server).poll(ctx);
+
+      expect(ctx.runs).toHaveLength(1);
+      const built = await threads();
+      expect(built).toEqual([
+        { id: expect.any(String), subject: 'Hello', state: 'waiting-on-me', n: 1, last: 'in' },
+      ]);
+      const { rows } = await pool.query(`select last_at from email.threads`);
+      // last_at was set from the poll's own clock (NOW), not left null and
+      // not taken from the header date.
+      expect(new Date(rows[0].last_at as string).toISOString()).toBe(NOW.toISOString());
+    });
+
+    it('breaks a tie on equal INTERNALDATE deterministically — folder then uid, never call order', async () => {
+      const [folderA, folderB] = await twoFolders();
+      const at = new Date('2026-09-20T09:00:00Z');
+
+      // Same two facts — an inbound message in A, an outbound one in B, with
+      // the identical clock value — joined in one order, then the other.
+      const forwardId1 = await insertMessage({ folderId: folderA, uid: 5, from: 'client@work.test', direction: 'in' });
+      await joinThread(pool, {
+        accountId,
+        threadKey: '<tie-1@work.test>',
+        messageRowId: forwardId1,
+        subject: 'Tie',
+        participants: ['client@work.test'],
+        at,
+        folderId: folderA,
+        uid: 5,
+        direction: 'in',
+      });
+      const forwardId2 = await insertMessage({ folderId: folderB, uid: 3, from: 'owner@example.test', direction: 'out' });
+      const forward = await joinThread(pool, {
+        accountId,
+        threadKey: '<tie-1@work.test>',
+        messageRowId: forwardId2,
+        subject: 'Tie',
+        participants: ['owner@example.test'],
+        at,
+        folderId: folderB,
+        uid: 3,
+        direction: 'out',
+      });
+
+      const backwardId2 = await insertMessage({
+        folderId: folderB,
+        uid: 3,
+        from: 'owner@example.test',
+        direction: 'out',
+        uidvalidity: 2,
+      });
+      await joinThread(pool, {
+        accountId,
+        threadKey: '<tie-2@work.test>',
+        messageRowId: backwardId2,
+        subject: 'Tie',
+        participants: ['owner@example.test'],
+        at,
+        folderId: folderB,
+        uid: 3,
+        direction: 'out',
+      });
+      const backwardId1 = await insertMessage({
+        folderId: folderA,
+        uid: 5,
+        from: 'client@work.test',
+        direction: 'in',
+        uidvalidity: 2,
+      });
+      const backward = await joinThread(pool, {
+        accountId,
+        threadKey: '<tie-2@work.test>',
+        messageRowId: backwardId1,
+        subject: 'Tie',
+        participants: ['client@work.test'],
+        at,
+        folderId: folderA,
+        uid: 5,
+        direction: 'in',
+      });
+
+      // Same two messages, same clock, opposite call order — the same one
+      // must win both times.
+      expect(forward.lastDirection).toBe(backward.lastDirection);
+    });
+  });
+
   // ----------------------------------------------------------------- tools
   describe('the thread tools', () => {
     async function conversation(): Promise<string> {
@@ -415,6 +725,10 @@ suite('email threads (postgres + fake imap)', () => {
           date: new Date('2026-09-20T09:00:00Z'),
         }),
       );
+      // The inbox message is discovered on a first poll — and a newly found
+      // Sent folder plants its cursor at UIDNEXT-1 regardless of backfill, so
+      // the reply below has to arrive on a *later* poll to be seen.
+      await source(server).poll(sourceContext());
       server.add(
         '[Gmail]/Sent Mail',
         fakeMessage({
