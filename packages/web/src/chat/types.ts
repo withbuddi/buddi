@@ -4,9 +4,12 @@
  * than an empty panel.
  */
 
-/** Why an agent is listed but cannot run: a plugin it was granted is absent. */
+/**
+ * Why an agent is listed but cannot run: a plugin it was granted is absent,
+ * or its file claims an id the installation reserves (`owner`, `room`).
+ */
 export interface AgentHoldBack {
-  reason: 'missing-plugin';
+  reason: 'missing-plugin' | 'reserved-id';
   /** The tool families nothing here provides, in declaration order. */
   families: string[];
   /** One sentence, the server's own words, printed verbatim. */

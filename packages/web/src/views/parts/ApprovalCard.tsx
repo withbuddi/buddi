@@ -12,8 +12,17 @@ import { useOwnerChoices } from './OwnerChoices';
 export type Decision = 'approve' | 'reject';
 export type Scope = 'once' | 'conversation' | 'always';
 
-/** The shared decide call, and the sentence it produces for a status line. */
-export function useDecide(onDone: () => void): {
+/**
+ * The shared decide call, and the sentence it produces for a status line.
+ *
+ * `onDone` is handed what the decision did — `approve`/`reject`, and the
+ * execution's state when there was one — for the callers that have something
+ * to do only when the effect actually happened. Callers that just reload
+ * ignore the argument.
+ */
+export function useDecide(
+  onDone: (outcome?: { decision: Decision; state?: string; result?: unknown }) => void,
+): {
   busy: string | null;
   note: string | null;
   failure: string | null;
@@ -31,12 +40,30 @@ export function useDecide(onDone: () => void): {
     setBusy(id);
     setFailure(null);
     setNote(null);
+    /*
+     * Undefined until the server has actually decided. A failed call — the
+     * gateway restarting, a 500 — must not read as "decided": a caller that
+     * is holding something back until the effect happened would let it go on
+     * a network blip, which is the one thing an approval exists to prevent.
+     */
+    let outcome: { decision: Decision; state?: string; result?: unknown } | undefined;
     try {
       // Only pass what there is: an approval that offered no controls makes
       // exactly the request it always made.
       const result = choices
         ? await api.decide(id, decision, scope, choices)
         : await api.decide(id, decision, scope);
+      /*
+       * The tool's own output travels with the decision. A page holding a
+       * sentence to print — "Queued for 9:00", read out of the result — has
+       * no other way to get it: the effect happened *here*, in the approval,
+       * not in the call that proposed it.
+       */
+      outcome = {
+        decision,
+        ...(result.execution?.state ? { state: result.execution.state } : {}),
+        ...(result.execution && 'result' in result.execution ? { result: result.execution.result } : {}),
+      };
       setNote(
         decision === 'reject'
           ? `Rejected ${result.action.tool}.`
@@ -50,7 +77,10 @@ export function useDecide(onDone: () => void): {
       setFailure(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
-      onDone();
+      // Always called — a list still reloads after a failure — but with
+      // `undefined` when nothing was decided, and that is the bit that
+      // matters to a caller waiting on the outcome.
+      onDone(outcome);
     }
   };
   return { busy, note, failure, decide };

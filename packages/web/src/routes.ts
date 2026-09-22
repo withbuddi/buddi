@@ -138,6 +138,64 @@ export function parseMailRoute(hash: string): { threadId?: string } | null {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Plugin pages
+ *
+ * A plugin's screens are data (`docs/specs/plugin-pages.md`), and so are their
+ * routes: `#/p/<plugin>/<page>` for a rail place, one more segment for the
+ * item a list-detail is showing, and `#/settings/<plugin>[.<page>]` for a
+ * settings tab. Nothing here knows a plugin by name — the descriptor says
+ * which words go in the hash.
+ * ------------------------------------------------------------------ */
+
+/** The prefix every plugin place sits under, kept clear of the core places. */
+export const PLUGIN_ROUTE = '#/p';
+
+export function pluginPageRoute(plugin: string, page: string, item?: string | null): string {
+  const base = `${PLUGIN_ROUTE}/${encodeURIComponent(plugin)}/${encodeURIComponent(page)}`;
+  return item ? `${base}/${encodeURIComponent(item)}` : base;
+}
+
+export function parsePluginPageRoute(hash: string): { plugin: string; page: string; item?: string } | null {
+  const match = /^#\/p\/([^/?]+)\/([^/?]+)(?:\/([^/?]+))?(?:\?.*)?$/.exec(hash);
+  if (!match) return null;
+  try {
+    return {
+      plugin: decodeURIComponent(match[1]!),
+      page: decodeURIComponent(match[2]!),
+      ...(match[3] ? { item: decodeURIComponent(match[3]) } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A plugin's settings tab: `#/settings/p.<plugin>[.<page>]`.
+ *
+ * Always prefixed, even for a plugin with one page. Without the `p.` a plugin
+ * called `memory` or `backup` would answer on a core section's own hash and
+ * both would draw, stacked; with it, the two namespaces cannot meet at all and
+ * nothing has to be reserved.
+ */
+export const PLUGIN_SETTINGS_PREFIX = 'p.';
+
+export function pluginSettingsRoute(plugin: string, page: string): string {
+  return `${SETTINGS_ROUTE}/${encodeURIComponent(pluginSettingsTab(plugin, page))}`;
+}
+
+export function parsePluginSettingsRoute(hash: string): { plugin: string; page: string } | null {
+  const match = /^#\/settings\/p\.([^/?.]+)(?:\.([^/?.]+))?(?:\?.*)?$/.exec(hash);
+  if (!match) return null;
+  const plugin = decodeURIComponent(match[1]!);
+  return { plugin, page: match[2] ? decodeURIComponent(match[2]) : plugin };
+}
+
+/** The tab id a plugin settings page answers to. */
+export function pluginSettingsTab(plugin: string, page: string): string {
+  return `${PLUGIN_SETTINGS_PREFIX}${plugin}${page === plugin ? '' : `.${page}`}`;
+}
+
 export function settingsRoute(section?: string): string {
   return section ? `${SETTINGS_ROUTE}/${section}` : SETTINGS_ROUTE;
 }
@@ -194,7 +252,7 @@ export function legacyRedirect(hash: string): string | null {
 }
 
 /** Which place a hash belongs to, for the rail's "where am I". */
-export function placeOf(hash: string): (typeof PLACES)[number]['route'] {
+export function placeOf(hash: string): string {
   if (hash === '' || hash === '#' || hash === HOME_ROUTE) return HOME_ROUTE;
   if (hash.startsWith(CHAT_ROUTE)) return CHAT_ROUTE;
   if (hash.startsWith(AGENTS_ROUTE)) return AGENTS_ROUTE;
@@ -202,5 +260,9 @@ export function placeOf(hash: string): (typeof PLACES)[number]['route'] {
   if (hash.startsWith(FILES_ROUTE)) return FILES_ROUTE;
   if (hash.startsWith(MAIL_ROUTE)) return MAIL_ROUTE;
   if (hash.startsWith(SETTINGS_ROUTE)) return SETTINGS_ROUTE;
+  // A plugin place: its own route *is* its place, so the rail marks the entry
+  // the descriptor put there without core knowing what it is.
+  const plugin = parsePluginPageRoute(hash);
+  if (plugin) return pluginPageRoute(plugin.plugin, plugin.page);
   return HOME_ROUTE;
 }

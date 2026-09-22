@@ -134,7 +134,9 @@ export interface AgentSummary {
 export type AgentProblem =
   | ProviderProblem
   /** A granted tool family no loaded plugin provides. See `AgentHoldBack`. */
-  | { code: 'missing-plugin'; message: string };
+  | { code: 'missing-plugin'; message: string }
+  /** The file claims a reserved id: `owner`, `room`. See `AgentHoldBack`. */
+  | { code: 'reserved-id'; message: string };
 
 export type AgentAvailability =
   | { ok: true }
@@ -256,6 +258,20 @@ export interface AgentCatalog {
   byHandle(handle: string): CatalogAgent | undefined;
   list(): AgentSummary[];
   /**
+   * Files that were read and deliberately *not* loaded: an agent claiming an
+   * id this installation reserves (`owner`, `room`).
+   *
+   * They are not agents. They are in no roster, answer to no handle, are
+   * nobody's delegate and can never be the default — the Agents page reads
+   * this so the owner can see why one of their files went quiet, and nothing
+   * else reads it at all.
+   *
+   * Optional in the interface because a catalog that is not the loader — the
+   * stand-ins a dozen suites build — has nothing to refuse, and because a
+   * reader must treat "no such list" and "an empty one" the same way.
+   */
+  refused?(): CatalogAgent[];
+  /**
    * The agent a chat that names nobody lands on, resolved in this order:
    *
    *  1. the installation's recorded choice (`defaultAgentId`), when it names a
@@ -337,6 +353,12 @@ export interface LoadAgentCatalogOptions {
    * `<repo>/skills`). A missing directory simply means no shared skills.
    */
   skillsDir?: string;
+  /**
+   * Where the loader reports a file it read but did not load — an agent
+   * claiming a reserved id. Defaults to `console.warn`; the gateway passes its
+   * own log so the line lands where every other line does.
+   */
+  log?: (line: string) => void;
 }
 
 /**
@@ -461,7 +483,12 @@ export function resolveToolNames(
  * whole installation down is precisely what this replaces.
  */
 export interface AgentHoldBack {
-  reason: 'missing-plugin';
+  /**
+   * `missing-plugin`: a granted tool family nothing here provides.
+   * `reserved-id`: the file claims an id the installation already means
+   * something by (`owner`, `room`) — it is listed and refused, never loaded.
+   */
+  reason: 'missing-plugin' | 'reserved-id';
   /** The families nothing provides here, in declaration order. */
   families: string[];
   /** One sentence for a surface to print verbatim. */
@@ -678,6 +705,8 @@ function buildAgent(
   sharedSkills: readonly Skill[],
   opts: LoadAgentCatalogOptions,
   roster: readonly AgentRosterEntry[] = [],
+  /** A hold-back the *loader* decided, before any grant was resolved. */
+  refused?: AgentHoldBack,
 ): CatalogAgent {
   const { tools: granted, missingFamilies } = resolveToolGrants(
     frontmatter.tools,
@@ -690,13 +719,14 @@ function buildAgent(
    * the owner with no way to read one — worse than saying so.
    */
   const heldBack: AgentHoldBack | undefined =
-    missingFamilies.length === 0
+    refused ??
+    (missingFamilies.length === 0
       ? undefined
       : {
           reason: 'missing-plugin',
           families: missingFamilies,
           message: heldBackMessage(missingFamilies, opts.pluginForFamily),
-        };
+        });
   const tools = heldBack === undefined ? granted : [];
   // The owner's zone, read from the env the caller passed — the catalog still
   // never reaches for `process.env` itself.
@@ -712,7 +742,7 @@ function buildAgent(
    * actually open first.
    */
   const availability: AgentAvailability = heldBack !== undefined
-    ? { ok: false, problem: { code: 'missing-plugin', message: heldBack.message } }
+    ? { ok: false, problem: { code: heldBack.reason, message: heldBack.message } }
     : (selection?.availability ?? (resolution.ok
       ? { ok: true }
       : { ok: false, problem: resolution.problem }));
@@ -826,6 +856,8 @@ interface ParsedAgentFile {
   source: AgentSource;
   /** Which entry of the search path it came from; later wins. */
   order: number;
+  /** Set when the file was read but must not run — see `readAgentDir`. */
+  heldBack?: AgentHoldBack;
 }
 
 /**
@@ -833,7 +865,12 @@ interface ParsedAgentFile {
  * files in one folder claiming one id is a mistake, not an override; overriding
  * is what the next directory on the path is for.
  */
-function readAgentDir(dir: string, source: AgentSource, order: number): ParsedAgentFile[] {
+function readAgentDir(
+  dir: string,
+  source: AgentSource,
+  order: number,
+  log: (line: string) => void,
+): ParsedAgentFile[] {
   const entries = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
@@ -852,6 +889,34 @@ function readAgentDir(dir: string, source: AgentSource, order: number): ParsedAg
     try {
       parsed = parseAgentFile(readFileSync(file, 'utf8'), { dirName, file });
     } catch (err) {
+      /*
+       * An id this installation reserves is the one parse failure that must
+       * not stop the boot. The reservation is newer than some installations,
+       * and an owner who already has an agent called `owner` would otherwise
+       * find buddi refusing to start with no way in to fix it. So it is said
+       * out loud, listed on the Agents page as held back, and given nothing:
+       * no tools, no availability, no way to be addressed.
+       */
+      if (err instanceof AgentFileError && err.code === 'reserved-id') {
+        log(`agents: ${file} claims the reserved id "${dirName}" and was not loaded — ${err.message}`);
+        if (seenIds.has(dirName)) continue;
+        seenIds.add(dirName);
+        files.push({
+          frontmatter: {
+            id: dirName,
+            handle: dirName,
+            name: dirName,
+            description: 'Held back: this file claims an id the installation reserves.',
+            tools: [],
+          } as AgentFrontmatter,
+          body: err.message,
+          file,
+          source,
+          order,
+          heldBack: { reason: 'reserved-id', families: [], message: err.message },
+        });
+        continue;
+      }
       if (err instanceof AgentFileError) throw new AgentCatalogError('agent-file', err.message);
       throw err;
     }
@@ -871,6 +936,12 @@ function readAgentDir(dir: string, source: AgentSource, order: number): ParsedAg
  */
 export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   const { specs, strict } = searchEntries(opts);
+  /*
+   * Where a file that was read but not loaded is reported. It defaults to the
+   * console because the alternative is silence: an agent that vanished from
+   * the roster must say why somewhere the owner can find it.
+   */
+  const warn = opts.log ?? ((line: string) => console.warn(line));
 
   // Skills first: a private skill replaces an example one of the same name, so
   // an owner's house rule wins over anything the repo ships.
@@ -881,7 +952,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   for (const [order, spec] of specs.entries()) {
     let loaded: ParsedAgentFile[];
     try {
-      loaded = readAgentDir(spec.dir, spec.source, order);
+      loaded = readAgentDir(spec.dir, spec.source, order, warn);
     } catch (err) {
       // A parse or duplicate-id failure inside a directory is the owner's
       // mistake and must stay loud; only an unreadable directory is skippable.
@@ -909,11 +980,20 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
 
   const sharedSkills = [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name));
   const files = [...byId.values()].sort((a, b) => a.frontmatter.id.localeCompare(b.frontmatter.id));
+  /*
+   * A file the loader refused — an agent claiming a reserved id — is not an
+   * agent and takes part in nothing: not the roster, not the handle map, not
+   * the duplicate-handle check (its handle is synthetic, invented from the
+   * directory name, and must not be able to collide with a real one), not the
+   * delegation lists and not the default. It is kept only to be shown.
+   */
+  const loadable = files.filter((entry) => entry.heldBack === undefined);
+  const refusedFiles = files.filter((entry) => entry.heldBack !== undefined);
 
   // Handles are checked *after* overriding: an example agent replaced by a
   // private one of the same id never collides with the file that replaced it.
   const seenHandles = new Map<string, string>();
-  for (const { frontmatter } of files) {
+  for (const { frontmatter } of loadable) {
     const key = frontmatter.handle.toLowerCase();
     const taken = seenHandles.get(key);
     if (taken !== undefined) {
@@ -925,7 +1005,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     seenHandles.set(key, frontmatter.id);
   }
 
-  const roster: AgentRosterEntry[] = files.map(({ frontmatter }) => ({
+  const roster: AgentRosterEntry[] = loadable.map(({ frontmatter }) => ({
     id: frontmatter.id,
     handle: frontmatter.handle,
     name: frontmatter.name,
@@ -937,12 +1017,21 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   const byHandle = new Map<string, CatalogAgent>();
   const claimed: Array<{ id: string; order: number }> = [];
 
-  for (const { frontmatter, body, file, source, order } of files) {
+  for (const { frontmatter, body, file, source, order } of loadable) {
     const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster);
     agents.set(agent.id, agent);
     byHandle.set(agent.handle.toLowerCase(), agent);
     if (agent.isDefault) claimed.push({ id: agent.id, order });
   }
+
+  /*
+   * The refused ones are built last and kept apart: they are drawn on the
+   * Agents page and nowhere else. Building them with an empty roster is the
+   * point — a file that cannot run is nobody's colleague.
+   */
+  const refused = refusedFiles.map(({ frontmatter, body, file, source, heldBack }) =>
+    buildAgent(frontmatter, body, file, source, sharedSkills, opts, [], heldBack),
+  );
 
   /*
    * Two directories may both ship a `default: true` — the example agent does,
@@ -1017,6 +1106,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     ...(defaultProblem === undefined ? {} : { defaultProblem }),
     get: (id) => agents.get(id),
     byHandle: (handle) => byHandle.get(handle.trim().replace(/^@/, '').toLowerCase()),
+    refused: () => [...refused],
     list: () =>
       [...agents.values()].map((a) => ({
         id: a.id,

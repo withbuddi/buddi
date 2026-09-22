@@ -259,6 +259,8 @@ export interface PluginManifest {
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
   home?: HomeContribution[];  // read-only blocks on the dashboard's Home page
+  pages?: PageDescriptor[];   // screens of your own: a rail place, a settings tab
+  queries?: PageQuery[];      // the read-only functions those screens draw from
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
   skills?: SuggestedSkill[];  // shared procedures you propose
   description?: string;       // one line, shown before anyone installs you
@@ -683,6 +685,63 @@ means, the page knows how to draw a line, and this says which is which.
   `cards[0].name`. If a descriptor needs arithmetic, the *tool* should be
   returning the number — the owner cannot audit a calculation that happens in a
   chart.
+- **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
+  of the form's *own values* first — a path that names a field on the form
+  reads what the owner has just typed — and of the loaded data otherwise, so
+  ticking a box reveals or greys a field with no round trip. A field the form
+  is not asking for — hidden by `when`, greyed by `disabledWhen` — is **not
+  required** and is **not submitted**: two branches may each have their own
+  required field, and the owner only ever fills the one they are on. A select whose
+  options are a read rather than a list takes
+  `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
+  form opens, and again whenever a field in `dependsOn` changes, with those
+  fields' values as the query's parameters (mailbox, then what is in it).
+- **Say what happened.** `ToolRef.done` is the sentence shown after a write
+  worked — a string, or a `ValueRef` read out of the tool's own result. A
+  gated tool says it once the approval has executed, because that is when it
+  is true, and the `ValueRef` then reads what *that execution* returned. A write that *failed* leaves its sentence on the page and re-reads
+  the component's query underneath it, so a save refused because the draft
+  moved on shows the refusal and the draft as it now stands.
+- **A query may refuse in words.** Throw `QueryRefusal` from `produce` and the
+  owner gets that sentence with a 400 — "No conversation here has that id."
+  Anything else you throw is a defect: one generic sentence, and the detail in
+  the log.
+- **Rows the owner acts on.** A `list` with `select` draws a select-all box
+  over the rows they may act on, and a `BulkAction` with `all: true` is about
+  every one of them when nothing is ticked. `{count}` in a label or a
+  confirmation is that number, `{one|many}` is the word that goes with it, and
+  a `RowAction`'s — or a `button`'s — label, confirmation and `done` may carry
+  `{field}` placeholders read from the row it stands in ("Remove {address}?",
+  "Fetch what {from} sent"). A `RowAction.when` offers the action only
+  on the rows where it holds — Fetch, until there is a file.
+- **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
+  may itself be a path, `ListItem.pills` draws several, and a table column with
+  `pill: { tone }` draws its cell as one — and when that cell's value is an
+  array, each `{ value, tone }` item is its own pill, so "off" and "from .env"
+  are two facts in one column rather than a sentence. A `section` may carry `actions` — a
+  link or a button — beside its heading.
+- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+  `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
+  a place of its own: the owner lands on Settings with that tab open.
+- **A tone is one of five.** `good`, `warning`, `critical`, `neutral` — and
+  `accent`, for the thing this screen is *about*: a draft waiting on the
+  owner is not good or bad. A figure never takes the accent; a pill and a
+  notice may.
+- **The rest of the set, in one line each.** `list-detail` has
+  `selection: 'route' | 'local'` — `local` for a second level inside a detail
+  the URL already owns. `search` takes `rows`, and optionally `count`, `note`
+  (both paths), `auto: true` for a picker with no button and `reset: true`
+  for a Clear beside it. `editor` takes
+  `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
+  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `list` must say what keys a row — `key`, or a `select.key`; a row without
+  one, or with one another row already used, is not drawn.
+- **Write a shared piece once.** Two rows may carry the same action object and
+  two sections the same `ListItem`: reuse is reuse, not a cycle, and only a
+  descriptor that *contains itself* is refused. Nesting is counted in
+  components — each `body` level — up to twelve; the arrays and the small
+  objects between them are not levels.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   with zod (`packages/core/src/views.ts`), checks the renderer against its own
   map shape, and refuses a descriptor naming a tool your manifest does not
@@ -715,26 +774,172 @@ plugin by name, and a plugin ships no page code.
 | Home, blocks | A read-only card in your own units (a balance, a count, a date) | `home` (`HomeContribution[]`) |
 | Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
 | Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
+| **The rail** | **A place of your own, with its own URL and a pinned icon** | **`pages` with `place: 'rail'` (§2.5b)** |
+| **Settings** | **A tab of your own, after the core sections** | **`pages` with `place: 'settings'` (§2.5b)** |
 | Approval card, everywhere | The envelope your gated tool described, and any `choices` it declared | a gated tool's `describe` (§2.1) |
 | Watchers | One row per sentinel: description, cadence, last run, on/off switch | `sentinels` (§2.3); the switch is core's |
 | Agents, "Proposed" | An agent or skill you suggest, awaiting the owner's approval | `agents`, `skills` (§2.6) |
 | Plugins | Your name, version, source, provenance, the hosts you reach, what you proposed | the manifest itself, `network` |
 | Weekly recap | A finding that did not wake anyone, read out once | any `info` finding (§2.3) |
 
-Not available to a plugin today, on purpose:
+Not available to a plugin, on purpose:
 
-- **A page of its own, or a rail entry.** The Mail page and the Settings →
-  Email section are compiled into the dashboard, not contributed by the email
-  plugin; the email plugin is a plugin for its tools, watchers and data, and a
-  built-in for its screens. A plugin that needs its own screen will get it
-  through the developer spec's proxy (`docs/specs/developer.md`): the plugin
-  serves its own app, buddi proxies it behind the dashboard's session, and the
-  rail links to it. Until that lands, a plugin's settings are tools
-  (`email.get_settings`/`set_settings` are the pattern), reachable from a chat.
-- **A settings section.** Same answer, same reason.
-- **Code in the page.** No plugin JavaScript ever runs in the dashboard; a
-  view descriptor is data the page interprets.
+- **Code in the page.** No plugin JavaScript ever runs in the dashboard. A
+  view descriptor and a page descriptor are *data* the page interprets, and
+  that is the whole boundary: a page is a tree of the components below, and
+  the set does not grow to fit one plugin's wish.
+- **Free layout, custom styling, your own components.** The dashboard draws
+  your page with its own primitives, in the owner's theme. A plugin that needs
+  its own interface serves its own app through the developer proxy
+  (`docs/specs/developer.md`): buddi proxies it behind the dashboard's session
+  and the rail links to it.
+- **A place inside a core page.** You add *beside* Home, Settings and the rail,
+  never inside them. Home blocks and view descriptors remain the way into Home
+  and the canvas.
 
+### 2.5b Pages: a screen of your own
+
+```ts
+export interface PageDescriptor {
+  id: string;                  // 'mail', 'settings' — unique in your plugin
+  title: string;
+  place: 'rail' | 'settings';
+  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file'
+       | 'chart' | 'bell' | 'plug' | 'key' | 'globe';
+  order?: number;
+  data?: QueryRef;             // one read for the page itself, resolved once
+  body: Component[];           // the tree, from the fixed component set
+}
+
+export interface PageQuery {
+  name: string;                // 'threads', 'accounts'
+  params: z.ZodTypeAny;        // validated; unknown keys refused
+  produce(params: unknown, ctx: ToolContext): Promise<unknown>;
+  result?: z.ZodTypeAny;       // validated before it leaves, when given
+}
+```
+
+A page is `pages` plus `queries`, and it follows the same rule views do: **a
+screen is data the page interprets; no plugin code runs in the browser.** The
+full contract is `docs/specs/plugin-pages.md`; the shape of it is:
+
+- **Reads are queries, writes are tools.** A component that shows something
+  names one of your `queries`; a button that changes something names one of
+  your `tools` and is invoked as the owner. An `auto` tool executes; a `gated`
+  tool yields an approval and the page draws the card in place, choices and
+  all. There is no third path, so everything the owner can do from your screen
+  is something an agent could be granted, audited the same way.
+- **A query cannot write, and Postgres is what says so.** `produce` is handed a
+  `ToolContext` whose `db` runs every statement inside a read-only transaction
+  with a five-second `statement_timeout` and rolls it back. `insert`, `update`,
+  `delete`, `create`, `select … into`, `nextval` and a large-object write are
+  all refused **including inside a volatile function you wrote yourself** — a
+  textual check could never have decided that. A cheap pre-filter in front of
+  it refuses what is plainly not a read (the first keyword, a second statement,
+  a locking clause); it is not the boundary.
+- **Every parameter arrives as a string**, because a query string is strings.
+  Write `z.coerce.number()` for a number and `z.enum(['true','false'])` for a
+  flag; a parameter your schema does not declare is refused, not ignored.
+- **The components are a fixed set**, each a shape: `section`, `notice`,
+  `link`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
+  `repeat`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
+  carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
+  in §2.5.
+- **`repeat` is how a row becomes a sub-tree.** `{ kind: 'repeat', query,
+  rows, key, body }` draws `body` once per row *with that row as its data*, so
+  a message's `expand` fetches its own body, a row's `button` acts on its own
+  id, and `artifact`, `approval` and `when` all work per row.
+- **`when` is the only logic**, and it is a condition, not an expression:
+  `{ path, equals }`, or `{ path, in: [...] }` for "one of these", with
+  `not: true` to invert. The same shape is `Field.disabledWhen`,
+  `editor.readOnlyWhen` and `Selection.disabledWhen`.
+- **A page may have its own read.** `PageDescriptor.data` is resolved once and
+  is the data the top of `body` is drawn against — without it a `when` at the
+  top level has nothing to be about.
+- **Text is a constant or a value.** `notice.text` and `expand.label` accept a
+  `ValueRef` as well as a string, and `ToolRef.confirm` may contain `{count}`,
+  replaced by the size of the selection.
+- **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
+  of the form's *own values* first — a path that names a field on the form
+  reads what the owner has just typed — and of the loaded data otherwise, so
+  ticking a box reveals or greys a field with no round trip. A select whose
+  options are a read rather than a list takes
+  `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
+  form opens, and again whenever a field in `dependsOn` changes, with those
+  fields' values as the query's parameters (mailbox, then what is in it).
+- **Say what happened.** `ToolRef.done` is the sentence shown after a write
+  worked — a string, or a `ValueRef` read out of the tool's own result. A
+  gated tool says it once the approval has executed, because that is when it
+  is true. A write that *failed* leaves its sentence on the page and re-reads
+  the component's query underneath it, so a save refused because the draft
+  moved on shows the refusal and the draft as it now stands.
+- **A query may refuse in words.** Throw `QueryRefusal` from `produce` and the
+  owner gets that sentence with a 400 — "No conversation here has that id."
+  Anything else you throw is a defect: one generic sentence, and the detail in
+  the log.
+- **Rows the owner acts on.** A `list` with `select` draws a select-all box
+  over the rows they may act on, and a `BulkAction` with `all: true` is about
+  every one of them when nothing is ticked. `{count}` in a label or a
+  confirmation is that number, `{one|many}` is the word that goes with it, and
+  a `RowAction`'s label and confirmation may carry `{field}` placeholders read
+  from the row ("Remove {address}?"). A `RowAction.when` offers the action only
+  on the rows where it holds — Fetch, until there is a file.
+- **State, in the tone the data names.** `ListItem.pill` takes a `tone` that
+  may itself be a path, `ListItem.pills` draws several, and a table column with
+  `pill: { tone }` draws its cell as one. A `section` may carry `actions` — a
+  link or a button — beside its heading.
+- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+  `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
+  a place of its own: the owner lands on Settings with that tab open.
+- **The rest of the set, in one line each.** `list-detail` has
+  `selection: 'route' | 'local'` — `local` for a second level inside a detail
+  the URL already owns. `search` takes `rows`, and optionally `count`, `note`
+  (both paths) and `auto: true` for a picker with no button. `editor` takes
+  `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
+  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `list` must say what keys a row — `key`, or a `select.key`; a row without
+  one, or with one another row already used, is not drawn.
+- **Write a shared piece once.** Two rows may carry the same action object and
+  two sections the same `ListItem`: reuse is reuse, not a cycle, and only a
+  descriptor that *contains itself* is refused. Nesting is counted in
+  components — each `body` level — up to twelve; the arrays and the small
+  objects between them are not levels.
+- **It is validated at load.** `ToolRegistry.register` parses every descriptor
+  and checks every reference: a query name you do not contribute, a tool that
+  is not yours, a link to a page that does not exist. A typo is a startup error
+  naming the plugin, the page and the field path. So is a descriptor that is
+  not a screen: components nested deeper than 12, more than 400 nodes, more
+  than 64 KB of JSON, or an object that contains itself.
+- **A page writes only through the tools its own descriptors name.**
+  `POST /api/pages/<plugin>/act` refuses every other name, including your own
+  plugin's other tools: those are an agent's business. It is rate-limited to 60
+  writes a minute per session, and it is CSRF- and Origin-checked like every
+  other write.
+- **Your routes are yours.** A rail page is `#/p/<plugin>/<page>`, an item
+  inside a `list-detail` is `#/p/<plugin>/<page>/<itemId>`, and a settings page
+  is the tab `#/settings/p.<plugin>` (or `#/settings/p.<plugin>.<page>` when
+  you ship several). The `p.` is always there, so a plugin called `memory` or
+  `backup` cannot land on a core section's hash.
+
+Two limits on an answer, so a screen stays a screen: a query's statement runs
+in a read-only transaction with a five-second `statement_timeout`, and an
+answer of more than 2,000 rows in any array or 1 MB of JSON is refused with a
+502 naming the query. What the browser is told about any failure is one
+sentence — "The `<plugin>` plugin could not answer `<query>`." — with a
+reference; the detail goes to the installation's log.
+
+`owner` and `room` are ids nothing may be called: they are what the ledger
+writes for the owner themselves and for a group's own voice. An installation
+that already has an agent by one of those names still starts — the file is
+read, said out loud in the log, and listed on the Agents page as held back
+with nothing granted — but it is in no roster, answers to no handle, is
+nobody's delegate and can never be the default.
+
+A tool the owner may run from a page but no model should ever see carries
+`ownerOnly: true` (§2.1): the registry leaves it out of the list every provider
+and every agent grant is built from, and `invoke` refuses it for anyone but the
+owner's own path. A tool that stores a secret is the case it exists for.
 
 ---
 
@@ -1895,6 +2100,8 @@ this says what it is *for*.
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
+| `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
+| `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
@@ -1910,6 +2117,7 @@ this says what it is *for*.
 | `description` | `string` | yes | What the model reads. Say *when* to use it, in the second person. |
 | `tier` | `Tier` | yes | `'auto' \| 'draft' \| 'gated' \| 'session'` — see the table below. |
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0`. |
+| `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
@@ -2080,6 +2288,37 @@ than guess.
 | `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| envelope \| structured`. Shapes, never domains. |
 | `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
 | `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
+
+#### `PageDescriptor`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `id` | `string` | yes | `mail`, `settings`. Lower-kebab-case, unique in your plugin, and the `<page>` of its route. |
+| `title` | `string` | yes | The rail entry's word, the settings tab's word, the page's heading. |
+| `place` | `'rail' \| 'settings'` | yes | A place of its own on the rail, or a tab after the core settings sections. |
+| `icon` | `PageIcon` | no | One of a pinned set the dashboard draws — `mail`, `money`, `calendar`, `people`, `file`, `chart`, `bell`, `plug`, `key`, `globe`. Never an image you supply. Defaults to the plug. |
+| `order` | `number` | no | Where you sit among the *plugin* entries. The core places are fixed. |
+| `data` | `QueryRef` | no | One read for the page itself, resolved once. Its answer is what the top of `body` — and any `when` there — is drawn against. |
+| `body` | `Component[]` | yes | The tree: the fixed component set of §2.5b, each bound to a query for its data and a tool for its writes. |
+
+#### `PageQuery`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `name` | `string` | yes | `threads`, `accounts`. Lower_snake_case, unique in your plugin; it is the `<query>` of `GET /api/pages/<plugin>/<query>`. |
+| `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
+| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
+| `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
+
+#### `OptionsFrom`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `query` | `QueryRef` | yes | The read behind a select's options, checked at load like any other reference. |
+| `rows` | `string` | yes | Path to the array of rows in the answer. |
+| `value` | `string` | yes | Path within a row to what a choice submits. |
+| `label` | `string` | yes | Path within a row to the words the owner reads. |
+| `dependsOn` | `string[]` | no | Field names whose current value is sent as a parameter of the same name, and whose change re-reads the options. An empty one is left out. |
 
 #### `NetworkUse`
 

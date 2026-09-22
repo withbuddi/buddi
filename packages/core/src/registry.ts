@@ -21,6 +21,7 @@ import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, Tier, ToolContext, ToolDefinition } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
+import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery } from './pages.js';
 import type { HomeContribution } from './home.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
@@ -28,6 +29,12 @@ export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
 
 /** Tiers that become an action and wait for the owner. */
 export const GATED_TIERS: readonly Tier[] = ['gated'];
+
+/** A page descriptor, and the plugin whose route it lives under. */
+export type RegisteredPage = PageDescriptor & { plugin: string };
+
+/** A page query, and the plugin whose route it answers on. */
+export type RegisteredQuery = PageQuery & { plugin: string };
 
 export type ToolSpec = {
   name: string;
@@ -217,6 +224,10 @@ export function toolInputSchema(tool: ToolDefinition<any, any>, plugin: string):
 export class ToolRegistry {
   readonly #tools = new Map<string, Entry>();
   readonly #manifests = new Map<string, PluginManifest>();
+  /** Per plugin, what `parsePageContributions` made of its screens. */
+  readonly #pages = new Map<string, PageDescriptor[]>();
+  readonly #queries = new Map<string, PageQuery[]>();
+  readonly #pageTools = new Map<string, Set<string>>();
 
   register(manifest: PluginManifest): void {
     if (this.#manifests.has(manifest.name)) {
@@ -245,7 +256,25 @@ export class ToolRegistry {
         tools: manifest.tools.map((t) => t.name),
       });
     }
+    // Page descriptors leave this process the same way and are checked the
+    // same way — shape, then every query, tool and route they name. What comes
+    // back is kept: the queries with their parameters made strict, and the set
+    // of tools the pages actually name, which is all the act route may invoke.
+    const contributions =
+      manifest.pages !== undefined || manifest.queries !== undefined
+        ? parsePageContributions({
+            plugin: manifest.name,
+            ...(manifest.pages ? { pages: manifest.pages } : {}),
+            ...(manifest.queries ? { queries: manifest.queries } : {}),
+            tools: manifest.tools.map((t) => t.name),
+          })
+        : undefined;
     this.#manifests.set(manifest.name, manifest);
+    if (contributions) {
+      this.#pages.set(manifest.name, contributions.pages);
+      this.#queries.set(manifest.name, contributions.queries);
+      this.#pageTools.set(manifest.name, new Set(contributions.tools));
+    }
     for (const tool of manifest.tools) {
       this.#tools.set(tool.name, {
         tool,
@@ -268,6 +297,41 @@ export class ToolRegistry {
    */
   views(): ViewDescriptor[] {
     return [...this.#manifests.values()].flatMap((m) => m.views ?? []);
+  }
+
+  /**
+   * Every page the installed plugins contribute, each carrying the plugin it
+   * came from: that is the `<plugin>` of its route and the only namespace a
+   * page id is unique in. This is what `GET /api/pages` serves.
+   */
+  pages(): RegisteredPage[] {
+    return [...this.#pages].flatMap(([plugin, pages]) => pages.map((page) => ({ ...page, plugin })));
+  }
+
+  /**
+   * Every page query, with its plugin. The query route finds one by the pair;
+   * nothing else may call `produce`, and nothing here exposes it to a model.
+   */
+  queries(): RegisteredQuery[] {
+    return [...this.#queries].flatMap(([plugin, queries]) => queries.map((query) => ({ ...query, plugin })));
+  }
+
+  /**
+   * The tools this plugin's *pages* name — and therefore the only tools the
+   * act route may invoke for it.
+   *
+   * Without this, `POST /api/pages/<plugin>/act` would be a general "run any
+   * tool of this plugin as the owner" endpoint, which is wider than anything
+   * the spec describes: a page is not a console. A plugin that contributes no
+   * pages contributes no page tools, so its act route can do nothing at all.
+   */
+  pageTools(plugin: string): string[] {
+    return [...(this.#pageTools.get(plugin) ?? [])];
+  }
+
+  /** Which plugin contributed a tool — the act route's "of that plugin" check. */
+  pluginOf(name: string): string | undefined {
+    return this.#tools.get(name)?.plugin;
   }
 
   /** Every Home block the installed plugins contribute, in registration order. */
@@ -298,12 +362,14 @@ export class ToolRegistry {
    * handed here is always an object schema — see `toolInputSchema`.
    */
   list(): ToolSpec[] {
-    return [...this.#tools.values()].map(({ tool, inputSchema }) => ({
-      name: tool.name,
-      description: tool.description,
-      tier: tool.tier,
-      inputSchema,
-    }));
+    return [...this.#tools.values()]
+      .filter(({ tool }) => tool.ownerOnly !== true)
+      .map(({ tool, inputSchema }) => ({
+        name: tool.name,
+        description: tool.description,
+        tier: tool.tier,
+        inputSchema,
+      }));
   }
 
   /**
@@ -346,6 +412,17 @@ export class ToolRegistry {
       return { ok: false, reason: 'unknown-tool', message: `unknown tool: ${name}` };
     }
     const { tool, version } = entry;
+
+    /*
+     * An `ownerOnly` tool is not listed to a model, and this is the other half
+     * of that: it does not exist for anybody but the owner's own path. The
+     * refusal is deliberately the same one a made-up name gets — there is
+     * nothing for a model to learn here, and "that tool exists but is not for
+     * you" is a sentence worth nothing to it.
+     */
+    if (tool.ownerOnly === true && ctx.agentId !== OWNER_AGENT_ID) {
+      return { ok: false, reason: 'unknown-tool', message: `unknown tool: ${name}` };
+    }
 
     const parsed = tool.input.safeParse(rawArgs);
     if (!parsed.success) {

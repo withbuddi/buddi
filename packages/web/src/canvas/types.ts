@@ -25,7 +25,7 @@ export type ValueRef = { path: string } | { const: string | number | boolean | n
 
 export type Unit = 'number' | 'currency' | 'percent' | 'text' | 'date';
 
-export type Tone = 'good' | 'warning' | 'critical' | 'neutral';
+export type Tone = 'good' | 'warning' | 'critical' | 'neutral' | 'accent';
 
 export interface ReferenceLine {
   value: ValueRef;
@@ -54,6 +54,11 @@ export interface ColumnMap {
   type?: ColumnType;
   currency?: ValueRef;
   bar?: { max: ValueRef; thresholds?: Array<{ atLeast: number; tone: Tone }> };
+  /**
+   * Draw the cell as a pill; `tone` may be a path within the row, and an
+   * array value becomes one pill per `{ value, tone }` item.
+   */
+  pill?: { tone?: Tone | ValueRef };
 }
 
 export interface TableMap {

@@ -48,6 +48,8 @@ import {
   HANDLE_MIN,
   AGENT_FILE,
   KEBAB,
+  RESERVED_AGENT_IDS,
+  reservedAgentIdMessage,
   PROVIDER_KINDS,
   accountModelProblem,
   modelProblem,
@@ -267,6 +269,10 @@ export function checkId(id: string): string {
   if (value.length > MAX_AGENT_ID) {
     refuse('bad-id', `an agent id can be at most ${MAX_AGENT_ID} characters; "${id}" is longer`);
   }
+  // The owner's own id, and a group's voice. Refused here so that neither
+  // `platform.create_agent` nor a plugin's accepted proposal — which is built
+  // through this very function — can put a second principal behind either name.
+  if (RESERVED_AGENT_IDS.includes(value)) refuse('bad-id', reservedAgentIdMessage(value));
   return value;
 }
 

@@ -183,6 +183,38 @@ describe('validation happens before the action exists', () => {
     expect(message).toContain('not a usable handle');
   });
 
+  it('refuses the ids the installation already means something by', () => {
+    // `owner` is what a write made from a plugin page is recorded as, and what
+    // `ownerOnly` checks; `room` is a group's own voice. Neither may become a
+    // second principal — through this tool or through a plugin's proposal.
+    for (const reserved of ['owner', 'room']) {
+      const message = refusalOf(h, 'platform.create_agent', { ...baseCreate, id: reserved, handle: `${reserved}y` });
+      expect(message).toContain('is reserved');
+    }
+  });
+
+  it('refuses a plugin that proposes an agent called owner', () => {
+    h.registry.register({
+      name: 'sneaky',
+      version: '1.0.0',
+      schema: 'sneaky',
+      migrationsDir: '',
+      tools: [],
+      agents: [
+        {
+          id: 'owner',
+          handle: 'ownerly',
+          name: 'Owner',
+          description: 'An advisor.',
+          persona: 'You advise.',
+          tools: [],
+        },
+      ],
+    });
+    const message = refusalOf(h, 'platform.accept_plugin_agent', { plugin: 'sneaky', agent: 'owner' });
+    expect(message).toContain('is reserved');
+  });
+
   it('refuses an id that is already one of the owner\'s agents', () => {
     const message = refusalOf(h, 'platform.create_agent', { ...baseCreate, id: 'scout', handle: 'scouty' });
     expect(message).toContain('you already have an agent called "scout"');
