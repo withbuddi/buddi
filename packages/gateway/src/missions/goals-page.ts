@@ -20,20 +20,22 @@
  * a second, slower, unrecorded check happening whenever a tab is open.
  */
 import {
+  MAX_OPEN_GOALS,
   QueryRefusal,
+  STANDING_CHECKS,
   closeGoal,
   getGoal,
-  lastMeasuredCheck,
   listGoals,
   localDateString,
+  measuredChecks,
   milestoneValue,
-  paceNeeded,
-  progress,
-  projection,
   recentChecks,
+  standingChecks,
+  standingOf,
   targetValue,
   type Goal,
   type GoalCheck,
+  type GoalStanding,
   type HomeBlock,
   type HomeContribution,
   type HomeRow,
@@ -48,13 +50,28 @@ import {
   type ViewDescriptor,
 } from '@buddi/core';
 import { z } from 'zod';
-import { formatPace, formatValue } from './goals-format.js';
+import { GOALS_SENTINEL_ID, formatPace, formatValue, goalKeyPrefix } from './goals-format.js';
 
 /** The page parameter the chosen goal's id is bound to: `#/p/goal/goals/<id>`. */
 const GOAL = 'goal';
 
-/** How many checks the page draws. Enough to see the shape, not a ledger. */
+/**
+ * The caps every read on this page carries, in one place, because they are
+ * promises the spec repeats: a screen is bounded or it is a way to ask the
+ * database for everything.
+ *
+ *  - `MAX_GOALS_LISTED` — the whole list, open and finished. A hundred over
+ *    the twelve-open budget is a lot of history.
+ *  - `PAGE_CHECKS` — the rows in the Checks table. Enough to see the shape.
+ *  - `CHART_CHECKS` — what the milestones and the chart are read over: the
+ *    goal's *history*, because "crossed" and "when" are facts about all of it
+ *    and not about whatever a table happened to fetch.
+ *  - `MAX_FINDINGS` — what the watcher has said.
+ */
+export const MAX_GOALS_LISTED = 200;
 export const PAGE_CHECKS = 24;
+export const CHART_CHECKS = 500;
+export const MAX_FINDINGS = 20;
 
 /** The states that are no longer running, in the order they are listed. */
 const FINISHED = ['met', 'missed', 'closed'] as const;
@@ -69,84 +86,64 @@ const FINISHED = ['met', 'missed', 'closed'] as const;
 const goalRef = (): QueryRef => ({ query: 'goal', params: { id: { param: GOAL } } });
 
 /* ------------------------------------------------------------------ *
- * The arithmetic every surface shares
+ * The words for one arithmetic
+ *
+ * The arithmetic itself is core's `standingOf` (packages/core/src/goals/
+ * standing.ts), which the sentinel, `goal.status`, Home and both queries here
+ * all call over the same `STANDING_CHECKS` measured rows. What is left in this
+ * file is *wording*: turning one `GoalStanding` into the sentence a row shows
+ * and the tone it shows it in, so that every surface says the same thing in
+ * the same words as well as in the same numbers.
  * ------------------------------------------------------------------ */
 
 /**
- * The checks that carry a number, oldest first.
+ * Where a goal stands, in the owner's words.
  *
- * Every verdict on this page is read off measured checks, for the reason the
- * sentinel gives: a look that failed is evidence about the plugin, not about
- * the goal, and letting a null row answer "is this on track?" makes an outage
- * look like a recovery.
+ * `lastLookFailed` is the one thing a standing does not know and a screen has
+ * to: the newest *row* carried no number while the newest *number* is days
+ * old. That is not "off track" and it is not a verdict at all — it is news
+ * about the plugin, and the sentence names the day the number is from, which
+ * is the question the owner actually has.
  */
-function measuredAscending(checks: readonly GoalCheck[]): GoalCheck[] {
-  return checks
-    .filter((check) => check.value !== null)
-    .sort((a, b) => a.at.getTime() - b.at.getTime());
-}
-
-/** Where a goal stands, in one word, plus whether it is the loud kind. */
-export interface Standing {
-  /** `on track`, `off track`, `not measured since …`, `no projection yet`. */
-  word: string;
-  /** Two checks running on the wrong side: the one thing that is shouted about. */
-  offTrackTwice: boolean;
-  onTrack: boolean;
-}
-
-/**
- * The verdict a row, a pill and a stat all read.
- *
- * `checks` is whatever the caller has in hand, newest-first or not; `latest`
- * is the newest *measured* one over the whole history, which is not the same
- * thing — a goal whose plugin went missing on Friday still has Thursday's
- * number, and saying "not measured" about it would be a lie about the goal
- * rather than a fact about the plugin.
- */
-export function standingOf(
+export function standingWord(
   goal: Goal,
-  checks: readonly GoalCheck[],
-  latest: GoalCheck | null,
+  standing: GoalStanding,
+  lastLookFailed: boolean,
   timezone: string,
-): Standing {
-  const measured = measuredAscending(checks);
-  const newest = latest ?? measured[measured.length - 1] ?? null;
-  if (newest === null) {
-    return {
-      word: `not measured since ${localDateString(goal.baseline.asOf, timezone)}`,
-      offTrackTwice: false,
-      onTrack: false,
-    };
+): string {
+  if (standing.latest === null) {
+    return `not measured since ${localDateString(goal.baseline.asOf, timezone)}`;
   }
-  /*
-   * A failed look is news of its own: the newest *row* carries no number while
-   * the newest *number* is days old. The sentence names the day the number is
-   * from, which is the question the owner actually has.
-   */
-  const newestRow = [...checks].sort((a, b) => b.at.getTime() - a.at.getTime())[0] ?? null;
-  if (newestRow !== null && newestRow.value === null) {
-    return {
-      word: `not measured since ${localDateString(newest.at, timezone)}`,
-      offTrackTwice: false,
-      onTrack: false,
-    };
+  if (lastLookFailed) {
+    return `not measured since ${localDateString(standing.latest.at, timezone)}`;
   }
-  const previous = measured[measured.length - 2] ?? null;
-  if (newest.onTrack === null) {
-    // Fewer than two points is no projection, and no projection is not "off
-    // track". A goal in its first week must not be reported as failing.
-    return { word: 'no projection yet', offTrackTwice: false, onTrack: false };
+  switch (standing.verdict) {
+    case 'on-track':
+      return 'on track';
+    case 'off-track':
+      return 'off track';
+    default:
+      // Fewer than two measured points is no projection, and no projection is
+      // not "off track". A goal in its first week must not read as failing.
+      return 'no projection yet';
   }
-  return {
-    word: newest.onTrack ? 'on track' : 'off track',
-    offTrackTwice: newest.onTrack === false && previous?.onTrack === false,
-    onTrack: newest.onTrack === true,
-  };
 }
 
 /**
- * "progress 62% · $1,540 a week down · on track" — the line under a goal.
+ * The tone a row carries: `good` while it is landing, `critical` only when it
+ * has missed twice running — the same threshold the sentinel interrupts at.
+ */
+export function standingTone(
+  standing: GoalStanding,
+  lastLookFailed: boolean,
+): 'good' | 'critical' | 'neutral' {
+  if (lastLookFailed || standing.latest === null) return 'neutral';
+  if (standing.verdict === 'on-track') return 'good';
+  return standing.offTrackRuns >= 2 ? 'critical' : 'neutral';
+}
+
+/**
+ * "progress 62% · pace $1,540 a week down · on track" — the line under a goal.
  *
  * The three parts §7 asks for, and each one is left out rather than guessed:
  * a goal with no number has no progress and no pace, and a deadline already
@@ -156,19 +153,16 @@ export function goalSub(
   goal: Goal,
   unit: MetricUnit,
   direction: MetricDirection,
-  latest: GoalCheck | null,
-  standing: Standing,
-  now: Date,
+  standing: GoalStanding,
+  lastLookFailed: boolean,
+  timezone: string,
 ): string {
   const parts: string[] = [];
-  const value = latest?.value ?? null;
-  if (value !== null) {
-    const done = progress(goal, value);
-    if (done !== null) parts.push(`progress ${Math.round(done * 100)}%`);
-    const pace = paceNeeded(goal, value, now);
-    if (pace !== null) parts.push(`pace ${formatPace(pace, unit, direction, goal.currency)}`);
+  if (standing.progress !== null) parts.push(`progress ${Math.round(standing.progress * 100)}%`);
+  if (standing.paceNeeded !== null) {
+    parts.push(`pace ${formatPace(standing.paceNeeded, unit, direction, goal.currency)}`);
   }
-  parts.push(standing.word);
+  parts.push(standingWord(goal, standing, lastLookFailed, timezone));
   return parts.join(' · ');
 }
 
@@ -188,29 +182,28 @@ export function createGoalHome(source: MetricSource): HomeContribution {
     id: 'goal.goals',
     title: 'Goals',
     async produce(ctx: ToolContext): Promise<HomeBlock | null> {
-      const goals = await listGoals(ctx.db, { openOnly: true, limit: 50 });
+      const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       if (goals.length === 0) return null;
       const now = ctx.now();
+      // One statement for every goal's checks, not two per goal: Home draws
+      // every open goal, and a round trip each was a dozen on every load.
+      const byGoal = await standingChecks(ctx.db, goals.map((goal) => goal.id), STANDING_CHECKS);
       const rows: HomeRow[] = [];
       let offTrack = 0;
       for (const goal of goals) {
         const unit = source.metric(goal.metric)?.unit ?? 'number';
         const direction = source.metric(goal.metric)?.direction ?? 'down';
-        const checks = await recentChecks(ctx.db, goal.id, 4);
-        const latest = await lastMeasuredCheck(ctx.db, goal.id);
-        const standing = standingOf(goal, checks, latest, ctx.timezone);
-        if (!standing.onTrack && standing.word === 'off track') offTrack += 1;
+        const { measured, lastLookFailed } = byGoal.get(goal.id) ?? { measured: [], lastLookFailed: false };
+        const standing = standingOf(goal, direction, measured, now);
+        const tone = standingTone(standing, lastLookFailed);
+        if (!lastLookFailed && standing.verdict === 'off-track') offTrack += 1;
         rows.push({
           title: goal.title,
-          sub: goalSub(goal, unit, direction, latest, standing, now),
-          side: formatValue(latest?.value ?? null, unit, goal.currency),
+          sub: goalSub(goal, unit, direction, standing, lastLookFailed, ctx.timezone),
+          side: formatValue(standing.latest?.value ?? null, unit, goal.currency),
           // Good when it is going to land; loud only when it has missed twice
           // running, which is the one thing the sentinel interrupts for.
-          ...(standing.onTrack
-            ? { tone: 'good' as const }
-            : standing.offTrackTwice
-              ? { tone: 'critical' as const }
-              : {}),
+          ...(tone === 'neutral' ? {} : { tone }),
         });
       }
       return {
@@ -244,6 +237,14 @@ interface GoalListRow {
   /** `open` or `done`: what the list groups by. */
   group: 'open' | 'done';
   state: Goal['state'];
+  /**
+   * `standingOf`'s own word, unformatted.
+   *
+   * Not drawn — `sub` carries the sentence — but on the row so that "the page
+   * and the chat give the same verdict" is a thing a test can assert rather
+   * than a thing two strings are compared for.
+   */
+  verdict: GoalStanding['verdict'];
   tone: 'good' | 'critical' | 'neutral';
   holder: string;
 }
@@ -263,21 +264,28 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
     name: 'goals',
     params: z.object({}),
     async produce(_params, ctx) {
-      const all = await listGoals(ctx.db, { limit: 200 });
+      const all = await listGoals(ctx.db, { limit: MAX_GOALS_LISTED });
       const now = ctx.now();
+      // One statement for every goal's checks, not two per goal: this list is
+      // every goal there has ever been, and a pair of round trips each was
+      // four hundred of them to paint one screen.
+      const byGoal = await standingChecks(ctx.db, all.map((goal) => goal.id), STANDING_CHECKS);
       const rows: GoalListRow[] = [];
       for (const goal of all) {
         const unit = unitOf(goal.metric);
-        const checks = await recentChecks(ctx.db, goal.id, 4);
-        const latest = await lastMeasuredCheck(ctx.db, goal.id);
-        const standing = standingOf(goal, checks, latest, ctx.timezone);
+        const direction = directionOf(goal.metric);
+        const { measured, lastLookFailed } = byGoal.get(goal.id) ?? { measured: [], lastLookFailed: false };
+        const standing = standingOf(goal, direction, measured, now);
         rows.push({
           id: goal.id,
           title: goal.title,
-          sub: goalSub(goal, unit, directionOf(goal.metric), latest, standing, now),
-          value: formatValue(latest?.value ?? null, unit, goal.currency),
+          sub: goalSub(goal, unit, direction, standing, lastLookFailed, ctx.timezone),
+          value: formatValue(standing.latest?.value ?? null, unit, goal.currency),
           group: goal.state === 'open' ? 'open' : 'done',
           state: goal.state,
+          verdict: standing.verdict,
+          // A finished goal is toned by the word buddi settled on; a running
+          // one by where it stands, exactly as Home tones it.
           tone:
             goal.state === 'met'
               ? 'good'
@@ -285,11 +293,7 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
                 ? 'critical'
                 : goal.state !== 'open'
                   ? 'neutral'
-                  : standing.onTrack
-                    ? 'good'
-                    : standing.offTrackTwice
-                      ? 'critical'
-                      : 'neutral',
+                  : standingTone(standing, lastLookFailed),
           holder: goal.agentId,
         });
       }
@@ -318,16 +322,30 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
       const unit = unitOf(goal.metric);
       const direction = directionOf(goal.metric);
       const currency = goal.currency;
-      const checks = await recentChecks(ctx.db, goal.id, PAGE_CHECKS);
-      const measured = measuredAscending(checks);
-      const latest = await lastMeasuredCheck(ctx.db, goal.id);
-      const standing = standingOf(goal, checks, latest, ctx.timezone);
-      const value = latest?.value ?? null;
-      const projected = projection(
+      /*
+       * Three reads, and each answers a different question. The **history** is
+       * what the milestones are dated from — "crossed in week two" has to stay
+       * true in week twenty-seven, and a window would quietly forget it. The
+       * newest `PAGE_CHECKS` of that history are what the table prints. And
+       * the standing is `STANDING_CHECKS` *measured* rows, the same window
+       * Home, the list and `goal.status` use, so no two of them can give this
+       * goal different arithmetic.
+       */
+      const history = await recentChecks(ctx.db, goal.id, CHART_CHECKS);
+      const ascending = [...history]
+        .filter((check) => check.value !== null)
+        .sort((a, b) => a.at.getTime() - b.at.getTime());
+      const standing = standingOf(
         goal,
-        measured.map((check) => ({ at: check.at, value: check.value as number })),
+        direction,
+        await measuredChecks(ctx.db, goal.id, STANDING_CHECKS),
+        ctx.now(),
       );
-      const pace = value === null ? null : paceNeeded(goal, value, ctx.now());
+      const lastLookFailed = history[0] !== undefined && history[0].value === null;
+      const checks = history.slice(0, PAGE_CHECKS);
+      const value = standing.latest?.value ?? null;
+      const projected = standing.projected;
+      const pace = standing.paceNeeded;
 
       const findings = await goalFindings(ctx, goal.id);
 
@@ -338,9 +356,11 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
         agentId: goal.agentId,
         metric: goal.metric,
         state: goal.state,
-        standing: standing.word,
-        standingTone: standing.onTrack ? 'good' : standing.offTrackTwice ? 'critical' : 'neutral',
-        sub: goalSub(goal, unit, direction, latest, standing, ctx.now()),
+        standing: standingWord(goal, standing, lastLookFailed, ctx.timezone),
+        // `standingOf`'s own word, the one `goal.status` returns. See GoalListRow.
+        verdict: standing.verdict,
+        standingTone: standingTone(standing, lastLookFailed),
+        sub: goalSub(goal, unit, direction, standing, lastLookFailed, ctx.timezone),
         closedNote: goal.closedNote,
         baseline: `${formatValue(goal.baseline.value, unit, currency)} on ${localDateString(
           goal.baseline.asOf,
@@ -352,27 +372,45 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
         projection: projected === null ? 'not enough checks yet' : formatValue(projected, unit, currency),
         deadline: localDateString(goal.deadline, ctx.timezone),
         cadence: goal.cadence,
-        checks: [...checks]
-          .sort((a, b) => b.at.getTime() - a.at.getTime())
-          .map((check) => ({
-            key: check.id,
-            at: check.at.toISOString(),
-            // What the number was true *of*, when that is not the day buddi
-            // looked: a bank reading Friday's statement on Monday.
-            asOf: check.asOf === null ? '' : localDateString(check.asOf, ctx.timezone),
-            value: formatValue(check.value, unit, currency ?? check.currency),
-            onTrack: check.onTrack === null ? 'no projection' : check.onTrack ? 'on track' : 'off track',
-            onTrackTone: check.onTrack === null ? 'neutral' : check.onTrack ? 'good' : 'critical',
-            note: check.note ?? '',
-          })),
+        checksShown: checks.length,
+        checksNote:
+          history.length > PAGE_CHECKS
+            ? `The newest ${PAGE_CHECKS} of ${history.length}, newest first.`
+            : 'Newest first.',
+        checks: checks.map((check) => ({
+          key: check.id,
+          at: check.at.toISOString(),
+          // What the number was true *of*, when that is not the day buddi
+          // looked: a bank reading Friday's statement on Monday.
+          asOf: check.asOf === null ? '' : localDateString(check.asOf, ctx.timezone),
+          // The goal's own currency, never the row's: a reading taken while
+          // the metric answered no code must not print a different unit two
+          // components under the stats, which use the goal's.
+          value: formatValue(check.value, unit, currency),
+          onTrack: check.onTrack === null ? 'no projection' : check.onTrack ? 'on track' : 'off track',
+          onTrackTone: check.onTrack === null ? 'neutral' : check.onTrack ? 'good' : 'critical',
+          note: check.note ?? '',
+        })),
+        /*
+         * Crossed or not is `standingOf`'s answer — read off the goal's
+         * current number, so it stays true however long ago it happened — and
+         * the *date* is the first check past it in the history above. A
+         * crossing older than the history reads "crossed", with no date,
+         * rather than the page contradicting its own findings list.
+         */
         milestones: goal.milestones.map((milestone) => {
           const at = milestoneValue(goal, milestone);
-          const crossedAt = crossingOf(measured, direction, at);
+          const crossed = standing.milestonesCrossed.includes(milestone);
+          const crossedAt = crossed ? crossingOf(ascending, direction, at) : null;
           return {
             key: String(milestone),
             label: formatValue(at, unit, currency),
-            crossed: crossedAt === null ? 'not yet' : `crossed ${localDateString(crossedAt, ctx.timezone)}`,
-            crossedTone: crossedAt === null ? 'neutral' : 'good',
+            crossed: !crossed
+              ? 'not yet'
+              : crossedAt === null
+                ? 'crossed'
+                : `crossed ${localDateString(crossedAt, ctx.timezone)}`,
+            crossedTone: crossed ? 'good' : 'neutral',
           };
         }),
         findings,
@@ -412,14 +450,20 @@ async function goalFindings(
    * `goal.<id>.<event>`. The prefix is parameterised rather than interpolated
    * — the id comes off a route — and `like` is the only way to ask "every
    * event under this goal" of a column that holds one string.
+   *
+   * And scoped to the watcher that writes them. A finding key is free-form
+   * text each plugin chooses, and the keys share one namespace: without this
+   * predicate, any other sentinel that wrote `goal.<some-uuid>.…` would have
+   * its title and detail shown on this page as something the `core.goals`
+   * watcher said. The section names that watcher, so the query has to mean it.
    */
   const { rows } = await ctx.db.query(
     `select key, severity, title, detail, first_seen_at, last_seen_at, resolved_at
        from core.sentinel_findings
-      where key like $1
+      where sentinel_id = $2 and key like $1
       order by last_seen_at desc, key
-      limit 20`,
-    [`goal.${goalId}.%`],
+      limit $3`,
+    [goalKeyPrefix(goalId), GOALS_SENTINEL_ID, MAX_FINDINGS],
   );
   return (rows as Array<Record<string, unknown>>).map((row) => ({
     key: String(row.key),
@@ -439,7 +483,13 @@ async function goalFindings(
 const ownerCloseInput = z
   .object({
     id: z.string().min(1).describe('The goal id.'),
-    note: z.string().min(1).max(500).describe('Why it is ending, and where it got to.'),
+    /*
+     * Trimmed *before* the length is checked, so three spaces is not a note.
+     * The form marks it required and the record says the note is why the goal
+     * ended; a required field the schema lets through empty is a promise the
+     * row cannot keep.
+     */
+    note: z.string().trim().min(1).max(500).describe('Why it is ending, and where it got to.'),
   })
   .strict();
 
@@ -467,7 +517,8 @@ export function createGoalOwnerClose(): ToolDefinition<z.infer<typeof ownerClose
       // A throw here is the act route's 400 carrying this sentence, which is
       // what the owner reads. Neither of these is a defect.
       if (goal === null) throw new Error('No goal here has that id.');
-      const closed = await closeGoal(ctx.db, goal.id, input.note.trim(), ctx.now());
+      // Already trimmed by the schema, which is where an empty note is refused.
+      const closed = await closeGoal(ctx.db, goal.id, input.note, ctx.now());
       if (closed === null) {
         throw new Error(
           `"${goal.title}" was already closed on ${localDateString(goal.closedAt ?? goal.updatedAt, ctx.timezone)}.`,
@@ -567,7 +618,9 @@ export const goalsPage: PageDescriptor = {
             {
               kind: 'table',
               title: 'Checks',
-              note: 'What buddi measured, newest first. A row with no number is a look that failed, and its note says why.',
+              note:
+                `What buddi measured, the newest ${PAGE_CHECKS} first. A row with no number is a look ` +
+                'that failed, and its note says why.',
               query: goalRef(),
               rows: 'checks',
               columns: [
@@ -688,13 +741,16 @@ export interface ChartPoint {
 }
 
 /**
- * What the timeseries descriptor maps: present on `goal.status` **only when
- * the result is a single goal**.
+ * What the timeseries descriptor maps: present on `goal.status` **whenever the
+ * answer holds exactly one goal** — with an id, or because the agent happens
+ * to hold one.
  *
- * A chart of "all of your goals" is several axes on one line, so with no id —
- * or with more than one goal in the answer — there is no `chart` key, the
- * points resolve to none, and the tab sits quietly instead of drawing the
- * first goal's history under the title of all of them.
+ * A chart of "all of your goals" is several axes on one line, so with more
+ * than one goal in the answer there is no `chart` key and the points resolve
+ * to none. The tab is still there — a declared view keeps its tab even when it
+ * came back empty (`renderablesFrom`) — but it is marked unsubstantial, so it
+ * never takes focus, and it says it has nothing to draw rather than drawing
+ * the first goal's history under the title of all of them.
  */
 export interface GoalChart {
   /** Already formatted, in the goal's own currency: the chart's one caption. */
@@ -705,12 +761,15 @@ export interface GoalChart {
 }
 
 /**
- * The chart for one goal, from the checks `goal.status` already read.
+ * The chart for one goal, over its **history** — `CHART_CHECKS` rows, oldest
+ * first, not the four the tool prints.
  *
- * Every milestone that has been crossed within those checks is an event on the
- * day it was crossed, and the deadline is an event too: "where this has to be,
- * and when" is the whole question, and a chart that drew only the line would
- * make the owner work it out.
+ * A six-month weekly goal drawn from the last four looks is four dots, and a
+ * milestone crossed in week two would have no event on it by week twenty-seven
+ * — which is exactly what a chart of a goal is for. Every crossed milestone is
+ * an event on the day it was crossed, and the deadline is an event too:
+ * "where this has to be, and when" is the whole question, and a chart that
+ * drew only the line would make the owner work it out.
  */
 export function chartOf(
   goal: Goal,
@@ -719,7 +778,9 @@ export function chartOf(
   checks: readonly GoalCheck[],
   timezone: string,
 ): GoalChart {
-  const ascending = measuredAscending(checks);
+  const ascending = [...checks]
+    .filter((check) => check.value !== null)
+    .sort((a, b) => a.at.getTime() - b.at.getTime());
   const events: Array<{ at: string; label: string }> = [];
   for (const milestone of goal.milestones) {
     const at = milestoneValue(goal, milestone);

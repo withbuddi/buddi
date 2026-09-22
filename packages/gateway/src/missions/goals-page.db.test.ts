@@ -32,8 +32,36 @@ import {
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createGoalManifest } from './goals.js';
-import { createGoalHome } from './goals-page.js';
+import { createGoalManifest, formatValue } from './goals.js';
+import { createGoalHome, goalViews } from './goals-page.js';
+
+/**
+ * One path into a result: dotted names with optional `[n]` indexes.
+ *
+ * The browser's own (`packages/web/src/canvas/resolve.ts`), re-implemented in
+ * ten lines because the gateway does not depend on the web package and core
+ * ships no equivalent. It is here so a descriptor can be resolved against what
+ * the tool really answers, which is the only check that catches a rename.
+ */
+function readPath(source: unknown, path: string): unknown {
+  if (path === '' || path === '$') return source;
+  let cursor: unknown = source;
+  for (const segment of path.split('.')) {
+    const match = /^([^[\]]*)((?:\[\d+\])*)$/.exec(segment);
+    if (!match) return undefined;
+    const [, key = '', indexes = ''] = match;
+    if (key !== '') {
+      if (cursor === null || typeof cursor !== 'object') return undefined;
+      cursor = (cursor as Record<string, unknown>)[key];
+    }
+    for (const index of indexes.match(/\d+/g) ?? []) {
+      if (!Array.isArray(cursor)) return undefined;
+      cursor = cursor[Number(index)];
+    }
+    if (cursor === undefined) return undefined;
+  }
+  return cursor;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -215,6 +243,86 @@ suite('the Goals page reads (postgres)', () => {
     expect(one.findings).toEqual([]);
   });
 
+  /**
+   * A crossing is a fact about the goal's whole history, not about a window.
+   *
+   * Forty weekly checks, the milestone crossed at the thirtieth: the table
+   * shows the newest twenty-four, so a scan of *those* would say "not yet"
+   * about something the findings list four components lower still reports as
+   * crossed — the page contradicting itself. `standingOf` answers crossed off
+   * the goal's current number, and the date comes from the history read.
+   */
+  it('says a milestone is crossed however long ago it happened, and puts it on the chart', async () => {
+    const goal = await aGoal();
+    // Forty weeks, coming down one a week: 99 … 60. The $80 milestone is
+    // crossed at the twentieth, well outside the 24-row table window at 40.
+    for (let week = 1; week <= 40; week += 1) {
+      await recordCheck(pool, {
+        goalId: goal.id,
+        at: new Date(T0.getTime() + week * WEEK),
+        value: 100 - week,
+        currency: 'USD',
+        onTrack: true,
+        projected: 40,
+      });
+    }
+
+    const one = await read('goal', { id: goal.id });
+    expect(one.checks).toHaveLength(24);
+    expect(one.milestones[0].crossed).toBe('crossed 2027-02-09');
+    expect(one.milestones[0].crossedTone).toBe('good');
+
+    // And the chart, which is read over the history rather than the last four.
+    const status = await registry.invoke('goal.status', { id: goal.id }, { ...ctx, agentId: HOLDER });
+    const chart = (status.ok === true ? (status.output as any) : null).chart;
+    expect(chart.points).toHaveLength(41);
+    expect(chart.events.map((e: any) => e.label)).toEqual(['$80 crossed', 'Deadline']);
+    expect(chart.events[0].at).toBe(new Date(T0.getTime() + 20 * WEEK).toISOString());
+  });
+
+  /**
+   * The descriptor, resolved over what the tool actually answers.
+   *
+   * Validating the map at `register()` says it is a well-formed timeseries; it
+   * says nothing about whether its paths find anything. A field renamed in
+   * `goal.status` with the descriptor left alone is a chart that silently
+   * draws nothing, and only this catches it.
+   *
+   * `readPath` is re-implemented here rather than imported: the resolver lives
+   * in `packages/web` (`canvas/resolve.ts`), which the gateway does not and
+   * should not depend on, and core ships no equivalent. It is the same
+   * algorithm — dotted names, `[n]` indexes — over ten lines.
+   */
+  it('resolves the timeseries descriptor over a real goal.status answer', async () => {
+    const goal = await aGoal();
+    await recordCheck(pool, {
+      goalId: goal.id,
+      at: new Date(T0.getTime() + WEEK),
+      value: 75,
+      currency: 'USD',
+      onTrack: true,
+      projected: 40,
+    });
+    const status = await registry.invoke('goal.status', { id: goal.id }, { ...ctx, agentId: HOLDER });
+    const output = status.ok === true ? status.output : null;
+
+    const map = goalViews[0]!.map as Record<string, any>;
+    const points = readPath(output, map.points);
+    expect(Array.isArray(points) && points.length).toBe(2);
+    for (const point of points as unknown[]) {
+      expect(typeof readPath(point, map.x)).toBe('string');
+      expect(typeof readPath(point, map.y)).toBe('number');
+    }
+    expect(typeof readPath(output, map.label.path)).toBe('string');
+    expect(typeof readPath(output, map.referenceLines[0].value.path)).toBe('number');
+    const events = readPath(output, map.events.path);
+    expect(Array.isArray(events) && events.length).toBeGreaterThan(0);
+    for (const event of events as unknown[]) {
+      expect(typeof readPath(event, map.events.at)).toBe('string');
+      expect(typeof readPath(event, map.events.label)).toBe('string');
+    }
+  });
+
   it('shows the findings the watcher raised about that goal, and no others', async () => {
     const goal = await aGoal();
     const other = await aGoal({ title: 'Another' });
@@ -233,10 +341,85 @@ suite('the Goals page reads (postgres)', () => {
     expect(one.findings.some((f: any) => f.title.includes('deadline passed'))).toBe(true);
   });
 
+  /**
+   * A finding key is free-form text each plugin chooses, out of one namespace.
+   * Without the `sentinel_id` predicate, any other watcher that happened to
+   * write under `goal.<uuid>.…` would have its words shown on this page as
+   * something the `core.goals` watcher said — the section names that watcher,
+   * so the query has to mean it.
+   */
+  it('shows only what the core.goals watcher said, not another sentinel under the same key', async () => {
+    const goal = await aGoal();
+    await pool.query(
+      `insert into core.sentinel_findings (key, sentinel_id, severity, title, detail, first_seen_at, last_seen_at)
+       values ($1, 'finance.floor', 'urgent', 'A floor was breached', 'not this watcher', $2, $2)`,
+      [`goal.${goal.id}.floor-breach`, T0.toISOString()],
+    );
+    await pool.query(
+      `insert into core.sentinel_findings (key, sentinel_id, severity, title, detail, first_seen_at, last_seen_at)
+       values ($1, 'core.goals', 'urgent', 'Off track', 'this one', $2, $2)`,
+      [`goal.${goal.id}.off-track`, T0.toISOString()],
+    );
+
+    const one = await read('goal', { id: goal.id });
+    expect(one.findings.map((f: any) => f.title)).toEqual(['Off track']);
+  });
+
   it('refuses an id that is not a goal, in words meant for the owner', async () => {
     await expect(read('goal', { id: '00000000-0000-0000-0000-000000000000' })).rejects.toThrow(
       /No goal here has that id/,
     );
+  });
+
+  /**
+   * One arithmetic, three surfaces — the thing `standingOf` exists for.
+   *
+   * Two good checks and then four failed looks is the case that used to break
+   * it: the page read twenty-four *rows* and still had two numbers, while
+   * `goal.status` read four rows, found one number among them, and answered
+   * "no projection". The holder said one thing in chat and the screen said
+   * another, and neither was wrong from its own inputs. Now all three read the
+   * last four **measured** checks, so there is one answer.
+   */
+  it('gives the list, the detail, Home and goal.status the same projection and verdict', async () => {
+    const goal = await aGoal();
+    await recordCheck(pool, {
+      goalId: goal.id,
+      at: new Date(T0.getTime() + WEEK),
+      value: 90,
+      currency: 'USD',
+      onTrack: true,
+      projected: 40,
+    });
+    // Four looks in a row that answered nothing at all.
+    for (let week = 2; week <= 5; week += 1) {
+      await recordCheck(pool, {
+        goalId: goal.id,
+        at: new Date(T0.getTime() + week * WEEK),
+        value: null,
+        note: 'the bank did not answer',
+      });
+    }
+
+    const list = await read('goals');
+    const detail = await read('goal', { id: goal.id });
+    const home = await createGoalHome(registry).produce(ctx);
+    const status = await registry.invoke('goal.status', { id: goal.id }, { ...ctx, agentId: HOLDER });
+    expect(status.ok).toBe(true);
+    const fromChat = (status.ok === true ? (status.output as any) : null).goals[0];
+
+    // The number: two measured points survive four failures, on every surface.
+    expect(fromChat.projected).not.toBeNull();
+    expect(detail.projection).toBe(formatValue(fromChat.projected, 'currency', 'USD'));
+    // The verdict, in `standingOf`'s own word rather than in three sentences.
+    expect(detail.verdict).toBe(fromChat.verdict);
+    expect(list.goals[0].verdict).toBe(fromChat.verdict);
+    // And the sentence the owner reads is one sentence.
+    expect(home?.rows[0]?.sub).toBe(list.goals[0].sub);
+    expect(detail.sub).toBe(list.goals[0].sub);
+    // All three still say the number is stale, because the newest look failed.
+    expect(detail.standing).toContain('not measured since');
+    expect(home?.rows[0]?.sub).toContain('not measured since');
   });
 
   it('cannot write: the pool a query is handed refuses anything but a select', async () => {
@@ -260,6 +443,30 @@ suite('the Goals page reads (postgres)', () => {
       expect(after?.state).toBe('closed');
       expect(after?.closedNote).toBe('We refinanced; this number stopped meaning anything.');
       expect(after?.closedAt).not.toBeNull();
+    });
+
+    it('refuses a note that is nothing but spaces', async () => {
+      const goal = await aGoal();
+      const result = await registry.invoke(
+        'goal.owner_close',
+        { id: goal.id, note: '   ' },
+        { ...ctx, agentId: 'owner' },
+      );
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.reason).toBe('invalid-args');
+      // The field is required because the row explains itself afterwards; a
+      // goal closed with an empty reason is the thing that must not happen.
+      expect((await getGoal(pool, goal.id))?.state).toBe('open');
+    });
+
+    it('stores the note trimmed', async () => {
+      const goal = await aGoal();
+      await registry.invoke(
+        'goal.owner_close',
+        { id: goal.id, note: '  we refinanced  ' },
+        { ...ctx, agentId: 'owner' },
+      );
+      expect((await getGoal(pool, goal.id))?.closedNote).toBe('we refinanced');
     });
 
     it('keeps the word buddi chose, and only adds the note', async () => {

@@ -1,10 +1,10 @@
 /**
- * How a goal's numbers read: the words for them, in one place.
+ * The names and the words a goal's surfaces share.
  *
  * Split out of `goals.ts` so the Goals page, the Home block and the tools can
  * all use these without the page module and the tool module importing each
- * other. Pure functions over numbers, dates and a timezone — no pool, no
- * registry, no clock of their own.
+ * other. Pure: numbers, dates, a timezone and two identifiers — no pool, no
+ * registry, no clock of its own.
  */
 import {
   localDateString,
@@ -15,6 +15,26 @@ import {
   type MetricDirection,
   type MetricUnit,
 } from '@buddi/core';
+
+/**
+ * The watcher's id. Core's own, like the goals it reads.
+ *
+ * Here rather than in `goals.ts` because both the watcher that *writes* a
+ * finding and the page that *reads* one back need it, and a page that filtered
+ * on a second copy of the string would go on showing another plugin's findings
+ * the day somebody renamed this one.
+ */
+export const GOALS_SENTINEL_ID = 'core.goals';
+
+/** `goal.<id>.<event>` — one fact, one key, so each resolves on its own. */
+export function goalKey(goalId: string, event: string): string {
+  return `goal.${goalId}.${event}`;
+}
+
+/** Every finding key under one goal, as a `like` pattern. The page's read. */
+export function goalKeyPrefix(goalId: string): string {
+  return `goal.${goalId}.%`;
+}
 
 /**
  * A metric's number, in its own unit. Already formatted, like a Home stat.

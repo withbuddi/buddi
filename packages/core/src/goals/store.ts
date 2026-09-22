@@ -345,15 +345,99 @@ export async function lastCheck(pool: Queryable, goalId: string): Promise<GoalCh
   return first ?? null;
 }
 
+/**
+ * The most recent checks that actually carried a number, newest first.
+ *
+ * What a *verdict* is read off — see `standing.ts`. It is a separate statement
+ * from `recentChecks` rather than a filter applied afterwards, because "the
+ * last four measured checks" and "the measured ones among the last four rows"
+ * are different sets the moment a look fails, and every surface has to be
+ * asking the first question.
+ */
+export async function measuredChecks(
+  pool: Queryable,
+  goalId: string,
+  limit = 4,
+): Promise<GoalCheck[]> {
+  const { rows } = await pool.query(
+    `select ${GOAL_CHECK_COLUMNS} from core.goal_checks
+      where goal_id = $1::uuid and value is not null
+      order by at desc, id desc limit $2`,
+    [goalId, limit],
+  );
+  return (rows as GoalCheckRow[]).map(toGoalCheck);
+}
+
 /** The most recent check that actually carried a number, or null. */
 export async function lastMeasuredCheck(
   pool: Queryable,
   goalId: string,
 ): Promise<GoalCheck | null> {
+  const [first] = await measuredChecks(pool, goalId, 1);
+  return first ?? null;
+}
+
+/** What one goal's row needs to draw a standing: its checks, and its last look. */
+export interface StandingChecks {
+  /** The newest measured checks, newest first. */
+  measured: GoalCheck[];
+  /**
+   * The newest check of all carried no number.
+   *
+   * Not the same as having no measurement: it is the difference between "this
+   * goal has never answered" and "this morning's look failed and the number
+   * you can see is Thursday's", which is the sentence the owner wants.
+   */
+  lastLookFailed: boolean;
+}
+
+/**
+ * The same, for many goals, in **one** statement.
+ *
+ * Home draws every open goal and the Goals page draws every goal there is; a
+ * pair of queries per goal is up to four hundred round trips to paint one
+ * screen. Two lateral joins answer it once: the newest measured checks per
+ * goal, and whether the newest row of all carried a number.
+ *
+ * Goals with no checks are still in the map, with an empty list — a caller
+ * asking about a goal must never have to tell "no rows" from "not asked".
+ */
+export async function standingChecks(
+  pool: Queryable,
+  goalIds: readonly string[],
+  limit = 4,
+): Promise<Map<string, StandingChecks>> {
+  const out = new Map<string, StandingChecks>();
+  for (const id of goalIds) out.set(id, { measured: [], lastLookFailed: false });
+  if (goalIds.length === 0) return out;
   const { rows } = await pool.query(
-    `select ${GOAL_CHECK_COLUMNS} from core.goal_checks
-      where goal_id = $1::uuid and value is not null order by at desc, id desc limit 1`,
-    [goalId],
+    `select g.id::text as goal_id, l.failed as last_look_failed,
+            m.id, m.goal_id as check_goal_id, m.at, m.as_of, m.value, m.currency,
+            m.note, m.on_track, m.pace_needed, m.projected
+       from unnest($1::uuid[]) as g(id)
+       left join lateral (
+         select c.* from core.goal_checks c
+          where c.goal_id = g.id and c.value is not null
+          order by c.at desc, c.id desc limit $2
+       ) m on true
+       left join lateral (
+         select c.value is null as failed from core.goal_checks c
+          where c.goal_id = g.id
+          order by c.at desc, c.id desc limit 1
+       ) l on true
+      order by g.id, m.at desc, m.id desc`,
+    [goalIds, limit],
   );
-  return rows.length > 0 ? toGoalCheck(rows[0] as GoalCheckRow) : null;
+  for (const raw of rows as Array<Record<string, unknown>>) {
+    const entry = out.get(String(raw.goal_id));
+    if (entry === undefined) continue;
+    entry.lastLookFailed = raw.last_look_failed === true;
+    // The measured lateral yields no row for a goal never measured; the
+    // `left join` still gives the goal its line, with every check column null.
+    if (raw.id === null || raw.id === undefined) continue;
+    entry.measured.push(
+      toGoalCheck({ ...(raw as unknown as GoalCheckRow), goal_id: String(raw.check_goal_id) }),
+    );
+  }
+  return out;
 }

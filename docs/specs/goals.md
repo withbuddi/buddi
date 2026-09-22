@@ -242,12 +242,37 @@ to core's `runSentinels` rather than to where a goal shows, and the gap stands.
   view descriptor (`keyvalue` plus a `timeseries` of the checks).
 - **Telegram**: the wakes reach it like any finding.
 
-As built, all four live in `packages/gateway/src/missions/goals-page.ts`, on
-the `goal` manifest beside the tools — `home`, `pages`, `queries`, `views` —
-because a goal has no schema of its own and this is only a surface onto core's
-rows. Nothing on any of these surfaces measures: every number is read out of
-`core.goals` and `core.goal_checks` as the sentinel left them, so opening a tab
-is never a second, slower, unrecorded check.
+As built, the first three are contributed from
+`packages/gateway/src/missions/goals-page.ts` on the `goal` manifest beside the
+tools — `home`, `pages`, `queries`, `views` — because a goal has no schema of
+its own and this is only a surface onto core's rows. The fourth needed no code
+at all (deviation 8); it is a test, in `goals.db.test.ts`. Nothing on any of
+these surfaces measures: every number is read out of `core.goals` and
+`core.goal_checks` as the sentinel left them, so opening a tab is never a
+second, slower, unrecorded check.
+
+**One arithmetic.** The verdict, the projection, the pace, the progress and the
+crossings are `standingOf` (`packages/core/src/goals/standing.ts`), called by
+the sentinel, `goal.status`, the Home block and both page queries over the same
+`STANDING_CHECKS` (four) newest **measured** checks, read by
+`measuredChecks`/`standingChecks`. Before that each surface put `math.ts`
+together for itself over whatever rows it had fetched, and two of them
+disagreed the moment a look failed: with two good checks and then four failed
+ones, the page still had two points and drew a projection while `goal.status`
+had one and said there was none. The window is fixed rather than "as many as
+you fetched" for exactly that reason — a surface that passed twenty-four rows
+would get a different slope. "Off track" is the two newest measured checks both
+recorded off; crossings are read off the newest measured *value*, so a
+milestone crossed in week two still reads crossed in week twenty-seven.
+
+**What each read is capped at**, because a screen is bounded or it is a way to
+ask the database for everything: the goals list 200 (`MAX_GOALS_LISTED`), the
+Checks table the newest 24 (`PAGE_CHECKS`, and its heading says so), the chart
+and the milestone dates the newest 500 (`CHART_CHECKS` — the goal's history,
+not a window, which is what makes a crossing datable), the findings 20
+(`MAX_FINDINGS`), the standing 4 (`STANDING_CHECKS`). Home and the list read
+every goal's checks in **one** statement (`standingChecks`, two lateral joins),
+not a pair of round trips per goal.
 
 Eight deviations, each one a thing the engine decides rather than a choice:
 
@@ -256,13 +281,17 @@ Eight deviations, each one a thing the engine decides rather than a choice:
    (`renderablesFrom` builds one `byTool` map), so a tool has exactly one
    descriptor. The timeseries is the one that says something the chat does
    not — the figures are already in `goal.status`'s own prose.
-2. **`goal.status` grew a `chart` key, present only when the answer is one
-   goal.** That is what the descriptor maps: `chart.points` (the measured
-   checks, oldest first), `chart.target` as a reference line, and
-   `chart.events` — every milestone on the day it was crossed, plus the
-   deadline. With no id, or with several goals, there is no `chart`, the
-   points resolve to none and the tab stays quiet rather than drawing the
-   first goal's history under the title of all of them.
+2. **`goal.status` grew a `chart` key, present whenever the answer holds
+   exactly one goal** — with an id, or because the agent happens to hold one.
+   That is what the descriptor maps: `chart.points` (the measured checks of
+   the goal's *history*, `CHART_CHECKS` rows, oldest first — not the four the
+   tool prints, or a six-month goal would be four dots), `chart.target` as a
+   reference line, and `chart.events` — every crossed milestone on the day it
+   was crossed, plus the deadline. With more than one goal there is no `chart`
+   and the points resolve to none. The tab is still drawn — a declared view
+   keeps its tab even when it came back empty (`renderablesFrom`) — but it is
+   marked unsubstantial, so it never takes focus, and it says it has nothing
+   rather than drawing the first goal's history under the title of all of them.
 3. **The chart's `unit` is `number`, not `currency`.** A `TimeseriesMap.unit`
    is a fixed enum, not a path, and one descriptor covers every metric in the
    installation; declaring `currency` would draw an unread-mail count in
@@ -299,7 +328,16 @@ Its one write is `goal.owner_close` — the same store call `goal.close` makes,
 without the holder check, because the owner is not an agent: a goal exists
 because they approved it, and stopping one is theirs to do on any screen. It
 is `ownerOnly`, so no model is listed it and `invoke` answers "unknown tool" to
-anybody but the owner's own path.
+anybody but the owner's own path. Its note is trimmed **before** the length is
+checked, so three spaces is not a note: the field is required because the row
+explains itself afterwards.
+
+Everything the page shows about a goal is in the goal's own currency
+(`goal.currency`), including the Checks table — never the currency a particular
+reading happened to carry, which would print `$75` one component under a bare
+`75`. The findings read is scoped to `sentinel_id = 'core.goals'` as well as to
+the goal's key prefix: keys are free-form text out of one namespace, and the
+section names that watcher.
 
 ## 8. Example, end to end
 
@@ -343,8 +381,10 @@ stated as such).
    manifests, for the same reason they do: nothing there owns a schema, and
    `createGoalManifest` takes the registry because a goal watches a metric.
 2. Home block, Goals page, chat view, Telegram parity. (1 day) — **built**.
-   All four are `packages/gateway/src/missions/goals-page.ts`, contributed on
-   the same manifest as the tools; §7 lists the deviations. The known gap in
+   The three surfaces are `packages/gateway/src/missions/goals-page.ts`,
+   contributed on the same manifest as the tools, over one arithmetic in
+   `packages/core/src/goals/standing.ts`; Telegram parity needed no code and is
+   a test in `goals.db.test.ts`. §7 lists the deviations. The known gap in
    §6 — the sentinel settling a goal in the same tick it returns the finding,
    with the finding written only after the loop — is **not** closed here: it
    is a change to core's `runSentinels`, not to where a goal shows, and it
