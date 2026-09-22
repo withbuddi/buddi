@@ -9,8 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   BASE_CONFIDENCE,
+  DATE_HORIZON_DAYS,
+  DATE_WINDOW_DAYS,
   DEFAULT_DATE_CONFIDENCE,
   KEYWORD_BOOST,
+  YEAR_ROLL_DAYS,
   MAX_CONFIDENCE,
   clampConfidence,
   findDates,
@@ -88,6 +91,15 @@ describe('slashed numbers and their ambiguity', () => {
     expect(isConfident(hit, DEFAULT_DATE_CONFIDENCE)).toBe(true);
   });
 
+  it('refuses the idioms that are not dates', () => {
+    // A promise about opening hours and a score, both of which would otherwise
+    // read as a July day and raise a finding in the fortnight before it.
+    expect(days('We are available 24/7, renewal noted.')).toEqual([]);
+    expect(days('The deadline rating was 5/7 across the board.')).toEqual([]);
+    // Written as a date, it is read as one.
+    expect(days('The deadline is 05/07/2027.')).toEqual(['2027-07-05']);
+  });
+
   it('does not read dotted numbers as dates', () => {
     expect(days('Version 22.09 shipped, the total was 25.09 euros.')).toEqual([]);
   });
@@ -133,23 +145,53 @@ describe('weekday plus a time', () => {
 
 describe('the window', () => {
   it('skips a date that has already gone by', () => {
-    expect(days('The invoice was due 15 September.')).toEqual([]);
     expect(days('It expired on 2026-09-01.')).toEqual([]);
+    expect(days('The meeting was 2026-09-20, remember.')).toEqual([]);
   });
 
-  it('skips a date beyond the fortnight', () => {
-    expect(days('The deadline is 20 October.')).toEqual([]);
+  it('keeps a date beyond the fortnight, which is the sentinel\'s rule and not this file\'s', () => {
+    // A message is read once, at ingest. A renewal announced a month out has
+    // to be stored now or it is lost forever — whether it is close enough to
+    // be worth saying anything about is asked later, by `statedDatesBetween`,
+    // against the owner's clock rather than the message's.
+    expect(days('The deadline is 20 October.')).toEqual(['2026-10-20']);
+    // ...and a caller that wants the old fortnight can still ask for it.
+    expect(
+      findDates('The deadline is 20 October.', { at: AT, timezone: 'UTC', windowDays: DATE_WINDOW_DAYS }),
+    ).toEqual([]);
   });
 
   it('keeps the far edge of the window', () => {
     expect(days('The deadline is 5 October.')).toEqual(['2026-10-05']);
   });
 
+  it('stops at the horizon: a year out is a lease, not a reminder', () => {
+    const beyond = new Date(AT.getTime() + (DATE_HORIZON_DAYS + 40) * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    expect(days(`The lease ends ${beyond}.`)).toEqual([]);
+  });
+
   it('takes the following year when the day has gone by this one', () => {
-    // From September, "2 January" is next January — and out of the window.
-    expect(days('Renewal on 2 January.')).toEqual([]);
-    expect(findDates('Renewal on 2 January.', { at: AT, timezone: 'UTC', windowDays: 200 })).toEqual([
+    // From September, "2 January" is next January: inside the horizon, so it
+    // is kept and will raise its finding in December.
+    expect(findDates('Renewal on 2 January.', { at: AT, timezone: 'UTC' })).toEqual([
       { date: '2027-01-02', phrase: '2 January', confidence: BASE_CONFIDENCE.monthName + KEYWORD_BOOST },
+    ]);
+  });
+
+  it('refuses to roll a day that has only just gone by into next year', () => {
+    // "was due 15 September", six days ago. Rolling it to September 2027
+    // would store a false deadline and raise it eleven months later.
+    expect(days('The invoice was due 15 September.')).toEqual([]);
+    expect(YEAR_ROLL_DAYS).toBeLessThan(DATE_HORIZON_DAYS);
+  });
+
+  it('reads a date that was months away when it was written', () => {
+    // The catch-up case: a backlog message read for the first time today.
+    const written = new Date('2026-08-01T09:00:00Z');
+    expect(findDates('The deadline is 25 September.', { at: written, timezone: 'UTC' })).toEqual([
+      { date: '2026-09-25', phrase: '25 September', confidence: BASE_CONFIDENCE.monthName + KEYWORD_BOOST },
     ]);
   });
 
@@ -198,6 +240,30 @@ describe('confidence', () => {
   it('a keyword in a different sentence does not', () => {
     const hit = one('Filing on 22 September. The deadline was last month.');
     expect(hit.confidence).toBe(BASE_CONFIDENCE.monthName);
+  });
+
+  it('does not lend a keyword to the next sentence when that one starts with a digit', () => {
+    // `sentencesOf` keeps these two together on purpose — the rule that saves
+    // `Sep. 22` from being cut in half — so the keyword is looked for in the
+    // clause the date is actually in.
+    const hit = one('The deadline has passed. 22/09 was the invoice number.');
+    expect(hit.confidence).toBe(BASE_CONFIDENCE.numeric);
+  });
+
+  it('still lends it across a boundary its own abbreviation drew', () => {
+    // "Sep." ends a clause as far as the splitter is concerned; the date is
+    // "Sep. 22", which is on both sides of it.
+    expect(one('Sep. 22 is the deadline.').confidence).toBeCloseTo(
+      BASE_CONFIDENCE.monthName + KEYWORD_BOOST,
+      5,
+    );
+  });
+
+  it('still lends it inside the same clause', () => {
+    expect(one('Invoice 22/09 is the deadline.').confidence).toBeCloseTo(
+      BASE_CONFIDENCE.numeric + KEYWORD_BOOST,
+      5,
+    );
   });
 
   it('recognises the French keywords', () => {

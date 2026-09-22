@@ -7,7 +7,9 @@
  *     the same fact: `last_seen_at` moves and nothing else happens.
  *  2. **Firing is rate limited by severity.** `urgent` wakes the owner once,
  *     then stays quiet for 24h; `info` lands in the weekly digest once, then
- *     stays quiet for 7 days. Silence is the default, not an optimization.
+ *     stays quiet for 7 days. Silence is the default, not an optimization —
+ *     with one exception: a fact that *got worse* (`info` to `urgent`) speaks
+ *     through its cooldown, because it is not the same news any more.
  *  3. **A sentinel that throws cannot stop the others.** The error is recorded
  *     in `core.sentinel_runs.last_error` and the tick continues; the findings
  *     of a failed run are ignored entirely (a half-list is not evidence that
@@ -22,12 +24,15 @@ import {
   SENTINEL_FINDING_COLUMNS,
   SENTINEL_WAKE_MISSION_ID,
   URGENT_COOLDOWN_MS,
+  findingsOf,
+  stillTrueKeys,
   toSentinelFinding,
   type Finding,
   type Sentinel,
   type SentinelFinding,
   type SentinelFindingRow,
   type SentinelOutcome,
+  type SentinelResult,
 } from './types.js';
 
 /** Every sentinel the installed plugins ship, in manifest order. */
@@ -143,9 +148,9 @@ async function runOne(
   timezone: string,
   agentForRole: (role: string) => string | undefined,
 ): Promise<SentinelOutcome> {
-  let findings: Finding[];
+  let result: SentinelResult;
   try {
-    findings = await sentinel.run({ db: pool, now: () => now, timezone, agentForRole });
+    result = await sentinel.run({ db: pool, now: () => now, timezone, agentForRole });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordRun(pool, sentinel.id, now, message);
@@ -158,25 +163,32 @@ async function runOne(
   }
 
   let fired = 0;
-  const seen = new Set<string>();
-  for (const finding of findings) {
+  const raised = new Set<string>();
+  /*
+   * What is still true, which is not the same list as what is raised: a
+   * sentinel that caps its findings per tick says so with `keys`, and those
+   * keys must not be resolved for having been left out of this tick's twenty.
+   */
+  const trueKeys = stillTrueKeys(result);
+  for (const finding of findingsOf(result)) {
     if (!finding.key || finding.key.trim() === '') {
       throw new Error(`sentinel ${sentinel.id} returned a finding with no key`);
     }
-    if (seen.has(finding.key)) continue; // one fact, one row, whatever the sentinel repeats
-    seen.add(finding.key);
+    if (raised.has(finding.key)) continue; // one fact, one row, whatever the sentinel repeats
+    raised.add(finding.key);
     if (await upsertAndMaybeFire(pool, sentinel.id, finding, now)) fired += 1;
   }
 
-  const resolved = await resolveMissing(pool, sentinel.id, seen, now);
+  const resolved = await resolveMissing(pool, sentinel.id, trueKeys, now);
   await recordRun(pool, sentinel.id, now, null);
   await appendEvent(pool, 'sentinel.ran', {
     sentinelId: sentinel.id,
-    findings: seen.size,
+    findings: raised.size,
     fired,
     resolved,
+    ...(trueKeys.size > raised.size ? { stillTrue: trueKeys.size } : {}),
   });
-  return { sentinelId: sentinel.id, ran: true, findings: seen.size, fired, resolved };
+  return { sentinelId: sentinel.id, ran: true, findings: raised.size, fired, resolved };
 }
 
 async function recordRun(
@@ -212,8 +224,16 @@ async function upsertAndMaybeFire(
   const cooldownPassed =
     existing !== null &&
     (existing.cooldownUntil === null || existing.cooldownUntil.getTime() <= now.getTime());
+  /*
+   * A fact that got worse is a new fact as far as the owner is concerned. A
+   * thread raised as `info` on day two is `urgent` on day seven, and the info
+   * cooldown is a week — so without this the escalation would wait until day
+   * nine to say anything, which is the one day the wording is about.
+   * Downgrades are not news and do not fire.
+   */
+  const escalated = existing !== null && existing.severity === 'info' && finding.severity === 'urgent';
   // A snoozed finding is touched and never fires: the owner has heard it.
-  const shouldFire = (isNew || cooldownPassed) && existing?.snoozedAt == null;
+  const shouldFire = (isNew || cooldownPassed || escalated) && existing?.snoozedAt == null;
 
   await pool.query(
     `insert into core.sentinel_findings
@@ -347,7 +367,7 @@ async function noteInDigest(pool: Pool, finding: Finding): Promise<Delivery> {
 async function resolveMissing(
   pool: Pool,
   sentinelId: string,
-  seen: Set<string>,
+  seen: ReadonlySet<string>,
   now: Date,
 ): Promise<number> {
   const open = await openFindings(pool, sentinelId);
@@ -359,6 +379,17 @@ async function resolveMissing(
        set resolved_at = $2, cooldown_until = null, snoozed_at = null
        where key = $1 and resolved_at is null`,
       [finding.key, now.toISOString()],
+    );
+    /*
+     * And it leaves the queue. An `info` finding waits in `core.digest_items`
+     * for the weekly recap; once the fact has stopped being true — answered,
+     * or a reminder now covers the date — reading it out next Sunday would be
+     * reporting something that is no longer so. Undelivered only: an item
+     * already consumed is history and stays in the record.
+     */
+    await pool.query(
+      `delete from core.digest_items where finding_key = $1 and consumed_at is null`,
+      [finding.key],
     );
     await appendEvent(pool, 'sentinel.resolved', {
       sentinelId,

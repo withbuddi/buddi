@@ -23,6 +23,7 @@
  * thread before the owner hears a word of it.
  */
 import type { Pool, PoolClient } from 'pg';
+import { quoted } from './mail.js';
 import {
   DEFAULT_DATE_CONFIDENCE,
   MAX_DATE_CONFIDENCE,
@@ -43,6 +44,18 @@ export const MAX_WAITING_DAYS = 60;
 
 /** A thread waiting this long is urgent whatever the setting says. */
 export const WARNING_WAITING_DAYS = 7;
+
+/**
+ * The ceiling: a conversation nobody has touched in this long is history.
+ *
+ * Without it the first tick on a real mailbox is a hundred urgent findings
+ * about mail from 2019 — migration 007 seeds every inbound-last thread as
+ * `waiting-on-me`, and every one of them is older than a week, so every one of
+ * them would be urgent, once a day, forever. A thread that went stale while
+ * the watcher was off stays stale: that is the same rule, and it is why
+ * switching a watcher back on cannot replay a month of news.
+ */
+export const STALE_WAITING_DAYS = 30;
 
 export interface WatcherSettings {
   waitingDays: number;
@@ -182,8 +195,8 @@ export interface WaitingFinding {
 export function waitingFinding(thread: WaitingThread): WaitingFinding {
   const subject = thread.subject.trim() === '' ? '(no subject)' : thread.subject.trim();
   const detail = [
-    `${thread.from} wrote last, ${days(thread.ageDays)} ago, and the conversation is still waiting on you.`,
-    thread.firstLine === '' ? '' : `Their message begins: "${thread.firstLine}"`,
+    `${quoted(thread.from)} wrote last, ${days(thread.ageDays)} ago, and the conversation is still waiting on you.`,
+    thread.firstLine === '' ? '' : `Their message begins: ${quoted(thread.firstLine)}`,
     'Read the thread before saying anything: it may already have been answered somewhere buddi cannot see.',
   ]
     .filter((line) => line !== '')
@@ -191,7 +204,7 @@ export function waitingFinding(thread: WaitingThread): WaitingFinding {
   return {
     key: waitingKey(thread.threadId, thread.lastInboundId),
     severity: severityForAge(thread.ageDays),
-    title: `${thread.from} has been waiting ${days(thread.ageDays)} on "${subject}"`,
+    title: `${quoted(thread.from)} has been waiting ${days(thread.ageDays)} on ${quoted(subject)}`,
     detail,
     data: {
       threadId: thread.threadId,
@@ -255,9 +268,9 @@ export function dateFinding(hit: StatedDate): DateFinding {
   return {
     key: dateKey(hit.messageId, hit.date),
     severity: 'info',
-    title: `A date is stated: ${hit.date}, in "${subject}"`,
+    title: `A date is stated: ${hit.date}, in ${quoted(subject)}`,
     detail:
-      `${hit.from} wrote "${hit.phrase}" (read as ${hit.date}, confidence ${hit.confidence.toFixed(2)}), ` +
+      `${quoted(hit.from)} wrote ${quoted(hit.phrase)} (read as ${hit.date}, confidence ${hit.confidence.toFixed(2)}), ` +
       'and no reminder exists for that day on this conversation. Read the message, and if the date is ' +
       `real set a reminder for it with reminder.set, passing context {"threadId": "${hit.threadId ?? ''}"} so ` +
       'this watcher knows not to raise it again. If the date is not what it looks like, say nothing.',

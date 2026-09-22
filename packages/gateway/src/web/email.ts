@@ -659,15 +659,32 @@ function watcherView(settings: { waitingDays: number; dateConfidence: number }):
 export async function readEmailWatchers(pool: Pool): Promise<RouteReply> {
   try {
     return { status: 200, body: watcherView(await loadWatcherSettings(pool)) };
-  } catch {
-    // No email schema yet: the section shows the defaults rather than an error
-    // the owner cannot act on, exactly as the policies route does.
+  } catch (err) {
+    /*
+     * The plugin is not installed — there is no `email.settings` table at all
+     * (42P01, undefined_table). That is not a failure: the section shows the
+     * defaults, exactly as the policies route does.
+     *
+     * Anything else is. A pool that timed out would otherwise make the page
+     * show `2 / 0.6` as though those were the stored values, and the owner
+     * would reasonably believe he had read his own settings.
+     */
+    if ((err as { code?: string } | null)?.code === '42P01') {
+      return {
+        status: 200,
+        body: watcherView({
+          waitingDays: DEFAULT_WAITING_DAYS,
+          dateConfidence: DEFAULT_DATE_CONFIDENCE,
+        }),
+      };
+    }
     return {
-      status: 200,
-      body: watcherView({
-        waitingDays: DEFAULT_WAITING_DAYS,
-        dateConfidence: DEFAULT_DATE_CONFIDENCE,
-      }),
+      status: 503,
+      body: {
+        error: `The watcher settings could not be read: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      },
     };
   }
 }

@@ -54,7 +54,9 @@ export function renderDigest(items: DigestItem[]): string {
   if (items.length === 0) return '';
   const lines = items.map((item) => `- ${item.title}: ${item.detail}`);
   return [
-    'Items noted this week (from the watchers, already verified — mention the ones that still matter, briefly):',
+    'Items noted this week by the watchers. They are deterministic readings, ' +
+      'not yet verified; check each one before repeating it, and mention only ' +
+      'the ones that still matter, briefly:',
     ...lines,
   ].join('\n');
 }

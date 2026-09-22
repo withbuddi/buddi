@@ -12,8 +12,11 @@
  * conversation is rendered into the prompt with the same bounded, fenced block
  * the triage prompt uses (`threadBlock` in the email plugin) — the last few
  * turns quoted, the ones before them a line each, every piece of sender text
- * marked as untrusted data. One extra instruction goes with it, and it is the
- * point of the whole watcher: verify, then report or draft. Never send.
+ * marked as untrusted data — followed by the same paragraph that tells the
+ * model what those markers mean (`UNTRUSTED_NOTICE`, also the plugin's). The
+ * markers without the sentence are half a contract. One extra instruction goes
+ * with it, and it is the point of the whole watcher: verify, then report or
+ * draft. Never send.
  *
  * It is a *gateway* concern because the finding and the mission are the
  * gateway's; the rendering is the plugin's own, imported rather than reinvented,
@@ -21,6 +24,7 @@
  * versions of the same conversation.
  */
 import {
+  UNTRUSTED_NOTICE,
   findThread,
   threadBlock,
   threadMessages,
@@ -105,7 +109,16 @@ export function createMailWatcherPrepare(pool: Pool): PrepareRun {
     }
     if (thread === null) return null;
     return {
-      appendix: [...threadBlock(thread), '', MAIL_WAKE_INSTRUCTION].join('\n').trim(),
+      /*
+       * The block, then the sentence that says what its markers mean, then the
+       * instruction — in that order, so the run's own orders are the last
+       * thing read. `UNTRUSTED_NOTICE` is the triage prompt's own paragraph,
+       * imported rather than paraphrased: the fence and the contract around it
+       * cannot drift apart into two versions.
+       */
+      appendix: [...threadBlock(thread), '', UNTRUSTED_NOTICE, '', MAIL_WAKE_INSTRUCTION]
+        .join('\n')
+        .trim(),
     };
   };
 }

@@ -31,8 +31,12 @@ create table if not exists dates (
   on_date date not null,
   -- The words it was read from, so the owner can check the parser.
   phrase text not null,
-  -- 0..1. `email.settings.watcher_date_confidence` is the threshold.
-  confidence real not null check (confidence >= 0 and confidence <= 1),
+  -- 0..1, to two decimals — `numeric`, not `real`. The parser rounds to 2dp
+  -- and the threshold it is compared against (`watcher_date_confidence`) is
+  -- typed the same way, because `real` 0.45 is 0.44999998807907104 and would
+  -- sit *below* an owner threshold of exactly 0.45: a hit the settings page
+  -- says qualifies, silently dropped.
+  confidence numeric(3,2) not null check (confidence >= 0 and confidence <= 1),
   found_at timestamptz not null default now(),
   -- One reading per day per message: the same Tuesday spelled twice is one
   -- fact, and re-scanning a message must not double its rows.
@@ -47,6 +51,21 @@ create index if not exists dates_on_date_idx on dates (on_date);
 -- was found: "no dates in it" is a result, not an omission.
 alter table messages add column if not exists dates_scanned_at timestamptz null;
 
+-- Inbound only, in the predicate as well as in the query: the owner's own
+-- mail is never read for dates, so an index that carried it would be mostly
+-- rows the sweep skips. `fetched_at` is the order `unscannedMessages` asks
+-- for, exactly, so the sweep walks this index rather than sorting the mailbox.
 create index if not exists messages_dates_unscanned_idx
-  on messages (fetched_at)
-  where dates_scanned_at is null;
+  on messages (fetched_at, id)
+  where dates_scanned_at is null and direction = 'in';
+
+-- The tail is history, not catch-up. On an existing installation every message
+-- ever fetched is unscanned, and reading a decade of mail 200 rows an hour to
+-- find dates that went by years ago is work for nothing. Anything older than
+-- sixty days is stamped as read with no rows: the sweep starts near the
+-- present and empties in a few ticks rather than a few weeks.
+update messages
+   set dates_scanned_at = now()
+ where dates_scanned_at is null
+   and direction = 'in'
+   and coalesce(internal_date, fetched_at) < now() - interval '60 days';
