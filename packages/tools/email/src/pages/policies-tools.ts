@@ -193,7 +193,29 @@ function idsTool(
     ownerOnly: true,
     input: idsInput,
     async execute(input, ctx) {
-      return bulkPolicies(ctx.db, action, input.ids, ctx.now());
+      const result = await bulkPolicies(ctx.db, action, input.ids, ctx.now());
+      /*
+       * A selection that touched nothing is a refusal, not a success.
+       *
+       * The page reloads after every act, so the usual way to get here is a
+       * rule somebody revoked in another tab while this list was on screen —
+       * and "Revoke" that quietly did nothing is indistinguishable from one
+       * that worked. The old route answered 404 with this sentence.
+       */
+      const touched = result.kept + result.revoked;
+      if (touched === 0) throw new RuleRefusal('That policy is no longer there.');
+      const word = action === 'keep' ? 'kept' : 'revoked';
+      return {
+        ...result,
+        // Partly done is said out loud too: what is on screen was older than
+        // the table, and the owner is told which half landed.
+        note:
+          result.missing === 0
+            ? `${touched} ${touched === 1 ? 'rule' : 'rules'} ${word}.`
+            : `${touched} ${touched === 1 ? 'rule' : 'rules'} ${word}; ${result.missing} ${
+                result.missing === 1 ? 'was' : 'were'
+              } no longer there.`,
+      };
     },
   };
 }

@@ -244,6 +244,8 @@ export { getSettings, setSettings } from './tools/settings.js';
 export {
   listPolicies,
   policiesView,
+  policyLists,
+  threadChoices,
   renderPolicyPreview,
   revokeEmailPolicy,
   setPolicy,

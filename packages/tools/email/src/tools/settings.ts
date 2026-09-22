@@ -123,8 +123,8 @@ const setInput = z
     retentionDays: z
       .number()
       .int()
-      .min(MIN_RETENTION_DAYS)
-      .max(MAX_RETENTION_DAYS)
+      .min(MIN_RETENTION_DAYS, `The retention window is a whole number of days between ${MIN_RETENTION_DAYS} and ${MAX_RETENTION_DAYS}.`)
+      .max(MAX_RETENTION_DAYS, `The retention window is a whole number of days between ${MIN_RETENTION_DAYS} and ${MAX_RETENTION_DAYS}.`)
       .optional()
       .describe(
         `How many days to keep message bodies before purging them (default ${DEFAULT_RETENTION_DAYS}, between ${MIN_RETENTION_DAYS} and ${MAX_RETENTION_DAYS}).`,
@@ -132,16 +132,16 @@ const setInput = z
     waitingDays: z
       .number()
       .int()
-      .min(MIN_WAITING_DAYS)
-      .max(MAX_WAITING_DAYS)
+      .min(MIN_WAITING_DAYS, `The waiting window is a whole number of days between ${MIN_WAITING_DAYS} and ${MAX_WAITING_DAYS}.`)
+      .max(MAX_WAITING_DAYS, `The waiting window is a whole number of days between ${MIN_WAITING_DAYS} and ${MAX_WAITING_DAYS}.`)
       .optional()
       .describe(
         `How many days a conversation may wait on the owner before the waiting-on-me watcher reports it (default ${DEFAULT_WAITING_DAYS}, between ${MIN_WAITING_DAYS} and ${MAX_WAITING_DAYS}). A week or more is reported as urgent whatever this says.`,
       ),
     dateConfidence: z
       .number()
-      .min(MIN_DATE_CONFIDENCE)
-      .max(MAX_DATE_CONFIDENCE)
+      .min(MIN_DATE_CONFIDENCE, `The date confidence is a number between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}.`)
+      .max(MAX_DATE_CONFIDENCE, `The date confidence is a number between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}.`)
       .optional()
       .describe(
         `How sure the date parser must be before a stated date raises a finding (default ${DEFAULT_DATE_CONFIDENCE}, between ${MIN_DATE_CONFIDENCE} and ${MAX_DATE_CONFIDENCE}). An unambiguous date with "deadline" beside it scores about 0.8; a bare "9/8" scores 0.3.`,
@@ -149,16 +149,16 @@ const setInput = z
     promisedDays: z
       .number()
       .int()
-      .min(MIN_PROMISED_DAYS)
-      .max(MAX_PROMISED_DAYS)
+      .min(MIN_PROMISED_DAYS, `The promise window is a whole number of days between ${MIN_PROMISED_DAYS} and ${MAX_PROMISED_DAYS}.`)
+      .max(MAX_PROMISED_DAYS, `The promise window is a whole number of days between ${MIN_PROMISED_DAYS} and ${MAX_PROMISED_DAYS}.`)
       .optional()
       .describe(
         `How many days a promise of yours, or a draft written for you, may sit unsent before the promised-reply watcher reports it (default ${DEFAULT_PROMISED_DAYS}, between ${MIN_PROMISED_DAYS} and ${MAX_PROMISED_DAYS}). A week or more is reported as urgent whatever this says.`,
       ),
     receiptConfidence: z
       .number()
-      .min(MIN_RECEIPT_CONFIDENCE)
-      .max(MAX_RECEIPT_CONFIDENCE)
+      .min(MIN_RECEIPT_CONFIDENCE, `The receipt confidence is a number between ${MIN_RECEIPT_CONFIDENCE} and ${MAX_RECEIPT_CONFIDENCE}.`)
+      .max(MAX_RECEIPT_CONFIDENCE, `The receipt confidence is a number between ${MIN_RECEIPT_CONFIDENCE} and ${MAX_RECEIPT_CONFIDENCE}.`)
       .optional()
       .describe(
         `How sure the classifier must be before a message is reported as a receipt or a bill (default ${DEFAULT_RECEIPT_CONFIDENCE}, between ${MIN_RECEIPT_CONFIDENCE} and ${MAX_RECEIPT_CONFIDENCE}). "Invoice" in the subject with a total beside it scores about 0.95; "your order" in a body alone scores 0.4.`,
@@ -166,8 +166,8 @@ const setInput = z
     nudgeDays: z
       .number()
       .int()
-      .min(MIN_NUDGE_DAYS)
-      .max(MAX_NUDGE_DAYS)
+      .min(MIN_NUDGE_DAYS, `The nudge window is a whole number of days between ${MIN_NUDGE_DAYS} and ${MAX_NUDGE_DAYS}.`)
+      .max(MAX_NUDGE_DAYS, `The nudge window is a whole number of days between ${MIN_NUDGE_DAYS} and ${MAX_NUDGE_DAYS}.`)
       .optional()
       .describe(
         `How many days you wait for an answer before the unanswered-by-them watcher offers to draft a nudge (default ${DEFAULT_NUDGE_DAYS}, between ${MIN_NUDGE_DAYS} and ${MAX_NUDGE_DAYS}). It never sends one.`,
@@ -203,6 +203,12 @@ export const setSettings: ToolDefinition<z.infer<typeof setInput>, unknown> = {
     if (Object.keys(patch).length > 0) {
       await setWatcherSettings(ctx.db, patch, ctx.now());
     }
-    return summarise(ctx.db);
+    return {
+      ...(await summarise(ctx.db)),
+      // What the owner is told on the settings page. The watchers do not
+      // re-read this until their next tick, and saying so is the difference
+      // between "saved" and "in force".
+      note: 'Saved. The watchers use it on their next run.',
+    };
   },
 };

@@ -69,6 +69,15 @@ const messages: Component = {
   query: thread(),
   rows: 'messages',
   key: 'id',
+  /*
+   * The sentence for an empty conversation belongs *here*, on the thing that
+   * would have drawn the rows — not on a sibling `notice` asking `when` about
+   * the thread. A component is handed the data of the nearest query above it,
+   * and inside a `list-detail`'s detail that is the page's own, which is
+   * nothing: such a `when` can only ever be false, and the sentence would
+   * never appear. `empty` asks nothing and cannot rot.
+   */
+  empty: 'No messages have been synced for this conversation yet.',
   body: [
     {
       kind: 'expand',
@@ -98,7 +107,9 @@ const messages: Component = {
           title: 'Attachments',
           query: message(),
           rows: 'attachments',
-          key: 'filename',
+          // The index, never the filename: a filename comes off the wire, and
+          // two `invoice.pdf` on one message are two rows, not one.
+          key: 'index',
           item: {
             title: { path: 'filename' },
             sub: { path: 'detail' },
@@ -118,7 +129,7 @@ const messages: Component = {
           kind: 'repeat',
           query: message(),
           rows: 'attachments',
-          key: 'filename',
+          key: 'index',
           body: [
             {
               kind: 'artifact',
@@ -162,19 +173,28 @@ const drafts: Component = {
   query: thread(),
   rows: 'drafts',
   key: 'id',
+  empty:
+    'No draft is waiting here. Ask an agent to draft a reply and it will appear under the conversation.',
   body: [
     {
+      // The sentence carries the server's own words when there were any, which
+      // is why it is a path rather than a string.
       kind: 'notice',
       tone: 'critical',
       title: 'This was dispatched and never confirmed',
-      text:
-        'buddi handed this message to the mail server and never got an answer, so whether it went out is genuinely unknown. Check the mailbox — the Sent folder and the recipient — before sending anything like it again. Nothing here can be edited, discarded or sent until you have.',
+      text: { path: 'unresolvedLine' },
       when: { path: 'unresolved', equals: true },
     },
     {
+      /*
+       * `notLive`, not `live === false`: a draft a dispatch is holding is also
+       * not live, and telling the owner "it is kept so you can read what was
+       * proposed" directly under "whether it went out is genuinely unknown"
+       * is two answers to one question.
+       */
       kind: 'notice',
-      text: 'This draft can no longer be edited or sent. It is kept so you can read what was proposed.',
-      when: { path: 'live', equals: false },
+      text: { path: 'notLiveLine' },
+      when: { path: 'notLive', equals: true },
     },
     {
       kind: 'editor',
@@ -252,8 +272,7 @@ const mail: PageDescriptor = {
           name: 'q',
           label: 'Text',
           type: 'text',
-          required: true,
-          hint: 'A word in the subject, the sender or the body.',
+          hint: 'A word in the subject, the sender or the body. On its own, or with the filters.',
         },
         { name: 'from', label: 'From', type: 'text', hint: 'An address, or a domain like acme.com.' },
         { name: 'since', label: 'Since', type: 'date' },
@@ -263,6 +282,13 @@ const mail: PageDescriptor = {
       query: {
         query: 'threads',
         params: {
+          /*
+           * What tells the query that somebody pressed Search: the list above
+           * asks the same query with no parameters at all, and an owner who
+           * searched for nothing must get the refusal that says so rather than
+           * the list's silence.
+           */
+          searching: { const: 'true' },
           q: { param: 'q' },
           from: { param: 'from' },
           since: { param: 'since' },
@@ -319,23 +345,18 @@ const mail: PageDescriptor = {
           ],
           body: [],
         },
-        {
-          kind: 'notice',
-          text: 'No messages have been synced for this conversation yet.',
-          when: { path: 'hasMessages', equals: false },
-        },
         messages,
-        {
-          kind: 'notice',
-          text:
-            'No draft is waiting here. Ask an agent to draft a reply and it will appear under the conversation.',
-          when: { path: 'hasDraft', equals: false },
-        },
         drafts,
+        /*
+         * The ended drafts. The fold is always here rather than shown only
+         * when there are some: `when` would be asked against the page's own
+         * data — which, inside a detail the route owns, is nothing — and a
+         * question that can only be answered "no" is how a whole section
+         * quietly stops existing. The list inside says when there is nothing.
+         */
         {
           kind: 'expand',
           label: 'Older drafts',
-          when: { path: 'hasOlder', equals: true },
           query: thread(),
           body: [
             {
@@ -599,6 +620,9 @@ const settings: PageDescriptor = {
           columns: [
             { key: 'address', label: 'Address' },
             { key: 'called', label: 'Called' },
+            // A reply leaves from the alias the message was addressed to, so
+            // which ones a mailbox answers to is part of what it *is*.
+            { key: 'aliases', label: 'Also receives as' },
             { key: 'host', label: 'Host' },
             { key: 'lastSync', label: 'Last sync' },
             { key: 'secretName', label: 'Password kept as' },
