@@ -1,9 +1,6 @@
 # Install: one command, then the dashboard
 
-Status: proposed spec, 2026-09-20. An experimental [packaged-install
-foundation](install-foundation.md) is implemented separately, and the first-run
-first run of §5 is now built on top of it (the thread of onboarding.md, minus the deferrals named
-there). Plugins from npm and the backup contract are not built.
+Status: reference, 2026-09-21
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
@@ -611,22 +608,40 @@ runs first-run headless, and asserts the gateway answers.
 
 ---
 
-## 12. Order of work
+## 12. What of this is built
 
-1. The published package: bundling, `bin`, CI that installs it clean.
-2. Bundled Postgres under the supervisor, `buddi` first run, data directory
-   layout, the maintenance path for upgrade and restore.
-3. The wizard, reusing the settings pages; `init` ends in it.
-4. Encrypted backup to a folder, restore in the wizard with recovery mode,
-   the Backup page. Prove a fresh machine comes back whole before anything
-   widens.
-5. Plugins from npm: staging, approval before import, the loader for
-   `<data>/plugins`, provenance and doctor checks. `@buddi/core` published.
-6. Linux and Windows: vault backends, Task Scheduler unit, the three-platform
-   CI job.
-7. Version check and the upgrade action in the dashboard.
-8. The provider APIs for backup (Drive, Dropbox), after the folder target
-   has been used for real.
+Checked against the code on 2026-09-21. The unbuilt part of the order of work
+this section used to carry has moved to [the roadmap](ROADMAP.md).
+
+Built:
+
+1. **The published package**: bundling and `bin` (`packages/install`).
+2. **Bundled Postgres under the supervisor**, `buddi` first run, the data
+   directory layout, and the maintenance path for upgrade and restore
+   (`packages/install/src/{postgres,supervisor,launcher,environment}.ts`, and
+   [install-foundation.md](install-foundation.md)).
+3. **The wizard**, reusing the settings pages; `init` ends in it
+   (`packages/cli/src/init.ts`, and [onboarding.md](onboarding.md)).
+4. **Encrypted backup to a folder**, restore with recovery mode, the Backup
+   page (`packages/core/src/backup`,
+   `packages/web/src/views/{Backup,Recovery}.tsx`, and
+   [operations.md](operations.md)).
+5. **Plugins from npm**: staging, approval before import, the loader for
+   `<data>/plugins`, provenance and doctor checks
+   (`packages/gateway/src/plugins/{npm,stage,install}.ts`,
+   `packages/web/src/views/Plugins.tsx`).
+7. **The version check and the upgrade action in the dashboard**
+   (`packages/web/src/views/Settings.tsx`, `packages/install/src/upgrade.ts`).
+
+Not built, and tracked in [the roadmap](ROADMAP.md):
+
+6. **Linux and Windows.** The data-directory layout knows both platforms
+   (`packages/install/src/environment.ts`), and nothing else does: the vault
+   has a macOS keychain backend and a file fallback and no third
+   (`packages/core/src/vault/index.ts`), there is no Task Scheduler unit, and
+   the repository carries no CI workflow at all.
+8. **The provider APIs for backup (Drive, Dropbox).** No code references
+   either.
 
 Three parts carry real risk and get the same care: the managed cluster,
 plugin code executing in the process, and restore.
