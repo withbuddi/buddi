@@ -263,7 +263,12 @@ suite('email accounts, plural (postgres)', () => {
     expect(approvedEffect.envelope).toMatchObject({ accountAddress: WORK, from: WORK });
     expect(approvedEffect.envelope.fromChoices).toEqual([WORK, WORK_ALIAS]);
     expect(approvedEffect.preview).toContain(`Send mail as ${WORK}`);
-    expect(approvedEffect.preview).toContain(`or, if you choose it here, as ${WORK_ALIAS}`);
+    // The alternatives are a *control* now, not a line of preview prose: the
+    // card draws a select from this, and the preview stays the effect.
+    expect(approvedEffect.preview).not.toContain('if you choose it here');
+    expect(approvedEffect.choices).toEqual([
+      { key: 'from', label: 'Send as', options: [WORK, WORK_ALIAS], default: WORK },
+    ]);
 
     const before = smtp.sent.length;
     await sendTool.execute(
@@ -272,6 +277,44 @@ suite('email accounts, plural (postgres)', () => {
     );
     expect(smtp.sent).toHaveLength(before + 1);
     expect(smtp.sent[before]).toMatchObject({ from: WORK, to: ['tdorothee@client.test'] });
+  });
+
+  it('sends under the alias the owner chose, still authenticating as the account', async () => {
+    const draft = await call('email.draft_reply', { inReplyTo: ids.workId, bodyText: 'Here it is.' });
+    const approvedEffect = await sendTool.describe({ draftId: draft.id }, ctx);
+    const before = smtp.sent.length;
+    await sendTool.execute(
+      { draftId: draft.id },
+      {
+        ...ctx,
+        actionId: '88888888-8888-4888-8888-888888888888',
+        approvedEffect,
+        // What core hands a gated execute after validating the owner's pick
+        // against the very list the envelope declared.
+        choices: { from: WORK_ALIAS },
+      },
+    );
+    expect(smtp.sent).toHaveLength(before + 1);
+    // The alias is the identity on the wire; the account is still what opened
+    // the connection, which is `FakeSmtpServer`'s `account` on the dispatch.
+    expect(smtp.sent[before]).toMatchObject({ from: WORK_ALIAS });
+    expect(smtp.logins[smtp.logins.length - 1]).toBe(WORK);
+  });
+
+  it('refuses an identity the approval never offered', async () => {
+    const draft = await call('email.draft_reply', { inReplyTo: ids.workId, bodyText: 'Here it is.' });
+    const approvedEffect = await sendTool.describe({ draftId: draft.id }, ctx);
+    await expect(
+      sendTool.execute(
+        { draftId: draft.id },
+        {
+          ...ctx,
+          actionId: '99999999-9999-4999-8999-999999999999',
+          approvedEffect,
+          choices: { from: 'someone@elsewhere.test' },
+        },
+      ),
+    ).rejects.toThrow(/not one of the identities this approval offered/);
   });
 
   it('replies from the personal account under its own address, with nothing else to choose', async () => {

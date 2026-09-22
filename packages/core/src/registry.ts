@@ -428,6 +428,9 @@ export class ToolRegistry {
         canonicalArgs: args,
         envelope: described.envelope,
         preview: described.preview,
+        // The controls the tool offered the owner. They are part of what was
+        // shown, so they are recorded on the action and hashed with it.
+        ...(described.choices && described.choices.length > 0 ? { choices: described.choices } : {}),
         now: ctx.now(),
       });
       const permission = tool.reusableApproval

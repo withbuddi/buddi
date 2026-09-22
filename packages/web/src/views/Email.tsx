@@ -80,6 +80,7 @@ import {
   type EmailWatcherSettings,
 } from '../api';
 import { fmtRelative } from '../format';
+import { EmailDraftsBlock } from './parts/EmailDrafts';
 import {
   Button,
   Empty,
@@ -775,6 +776,7 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
           />
           </Stack>
         </Section>
+        <EmailDraftsBlock />
         <WatchersBlock />
       </Stack>
       {sheet === 'account' ? (

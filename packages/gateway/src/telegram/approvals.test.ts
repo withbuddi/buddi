@@ -27,6 +27,7 @@ import {
   approvalCallbackData,
   approvalKeyboard,
   approvalRequestText,
+  choiceOverflowLine,
   decidedText,
   parseApprovalCallback,
   pendingText,
@@ -63,6 +64,51 @@ describe('approval callbacks (pure)', () => {
     }
   });
 
+  it('offers one "Approve as" button per option, carrying the index and never the value', () => {
+    const choice = {
+      key: 'from',
+      label: 'Send as',
+      options: ['owner@work.test', 'legal@work.test'],
+      default: 'owner@work.test',
+    };
+    const keyboard = approvalKeyboard(ACTION_ID, false, choice);
+    expect(keyboard.inline_keyboard.map((row) => row.map((b) => b.text))).toEqual([
+      ['✅ Approve as owner@work.test'],
+      ['✅ Approve as legal@work.test'],
+      ['✖ Reject'],
+    ]);
+    // The payload is an index into the declared list. An address would not
+    // reliably fit in 64 bytes, and a value arriving from outside is exactly
+    // what the declared list exists to make impossible.
+    const data = keyboard.inline_keyboard[1]?.[0]?.callback_data as string;
+    expect(data).toBe(`apr:${ACTION_ID}:o1`);
+    expect(data).not.toContain('legal@work.test');
+    expect(parseApprovalCallback(data)).toEqual({
+      actionId: ACTION_ID,
+      decision: 'approved',
+      optionIndex: 1,
+    });
+    expect(choiceOverflowLine(choice)).toBeUndefined();
+  });
+
+  it('offers only the default past four options, and says where the rest are', () => {
+    const choice = {
+      key: 'from',
+      label: 'Send as',
+      options: ['a@x.test', 'b@x.test', 'c@x.test', 'd@x.test', 'e@x.test'],
+      default: 'a@x.test',
+    };
+    const keyboard = approvalKeyboard(ACTION_ID, false, choice);
+    expect(keyboard.inline_keyboard).toHaveLength(2);
+    expect(keyboard.inline_keyboard[0]?.[0]?.text).toBe('✅ Approve as a@x.test');
+    const line = choiceOverflowLine(choice);
+    expect(line).toContain('this approves as a@x.test');
+    expect(line).toContain('e@x.test');
+    expect(approvalRequestText({ ...sampleAction, choices: [choice] }, 'UTC')).toContain(
+      'are on the dashboard',
+    );
+  });
+
   it('builds one row of two buttons, each bound to this action', () => {
     const keyboard = approvalKeyboard(ACTION_ID);
     expect(keyboard.inline_keyboard).toHaveLength(1);
@@ -93,6 +139,8 @@ const sampleAction = {
   decidedAt: null,
   claimedBy: null,
   claimedAt: null,
+  choices: [],
+  ownerChoices: null,
   outcome: null,
   updatedAt: new Date('2026-09-13T12:00:00Z'),
 };
@@ -244,6 +292,69 @@ suite('TelegramApprovals (postgres)', () => {
     from: { id: Number(from) },
     data: approvalCallbackData(actionId, decision),
     message: { message_id: 77, chat: { id: Number(OWNER_CHAT), type: 'private' } },
+  });
+
+  it('maps the tapped index to the value the action declared, and runs with it', async () => {
+    const ran: Array<Record<string, string> | undefined> = [];
+    const manifest: PluginManifest = {
+      name: 'mail',
+      version: '1.0.0',
+      schema: 'mail',
+      migrationsDir: '/tmp/mail',
+      tools: [
+        {
+          name: 'mail.send',
+          description: 'Send an email.',
+          tier: 'gated',
+          input: z.object({ to: z.string() }),
+          describe: (input) => ({
+            envelope: { to: [input.to] },
+            preview: `Send to ${input.to}`,
+            choices: [
+              {
+                key: 'from',
+                label: 'Send as',
+                options: ['owner@work.test', 'legal@work.test'],
+                default: 'owner@work.test',
+              },
+            ],
+          }),
+          execute: (async (_input: unknown, toolCtx: ToolContext) => {
+            ran.push(toolCtx.choices ? { ...toolCtx.choices } : undefined);
+            return { messageId: 'mid-1' };
+          }) as never,
+        },
+      ],
+    };
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+    const { approvals } = build({ registry });
+    const action = await createAction(pool, {
+      tool: 'mail.send',
+      toolVersion: '1.0.0',
+      agentId: 'mailer',
+      canonicalArgs: { to: 'a@b.c' },
+      envelope: { to: ['a@b.c'] },
+      preview: 'Send to a@b.c',
+      choices: [
+        {
+          key: 'from',
+          label: 'Send as',
+          options: ['owner@work.test', 'legal@work.test'],
+          default: 'owner@work.test',
+        },
+      ],
+    });
+
+    await approvals.handleCallback({
+      id: 'cb-1',
+      from: { id: Number(OWNER_USER) },
+      data: `apr:${action.id}:o1`,
+      message: { message_id: 77, chat: { id: Number(OWNER_CHAT), type: 'private' } },
+    });
+
+    expect((await getAction(pool, action.id))?.state).toBe('succeeded');
+    expect(ran).toEqual([{ from: 'legal@work.test' }]);
   });
 
   it('posts the request with buttons bound to the action', async () => {

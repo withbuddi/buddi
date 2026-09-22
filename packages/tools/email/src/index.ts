@@ -19,7 +19,7 @@ import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailSentinels } from './sentinels/index.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
-import { draftNew, draftReply } from './tools/drafts.js';
+import { draftNew, draftReply, readDraft } from './tools/drafts.js';
 import { listRecent, readMessage, search } from './tools/read.js';
 import { senderProfile } from './tools/sender.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
@@ -88,6 +88,7 @@ export function createEmailManifest(
       triageRecord,
       draftReply,
       draftNew,
+      readDraft,
       getSettings,
       setSettings,
       listPolicies,
@@ -156,6 +157,7 @@ export {
   type FolderKind,
   type FolderPlan,
 } from './folders.js';
+export * from './drafts.js';
 export { triageRecord } from './tools/triage.js';
 export { getSettings, setSettings } from './tools/settings.js';
 export {
@@ -241,7 +243,7 @@ export {
   RETENTION_EVERY_SECONDS,
   RETENTION_SOURCE_ID,
 } from './sources/retention.js';
-export { draftNew, draftReply, draftFilename } from './tools/drafts.js';
+export { draftNew, draftReply, readDraft, draftView, ownerEditedNote, type DraftView } from './tools/drafts.js';
 export {
   buildEnvelope,
   createSendTool,

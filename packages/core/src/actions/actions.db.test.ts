@@ -146,6 +146,139 @@ suite('actions and approvals (postgres)', () => {
     });
   });
 
+  /**
+   * The same tool, but it offers the owner something: a control the *tool*
+   * declared, with the list of values it declared, on the action recorded
+   * before anybody was asked.
+   */
+  function choiceManifest(): { manifest: PluginManifest; ran: Array<Record<string, string> | undefined> } {
+    const ran: Array<Record<string, string> | undefined> = [];
+    const manifest: PluginManifest = {
+      name: 'mail',
+      version: '1.2.3',
+      schema: 'mail',
+      migrationsDir: '/tmp/mail',
+      tools: [
+        {
+          name: 'mail.send',
+          description: 'Send an email.',
+          tier: 'gated',
+          input: z.object({ to: z.string(), subject: z.string() }),
+          execute: async (_input: any, toolCtx: ToolContext) => {
+            ran.push(toolCtx.choices ? { ...toolCtx.choices } : undefined);
+            return { messageId: 'mid-1' };
+          },
+          describe: (input: any) => ({
+            envelope: { to: [input.to], subject: input.subject },
+            preview: `Send "${input.subject}" to ${input.to}`,
+            choices: [
+              {
+                key: 'from',
+                label: 'Send as',
+                options: ['owner@work.test', 'legal@work.test'],
+                default: 'owner@work.test',
+              },
+            ],
+          }),
+        },
+      ],
+    };
+    return { manifest, ran };
+  }
+
+  describe('owner choices on an approval', () => {
+    const proposed = async (): Promise<{ id: string; registry: ToolRegistry; ran: Array<Record<string, string> | undefined> }> => {
+      const { manifest, ran } = choiceManifest();
+      const registry = new ToolRegistry();
+      registry.register(manifest);
+      const res = await registry.invoke('mail.send', { to: 'a@b.c', subject: 'Hi' }, ctx());
+      if (res.ok || res.reason !== 'approval-required') throw new Error('expected approval');
+      return { id: res.actionId, registry, ran };
+    };
+
+    it('records what the tool offered on the action itself', async () => {
+      const { id } = await proposed();
+      const action = await getAction(pool, id);
+      expect(action?.choices).toEqual([
+        {
+          key: 'from',
+          label: 'Send as',
+          options: ['owner@work.test', 'legal@work.test'],
+          default: 'owner@work.test',
+        },
+      ]);
+      // Pending: nothing has been picked yet, and `{}` would be a picked
+      // nothing rather than an unanswered question.
+      expect(action?.ownerChoices).toBeNull();
+    });
+
+    it('refuses a key nobody offered, and changes nothing', async () => {
+      const { id } = await proposed();
+      const out = await decideApproval(pool, {
+        actionId: id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+        ownerChoices: { replyTo: 'someone@else.test' },
+      });
+      expect(out).toMatchObject({ ok: false, reason: 'invalid-choice' });
+      expect((await getAction(pool, id))?.state).toBe('pending');
+    });
+
+    it('refuses a value that is not one of the options, and changes nothing', async () => {
+      const { id } = await proposed();
+      const out = await decideApproval(pool, {
+        actionId: id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+        ownerChoices: { from: 'attacker@evil.test' },
+      });
+      expect(out).toMatchObject({ ok: false, reason: 'invalid-choice' });
+      expect((await getAction(pool, id))?.state).toBe('pending');
+    });
+
+    it('hands execute the value the owner picked', async () => {
+      const { id, registry, ran } = await proposed();
+      const decided = await decideApproval(pool, {
+        actionId: id,
+        decision: 'approved',
+        by: 'owner',
+        via: 'web',
+        ownerChoices: { from: 'legal@work.test' },
+      });
+      expect(decided.ok).toBe(true);
+      const out = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(out.ok).toBe(true);
+      expect(ran).toEqual([{ from: 'legal@work.test' }]);
+      expect((await getAction(pool, id))?.ownerChoices).toEqual({ from: 'legal@work.test' });
+    });
+
+    it('fills an unanswered choice in from its declared default', async () => {
+      const { id, registry, ran } = await proposed();
+      await decideApproval(pool, { actionId: id, decision: 'approved', by: 'owner', via: 'cli' });
+      await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(ran).toEqual([{ from: 'owner@work.test' }]);
+    });
+
+    it('binds the menu into the hash: swapping the options voids the approval', async () => {
+      const { id, registry, ran } = await proposed();
+      await decideApproval(pool, { actionId: id, decision: 'approved', by: 'owner', via: 'web' });
+      await pool.query(
+        `update core.actions set choices = $2::jsonb where id = $1`,
+        [
+          id,
+          JSON.stringify([
+            { key: 'from', label: 'Send as', options: ['owner@work.test', 'attacker@evil.test'], default: 'owner@work.test' },
+          ]),
+        ],
+      );
+      const out = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
+      expect(out).toMatchObject({ ok: false, reason: 'args-hash-mismatch', state: 'refused' });
+      expect(ran).toEqual([]);
+    });
+  });
+
   describe('decideApproval', () => {
     const pending = async (): Promise<string> => {
       const action = await createAction(pool, {
@@ -327,11 +460,13 @@ suite('actions and approvals (postgres)', () => {
       );
 
       const res = await executeApproved(pool, { actionId: id, registry, ctx: ctx(), worker: 'w1' });
-      expect(res).toMatchObject({ ok: false, reason: 'args-hash-mismatch', state: 'failed' });
+      // `refused`, not `failed`: nothing was dispatched, so this did not
+      // half-happen the way a thrown effect might have.
+      expect(res).toMatchObject({ ok: false, reason: 'args-hash-mismatch', state: 'refused' });
       expect(sent).toEqual([]);
       // Nothing was dispatched, so nothing is in the ledger.
       expect(await listEffectAttempts(pool, id)).toHaveLength(0);
-      expect((await getAction(pool, id))?.state).toBe('failed');
+      expect((await getAction(pool, id))?.state).toBe('refused');
     });
 
     it('refuses when the tool moved to another version', async () => {

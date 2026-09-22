@@ -78,6 +78,16 @@ import {
   writeEmailWatchers,
   type EmailWebDeps,
 } from './email.js';
+import {
+  discardEmailDraft,
+  readEmailDraft,
+  readEmailDrafts,
+  readEmailThread,
+  readEmailThreads,
+  sendEmailDraft,
+  writeEmailDraft,
+  type EmailDraftsDeps,
+} from './email-drafts.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -762,6 +772,17 @@ export function createWebApp(deps: WebServerDeps): Server {
       pool: deps.pool as never,
       env: deps.env ?? process.env,
     });
+    /**
+     * What the draft editor needs. The registry and the context are for Send
+     * alone, which proposes the `email.send` action by the same path an agent
+     * takes and never executes anything itself.
+     */
+    const draftDeps = (): EmailDraftsDeps => ({
+      pool: deps.pool,
+      registry: deps.registry,
+      ctx: deps.ctx,
+      now: deps.now,
+    });
     /** What the two Telegram routes need. The environment is the live one. */
     const telegramDeps = (): TelegramWebDeps => ({
       pool: deps.pool,
@@ -1084,6 +1105,21 @@ export function createWebApp(deps: WebServerDeps): Server {
          * Settings → Email → Watchers: the two settings §7's watchers read.
          * A read; the counterpart writes them below.
          */
+        case '/api/email/threads': {
+          const account = q.get('account');
+          const view = await readEmailThreads(draftDeps(), {
+            ...(account && account.trim() !== '' ? { accountId: account.trim() } : {}),
+          });
+          return sendJson(res, view.status, view.body);
+        }
+        case '/api/email/drafts': {
+          const thread = q.get('thread');
+          if (!thread || thread.trim() === '') {
+            return sendJson(res, 400, { error: 'Name the conversation with `thread`.' });
+          }
+          const view = await readEmailDrafts(draftDeps(), thread.trim());
+          return sendJson(res, view.status, view.body);
+        }
         case '/api/email/watchers': {
           const view = await readEmailWatchers(deps.pool);
           return sendJson(res, view.status, view.body);
@@ -1282,6 +1318,22 @@ export function createWebApp(deps: WebServerDeps): Server {
         return;
       }
 
+      /*
+       * One conversation, drawn whole: its newest messages, and its drafts
+       * under them (docs/specs/email.md §8). The live ones and the ended ones
+       * come back as two lists, because the page draws them as two things.
+       */
+      const thread = /^\/api\/email\/threads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (thread) {
+        const view = await readEmailThread(draftDeps(), thread[1] as string);
+        return sendJson(res, view.status, view.body);
+      }
+      const draft = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (draft) {
+        const view = await readEmailDraft(draftDeps(), draft[1] as string);
+        return sendJson(res, view.status, view.body);
+      }
+
       return sendJson(res, 404, { error: 'no such endpoint' });
     }
 
@@ -1391,6 +1443,27 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
+      /*
+       * The owner's own save over a draft. No approval card: the gate on
+       * `email.draft_reply` exists because a model proposed something, and a
+       * person editing their own unsent letter has already said what they
+       * want. What it does do is mark the words as theirs — which is what
+       * stops the next agent draft from writing over them — and save a new
+       * artifact version, which is what makes a send approved a minute ago
+       * refuse rather than go out with different text.
+       */
+      const draftEdit = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (draftEdit) {
+        let edit: Record<string, unknown>;
+        try {
+          edit = await readJsonBody(req);
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: err.message });
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+        const view = await writeEmailDraft(draftDeps(), draftEdit[1] as string, edit);
+        return sendJson(res, view.status, view.body);
+      }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
@@ -1597,6 +1670,13 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (approval) {
       const scope = body.permissionScope ?? 'once';
       if (!['once', 'conversation', 'always'].includes(String(scope)) || typeof scope !== 'string') return sendJson(res, 400, { error: 'Invalid permission scope.' });
+      // What the owner set on the card's controls. The shape is checked here;
+      // whether each key and value was *offered* is core's to say, against the
+      // action it was declared on (`resolveOwnerChoices`).
+      const choices = body.ownerChoices;
+      if (choices !== undefined && (choices === null || typeof choices !== 'object' || Array.isArray(choices))) {
+        return sendJson(res, 400, { error: '`ownerChoices` must be an object of key to value.' });
+      }
       return finish(
         res,
         await decideApprovalFromWeb(
@@ -1604,6 +1684,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           decodeURIComponent(approval[1] as string),
           approval[2] === 'approve' ? 'approved' : 'rejected',
           scope as PermissionScope,
+          choices as Record<string, unknown> | undefined,
         ),
       );
     }
@@ -2139,6 +2220,23 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (path === '/api/email/watchers') {
       const reply = await writeEmailWatchers(deps.pool, body, deps.now());
       return sendJson(res, reply.status, reply.body);
+    }
+
+    /*
+     * Discard, and Send. Send *proposes*: it records the `email.send` action by
+     * the same path an agent takes and answers with its id, and the owner
+     * approves it on the card — identity select and all. Nothing in this file
+     * reaches SMTP.
+     */
+    const draftDiscard = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/discard$/i.exec(path);
+    if (draftDiscard) {
+      const view = await discardEmailDraft(draftDeps(), draftDiscard[1] as string);
+      return sendJson(res, view.status, view.body);
+    }
+    const draftSend = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/send$/i.exec(path);
+    if (draftSend) {
+      const view = await sendEmailDraft(draftDeps(), draftSend[1] as string);
+      return sendJson(res, view.status, view.body);
     }
 
     if (path === '/api/email/policies/bulk') {

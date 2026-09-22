@@ -30,6 +30,7 @@ import {
   hashAction,
   hashEnvelope,
   POLICY_VERSION,
+  resolveOwnerChoices,
   toActionRecord,
   type ActionRecord,
   type ApprovalState,
@@ -106,10 +107,10 @@ export async function executeApproved(
         and ap.state = 'approved'
         and a.expires_at > $3
       returning a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-                a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+                a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-                ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at`,
+                ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at`,
     [input.actionId, input.worker, now],
   );
 
@@ -129,7 +130,13 @@ export async function executeApproved(
       message: 'this approval predates full effect binding; propose the action again',
     });
   }
-  const recomputed = hashAction(action.tool, action.toolVersion, action.canonicalArgs, action.envelope);
+  const recomputed = hashAction(
+    action.tool,
+    action.toolVersion,
+    action.canonicalArgs,
+    action.envelope,
+    action.choices,
+  );
   if (recomputed !== action.argsHash) {
     return settleWithoutDispatch(pool, action, 'args-hash-mismatch', {
       message:
@@ -165,6 +172,11 @@ export async function executeApproved(
     ...input.ctx,
     actionId: action.id,
     approvedEffect: { envelope: structuredClone(action.envelope) },
+    // What the owner picked, already validated against the declared menu at
+    // decision time. An action decided before choices existed, or by a surface
+    // that never asked, resolves every key to its declared default here, so a
+    // tool reading `ctx.choices` never has to tell the two cases apart.
+    choices: Object.freeze(resolveOwnerChoices(action.choices, action.ownerChoices ?? {})),
     ...(action.agentId ? { agentId: action.agentId } : {}),
     ...(action.conversationId ? { conversationId: action.conversationId } : {}),
     ...(action.jobId ? { jobId: action.jobId } : {}),
@@ -309,7 +321,7 @@ async function refuseClaim(
       message: 'the approval expired before it was executed',
     };
   }
-  if (state === 'executing' || state === 'succeeded' || state === 'failed') {
+  if (state === 'executing' || state === 'succeeded' || state === 'failed' || state === 'refused') {
     return {
       ok: false,
       state,
@@ -328,7 +340,13 @@ async function refuseClaim(
 /**
  * A refusal discovered *after* the claim but *before* dispatch. No effect
  * attempt is recorded, because nothing was attempted; the approval lands in
- * `failed` carrying the reason, and never goes back to `approved`.
+ * `refused` carrying the reason, and never goes back to `approved`.
+ *
+ * `refused` rather than `failed` is the whole distinction: `failed` means the
+ * effect was dispatched and threw, and for an irreversible effect that is a
+ * state the owner has to go and check. This one certainly did not happen — the
+ * body changed, the tool moved, the hash no longer matches — and saying so in
+ * the state means a reader does not have to open the outcome to find out.
  */
 async function settleWithoutDispatch(
   pool: Queryable,
@@ -336,14 +354,14 @@ async function settleWithoutDispatch(
   reason: 'args-hash-mismatch' | 'unknown-tool' | 'invalid-args' | 'effect-changed' | 'policy-version-mismatch',
   detail: Record<string, unknown> & { message: string },
 ): Promise<ExecuteApprovedResult> {
-  await settleApproval(pool, action, 'failed', { reason, ...detail });
+  await settleApproval(pool, action, 'refused', { reason, ...detail });
   await emitActionEvent(
     pool,
     'effect.refused',
     { actionId: action.id, tool: action.tool, reason, message: detail.message },
     action.conversationId,
   );
-  return { ok: false, state: 'failed', reason, message: detail.message };
+  return { ok: false, state: 'refused', reason, message: detail.message };
 }
 
 async function startAttempt(
@@ -397,7 +415,7 @@ async function finishAttempt(
 async function settleApproval(
   pool: Queryable,
   action: ActionRecord,
-  state: 'succeeded' | 'failed' | 'unknown',
+  state: 'succeeded' | 'failed' | 'refused' | 'unknown',
   outcome: Record<string, unknown>,
 ): Promise<ActionRecord> {
   const { rows } = await pool.query(
