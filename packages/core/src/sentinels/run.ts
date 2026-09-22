@@ -282,12 +282,22 @@ async function upsertAndMaybeFire(
   /*
    * `wake` is the third delivery, between the two: an `info` fact that is only
    * news the first time — a milestone crossed, a target reached — and that is
-   * stale by next Sunday. It wakes exactly once, on the raise that created the
-   * row, *instead of* taking a digest line, so the owner is not told the same
-   * good news twice. Every later fire of that key (after the seven-day
-   * cooldown, or after it resolved and came back) is an ordinary digest note.
+   * stale by next Sunday. It wakes exactly once, *instead of* taking a digest
+   * line, so the owner is not told the same good news twice.
+   *
+   * "Once" is "once it has actually been queued", not "on the first tick that
+   * saw it". A wake that could not be enqueued — no `sentinel-wake` mission
+   * yet, an instant that could not be allocated — leaves the cooldown clear
+   * (see below), and a clear cooldown is precisely this module's existing
+   * record of "this key has never successfully spoken". So a row that exists
+   * but has never fired still wakes; a row that has fired is past its one
+   * chance, and its next fire after the seven-day cooldown is an ordinary
+   * digest note. A fact that resolved and came back gets a fresh chance,
+   * because resolution clears the cooldown too — which is right: that is a new
+   * episode, not the same news.
    */
-  const wakesOnce = finding.severity === 'info' && finding.wake === true && isNew;
+  const neverSpoke = existing === null || existing.cooldownUntil === null;
+  const wakesOnce = finding.severity === 'info' && finding.wake === true && neverSpoke;
   const delivery =
     finding.severity === 'urgent' || wakesOnce
       ? await enqueueWake(pool, sentinelId, finding, now)
@@ -295,7 +305,9 @@ async function upsertAndMaybeFire(
 
   if (!delivery.ok) {
     // Nowhere to put it yet (the wake mission is not registered). Leave the
-    // cooldown clear so it fires on the tick after `buddi missions add-defaults`.
+    // cooldown clear: that is what makes the next tick try again, both for an
+    // urgent and for a `wake` info finding — see `neverSpoke` above. It fires
+    // on the tick after `buddi missions add-defaults`.
     await appendEvent(pool, 'sentinel.finding', {
       sentinelId,
       key: finding.key,

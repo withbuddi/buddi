@@ -20,7 +20,7 @@
  *     `null` too, with its message kept as the check's note — one goal's
  *     metric must never stop the sentinel from checking the other eleven.
  */
-import type { ZodObject, ZodTypeAny } from 'zod';
+import { z, type ZodObject, type ZodTypeAny } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { readOnlyPool } from './pages.js';
 import type { ToolContext } from './tools.js';
@@ -76,6 +76,9 @@ export interface MetricSource {
 
 /** `<plugin>.<name>`: lowercase, and the plugin's own name in front. */
 const METRIC_ID = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+
+/** What a metric that declares no narrowing accepts: nothing. */
+const EMPTY_PARAMS = z.object({}).strict();
 
 /**
  * Check one plugin's metrics, and hand back the versions the registry stores.
@@ -170,6 +173,29 @@ export function metricParamsSchema(metric: MetricDefinition): Record<string, unk
   return schema;
 }
 
+/**
+ * Does this metric accept these parameters? The question `goal.set` asks
+ * before it draws a card, so the refusal is a sentence rather than a goal that
+ * measures `null` forever.
+ */
+export function checkMetricParams(
+  metric: MetricDefinition,
+  params: unknown,
+): { ok: true; params: Record<string, unknown> } | { ok: false; message: string } {
+  const schema = metric.params ?? EMPTY_PARAMS;
+  const result = schema.safeParse(params ?? {});
+  if (result.success) return { ok: true, params: result.data as Record<string, unknown> };
+  return {
+    ok: false,
+    message:
+      metric.params === undefined
+        ? `${metric.id} takes no parameters; drop them.`
+        : `${metric.id} refused those parameters: ${result.error.issues
+            .map((issue) => `${issue.path.join('.') || '(root)'} ${issue.message}`)
+            .join('; ')}`,
+  };
+}
+
 /** A reading, plus what could not be read. Never a throw. */
 export type MetricMeasurement =
   | { ok: true; reading: MetricReading }
@@ -214,20 +240,33 @@ export async function measureMetricResult(
   if (metric === undefined) {
     return { ok: false, reason: 'unknown-metric', note: `no metric ${id} is installed here` };
   }
-  let parsed: unknown = params ?? {};
-  if (metric.params !== undefined) {
-    const result = metric.params.safeParse(params ?? {});
-    if (!result.success) {
-      return {
-        ok: false,
-        reason: 'invalid-params',
-        note: `${id} refused those parameters: ${result.error.issues
-          .map((issue) => `${issue.path.join('.') || '(root)'} ${issue.message}`)
-          .join('; ')}`,
-      };
-    }
-    parsed = result.data;
+  /*
+   * A metric that declares no narrowing takes none. Without this, a metric
+   * whose `measure` defensively reads an optional field it never declared —
+   * an account, an agent id — can be handed one a *model* chose, and the goal
+   * row keeps it forever. "Strict, like page queries" has to mean the empty
+   * case too, or it only means the cases somebody remembered to declare.
+   */
+  const schema = metric.params ?? EMPTY_PARAMS;
+  const result = schema.safeParse(params ?? {});
+  if (!result.success) {
+    return {
+      ok: false,
+      reason: 'invalid-params',
+      note:
+        metric.params === undefined
+          ? `${id} takes no parameters; drop them.`
+          : `${id} refused those parameters: ${result.error.issues
+              .map((issue) => `${issue.path.join('.') || '(root)'} ${issue.message}`)
+              .join('; ')}`,
+    };
   }
+  /*
+   * What is handed to `measure` is what the schema *made of* the input, not
+   * the input — defaults applied, values coerced. The caller that persists it
+   * (`goal.set`) stores this too, so the goal row and the measurement agree.
+   */
+  const parsed: unknown = result.data;
   try {
     const reading = await metric.measure(parsed, metricContext(ctx));
     if (reading === null || reading === undefined) {

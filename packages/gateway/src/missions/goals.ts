@@ -37,11 +37,14 @@ import {
   closeGoal,
   createGoal,
   getGoal,
+  checkMetricParams,
   lastCheck,
+  lastMeasuredCheck,
   listGoals,
   localDateString,
   measureMetricResult,
   metricParamsSchema,
+  milestoneValue,
   milestonesCrossed,
   onTrack,
   paceNeeded,
@@ -113,7 +116,14 @@ export const GOAL_WAKE_INSTRUCTION =
  * Rendering
  * ------------------------------------------------------------------ */
 
-/** A metric's number, in its own unit. Already formatted, like a Home stat. */
+/**
+ * A metric's number, in its own unit. Already formatted, like a Home stat.
+ *
+ * A `currency` metric that answered no currency prints the bare number. The
+ * alternative — defaulting to dollars — puts a `$` in front of a euro balance
+ * on a card the owner is about to approve, which is a worse answer than no
+ * symbol at all: a missing symbol is visibly missing, a wrong one is not.
+ */
 export function formatValue(
   value: number | null,
   unit: MetricUnit,
@@ -121,14 +131,15 @@ export function formatValue(
 ): string {
   if (value === null || !Number.isFinite(value)) return 'not measured';
   if (unit === 'currency') {
+    if (!currency) return new Intl.NumberFormat('en-US').format(round(value, 2));
     try {
       return new Intl.NumberFormat('en-US', {
         style: 'currency',
-        currency: currency ?? 'USD',
+        currency,
         maximumFractionDigits: 0,
       }).format(value);
     } catch {
-      return value.toFixed(2);
+      return `${new Intl.NumberFormat('en-US').format(round(value, 2))} ${currency}`;
     }
   }
   if (unit === 'percent') return `${new Intl.NumberFormat('en-US').format(round(value, 1))}%`;
@@ -141,10 +152,22 @@ function round(value: number, places: number): number {
   return Math.round(value * factor) / factor;
 }
 
-/** A pace, in the owner's words: the size of the weekly move, never its sign. */
-function formatPace(pace: number | null, unit: MetricUnit, currency?: string | null): string {
+/**
+ * A pace, in the owner's words: the size of the weekly move, and which way.
+ *
+ * The direction has to be in the sentence. "$1,540 a week" reads identically
+ * for a debt coming down and a debt going up, and the sign of the number is
+ * not something anybody reads off a card at seven in the morning — so the
+ * magnitude carries the size and the word carries the direction.
+ */
+export function formatPace(
+  pace: number | null,
+  unit: MetricUnit,
+  direction: MetricDirection,
+  currency?: string | null,
+): string {
   if (pace === null) return 'no time left';
-  return `${formatValue(Math.abs(pace), unit, currency)} per week`;
+  return `${formatValue(Math.abs(pace), unit, currency)} a week ${direction}`;
 }
 
 /** One goal, on one line: what `goal.list` prints and what a wake carries. */
@@ -154,7 +177,10 @@ export function goalLine(
   last: GoalCheck | null,
   timezone: string,
 ): string {
-  const currency = last?.currency ?? null;
+  // The goal's own currency, not the last check's: an unmeasured check carries
+  // none, and a line that loses its currency the week the bank is down is a
+  // line that prints a different number than the week before.
+  const currency = goal.currency ?? last?.currency ?? null;
   const at = last?.value ?? null;
   const pct = at === null ? null : progress(goal, at);
   return (
@@ -166,14 +192,24 @@ export function goalLine(
 }
 
 /** The last four checks, oldest first, one line each. Evidence, not prose. */
-export function checkLines(checks: readonly GoalCheck[], unit: MetricUnit, timezone: string): string[] {
+export function checkLines(
+  checks: readonly GoalCheck[],
+  unit: MetricUnit,
+  timezone: string,
+  currency: string | null = null,
+): string[] {
   return [...checks]
     .sort((a, b) => a.at.getTime() - b.at.getTime())
     .map((check) => {
-      const parts = [`${localDateString(check.at, timezone)}: ${formatValue(check.value, unit, check.currency)}`];
+      const money = currency ?? check.currency;
+      const parts = [`${localDateString(check.at, timezone)}: ${formatValue(check.value, unit, money)}`];
+      // What the number was true *of*, when that is not the day buddi looked.
+      if (check.asOf !== null && localDateString(check.asOf, timezone) !== localDateString(check.at, timezone)) {
+        parts.push(`reading as of ${localDateString(check.asOf, timezone)}`);
+      }
       if (check.onTrack !== null) parts.push(check.onTrack ? 'on track' : 'off track');
       if (check.projected !== null) {
-        parts.push(`projected ${formatValue(check.projected, unit, check.currency)}`);
+        parts.push(`projected ${formatValue(check.projected, unit, money)}`);
       }
       if (check.note) parts.push(check.note);
       return `  ${parts.join(' · ')}`;
@@ -189,20 +225,24 @@ export interface GoalSetEnvelope {
   params: Record<string, unknown>;
   target: GoalTarget;
   /**
-   * The number the owner saw, and the moment the goal was set.
+   * The number the owner saw, and the two instants behind it.
    *
-   * `asOf` is the *description clock*, not the reading's own `asOf`. The
+   * `asOf` is the *description clock* — when the goal was set. `readingAsOf`
+   * is what the metric said its number was true of, which for a bank reading
+   * last Friday's statement is not the same day, and is kept because the card
+   * says so out loud and the first check row stores it.
+   *
+   * The whole baseline is measured **once**, at the first description. The
    * executor re-describes before it dispatches and refuses anything that
-   * changed since the preview (`effect-changed`), freezing `now` at the
-   * action's creation to do it — so a metric that answers `asOf: new Date()`,
-   * which is the obvious way to write one, would void every approval a second
-   * after it was made. What the owner approved is the *value*; if that moves
-   * between the card and the yes, the approval is refused and the agent
-   * proposes again, which is the platform's rule and the right one. The
-   * reading's own `asOf` is kept on the first check instead, where a reader
-   * wants it.
+   * changed since the preview (`effect-changed`); a `describe` that measured
+   * again would put a live number into a hashed envelope, and
+   * `email.inbox_unread` moving by one between the card and the tap would void
+   * an approval that was perfectly good. So `describe` reuses the approved
+   * baseline when `ctx.approvedEffect` is there — the owner's number is what
+   * executes, and everything else in the envelope still re-derives and still
+   * voids the approval if the model changed it.
    */
-  baseline: { value: number; currency: string | null; asOf: string };
+  baseline: { value: number; currency: string | null; asOf: string; readingAsOf: string | null };
   deadline: string;
   cadence: GoalCadence;
   milestones: number[];
@@ -219,6 +259,7 @@ export interface GoalSetEnvelope {
 export function renderGoalSet(
   envelope: GoalSetEnvelope,
   unit: MetricUnit,
+  direction: MetricDirection,
   timezone: string,
 ): string {
   const asGoal = {
@@ -228,13 +269,25 @@ export function renderGoalSet(
     milestones: envelope.milestones,
   };
   const currency = envelope.baseline.currency;
-  const pace = paceNeeded(asGoal, envelope.baseline.value, new Date(envelope.baseline.asOf));
+  const setAt = new Date(envelope.baseline.asOf);
+  const pace = paceNeeded(asGoal, envelope.baseline.value, setAt);
+  /*
+   * "Today" is a claim about the number, and it is not always true: a metric
+   * may be reading a statement that closed on Friday. When the reading is more
+   * than a day behind the card, the card says so — the owner is approving six
+   * months of behaviour off this number and deserves to know how old it is.
+   */
+  const readingAsOf = envelope.baseline.readingAsOf === null ? null : new Date(envelope.baseline.readingAsOf);
+  const stale =
+    readingAsOf !== null && setAt.getTime() - readingAsOf.getTime() > 24 * 60 * 60_000
+      ? ` (reading as of ${localDateString(readingAsOf, timezone)})`
+      : '';
   const lines = [
     `${envelope.title}`,
     '',
-    `From ${formatValue(envelope.baseline.value, unit, currency)} today to ` +
+    `From ${formatValue(envelope.baseline.value, unit, currency)} today${stale} to ` +
       `${formatValue(targetValue(asGoal), unit, currency)} by ${localDateString(asGoal.deadline, timezone)}: ` +
-      `${formatPace(pace, unit, currency)}, checked ${envelope.cadence}, held by @${envelope.agentId}`,
+      `${formatPace(pace, unit, direction, currency)}, checked ${envelope.cadence}, held by @${envelope.agentId}`,
     '',
     `Measured by ${envelope.metric}${
       Object.keys(envelope.params).length === 0 ? '' : ` ${JSON.stringify(envelope.params)}`
@@ -256,6 +309,16 @@ export interface GoalUpdateEnvelope {
   id: string;
   agentId: string;
   title: string;
+  /**
+   * The version of the goal this card was drawn from.
+   *
+   * It is in the envelope because it is part of what the owner approved: "this
+   * goal, as it stands now, becomes that". The store predicates its UPDATE on
+   * it, so an approval that sat in Telegram while the sentinel settled the
+   * goal — or while another approval landed — writes nothing instead of
+   * quietly restoring values nobody agreed to.
+   */
+  updatedAt: string;
   before: { target: GoalTarget; deadline: string; cadence: GoalCadence; milestones: number[] };
   after: { target: GoalTarget; deadline: string; cadence: GoalCadence; milestones: number[] };
 }
@@ -266,9 +329,10 @@ export function renderGoalUpdate(
   unit: MetricUnit,
   timezone: string,
   baseline: number,
+  currency: string | null = null,
 ): string {
   const value = (target: GoalTarget): string =>
-    formatValue(targetValue({ target, baseline: { value: baseline, asOf: new Date() } }), unit, null);
+    formatValue(targetValue({ target, baseline: { value: baseline, asOf: new Date(0) } }), unit, currency);
   const { before, after } = envelope;
   const rows: string[] = [];
   if (before.target.kind !== after.target.kind || before.target.value !== after.target.value) {
@@ -412,6 +476,64 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   const directionOf = (metric: string): MetricDirection => source.metric(metric)?.direction ?? 'down';
 
   /**
+   * Is this target — and are these milestones — on the improving side of the
+   * baseline?
+   *
+   * The one check that makes a goal mean what it says. `reached()` is a pure
+   * inequality, so a `down` goal whose target is *above* its baseline is
+   * already met by the baseline: the first tick settles it `met` and
+   * congratulates the owner on a debt that grew. A sign slip in one field of a
+   * model's JSON is all it takes, and the card reads almost identically —
+   * which is why this is refused before anybody is asked, rather than relied
+   * on being spotted.
+   *
+   * Milestones get the same treatment: on a `down` delta goal, positive
+   * milestones are all "crossed" at the baseline, so the first tick would
+   * raise three wakes at once. They must lie strictly between the baseline and
+   * the target, and be ordered toward it.
+   */
+  function refuseDirection(
+    goal: { target: GoalTarget; baseline: { value: number; asOf: Date } },
+    milestones: readonly number[],
+    direction: MetricDirection,
+    unit: MetricUnit,
+    currency: string | null,
+  ): Refusal | null {
+    const target = targetValue(goal);
+    const baseline = goal.baseline.value;
+    const money = (n: number): string => formatValue(n, unit, currency);
+    if (reached(goal, direction, baseline)) {
+      return refusal(
+        'wrong-direction',
+        `this metric should go ${direction}, and ${money(target)} is not ${
+          direction === 'down' ? 'below' : 'above'
+        } today's ${money(baseline)} — the goal would be met the moment it was set. ` +
+          (goal.target.kind === 'delta'
+            ? `A delta carries its own sign: to go ${direction} from here, use a ${
+                direction === 'down' ? 'negative' : 'positive'
+              } value.`
+            : 'Name a target on the other side of where the number is now.'),
+      );
+    }
+    let previous = baseline;
+    for (const milestone of milestones) {
+      const at = milestoneValue(goal, milestone);
+      const beyondBaseline = direction === 'down' ? at < baseline : at > baseline;
+      const beforeTarget = direction === 'down' ? at > target : at < target;
+      const forward = direction === 'down' ? at < previous : at > previous;
+      if (!beyondBaseline || !beforeTarget || !forward) {
+        return refusal(
+          'wrong-direction',
+          `the milestone ${money(at)} is not on the way from ${money(baseline)} to ${money(target)}. ` +
+            'Milestones lie strictly between the two and are listed in the order they will be crossed.',
+        );
+      }
+      previous = at;
+    }
+    return null;
+  }
+
+  /**
    * Everything `goal.set` refuses before an approval exists, in one place.
    *
    * Read twice on purpose: by `describe`, so the call never becomes a card,
@@ -433,13 +555,16 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
           'be woken about it. Report back instead, and let the agent that asked you propose it.',
       );
     }
-    if (source.metric(input.metric) === undefined) {
+    const metric = source.metric(input.metric);
+    if (metric === undefined) {
       return refusal(
         'unknown-metric',
         `no metric "${input.metric}" is installed here. Call goal.metrics and name one of those; a goal ` +
           'without a metric is a reminder.',
       );
     }
+    const params = checkMetricParams(metric, input.params);
+    if (!params.ok) return refusal('invalid-params', params.message);
     const when = parseReminderWhen(input.deadline, ctx.timezone);
     if (!when.ok) return refusal('invalid-deadline', when.message);
     const aheadMs = when.at.getTime() - ctx.now().getTime();
@@ -464,24 +589,37 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   function envelopeOf(
     input: z.infer<typeof setInput>,
     ctx: ToolContext,
-    baseline: { value: number; currency: string | null; asOf: Date },
+    baseline: GoalSetEnvelope['baseline'],
   ): GoalSetEnvelope {
     const when = parseReminderWhen(input.deadline, ctx.timezone);
+    const metric = source.metric(input.metric);
+    const params = metric === undefined ? { ok: false as const } : checkMetricParams(metric, input.params);
     return {
       tool: 'goal.set',
       agentId: ctx.agentId ?? '',
       title: input.title.trim(),
       metric: input.metric,
-      params: input.params ?? {},
+      // What the schema *made of* the input — defaults applied, unknown keys
+      // already refused — so the goal row and every later measurement agree.
+      params: params.ok ? params.params : (input.params ?? {}),
       target: { kind: input.target.kind, value: input.target.value },
-      baseline: {
-        value: baseline.value,
-        currency: baseline.currency,
-        asOf: baseline.asOf.toISOString(),
-      },
+      baseline,
       deadline: (when.ok ? when.at : new Date(0)).toISOString(),
       cadence: input.cadence,
       milestones: input.milestones ?? [],
+    };
+  }
+
+  /** The baseline an approval already carries, when it carries one. */
+  function approvedBaseline(ctx: ToolContext): GoalSetEnvelope['baseline'] | null {
+    const envelope = (ctx.approvedEffect?.envelope ?? null) as GoalSetEnvelope | null;
+    const baseline = envelope?.baseline;
+    if (!baseline || typeof baseline.value !== 'number' || typeof baseline.asOf !== 'string') return null;
+    return {
+      value: baseline.value,
+      currency: baseline.currency ?? null,
+      asOf: baseline.asOf,
+      readingAsOf: baseline.readingAsOf ?? null,
     };
   }
 
@@ -531,24 +669,52 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     async describe(input, ctx) {
       const no = refuseSet(input, ctx);
       if (no !== null) throw new Error(no.message);
-      const measured = await measureMetricResult(source, input.metric, input.params ?? {}, ctx);
-      if (!measured.ok) {
-        /*
-         * The card is never shown for a metric nobody can read. Approving
-         * "from ? today to 47,400" is approving nothing, and the baseline is
-         * the one number the whole goal is relative to.
-         */
-        throw new Error(
-          `${input.metric} cannot be measured right now, so there is no baseline to set a goal against: ` +
-            `${measured.note ?? 'no reason given'}. Fix that first — a goal needs a number to start from.`,
-        );
-      }
-      const envelope = envelopeOf(input, ctx, {
-        value: measured.reading.value,
-        currency: measured.reading.currency ?? null,
-        asOf: ctx.now(),
-      });
-      return { envelope, preview: renderGoalSet(envelope, unitOf(input.metric), ctx.timezone) };
+      /*
+       * Measure **once**, on the first description. The executor re-describes
+       * before it dispatches and compares envelope hashes, so a second
+       * measurement here would mean the approval survives only if the metric
+       * answers the identical number at approval time — fine for a debt,
+       * hopeless for an unread count, and `email.inbox_unread` is one of the
+       * metrics this exists for. At re-description the approved envelope is on
+       * the context, so the number the owner saw is the number that executes.
+       */
+      const baseline =
+        approvedBaseline(ctx) ??
+        (await (async (): Promise<GoalSetEnvelope['baseline']> => {
+          const measured = await measureMetricResult(source, input.metric, input.params ?? {}, ctx);
+          if (!measured.ok) {
+            /*
+             * The card is never shown for a metric nobody can read. Approving
+             * "from ? today to 47,400" is approving nothing, and the baseline
+             * is the one number the whole goal is relative to.
+             */
+            throw new Error(
+              `${input.metric} cannot be measured right now, so there is no baseline to set a goal against: ` +
+                `${measured.note ?? 'no reason given'}. Fix that first — a goal needs a number to start from.`,
+            );
+          }
+          return {
+            value: measured.reading.value,
+            currency: measured.reading.currency ?? null,
+            asOf: ctx.now().toISOString(),
+            readingAsOf: measured.reading.asOf?.toISOString() ?? null,
+          };
+        })());
+
+      const envelope = envelopeOf(input, ctx, baseline);
+      const direction = directionOf(input.metric);
+      const wrongWay = refuseDirection(
+        { target: envelope.target, baseline: { value: baseline.value, asOf: new Date(baseline.asOf) } },
+        envelope.milestones,
+        direction,
+        unitOf(input.metric),
+        baseline.currency,
+      );
+      if (wrongWay !== null) throw new Error(wrongWay.message);
+      return {
+        envelope,
+        preview: renderGoalSet(envelope, unitOf(input.metric), direction, ctx.timezone),
+      };
     },
     async execute(input, ctx) {
       // Only `executeApproved` reaches this. The checks run again anyway: the
@@ -557,21 +723,17 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       const no = refuseSet(input, ctx);
       if (no !== null) throw new Error(no.message);
       /*
-       * The baseline is taken from the approval, not re-measured: it is the
-       * number the owner saw, and a goal measured against a different one is
-       * a different goal. Everything else is rebuilt from the arguments, so
-       * `assertApprovedEffect` still catches a model that changed the target
-       * or the deadline between the card and the yes.
+       * The baseline is the approval's: it is the number the owner saw, and a
+       * goal measured against a different one is a different goal. Everything
+       * else is rebuilt from the arguments, so `assertApprovedEffect` still
+       * catches a model that changed the target or the deadline between the
+       * card and the yes.
        */
-      const approved = (ctx.approvedEffect?.envelope ?? null) as GoalSetEnvelope | null;
-      if (approved === null || typeof approved.baseline?.value !== 'number') {
+      const baseline = approvedBaseline(ctx);
+      if (baseline === null) {
         throw new Error('the effect no longer matches the approved preview; propose it again');
       }
-      const envelope = envelopeOf(input, ctx, {
-        value: approved.baseline.value,
-        currency: approved.baseline.currency,
-        asOf: new Date(approved.baseline.asOf),
-      });
+      const envelope = envelopeOf(input, ctx, baseline);
       assertApprovedEffect(ctx, envelope);
 
       const created = await createGoal(ctx.db, {
@@ -583,6 +745,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
         baseline: { value: envelope.baseline.value, asOf: new Date(envelope.baseline.asOf) },
         deadline: new Date(envelope.deadline),
         cadence: envelope.cadence,
+        currency: envelope.baseline.currency,
         milestones: envelope.milestones,
       });
       if (!created.ok) return { ok: false, reason: created.reason, message: created.message };
@@ -592,12 +755,16 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       await recordCheck(ctx.db, {
         goalId: created.goal.id,
         at: new Date(envelope.baseline.asOf),
+        asOf: envelope.baseline.readingAsOf === null ? null : new Date(envelope.baseline.readingAsOf),
         value: envelope.baseline.value,
         currency: envelope.baseline.currency,
         note: 'baseline, measured when the goal was set',
         paceNeeded: paceNeeded(created.goal, envelope.baseline.value, ctx.now()),
       });
-      return { ok: true, goal: renderGoal(created.goal, unitOf(envelope.metric), ctx.timezone) };
+      return {
+        ok: true,
+        goal: renderGoal(created.goal, unitOf(envelope.metric), ctx.timezone, [], ctx.now()),
+      };
     },
   };
 
@@ -630,6 +797,63 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     };
   }
 
+  /**
+   * The whole update envelope, built the same way by `describe` and `execute`
+   * so the hashes agree — and carrying the goal's version, which is what the
+   * store's UPDATE is predicated on.
+   */
+  function updateEnvelopeOf(
+    input: z.infer<typeof updateInput>,
+    goal: Goal,
+    ctx: ToolContext,
+  ): GoalUpdateEnvelope {
+    return {
+      tool: 'goal.update',
+      id: goal.id,
+      agentId: goal.agentId,
+      title: goal.title,
+      updatedAt: goal.updatedAt.toISOString(),
+      before: {
+        target: goal.target,
+        deadline: goal.deadline.toISOString(),
+        cadence: goal.cadence,
+        milestones: goal.milestones,
+      },
+      after: afterOf(input, goal, ctx),
+    };
+  }
+
+  /** What `goal.update` refuses before a card exists, read twice like the rest. */
+  function refuseUpdate(
+    input: z.infer<typeof updateInput>,
+    goal: Goal,
+    ctx: ToolContext,
+  ): Refusal | null {
+    if (goal.state !== 'open') {
+      return refusal('not-open', `goal ${goal.id} is ${goal.state}; only an open goal can be changed`);
+    }
+    if (input.deadline !== undefined) {
+      const when = parseReminderWhen(input.deadline, ctx.timezone);
+      if (!when.ok) return refusal('invalid-deadline', when.message);
+      if (when.at.getTime() <= ctx.now().getTime()) {
+        return refusal(
+          'deadline-past',
+          `${localDateString(when.at, ctx.timezone)} is not in the future; a goal needs time left on its clock`,
+        );
+      }
+    }
+    const after = afterOf(input, goal, ctx);
+    // Same rule as `goal.set`: an update that puts the target on the wrong
+    // side of the baseline would settle the goal `met` on the next tick.
+    return refuseDirection(
+      { target: after.target, baseline: goal.baseline },
+      after.milestones,
+      directionOf(goal.metric),
+      unitOf(goal.metric),
+      goal.currency,
+    );
+  }
+
   const update: ToolDefinition<z.infer<typeof updateInput>, unknown> = {
     name: 'goal.update',
     description:
@@ -646,57 +870,35 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
-      if (goal.state !== 'open') {
-        throw new Error(`goal ${goal.id} is ${goal.state}; only an open goal can be changed`);
-      }
-      if (input.deadline !== undefined) {
-        const when = parseReminderWhen(input.deadline, ctx.timezone);
-        if (!when.ok) throw new Error(when.message);
-        if (when.at.getTime() <= ctx.now().getTime()) {
-          throw new Error(
-            `${localDateString(when.at, ctx.timezone)} is not in the future; a goal needs time left on its clock`,
-          );
-        }
-      }
-      const envelope: GoalUpdateEnvelope = {
-        tool: 'goal.update',
-        id: goal.id,
-        agentId: goal.agentId,
-        title: goal.title,
-        before: {
-          target: goal.target,
-          deadline: goal.deadline.toISOString(),
-          cadence: goal.cadence,
-          milestones: goal.milestones,
-        },
-        after: afterOf(input, goal, ctx),
-      };
+      const no = refuseUpdate(input, goal, ctx);
+      if (no !== null) throw new Error(no.message);
+      const envelope = updateEnvelopeOf(input, goal, ctx);
       return {
         envelope,
-        preview: renderGoalUpdate(envelope, unitOf(goal.metric), ctx.timezone, goal.baseline.value),
+        preview: renderGoalUpdate(
+          envelope,
+          unitOf(goal.metric),
+          ctx.timezone,
+          goal.baseline.value,
+          goal.currency,
+        ),
       };
     },
     async execute(input, ctx) {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
-      if (goal.state !== 'open') {
-        throw new Error(`goal ${goal.id} is ${goal.state}; only an open goal can be changed`);
-      }
-      const envelope: GoalUpdateEnvelope = {
-        tool: 'goal.update',
-        id: goal.id,
-        agentId: goal.agentId,
-        title: goal.title,
-        before: {
-          target: goal.target,
-          deadline: goal.deadline.toISOString(),
-          cadence: goal.cadence,
-          milestones: goal.milestones,
-        },
-        after: afterOf(input, goal, ctx),
-      };
+      const no = refuseUpdate(input, goal, ctx);
+      if (no !== null) throw new Error(no.message);
+      const envelope = updateEnvelopeOf(input, goal, ctx);
       assertApprovedEffect(ctx, envelope);
+      /*
+       * The version the card was drawn from travels into the WHERE clause.
+       * Re-reading the row above cannot close the window between that read and
+       * this statement — only the statement can — and what is on the other
+       * side of that window is an approval silently restoring a target, a
+       * deadline and a milestone list that nobody agreed to.
+       */
       const updated = await updateGoal(
         ctx.db,
         goal.id,
@@ -705,11 +907,15 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
           deadline: new Date(envelope.after.deadline),
           cadence: envelope.after.cadence,
           milestones: envelope.after.milestones,
+          expectedUpdatedAt: new Date(envelope.updatedAt),
         },
         ctx.now(),
       );
-      if (updated === null) return refusal('not-found', `no goal ${goal.id}`);
-      return { ok: true, goal: renderGoal(updated, unitOf(updated.metric), ctx.timezone) };
+      if (!updated.ok) return refusal(updated.reason, updated.message);
+      return {
+        ok: true,
+        goal: renderGoal(updated.goal, unitOf(updated.goal.metric), ctx.timezone, [], ctx.now()),
+      };
     },
   };
 
@@ -725,16 +931,36 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     async execute(input, ctx) {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) return mine;
+      /*
+       * `open`, `met` and `missed` can all be closed; only an already-closed
+       * goal cannot. This is §5's "met and missed become final when the owner
+       * agrees": buddi decides the word, the holder writes the note and the
+       * date, and the word is kept.
+       */
       const closed = await closeGoal(ctx.db, mine.goal.id, input.note.trim(), ctx.now());
       if (closed === null) {
-        return refusal('already-closed', `goal ${mine.goal.id} was already closed on ${mine.goal.closedAt?.toISOString()}`);
+        return refusal(
+          'already-closed',
+          `goal ${mine.goal.id} was already closed on ${mine.goal.closedAt?.toISOString()}`,
+        );
       }
-      return { ok: true, goal: renderGoal(closed, unitOf(closed.metric), ctx.timezone) };
+      return {
+        ok: true,
+        goal: renderGoal(closed, unitOf(closed.metric), ctx.timezone, [], ctx.now()),
+      };
     },
   };
 
   /** A goal and its arithmetic, as a tool result. Numbers, and the words for them. */
-  function renderGoal(goal: Goal, unit: MetricUnit, timezone: string, checks: GoalCheck[] = []): Record<string, unknown> {
+  function renderGoal(
+    goal: Goal,
+    unit: MetricUnit,
+    timezone: string,
+    checks: GoalCheck[],
+    /** The run's clock. Never `new Date()`: `goal.status` is read under one. */
+    now: Date,
+  ): Record<string, unknown> {
+    const currency = goal.currency;
     const measured = checks.filter((c) => c.value !== null);
     const latest = measured[0] ?? null;
     const value = latest?.value ?? null;
@@ -755,20 +981,25 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       deadline: goal.deadline.toISOString(),
       deadlineLocal: localDateString(goal.deadline, timezone),
       cadence: goal.cadence,
+      currency,
       milestones: goal.milestones,
       state: goal.state,
+      closedAt: goal.closedAt?.toISOString() ?? null,
       closedNote: goal.closedNote,
       value,
-      valueFormatted: formatValue(value, unit, latest?.currency ?? null),
+      valueFormatted: formatValue(value, unit, currency),
       progress: value === null ? null : progress(goal, value),
-      paceNeeded: value === null ? null : paceNeeded(goal, value, new Date()),
+      paceNeeded: value === null ? null : paceNeeded(goal, value, now),
+      paceNeededInWords:
+        value === null ? null : formatPace(paceNeeded(goal, value, now), unit, directionOf(goal.metric), currency),
       projected,
       onTrack: onTrack(goal, directionOf(goal.metric), projected),
       line: goalLine(goal, unit, latest, timezone),
       checks: checks.map((check) => ({
         at: check.at.toISOString(),
+        asOf: check.asOf?.toISOString() ?? null,
         value: check.value,
-        valueFormatted: formatValue(check.value, unit, check.currency),
+        valueFormatted: formatValue(check.value, unit, currency ?? check.currency),
         note: check.note,
         onTrack: check.onTrack,
         paceNeeded: check.paceNeeded,
@@ -800,7 +1031,16 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       const out = [];
       for (const goal of goals) {
         const checks = await recentChecks(ctx.db, goal.id, 4);
-        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, checks));
+        /*
+         * The last four rows may all be unmeasured, and "not measured" is then
+         * a fact about the last four *looks*, not about the goal. The newest
+         * row that carried a number comes from the whole history, so a goal
+         * whose plugin went missing on Friday still shows Thursday's number.
+         */
+        const measured = await lastMeasuredCheck(ctx.db, goal.id);
+        const withValue =
+          measured !== null && !checks.some((c) => c.id === measured.id) ? [...checks, measured] : checks;
+        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, withValue, ctx.now()));
       }
       return { goals: out };
     },
@@ -818,7 +1058,10 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       const out = [];
       for (const goal of goals) {
-        const last = await lastCheck(ctx.db, goal.id);
+        // The newest row that carried a number, not merely the newest row: a
+        // line that says "not measured" because this morning's look failed is
+        // a line that has forgotten yesterday.
+        const last = (await lastMeasuredCheck(ctx.db, goal.id)) ?? (await lastCheck(ctx.db, goal.id));
         out.push({
           id: goal.id,
           agentId: goal.agentId,
@@ -884,9 +1127,28 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
         const metric = source.metric(goal.metric);
         const unit = metric?.unit ?? 'number';
         const direction = metric?.direction ?? 'down';
+        const currency = goal.currency;
+
+        /*
+         * What was true *before* this tick's check, which is what "newly
+         * crossed" is measured against. Read before anything is written: after
+         * the insert it is indistinguishable from the new reading.
+         */
+        const beforeThisTick = await lastMeasuredCheck(ctx.db, goal.id);
 
         let checks = await recentChecks(ctx.db, goal.id, 4);
-        if (cadenceDue(goal.cadence, checks[0]?.at ?? null, now)) {
+        const pastDeadline = now.getTime() >= goal.deadline.getTime();
+        /*
+         * The deadline gets a measurement of its own, cadence or no cadence.
+         * A weekly goal with a Thursday deadline is not due on Thursday, and
+         * settling it `missed` off Monday's number would record a verdict
+         * about a week the goal never had. The same applies in the last seven
+         * days, where the urgent finding quotes a number the owner will check.
+         */
+        const lastAt = checks[0]?.at ?? null;
+        const deadlineUnmeasured =
+          pastDeadline && (lastAt === null || lastAt.getTime() < goal.deadline.getTime());
+        if (deadlineUnmeasured || cadenceDue(goal.cadence, lastAt, now)) {
           const measured = await measureMetricResult(source, goal.metric, goal.params, goalToolContext(goal, ctx));
           const value = measured.ok ? measured.reading.value : null;
           const points = checks
@@ -897,6 +1159,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
           await recordCheck(ctx.db, {
             goalId: goal.id,
             at: now,
+            asOf: measured.ok ? (measured.reading.asOf ?? null) : null,
             value,
             currency: measured.ok ? (measured.reading.currency ?? null) : null,
             // The reason it could not be measured is the check's note, so
@@ -910,8 +1173,18 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
           checks = await recentChecks(ctx.db, goal.id, 4);
         }
 
+        /*
+         * Every verdict below is read off *measured* checks. A look that
+         * failed is not evidence about the goal — it is evidence about the
+         * plugin — and letting a null row answer "is this off track?" makes a
+         * timed-out metric look like a recovery.
+         */
         const measuredChecks = checks.filter((c) => c.value !== null);
-        const latest = measuredChecks[0] ?? null;
+        const latest =
+          measuredChecks[0] ??
+          // The last four rows can all be unmeasured on a long outage; the
+          // newest number in the whole history is still the goal's number.
+          (await lastMeasuredCheck(ctx.db, goal.id));
         const detail = (lead: string): string =>
           [
             lead,
@@ -919,7 +1192,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
             goalLine(goal, unit, latest, ctx.timezone),
             '',
             'The last four checks:',
-            ...checkLines(checks, unit, ctx.timezone),
+            ...checkLines(checks, unit, ctx.timezone, currency),
             '',
             GOAL_WAKE_INSTRUCTION,
           ].join('\n');
@@ -934,7 +1207,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
         const base = { agentId: goal.agentId, data };
 
         // 1. Done. The goal is settled here and stops being walked: every key
-        //    under it resolves on the next tick.
+        //    under it resolves on the next tick, this one included.
         if (latest !== null && reached(goal, direction, latest.value as number)) {
           await settleGoal(ctx.db, goal.id, 'met', 'the target was reached', now);
           findings.push({
@@ -944,15 +1217,16 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
             wake: true,
             title: `Goal reached: ${goal.title}`,
             detail: detail(
-              `${goal.metric} is at ${formatValue(latest.value, unit, latest.currency)}, which meets the target of ` +
-                `${formatValue(targetValue(goal), unit, latest.currency)}.`,
+              `${goal.metric} is at ${formatValue(latest.value, unit, currency)}, which meets the target of ` +
+                `${formatValue(targetValue(goal), unit, currency)}.`,
             ),
           });
           continue;
         }
 
-        // 2. Out of time, and not there.
-        if (now.getTime() >= goal.deadline.getTime()) {
+        // 2. Out of time, and not there. The check above means this verdict is
+        //    always about a number taken at or after the deadline.
+        if (pastDeadline) {
           await settleGoal(ctx.db, goal.id, 'missed', 'the deadline passed and the target was not reached', now);
           findings.push({
             ...base,
@@ -961,8 +1235,8 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
             title: `Goal deadline passed: ${goal.title}`,
             detail: detail(
               `The deadline was ${localDateString(goal.deadline, ctx.timezone)} and ${goal.metric} is at ` +
-                `${formatValue(latest?.value ?? null, unit, latest?.currency ?? null)}, short of ` +
-                `${formatValue(targetValue(goal), unit, latest?.currency ?? null)}.`,
+                `${formatValue(latest?.value ?? null, unit, currency)}, short of ` +
+                `${formatValue(targetValue(goal), unit, currency)}.`,
             ),
           });
           continue;
@@ -976,14 +1250,29 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
             severity: 'urgent',
             title: `A week left on: ${goal.title}`,
             detail: detail(
-              `${localDateString(goal.deadline, ctx.timezone)} is within seven days and the target is not met.`,
+              `${localDateString(goal.deadline, ctx.timezone)} is within seven days and ${goal.metric} is at ` +
+                `${formatValue(latest?.value ?? null, unit, currency)}, short of ` +
+                `${formatValue(targetValue(goal), unit, currency)}.`,
             ),
           });
         }
 
-        // 4. Milestones. One key each, so each one is news exactly once.
-        if (latest !== null) {
-          for (const milestone of milestonesCrossed(goal, direction, latest.value as number)) {
+        /*
+         * 4. Milestones, on the tick they are *newly* crossed and no other.
+         *
+         * A key that keeps being returned is a fact that keeps being true, and
+         * core rightly reads it back out after each cooldown — so a milestone
+         * returned forever is a milestone in every weekly digest forever,
+         * which is not what "fires once when crossed" means. Returned once, it
+         * wakes once and resolves on the next tick.
+         */
+        if (latest !== null && latest.id !== beforeThisTick?.id) {
+          const crossedNow = milestonesCrossed(goal, direction, latest.value as number);
+          const crossedBefore =
+            beforeThisTick === null
+              ? []
+              : milestonesCrossed(goal, direction, beforeThisTick.value as number);
+          for (const milestone of crossedNow.filter((m) => !crossedBefore.includes(m))) {
             findings.push({
               ...base,
               key: goalKey(goal.id, `milestone.${milestone}`),
@@ -991,15 +1280,17 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
               wake: true,
               title: `Milestone on ${goal.title}`,
               detail: detail(
-                `${goal.metric} has crossed the ${formatValue(milestone, unit, latest.currency)} milestone.`,
+                `${goal.metric} has crossed the ${formatValue(milestoneValue(goal, milestone), unit, currency)} milestone.`,
               ),
             });
           }
         }
 
         // 5. Off track twice running is the one thing that interrupts; coming
-        //    back is news for the recap, not for a phone.
-        const [newest, previous] = checks;
+        //    back is news for the recap, not for a phone. Both read the last
+        //    two *measured* checks, so a failed look leaves an open off-track
+        //    finding exactly as it was.
+        const [newest, previous] = measuredChecks;
         if (newest?.onTrack === false && previous?.onTrack === false) {
           findings.push({
             ...base,
@@ -1008,10 +1299,10 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
             title: `Off track: ${goal.title}`,
             detail: detail(
               `Two checks running, the pace of the last four lands at ` +
-                `${formatValue(newest.projected, unit, newest.currency)} by ` +
+                `${formatValue(newest.projected, unit, currency)} by ` +
                 `${localDateString(goal.deadline, ctx.timezone)}, short of ` +
-                `${formatValue(targetValue(goal), unit, newest.currency)}. ` +
-                `From here it needs ${formatPace(newest.paceNeeded, unit, newest.currency)}.`,
+                `${formatValue(targetValue(goal), unit, currency)}. ` +
+                `From here it needs ${formatPace(newest.paceNeeded, unit, direction, currency)}.`,
             ),
           });
         } else if (newest?.onTrack === true && previous?.onTrack === false) {
@@ -1024,8 +1315,14 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
           });
         }
 
-        // 6. Seven days with no number at all. The goal shows "not measured"
-        //    and the holder hears it once, rather than a made-up figure.
+        /*
+         * 6. Seven days with no number at all — counted from the last check
+         *    that carried one, over the whole history, and from the baseline
+         *    only when there has never been one. Counting from the last four
+         *    rows would collapse onto the baseline the moment four looks fail
+         *    in a row, and fire on day four of an outage saying a number that
+         *    existed yesterday has been missing for months.
+         */
         const lastMeasuredAt = latest?.at ?? goal.baseline.asOf;
         if (now.getTime() - lastMeasuredAt.getTime() >= NOT_MEASURABLE_MS) {
           findings.push({

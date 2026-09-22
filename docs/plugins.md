@@ -605,11 +605,13 @@ export interface Finding {
   title: string;
   detail: string;
   agentId?: string;        // who should speak about it; resolve it by role
+  wake?: boolean;          // an INFO finding that wakes once instead of waiting
   data?: unknown;          // structured evidence, handed over verbatim
 }
 
 export interface SentinelContext {
   db: Pool;
+  ownerId: string;         // whose installation this is
   now: () => Date;
   timezone: string;
   agentForRole(role: string): string | undefined;   // who answers for a role
@@ -704,10 +706,17 @@ Three things to know before you write one:
   metric answers a number.
 - **`null` is an answer, not a failure.** "No data yet", "the account has not
   synced", "the thing this counts does not exist here": return `null` and the
-  check records *not measurable* with your `note`, and the goal shows "not
-  measured since …" rather than a made-up figure. A `measure` that throws is
-  treated the same way, with the message kept as the note — one plugin's bad
-  afternoon must not stop the other eleven goals being checked.
+  check records *not measurable* — with core's own generic reason, because a
+  bare `null` carries no words of its own — and the goal shows "not measured
+  since …" rather than a made-up figure. A `measure` that **throws** is
+  treated the same way except that its message is kept as the check's note,
+  which is the way to say *why* you cannot answer. Either way one plugin's bad
+  afternoon does not stop the other eleven goals being checked.
+- **Parameters are strict, including when you declare none.** A metric with no
+  `params` accepts `{}` and nothing else, so a `measure` that defensively
+  reads a field it never declared can never be handed one a model chose. What
+  reaches `measure` is what your schema made of the input — defaults applied,
+  values coerced — and that is what the goal stores.
 - **The holder is the agent in `ctx`.** `ctx.agentId` is whichever agent holds
   the goal being checked, not the owner, so a metric that scopes to an agent
   scopes to the right one. `ctx.ownerId` and `ctx.timezone` are the

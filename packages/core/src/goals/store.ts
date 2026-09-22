@@ -1,14 +1,26 @@
 /**
  * The goal store. The budget lives here, in SQL, never in an agent's judgement.
  *
- * `createGoal` is one INSERT whose WHERE clause *is* the 12-goal limit — the
- * count is a subquery in the same statement, exactly as `createReminder` does
- * it — so two runs racing for the last slot produce one goal and one refusal
- * rather than thirteen rows. When it inserts nothing, the answer is a typed
- * refusal carrying the sentence the owner reads, not an error.
+ * `createGoal` counts the open goals inside the INSERT's own WHERE clause, the
+ * way `createReminder` does — and, unlike it, takes a transaction-scoped
+ * advisory lock first. The count alone is not a limit: under READ COMMITTED
+ * two concurrent statements both see eleven open goals and both commit, and
+ * the thirteenth goal is then one the sentinel never even walks (it reads
+ * `limit: MAX_OPEN_GOALS`). The lock is what makes "one goal and one refusal"
+ * true; the count is what decides which. When nothing is inserted, the answer
+ * is a typed refusal carrying the sentence the owner reads, not an error.
+ *
+ * The two ways a goal changes are both guarded by what the *caller last saw*
+ * rather than by the row alone: `updateGoal` takes the `updated_at` the
+ * approval card was drawn from, and writes nothing if the goal moved since —
+ * an approval names the goal as it was, and a goal that changed underneath is
+ * not the one the owner agreed about. `closeGoal` and `settleGoal` are
+ * guarded on `state`, so the SQL says what the module claims.
  */
+import type { Pool, PoolClient } from 'pg';
 import type { Queryable } from '../owner.js';
 import {
+  GOALS_LOCK_KEY,
   GOAL_CHECK_COLUMNS,
   GOAL_COLUMNS,
   MAX_OPEN_GOALS,
@@ -23,6 +35,7 @@ import {
   type GoalRow,
   type GoalState,
   type GoalTarget,
+  type GoalUpdateRefusal,
 } from './types.js';
 
 export interface CreateGoalInput {
@@ -36,12 +49,23 @@ export interface CreateGoalInput {
   baseline: { value: number; asOf: Date };
   deadline: Date;
   cadence: GoalCadence;
+  /** The currency of that first reading, when the metric answered one. */
+  currency?: string | null;
   milestones?: number[];
 }
 
-/** Put a goal on the clock, or say why not. Never throws for a known limit. */
+/**
+ * Put a goal on the clock, or say why not. Never throws for a known limit.
+ *
+ * Takes a `Pool` rather than a `Queryable` because the budget needs a
+ * transaction: `pg_advisory_xact_lock` is held until commit, and that is the
+ * whole point — it serialises the count and the insert against every other
+ * writer, and it is released by the commit or the rollback whatever happens to
+ * this process afterwards. The count stays in the WHERE clause: the lock says
+ * "one at a time", the count says "and only if there is room".
+ */
 export async function createGoal(
-  pool: Queryable,
+  pool: Pool,
   input: CreateGoalInput,
 ): Promise<CreateGoalResult> {
   const agentId = (input.agentId ?? '').trim();
@@ -57,33 +81,54 @@ export async function createGoal(
     return { ok: false, reason: 'empty-title', message: 'a goal needs a title the owner recognises' };
   }
 
-  const { rows } = await pool.query(
-    `insert into core.goals
-       (title, agent_id, metric, params, target_kind, target_value,
-        baseline_value, baseline_as_of, deadline, cadence, milestones)
-     select $1::text, $2::text, $3::text, $4::jsonb, $5::text, $6::numeric,
-            $7::numeric, $8::timestamptz, $9::timestamptz, $10::text, $11::jsonb
-     where (select count(*) from core.goals where state = 'open') < $12
-     returning ${GOAL_COLUMNS}`,
-    [
-      title,
-      agentId,
-      input.metric,
-      JSON.stringify(input.params ?? {}),
-      input.target.kind,
-      input.target.value,
-      input.baseline.value,
-      input.baseline.asOf.toISOString(),
-      input.deadline.toISOString(),
-      input.cadence,
-      JSON.stringify(input.milestones ?? []),
-      MAX_OPEN_GOALS,
-    ],
-  );
+  const rows = await inTransaction(pool, async (client) => {
+    await client.query('select pg_advisory_xact_lock($1)', [GOALS_LOCK_KEY]);
+    const inserted = await client.query(
+      `insert into core.goals
+         (title, agent_id, metric, params, target_kind, target_value,
+          baseline_value, baseline_as_of, deadline, cadence, currency, milestones)
+       select $1::text, $2::text, $3::text, $4::jsonb, $5::text, $6::numeric,
+              $7::numeric, $8::timestamptz, $9::timestamptz, $10::text, $11::text, $12::jsonb
+       where (select count(*) from core.goals where state = 'open') < $13
+       returning ${GOAL_COLUMNS}`,
+      [
+        title,
+        agentId,
+        input.metric,
+        JSON.stringify(input.params ?? {}),
+        input.target.kind,
+        input.target.value,
+        input.baseline.value,
+        input.baseline.asOf.toISOString(),
+        input.deadline.toISOString(),
+        input.cadence,
+        input.currency ?? null,
+        JSON.stringify(input.milestones ?? []),
+        MAX_OPEN_GOALS,
+      ],
+    );
+    return inserted.rows;
+  });
 
   if (rows.length > 0) return { ok: true, goal: toGoal(rows[0] as GoalRow) };
   // Nothing inserted: the only WHERE clause is the budget.
   return { ok: false, reason: 'too-many', message: TOO_MANY_GOALS };
+}
+
+/** One transaction, committed on return and rolled back on any throw. */
+async function inTransaction<T>(pool: Pool, body: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const result = await body(client);
+    await client.query('commit');
+    return result;
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** One goal by id, or null. */
@@ -122,19 +167,35 @@ export interface UpdateGoalInput {
   deadline?: Date;
   cadence?: GoalCadence;
   milestones?: number[];
+  /**
+   * The `updated_at` the caller last saw — the one the approval card was drawn
+   * from. The UPDATE is predicated on it, so a goal that moved since the card
+   * (another approval landed, the sentinel settled it) is not written to.
+   *
+   * It is the version, not a timestamp anybody reads: an approval names the
+   * goal *as it was*, and re-describing cannot close the window between the
+   * executor's check and this statement. Only the statement can.
+   */
+  expectedUpdatedAt: Date;
 }
+
+export type UpdateGoalResult =
+  | { ok: true; goal: Goal }
+  | { ok: false; reason: GoalUpdateRefusal; message: string };
 
 /**
  * Change what an approved goal is aiming at. Only the four fields §5 names:
  * the metric, the baseline and the holder are what the goal *is*, and
  * changing one of those is a new goal, not an update.
+ *
+ * Open goals only, and only at the version the caller saw.
  */
 export async function updateGoal(
   pool: Queryable,
   id: string,
   input: UpdateGoalInput,
   now: Date,
-): Promise<Goal | null> {
+): Promise<UpdateGoalResult> {
   const { rows } = await pool.query(
     `update core.goals set
        target_kind = coalesce($2::text, target_kind),
@@ -143,7 +204,7 @@ export async function updateGoal(
        cadence = coalesce($5::text, cadence),
        milestones = coalesce($6::jsonb, milestones),
        updated_at = $7::timestamptz
-     where id = $1::uuid
+     where id = $1::uuid and state = 'open' and updated_at = $8::timestamptz
      returning ${GOAL_COLUMNS}`,
     [
       id,
@@ -153,9 +214,20 @@ export async function updateGoal(
       input.cadence ?? null,
       input.milestones === undefined ? null : JSON.stringify(input.milestones),
       now.toISOString(),
+      input.expectedUpdatedAt.toISOString(),
     ],
   );
-  return rows.length > 0 ? toGoal(rows[0] as GoalRow) : null;
+  if (rows.length > 0) return { ok: true, goal: toGoal(rows[0] as GoalRow) };
+  const still = await getGoal(pool, id);
+  if (still === null) return { ok: false, reason: 'not-found', message: `no goal ${id}` };
+  return {
+    ok: false,
+    reason: 'changed',
+    message:
+      `goal ${id} has changed since the owner saw the card` +
+      `${still.state === 'open' ? '' : ` and is now ${still.state}`}` +
+      '. Read it again with goal.status and propose the change afresh.',
+  };
 }
 
 /**
@@ -179,14 +251,22 @@ export async function closeGoal(
        closed_at = $3::timestamptz,
        closed_note = $2::text,
        updated_at = $3::timestamptz
-     where id = $1::uuid and closed_at is null
+     where id = $1::uuid and state in ('open', 'met', 'missed')
      returning ${GOAL_COLUMNS}`,
     [id, note, now.toISOString()],
   );
   return rows.length > 0 ? toGoal(rows[0] as GoalRow) : null;
 }
 
-/** The sentinel's two verdicts. Both are final and both set `closed_at`. */
+/**
+ * The sentinel's two verdicts.
+ *
+ * They settle the *state* and nothing else. `closed_at` stays null on purpose:
+ * a goal buddi decided was met is not a goal the owner has finished with, and
+ * §5 says "met and missed become final when the owner agrees" — that agreement
+ * is `goal.close`, which adds the note and the date and leaves the word alone.
+ * The note here is buddi's own reason, kept so the row explains itself.
+ */
 export async function settleGoal(
   pool: Queryable,
   id: string,
@@ -195,8 +275,8 @@ export async function settleGoal(
   now: Date,
 ): Promise<Goal | null> {
   const { rows } = await pool.query(
-    `update core.goals set state = $2::text, closed_at = $4::timestamptz,
-       closed_note = $3::text, updated_at = $4::timestamptz
+    `update core.goals set state = $2::text, closed_note = $3::text,
+       updated_at = $4::timestamptz
      where id = $1::uuid and state = 'open'
      returning ${GOAL_COLUMNS}`,
     [id, state, note, now.toISOString()],
@@ -206,7 +286,10 @@ export async function settleGoal(
 
 export interface RecordCheckInput {
   goalId: string;
+  /** When buddi looked. */
   at: Date;
+  /** When the world was that way, as the reading said. Null when it did not. */
+  asOf?: Date | null;
   value?: number | null;
   currency?: string | null;
   note?: string | null;
@@ -221,8 +304,8 @@ export async function recordCheck(
   input: RecordCheckInput,
 ): Promise<GoalCheck> {
   const { rows } = await pool.query(
-    `insert into core.goal_checks (goal_id, at, value, currency, note, on_track, pace_needed, projected)
-     values ($1::uuid, $2::timestamptz, $3::numeric, $4::text, $5::text, $6::boolean, $7::numeric, $8::numeric)
+    `insert into core.goal_checks (goal_id, at, as_of, value, currency, note, on_track, pace_needed, projected)
+     values ($1::uuid, $2::timestamptz, $9::timestamptz, $3::numeric, $4::text, $5::text, $6::boolean, $7::numeric, $8::numeric)
      returning ${GOAL_CHECK_COLUMNS}`,
     [
       input.goalId,
@@ -233,6 +316,7 @@ export async function recordCheck(
       input.onTrack ?? null,
       input.paceNeeded ?? null,
       input.projected ?? null,
+      input.asOf?.toISOString() ?? null,
     ],
   );
   return toGoalCheck(rows[0] as GoalCheckRow);
