@@ -16,13 +16,15 @@
  *     502 with its own refusal in it, not a write nobody approved.
  *  2. **A page writes only through its plugin's tools.** The act route resolves
  *     the tool through the registry and refuses any name that belongs to
- *     another plugin — including a core `platform.*` tool. A page is not a
- *     console.
+ *     another plugin — and any name its own descriptors do not
+ *     carry (`registry.pageTools`). A plugin's other tools are an agent's
+ *     business; a page is not a console.
  *  3. **A write from a page is the owner acting.** It is invoked with
  *     `agentId: 'owner'`, so an `auto` tool runs and a `gated` one records the
  *     same immutable action an agent's call would have, and the page draws the
  *     approval card in place. There is no third path.
  */
+import { randomUUID } from 'node:crypto';
 import { OWNER_AGENT_ID, pageQueryContext, ReadOnlyRefusal, type ToolContext, type ToolRegistry } from '@buddi/core';
 
 /** What these routes need. Nothing that is not already in the server's deps. */
@@ -30,6 +32,8 @@ export interface PagesDeps {
   registry: ToolRegistry;
   ctx: ToolContext;
   now: () => Date;
+  /** Where the detail of a failure goes. The browser gets a sentence. */
+  log?: (line: string) => void;
 }
 
 export interface PagesReply {
@@ -39,6 +43,81 @@ export interface PagesReply {
 
 /** How many parameters a query route will look at. A page asks small questions. */
 export const PAGE_PARAM_LIMIT = 24;
+
+/**
+ * What one answer may weigh.
+ *
+ * A page draws a screen, and a screen is small. A query that answers with
+ * every row it has is a plugin defect, and it is better found as a 502 naming
+ * the query than as a browser tab that stops responding.
+ */
+export const PAGE_RESULT_LIMITS = { bytes: 1024 * 1024, rows: 2_000 } as const;
+
+/** Writes from one session: 60 a minute, counted before anything is invoked. */
+export const PAGE_ACT_RATE = { perMinute: 60, windowMs: 60_000 } as const;
+
+/**
+ * What a failure says.
+ *
+ * The owner is the only reader, but a Postgres error names tables and columns
+ * and a refused statement is the plugin's business rather than the page's. So
+ * the detail is logged with a reference and the browser gets one sentence it
+ * can quote back.
+ */
+function failed(deps: PagesDeps, plugin: string, query: string, detail: string): PagesReply {
+  const reference = randomUUID().slice(0, 8);
+  deps.log?.(`pages: ${plugin}/${query} failed [${reference}]: ${detail}`);
+  return {
+    status: 502,
+    body: { error: `The ${plugin} plugin could not answer ${query}.`, reference },
+  };
+}
+
+/** The biggest array anywhere in an answer, and what the whole thing weighs. */
+function tooBig(value: unknown): string | null {
+  const stack: unknown[] = [value];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (typeof node !== 'object' || node === null || seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      if (node.length > PAGE_RESULT_LIMITS.rows) {
+        return `it answered with ${node.length} rows; a page shows at most ${PAGE_RESULT_LIMITS.rows}`;
+      }
+      stack.push(...node);
+      continue;
+    }
+    stack.push(...Object.values(node as Record<string, unknown>));
+  }
+  const size = JSON.stringify(value ?? null)?.length ?? 0;
+  if (size > PAGE_RESULT_LIMITS.bytes) {
+    return `it answered with ${size} bytes; a page reads at most ${PAGE_RESULT_LIMITS.bytes}`;
+  }
+  return null;
+}
+
+/** One session's recent writes, for the rate limit. Per process, like every other. */
+const acts = new Map<string, number[]>();
+
+/** Has this session run out of writes for the minute? */
+export function actRateLimited(sessionId: string, now: number): boolean {
+  const recent = (acts.get(sessionId) ?? []).filter((at) => now - at < PAGE_ACT_RATE.windowMs);
+  if (recent.length >= PAGE_ACT_RATE.perMinute) {
+    acts.set(sessionId, recent);
+    return true;
+  }
+  recent.push(now);
+  acts.set(sessionId, recent);
+  // Nothing here grows without bound: a session that stops writing is dropped
+  // the next time any session writes.
+  if (acts.size > 64) {
+    for (const [id, times] of acts) {
+      if (times.every((at) => now - at >= PAGE_ACT_RATE.windowMs)) acts.delete(id);
+    }
+  }
+  return false;
+}
 
 /**
  * Every descriptor, with the plugin each came from.
@@ -91,14 +170,13 @@ export async function runPageQuery(
   try {
     produced = await query.produce(parsed.data, pageQueryContext(deps.ctx));
   } catch (error) {
-    if (error instanceof ReadOnlyRefusal) {
-      // The plugin's defect, named as one: a query tried to write.
-      return { status: 502, body: { error: `${plugin}.${name} is not a read: ${error.message}` } };
-    }
-    return {
-      status: 502,
-      body: { error: `${plugin}.${name} could not answer: ${error instanceof Error ? error.message : String(error)}` },
-    };
+    const detail = error instanceof Error ? error.message : String(error);
+    return failed(
+      deps,
+      plugin,
+      name,
+      error instanceof ReadOnlyRefusal ? `the query tried to write — ${detail}` : detail,
+    );
   }
 
   if (query.result) {
@@ -106,17 +184,19 @@ export async function runPageQuery(
     if (!checked.success) {
       // Validated before it leaves, exactly like a descriptor: the page draws
       // what it is handed and cannot check it.
-      return {
-        status: 502,
-        body: {
-          error: `${plugin}.${name} answered with something its own result shape refuses: ${checked.error.issues
-            .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
-            .join('; ')}`,
-        },
-      };
+      return failed(
+        deps,
+        plugin,
+        name,
+        `the answer breaks the query's own result shape: ${checked.error.issues
+          .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+          .join('; ')}`,
+      );
     }
-    return { status: 200, body: { data: checked.data } };
+    produced = checked.data;
   }
+  const oversized = tooBig(produced);
+  if (oversized) return failed(deps, plugin, name, oversized);
   return { status: 200, body: { data: produced ?? null } };
 }
 
@@ -128,7 +208,20 @@ export async function runPageQuery(
  * route, so a decision made there and a decision made on Home are the same
  * row and the same race.
  */
-export async function actOnPage(deps: PagesDeps, plugin: string, body: unknown): Promise<PagesReply> {
+export async function actOnPage(
+  deps: PagesDeps,
+  plugin: string,
+  body: unknown,
+  session: { id: string },
+): Promise<PagesReply> {
+  /*
+   * Counted before anything is looked up, let alone invoked: a page that has
+   * gone into a loop, or a tab left refreshing, must not be able to spend a
+   * plugin's rate limit — or the owner's money — sixty times a second.
+   */
+  if (actRateLimited(session.id, deps.now().getTime())) {
+    return { status: 429, body: { error: 'Too many writes from this page. Wait a moment and try again.' } };
+  }
   if (typeof body !== 'object' || body === null) {
     return { status: 400, body: { error: 'Send `{ tool, args }`.' } };
   }
@@ -145,8 +238,8 @@ export async function actOnPage(deps: PagesDeps, plugin: string, body: unknown):
    * whose page it is. A tool of another plugin is not refused with a lecture —
    * as far as this route is concerned it does not exist.
    */
-  if (deps.registry.pluginOf(tool) !== plugin) {
-    return { status: 404, body: { error: `${plugin} has no tool called ${tool}.` } };
+  if (deps.registry.pluginOf(tool) !== plugin || !deps.registry.pageTools(plugin).includes(tool)) {
+    return { status: 404, body: { error: `${plugin} has no page that writes through ${tool}.` } };
   }
 
   const result = await deps.registry.invoke(tool, args ?? {}, {

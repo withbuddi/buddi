@@ -31,6 +31,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { PAGE_ACT_RATE } from './pages.js';
 import { startWebServer, type WebServer } from './server.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -38,6 +39,9 @@ const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_pages_test_${process.pid}`;
 const TOKEN = 'a-test-dashboard-token-long-enough';
 const now = (): Date => new Date();
+
+/** Everything the server logged, so a refusal can be checked to say more there. */
+const logged: string[] = [];
 
 /** A second plugin, so "only this plugin's tools" has something to refuse. */
 const otherManifest: PluginManifest = {
@@ -130,7 +134,20 @@ suite('the plugin page routes', () => {
     await ensureOwner(pool, 'owner');
 
     const registry = new ToolRegistry();
-    registry.register(demoPagesManifest);
+    registry.register({
+      ...demoPagesManifest,
+      queries: [
+        ...(demoPagesManifest.queries ?? []),
+        // More rows than a screen has any business drawing.
+        {
+          name: 'flood',
+          params: z.object({}).strict(),
+          produce: async () => ({ items: Array.from({ length: 2_500 }, (_, i) => ({ i })) }),
+        },
+        // Declared without `.strict()`: the framework adds it.
+        { name: 'loose', params: z.object({}), produce: async () => ({ ok: true }) },
+      ],
+    });
     registry.register(otherManifest);
     const ctx: ToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
 
@@ -143,7 +160,7 @@ suite('the plugin page routes', () => {
       now,
       config: { enabled: true, host: '127.0.0.1', port: 0 },
       token: TOKEN,
-      log: () => {},
+      log: (line) => logged.push(line),
     });
     base = `http://127.0.0.1:${web.port}`;
     closed = await startWebServer({
@@ -173,6 +190,7 @@ suite('the plugin page routes', () => {
 
   beforeEach(async () => {
     demoWrites.length = 0;
+    logged.length = 0;
     await pool.query('truncate core.effect_attempts, core.approvals, core.actions cascade');
   });
 
@@ -235,7 +253,12 @@ suite('the plugin page routes', () => {
   it('refuses a query that tries to write, and writes nothing', async () => {
     const res = await new Client(base).get('/api/pages/demo/naughty');
     expect(res.status).toBe(502);
-    expect(((await res.json()) as { error: string }).error).toMatch(/is not a read/);
+    const body = (await res.json()) as { error: string; reference: string };
+    // One sentence for the browser; the detail — including any SQL — goes to
+    // the log with a reference the owner can quote.
+    expect(body.error).toBe('The demo plugin could not answer naughty.');
+    expect(body.error).not.toMatch(/update|system_flags/i);
+    expect(logged.some((line) => line.includes(body.reference) && line.includes('tried to write'))).toBe(true);
     const flag = await pool.query<{ value: unknown }>(`select value from core.system_flags where key = 'paused'`);
     expect(flag.rows[0]?.value).toBe(false);
   });
@@ -289,11 +312,44 @@ suite('the plugin page routes', () => {
   it('will not name another plugin\'s tool, or a core one', async () => {
     const client = new Client(base);
     await client.get('/api/session');
-    for (const tool of ['other.write', 'platform.create_agent', 'demo.nothing']) {
+    for (const tool of ['other.write', 'platform.create_agent', 'demo.nothing', 'demo.quiet']) {
       const res = await client.post('/api/pages/demo/act', { tool, args: {} });
       expect(res.status).toBe(404);
     }
     expect(demoWrites).toEqual([]);
+  });
+
+  it('refuses a query whose answer is too big to be a screen', async () => {
+    const res = await new Client(base).get('/api/pages/demo/flood');
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string; reference: string };
+    // The sentence the owner gets says which plugin and which query, and
+    // nothing about rows, tables or SQL.
+    expect(body.error).toBe('The demo plugin could not answer flood.');
+    expect(body.reference).toMatch(/^[0-9a-f]{8}$/);
+    expect(logged.some((line) => line.includes(body.reference) && line.includes('rows'))).toBe(true);
+  });
+
+  it('refuses a parameter the query never declared, even when the plugin forgot `.strict()`', async () => {
+    // `loose` declares `z.object({})` with no `.strict()`: the framework makes
+    // it strict at register, so this is refused without the plugin's help.
+    const ok = await new Client(base).get('/api/pages/demo/loose');
+    expect(ok.status).toBe(200);
+    const res = await new Client(base).get('/api/pages/demo/loose?sneaky=1');
+    expect(res.status).toBe(400);
+  });
+
+  it('counts a session\'s writes and stops at a minute\'s worth', async () => {
+    const client = new Client(base);
+    await client.get('/api/session');
+    let limited = 0;
+    for (let i = 0; i < PAGE_ACT_RATE.perMinute + 5; i += 1) {
+      const res = await client.post('/api/pages/demo/act', { tool: 'demo.keep', args: { id: 'a1' } });
+      if (res.status === 429) limited += 1;
+    }
+    expect(limited).toBe(5);
+    // Refused before the registry: the tool ran only while there was budget.
+    expect(demoWrites).toHaveLength(PAGE_ACT_RATE.perMinute);
   });
 
   it('is CSRF- and Origin-checked like every other write', async () => {

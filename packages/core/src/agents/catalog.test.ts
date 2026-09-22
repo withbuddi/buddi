@@ -172,6 +172,18 @@ describe('parseAgentFile', () => {
     expect(() => parseAgentFile(file)).toThrow(/kebab-case/);
   });
 
+  it('refuses an id the installation already means something by', () => {
+    // `owner` is the agent id a write from a plugin page is recorded under,
+    // and the one `ownerOnly` checks; `room` is a group's own voice. An agent
+    // called either would make the ledger ambiguous about who did something.
+    for (const reserved of ['owner', 'room']) {
+      const file = agentFile(`id: ${reserved}\nhandle: ${reserved}x\nname: X\ndescription: d\ntools: []`);
+      expect(() => parseAgentFile(file, { dirName: reserved, file: `/agents/${reserved}/agent.md` })).toThrow(
+        /is reserved/,
+      );
+    }
+  });
+
   it('refuses a missing required field', () => {
     expect(() => parseAgentFile(agentFile('id: a\nhandle: aa\nname: A\ntools: []'))).toThrow(
       /description/,

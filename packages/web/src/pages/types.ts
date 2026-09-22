@@ -4,8 +4,12 @@
  * This mirrors `packages/core/src/pages.ts`, for the same reason
  * `canvas/types.ts` mirrors `views.ts`: the contract crosses a process
  * boundary as JSON, and the page must not pull a Node package (pg, zod) into
- * the bundle to read it. Two copies of a data-only contract is the cheap half
- * of that trade; if one changes, change both.
+ * the bundle to read it.
+ *
+ * The copy is not trusted to stay in step by hand: `types.conformance.ts`
+ * asserts, at `tsc` time, that each declaration here and its counterpart in
+ * core are mutually assignable, so a field added on one side and not the other
+ * fails `pnpm -r typecheck` rather than a page at 7 a.m.
  *
  * Everything here is a *shape*. Nothing in this directory — types, components
  * or tests — is allowed to know the name of a plugin, a tool or a query.
@@ -26,15 +30,12 @@ export type PageIcon =
   | 'key'
   | 'globe';
 
-/** A descriptor as `GET /api/pages` serves it: the plugin, then the screen. */
-export interface PluginPageDescriptor {
-  plugin: string;
-  id: string;
-  title: string;
-  place: 'rail' | 'settings';
-  icon?: PageIcon;
-  order?: number;
-  body: Component[];
+/** A condition over the data: `equals` one value, or `in` a set, optionally `not`. */
+export interface Visibility {
+  path: string;
+  equals?: unknown;
+  in?: unknown[];
+  not?: true;
 }
 
 export type ParamRef = ValueRef | { param: string } | { route: 'plugin' | 'page' | 'item' };
@@ -56,8 +57,21 @@ export interface ToolRef {
   label: string;
   args?: Record<string, ArgRef>;
   tone?: 'accent' | 'danger';
+  /** `{count}` in it is replaced by the size of the selection. */
   confirm?: string;
+  /** The label while it is running. */
+  busy?: string;
+  /** Left of the toolbar, with a spacer after it. The primary stays rightmost. */
+  placement?: 'leading';
   then?: 'refresh' | 'close' | { route: RouteRef };
+}
+
+export interface RowAction extends ToolRef {
+  args: Record<string, ValueRef | { row: string }>;
+}
+
+export interface BulkAction extends ToolRef {
+  args: Record<string, ValueRef | { selected: true }>;
 }
 
 export interface ListItem {
@@ -70,7 +84,12 @@ export interface ListItem {
 
 export interface Selection {
   key: string;
-  disabledWhen?: { path: string; equals: unknown };
+  disabledWhen?: Visibility;
+}
+
+export interface GroupBy {
+  key: string;
+  labels?: Record<string, string>;
 }
 
 export interface Field {
@@ -84,10 +103,11 @@ export interface Field {
   step?: number;
   hint?: string;
   from?: string;
+  disabledWhen?: Visibility;
 }
 
 export interface ComponentCommon {
-  when?: { path: string; equals: unknown };
+  when?: Visibility;
   title?: string;
   note?: string;
   empty?: string;
@@ -97,17 +117,18 @@ export type ListComponent = ComponentCommon & {
   kind: 'list';
   query: QueryRef;
   rows: string;
+  key?: string;
   item: ListItem;
   select?: Selection;
-  actions?: ToolRef[];
-  bulk?: ToolRef[];
-  groupBy?: { key: string; labels?: Record<string, string> };
+  actions?: RowAction[];
+  bulk?: BulkAction[];
+  groupBy?: GroupBy;
   collapsed?: { label: string; rows: string };
 };
 
 export type Component =
   | (ComponentCommon & { kind: 'section'; body: Component[] })
-  | (ComponentCommon & { kind: 'notice'; text: string; tone?: Tone })
+  | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
   | (ComponentCommon & {
       kind: 'stats';
@@ -115,7 +136,7 @@ export type Component =
       items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }>;
     })
   | ListComponent
-  | (ComponentCommon & { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: ToolRef[] })
+  | (ComponentCommon & { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] })
   | (ComponentCommon & {
       kind: 'detail';
       query: QueryRef;
@@ -129,9 +150,27 @@ export type Component =
       initial?: QueryRef;
       drawer?: { title: string; button: string };
     })
-  | (ComponentCommon & { kind: 'search'; fields: Field[]; query: QueryRef; results: ListItem; to?: RouteRef })
-  | (ComponentCommon & { kind: 'list-detail'; list: ListComponent; param: string; detail: Component[] })
-  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string; body: Component[] })
+  | (ComponentCommon & {
+      kind: 'search';
+      fields: Field[];
+      query: QueryRef;
+      rows: string;
+      results: ListItem;
+      to?: RouteRef;
+      count?: string;
+      note?: string;
+      auto?: true;
+    })
+  | (ComponentCommon & {
+      kind: 'list-detail';
+      list: ListComponent;
+      param: string;
+      selection?: 'route' | 'local';
+      detail: Component[];
+    })
+  | (ComponentCommon & { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] })
+  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
+  | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
   | (ComponentCommon & {
@@ -140,8 +179,22 @@ export type Component =
       fields: Field[];
       save: ToolRef;
       actions?: ToolRef[];
+      footnote?: string;
+      readOnlyWhen?: Visibility;
       version: string;
     });
+
+/** A descriptor as `GET /api/pages` serves it: the plugin, then the screen. */
+export interface PluginPageDescriptor {
+  plugin: string;
+  id: string;
+  title: string;
+  place: 'rail' | 'settings';
+  icon?: PageIcon;
+  order?: number;
+  data?: QueryRef;
+  body: Component[];
+}
 
 /** What a write answered with: the tool's result, or an approval to decide. */
 export interface PageActResult {

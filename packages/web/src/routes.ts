@@ -171,16 +171,21 @@ export function parsePluginPageRoute(hash: string): { plugin: string; page: stri
 }
 
 /**
- * A plugin's settings tab. One page is `#/settings/<plugin>`; a plugin with
- * several distinguishes them with `.<page>`, which keeps the tab id one
- * segment and the core sections untouched.
+ * A plugin's settings tab: `#/settings/p.<plugin>[.<page>]`.
+ *
+ * Always prefixed, even for a plugin with one page. Without the `p.` a plugin
+ * called `memory` or `backup` would answer on a core section's own hash and
+ * both would draw, stacked; with it, the two namespaces cannot meet at all and
+ * nothing has to be reserved.
  */
+export const PLUGIN_SETTINGS_PREFIX = 'p.';
+
 export function pluginSettingsRoute(plugin: string, page: string): string {
-  return `${SETTINGS_ROUTE}/${encodeURIComponent(page === plugin ? plugin : `${plugin}.${page}`)}`;
+  return `${SETTINGS_ROUTE}/${encodeURIComponent(pluginSettingsTab(plugin, page))}`;
 }
 
 export function parsePluginSettingsRoute(hash: string): { plugin: string; page: string } | null {
-  const match = /^#\/settings\/([^/?.]+)(?:\.([^/?.]+))?(?:\?.*)?$/.exec(hash);
+  const match = /^#\/settings\/p\.([^/?.]+)(?:\.([^/?.]+))?(?:\?.*)?$/.exec(hash);
   if (!match) return null;
   const plugin = decodeURIComponent(match[1]!);
   return { plugin, page: match[2] ? decodeURIComponent(match[2]) : plugin };
@@ -188,7 +193,7 @@ export function parsePluginSettingsRoute(hash: string): { plugin: string; page: 
 
 /** The tab id a plugin settings page answers to. */
 export function pluginSettingsTab(plugin: string, page: string): string {
-  return page === plugin ? plugin : `${plugin}.${page}`;
+  return `${PLUGIN_SETTINGS_PREFIX}${plugin}${page === plugin ? '' : `.${page}`}`;
 }
 
 export function settingsRoute(section?: string): string {

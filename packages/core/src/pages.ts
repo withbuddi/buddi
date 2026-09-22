@@ -113,6 +113,12 @@ export interface PageDescriptor {
   icon?: PageIcon;
   /** Rail order among plugin entries; core places are fixed. */
   order?: number;
+  /**
+   * One read for the page itself, resolved once. Its answer is the data the
+   * top of `body` is drawn against — which is what makes a `when` outside any
+   * component that fetched something mean anything at all.
+   */
+  data?: QueryRef;
   body: Component[];
 }
 
@@ -162,9 +168,24 @@ export interface ToolRef {
   label: string;
   args?: Record<string, ArgRef>;
   tone?: 'accent' | 'danger';
-  /** One sentence the owner must confirm first. */
+  /**
+   * One sentence the owner must confirm first. `{count}` in it is replaced by
+   * the size of the selection, for a bulk action over many rows.
+   */
   confirm?: string;
-  /** What the page does after it succeeds. Refreshes its queries by default. */
+  /** The label while it is running: "Saving…", "Proposing…". */
+  busy?: string;
+  /**
+   * `leading` puts this action at the *left* of its toolbar, with a spacer
+   * after it — Discard on the left, then Save, then Send on the right. The
+   * primary action stays rightmost, which is the house rule.
+   */
+  placement?: 'leading';
+  /**
+   * What the page does after it succeeds. Refreshes its queries by default.
+   * For a **gated** tool nothing has happened yet, so `then` is held and
+   * applied only once the owner's approval has executed successfully.
+   */
   then?: 'refresh' | 'close' | { route: RouteRef };
 }
 
@@ -191,7 +212,8 @@ export interface ListItem {
 export interface Selection {
   /** Path within a row to the value an action is given. */
   key: string;
-  disabledWhen?: { path: string; equals: unknown };
+  /** Rows the owner may not tick — and which a bulk action never receives. */
+  disabledWhen?: Visibility;
 }
 
 /** Split a list into named groups by one field. */
@@ -213,17 +235,30 @@ export interface Field {
   hint?: string;
   /** Path into the `initial` (form) or `query` (editor) result this starts from. */
   from?: string;
+  /** Drawn, but not editable, while this holds of the surrounding data. */
+  disabledWhen?: Visibility;
 }
 
-/** Shown or hidden by what the page's own data says. */
+/**
+ * A condition over the data, and the only logic a descriptor may carry.
+ *
+ * `equals` is one value, `in` is a set of them — "status is edited **or**
+ * proposed" is one condition rather than one component per value — and `not`
+ * inverts whichever was given. Exactly one of `equals` and `in` is required:
+ * a bare path would have meant "show where this is undefined", which is a
+ * sentence nobody meant to write.
+ */
 export interface Visibility {
   path: string;
-  equals: unknown;
+  equals?: unknown;
+  in?: unknown[];
+  /** Invert the test. */
+  not?: true;
 }
 
 /** What every component may carry. */
 export interface ComponentCommon {
-  /** Show this only when the data at `path` equals this value. */
+  /** Show this only while this holds of the data the component is drawn with. */
   when?: Visibility;
   title?: string;
   /** One line under the title. */
@@ -234,7 +269,8 @@ export interface ComponentCommon {
 
 export type Component =
   | (ComponentCommon & { kind: 'section'; body: Component[] })
-  | (ComponentCommon & { kind: 'notice'; text: string; tone?: Tone })
+  /** A sentence. `text` may be a path, for something the data has to say. */
+  | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
   | (ComponentCommon & {
       kind: 'stats';
@@ -246,6 +282,12 @@ export type Component =
       query: QueryRef;
       /** Path to the array of rows in the query's result. */
       rows: string;
+      /**
+       * Path within a row to what makes it itself. Required unless `select`
+       * gives one: a row keyed by its position collides across groups and
+       * across the folded list, and the owner ticks the wrong thing.
+       */
+      key?: string;
       item: ListItem;
       select?: Selection;
       actions?: RowAction[];
@@ -269,15 +311,54 @@ export type Component =
       /** Behind a button, in a sheet, rather than open on the page. */
       drawer?: { title: string; button: string };
     })
-  | (ComponentCommon & { kind: 'search'; fields: Field[]; query: QueryRef; results: ListItem; to?: RouteRef })
+  | (ComponentCommon & {
+      kind: 'search';
+      fields: Field[];
+      query: QueryRef;
+      /** Path to the array of results in the query's answer. */
+      rows: string;
+      results: ListItem;
+      /** Where a result goes when `results.to` does not say. */
+      to?: RouteRef;
+      /** Path to how many there are in all — a windowed answer says so. */
+      count?: string;
+      /** Path to one line about the answer: "the last 500, newest first". */
+      note?: string;
+      /** Ask again on every change, with no button. For a picker, not a search box. */
+      auto?: true;
+    })
   | (ComponentCommon & {
       kind: 'list-detail';
       list: Extract<Component, { kind: 'list' }>;
       /** The page parameter the chosen item's id is bound to. */
       param: string;
+      /**
+       * `route` (the default) puts the chosen item in the URL, so it is a
+       * thing the owner can link to. `local` keeps it in the page, for a
+       * second level *inside* a detail that is already routed — two levels
+       * cannot both own the one item segment.
+       */
+      selection?: 'route' | 'local';
       detail: Component[];
     })
-  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string; body: Component[] })
+  /**
+   * The same sub-tree, once per row, with that row as its data.
+   *
+   * What makes a thread's messages (each an `expand` that fetches its own
+   * body) and its drafts (each an `editor`) expressible at all: every
+   * component inside is drawn against one row, so `artifact`, `approval` and
+   * `when` all work per row.
+   */
+  | (ComponentCommon & { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] })
+  /** A fold. `label` may be a path, so a row's own words are on it. */
+  | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
+  /**
+   * One button, anywhere — including inside a `repeat`, where its `ValueRef`
+   * arguments resolve against that row. What makes an attachment one block: a
+   * Fetch button that gives way, under a `when`, to the `artifact` link for
+   * the file it just produced.
+   */
+  | (ComponentCommon & { kind: 'button'; action: ToolRef })
   /** An approval id in the data; draws the ApprovalCard, choices and all. */
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** An artifact id in the data; draws the download link. */
@@ -288,6 +369,10 @@ export type Component =
       fields: Field[];
       save: ToolRef;
       actions?: ToolRef[];
+      /** A line under the toolbar: what the buttons do, and do not do. */
+      footnote?: string;
+      /** Every field disabled and no buttons at all, while this holds. */
+      readOnlyWhen?: Visibility;
       /**
        * Path to the version the save is made against — a stamp, not a clock.
        * The page offers it to `save` as the implicit field `version`, so a
@@ -333,6 +418,8 @@ const toolRefCommon = {
   label,
   tone: z.enum(['accent', 'danger']).optional(),
   confirm: sentence.optional(),
+  busy: label.optional(),
+  placement: z.literal('leading').optional(),
   then: z.union([z.enum(['refresh', 'close']), z.object({ route: routeRefSchema }).strict()]).optional(),
 };
 
@@ -359,7 +446,18 @@ const listItemSchema = z
   })
   .strict();
 
-const visibilitySchema = z.object({ path: viewPathSchema, equals: z.unknown() }).strict();
+const visibilitySchema = z
+  .object({
+    path: viewPathSchema,
+    equals: z.unknown(),
+    in: z.array(z.unknown()).min(1).max(24).optional(),
+    not: z.literal(true).optional(),
+  })
+  .strict()
+  .refine(
+    (v) => 'equals' in v || v.in !== undefined,
+    'a condition needs `equals` or `in`: a path on its own is not a question',
+  );
 
 const fieldSchema = z
   .object({
@@ -373,6 +471,7 @@ const fieldSchema = z
     step: z.number().optional(),
     hint: sentence.optional(),
     from: viewPathSchema.optional(),
+    disabledWhen: visibilitySchema.optional(),
   })
   .strict()
   .refine(
@@ -398,7 +497,14 @@ const common = {
 export const componentSchema: z.ZodType<Component> = z.lazy(() =>
   z.discriminatedUnion('kind', [
     z.object({ ...common, kind: z.literal('section'), body: z.array(componentSchema).max(24) }).strict(),
-    z.object({ ...common, kind: z.literal('notice'), text: sentence, tone: toneSchema.optional() }).strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('notice'),
+        text: z.union([sentence, valueRefSchema]),
+        tone: toneSchema.optional(),
+      })
+      .strict(),
     z.object({ ...common, kind: z.literal('link'), label, to: routeRefSchema }).strict(),
     z
       .object({
@@ -421,6 +527,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         kind: z.literal('list'),
         query: queryRefSchema,
         rows: viewPathSchema,
+        key: viewPathSchema.optional(),
         item: listItemSchema,
         select: z
           .object({ key: viewPathSchema, disabledWhen: visibilitySchema.optional() })
@@ -469,8 +576,12 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         kind: z.literal('search'),
         fields: z.array(fieldSchema).min(1).max(12),
         query: queryRefSchema,
+        rows: viewPathSchema,
         results: listItemSchema,
         to: routeRefSchema.optional(),
+        count: viewPathSchema.optional(),
+        note: viewPathSchema.optional(),
+        auto: z.literal(true).optional(),
       })
       .strict(),
     z
@@ -484,7 +595,18 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           'the `list` of a list-detail must be a list component',
         ),
         param: z.string().regex(PAGE_NAME, 'a page parameter is a name'),
+        selection: z.enum(['route', 'local']).optional(),
         detail: z.array(componentSchema).max(24),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('repeat'),
+        query: queryRefSchema,
+        rows: viewPathSchema,
+        key: viewPathSchema,
+        body: z.array(componentSchema).max(24),
       })
       .strict(),
     z
@@ -492,10 +614,11 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         ...common,
         kind: z.literal('expand'),
         query: queryRefSchema,
-        label,
+        label: z.union([label, valueRefSchema]),
         body: z.array(componentSchema).max(24),
       })
       .strict(),
+    z.object({ ...common, kind: z.literal('button'), action: toolRefSchema }).strict(),
     z.object({ ...common, kind: z.literal('approval'), path: viewPathSchema }).strict(),
     z.object({ ...common, kind: z.literal('artifact'), path: viewPathSchema, label }).strict(),
     z
@@ -506,6 +629,8 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         fields: z.array(fieldSchema).min(1).max(24),
         save: toolRefSchema,
         actions: z.array(toolRefSchema).max(6).optional(),
+        footnote: sentence.optional(),
+        readOnlyWhen: visibilitySchema.optional(),
         version: viewPathSchema,
       })
       .strict(),
@@ -519,65 +644,234 @@ export const pageDescriptorSchema = z
     place: z.enum(['rail', 'settings']),
     icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe']).optional(),
     order: z.number().int().min(-999).max(999).optional(),
+    data: queryRefSchema.optional(),
     body: z.array(componentSchema).min(1).max(24),
   })
   .strict();
 
-/** Every `{ query }`, `{ tool }` and `{ page }` in a tree, with where it was. */
-function collectRefs(node: unknown, at: string, into: Array<{ kind: 'query' | 'tool' | 'page'; name: string; at: string }>): void {
-  if (Array.isArray(node)) {
-    node.forEach((child, index) => collectRefs(child, `${at}[${index}]`, into));
-    return;
-  }
-  if (typeof node !== 'object' || node === null) return;
-  const record = node as Record<string, unknown>;
-  // The three reference keys are unambiguous in this grammar: nothing else in
-  // a descriptor is called `query`, `tool` or `page`.
-  for (const key of ['query', 'tool', 'page'] as const) {
-    if (typeof record[key] === 'string') {
-      into.push({ kind: key, name: record[key] as string, at: `${at}${at === '' ? '' : '.'}${key}` });
+/* ------------------------------------------------------------------ *
+ * The walk
+ *
+ * A descriptor is somebody else's object graph. It is walked twice — once for
+ * its size and shape, once for the names it references — and both walks are
+ * iterative and cycle-safe, because a plugin that hands over `a.b = a` must
+ * fail load with a sentence rather than take the process down with a stack
+ * overflow.
+ * ------------------------------------------------------------------ */
+
+/** How big somebody else's descriptor may be before it is not a screen. */
+export const PAGE_LIMITS = { depth: 12, nodes: 400, bytes: 64 * 1024 } as const;
+
+/** Refuse a descriptor that is too deep, too big, or not a tree at all. */
+function checkShape(raw: unknown, plugin: string, named: string): void {
+  const seen = new Set<object>();
+  let nodes = 0;
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: raw, depth: 0 }];
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop() as { value: unknown; depth: number };
+    if (typeof value !== 'object' || value === null) continue;
+    if (seen.has(value)) {
+      throw new Error(`plugin ${plugin}: page descriptor ${named} refers to itself; a descriptor is a tree`);
+    }
+    seen.add(value);
+    nodes += 1;
+    if (nodes > PAGE_LIMITS.nodes) {
+      throw new Error(`plugin ${plugin}: page descriptor ${named} has more than ${PAGE_LIMITS.nodes} nodes`);
+    }
+    if (depth > PAGE_LIMITS.depth) {
+      throw new Error(`plugin ${plugin}: page descriptor ${named} nests deeper than ${PAGE_LIMITS.depth}`);
+    }
+    for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) {
+      stack.push({ value: child, depth: depth + 1 });
     }
   }
-  for (const [key, value] of Object.entries(record)) {
-    collectRefs(value, `${at}${at === '' ? '' : '.'}${key}`, into);
+  const size = JSON.stringify(raw)?.length ?? 0;
+  if (size > PAGE_LIMITS.bytes) {
+    throw new Error(
+      `plugin ${plugin}: page descriptor ${named} is ${size} bytes; a descriptor is a screen, not a document (${PAGE_LIMITS.bytes} max)`,
+    );
   }
+}
+
+/**
+ * Subtrees whose *keys* come from data rather than from the grammar.
+ *
+ * `groupBy.labels` is keyed by the values of a column, and `options` by
+ * whatever a select offers. A plugin whose rows are grouped by a field whose
+ * value is "page" must not fail to load with "links to Page, which is not a
+ * page of this plugin".
+ */
+const DATA_KEYED = new Set(['labels', 'options', 'args', 'params']);
+
+/** The shapes a reference string is allowed to sit in. */
+const REF_PARENT: Record<'query' | 'tool' | 'page', (parent: Record<string, unknown>) => boolean> = {
+  // `{ query, params? }` — a QueryRef, and nothing else in the grammar.
+  query: (parent) => Object.keys(parent).every((key) => key === 'query' || key === 'params'),
+  // A ToolRef always carries the button's words.
+  tool: (parent) => typeof parent.label === 'string',
+  // `{ page, item? }` — a RouteRef.
+  page: (parent) => Object.keys(parent).every((key) => key === 'page' || key === 'item'),
+};
+
+interface Ref {
+  kind: 'query' | 'tool' | 'page';
+  name: string;
+  at: string;
+}
+
+/**
+ * Every `{ query }`, `{ tool }` and `{ page }` in a tree, with where it was.
+ *
+ * Shape-aware rather than key-aware: a string under a key called `page` is a
+ * route only when its parent looks like a route. See `DATA_KEYED`.
+ */
+function collectRefs(root: unknown, at: string): Ref[] {
+  const refs: Ref[] = [];
+  const stack: Array<{ value: unknown; at: string }> = [{ value: root, at }];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const { value, at: where } = stack.pop() as { value: unknown; at: string };
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => stack.push({ value: child, at: `${where}[${index}]` }));
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    for (const kind of ['query', 'tool', 'page'] as const) {
+      const name = record[kind];
+      if (typeof name === 'string' && REF_PARENT[kind](record)) {
+        refs.push({ kind, name, at: `${where}${where === '' ? '' : '.'}${kind}` });
+      }
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (DATA_KEYED.has(key)) continue;
+      stack.push({ value: child, at: `${where}${where === '' ? '' : '.'}${key}` });
+    }
+  }
+  return refs;
+}
+
+/** Where a `list` says nothing about what makes a row itself. */
+function unkeyedLists(root: unknown, at: string): string[] {
+  const found: string[] = [];
+  const stack: Array<{ value: unknown; at: string }> = [{ value: root, at }];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const { value, at: where } = stack.pop() as { value: unknown; at: string };
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => stack.push({ value: child, at: `${where}[${index}]` }));
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.kind === 'list' && record.key === undefined && record.select === undefined) found.push(where);
+    for (const [key, child] of Object.entries(record)) {
+      if (DATA_KEYED.has(key)) continue;
+      stack.push({ value: child, at: `${where}${where === '' ? '' : '.'}${key}` });
+    }
+  }
+  return found;
+}
+
+/** Is this a zod schema at all? Duck-typed: core does not own the plugin's zod. */
+function isZodSchema(value: unknown): value is ZodTypeAny {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { safeParse?: unknown }).safeParse === 'function'
+  );
+}
+
+/**
+ * A query's parameters, as the route will use them: an object schema that
+ * refuses what it does not declare.
+ *
+ * Unknown keys are refused by the *framework*, not by each plugin remembering
+ * `.strict()`. A plugin that wrote `z.object({...})` gets the strict version
+ * of it; anything that is not an object schema is refused at load, because a
+ * query string is a bag of named strings and nothing else can read one.
+ */
+function strictParams(query: PageQuery, plugin: string): ZodTypeAny {
+  const params = query.params as unknown as {
+    _def?: { typeName?: string; unknownKeys?: string };
+    strict?: () => ZodTypeAny;
+  };
+  if (!isZodSchema(query.params) || params._def?.typeName !== 'ZodObject' || typeof params.strict !== 'function') {
+    throw new Error(
+      `plugin ${plugin}: page query ${query.name} must declare \`params\` as a zod object schema; ` +
+        'a query string is a bag of named strings.',
+    );
+  }
+  return params._def?.unknownKeys === 'strict' ? (query.params as ZodTypeAny) : params.strict();
+}
+
+/** What a manifest's pages and queries are, once they have been checked. */
+export interface PageContributions {
+  pages: PageDescriptor[];
+  /**
+   * The queries, with `params` made strict. These are what the route runs:
+   * the plugin's own objects, never re-created.
+   */
+  queries: PageQuery[];
+  /**
+   * Every tool any of these pages names — and therefore the only tools the act
+   * route will invoke for this plugin. A plugin's other tools are an agent's
+   * business, not a button's.
+   */
+  tools: string[];
 }
 
 /**
  * Validate a manifest's pages and queries, or throw naming the plugin, the
  * page and the field.
  *
- * Three things are checked beyond the shape, and each one is a rename that
- * missed a file rather than a typo the browser could survive:
+ * Beyond the shape, each of these is a rename that missed a file rather than a
+ * typo the browser could survive:
  *
  *  - a query name a page uses must be one the same manifest contributes;
- *  - a tool a page writes through must be one the same manifest contributes
- *    (the act route refuses any other name anyway, at run time, but a page
- *    that could never work should not install);
+ *  - a tool a page writes through must be one the same manifest contributes;
  *  - a route a page links to must be a page of the same plugin.
+ *
+ * And each query is checked to be a query at all: `produce` a function,
+ * `params` a zod object schema, `result` a zod schema when it is there. They
+ * are called by the gateway with the owner's own context, so "it looked like a
+ * query" is not a thing to find out at request time.
  */
 export function parsePageContributions(opts: {
   plugin: string;
   pages?: readonly unknown[];
   queries?: readonly PageQuery[];
   tools?: readonly string[];
-}): PageDescriptor[] {
+}): PageContributions {
   const { plugin } = opts;
   const queryNames = new Set<string>();
+  const queries: PageQuery[] = [];
   for (const query of opts.queries ?? []) {
-    if (!PAGE_QUERY_NAME.test(query.name)) {
-      throw new Error(`plugin ${plugin}: invalid page query name "${query.name}" — lower_snake_case, up to 40 characters`);
+    if (typeof query?.name !== 'string' || !PAGE_QUERY_NAME.test(query.name)) {
+      throw new Error(
+        `plugin ${plugin}: invalid page query name "${String(query?.name)}" — lower_snake_case, up to 40 characters`,
+      );
     }
     if (queryNames.has(query.name)) {
       throw new Error(`plugin ${plugin}: two page queries are called ${query.name}`);
     }
+    if (typeof query.produce !== 'function') {
+      throw new Error(`plugin ${plugin}: page query ${query.name} has no \`produce\` function`);
+    }
+    if (query.result !== undefined && !isZodSchema(query.result)) {
+      throw new Error(`plugin ${plugin}: page query ${query.name} declares a \`result\` that is not a zod schema`);
+    }
     queryNames.add(query.name);
+    queries.push({ ...query, params: strictParams(query, plugin) });
   }
 
   const pages: PageDescriptor[] = [];
   const ids = new Set<string>();
   for (const [index, raw] of (opts.pages ?? []).entries()) {
     const named = typeof (raw as { id?: unknown } | null)?.id === 'string' ? (raw as { id: string }).id : `index ${index}`;
+    checkShape(raw, plugin, named);
     const parsed = pageDescriptorSchema.safeParse(raw);
     if (!parsed.success) {
       const detail = parsed.error.issues
@@ -590,11 +884,25 @@ export function parsePageContributions(opts: {
     pages.push(parsed.data as PageDescriptor);
   }
 
-  const tools = new Set(opts.tools ?? []);
+  /*
+   * A row must be keyed by something in the row. Checked here rather than in
+   * the schema because a `.refine` on one arm of a discriminated union is no
+   * longer an object schema, and the union is what makes `body.0.rows` the
+   * error instead of "no branch matched".
+   */
   for (const page of pages) {
-    const refs: Array<{ kind: 'query' | 'tool' | 'page'; name: string; at: string }> = [];
-    collectRefs(page.body, 'body', refs);
-    for (const ref of refs) {
+    for (const at of unkeyedLists(page.body, 'body')) {
+      throw new Error(
+        `plugin ${plugin}: page ${page.id}, ${at}: a list needs \`key\` (or a \`select.key\`) — ` +
+          'a row keyed by its position collides across groups and across the folded rows',
+      );
+    }
+  }
+
+  const contributed = new Set(opts.tools ?? []);
+  const named = new Set<string>();
+  for (const page of pages) {
+    for (const ref of [...collectRefs(page.data, 'data'), ...collectRefs(page.body, 'body')]) {
       if (ref.kind === 'query' && !queryNames.has(ref.name)) {
         throw new Error(
           `plugin ${plugin}: page ${page.id}, ${ref.at}: no query called ${ref.name} — this plugin contributes ${
@@ -602,17 +910,20 @@ export function parsePageContributions(opts: {
           }`,
         );
       }
-      if (ref.kind === 'tool' && opts.tools !== undefined && !tools.has(ref.name)) {
-        throw new Error(
-          `plugin ${plugin}: page ${page.id}, ${ref.at}: names ${ref.name}, which this plugin does not contribute`,
-        );
+      if (ref.kind === 'tool') {
+        if (opts.tools !== undefined && !contributed.has(ref.name)) {
+          throw new Error(
+            `plugin ${plugin}: page ${page.id}, ${ref.at}: names ${ref.name}, which this plugin does not contribute`,
+          );
+        }
+        named.add(ref.name);
       }
       if (ref.kind === 'page' && !ids.has(ref.name)) {
         throw new Error(`plugin ${plugin}: page ${page.id}, ${ref.at}: links to ${ref.name}, which is not a page of this plugin`);
       }
     }
   }
-  return pages;
+  return { pages, queries, tools: [...named] };
 }
 
 /* ------------------------------------------------------------------ *
@@ -688,20 +999,23 @@ export function stripSqlNoise(sql: string): string {
   return out;
 }
 
-/** Everything a page query may not do, whatever the statement starts with. */
-const FORBIDDEN_KEYWORD =
-  /\b(insert|update|delete|merge|truncate|create|alter|drop|grant|revoke|copy|call|do|lock|set|reset|comment|refresh|vacuum|cluster|reindex|notify|listen|unlisten|prepare|execute|begin|commit|rollback|savepoint|discard|security|nextval|setval|pg_sleep|pg_advisory|dblink)\b/i;
-
-/** `select … for update` and its relatives: a lock is a write. */
-const LOCKING_CLAUSE = /\bfor\s+(no\s+key\s+update|key\s+share|update|share)\b/i;
+/**
+ * `select … into` is `create table as` with a friendlier face, and `for
+ * update` takes a lock. Both are refused by the read-only transaction below
+ * as well; they are named here so the refusal is a sentence about pages
+ * rather than a Postgres error code.
+ */
+const NOT_A_READ = /\binto\b|\bfor\s+(no\s+key\s+update|key\s+share|update|share)\b/i;
 
 /**
- * Is this statement a read, and nothing else?
+ * A cheap pre-filter: does this statement even *look* like a read?
  *
- * The first keyword decides what it *is* — `select`, or a `with` whose body is
- * one — and the rest is checked for the ways a read stops being one: a
- * data-modifying CTE, a locking clause, a second statement after a semicolon.
- * Fail-closed: anything this cannot recognise is refused.
+ * It decides one thing — what the statement starts with — and refuses a second
+ * statement smuggled in after a semicolon. It is **not** the enforcement, and
+ * it deliberately no longer hunts for keywords anywhere else: `select comment
+ * from t` is an ordinary read, and a lexical scan cannot tell whether
+ * `select plugin.f()` writes. What decides that is Postgres, in
+ * `readOnlyPool`.
  */
 export function isReadOnlyStatement(sql: string): boolean {
   const bare = stripSqlNoise(sql).trim().replace(/;+\s*$/, '');
@@ -712,46 +1026,79 @@ export function isReadOnlyStatement(sql: string): boolean {
   const opening = bare.replace(/^[\s(]+/, '');
   const first = /^([a-z_]+)/i.exec(opening)?.[1]?.toLowerCase();
   if (first !== 'select' && first !== 'with') return false;
-  if (FORBIDDEN_KEYWORD.test(bare)) return false;
-  if (LOCKING_CLAUSE.test(bare)) return false;
-  return true;
+  return !NOT_A_READ.test(bare);
 }
 
+/** How long one page query's statement may run before Postgres cancels it. */
+export const PAGE_QUERY_TIMEOUT_MS = 5_000;
+
 /**
- * The pool a `PageQuery` is handed: the real one, with a rule.
+ * The pool a `PageQuery` is handed: the real one, in a transaction that cannot
+ * write.
  *
  * "A query cannot write" is the whole reason reads and writes are different
- * things here, and a comment saying so would be worth nothing — the first
- * plugin to run an `update` in a query would have invented a write nobody
- * approved, with no action, no preview and no ledger row. So the statement is
- * read before it is sent, and anything that is not a `select` throws.
+ * things here — the first plugin to run an `update` in a query would have
+ * invented a write nobody approved, with no action, no preview and no ledger
+ * row — so it is **Postgres** that enforces it, not a regular expression:
+ * every statement runs inside
  *
- * Not a substitute for a read-only role in Postgres — a plugin's own pool can
- * still do as it likes — but this is the pool the *engine* hands out, and it
- * is the one a page's data comes through.
+ *     begin isolation level repeatable read read only;
+ *     set local statement_timeout = '5s';
+ *     <the statement>
+ *     rollback;
+ *
+ * which refuses `insert`/`update`/`delete`/`copy … to`/`create`/`select …
+ * into`/`nextval`/large-object writes **including inside a volatile function
+ * the plugin wrote itself**, in Postgres's own words. The scanner above stays
+ * as a pre-filter, so the common mistake is answered in this process; it is no
+ * longer described as the boundary.
+ *
+ * Two things it does **not** cover, and they are honest limits rather than
+ * bugs: a superuser-ish role can still call `pg_read_file` or
+ * `pg_terminate_backend`, neither of which writes a row. The answer to those
+ * is a Postgres role without the grant — see `docs/specs/plugin-pages.md` §8.
+ *
+ * The wrapper holds the client, takes one per statement and always gives it
+ * back; `connect()` throws, so a query never sees one and cannot open a
+ * transaction of its own.
  */
 export function readOnlyPool(pool: Pool): Pool {
-  /**
-   * A refusal is a rejected promise, not a throw: `pool.query` is awaited
-   * everywhere, and a caller that only catches rejections must not be able to
-   * turn this into an unhandled defect.
-   */
-  const refuse = (sql: string): Promise<never> =>
-    Promise.reject(
-      new ReadOnlyRefusal(
-        `a page query may only read: this statement is not a select — ${sql.trim().slice(0, 120)}`,
-      ),
-    );
+  const run = async (config: unknown, values?: unknown): Promise<unknown> => {
+    const text =
+      typeof config === 'string'
+        ? config
+        : typeof (config as { text?: unknown } | null)?.text === 'string'
+          ? (config as { text: string }).text
+          : null;
+    if (text === null || !isReadOnlyStatement(text)) {
+      throw new ReadOnlyRefusal('a page query may only read: this statement is not a select.');
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('begin isolation level repeatable read read only');
+      await client.query(`set local statement_timeout = ${PAGE_QUERY_TIMEOUT_MS}`);
+      return await (client.query as (...args: unknown[]) => Promise<unknown>)(
+        config,
+        ...(values === undefined ? [] : [values]),
+      );
+    } finally {
+      // Always, and whatever happened: the transaction only ever read, so
+      // there is nothing to keep and nothing to lose by throwing it away.
+      try {
+        await client.query('rollback');
+      } catch {
+        /* the connection is already gone; releasing it is what matters */
+      }
+      client.release();
+    }
+  };
+
   const guarded = {
-    query(config: unknown, values?: unknown, callback?: unknown): unknown {
-      const text =
-        typeof config === 'string'
-          ? config
-          : typeof (config as { text?: unknown } | null)?.text === 'string'
-            ? ((config as { text: string }).text)
-            : null;
-      if (text === null || !isReadOnlyStatement(text)) return refuse(text ?? String(config));
-      return (pool.query as (...args: unknown[]) => unknown)(config, values, callback);
+    query(config: unknown, values?: unknown): unknown {
+      // A refusal is a rejected promise, not a throw: `pool.query` is awaited
+      // everywhere, and a caller that only catches rejections must not be able
+      // to turn this into an unhandled defect.
+      return run(config, typeof values === 'function' ? undefined : values);
     },
     connect(): never {
       throw new ReadOnlyRefusal(

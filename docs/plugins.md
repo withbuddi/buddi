@@ -779,17 +779,47 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   flag; a parameter your schema does not declare is refused, not ignored.
 - **The components are a fixed set**, each a shape: `section`, `notice`,
   `link`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
-  `expand`, `approval`, `artifact`, `editor`. Every one may carry `when`
-  (`{ path, equals }` against its data), `title`, `note` and `empty`. Paths are
-  view paths, exactly as in §2.5.
+  `repeat`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
+  carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
+  in §2.5.
+- **`repeat` is how a row becomes a sub-tree.** `{ kind: 'repeat', query,
+  rows, key, body }` draws `body` once per row *with that row as its data*, so
+  a message's `expand` fetches its own body, a row's `button` acts on its own
+  id, and `artifact`, `approval` and `when` all work per row.
+- **`when` is the only logic**, and it is a condition, not an expression:
+  `{ path, equals }`, or `{ path, in: [...] }` for "one of these", with
+  `not: true` to invert. The same shape is `Field.disabledWhen`,
+  `editor.readOnlyWhen` and `Selection.disabledWhen`.
+- **A page may have its own read.** `PageDescriptor.data` is resolved once and
+  is the data the top of `body` is drawn against — without it a `when` at the
+  top level has nothing to be about.
+- **Text is a constant or a value.** `notice.text` and `expand.label` accept a
+  `ValueRef` as well as a string, and `ToolRef.confirm` may contain `{count}`,
+  replaced by the size of the selection.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   and checks every reference: a query name you do not contribute, a tool that
   is not yours, a link to a page that does not exist. A typo is a startup error
-  naming the plugin, the page and the field path.
+  naming the plugin, the page and the field path. So is a descriptor that is
+  not a screen: deeper than 12, more than 400 nodes, more than 64 KB of JSON,
+  or a graph that refers to itself. A `list` must say what keys a row (`key`,
+  or a `select.key`).
+- **A page writes only through the tools its own descriptors name.**
+  `POST /api/pages/<plugin>/act` refuses every other name, including your own
+  plugin's other tools: those are an agent's business. It is rate-limited to 60
+  writes a minute per session, and it is CSRF- and Origin-checked like every
+  other write.
 - **Your routes are yours.** A rail page is `#/p/<plugin>/<page>`, an item
   inside a `list-detail` is `#/p/<plugin>/<page>/<itemId>`, and a settings page
-  is the tab `#/settings/<plugin>` (or `#/settings/<plugin>.<page>` when you
-  ship several).
+  is the tab `#/settings/p.<plugin>` (or `#/settings/p.<plugin>.<page>` when
+  you ship several). The `p.` is always there, so a plugin called `memory` or
+  `backup` cannot land on a core section's hash.
+
+Two limits on an answer, so a screen stays a screen: a query's statement runs
+in a read-only transaction with a five-second `statement_timeout`, and an
+answer of more than 2,000 rows in any array or 1 MB of JSON is refused with a
+502 naming the query. What the browser is told about any failure is one
+sentence — "The `<plugin>` plugin could not answer `<query>`." — with a
+reference; the detail goes to the installation's log.
 
 A tool the owner may run from a page but no model should ever see carries
 `ownerOnly: true` (§2.1): the registry leaves it out of the list every provider
@@ -2153,6 +2183,7 @@ than guess.
 | `place` | `'rail' \| 'settings'` | yes | A place of its own on the rail, or a tab after the core settings sections. |
 | `icon` | `PageIcon` | no | One of a pinned set the dashboard draws — `mail`, `money`, `calendar`, `people`, `file`, `chart`, `bell`, `plug`, `key`, `globe`. Never an image you supply. Defaults to the plug. |
 | `order` | `number` | no | Where you sit among the *plugin* entries. The core places are fixed. |
+| `data` | `QueryRef` | no | One read for the page itself, resolved once. Its answer is what the top of `body` — and any `when` there — is drawn against. |
 | `body` | `Component[]` | yes | The tree: the fixed component set of §2.5b, each bound to a query for its data and a tool for its writes. |
 
 #### `PageQuery`
