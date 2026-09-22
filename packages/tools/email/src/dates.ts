@@ -35,7 +35,12 @@
  *  - **relative words** (`tomorrow`, `in three days`, `next month`) — they need
  *    the sender's own timezone to mean a day, and the header that would give it
  *    is the one thing in a message nobody can trust;
- *  - **times without a day**, and anything outside the 14-day window.
+ *  - **times without a day**, and anything beyond `DATE_HORIZON_DAYS`.
+ *
+ * The *fortnight* is not this file's rule. A message is read once, at ingest,
+ * and every date it resolves inside the horizon is kept; whether a stored date
+ * is close enough to be worth a finding is asked later, of the owner's clock,
+ * by `statedDatesBetween`.
  *
  * ## Quoted history is not the message
  *
@@ -48,6 +53,19 @@
 
 /** How far ahead a stated date is still worth a finding. §7's "next 14 days". */
 export const DATE_WINDOW_DAYS = 14;
+
+/**
+ * How far ahead a date is still *stored*, which is not the same question.
+ *
+ * The fortnight is the alerting window and it belongs to the sentinel
+ * (`statedDatesBetween`), not to the parser. The parser reads a message once,
+ * at ingest, and stamps it — so a window measured from the message's own day
+ * would silently throw away every date the owner has not reached yet: a
+ * renewal announced two months out, or a backlog message swept up at catch-up
+ * whose date is now three days away. Anything resolvable inside a year is
+ * kept; beyond that it is nonsense or a lease, and neither is a reminder.
+ */
+export const DATE_HORIZON_DAYS = 365;
 
 /** Confidence at or above which a hit is worth waking somebody about. */
 export const DEFAULT_DATE_CONFIDENCE = 0.6;
@@ -170,7 +188,11 @@ export interface FindDatesOptions {
   at: Date;
   /** The owner's zone, for turning that instant into a day. */
   timezone?: string;
-  /** How far ahead to look. Defaults to `DATE_WINDOW_DAYS`. */
+  /**
+   * How far ahead to keep a date, from the message's own day. Defaults to
+   * `DATE_HORIZON_DAYS`; the fortnight that decides whether a stored date is
+   * worth saying anything about is applied by the sentinel, not here.
+   */
   windowDays?: number;
 }
 
@@ -212,16 +234,28 @@ function realDay(year: number, month: number, day: number): boolean {
 }
 
 /**
+ * How far a year-less date may be rolled into the next year to make it future.
+ *
+ * "2 January" written in September is next January and means it; "15 September"
+ * written a week *after* the fifteenth is somebody talking about a day that has
+ * gone by, not booking the same day in twelve months' time. The line between
+ * the two is distance, and half a year is where it sits: past that, a rolled
+ * reading is refused rather than stored and raised eleven months later.
+ */
+export const YEAR_ROLL_DAYS = 180;
+
+/**
  * The year a month-and-day with no year means.
  *
  * The one the message was written in, unless that day has already gone by —
- * then the next one. "22 September" in a mail from December is next September,
- * and the window check below is what then throws it away.
+ * then the next one, as long as it is inside `YEAR_ROLL_DAYS`.
  */
 function resolveYear(month: number, day: number, refDay: number, refYear: number): number | null {
   for (const year of [refYear, refYear + 1]) {
     if (!realDay(year, month, day)) continue;
-    if (dayNumber(year, month, day) >= refDay) return year;
+    const dayNo = dayNumber(year, month, day);
+    if (dayNo < refDay) continue;
+    return year === refYear || dayNo <= refDay + YEAR_ROLL_DAYS ? year : null;
   }
   return null;
 }
@@ -230,7 +264,7 @@ function resolveYear(month: number, day: number, refDay: number, refYear: number
  * The scan
  * ------------------------------------------------------------------ */
 
-type Candidate = { dayNo: number; phrase: string; base: number };
+type Candidate = { dayNo: number; phrase: string; base: number; at: number };
 
 /**
  * Strip the quoted history. A line whose first non-space character is `>` was
@@ -259,6 +293,50 @@ export function sentencesOf(text: string): string[] {
     .filter((part) => part !== '');
 }
 
+/**
+ * The clauses inside one of those "sentences", with where each one starts.
+ *
+ * `sentencesOf` deliberately does not break on a full stop followed by a digit
+ * — that is what keeps `Sep. 22` in one piece — but the cost is that "The
+ * deadline has passed. 22/09 was the invoice number." arrives as a single
+ * sentence, and the keyword would lend its confidence to a date in the next
+ * breath. So the keyword is looked for in the clause the date is actually in:
+ * every `.`/`!`/`?` is a boundary here, digits included.
+ */
+function clausesOf(sentence: string): Array<{ at: number; text: string }> {
+  const clauses: Array<{ at: number; text: string }> = [];
+  let at = 0;
+  for (const part of sentence.split(/(?<=[.!?])\s+/u)) {
+    clauses.push({ at, text: part });
+    at += part.length;
+    // Whatever whitespace the split consumed: found by walking, not guessed.
+    while (at < sentence.length && /\s/u.test(sentence[at] as string)) at += 1;
+  }
+  return clauses.length > 0 ? clauses : [{ at: 0, text: sentence }];
+}
+
+/**
+ * Does the clause this date sits in carry a word that makes it a commitment?
+ *
+ * The date's whole phrase is what is placed, not its first character: `Sep. 22`
+ * straddles a clause boundary this function itself drew, and the keyword in
+ * "Sep. 22 is the deadline" is on the far side of it. Any clause the phrase
+ * touches counts.
+ */
+function keywordBoostAt(
+  clauses: Array<{ at: number; text: string }>,
+  at: number,
+  length: number,
+): number {
+  for (const clause of clauses) {
+    const end = clause.at + clause.text.length;
+    if (clause.at > at + length) break;
+    if (end < at) continue;
+    if (KEYWORDS.test(clause.text)) return KEYWORD_BOOST;
+  }
+  return 0;
+}
+
 function pushCandidate(into: Candidate[], candidate: Candidate | null): void {
   if (candidate !== null) into.push(candidate);
 }
@@ -275,20 +353,31 @@ function scanSentence(
   for (const m of sentence.matchAll(ISO_RE)) {
     const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
     if (!realDay(year, month, day)) continue;
-    found.push({ dayNo: dayNumber(year, month, day), phrase: m[0], base: BASE_CONFIDENCE.iso });
+    found.push({
+      dayNo: dayNumber(year, month, day),
+      phrase: m[0],
+      base: BASE_CONFIDENCE.iso,
+      at: m.index ?? 0,
+    });
   }
 
   for (const m of sentence.matchAll(DAY_MONTH_RE)) {
-    pushCandidate(found, monthNameCandidate(Number(m[1]), m[2] as string, m[3], m[0], refDay, refYear));
+    pushCandidate(
+      found,
+      monthNameCandidate(Number(m[1]), m[2] as string, m[3], m[0], refDay, refYear, m.index ?? 0),
+    );
   }
   for (const m of sentence.matchAll(MONTH_DAY_RE)) {
-    pushCandidate(found, monthNameCandidate(Number(m[2]), m[1] as string, m[3], m[0], refDay, refYear));
+    pushCandidate(
+      found,
+      monthNameCandidate(Number(m[2]), m[1] as string, m[3], m[0], refDay, refYear, m.index ?? 0),
+    );
   }
 
   for (const m of sentence.matchAll(NUMERIC_RE)) {
     pushCandidate(
       found,
-      numericCandidate(Number(m[1]), Number(m[2]), m[3], m[0], refDay, refYear, maxDay),
+      numericCandidate(Number(m[1]), Number(m[2]), m[3], m[0], refDay, refYear, maxDay, m.index ?? 0),
     );
   }
 
@@ -311,6 +400,7 @@ function scanSentence(
       dayNo: refDay + ahead,
       phrase: m[0].trim(),
       base: BASE_CONFIDENCE.weekdayTime,
+      at: m.index ?? 0,
     });
   }
 
@@ -324,12 +414,18 @@ function monthNameCandidate(
   phrase: string,
   refDay: number,
   refYear: number,
+  at: number,
 ): Candidate | null {
   const month = MONTHS[monthWord.toLowerCase().replace(/\.$/, '')];
   if (month === undefined) return null;
   const year = yearWord ? Number(yearWord) : resolveYear(month, day, refDay, refYear);
   if (year === null || year === undefined || !realDay(year, month, day)) return null;
-  return { dayNo: dayNumber(year, month, day), phrase: phrase.trim(), base: BASE_CONFIDENCE.monthName };
+  return {
+    dayNo: dayNumber(year, month, day),
+    phrase: phrase.trim(),
+    base: BASE_CONFIDENCE.monthName,
+    at,
+  };
 }
 
 /**
@@ -352,7 +448,13 @@ function numericCandidate(
   refDay: number,
   refYear: number,
   maxDay: number,
+  at: number,
 ): Candidate | null {
+  // Idioms, not dates. `24/7` is a promise about opening hours and `5/7` is a
+  // score; both read as a plausible July day and both would raise a finding in
+  // the fortnight before it. A zero-padded month (`05/07`) is somebody writing
+  // a date, and is read as one — the deny-list is only the unpadded form.
+  if (yearWord === undefined && /^\s*\d{1,2}\s*\/\s*7\s*$/u.test(phrase)) return null;
   const year = yearWord
     ? yearWord.length === 2
       ? 2000 + Number(yearWord)
@@ -374,6 +476,7 @@ function numericCandidate(
       dayNo: dayNumber(resolved, reading.month, reading.day),
       phrase: phrase.trim(),
       base: reading.ambiguous ? BASE_CONFIDENCE.numericAmbiguous : BASE_CONFIDENCE.numeric,
+      at,
     };
     if (candidate.dayNo >= refDay && candidate.dayNo <= maxDay) return candidate;
     fallback ??= candidate;
@@ -393,7 +496,7 @@ function numericCandidate(
  */
 export function findDates(text: string, opts: FindDatesOptions): DateHit[] {
   const timezone = opts.timezone ?? 'UTC';
-  const windowDays = opts.windowDays ?? DATE_WINDOW_DAYS;
+  const windowDays = opts.windowDays ?? DATE_HORIZON_DAYS;
   if (typeof text !== 'string' || text.trim() === '') return [];
   if (Number.isNaN(opts.at.getTime())) return [];
 
@@ -404,11 +507,16 @@ export function findDates(text: string, opts: FindDatesOptions): DateHit[] {
   const refWeekday = ((((refDay + 3) % 7) + 7) % 7) + 1;
 
   const best = new Map<string, DateHit>();
+  // Which reading of an ambiguous `10/2` wins is a plausibility question, and
+  // the answer is the fortnight — the sender is writing about something close,
+  // not about February. The horizon above is about what is *kept*.
+  const plausibleDay = refDay + Math.min(windowDays, DATE_WINDOW_DAYS);
   for (const sentence of sentencesOf(withoutQuotedLines(text))) {
-    const boost = KEYWORDS.test(sentence) ? KEYWORD_BOOST : 0;
-    for (const candidate of scanSentence(sentence, refDay, refYear, refWeekday, refDay + windowDays)) {
+    const clauses = clausesOf(sentence);
+    for (const candidate of scanSentence(sentence, refDay, refYear, refWeekday, plausibleDay)) {
       if (candidate.dayNo < refDay || candidate.dayNo > refDay + windowDays) continue;
       const date = isoOf(candidate.dayNo);
+      const boost = keywordBoostAt(clauses, candidate.at, candidate.phrase.length);
       const confidence = Math.min(MAX_CONFIDENCE, Math.round((candidate.base + boost) * 100) / 100);
       const kept = best.get(date);
       if (!kept || confidence > kept.confidence) {

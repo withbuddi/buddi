@@ -210,7 +210,13 @@ visible and switchable on the Watchers page:
   stranger. A live `ignore` policy on the sender or their domain, and a muted
   thread, are the owner's decisions and silence it. One finding per thread per
   cycle, keyed to the thread **and** the last inbound message, so a reply is a
-  new fact and the old one resolves; `info` at the setting, `urgent` at a week.
+  new fact and the old one resolves; `info` at the setting, `urgent` at a week
+  — and a thread raised as `info` still wakes somebody the day it turns
+  `urgent`, rather than waiting out the weekly cooldown first. Nothing older
+  than a month is reported at all: an inbox arrives with years of unanswered
+  threads, and a watcher that read them all out would be an alarm about 2019.
+  The newest waiting threads are reported first, so the per-tick cap truncates
+  the least urgent, and what it truncates is not mistaken for answered.
   Twice a day.
 - `email.promised-reply`: the owner wrote "I'll get back to you" or asked
   buddi to draft, and nothing was sent within N days. *Not built.*
@@ -220,7 +226,11 @@ visible and switchable on the Watchers page:
   in `email.dates` (message, day, the phrase it was read from, a confidence);
   the sentinel sweeps up what ingest missed, bounded, and raises one `info`
   finding per message-date above `dateConfidence` (default 0.6) whose day is
-  still ahead. A pending reminder for that day on that thread silences it, and
+  still ahead. Reading and alerting are two horizons: every date the parser can
+  resolve inside a year is stored when the message is read, and the fortnight
+  is applied later, against the owner's clock — otherwise a date announced a
+  month out, or a backlog message swept up long after it arrived, would be
+  dropped by the only pass that will ever look at it. A pending reminder for that day on that thread silences it, and
   so do a muted thread, an `ignore` policy on the sender, and quoted (`>`)
   lines. The finding offers "set a reminder"; the agent creates it with
   `reminder.set` after reading the message. What the parser does and refuses to
@@ -244,13 +254,23 @@ switched off — nothing is registered for them.
 None of these send mail. A finding leads to a report, a draft, or a
 reminder, never to a send without the card. The wake run is given the
 conversation the finding is about — the same bounded, fenced block §6 gives a
-triage run — and with it the one instruction that makes a watcher safe:
-**verify, then report or draft, never send.**
+triage run, with the same paragraph that says what its markers mean — and with
+it the one instruction that makes a watcher safe: **verify, then report or
+draft, never send.** The finding's own words are fenced too, at the source: a
+subject, an address, a quoted first line and a parsed phrase are all things a
+stranger wrote, and they reach a model through the wake prompt and the weekly
+recap. The raw values stay in the finding's `data`, where nothing reads them as
+prose.
 
 Both built watchers appear on the Watchers page with their last run and a
 switch (`core.sentinel_switches`; absent means on). A watcher that is off does
 not run, and resolves nothing: what it already found stays as it was, so
-switching it back on does not replay a week of news. `waitingDays` and
+switching it back on does not replay a week of news — it reports what is true
+that morning, resolves quietly what stopped being true while it was off, and
+says nothing about the threads that went stale in the meantime. A finding that
+resolves also leaves the digest queue, so the weekly recap never reads out
+something the watcher has stopped believing. The switch route refuses an id
+this installation does not ship. `waitingDays` and
 `dateConfidence` are on the Email settings page in a small "Watchers" block,
 and are readable and writable from a chat through `email.get_settings` and
 `email.set_settings`.

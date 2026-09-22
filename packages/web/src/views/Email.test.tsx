@@ -644,6 +644,18 @@ describe('Settings → Email → the drawers', () => {
 });
 
 describe('Settings → Email → Watchers', () => {
+  /**
+   * The Watchers block's own Save, found through its heading rather than by
+   * being the first Save on the page — which it is today, and would stop being
+   * the day another section grows one.
+   */
+  async function watchersSave(): Promise<HTMLElement> {
+    const heading = await screen.findByText('Watchers');
+    const block = heading.closest('section');
+    expect(block, 'the Watchers block is a section of its own').not.toBeNull();
+    return within(block as HTMLElement).getByRole('button', { name: 'Save' });
+  }
+
   it('shows the two settings the mail watchers read, with their defaults said out loud', async () => {
     render(<Email />);
     expect(await screen.findByText('Watchers')).toBeInTheDocument();
@@ -658,7 +670,7 @@ describe('Settings → Email → Watchers', () => {
 
   it('saves nothing until something is changed, then saves both together', async () => {
     render(<Email />);
-    const save = (await screen.findAllByRole('button', { name: 'Save' }))[0]!;
+    const save = await watchersSave();
     expect(save).toBeDisabled();
 
     fireEvent.change(await screen.findByLabelText('Waiting longer than'), { target: { value: '4' } });
@@ -677,7 +689,7 @@ describe('Settings → Email → Watchers', () => {
     );
     render(<Email />);
     fireEvent.change(await screen.findByLabelText('Date confidence'), { target: { value: '0.9' } });
-    fireEvent.click((await screen.findAllByRole('button', { name: 'Save' }))[0]!);
+    fireEvent.click(await watchersSave());
     expect(
       await screen.findByText('The waiting window is a whole number of days between 1 and 60.'),
     ).toBeInTheDocument();

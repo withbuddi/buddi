@@ -9,18 +9,22 @@
  *
  *  1. **catch-up.** Messages that landed before this watcher existed, or while
  *    it threw, are read here — bounded, oldest first, and stamped so nothing is
- *    read twice.
+ *    read twice. The parser keeps every date it can resolve inside a year
+ *    (`DATE_HORIZON_DAYS`), which is what makes this sweep worth running at
+ *    all: a message read for the first time today may state a day that was
+ *    months away when it was written and is now next week.
  *  2. **the finding.** A stored reading is a candidate; whether it is worth
- *    saying anything about depends on the owner's threshold, on the day still
- *    being ahead of us, and on whether a reminder for it already exists — none
- *    of which were knowable at ingest.
+ *    saying anything about depends on the owner's threshold, on the day being
+ *    inside the fortnight §7 asks for — which is applied *here*, against the
+ *    owner's clock, and nowhere else — and on whether a reminder for it
+ *    already exists. None of the three was knowable at ingest.
  *
  * It never sets the reminder itself. A sentinel is deterministic code with no
  * judgement in it, and "is this really a deadline?" is a judgement: the finding
  * carries `suggestedAction: 'set-a-reminder'` and the agent calls
  * `reminder.set` once it has read the message and agrees.
  */
-import type { Finding, Sentinel, SentinelContext } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
 import { localDateString } from '@buddi/core';
 import { DATE_WINDOW_DAYS } from '../dates.js';
 import {
@@ -32,7 +36,7 @@ import {
   statedDatesBetween,
   unscannedMessages,
 } from '../dates-store.js';
-import { dateFinding, loadWatcherSettings, type StatedDate } from '../watchers.js';
+import { dateFinding, dateKey, loadWatcherSettings, type StatedDate } from '../watchers.js';
 import { mailAgent } from './waiting-on-me.js';
 
 /** Hourly. The scan is cheap and the catch-up is bounded. */
@@ -54,7 +58,7 @@ export function createDateStatedSentinel(): Sentinel {
     description:
       'Reports a date stated in a message that falls in the next 14 days and has no reminder yet.',
     every: EVERY_HOUR,
-    async run(ctx: SentinelContext): Promise<Finding[]> {
+    async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.db);
       const now = ctx.now();
 
@@ -87,7 +91,7 @@ export function createDateStatedSentinel(): Sentinel {
         addDays(today, DATE_WINDOW_DAYS),
         settings.dateConfidence,
       );
-      if (hits.length === 0) return [];
+      if (hits.length === 0) return { findings: [] };
 
       // Which of these already have a reminder on their conversation for that
       // day. One query for the lot; a hit with no thread cannot be matched to a
@@ -98,14 +102,22 @@ export function createDateStatedSentinel(): Sentinel {
 
       const agentId = mailAgent(ctx);
       const findings: Finding[] = [];
+      /*
+       * Every uncovered hit is a fact that is still true, cap or no cap. Core
+       * resolves what a run did not report, so a date pushed past the cap has
+       * to be named here or it would read as dealt with — and come back as
+       * news, once a tick, for as long as the backlog lasts.
+       */
+      const keys: string[] = [];
       for (const hit of hits) {
         if (hit.threadId !== null && covered.has(`${hit.threadId}|${hit.date}`)) continue;
+        keys.push(dateKey(hit.messageId, hit.date));
+        if (findings.length >= MAX_DATE_FINDINGS) continue;
         const stated: StatedDate = hit;
         const finding = dateFinding(stated);
         findings.push({ ...finding, ...(agentId ? { agentId } : {}) });
-        if (findings.length >= MAX_DATE_FINDINGS) break;
       }
-      return findings;
+      return { findings, keys };
     },
   };
 }

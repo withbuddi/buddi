@@ -95,7 +95,7 @@ export async function scanMessageDates(
 }
 
 /**
- * Messages nothing has read for dates yet, oldest first, bounded.
+ * Messages nothing has read for dates yet, oldest fetched first, bounded.
  *
  * Inbound only: a date the owner wrote himself is his own diary, and reminding
  * somebody of what they just said is the kind of help nobody asked for. The
@@ -125,7 +125,12 @@ export async function unscannedMessages(
        from email.messages m
       where m.dates_scanned_at is null
         and m.direction = 'in'
-      order by coalesce(m.internal_date, m.fetched_at) asc, m.id asc
+      -- fetched_at, not coalesce(internal_date, fetched_at): it is the
+      -- expression the partial index is on (migration 009), so the sweep walks
+      -- the index instead of sorting every unscanned message in the mailbox.
+      -- The two orders differ only for backfilled rows, and a sweep does not
+      -- care which of two old messages it reads first.
+      order by m.fetched_at asc, m.id asc
       limit $1`,
     [limit],
   );
@@ -207,9 +212,10 @@ export async function statedDatesBetween(
  * to be able to see one. A pending reminder whose `context` names this thread,
  * due on that day in the owner's zone, is the owner already knowing.
  *
- * Returns a set of `${threadId}|${date}` keys, plus `|${date}` for reminders
- * that name no thread — a date-only match is deliberately *not* treated as
- * covering a thread: two different mails can state the same Tuesday.
+ * Returns a set of `${threadId}|${date}` keys. A reminder that names no thread
+ * is no answer to this question and is not matched: two different mails can
+ * state the same Tuesday, and a reminder about one of them is not the owner
+ * knowing about the other.
  */
 export async function remindersFor(
   db: Db,

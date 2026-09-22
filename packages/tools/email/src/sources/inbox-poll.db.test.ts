@@ -140,7 +140,8 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
         order by m.uid`,
     );
     expect(rows).toEqual([
-      { subject: 'Invoice', day: '2026-09-22', phrase: '22 September', confidence: 0.8, scanned: true },
+      // `numeric(3,2)`, which pg hands back as a string: two decimals exactly.
+      { subject: 'Invoice', day: '2026-09-22', phrase: '22 September', confidence: '0.80', scanned: true },
       // Read, nothing found: stamped all the same, so nothing reads it twice.
       { subject: 'Hello', day: null, phrase: null, confidence: null, scanned: true },
     ]);

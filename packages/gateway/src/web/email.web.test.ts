@@ -5,6 +5,7 @@
  * when a password crosses this boundary — it is tested before it is kept, it is
  * kept in the vault and nowhere else, and a refusal keeps nothing at all.
  */
+import type { Pool } from 'pg';
 import { expect, it, vi } from 'vitest';
 import { createMemoryVault, type Vault } from '@buddi/core';
 import { secretNameFor } from '@buddi/tool-email';
@@ -16,6 +17,7 @@ import {
   bulkEmailPolicies,
   listEmailAccounts,
   removeEmailAccount,
+  readEmailWatchers,
   readNewAccount,
   writeEmailPolicy,
   type EmailWebDeps,
@@ -480,4 +482,31 @@ it('refuses a body that is not a selection, before opening a transaction', async
     ),
   ).toMatchObject({ status: 400 });
   expect(statements).toEqual([]);
+});
+
+/*
+ * The watcher settings, read. The two answers that matter are the two the
+ * owner cannot tell apart from the page unless this route distinguishes them:
+ * "the plugin is not installed" and "the database did not answer".
+ */
+it('answers the defaults when there is no email schema at all', async () => {
+  const pool = {
+    async query() {
+      throw Object.assign(new Error('relation "email.settings" does not exist'), { code: '42P01' });
+    },
+  } as unknown as Pool;
+  const reply = await readEmailWatchers(pool);
+  expect(reply.status).toBe(200);
+  expect(reply.body).toMatchObject({ waitingDays: 2, dateConfidence: 0.6 });
+});
+
+it('says the settings could not be read rather than showing the defaults as stored', async () => {
+  const pool = {
+    async query() {
+      throw new Error('timeout expired');
+    },
+  } as unknown as Pool;
+  const reply = await readEmailWatchers(pool);
+  expect(reply.status).toBe(503);
+  expect((reply.body as { error: string }).error).toContain('timeout expired');
 });

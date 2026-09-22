@@ -1633,20 +1633,27 @@ export function createWebApp(deps: WebServerDeps): Server {
     /*
      * A watcher, switched off or back on. Off means it does not run: it raises
      * nothing and resolves nothing, so what it already found stays as it was.
-     * The id is not checked against the registry — a plugin mid-reinstall must
-     * not lose the owner's decision about its watcher.
+     *
+     * The id has to name a watcher this installation actually ships. The store
+     * itself takes any id on purpose (a plugin mid-reinstall must not lose the
+     * owner's decision), but the route is the outside world: an unknown id
+     * there is a typo or a probe, and answering 200 to it would write a row
+     * nothing will ever read and tell the caller it had switched something off.
      */
     const sentinelEnabled = /^\/api\/sentinels\/([^/]+)\/enabled$/.exec(path);
     if (sentinelEnabled) {
       if (typeof body.enabled !== 'boolean') {
         return sendJson(res, 400, { error: '`enabled` must be true or false' });
       }
-      const state = await setSentinelEnabled(
-        deps.pool,
-        decodeURIComponent(sentinelEnabled[1] as string),
-        body.enabled,
-        deps.now(),
-      );
+      const sentinelId = decodeURIComponent(sentinelEnabled[1] as string);
+      const installed = deps.registry
+        .manifests()
+        .flatMap((m) => m.sentinels ?? [])
+        .some((s) => s.id === sentinelId);
+      if (!installed) {
+        return sendJson(res, 400, { error: `no watcher is installed with the id ${sentinelId}` });
+      }
+      const state = await setSentinelEnabled(deps.pool, sentinelId, body.enabled, deps.now());
       return sendJson(res, 200, { sentinelId: state.sentinelId, enabled: state.enabled });
     }
 

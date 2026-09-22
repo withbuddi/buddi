@@ -65,13 +65,49 @@ export interface SentinelContext {
   agentForRole(role: string): string | undefined;
 }
 
+/**
+ * What a sentinel hands back when the facts it sees outnumber what it is
+ * willing to raise in one tick.
+ *
+ * A cap on findings is not a statement that the facts past it stopped being
+ * true — but `resolveMissing` can only go by what the run returned, so a bare
+ * capped array makes core resolve the tail and then hear it again as news next
+ * tick. So a sentinel that caps says both things: the findings it wants raised
+ * now, and every key that is still true. Core raises the first and resolves
+ * nothing in the second.
+ */
+export interface SentinelReport {
+  /** The findings to raise this tick, already capped by the sentinel. */
+  findings: Finding[];
+  /**
+   * Every key the sentinel still holds true, the raised ones included. Absent
+   * means "the findings are the whole truth", which is the common case.
+   */
+  keys?: readonly string[];
+}
+
+export type SentinelResult = Finding[] | SentinelReport;
+
+/** The findings of a result, whichever shape it came in. */
+export function findingsOf(result: SentinelResult): Finding[] {
+  return Array.isArray(result) ? result : result.findings;
+}
+
+/** Every key a result says is still true: the raised ones plus the capped tail. */
+export function stillTrueKeys(result: SentinelResult): Set<string> {
+  const keys = new Set<string>();
+  for (const finding of findingsOf(result)) keys.add(finding.key);
+  if (!Array.isArray(result)) for (const key of result.keys ?? []) keys.add(key);
+  return keys;
+}
+
 export interface Sentinel {
   /** Namespaced and stable, e.g. 'finance.cashflow'. Keys the run ledger. */
   id: string;
   description: string;
   /** Period in **seconds**. The tick runs it when that much time has passed. */
   every: number;
-  run(ctx: SentinelContext): Promise<Finding[]>;
+  run(ctx: SentinelContext): Promise<SentinelResult>;
 }
 
 export type SentinelFinding = {

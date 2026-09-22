@@ -21,13 +21,26 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations, runSentinels, type SentinelContext } from '@buddi/core';
+import {
+  createPool,
+  findingsOf,
+  openFindings,
+  pendingDigestItems,
+  runMigrations,
+  runSentinels,
+  setSentinelEnabled,
+  stillTrueKeys,
+  type Finding,
+  type Sentinel,
+  type SentinelContext,
+} from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { manifest } from '../index.js';
+import { quoted } from '../mail.js';
 import { joinThread, setThreadState } from '../threads.js';
 import { setWatcherSettings } from '../watchers.js';
-import { dateStated, waitingOnMe } from './index.js';
+import { MAX_DATE_FINDINGS, MAX_WAITING_FINDINGS, dateStated, waitingOnMe } from './index.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -174,6 +187,15 @@ suite('email watchers (postgres)', () => {
     });
   }
 
+  /**
+   * What a sentinel raises this tick. Both watchers report more than they
+   * raise — the keys past their cap are still true and must not be resolved —
+   * so a test that is about the findings unwraps them here.
+   */
+  async function raise(sentinel: Sentinel, context: SentinelContext): Promise<Finding[]> {
+    return findingsOf(await sentinel.run(context));
+  }
+
   function ctx(over: Partial<SentinelContext> = {}): SentinelContext {
     return {
       db: pool,
@@ -196,11 +218,15 @@ suite('email watchers (postgres)', () => {
   describe('email.waiting-on-me', () => {
     it('reports a thread waiting longer than the setting', async () => {
       const { threadId, messageId } = await waitingThread({ ageDays: 3 });
-      const findings = await waitingOnMe.run(ctx());
+      const findings = await raise(waitingOnMe, ctx());
       expect(findings).toHaveLength(1);
       const finding = findings[0]!;
       expect(finding.key).toBe(`email.waiting-on-me:${threadId}:${messageId}`);
-      expect(finding.title).toBe('agent@letting.test has been waiting 3 days on "The lease"');
+      // Every sender-controlled word in the title is fenced as data: the
+      // address and the subject both came out of the message.
+      expect(finding.title).toBe(
+        `${quoted('agent@letting.test')} has been waiting 3 days on ${quoted('The lease')}`,
+      );
       expect(finding.severity).toBe('info');
       expect(finding.detail).toContain('Could you confirm?');
       expect(finding.agentId).toBeUndefined();
@@ -208,25 +234,28 @@ suite('email watchers (postgres)', () => {
 
     it('says nothing inside the window, and says something once it is past', async () => {
       await waitingThread({ ageDays: 1 });
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
       // The owner widening the window silences a thread that was reported.
       await waitingThread({ ageDays: 3, uid: 200, subject: 'The survey' });
-      expect(await waitingOnMe.run(ctx())).toHaveLength(1);
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
       await setWatcherSettings(pool, { waitingDays: 5 }, NOW);
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
     });
 
     it('is urgent once a week has gone by', async () => {
       await waitingThread({ ageDays: 8 });
-      const findings = await waitingOnMe.run(ctx());
+      const findings = await raise(waitingOnMe, ctx());
       expect(findings.map((f) => [f.severity, f.title])).toEqual([
-        ['urgent', 'agent@letting.test has been waiting 8 days on "The lease"'],
+        [
+          'urgent',
+          `${quoted('agent@letting.test')} has been waiting 8 days on ${quoted('The lease')}`,
+        ],
       ]);
     });
 
     it('says nothing about somebody the owner has never written to', async () => {
       await waitingThread({ ageDays: 5, replied: false });
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
     });
 
     it('counts a reply the owner sent from any client, in that mailbox', async () => {
@@ -244,24 +273,24 @@ suite('email watchers (postgres)', () => {
       });
       // Their message is still the newest one, so the thread still waits on him.
       await setThreadState(pool, threadId, 'waiting-on-me');
-      expect(await waitingOnMe.run(ctx())).toHaveLength(1);
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
     });
 
     it('respects a muted conversation', async () => {
       const { threadId } = await waitingThread({ ageDays: 5 });
       await setThreadState(pool, threadId, 'muted');
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
     });
 
     it('respects an ignore policy on the sender, and on their domain', async () => {
       await waitingThread({ ageDays: 5 });
       await ignorePolicy('agent@letting.test');
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
 
       await pool.query(`delete from email.policies`);
-      expect(await waitingOnMe.run(ctx())).toHaveLength(1);
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
       await ignorePolicy('letting.test', 'domain');
-      expect(await waitingOnMe.run(ctx())).toEqual([]);
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
     });
 
     it('ignores a policy that is only proposed', async () => {
@@ -271,13 +300,13 @@ suite('email watchers (postgres)', () => {
          values ($1, 'sender', 'agent@letting.test', 'ignore', '{}'::jsonb, 'learned', true)`,
         [accountId],
       );
-      expect(await waitingOnMe.run(ctx())).toHaveLength(1);
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
     });
 
     it('returns the same key on every run, and a new one when they write again', async () => {
       const first = await waitingThread({ ageDays: 3 });
-      const a = await waitingOnMe.run(ctx());
-      const b = await waitingOnMe.run(ctx());
+      const a = await raise(waitingOnMe, ctx());
+      const b = await raise(waitingOnMe, ctx());
       expect(a.map((f) => f.key)).toEqual(b.map((f) => f.key));
 
       const second = await write({
@@ -289,19 +318,56 @@ suite('email watchers (postgres)', () => {
         at: daysBefore(2),
         scanned: true,
       });
-      const c = await waitingOnMe.run(ctx());
+      const c = await raise(waitingOnMe, ctx());
       expect(c).toHaveLength(1);
       expect(c[0]!.key).toBe(`email.waiting-on-me:${first.threadId}:${second.messageId}`);
     });
 
     it('addresses the finding by role when somebody holds one', async () => {
       await waitingThread({ ageDays: 3 });
-      const mail = await waitingOnMe.run(ctx({ agentForRole: (role) => (role === 'mail' ? 'mailer' : undefined) }));
+      const mail = await raise(waitingOnMe, ctx({ agentForRole: (role) => (role === 'mail' ? 'mailer' : undefined) }));
       expect(mail[0]!.agentId).toBe('mailer');
-      const triage = await waitingOnMe.run(
+      const triage = await raise(waitingOnMe, 
         ctx({ agentForRole: (role) => (role === 'triage' ? 'mail-triage' : undefined) }),
       );
       expect(triage[0]!.agentId).toBe('mail-triage');
+    });
+
+    it('says nothing about a conversation that went stale a month ago', async () => {
+      // Migration 007 seeds every inbound-last thread as `waiting-on-me`, so a
+      // real mailbox arrives with years of these. A month is the ceiling: past
+      // it, an unanswered thread is history and not an alarm.
+      await waitingThread({ ageDays: 45, uid: 600 });
+      expect(await raise(waitingOnMe, ctx())).toEqual([]);
+      // The near edge is still reported.
+      await waitingThread({ ageDays: 29, uid: 601, subject: 'The survey' });
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
+    });
+
+    it('reports the newest waiting threads first', async () => {
+      await waitingThread({ ageDays: 20, uid: 610, subject: 'Older' });
+      await waitingThread({ ageDays: 4, uid: 611, subject: 'Newer' });
+      const titles = (await raise(waitingOnMe, ctx())).map((f) => f.title);
+      expect(titles[0]).toContain('Newer');
+      expect(titles[1]).toContain('Older');
+    });
+
+    it('does not resolve the threads its cap left out', async () => {
+      // Twenty-five qualifying threads against a cap of twenty. The five that
+      // are not raised are still true, and a tick that let core resolve them
+      // would hand them back as news on the next one, forever.
+      for (let i = 0; i < 25; i++) {
+        await waitingThread({ ageDays: 2 + i, uid: 700 + i, subject: `Matter ${i}` });
+      }
+      const result = await waitingOnMe.run(ctx());
+      expect(findingsOf(result)).toHaveLength(MAX_WAITING_FINDINGS);
+      expect(new Set(stillTrueKeys(result)).size).toBe(25);
+
+      const manifests = [{ ...manifest, sentinels: [waitingOnMe] }];
+      const first = await runSentinels(pool, manifests, NOW, 'UTC');
+      expect(first[0]).toMatchObject({ findings: 20, resolved: 0 });
+      const second = await runSentinels(pool, manifests, new Date(NOW.getTime() + 13 * 3_600_000), 'UTC');
+      expect(second[0]).toMatchObject({ findings: 20, resolved: 0 });
     });
 
     it('goes to the digest through core, once', async () => {
@@ -315,6 +381,52 @@ suite('email watchers (postgres)', () => {
       const later = new Date(NOW.getTime() + 13 * 3_600_000);
       const second = await runSentinels(pool, [{ ...manifest, sentinels: [waitingOnMe] }], later, 'UTC');
       expect(second[0]).toMatchObject({ findings: 1, fired: 0 });
+    });
+  });
+
+  // ---------------------------------------------------------- the switch
+  describe('a watcher switched off and back on', () => {
+    it('replays nothing, and reports only what is still true', async () => {
+      const manifests = [{ ...manifest, sentinels: [waitingOnMe] }];
+      const answered = await waitingThread({ ageDays: 3, uid: 800, subject: 'Answered later' });
+      await waitingThread({ ageDays: 5, uid: 801, subject: 'Left to go stale' });
+
+      const first = await runSentinels(pool, manifests, NOW, 'UTC');
+      expect(first[0]).toMatchObject({ findings: 2, fired: 2, resolved: 0 });
+      expect(await pendingDigestItems(pool)).toHaveLength(2);
+
+      // Off for four weeks. Nothing runs and nothing resolves.
+      await setSentinelEnabled(pool, 'email.waiting-on-me', false, NOW);
+      const later = new Date(NOW.getTime() + 27 * 86_400_000);
+      const off = await runSentinels(pool, manifests, new Date(NOW.getTime() + 86_400_000), 'UTC');
+      expect(off[0]).toMatchObject({ ran: false, disabled: true });
+
+      // While it was off: one thread was answered, one went stale past the
+      // ceiling, and a new conversation started waiting.
+      await setThreadState(pool, answered.threadId, 'waiting-on-them');
+      await write({
+        uid: 802,
+        from: 'agent@letting.test',
+        to: 'owner@example.test',
+        subject: 'Started while it was off',
+        threadKey: '<thread-802@letting.test>',
+        at: new Date(later.getTime() - 3 * 86_400_000),
+        body: 'Any news?',
+        scanned: true,
+      });
+
+      await setSentinelEnabled(pool, 'email.waiting-on-me', true, later);
+      const back = await runSentinels(pool, manifests, later, 'UTC');
+      // One fact, and it is the one that is true now: the answered thread is
+      // not news and the stale one is not either. Both resolve quietly.
+      expect(back[0]).toMatchObject({ findings: 1, fired: 1, resolved: 2 });
+      const open = await openFindings(pool, 'email.waiting-on-me');
+      expect(open).toHaveLength(1);
+      expect(open[0]!.title).toContain('Started while it was off');
+      // And the two resolved facts are gone from the queue the recap reads,
+      // rather than waiting there to be read out as though they still held.
+      const pending = await pendingDigestItems(pool);
+      expect(pending.map((i) => i.findingKey)).toEqual([open[0]!.key]);
     });
   });
 
@@ -339,12 +451,14 @@ suite('email watchers (postgres)', () => {
 
     it('reads an unscanned message, stores the reading, and raises one finding', async () => {
       const { messageId, threadId } = await stating('Your policy is due 30 September. Please confirm.');
-      const findings = await dateStated.run(ctx());
+      const findings = await raise(dateStated, ctx());
       expect(findings).toHaveLength(1);
       expect(findings[0]!.key).toBe(`email.date-stated:${messageId}:2026-09-30`);
-      expect(findings[0]!.title).toBe('A date is stated: 2026-09-30, in "Insurance renewal"');
+      expect(findings[0]!.title).toBe(
+        `A date is stated: 2026-09-30, in ${quoted('Insurance renewal')}`,
+      );
       expect(findings[0]!.severity).toBe('info');
-      expect(findings[0]!.detail).toContain('wrote "30 September"');
+      expect(findings[0]!.detail).toContain(`wrote ${quoted('30 September')}`);
       expect(findings[0]!.data).toMatchObject({ threadId, suggestedAction: 'set-a-reminder' });
 
       const { rows } = await pool.query(
@@ -353,40 +467,94 @@ suite('email watchers (postgres)', () => {
       );
       expect(rows).toEqual([
         // The keyword raised the confidence; the phrase is the date itself.
-        { day: '2026-09-30', phrase: '30 September', confidence: 0.8, scanned: true },
+        // `confidence` is `numeric(3,2)`, which pg hands back as a string —
+        // exactly the point of the column type: two decimals, no float drift.
+        { day: '2026-09-30', phrase: '30 September', confidence: '0.80', scanned: true },
       ]);
     });
 
     it('reads the message once, and repeats itself without new rows', async () => {
       await stating('Deadline 30 September.');
-      const first = await dateStated.run(ctx());
-      const second = await dateStated.run(ctx());
+      const first = await raise(dateStated, ctx());
+      const second = await raise(dateStated, ctx());
       expect(second.map((f) => f.key)).toEqual(first.map((f) => f.key));
       const { rows } = await pool.query(`select count(*)::int as n from email.dates`);
       expect(rows[0].n).toBe(1);
     });
 
+    it('qualifies at a threshold it exactly equals', async () => {
+      // `22/09` with nothing beside it scores 0.45 — and 0.45 is a threshold
+      // the settings page lets the owner pick. Stored as `real`, it came back
+      // as 0.44999998807907104 and lost to its own equal.
+      await stating('Anyway, 22/09 then.', { uid: 420 });
+      await setWatcherSettings(pool, { dateConfidence: 0.45 }, NOW);
+      expect(await raise(dateStated, ctx())).toHaveLength(1);
+    });
+
     it("says nothing below the owner's threshold", async () => {
       await stating('Anyway, 10/2 then.');
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
       // The reading is still stored: it is evidence, not a finding.
       const { rows } = await pool.query(`select confidence from email.dates`);
       expect(Number(rows[0].confidence)).toBeCloseTo(0.3, 5);
 
       await setWatcherSettings(pool, { dateConfidence: 0.2 }, NOW);
-      expect(await dateStated.run(ctx())).toHaveLength(1);
+      expect(await raise(dateStated, ctx())).toHaveLength(1);
     });
 
     it('raises nothing for a date already gone by, or one beyond the fortnight', async () => {
       await stating('The deadline was 15 September.', { uid: 401 });
       await stating('The deadline is 30 October.', { uid: 402 });
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
+    });
+
+    it('reads a backlog message whose date has since come close', async () => {
+      // The catch-up case the sweep exists for: a message from six weeks ago,
+      // read for the first time now. Its date was 49 days out when it was
+      // written and is four days out today — a window measured from the
+      // message would drop it, and the stamp would mean nothing ever looked
+      // again.
+      const { messageId } = await stating('The deadline is 25 September.', {
+        uid: 410,
+        at: daysBefore(45),
+      });
+      const findings = await raise(dateStated, ctx());
+      expect(findings.map((f) => f.key)).toEqual([`email.date-stated:${messageId}:2026-09-25`]);
+    });
+
+    it('keeps a date announced a month ahead, and raises it once it is close', async () => {
+      const { messageId } = await stating('The deadline is 30 October.', { uid: 411 });
+      // Nothing to say today: it is outside the fortnight.
+      expect(await raise(dateStated, ctx())).toEqual([]);
+      // But it was read and kept, which is what makes the next line possible.
+      const { rows } = await pool.query(
+        `select to_char(on_date, 'YYYY-MM-DD') as day from email.dates`,
+      );
+      expect(rows).toEqual([{ day: '2026-10-30' }]);
+
+      const october = new Date('2026-10-20T12:00:00Z');
+      const findings = await raise(dateStated, ctx({ now: () => october }));
+      expect(findings.map((f) => f.key)).toEqual([`email.date-stated:${messageId}:2026-10-30`]);
+    });
+
+    it('names the dates its cap left out rather than letting them resolve', async () => {
+      for (let i = 0; i < 25; i++) {
+        await stating(`The deadline is 30 September, ref ${i}.`, { uid: 900 + i });
+      }
+      const result = await dateStated.run(ctx());
+      expect(findingsOf(result)).toHaveLength(MAX_DATE_FINDINGS);
+      expect(new Set(stillTrueKeys(result)).size).toBe(25);
+
+      const manifests = [{ ...manifest, sentinels: [dateStated] }];
+      await runSentinels(pool, manifests, NOW, 'UTC');
+      const second = await runSentinels(pool, manifests, new Date(NOW.getTime() + 2 * 3_600_000), 'UTC');
+      expect(second[0]).toMatchObject({ resolved: 0 });
     });
 
     it('skips a message from a sender the owner silenced, without reading it', async () => {
       await ignorePolicy('billing@insurer.test');
       await stating('Your policy is due 30 September.');
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
       const { rows } = await pool.query(
         `select (select count(*)::int from email.dates) as dates,
                 (select count(*)::int from email.messages where dates_scanned_at is null) as unscanned`,
@@ -396,27 +564,27 @@ suite('email watchers (postgres)', () => {
 
     it('silences a stored reading when a policy arrives after the scan', async () => {
       await stating('Your policy is due 30 September.');
-      expect(await dateStated.run(ctx())).toHaveLength(1);
+      expect(await raise(dateStated, ctx())).toHaveLength(1);
       await ignorePolicy('insurer.test', 'domain');
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
     });
 
     it('says nothing about a muted conversation', async () => {
       const { threadId } = await stating('Your policy is due 30 September.');
       await setThreadState(pool, threadId, 'muted');
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
     });
 
     it('says nothing when a reminder for that day on that thread already exists', async () => {
       const { threadId } = await stating('Your policy is due 30 September.');
-      expect(await dateStated.run(ctx())).toHaveLength(1);
+      expect(await raise(dateStated, ctx())).toHaveLength(1);
 
       await pool.query(
         `insert into core.reminders (agent_id, due_at, text, context, state)
          values ('mail-triage', $1, 'check the renewal', $2::jsonb, 'pending')`,
         ['2026-09-30T08:00:00Z', JSON.stringify({ threadId })],
       );
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
     });
 
     it('is not silenced by a reminder for another day, another thread, or a cancelled one', async () => {
@@ -428,7 +596,7 @@ suite('email watchers (postgres)', () => {
                 ('mail-triage', '2026-09-30T08:00:00Z', 'cancelled', $1::jsonb, 'cancelled')`,
         [JSON.stringify({ threadId }), JSON.stringify({ threadId: '00000000-0000-0000-0000-000000000001' })],
       );
-      expect(await dateStated.run(ctx())).toHaveLength(1);
+      expect(await raise(dateStated, ctx())).toHaveLength(1);
     });
 
     it("never reads the owner's own mail for dates", async () => {
@@ -443,14 +611,14 @@ suite('email watchers (postgres)', () => {
         direction: 'out',
         scanned: false,
       });
-      expect(await dateStated.run(ctx())).toEqual([]);
+      expect(await raise(dateStated, ctx())).toEqual([]);
       const { rows } = await pool.query(`select count(*)::int as n from email.dates`);
       expect(rows[0].n).toBe(0);
     });
 
     it('addresses the finding by role', async () => {
       await stating('Your policy is due 30 September.');
-      const findings = await dateStated.run(
+      const findings = await raise(dateStated, 
         ctx({ agentForRole: (role) => (role === 'mail' ? 'mailer' : undefined) }),
       );
       expect(findings[0]!.agentId).toBe('mailer');

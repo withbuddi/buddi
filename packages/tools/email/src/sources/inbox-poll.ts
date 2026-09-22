@@ -776,14 +776,14 @@ async function drain(
      * alternative is the sentinel re-reading every message that ever landed.
      *
      * An ignored sender is stamped, not read: the watchers are not a way round
-     * the owner's own gate. A parse that throws must never cost the message its
-     * run, so it is logged and the message is stamped with nothing found.
+     * the owner's own gate — and that stamp belongs to the transaction that
+     * records the ignore, not to this line. A parse that throws must never cost
+     * the message its run, so it is logged and the message left unscanned for
+     * the next poll.
      */
     const ignoring = !decision.refused && decision.action === 'ignore' && Boolean(decision.policy);
     try {
-      if (ignoring) {
-        await skipDates(ctx.db, message.id, ctx.now());
-      } else {
+      if (!ignoring) {
         await scanMessageDates(
           ctx.db,
           { id: message.id, bodyText: message.bodyText, subject: message.subject },
@@ -791,6 +791,10 @@ async function drain(
           ctx.now(),
         );
       }
+      // An ignored sender's message is stamped inside the transaction that
+      // records the ignore, below: a stamp that committed while the ignore
+      // rolled back would leave the message unread for dates forever, even
+      // after the owner revoked the policy.
     } catch (err) {
       (ctx.log ?? (() => {}))(
         `email.inbox-poll: could not read dates in message ${message.id}: ` +
@@ -806,6 +810,10 @@ async function drain(
       // that produces silence.
       await inOneTransaction(ctx.db, async (tx) => {
         await ignoreByPolicy(tx, message, decision.policy as PolicyRecord, ctx.now());
+        // Stamped without being read: the watchers are not a way round the
+        // owner's own gate (see `dates-store.ts`). In here with the rest of
+        // it, so a rolled-back ignore leaves nothing stamped behind.
+        await skipDates(tx, message.id, ctx.now());
         await recordEvent(
           tx,
           {
