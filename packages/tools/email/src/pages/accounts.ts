@@ -345,7 +345,14 @@ export function createRemoveAccountTool(
         secretRemoved = (await vault?.delete(account.secretName).catch(() => false)) ?? false;
         delete (env as Record<string, string | undefined>)[account.secretName];
       }
-      return { removed: true, address: account.address, secretRemoved };
+      return {
+        removed: true,
+        address: account.address,
+        secretRemoved,
+        note: secretRemoved
+          ? `${account.address} is gone, and its password with it.`
+          : `${account.address} is gone. Its password came from the environment and was left alone.`,
+      };
     },
   };
 }

@@ -37,6 +37,7 @@ describe('the mail pages, as contributions', () => {
       'message',
       'accounts',
       'policies',
+      'rule_threads',
       'watcher_settings',
     ]);
   });
@@ -110,8 +111,8 @@ describe('the mail pages, as contributions', () => {
   it('refuses a link to a page that is not one of its own', () => {
     const broken = copy(manifest.pages ?? []);
     const mail = broken.find((p) => p.id === 'mail');
-    const link = (mail as { body: any[] }).body.find((c: any) => c.kind === 'link');
-    link.to.page = 'nowhere';
+    const section = (mail as { body: any[] }).body.find((c: any) => c.kind === 'section');
+    section.actions[0].to.page = 'nowhere';
     const registry = new ToolRegistry();
     expect(() => registry.register({ ...manifest, pages: broken })).toThrow(
       /links to nowhere, which is not a page of this plugin/,

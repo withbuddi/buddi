@@ -39,9 +39,16 @@ export class RuleRefusal extends Error {
 const ruleInput = z
   .object({
     scope: z.enum(POLICY_SCOPES),
-    matcher: z.string().min(1),
+    /** What the rule matches, for every scope the owner types. */
+    matcher: z.string().optional(),
+    /**
+     * The conversation, when the scope is one: picked from a list and sent as
+     * the thread's id, because a thread key is a Message-ID off the wire and
+     * not something an owner has (docs/specs/email.md §5).
+     */
+    thread: z.string().optional(),
     action: z.enum(POLICY_ACTIONS),
-    /** The mailbox, by address. Empty when "for every mailbox" is ticked. */
+    /** The mailbox: its id, as the picker sends it, or its address. */
     mailbox: z.string().optional(),
     allAccounts: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
     sender: z.string().optional(),
@@ -79,7 +86,15 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
     ownerOnly: true,
     input: ruleInput,
     async execute(input, ctx) {
-      const matcher = input.matcher.trim();
+      // One conversation is picked; everything else is typed.
+      const matcher = (input.scope === 'thread' ? (input.thread ?? '') : (input.matcher ?? '')).trim();
+      if (matcher === '') {
+        throw new RuleRefusal(
+          input.scope === 'thread'
+            ? 'Choose the conversation this rule is about.'
+            : 'Say what this rule matches.',
+        );
+      }
       const params: PolicyParams = {};
       if (input.agentId?.trim()) params.agentId = input.agentId.trim();
       if (input.instruction?.trim()) params.instruction = input.instruction.trim();
@@ -107,6 +122,16 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
       if (allAccounts && mailbox !== '') {
         throw new RuleRefusal('Choose one mailbox, or "for every mailbox" — not both.');
       }
+      /*
+       * A conversation lives in exactly one mailbox, so a rule about one is
+       * never about every mailbox. The form takes the tick away for this
+       * scope; this is the same rule where it cannot be taken away.
+       */
+      if (allAccounts && input.scope === 'thread') {
+        throw new RuleRefusal(
+          'A conversation lives in one mailbox, so a rule about one is never "every mailbox".',
+        );
+      }
       let accountId: string | null = null;
       if (!allAccounts) {
         if (mailbox === '') {
@@ -114,8 +139,9 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
             'Say which mailbox this rule is for, or tick "for every mailbox". The same sender can matter in one inbox and not in another.',
           );
         }
+        // The picker sends an id; a hand-written call may send the address.
         const { rows } = await ctx.db.query<{ id: string }>(
-          `select id from email.accounts where address = $1`,
+          `select id from email.accounts where address = $1 or id::text = $1`,
           [mailbox],
         );
         if (rows.length === 0) throw new RuleRefusal('That mailbox is not one of yours.');
@@ -153,7 +179,11 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
           },
           ctx.now(),
         );
-        return { added: true, policyId: policy.id };
+        return {
+          added: true,
+          policyId: policy.id,
+          note: `The rule is on: ${policy.action} ${policy.scope} ${policy.matcher}.`,
+        };
       } catch (err) {
         if (err instanceof PolicyRefusal) throw new RuleRefusal(err.message);
         throw err;

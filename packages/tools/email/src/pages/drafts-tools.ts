@@ -175,7 +175,11 @@ export function createDiscardDraftTool(): ToolDefinition<z.infer<typeof discardI
       if (!discarded) {
         throw new DraftRefusal(`This draft is ${draft.status}; only a live draft can be discarded.`);
       }
-      return { discarded: true, draftId: discarded.id };
+      return {
+        discarded: true,
+        draftId: discarded.id,
+        note: 'Discarded. It is kept under Older drafts, so you can still read what was proposed.',
+      };
     },
   };
 }
