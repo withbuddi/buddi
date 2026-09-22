@@ -1,6 +1,7 @@
 # Goals: a target with a clock, that buddi keeps
 
-Status: specified 2026-09-22, not started. Core feature, agent-neutral: any
+Status: step 1 built 2026-09-22 (metrics, tables, tools, sentinel, docs).
+Steps 2 and 3 not started. Core feature, agent-neutral: any
 agent with a metric can hold a goal, and the finance plugin is only the first
 plugin to declare one.
 
@@ -92,6 +93,28 @@ interface Goal {
 Tables in core: `core.goals`, `core.goal_checks (goal_id, at, value, note,
 onTrack boolean, paceNeeded numeric, projected numeric)`, migration 037.
 
+As built, `core.goals` also carries `currency`, taken from the first reading:
+a card rendering a target or a milestone has no check in its hand, and a euro
+debt shown in dollars is worse than a bare number, which is what a currency
+metric with no currency prints. A check carries `currency` too, and `as_of` —
+what the metric said its number was true *of*, which for a bank reading
+Friday's statement is not the day buddi looked. `updated_at` is the goal's
+*version*: `goal.update` carries the one its card was drawn from into the
+UPDATE's WHERE clause, so the column is `timestamptz(3)` — a version has to
+survive a round trip through JavaScript, whose Date stops at milliseconds.
+
+`milestones` are on the target's own scale: deltas when the target is a delta
+(which is how §8 writes them), absolutes when it is absolute. `goal.set` and
+`goal.update` refuse a target that is not on the improving side of the
+baseline for the metric's `direction`, and milestones that do not lie strictly
+between the two in the order they will be crossed — without that, a sign slip
+in one field of a model's JSON makes a goal the first tick settles `met`.
+
+The 12-goal budget is a count in the INSERT's own WHERE clause taken under
+`pg_advisory_xact_lock`. The count alone is not a limit: under READ COMMITTED
+two racing statements both see eleven and both commit, and a thirteenth goal
+is one the sentinel never even walks.
+
 ## 5. Tools
 
 - `goal.metrics` (auto): the metrics this installation can measure, with
@@ -110,6 +133,38 @@ onTrack boolean, paceNeeded numeric, projected numeric)`, migration 037.
 - `goal.list` (auto): every open goal, any holder (read).
 
 An agent that is not the holder gets `goal.list`/`goal.status` only.
+
+As built: a gated tool is gated on every call (the registry refuses a `tierFor`
+that narrows it), so every refusal before the card — a delegate, a deadline in
+the past, a metric nobody installed, a metric that cannot be measured, a target
+pointed the wrong way, parameters a metric never declared — is a throw out of
+`describe`, which runs before any action exists. Nothing is recorded and the
+model is handed the sentence.
+
+"The baseline the owner saw is the baseline stored" is implemented by measuring
+**once**. The executor re-describes before it dispatches and refuses anything
+that changed (`effect-changed`); a `describe` that measured again would put a
+live number into a hashed envelope, so one mail arriving between the card and
+the tap would void a perfectly good approval — fine for a debt, hopeless for
+`email.inbox_unread`, which is one of the metrics step 3 ships. At
+re-description the approved envelope is on the context and `describe` reuses
+its baseline. Everything else still re-derives, so an approval whose target,
+deadline or holder changed is still refused.
+
+The envelope's `baseline.asOf` is the description clock — when the goal was set
+— and `baseline.readingAsOf` is what the metric said its number was true of.
+Both are stored: the first as the goal's baseline instant, the second on the
+first check row. When the reading is more than a day behind the card, the card
+says "(reading as of <date>)", because the owner is approving six months of
+behaviour off that number.
+
+`goal.update`'s envelope carries the goal's `updated_at`, and the store's
+UPDATE is predicated on it. The executor's re-description catches a goal that
+moved before dispatch; the predicate covers the window between that check and
+the write, which re-describing cannot. `goal.close` accepts `open`, `met` and
+`missed` and refuses only an already-closed goal: buddi decides the word, the
+holder adds the note and the date, and the word is kept — which is what "met
+and missed become final when the owner agrees" means.
 
 ## 6. The check
 
@@ -138,6 +193,40 @@ Findings, keyed per goal and per event so each is one fact that resolves:
 The wake prompt carries the goal, the last four checks and the instruction:
 verify with your own tools, then report or propose a change through
 `goal.update`; never change the goal silently.
+
+As built, "due" has a four-hour margin — no check in the last 20 h (daily) or
+6 d 20 h (weekly) — because a strict 24 h makes a goal checked at 09:04 slip
+an hour every day until a morning goal is a midnight one. The cost is that a
+daily goal *can* take two checks in one calendar day, so §2's "one check per
+goal per day at most" is a near-miss rather than an invariant; it is one extra
+row and never a second wake, because findings dedup by key. `Finding.wake` is
+the new core field that makes the "yes, once" column work: an `info` finding
+that wakes its agent on its first raise instead of taking a digest line. The
+milestone event is keyed per milestone (`goal.<id>.milestone.<n>`), since one
+key per goal could only ever fire once for the whole list — and it is returned
+only on the tick where it is *newly* crossed, so it wakes once and then
+resolves. A key returned for as long as the fact is true would be read out in
+every weekly digest, once per cooldown, for a payment made in September.
+
+Two more things the sentinel does that §6 does not spell out. It takes a check
+at the deadline whatever the cadence says, when no check exists at or after it:
+a weekly goal with a Thursday deadline is not due on Thursday, and settling it
+`missed` off Monday's number would record a verdict about a week the goal never
+had. And every verdict — off track, back on track, milestones, met, missed — is
+read off *measured* checks only: a look that failed is evidence about the
+plugin, not about the goal, so a timed-out metric leaves an open off-track
+finding open instead of looking like a recovery. "Not measurable for 7 days" is
+counted from the last check that carried a number over the whole history, not
+over the last four rows, which would collapse onto the baseline the moment four
+looks failed in a row.
+
+**Known gap.** The sentinel settles `met`/`missed` in the same tick it returns
+the finding, and the finding is only written after the loop. A throw later in
+that loop — a failed `recordCheck` on another goal — loses the wake while the
+state change is already committed, and the next tick no longer walks the goal,
+so the wake is never raised. The digest still carries the fact and the goal
+reads correctly everywhere it is shown; making the two atomic needs the finding
+write to move inside the per-goal step, which is step 2's business.
 
 ## 7. Where it shows
 
@@ -188,7 +277,10 @@ stated as such).
 
 1. Core: metrics contribution, `core.goals` tables, the tools with cards,
    the sentinel and its findings, the wake prompt, docs (`docs/plugins.md`
-   gains `metrics`), tests. (2 days)
+   gains `metrics`), tests. (2 days) — **built**. The tools live in
+   `packages/gateway/src/missions/goals.ts`, beside the reminder and schedule
+   manifests, for the same reason they do: nothing there owns a schema, and
+   `createGoalManifest` takes the registry because a goal watches a metric.
 2. Home block, Goals page, chat view, Telegram parity. (1 day)
 3. Metrics in finance (`total_debt`, `card_balance`, `cash_available`) and
    email (`inbox_unread`, `waiting_on_me`); the developer plugin's

@@ -40,6 +40,7 @@ import { createOwnerManifest } from './owner-tools.js';
 import { createPlatformManifest } from './platform.js';
 import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
+import { createGoalManifest } from '../missions/goals.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
 export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? path.resolve(
@@ -156,6 +157,11 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // reminder set in a chat is the same object as one set by the daily check.
   registry.register(createReminderManifest(reminderLimitsFromEnv(env)));
   registry.register(createScheduleManifest());
+  // Goals, for the same reason and in the same place: a goal is core's row and
+  // this is only the surface onto it. It takes the registry because a goal
+  // watches a *metric*, and metrics are a plugin contribution — so what can be
+  // watched here is exactly what is installed here, and nothing more.
+  registry.register(createGoalManifest(registry));
   // The canvas, for the same reason: what an agent can draw is a property of
   // the installation, not of one conversation. It owns no data, so it is here
   // rather than in `installedManifests` — there is nothing to migrate.

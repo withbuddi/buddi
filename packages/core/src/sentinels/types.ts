@@ -39,12 +39,37 @@ export interface Finding {
    * nobody holds it.
    */
   agentId?: string;
+  /**
+   * An `info` finding that wakes its agent **once**, when it is first raised,
+   * instead of waiting for the digest.
+   *
+   * Some facts are good news with a short shelf life — a milestone crossed, a
+   * target reached, a number nobody has been able to measure for a week. They
+   * do not deserve an `urgent` (which repeats every 24 h and interrupts), but
+   * hearing about them next Sunday is hearing about them too late. So the
+   * first raise becomes a wake and everything after it behaves like any other
+   * `info`: quiet for seven days, then the digest.
+   *
+   * Ignored on `urgent`, which already wakes. Unset — the normal case — is an
+   * `info` that simply waits for the recap.
+   */
+  wake?: boolean;
   /** Structured evidence handed to that agent verbatim. */
   data?: unknown;
 }
 
 export interface SentinelContext {
   db: Pool;
+  /**
+   * The owner this installation belongs to.
+   *
+   * A sentinel that only reads its own rows never needs it. A sentinel that
+   * calls something written for a *tool* does: `measureMetric` takes a
+   * `ToolContext`, and a `ToolContext` has an owner. Core's goal watcher is
+   * the first, and rather than let it invent the string, the tick passes down
+   * the same id every other part of the process runs as.
+   */
+  ownerId: string;
   now: () => Date;
   /** The owner's timezone: a sentinel that needs a *day* renders it in this zone. */
   timezone: string;
