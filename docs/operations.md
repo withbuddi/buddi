@@ -872,6 +872,45 @@ in place is migrated with everything else. Installing a newer version of one is
 `buddi plugins install <dir>`, which reads what it contributes before it
 changes anything.
 
+### Mail search (migration 012)
+
+The email plugin's `012_search.sql` is the one migration in this repo that
+needs more than the schema it owns, so it is worth knowing about before an
+upgrade rather than during one.
+
+**It creates the `pg_trgm` extension.** That needs the CREATE privilege *on
+the database*, not just on a schema. pg_trgm is a trusted extension
+(PostgreSQL 13 and later), so superuser is not required — the role buddi
+connects as is enough, provided it may create on the database. If the
+migration stops with a privilege error, you have two ways out:
+
+```
+-- either, as a superuser or the database owner, once:
+grant create on database buddi to buddi;
+
+-- or, as a superuser, once — any schema will do, the migration finds it:
+create extension pg_trgm;
+```
+
+then run `buddi migrate` again. The migration does **not** skip the extension
+and carry on: a mail search that silently falls back to a full table scan on
+one installation and not another is a worse thing to own than a migration that
+refuses and says why.
+
+**The two trigram indexes build under an exclusive lock on `email.messages`.**
+Migrations run inside a transaction, so `create index concurrently` is not
+available. On a new install this is instantaneous. On a mailbox with several
+years of history it is seconds to a minute, and for that time the mail poller's
+inserts wait. So on a large mailbox, stop the service first:
+
+```
+buddi service stop
+buddi migrate
+buddi service start
+```
+
+rather than meeting it as an ingest that appears to have hung.
+
 ## Retention
 
 ```

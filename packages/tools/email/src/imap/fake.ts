@@ -8,6 +8,7 @@
  * failing test rather than as silently-read mail.
  */
 import type {
+  AttachmentInfo,
   FetchedMessage,
   ImapClient,
   ImapClientFactory,
@@ -22,6 +23,18 @@ export interface FakeMailbox {
   specialUse?: string | null;
 }
 
+/**
+ * The bytes this server will hand over for one body part, keyed
+ * `<mailbox>/<uid>/<part>`. A message whose attachment has no entry here is a
+ * message whose part the server does not have — which is the other half of
+ * what `email.fetch_attachment` has to cope with.
+ */
+export type FakeParts = Map<string, Buffer>;
+
+function partKey(mailbox: string, uid: number, part: string): string {
+  return `${mailbox}/${uid}/${part}`;
+}
+
 export class FakeImapServer {
   readonly mailboxes = new Map<string, FakeMailbox>();
   /** Every fetch this server served, for assertions about the cap and cursor. */
@@ -30,6 +43,10 @@ export class FakeImapServer {
   closes = 0;
   /** How many times the folders were listed. Discovery happens once. */
   lists = 0;
+  /** The body parts this server can hand over. See `putPart`. */
+  readonly parts: FakeParts = new Map();
+  /** Every part download served, for assertions about the cap and the peek. */
+  readonly downloads: Array<{ mailbox: string; uid: number; part: string; maxBytes: number }> = [];
 
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
@@ -50,6 +67,11 @@ export class FakeImapServer {
     const uid = message.uid ?? Math.max(0, ...box.messages.map((m) => m.uid)) + 1;
     box.messages.push({ ...message, uid });
     return uid;
+  }
+
+  /** Give one body part of one message its bytes. */
+  putPart(mailbox: string, uid: number, part: string, bytes: Buffer): void {
+    this.parts.set(partKey(mailbox, uid, part), bytes);
   }
 
   /**
@@ -123,6 +145,38 @@ class FakeImapClient implements ImapClient {
       flags: [...m.flags],
       attachments: m.attachments.map((a) => ({ ...a })),
     }));
+  }
+
+  async listAttachments(mailbox: string, uid: number): Promise<AttachmentInfo[] | null> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    const box = this.server.mailbox(mailbox);
+    const message = box.messages.find((m) => m.uid === uid);
+    // Not there at all is a different answer from "there, with no files".
+    if (!message) return null;
+    return message.attachments.map((a) => ({ ...a }));
+  }
+
+  async downloadAttachment(
+    mailbox: string,
+    uid: number,
+    part: string,
+    maxBytes: number,
+  ): Promise<Buffer | null> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.downloads.push({ mailbox, uid, part, maxBytes });
+    const box = this.server.mailbox(mailbox);
+    if (!box.messages.some((m) => m.uid === uid)) return null;
+    const bytes = this.server.parts.get(partKey(mailbox, uid, part));
+    if (!bytes) return null;
+    // The real adapter enforces the cap on the stream rather than on a
+    // declared size, so the fake refuses the same way: a test can seed a part
+    // fatter than its own body structure claims and see the same error.
+    if (bytes.length > maxBytes) {
+      throw new Error(
+        `attachment part ${part} of uid ${uid} is larger than the ${maxBytes}-byte cap`,
+      );
+    }
+    return Buffer.from(bytes);
   }
 
   async close(): Promise<void> {

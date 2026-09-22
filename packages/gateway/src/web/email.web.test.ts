@@ -112,6 +112,10 @@ function fakeConnect(refuse?: string): { connect: ImapClientFactory; opens: () =
         return { uidValidity: 1, uidNext: 1, exists: 0 };
       },
       fetchSince: async () => [],
+      // The account test never reads an attachment; the port has the two
+      // methods all the same, so the stub answers "nothing here".
+      listAttachments: async () => [],
+      downloadAttachment: async () => null,
       close: async () => { closes += 1; },
     })) as ImapClientFactory,
   };

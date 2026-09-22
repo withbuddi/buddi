@@ -20,6 +20,9 @@ import { emailSentinels } from './sentinels/index.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
 import { draftNew, draftReply, readDraft } from './tools/drafts.js';
+// --- email step 6b: search and attachments ---
+import { createFetchAttachmentTool } from './tools/attachments.js';
+// --- end step 6b ---
 import { listRecent, readMessage, search } from './tools/read.js';
 import { senderProfile } from './tools/sender.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
@@ -98,6 +101,13 @@ export function createEmailManifest(
         send: opts.send ?? smtpFactory,
         ...(opts.env ? { env: opts.env } : {}),
       }),
+      // --- email step 6b: attachments on request (docs/specs/email.md §10).
+      // It talks to IMAP, so it takes the same client factory the source does.
+      createFetchAttachmentTool({
+        connect: opts.connect ?? imapflowFactory,
+        ...(opts.env ? { env: opts.env } : {}),
+      }),
+      // --- end step 6b ---
     ],
     sources: createEmailSources(opts),
     // The watchers (docs/specs/email.md §7). Two of the six, as step 4 asks:
@@ -115,6 +125,57 @@ export const emailSources: Source[] = manifest.sources ?? [];
 export default manifest;
 
 export { listRecent, readMessage, search } from './tools/read.js';
+// --- email step 6b: search and attachments ---
+export {
+  booleanFilter,
+  bounded,
+  buildSearch,
+  isCalendarDate,
+  likeNeedle,
+  narrows,
+  qualify,
+  searchColumns,
+  toSearchRow,
+  validateFilters,
+  windowNote,
+  DATE_PATTERN,
+  DEFAULT_WINDOW_DAYS,
+  MIN_QUERY_CHARS,
+  WHEN,
+  type BuiltSearch,
+  type SearchFilters,
+  type SearchOptions,
+  type SearchRow,
+} from './search.js';
+export {
+  createFetchAttachmentTool,
+  markFetched,
+  pickAttachment,
+  resolveAgainstFresh,
+  MAX_ATTACHMENT_BYTES,
+  type FetchAttachmentInput,
+  type FetchAttachmentOptions,
+  type FetchAttachmentResult,
+} from './tools/attachments.js';
+export {
+  bareMime,
+  bytesRefusal,
+  declaredRefusal,
+  extensionOf,
+  inspectZip,
+  isPartId,
+  looksLikeZip,
+  mimeToStore,
+  safeFilename,
+  sniffMime,
+  zipEntryNames,
+  type ZipInspection,
+  MAX_FILENAME,
+  PART_PATTERN,
+  REFUSED_EXTENSIONS,
+  REFUSED_MIMES,
+} from './attachments/safety.js';
+// --- end step 6b ---
 export { senderProfile } from './tools/sender.js';
 export {
   listThreads,
