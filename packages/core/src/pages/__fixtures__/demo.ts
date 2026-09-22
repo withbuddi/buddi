@@ -19,7 +19,7 @@ import type { PageDescriptor, PageQuery } from '../../pages.js';
 
 /** What the demo plugin's queries answer with. Constants, deliberately. */
 export const DEMO_DATA = {
-  counts: { items: 3, open: 1 },
+  counts: { items: 3, open: 1, state: 'ready', headline: 'Three things, one of them open.' },
   items: {
     items: [
       { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', pinned: false },
@@ -35,7 +35,20 @@ export const DEMO_DATA = {
     approvalId: null as string | null,
   },
   body: { text: 'The body of the first thing.', attachmentId: 'artifact-1' },
-  draft: { id: 'd1', subject: 'A reply', body: 'Nearly done.', updatedAt: '2026-09-22T09:05:00.000Z' },
+  messages: {
+    messages: [
+      { id: 'm1', from: 'one@example.com', at: '2026-09-22T08:00:00.000Z', attachmentId: 'artifact-1' },
+      { id: 'm2', from: 'two@example.com', at: '2026-09-22T08:30:00.000Z', attachmentId: null },
+    ],
+  },
+  drafts: { drafts: [{ id: 'd1', subject: 'A reply', state: 'draft' }] },
+  draft: {
+    id: 'd1',
+    subject: 'A reply',
+    body: 'Nearly done.',
+    updatedAt: '2026-09-22T09:05:00.000Z',
+    locked: false,
+  },
   accounts: { accounts: [{ id: 'acc-1', address: 'owner@example.com', state: 'ready' }] },
   settings: { everyMinutes: 15, keepDays: 30 },
 } as const;
@@ -58,10 +71,16 @@ export const demoQueries: PageQuery[] = [
     params: z.object({ q: z.string().min(1) }).strict(),
     produce: async (params) => {
       const { q } = params as { q: string };
-      return { items: DEMO_DATA.items.items.filter((i) => i.title.includes(q)) };
+      return {
+        items: DEMO_DATA.items.items.filter((i) => i.title.includes(q)),
+        total: 2,
+        note: 'The most recent two, newest first.',
+      };
     },
   },
   { name: 'item', params: ID, produce: async () => DEMO_DATA.item },
+  { name: 'messages', params: ID, produce: async () => DEMO_DATA.messages },
+  { name: 'drafts', params: ID, produce: async () => DEMO_DATA.drafts },
   { name: 'body', params: ID, produce: async () => DEMO_DATA.body },
   { name: 'draft', params: ID, produce: async () => DEMO_DATA.draft },
   { name: 'accounts', params: z.object({}).strict(), produce: async () => DEMO_DATA.accounts },
@@ -182,6 +201,33 @@ const demoTools: PluginManifest['tools'] = [
     },
   },
   {
+    // Fetch one row's file into the library. The button that calls it gives
+    // way to the artifact link once the row carries an id.
+    name: 'demo.fetch',
+    description: 'Fetch the attachment of one message.',
+    tier: 'auto',
+    input: z.object({ id: z.string() }).strict(),
+    async execute(args) {
+      demoWrites.push({ tool: 'demo.fetch', args });
+      return { artifactId: 'artifact-2' };
+    },
+  },
+  {
+    /**
+     * A tool of this plugin that no page names. An agent may be granted it;
+     * the act route may not invoke it, which is the difference between a page
+     * and a console.
+     */
+    name: 'demo.quiet',
+    description: 'Something only an agent does.',
+    tier: 'auto',
+    input: z.object({}).strict(),
+    async execute() {
+      demoWrites.push({ tool: 'demo.quiet', args: {} });
+      return { quiet: true };
+    },
+  },
+  {
     name: 'demo.set_settings',
     description: 'Write the watcher settings.',
     tier: 'auto',
@@ -200,7 +246,10 @@ const board: PageDescriptor = {
   place: 'rail',
   icon: 'chart',
   order: 10,
+  // One read for the page itself: what the top-level `when` below is about.
+  data: { query: 'counts' },
   body: [
+    { kind: 'notice', text: { path: 'headline' }, when: { path: 'state', equals: 'ready' } },
     { kind: 'notice', text: 'Everything the demo plugin knows, drawn from descriptors.' },
     {
       kind: 'stats',
@@ -216,7 +265,11 @@ const board: PageDescriptor = {
       title: 'Find a thing',
       fields: [{ name: 'q', label: 'Words', type: 'text', required: true }],
       query: { query: 'search', params: { q: { param: 'q' } } },
-      results: { title: { path: 'title' }, sub: { path: 'sub' }, to: { page: 'board', item: { path: 'id' } } },
+      rows: 'items',
+      count: 'total',
+      note: 'note',
+      results: { title: { path: 'title' }, sub: { path: 'sub' } },
+      to: { page: 'board', item: { path: 'id' } },
       empty: 'Nothing matches those words.',
     },
     {
@@ -227,6 +280,7 @@ const board: PageDescriptor = {
         title: 'Things',
         query: { query: 'items' },
         rows: 'items',
+        key: 'id',
         item: {
           title: { path: 'title' },
           sub: { path: 'sub' },
@@ -236,7 +290,14 @@ const board: PageDescriptor = {
         },
         select: { key: 'id', disabledWhen: { path: 'pinned', equals: true } },
         actions: [{ tool: 'demo.keep', label: 'Keep', args: { id: { row: 'id' } } }],
-        bulk: [{ tool: 'demo.keep_many', label: 'Keep selected', args: { ids: { selected: true } } }],
+        bulk: [
+          {
+            tool: 'demo.keep_many',
+            label: 'Keep selected',
+            confirm: 'Keep {count} things?',
+            args: { ids: { selected: true } },
+          },
+        ],
         groupBy: { key: 'state', labels: { open: 'Open', done: 'Done' } },
         collapsed: { label: 'Older things', rows: 'older' },
         empty: 'Nothing here yet.',
@@ -251,47 +312,107 @@ const board: PageDescriptor = {
             { label: 'Seen', value: { path: 'at' }, unit: 'date' },
           ],
           body: [
-            { kind: 'approval', path: 'approvalId', when: { path: 'state', equals: 'open' } },
+            { kind: 'approval', path: 'approvalId', when: { path: 'state', in: ['open', 'waiting'] } },
+          ],
+        },
+        /*
+         * One sub-tree per message: each fetches its own body when it is
+         * opened, and each draws its own attachment link — which is the whole
+         * reason `repeat` exists.
+         */
+        {
+          kind: 'repeat',
+          title: 'The messages',
+          query: { query: 'messages', params: { id: { param: 'item' } } },
+          rows: 'messages',
+          key: 'id',
+          body: [
             {
               kind: 'expand',
-              label: 'Show the body',
-              query: { query: 'body', params: { id: { param: 'item' } } },
-              body: [
-                { kind: 'notice', text: 'Fetched when you opened it.' },
-                { kind: 'artifact', path: 'attachmentId', label: 'Download the attachment' },
-              ],
+              // The fold carries the row's own words: who wrote it, and when.
+              label: { path: 'from' },
+              query: { query: 'body', params: { id: { path: 'id' } } },
+              body: [{ kind: 'notice', text: 'Fetched when you opened it.' }],
+            },
+            /*
+             * One attachment, as one block: Fetch while there is nothing to
+             * download, the link once there is.
+             */
+            {
+              kind: 'button',
+              when: { path: 'attachmentId', equals: null },
+              action: { tool: 'demo.fetch', label: 'Fetch the attachment', args: { id: { path: 'id' } } },
+            },
+            {
+              kind: 'artifact',
+              when: { path: 'attachmentId', equals: null, not: true },
+              path: 'attachmentId',
+              label: 'Download the attachment',
             },
           ],
         },
+        /*
+         * A second level of choosing, inside a detail the route already owns:
+         * `local` keeps it in the page rather than fighting over the one item
+         * segment.
+         */
         {
-          kind: 'editor',
-          title: 'The draft',
-          query: { query: 'draft', params: { id: { param: 'item' } } },
-          version: 'updatedAt',
-          fields: [
-            { name: 'subject', label: 'Subject', type: 'text', from: 'subject', required: true },
-            { name: 'body', label: 'Body', type: 'textarea', from: 'body' },
-          ],
-          save: {
-            tool: 'demo.save',
-            label: 'Save',
-            tone: 'accent',
-            args: {
-              id: { param: 'item' },
-              subject: { field: 'subject' },
-              body: { field: 'body' },
-              version: { field: 'version' },
-            },
+          kind: 'list-detail',
+          param: 'draft',
+          selection: 'local',
+          list: {
+            kind: 'list',
+            title: 'Drafts',
+            query: { query: 'drafts', params: { id: { param: 'item' } } },
+            rows: 'drafts',
+            key: 'id',
+            item: { title: { path: 'subject' }, pill: { value: { path: 'state' } } },
+            empty: 'No drafts on this one.',
           },
-          actions: [
+          detail: [
             {
-              tool: 'demo.discard',
-              label: 'Discard',
-              tone: 'danger',
-              confirm: 'Discard this draft?',
-              args: { id: { param: 'item' } },
+              kind: 'editor',
+              title: 'The draft',
+              query: { query: 'draft', params: { id: { param: 'draft' } } },
+              version: 'updatedAt',
+              readOnlyWhen: { path: 'locked', equals: true },
+              footnote: 'Send does not send: it asks you to approve the dispatch.',
+              fields: [
+                {
+                  name: 'subject',
+                  label: 'Subject',
+                  type: 'text',
+                  from: 'subject',
+                  required: true,
+                  disabledWhen: { path: 'locked', equals: true },
+                },
+                { name: 'body', label: 'Body', type: 'textarea', from: 'body' },
+              ],
+              save: {
+                tool: 'demo.save',
+                label: 'Save',
+                tone: 'accent',
+                busy: 'Saving…',
+                args: {
+                  id: { param: 'draft' },
+                  subject: { field: 'subject' },
+                  body: { field: 'body' },
+                  version: { field: 'version' },
+                },
+              },
+              actions: [
+                {
+                  tool: 'demo.discard',
+                  label: 'Discard',
+                  tone: 'danger',
+                  placement: 'leading',
+                  confirm: 'Discard this draft?',
+                  args: { id: { param: 'draft' } },
+                  then: { route: { page: 'board' } },
+                },
+                { tool: 'demo.send', label: 'Send', busy: 'Proposing…', args: { id: { param: 'draft' } }, then: 'refresh' },
+              ],
             },
-            { tool: 'demo.send', label: 'Send', args: { id: { param: 'item' } }, then: 'refresh' },
           ],
         },
       ],
@@ -346,6 +467,27 @@ const settings: PageDescriptor = {
           },
         },
       ],
+    },
+    {
+      // A picker, not a search box: it asks again on every change.
+      kind: 'search',
+      title: 'Things by state',
+      auto: true,
+      fields: [
+        {
+          name: 'state',
+          label: 'State',
+          type: 'select',
+          options: [
+            { value: 'open', label: 'Open' },
+            { value: 'done', label: 'Done' },
+          ],
+        },
+      ],
+      query: { query: 'items', params: { state: { param: 'state' } } },
+      rows: 'items',
+      results: { title: { path: 'title' }, sub: { path: 'sub' } },
+      empty: 'Nothing in that state.',
     },
     {
       kind: 'form',

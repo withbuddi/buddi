@@ -48,17 +48,23 @@ describe('the routes', () => {
     for (const place of PLACES) expect(placeOf(place.route)).toBe(place.route);
   });
 
-  it('names a settings tab after the plugin, and after the page when there are several', () => {
-    expect(pluginSettingsRoute('demo', 'settings')).toBe('#/settings/demo.settings');
-    expect(pluginSettingsRoute('demo', 'demo')).toBe('#/settings/demo');
-    expect(pluginSettingsTab('demo', 'demo')).toBe('demo');
-    expect(parsePluginSettingsRoute('#/settings/demo.settings')).toEqual({ plugin: 'demo', page: 'settings' });
-    expect(parsePluginSettingsRoute('#/settings/demo')).toEqual({ plugin: 'demo', page: 'demo' });
+  it('prefixes every plugin settings tab, whether or not the plugin has several pages', () => {
+    expect(pluginSettingsRoute('demo', 'settings')).toBe('#/settings/p.demo.settings');
+    expect(pluginSettingsRoute('demo', 'demo')).toBe('#/settings/p.demo');
+    expect(pluginSettingsTab('demo', 'demo')).toBe('p.demo');
+    expect(parsePluginSettingsRoute('#/settings/p.demo.settings')).toEqual({ plugin: 'demo', page: 'settings' });
+    expect(parsePluginSettingsRoute('#/settings/p.demo')).toEqual({ plugin: 'demo', page: 'demo' });
+    // A core section is not a plugin tab, whatever it is called.
+    expect(parsePluginSettingsRoute('#/settings/memory')).toBeNull();
   });
 
-  it('never collides with a core settings section', () => {
+  it('cannot collide with a core section — not even a plugin named after one', () => {
+    const core = new Set<string>(SETTINGS_SECTIONS.map((section) => section.id));
     for (const section of SETTINGS_SECTIONS) {
-      expect(pluginSettingsTab('demo', 'settings')).not.toBe(section.id);
+      // The property, for a plugin called exactly like each core section.
+      expect(core.has(pluginSettingsTab(section.id, section.id))).toBe(false);
+      expect(core.has(pluginSettingsTab(section.id, 'other'))).toBe(false);
+      expect(parsePluginSettingsRoute(`#/settings/${section.id}`)).toBeNull();
     }
   });
 });

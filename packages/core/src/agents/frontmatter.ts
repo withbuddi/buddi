@@ -36,6 +36,27 @@ export type YamlValue = string | number | boolean | string[];
 export const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * Ids nothing may be called, because the installation already means something
+ * by them.
+ *
+ * `owner` is the owner themselves — it is the agent id a write made from a
+ * plugin page is recorded under, and the one `ownerOnly` checks — and `room`
+ * is the speaker a group's own turns are written as. Both share the namespace
+ * with agent ids in `core.actions.agent_id`, in artifacts' `createdBy` and in
+ * a transcript's speaker, so an agent called either would not merely slip past
+ * a gate: it would make the ledger ambiguous about who did something.
+ */
+export const RESERVED_AGENT_IDS: readonly string[] = ['owner', 'room'];
+
+/** Why an id is refused, in the one sentence every path uses. */
+export function reservedAgentIdMessage(id: string): string {
+  return (
+    `"${id}" is reserved: the installation already writes ${RESERVED_AGENT_IDS.map((r) => `"${r}"`).join(' and ')} ` +
+    'in the columns that say who did something — the owner, and a group\'s own voice. Choose another id.'
+  );
+}
+
+/**
  * A handle is the name the owner types: `@ledger`. Kebab-case like an id, but
  * it must start with a letter and stay short — it is typed at the head of a
  * message, not stored in a config file.
@@ -148,7 +169,10 @@ export function parseYamlSubset(source: string, file?: string): Record<string, Y
  */
 export const agentFrontmatterSchema = z
   .object({
-    id: z.string().regex(KEBAB, 'id must be kebab-case'),
+    id: z
+      .string()
+      .regex(KEBAB, 'id must be kebab-case')
+      .refine((id) => !RESERVED_AGENT_IDS.includes(id), (id) => ({ message: reservedAgentIdMessage(id) })),
     /**
      * How the owner addresses this agent: `@ledger`. Required, because an agent
      * nobody can call by name is only half installed; uniqueness across the

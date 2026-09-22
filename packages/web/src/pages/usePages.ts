@@ -28,9 +28,10 @@ export function orderPages(pages: PluginPageDescriptor[], place: 'rail' | 'setti
     .map((entry) => entry.page);
 }
 
-export function usePluginPages(): PluginPages {
+export function usePluginPages(skip = false): PluginPages {
   const [pages, setPages] = useState<PluginPageDescriptor[]>([]);
   useEffect(() => {
+    if (skip) return undefined;
     let cancelled = false;
     // Through a promise, so a gateway that answers 404 and a browser that
     // cannot reach one leave the shell exactly as it was.
@@ -48,7 +49,7 @@ export function usePluginPages(): PluginPages {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [skip]);
   return {
     all: pages,
     rail: orderPages(pages, 'rail'),

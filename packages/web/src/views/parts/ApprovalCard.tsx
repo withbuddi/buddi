@@ -12,8 +12,15 @@ import { useOwnerChoices } from './OwnerChoices';
 export type Decision = 'approve' | 'reject';
 export type Scope = 'once' | 'conversation' | 'always';
 
-/** The shared decide call, and the sentence it produces for a status line. */
-export function useDecide(onDone: () => void): {
+/**
+ * The shared decide call, and the sentence it produces for a status line.
+ *
+ * `onDone` is handed what the decision did — `approve`/`reject`, and the
+ * execution's state when there was one — for the callers that have something
+ * to do only when the effect actually happened. Callers that just reload
+ * ignore the argument.
+ */
+export function useDecide(onDone: (outcome?: { decision: Decision; state?: string }) => void): {
   busy: string | null;
   note: string | null;
   failure: string | null;
@@ -31,12 +38,14 @@ export function useDecide(onDone: () => void): {
     setBusy(id);
     setFailure(null);
     setNote(null);
+    let outcome: { decision: Decision; state?: string } | undefined;
     try {
       // Only pass what there is: an approval that offered no controls makes
       // exactly the request it always made.
       const result = choices
         ? await api.decide(id, decision, scope, choices)
         : await api.decide(id, decision, scope);
+      outcome = { decision, ...(result.execution?.state ? { state: result.execution.state } : {}) };
       setNote(
         decision === 'reject'
           ? `Rejected ${result.action.tool}.`
@@ -50,7 +59,7 @@ export function useDecide(onDone: () => void): {
       setFailure(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
-      onDone();
+      onDone(outcome);
     }
   };
   return { busy, note, failure, decide };

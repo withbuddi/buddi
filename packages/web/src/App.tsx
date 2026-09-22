@@ -407,6 +407,12 @@ export function App(): JSX.Element {
 
 export interface PlaceProps {
   hash: string;
+  /**
+   * The screens the installed plugins contribute, read once by the shell.
+   * Optional so every other view keeps its signature; Settings is the one
+   * that draws the extra tabs.
+   */
+  pluginPages?: PluginPages;
   timezone: string;
   navigate: (next: string, replace?: boolean) => void;
   agents: ChatAgent[];
@@ -414,6 +420,7 @@ export interface PlaceProps {
 }
 
 function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; pluginPages: PluginPages }): JSX.Element {
+  const withPages = { ...props, pluginPages };
   /*
    * A plugin's own place. The hash says which plugin and which page; the
    * descriptor says what is on it. When the descriptors have not arrived yet —
@@ -440,7 +447,7 @@ function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; p
     case ACTIVITY_ROUTE:
       return <Activity {...props} />;
     case SETTINGS_ROUTE:
-      return <Settings {...props} />;
+      return <Settings {...withPages} />;
     case FILES_ROUTE:
       return <Files {...props} />;
     case MAIL_ROUTE:

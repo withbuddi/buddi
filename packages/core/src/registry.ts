@@ -224,6 +224,10 @@ export function toolInputSchema(tool: ToolDefinition<any, any>, plugin: string):
 export class ToolRegistry {
   readonly #tools = new Map<string, Entry>();
   readonly #manifests = new Map<string, PluginManifest>();
+  /** Per plugin, what `parsePageContributions` made of its screens. */
+  readonly #pages = new Map<string, PageDescriptor[]>();
+  readonly #queries = new Map<string, PageQuery[]>();
+  readonly #pageTools = new Map<string, Set<string>>();
 
   register(manifest: PluginManifest): void {
     if (this.#manifests.has(manifest.name)) {
@@ -253,16 +257,24 @@ export class ToolRegistry {
       });
     }
     // Page descriptors leave this process the same way and are checked the
-    // same way — shape, then every query, tool and route they name.
-    if (manifest.pages !== undefined || manifest.queries !== undefined) {
-      parsePageContributions({
-        plugin: manifest.name,
-        ...(manifest.pages ? { pages: manifest.pages } : {}),
-        ...(manifest.queries ? { queries: manifest.queries } : {}),
-        tools: manifest.tools.map((t) => t.name),
-      });
-    }
+    // same way — shape, then every query, tool and route they name. What comes
+    // back is kept: the queries with their parameters made strict, and the set
+    // of tools the pages actually name, which is all the act route may invoke.
+    const contributions =
+      manifest.pages !== undefined || manifest.queries !== undefined
+        ? parsePageContributions({
+            plugin: manifest.name,
+            ...(manifest.pages ? { pages: manifest.pages } : {}),
+            ...(manifest.queries ? { queries: manifest.queries } : {}),
+            tools: manifest.tools.map((t) => t.name),
+          })
+        : undefined;
     this.#manifests.set(manifest.name, manifest);
+    if (contributions) {
+      this.#pages.set(manifest.name, contributions.pages);
+      this.#queries.set(manifest.name, contributions.queries);
+      this.#pageTools.set(manifest.name, new Set(contributions.tools));
+    }
     for (const tool of manifest.tools) {
       this.#tools.set(tool.name, {
         tool,
@@ -293,9 +305,7 @@ export class ToolRegistry {
    * page id is unique in. This is what `GET /api/pages` serves.
    */
   pages(): RegisteredPage[] {
-    return [...this.#manifests.values()].flatMap((m) =>
-      (m.pages ?? []).map((page) => ({ ...page, plugin: m.name })),
-    );
+    return [...this.#pages].flatMap(([plugin, pages]) => pages.map((page) => ({ ...page, plugin })));
   }
 
   /**
@@ -303,9 +313,20 @@ export class ToolRegistry {
    * nothing else may call `produce`, and nothing here exposes it to a model.
    */
   queries(): RegisteredQuery[] {
-    return [...this.#manifests.values()].flatMap((m) =>
-      (m.queries ?? []).map((query) => ({ ...query, plugin: m.name })),
-    );
+    return [...this.#queries].flatMap(([plugin, queries]) => queries.map((query) => ({ ...query, plugin })));
+  }
+
+  /**
+   * The tools this plugin's *pages* name — and therefore the only tools the
+   * act route may invoke for it.
+   *
+   * Without this, `POST /api/pages/<plugin>/act` would be a general "run any
+   * tool of this plugin as the owner" endpoint, which is wider than anything
+   * the spec describes: a page is not a console. A plugin that contributes no
+   * pages contributes no page tools, so its act route can do nothing at all.
+   */
+  pageTools(plugin: string): string[] {
+    return [...(this.#pageTools.get(plugin) ?? [])];
   }
 
   /** Which plugin contributed a tool — the act route's "of that plugin" check. */

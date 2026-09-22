@@ -40,7 +40,7 @@ const parse = (pages: unknown[], opts: { queries?: string[]; tools?: string[] } 
     pages,
     queries: (opts.queries ?? []).map((name) => ({ name, params: z.object({}), produce: async () => ({}) })),
     tools: opts.tools ?? [],
-  });
+  }).pages;
 
 describe('page descriptors', () => {
   it('accepts the fixture plugin, which uses every component once', () => {
@@ -49,7 +49,7 @@ describe('page descriptors', () => {
       pages: demoPages,
       queries: demoQueries,
       tools: demoPagesManifest.tools.map((t) => t.name),
-    });
+    }).pages;
     expect(parsed.map((p) => p.id)).toEqual(['board', 'settings']);
     const kinds = new Set<string>();
     const walk = (node: unknown): void => {
@@ -64,6 +64,7 @@ describe('page descriptors', () => {
       [
         'approval',
         'artifact',
+        'button',
         'detail',
         'editor',
         'expand',
@@ -72,6 +73,7 @@ describe('page descriptors', () => {
         'list',
         'list-detail',
         'notice',
+        'repeat',
         'search',
         'section',
         'stats',
@@ -82,7 +84,7 @@ describe('page descriptors', () => {
 
   it('names the plugin, the page and the field when a descriptor is wrong', () => {
     expect(() =>
-      parse([page({ body: [{ kind: 'list', query: { query: 'items' }, rows: 'items are here', item: { title: { path: 'title' } } }] })], {
+      parse([page({ body: [{ kind: 'list', query: { query: 'items' }, key: 'id', rows: 'items are here', item: { title: { path: 'title' } } }] })], {
         queries: ['items'],
       }),
     ).toThrow(/plugin demo: invalid page descriptor board — body\.0\.rows: a view path/);
@@ -225,6 +227,19 @@ describe('the registry', () => {
     expect(registry.pluginOf('other.keep')).toBeUndefined();
   });
 
+  it('knows which tools the pages actually name — and no others', () => {
+    const registry = new ToolRegistry();
+    registry.register(demoPagesManifest);
+    const named = registry.pageTools('demo');
+    expect(named).toContain('demo.keep');
+    expect(named).toContain('demo.add_account');
+    // A tool of this plugin that no page writes through: an agent's business,
+    // not a button's, and therefore not something the act route may invoke.
+    expect(named).not.toContain('demo.quiet');
+    expect(registry.has('demo.quiet')).toBe(true);
+    expect(registry.pageTools('other')).toEqual([]);
+  });
+
   it('never lists an ownerOnly tool to a model', () => {
     const registry = new ToolRegistry();
     registry.register(demoPagesManifest);
@@ -248,42 +263,162 @@ describe('the registry', () => {
   });
 });
 
-describe('the read-only pool', () => {
-  const statements: string[] = [];
-  const fake = {
-    query: (sql: unknown) => {
-      statements.push(String(sql));
-      return Promise.resolve({ rows: [] });
-    },
-    totalCount: 1,
-    idleCount: 1,
-    waitingCount: 0,
-  } as unknown as Pool;
-
-  it('lets a select through, statement and values alike', async () => {
-    statements.length = 0;
-    const pool = readOnlyPool(fake);
-    await pool.query('select id from demo.things where id = $1', ['a1']);
-    await pool.query({ text: 'with recent as (select 1) select * from recent' });
-    expect(statements).toHaveLength(2);
+describe('what a descriptor may not be', () => {
+  it('refuses a list with nothing to key a row by', () => {
+    expect(() =>
+      parse([page({ body: [{ kind: 'list', query: { query: 'items' }, rows: 'items', item: { title: { path: 't' } } }] })], {
+        queries: ['items'],
+      }),
+    ).toThrow(/page board, body\[0\]: a list needs `key`/);
   });
 
-  it('refuses everything that is not a read', async () => {
-    const pool = readOnlyPool(fake);
+  it('refuses a condition that asks nothing', () => {
+    expect(() =>
+      parse([page({ body: [{ kind: 'notice', text: 'Hi.', when: { path: 'state' } }] })]),
+    ).toThrow(/body\.0\.when: a condition needs `equals` or `in`/);
+  });
+
+  it('refuses a descriptor that refers to itself', () => {
+    const cyclic: Record<string, unknown> = { id: 'board', title: 'Board', place: 'rail' };
+    cyclic.body = [{ kind: 'notice', text: 'Hi.', me: cyclic }];
+    expect(() => parse([cyclic])).toThrow(/page descriptor board refers to itself/);
+  });
+
+  it('refuses one that is deeper than a screen', () => {
+    let body: unknown[] = [{ kind: 'notice', text: 'The bottom.' }];
+    for (let i = 0; i < 12; i += 1) body = [{ kind: 'section', body }];
+    expect(() => parse([page({ body })])).toThrow(/nests deeper than 12|has more than 400 nodes/);
+  });
+
+  it('refuses one that is bigger than a screen', () => {
+    // Within every other limit — 290 nodes, three deep — and still 100 KB of
+    // JSON, which is not a screen.
+    const body = Array.from({ length: 16 }, () => ({
+      kind: 'section',
+      body: Array.from({ length: 16 }, () => ({ kind: 'notice', text: 'x'.repeat(400) })),
+    }));
+    expect(() => parse([page({ body })])).toThrow(/is \d+ bytes; a descriptor is a screen/);
+  });
+
+  it('reads a group label called `page` as a label, not as a route', () => {
+    expect(() =>
+      parse(
+        [
+          page({
+            body: [
+              {
+                kind: 'list',
+                query: { query: 'items' },
+                rows: 'items',
+                key: 'id',
+                item: { title: { path: 't' } },
+                // Keys here come from the *data*, not from the grammar.
+                groupBy: { key: 'state', labels: { page: 'Page', tool: 'Tool', query: 'Query' } },
+              },
+            ],
+          }),
+        ],
+        { queries: ['items'] },
+      ),
+    ).not.toThrow();
+  });
+
+  it('reads a select option called `tool` as an option', () => {
+    expect(() =>
+      parse(
+        [
+          page({
+            body: [
+              {
+                kind: 'form',
+                fields: [
+                  {
+                    name: 'a',
+                    label: 'A',
+                    type: 'select',
+                    options: [{ value: 'tool', label: 'Tool' }],
+                  },
+                ],
+                submit: { tool: 'demo.write', label: 'Go' },
+              },
+            ],
+          }),
+        ],
+        { tools: ['demo.write'] },
+      ),
+    ).not.toThrow();
+  });
+
+  it('checks the page\'s own read like any other', () => {
+    expect(() => parse([page({ data: { query: 'nope' } })], { queries: ['counts'] })).toThrow(
+      /page board, data\.query: no query called nope/,
+    );
+  });
+});
+
+describe('what a query must be', () => {
+  const query = (over: Record<string, unknown>): unknown =>
+    ({ name: 'q', params: z.object({}), produce: async () => ({}), ...over });
+
+  it('refuses one whose params are not an object schema', () => {
+    expect(() =>
+      parsePageContributions({ plugin: 'demo', queries: [query({ params: z.string() }) as never] }),
+    ).toThrow(/page query q must declare `params` as a zod object schema/);
+  });
+
+  it('makes a plain object schema strict, so the framework refuses unknown keys', () => {
+    const { queries } = parsePageContributions({
+      plugin: 'demo',
+      queries: [query({ params: z.object({ id: z.string() }) }) as never],
+    });
+    const parsed = queries[0]!.params.safeParse({ id: 'a', sneaky: '1' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('leaves an already strict schema alone', () => {
+    const strict = z.object({ id: z.string() }).strict();
+    const { queries } = parsePageContributions({ plugin: 'demo', queries: [query({ params: strict }) as never] });
+    expect(queries[0]!.params).toBe(strict);
+  });
+
+  it('refuses one with no `produce`, or a `result` that is not a schema', () => {
+    expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ produce: 'soon' }) as never] })).toThrow(
+      /page query q has no `produce` function/,
+    );
+    expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ result: {} }) as never] })).toThrow(
+      /page query q declares a `result` that is not a zod schema/,
+    );
+  });
+});
+
+describe('the read-only pre-filter', () => {
+  it('lets a read through, whatever its columns are called', () => {
+    // The keyword list is gone: these are ordinary column names, and the old
+    // scanner refused every one of them.
+    expect(isReadOnlyStatement('select comment from t')).toBe(true);
+    expect(isReadOnlyStatement('select * from comments where comment = 1')).toBe(true);
+    expect(isReadOnlyStatement('select set, copy, execute, lock from t')).toBe(true);
+    expect(isReadOnlyStatement('select deleted_at, updated_at, offset_days from t')).toBe(true);
+    expect(isReadOnlyStatement('with recent as (select 1) select * from recent')).toBe(true);
+    expect(isReadOnlyStatement('select 1 limit 10 offset 5')).toBe(true);
+  });
+
+  it('refuses what is plainly not a read before it costs a connection', () => {
     for (const sql of [
       'update demo.things set state = 1',
       'insert into demo.things (id) values (1)',
       'delete from demo.things',
-      'truncate demo.things',
-      'create table demo.x (a int)',
+      'explain analyze update demo.things set a = 1',
       'select 1; delete from demo.things',
       'select * from demo.things for update',
       'select * from demo.things for no key update',
-      'with moved as (delete from demo.things returning *) select * from moved',
+      'select * into evil from core.secrets',
+      'select 1 into new_table',
+      'with x as (select 1) select * into t from x',
       'do $$ begin end $$',
       '',
     ]) {
-      await expect(pool.query(sql)).rejects.toThrow(ReadOnlyRefusal);
+      expect([sql, isReadOnlyStatement(sql)]).toEqual([sql, false]);
     }
   });
 
@@ -292,8 +427,6 @@ describe('the read-only pool', () => {
     expect(isReadOnlyStatement('-- select\nupdate demo.things set a = 1')).toBe(false);
     expect(isReadOnlyStatement("select 1 where x = '; drop table y'")).toBe(true);
     expect(isReadOnlyStatement("select * from t where note = 'for update'")).toBe(true);
-    // Column names that merely start with a forbidden word are still fine.
-    expect(isReadOnlyStatement('select deleted_at, updated_at, offset_days from t')).toBe(true);
   });
 
   it('blanks comments, literals and dollar quotes when it reads a statement', () => {
@@ -302,8 +435,15 @@ describe('the read-only pool', () => {
   });
 
   it('refuses a client, because a transaction is a write', () => {
-    const pool = readOnlyPool(fake);
+    const pool = readOnlyPool({} as unknown as Pool);
     expect(() => pool.connect()).toThrow(ReadOnlyRefusal);
     expect(() => pool.end()).toThrow(ReadOnlyRefusal);
+  });
+
+  it('says nothing about the statement it refused', async () => {
+    const pool = readOnlyPool({} as unknown as Pool);
+    await expect(pool.query('update core.secrets set token = 1')).rejects.toThrow(
+      /^a page query may only read: this statement is not a select\.$/,
+    );
   });
 });

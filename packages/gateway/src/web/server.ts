@@ -748,7 +748,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       log,
     });
     /** What the plugin page routes need: the registry, and the owner's context. */
-    const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now });
+    const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now, log });
     /** The same, for the version and upgrade routes. */
     const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
@@ -2234,7 +2234,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     const pageAct = /^\/api\/pages\/([a-z][a-z0-9_-]{0,39})\/act$/.exec(path);
     if (pageAct) {
-      return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body));
+      return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body, session));
     }
 
     /*

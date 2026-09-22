@@ -21,7 +21,7 @@ import { You } from './You';
 import { Memory } from './Memory';
 import { Plugins } from './Plugins';
 
-export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.Element {
+export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
   const section = /^#\/settings\/([a-z0-9.-]+)/.exec(hash)?.[1] ?? 'you';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   /*
@@ -29,7 +29,10 @@ export function Settings({ hash, timezone, navigate, agents }: PlaceProps): JSX.
    * any other: one hash, one page, drawn from the descriptor. Nothing here
    * knows which plugin it is.
    */
-  const plugins = usePluginPages();
+  // Read by the shell and passed down; a Settings page opened on its own (a
+  // test, a story) still reads for itself rather than drawing no tabs.
+  const own = usePluginPages(pluginPages !== undefined);
+  const plugins = pluginPages ?? own;
   const located = parsePluginSettingsRoute(hash);
   const pluginPage = located ? plugins.find(located.plugin, located.page) : undefined;
   return (

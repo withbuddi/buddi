@@ -57,6 +57,8 @@ export interface PageQuery {
 export interface PageDescriptor {
   id: string;                         // 'mail', 'settings' — unique in the plugin
   title: string;
+  /** One read for the page itself; the data its top level is drawn against. */
+  data?: QueryRef;
   /** Where it lives. `rail` gives it a rail entry; `settings` a settings tab. */
   place: 'rail' | 'settings';
   /** One of a pinned set the dashboard draws; never an arbitrary image. */
@@ -68,14 +70,19 @@ export interface PageDescriptor {
 ```
 
 Routes: a rail page is `#/p/<plugin>/<page>`; an item inside a list-detail is
-`#/p/<plugin>/<page>/<itemId>`. A settings page is a tab `#/settings/<plugin>`
-(or `#/settings/<plugin>.<page>` when a plugin has several). The gateway
+`#/p/<plugin>/<page>/<itemId>`. A settings page is a tab
+`#/settings/p.<plugin>` (or `#/settings/p.<plugin>.<page>` when a plugin has
+several) — the `p.` prefix is what keeps a plugin called `memory` off the core
+section's own hash. The gateway
 serves the descriptors at `GET /api/pages` (session-gated), the queries at
 `GET /api/pages/<plugin>/<query>?<params>` (each param validated by the
 query's schema), and writes at `POST /api/pages/<plugin>/act` with
 `{ tool, args }`: the tool is invoked through the registry with
 `agentId: 'owner'`, and the response is either the tool's result or
-`{ approvalId }` for a gated tool. Rate limits and CSRF as every other write.
+`{ approvalId }` for a gated tool. Only the tools this plugin's own pages name
+may be invoked, at 60 writes a minute per session, and CSRF as every other
+write. A gated tool's `then` is held until the approval has actually
+executed — nothing has happened yet when the card appears.
 
 Tools an owner may call from a page but no agent should see carry
 `ownerOnly: true` (new `ToolDefinition` field, off by default): the registry
@@ -89,38 +96,50 @@ show or hide itself, and `title`, `note` (one line under the title) and
 `empty` (the sentence when there is nothing). Paths are view paths (`views.ts`,
 `VIEW_PATH`).
 
+Every component may carry `when`, `title`, `note` and `empty`. `when` is a
+`Visibility`: `{ path, equals }`, or `{ path, in: [...] }`, with `not: true` to
+invert — one condition rather than one component per value.
+
 ```ts
 type Component =
   | { kind: 'section'; title?: string; note?: string; body: Component[] }
-  | { kind: 'notice'; text: string; tone?: Tone }
+  | { kind: 'notice'; text: string | ValueRef; tone?: Tone }
   | { kind: 'link'; label: string; to: RouteRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
   | { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] }
   | { kind: 'detail'; query: QueryRef; fields: Array<{ label: string; value: ValueRef; unit?: Unit }>; body: Component[] }
   | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string } }
-  | { kind: 'search'; fields: Field[]; query: QueryRef; results: ListItem; to?: RouteRef }
-  | { kind: 'list-detail'; list: Component & { kind: 'list' }; param: string; detail: Component[] }
-  | { kind: 'expand'; query: QueryRef; label: string; body: Component[] }
+  | { kind: 'search'; fields: Field[]; query: QueryRef; rows: string; results: ListItem; to?: RouteRef; count?: string; note?: string; auto?: true }
+  | { kind: 'list-detail'; list: Component & { kind: 'list' }; param: string; selection?: 'route' | 'local'; detail: Component[] }
+  /** The same sub-tree once per row, with that row as its data. */
+  | { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] }
+  | { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] }
+  /** One button, anywhere; its `ValueRef` args resolve against the row it stands in. */
+  | { kind: 'button'; action: ToolRef }
   | { kind: 'approval'; path: string }          // an approval id in the data; draws ApprovalCard
   | { kind: 'artifact'; path: string; label: string }  // an artifact id; draws the download link
-  | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; version: string };
+  | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string };
+
+interface Visibility { path: string; equals?: unknown; in?: unknown[]; not?: true }
 
 interface QueryRef { query: string; params?: Record<string, ValueRef | { param: string } | { route: string }> }
-interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; then?: 'refresh' | 'close' | { route: RouteRef } }
+interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
 interface RouteRef { page: string; item?: ValueRef }        // within the same plugin
 interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: { value: ValueRef; tone?: Tone }; to?: RouteRef }
-interface Selection { key: string; disabledWhen?: { path: string; equals: unknown } }
+interface Selection { key: string; disabledWhen?: Visibility }
 interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }> }
 interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }> }
-interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string }
+interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; disabledWhen?: Visibility }
 ```
 
 What each one is for, in email's terms:
 
 | Component | Email uses it for |
 | --- | --- |
-| `list-detail` | Mail: threads on the left (or above on a phone), one thread's URL on the right |
+| `repeat` | Mail: a thread's messages, each an `expand` with its own body and its own attachment |
+| `button` | Mail: Fetch this attachment — and, once it has an id, the `artifact` link in its place |
+| `list-detail` | Mail: threads on the left (or above on a phone), one thread's URL on the right; `selection: 'local'` for a second level inside it |
 | `search` | Mail: the search field with its filters, results linking to a thread |
 | `list` with `collapsed` | Drafts under a thread, older drafts folded |
 | `expand` | A message's body, fetched when opened |
@@ -180,5 +199,21 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 - A second plugin (the synthetic one) gets a rail entry and a settings tab
   with no change to `packages/web`.
 - A descriptor with a typo fails plugin load with the path to the field.
-- A query cannot write: the `ToolContext` it receives has a read-only pool
-  wrapper that refuses anything but `select`/`with … select`.
+- A query cannot write, and **Postgres** is what says so: the `ToolContext` it
+  receives has a pool wrapper that runs every statement inside
+  `begin isolation level repeatable read read only; set local
+  statement_timeout = '5s'; … rollback`. That refuses `insert`/`update`/
+  `delete`/`create`/`select … into`/`nextval`/large-object writes *including
+  inside a volatile function the plugin wrote itself*. A textual scanner stays
+  in front of it as a cheap pre-filter — first keyword `select` or `with`, no
+  second statement, no `into`, no locking clause — but it is not the boundary,
+  because no lexical scan can decide whether `select plugin.f()` writes.
+  - Two things a read-only transaction does not cover, and they are limits
+    rather than bugs: `pg_read_file` and `pg_terminate_backend` write no rows.
+    The answer to those is a Postgres role without those grants, which is how
+    an installation that runs third-party plugins should be configured; buddi
+    does not create such a role today.
+- The act route invokes only the tools a plugin's own pages name
+  (`registry.pageTools`), at 60 writes a minute per session.
+- `owner` and `room` are reserved agent ids, so nothing can become a second
+  principal behind the id a page's writes are recorded under.

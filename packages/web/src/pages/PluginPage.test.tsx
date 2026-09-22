@@ -30,7 +30,7 @@ vi.mock('../api', async (load) => ({
 }));
 
 const DATA: Record<string, unknown> = {
-  counts: { items: 3, open: 1 },
+  counts: { items: 3, open: 1, state: 'ready', headline: 'Three things, one of them open.' },
   items: {
     items: [
       { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', pinned: false },
@@ -38,15 +38,24 @@ const DATA: Record<string, unknown> = {
     ],
     older: [{ id: 'a0', title: 'An older thing', sub: 'zero@example.com', state: 'done', pinned: false }],
   },
-  search: { items: [{ id: 'a1', title: 'The first thing', sub: 'one@example.com' }] },
+  search: { items: [{ id: 'a1', title: 'The first thing', sub: 'one@example.com' }], total: 9, note: 'The newest nine.' },
   item: { id: 'a1', title: 'The first thing', state: 'open', at: '2026-09-22', approvalId: 'act-1' },
   body: { text: 'The body.', attachmentId: 'artifact-1' },
-  draft: { id: 'd1', subject: 'A reply', body: 'Nearly done.', updatedAt: '2026-09-22T09:05:00.000Z' },
+  messages: {
+    messages: [
+      { id: 'm1', from: 'Ada, on Tuesday', attachmentId: 'artifact-1' },
+      { id: 'm2', from: 'Bo, on Wednesday', attachmentId: null },
+    ],
+  },
+  drafts: { drafts: [{ id: 'd1', subject: 'A reply', state: 'draft' }] },
+  draft: { id: 'd1', subject: 'A reply', body: 'Nearly done.', updatedAt: '2026-09-22T09:05:00.000Z', locked: false },
   accounts: { accounts: [{ id: 'acc-1', address: 'owner@example.com', state: 'ready' }] },
   settings: { everyMinutes: 15, keepDays: 30 },
 };
 
 const board: Component[] = [
+  { kind: 'notice', text: { path: 'headline' }, when: { path: 'state', equals: 'ready' } },
+  { kind: 'notice', text: 'Only when it is not ready.', when: { path: 'state', equals: 'ready', not: true } },
   { kind: 'notice', text: 'Everything the demo plugin knows.' },
   {
     kind: 'stats',
@@ -62,7 +71,11 @@ const board: Component[] = [
     title: 'Find a thing',
     fields: [{ name: 'q', label: 'Words', type: 'text', required: true }],
     query: { query: 'search', params: { q: { param: 'q' } } },
-    results: { title: { path: 'title' }, sub: { path: 'sub' }, to: { page: 'board', item: { path: 'id' } } },
+    rows: 'items',
+    count: 'total',
+    note: 'note',
+    results: { title: { path: 'title' }, sub: { path: 'sub' } },
+    to: { page: 'board', item: { path: 'id' } },
   },
   {
     kind: 'list-detail',
@@ -73,6 +86,7 @@ const board: Component[] = [
       title: 'Things',
       query: { query: 'items' },
       rows: 'items',
+      key: 'id',
       item: {
         title: { path: 'title' },
         sub: { path: 'sub' },
@@ -81,7 +95,14 @@ const board: Component[] = [
       },
       select: { key: 'id', disabledWhen: { path: 'pinned', equals: true } },
       actions: [{ tool: 'demo.keep', label: 'Keep', args: { id: { row: 'id' } } }],
-      bulk: [{ tool: 'demo.keep_many', label: 'Keep selected', args: { ids: { selected: true } } }],
+      bulk: [
+        {
+          tool: 'demo.keep_many',
+          label: 'Keep selected',
+          confirm: 'Keep {count} things?',
+          args: { ids: { selected: true } },
+        },
+      ],
       groupBy: { key: 'state', labels: { open: 'Open', done: 'Done' } },
       collapsed: { label: 'Older things', rows: 'older' },
     },
@@ -91,32 +112,79 @@ const board: Component[] = [
         title: 'The thing',
         query: { query: 'item', params: { id: { param: 'item' } } },
         fields: [{ label: 'State', value: { path: 'state' } }],
+        body: [{ kind: 'approval', path: 'approvalId', when: { path: 'state', in: ['open', 'waiting'] } }],
+      },
+      {
+        kind: 'repeat',
+        title: 'The messages',
+        query: { query: 'messages', params: { id: { param: 'item' } } },
+        rows: 'messages',
+        key: 'id',
         body: [
-          { kind: 'approval', path: 'approvalId', when: { path: 'state', equals: 'open' } },
           {
             kind: 'expand',
-            label: 'Show the body',
-            query: { query: 'body', params: { id: { param: 'item' } } },
-            body: [{ kind: 'artifact', path: 'attachmentId', label: 'Download the attachment' }],
+            label: { path: 'from' },
+            query: { query: 'body', params: { id: { path: 'id' } } },
+            body: [{ kind: 'notice', text: 'Fetched when you opened it.' }],
+          },
+          {
+            kind: 'button',
+            when: { path: 'attachmentId', equals: null },
+            action: { tool: 'demo.fetch', label: 'Fetch the attachment', args: { id: { path: 'id' } } },
+          },
+          {
+            kind: 'artifact',
+            when: { path: 'attachmentId', equals: null, not: true },
+            path: 'attachmentId',
+            label: 'Download the attachment',
           },
         ],
       },
       {
-        kind: 'editor',
-        title: 'The draft',
-        query: { query: 'draft', params: { id: { param: 'item' } } },
-        version: 'updatedAt',
-        fields: [
-          { name: 'subject', label: 'Subject', type: 'text', from: 'subject' },
-          { name: 'body', label: 'Body', type: 'textarea', from: 'body' },
-        ],
-        save: {
-          tool: 'demo.save',
-          label: 'Save',
-          tone: 'accent',
-          args: { id: { param: 'item' }, subject: { field: 'subject' }, version: { field: 'version' } },
+        kind: 'list-detail',
+        param: 'draft',
+        selection: 'local',
+        empty: 'Choose a draft.',
+        list: {
+          kind: 'list',
+          title: 'Drafts',
+          query: { query: 'drafts', params: { id: { param: 'item' } } },
+          rows: 'drafts',
+          key: 'id',
+          item: { title: { path: 'subject' } },
         },
-        actions: [{ tool: 'demo.send', label: 'Send', args: { id: { param: 'item' } } }],
+        detail: [
+          {
+            kind: 'editor',
+            title: 'The draft',
+            query: { query: 'draft', params: { id: { param: 'draft' } } },
+            version: 'updatedAt',
+            readOnlyWhen: { path: 'locked', equals: true },
+            footnote: 'Send does not send: it asks you to approve the dispatch.',
+            fields: [
+              { name: 'subject', label: 'Subject', type: 'text', from: 'subject' },
+              { name: 'body', label: 'Body', type: 'textarea', from: 'body' },
+            ],
+            save: {
+              tool: 'demo.save',
+              label: 'Save',
+              tone: 'accent',
+              busy: 'Saving…',
+              args: { id: { param: 'draft' }, subject: { field: 'subject' }, version: { field: 'version' } },
+            },
+            actions: [
+              {
+                tool: 'demo.discard',
+                label: 'Discard',
+                tone: 'danger',
+                placement: 'leading',
+                args: { id: { param: 'draft' } },
+                then: { route: { page: 'board' } },
+              },
+              { tool: 'demo.send', label: 'Send', args: { id: { param: 'draft' } } },
+            ],
+          },
+        ],
       },
     ],
   },
@@ -165,11 +233,39 @@ const settings: Component[] = [
     ],
   },
   {
+    // A picker, not a search box: it asks again on every change.
+    kind: 'search',
+    title: 'Things by state',
+    auto: true,
+    fields: [
+      {
+        name: 'state',
+        label: 'State',
+        type: 'select',
+        options: [
+          { value: 'open', label: 'Open' },
+          { value: 'done', label: 'Done' },
+        ],
+      },
+    ],
+    query: { query: 'items', params: { state: { param: 'state' } } },
+    rows: 'items',
+    results: { title: { path: 'title' } },
+  },
+  {
     kind: 'form',
     title: 'Watchers',
     initial: { query: 'settings' },
-    fields: [{ name: 'everyMinutes', label: 'Check every', type: 'number', from: 'everyMinutes' }],
-    submit: { tool: 'demo.set_settings', label: 'Save', tone: 'accent', args: { everyMinutes: { field: 'everyMinutes' } } },
+    fields: [
+      { name: 'everyMinutes', label: 'Check every', type: 'number', from: 'everyMinutes' },
+      { name: 'keepDays', label: 'Keep for', type: 'number' },
+    ],
+    submit: {
+      tool: 'demo.set_settings',
+      label: 'Save',
+      tone: 'accent',
+      args: { everyMinutes: { field: 'everyMinutes' }, keepDays: { field: 'keepDays' } },
+    },
   },
 ];
 
@@ -178,6 +274,8 @@ const page = (id: 'board' | 'settings'): PluginPageDescriptor => ({
   id,
   title: id === 'board' ? 'Demo board' : 'Demo',
   place: id === 'board' ? 'rail' : 'settings',
+  // The page's own read: what the top-level `when`s are about.
+  ...(id === 'board' ? { data: { query: 'counts' } } : {}),
   body: id === 'board' ? board : settings,
 });
 
@@ -254,8 +352,32 @@ describe('the pieces a descriptor is made of', () => {
     expect(boxes[1]).toBeDisabled(); // pinned
     fireEvent.click(boxes[0] as HTMLElement);
     fireEvent.click(screen.getByRole('button', { name: 'Keep selected' }));
+    // The sentence counts what is actually selected.
+    expect(screen.getByText('Keep 1 things?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Yes, keep selected/i }));
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.keep_many', args: { ids: ['a1'] } }),
+    );
+  });
+
+  it('draws a sub-tree per row, each labelled and acting on its own row', async () => {
+    draw('board', 'a1');
+    // The fold carries the row's own words.
+    expect(await screen.findByText('Ada, on Tuesday')).toBeInTheDocument();
+    expect(screen.getByText('Bo, on Wednesday')).toBeInTheDocument();
+    expect(api.pageQuery).toHaveBeenCalledWith('demo', 'messages', { id: 'a1' });
+    // One row has a file and shows the link; the other has none and offers to
+    // fetch it — the same block, under a `when`.
+    expect(screen.getByRole('link', { name: 'Download the attachment' })).toHaveAttribute(
+      'href',
+      '/api/artifacts/artifact-1/download',
+    );
+    const fetchButtons = screen.getAllByRole('button', { name: 'Fetch the attachment' });
+    expect(fetchButtons).toHaveLength(1);
+    fireEvent.click(fetchButtons[0] as HTMLElement);
+    await waitFor(() =>
+      // Its arguments came from the row it stands in.
+      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.fetch', args: { id: 'm2' } }),
     );
   });
 
@@ -276,19 +398,36 @@ describe('the pieces a descriptor is made of', () => {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
   });
 
-  it('fetches an expand\'s body when it is opened, and draws its artifact link', async () => {
+  it('fetches an expand\'s body only when it is opened', async () => {
     draw('board', 'a1');
-    const summary = await screen.findByText('Show the body');
+    const summary = (await screen.findByText('Ada, on Tuesday')) as HTMLElement;
     const details = summary.closest('details') as HTMLDetailsElement;
     expect(api.pageQuery).not.toHaveBeenCalledWith('demo', 'body', expect.anything());
     details.open = true;
     fireEvent(details, new Event('toggle'));
-    const download = await screen.findByRole('link', { name: 'Download the attachment' });
-    expect(download).toHaveAttribute('href', '/api/artifacts/artifact-1/download');
+    // Asked with the row's own id, not the page's item.
+    await waitFor(() => expect(api.pageQuery).toHaveBeenCalledWith('demo', 'body', { id: 'm1' }));
+    expect(await screen.findByText('Fetched when you opened it.')).toBeInTheDocument();
+  });
+
+  /** Open the local list-detail on the one draft, which is where the editor is. */
+  const openDraft = async (): Promise<void> => {
+    fireEvent.click(await screen.findByRole('link', { name: 'A reply' }));
+  };
+
+  it('chooses inside a routed detail without touching the URL', async () => {
+    draw('board', 'a1');
+    expect(await screen.findByText('Choose a draft.')).toBeInTheDocument();
+    await openDraft();
+    expect(await screen.findByLabelText('Subject')).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
+    // The inner selection is what the editor's query was asked with.
+    expect(api.pageQuery).toHaveBeenCalledWith('demo', 'draft', { id: 'd1' });
   });
 
   it('fills the editor from its query and saves against the version it read', async () => {
     draw('board', 'a1');
+    await openDraft();
     const subject = (await screen.findByLabelText('Subject')) as HTMLInputElement;
     expect(subject.value).toBe('A reply');
     fireEvent.change(subject, { target: { value: 'A better reply' } });
@@ -296,7 +435,7 @@ describe('the pieces a descriptor is made of', () => {
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', {
         tool: 'demo.save',
-        args: { id: 'a1', subject: 'A better reply', version: '2026-09-22T09:05:00.000Z' },
+        args: { id: 'd1', subject: 'A better reply', version: '2026-09-22T09:05:00.000Z' },
       }),
     );
   });
@@ -304,9 +443,55 @@ describe('the pieces a descriptor is made of', () => {
   it('draws the approval a gated write answered with, rather than claiming it happened', async () => {
     vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
     draw('board', 'a1');
+    await openDraft();
     fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
     await waitFor(() => expect(api.approval).toHaveBeenCalledWith('act-2'));
     expect(await screen.findByText('Send it now')).toBeInTheDocument();
+  });
+
+  it('holds what `then` asked for until the approval has actually executed', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    vi.mocked(api.decide).mockResolvedValue({
+      action: approvalRow('act-2', 'Send it now'),
+      execution: { state: 'succeeded' },
+    } as never);
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    // A gated answer: nothing has happened, so `then: { route }` has not run.
+    expect(navigate).not.toHaveBeenCalled();
+    // The card this action is waiting on, not the one the descriptor draws
+    // from the item's own data.
+    const card = (await screen.findByText('Send it now')).closest('.ui-card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/p/demo/board'));
+  });
+
+  it('does not act on `then` when the approval was rejected', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    vi.mocked(api.decide).mockResolvedValue({
+      action: approvalRow('act-2', 'Send it now'),
+      execution: null,
+    } as never);
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    const card = (await screen.findByText('Send it now')).closest('.ui-card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Reject' }));
+    await waitFor(() => expect(api.decide).toHaveBeenCalled());
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('draws an editor the data says is a record: no fields to type in, and no buttons', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({
+        data: query === 'draft' ? { ...(DATA.draft as object), locked: true } : DATA[query],
+      })) as typeof api.pageQuery);
+    draw('board', 'a1');
+    await openDraft();
+    expect(await screen.findByLabelText('Subject')).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Send does not send/)).toBeInTheDocument();
   });
 
   it('searches on demand and links each result', async () => {
@@ -317,6 +502,16 @@ describe('the pieces a descriptor is made of', () => {
     await waitFor(() => expect(api.pageQuery).toHaveBeenCalledWith('demo', 'search', { q: 'first' }));
     const results = await screen.findAllByRole('link', { name: 'The first thing' });
     expect(results[0]).toHaveAttribute('href', '#/p/demo/board/a1');
+    // The count and the caveat the query answered with.
+    expect(await screen.findByText(/9 in all/)).toBeInTheDocument();
+    expect(screen.getByText(/The newest nine/)).toBeInTheDocument();
+  });
+
+  it('draws what the page\'s own read says, and hides what it does not', async () => {
+    draw('board');
+    expect(await screen.findByText('Three things, one of them open.')).toBeInTheDocument();
+    expect(screen.queryByText('Only when it is not ready.')).not.toBeInTheDocument();
+    expect(api.pageQuery).toHaveBeenCalledWith('demo', 'counts', {});
   });
 });
 
@@ -357,6 +552,14 @@ describe('a settings page', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('asks again on every change when the picker says `auto`', async () => {
+    draw('settings');
+    const picker = await screen.findByLabelText('State');
+    expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: 'done' } });
+    await waitFor(() => expect(api.pageQuery).toHaveBeenCalledWith('demo', 'items', { state: 'done' }));
+  });
+
   it('fills a form from its `initial` query and sends the numbers back', async () => {
     draw('settings');
     // The form remounts when its `initial` query answers, so the element is
@@ -364,6 +567,8 @@ describe('a settings page', () => {
     await waitFor(() => expect((screen.getByLabelText('Check every') as HTMLInputElement).value).toBe('15'));
     fireEvent.change(screen.getByLabelText('Check every'), { target: { value: '30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // `keepDays` was never touched, so it is not sent at all: an empty number
+    // field is the owner saying nothing, not the number zero or the string ''.
     await waitFor(() =>
       expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.set_settings', args: { everyMinutes: 30 } }),
     );
