@@ -77,6 +77,7 @@ import {
   type EmailAccountView,
   type EmailPolicy,
   type EmailThreadChoice,
+  type EmailWatcherSetting,
   type EmailWatcherSettings,
 } from '../api';
 import { fmtRelative } from '../format';
@@ -803,39 +804,95 @@ export function Email({ embedded }: { embedded?: boolean }): JSX.Element {
 
 
 /**
- * The two numbers the mail watchers read (docs/specs/email.md §7).
+ * The five numbers the mail watchers read (docs/specs/email.md §7).
  *
  * Small on purpose: the watchers themselves live on the Watchers page, with
  * their switches and their last run, and this is only what *mail* watching
- * needs told — how long is too long to leave somebody waiting, and how sure a
- * date has to look before it is worth a word. Both are saved together, because
- * two fields and two buttons would be two decisions where there is one.
+ * needs told — how long is too long to leave somebody waiting, how sure a date
+ * or a receipt has to look before it is worth a word, how long a promise may
+ * sit, and how long the owner waits before a nudge is offered. They are saved
+ * together, because five fields and five buttons would be five decisions where
+ * there is one.
+ *
+ * The fields are drawn from a table rather than written out one by one: each
+ * carries its own step and its own sentence, and the bounds come from the
+ * route, so a setting whose range changes changes here without being edited.
  */
+const WATCHER_FIELDS: ReadonlyArray<{
+  key: EmailWatcherSetting;
+  label: string;
+  step: string;
+  mode: 'numeric' | 'decimal';
+  hint: (s: EmailWatcherSettings) => string;
+}> = [
+  {
+    key: 'waitingDays',
+    label: 'Waiting longer than',
+    step: '1',
+    mode: 'numeric',
+    hint: (s) =>
+      `Days before a conversation waiting on you is reported. ${s.defaults.waitingDays} by default; a week or more is always urgent.`,
+  },
+  {
+    key: 'dateConfidence',
+    label: 'Date confidence',
+    step: '0.05',
+    mode: 'decimal',
+    hint: (s) =>
+      `How sure the date reader must be before it says anything, between ${s.limits.dateConfidence.min} and ${s.limits.dateConfidence.max}. ${s.defaults.dateConfidence} by default: a date with "deadline" beside it scores about 0.8, a bare "9/8" scores 0.3.`,
+  },
+  {
+    key: 'promisedDays',
+    label: 'Unkept promise after',
+    step: '1',
+    mode: 'numeric',
+    hint: (s) =>
+      `Days before a promise of yours — or a draft written for you and never sent — is reported. ${s.defaults.promisedDays} by default; a week or more is always urgent.`,
+  },
+  {
+    key: 'receiptConfidence',
+    label: 'Receipt confidence',
+    step: '0.05',
+    mode: 'decimal',
+    hint: (s) =>
+      `How sure the classifier must be before a message is called a receipt or a bill, between ${s.limits.receiptConfidence.min} and ${s.limits.receiptConfidence.max}. ${s.defaults.receiptConfidence} by default: "Invoice" in the subject with a total beside it scores ${s.limits.receiptConfidence.max}, which is as sure as it ever gets.`,
+  },
+  {
+    key: 'nudgeDays',
+    label: 'Nudge after',
+    step: '1',
+    mode: 'numeric',
+    hint: (s) =>
+      `Days you wait for an answer before a nudge is offered. ${s.defaults.nudgeDays} by default, and it is only ever offered: nothing here sends mail.`,
+  },
+];
+
 export function WatchersBlock(): JSX.Element {
   const settings = useAsync(() => api.emailWatchers(), []);
-  const [days, setDays] = useState<string | null>(null);
-  const [confidence, setConfidence] = useState<string | null>(null);
+  const [edits, setEdits] = useState<Partial<Record<EmailWatcherSetting, string>>>({});
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const current: EmailWatcherSettings | undefined = settings.data;
-  const daysValue = days ?? (current ? String(current.waitingDays) : '');
-  const confidenceValue = confidence ?? (current ? String(current.dateConfidence) : '');
+  const valueOf = (key: EmailWatcherSetting): string =>
+    edits[key] ?? (current ? String(current[key]) : '');
   const dirty =
     current !== undefined &&
-    (daysValue !== String(current.waitingDays) || confidenceValue !== String(current.dateConfidence));
+    WATCHER_FIELDS.some(({ key }) => valueOf(key) !== String(current[key]));
 
   const save = (): void => {
     setBusy(true);
     setFailed(null);
     setSaved(false);
+    const patch = Object.fromEntries(
+      WATCHER_FIELDS.map(({ key }) => [key, Number(valueOf(key))]),
+    ) as Record<EmailWatcherSetting, number>;
     api
-      .setEmailWatchers({ waitingDays: Number(daysValue), dateConfidence: Number(confidenceValue) })
+      .setEmailWatchers(patch)
       .then(() => {
         setSaved(true);
-        setDays(null);
-        setConfidence(null);
+        setEdits({});
       })
       .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
       .finally(() => {
@@ -849,49 +906,34 @@ export function WatchersBlock(): JSX.Element {
       <Stack gap="lg">
         <ErrorBanner message={settings.error ?? failed} />
         <Notice>
-          Two watchers read your mail without a model: one reports a conversation that has been waiting on
-          you, the other a date stated in a message with no reminder for it. Neither ever sends anything —
-          they wake an agent, which reads the thread before it says a word.
+          Six watchers read your mail without a model: a conversation waiting on you, a date stated with no
+          reminder, a promise you have not kept, a receipt or a bill, a sender wearing somebody else's name,
+          and a question of yours nobody answered. None of them ever sends anything — they wake an agent,
+          which reads the conversation before it says a word.
         </Notice>
         <Panel>
           <Stack gap="sm">
-            <Field
-              label="Waiting longer than"
-              hint={
-                current
-                  ? `Days before a conversation waiting on you is reported. ${current.defaults.waitingDays} by default; a week or more is always urgent.`
-                  : 'Days before a conversation waiting on you is reported.'
-              }
-            >
-              <input
-                type="number"
-                inputMode="numeric"
-                min={current?.limits.waitingDays.min ?? 1}
-                max={current?.limits.waitingDays.max ?? 60}
-                value={daysValue}
-                disabled={!current || busy}
-                onChange={(event) => { setDays(event.target.value); setSaved(false); }}
-              />
-            </Field>
-            <Field
-              label="Date confidence"
-              hint={
-                current
-                  ? `How sure the date reader must be before it says anything, between ${current.limits.dateConfidence.min} and ${current.limits.dateConfidence.max}. ${current.defaults.dateConfidence} by default: a date with "deadline" beside it scores about 0.8, a bare "9/8" scores 0.3.`
-                  : 'How sure the date reader must be before it says anything.'
-              }
-            >
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.05"
-                min={current?.limits.dateConfidence.min ?? 0.1}
-                max={current?.limits.dateConfidence.max ?? 0.99}
-                value={confidenceValue}
-                disabled={!current || busy}
-                onChange={(event) => { setConfidence(event.target.value); setSaved(false); }}
-              />
-            </Field>
+            {WATCHER_FIELDS.map((field) => (
+              <Field
+                key={field.key}
+                label={field.label}
+                hint={current ? field.hint(current) : ''}
+              >
+                <input
+                  type="number"
+                  inputMode={field.mode}
+                  step={field.step}
+                  min={current?.limits[field.key]?.min}
+                  max={current?.limits[field.key]?.max}
+                  value={valueOf(field.key)}
+                  disabled={!current || busy}
+                  onChange={(event) => {
+                    setEdits((prev) => ({ ...prev, [field.key]: event.target.value }));
+                    setSaved(false);
+                  }}
+                />
+              </Field>
+            ))}
             {saved ? (
               <Notice tone="good" role="status">
                 Saved. The watchers use it on their next run.

@@ -1,12 +1,6 @@
 # Email: accounts, threads, policies, watchers
 
-Status: in progress, steps 1 to 5 of 6 built, 2026-09-22. Step 6 — the remaining sentinels, the search filters and attachments — remains specification.
-review; the current plugin had no document, and this is the one it should have
-had. What §13.1 asks for — policies, the gate, the backfill and the Learned
-list — is implemented, with three departures noted in §5; §4's accounts are
-plural, added from the settings page; and §13.3's threads, Sent folder and
-thread-shaped triage prompt are in, which is what §3's `threads` and `folders`
-below now describe rather than propose.
+Status: built, steps 1 to 6 of 6. The spec now describes what exists; the limits of each watcher are stated in §7.
 
 ## 1. The verdict on today
 
@@ -221,8 +215,23 @@ visible and switchable on the Watchers page:
   The newest waiting threads are reported first, so the per-tick cap truncates
   the least urgent, and what it truncates is not mistaken for answered.
   Twice a day.
-- `email.promised-reply`: the owner wrote "I'll get back to you" or asked
-  buddi to draft, and nothing was sent within N days. *Not built.*
+- `email.promised-reply` (**built**): the owner's own outbound message of the
+  last thirty days contains one of a small pinned list of promise phrases —
+  "I'll get back to you", "I'll send", "je reviens vers vous", "je vous envoie"
+  and a dozen more in English and French, in
+  `packages/tools/email/src/phrases.ts` and pinned as a table in
+  `phrases.test.ts` — and nothing outbound has followed on that conversation
+  since. A *second* shape of the same promise: a live draft (`draft` or
+  `edited`, never claimed by a dispatch) that an agent wrote and that has sat
+  unsent for longer than the setting. The two are keyed apart — the thread and
+  the promising message, the thread and the draft — because they are two things
+  the owner owes and resolving one must not resolve the other. `promisedDays`,
+  default 3; `urgent` at a week. Twice a day.
+  Its limits, honestly: it reads the owner's *words*, so "let me check" and
+  "I'll have a look" are not promises here and never will be, and a promise
+  kept by phone looks exactly like one that was not — which is why the finding
+  tells the agent to read the thread before it says anything. A month is the
+  ceiling; a muted thread and a live `ignore` on the recipient silence it.
 - `email.date-stated` (**built**): a message states a date within the next 14
   days (a deadline, an appointment, a due date), and no reminder exists for it.
   The reading happens at **ingest**, on the body already in hand, and is stored
@@ -246,18 +255,116 @@ visible and switchable on the Watchers page:
   weekday-plus-time against the message's own INTERNALDATE, and no relative
   words, no dotted numbers, no bare weekday — is documented in
   `packages/tools/email/src/dates.ts` and pinned as a table in `dates.test.ts`.
-- `email.receipt-or-bill`: an order confirmation, receipt, invoice or bill
-  arrived; the finding offers to hand it to the agent holding the
-  `overview` role and to record it.
-- `email.suspicious-sender`: a first-time sender imitating a known one
-  (display name matches, address does not), or a message asking for
-  credentials, a wire, or a gift card. *Not built.*
-- `email.unanswered-by-them`: the owner wrote to someone N days ago and
-  nothing came back; a nudge, once. *Not built.*
+- `email.receipt-or-bill` (**built**): an inbound message of the last fortnight
+  that a pure classifier reads as an order confirmation, receipt, invoice or
+  bill, over the subject, the sender and the first lines of the body. The
+  vocabulary is a pinned table with weights — `invoice`, `facture`, `receipt`,
+  `reçu`, `order confirmation`, `payment received` are worth 0.55; `your order`,
+  `amount due`, `montant dû` 0.4 — plus a fifth for saying it in the subject or
+  the sender, and a fifth for an amount with a currency sign beside the word
+  "total". `receiptConfidence`, default 0.7, so "Invoice #42" in a subject with
+  a total speaks and a bare shipping notice does not. Always `info`: a bill is a
+  thing to file, and a phone buzzing at a misread order confirmation costs the
+  watcher its welcome. One finding per message, keyed to the message; it names
+  the total when one was read — in the prose, as a number *we* parsed and a
+  sign from a table of three, never the sender's own string, and never in
+  `data`, which is ids and numbers only — and offers two actions in the detail, hand it
+  to whoever holds the `overview` role (falling back to `mail`) and record it.
+  Hourly, with the bounded catch-up dates has: bodies are classified once and
+  stamped (`messages.receipts_scanned_at`, migration `011_receipts.sql`), the
+  reading kept in `email.receipts`. Two bounds keep the sweep honest. Mail
+  older than the fortnight is **stamped as read without being read** — it could
+  never raise a finding, and reading it oldest-first for ever is how a busy
+  mailbox ends up silent about exactly the fortnight this watcher exists for —
+  and migration `011` does the same for everything older than thirty days on
+  the day it is applied, once, so a decade of history does not become a decade
+  of sweeping. The reading and the stamp are one statement, so a message whose
+  reading cannot be stored is read again rather than marked read with nothing
+  behind it.
+  Its limits: it reads vocabulary, not documents. A receipt with no receipt
+  word in it — a bank's "your statement is ready" — is invisible to it, and a
+  mail *about* an invoice reads like one. A muted thread silences it, and a
+  sender under a live `ignore` is neither read nor stamped — so revoking the
+  rule lets the message be read after all, which a permanent stamp would have
+  made impossible.
+- `email.suspicious-sender` (**built**): two tests over inbound mail of the last
+  seven days, and one finding per message, keyed to the message, whose detail
+  says which of them fired. **(a)** the display name is one the owner writes to — read from
+  the Sent folder's To and Cc of the last two years — at a different address,
+  on a domain no address of that name has ever been written to. Two names are
+  compared through one algorithm written twice, in
+  `packages/tools/email/src/phrases.ts` and as `email.name_key` in migration
+  `011`, with the DB suite holding the two to the same answers: NFKD, combining
+  marks dropped, lowercased, the letters no decomposition touches (`ø`, `æ`,
+  `ß`) folded, Cyrillic and Greek homoglyphs mapped onto the Latin letters they
+  are drawn as, punctuation collapsed and the tokens **sorted** — so `MEYER,
+  Jean-Paul` is `Jean-Paul Meyer`, `Søren Kjær` is `Soren Kjaer`, and an
+  `Аna` with a Cyrillic А is `Ana`. A name has to identify somebody: the
+  owner's own address and aliases are excluded, and so is a pinned list of
+  generic display names (`Support`, `Billing`, `Notifications`…), which he
+  writes to at a dozen addresses and which would otherwise make every second
+  shop an urgent warning. It is computed in SQL on every tick rather than stamped,
+  so a correspondent first written to this morning is protective this afternoon;
+  it is `urgent`, because a name worn by the wrong address is never innocent by
+  accident. **(b)** the body asks for credentials (0.6), a wire (0.7) or a gift
+  card (0.8), from a pinned bilingual table, with a quarter added for
+  "urgently" and its French **when the urgency is in the same sentence as the
+  ask**. A *noun* is never a demand on its own: `wire transfer` and `gift card`
+  are the words receipts and dispatch notices are written in, so they count
+  only when the same sentence — the noun itself cut out of it first — carries a
+  verb of sending or paying, an asking construction ("can you", "please",
+  "merci de", "veuillez"), or a `to`/`vers` directly after the noun, which is
+  what a wiring instruction looks like when its verb is elsewhere. Above 0.8 is `urgent`, the rest `info` — and a phrase that only
+  *names* a credential rather than asking to be given it (`reset your
+  password`, `verify your account`, the vocabulary of every real reset mail)
+  is capped below that line and can never be more than a notice. Only somebody
+  asking to be sent the thing, or to be paid, wakes anybody: §7's *«a password
+  reset "urgently"»* is the phishing sentence, not the transactional one, and
+  the difference is the difference between this watcher being kept and being
+  switched off in its first week. The body is read once and stamped
+  (`messages.suspicion_scanned_at`), the reading kept in `email.suspicions`.
+  **An `ignore` policy does not silence this one**, and that is the whole point:
+  an impostor sends from a domain the owner has very likely silenced, and a
+  fraud that can buy its own quiet with a promotional rule is not being watched
+  for. Only a muted conversation does. The finding never quotes the body beyond
+  a single fenced first line, and it tells the agent to describe the message and
+  reply to nothing.
+  Its limits: (a) says nothing about a name the owner has never written to, one
+  he last wrote to more than two years ago, one too generic to identify
+  anybody, or a display name the impostor did not bother to copy — and,
+  because the tokens are sorted, `May Lee` and `Lee May` are one name to it.
+  That collision is accepted: sorting is what makes `MEYER, Jean-Paul` match
+  `Jean-Paul Meyer`, which is the form half the world's address books produce,
+  and two real correspondents whose names are each other's reverse is rarer
+  than a corporate directory. The cost is a false warning, which is a warning
+  the agent reads the thread about; the alternative cost is silence about the
+  comma form, which is the shape an impostor would copy. (b) is a phrase table
+  over a *request*, not over a noun — `Your wire transfer was processed` is a
+  receipt and is read as one — so it is blind to a fraud that asks for nothing
+  in its first message, which is most of them.
+- `email.unanswered-by-them` (**built**): the owner wrote to somebody in the
+  last thirty days, it was not a reply to a message of theirs, it *asked*
+  something — a sentence ending in a question mark, or one of the pinned polite
+  asks ("let me know", "can you", "pourriez-vous", "merci de") — and nothing has
+  come back from anybody he addressed it to. `nudgeDays`, default 5, because
+  people are allowed a working week. `info`, once, keyed to the thread and the
+  message that asked; the detail offers a draft with `email.draft_reply` and
+  says in as many words never to send it. Daily. "Not a reply to *their*
+  message" means the earlier inbound came from somebody this message is
+  addressed to — an introduction from a third party, then an original question
+  to a second, is the ordinary shape of work and is reported.
+  Excluded: no-reply addresses, any conversation carrying a `List-Id`, muted
+  threads, a live `ignore` on the recipient, and anything the owner has already
+  nudged — which is any later outbound message on the thread, whatever it says.
+  Its limits: an answer that arrived by phone looks like no answer at all, and
+  a question asked in a quoted line is not the owner's question, so quoted
+  history is dropped before anything is read.
 
-Four of the six remain: `promised-reply`, `receipt-or-bill`,
-`suspicious-sender` and `unanswered-by-them`. They are specification, not code
-switched off — nothing is registered for them.
+All six are registered and switchable. The two steps that built them left one
+rule in common behind: a watcher's judgement over *text* lives in a pure module
+with a pinned table — `dates.ts` for days, `phrases.ts` for promises, receipts,
+asks and questions — so that what wakes the owner can be changed, and argued
+with, without a database.
 
 None of these send mail. A finding leads to a report, a draft, or a
 reminder, never to a send without the card. The wake run is given the
@@ -270,7 +377,7 @@ stranger wrote, and they reach a model through the wake prompt and the weekly
 recap. The raw values stay in the finding's `data`, where nothing reads them as
 prose.
 
-Both built watchers appear on the Watchers page with their last run and a
+All six appear on the Watchers page with their last run and a
 switch (`core.sentinel_switches`; absent means on). A watcher that is off does
 not run, and resolves nothing: what it already found stays as it was, so
 switching it back on does not replay a week of news — it reports what is true
@@ -278,10 +385,20 @@ that morning, resolves quietly what stopped being true while it was off, and
 says nothing about the threads that went stale in the meantime. A finding that
 resolves also leaves the digest queue, so the weekly recap never reads out
 something the watcher has stopped believing. The switch route refuses an id
-this installation does not ship. `waitingDays` and
-`dateConfidence` are on the Email settings page in a small "Watchers" block,
-and are readable and writable from a chat through `email.get_settings` and
-`email.set_settings`.
+this installation does not ship. Five numbers are on the Email settings page in
+a small "Watchers" block, saved together — `waitingDays` (2), `dateConfidence`
+(0.6), `promisedDays` (3), `receiptConfidence` (0.7) and `nudgeDays` (5) — and
+all five are readable and writable from a chat through `email.get_settings` and
+`email.set_settings`. Each is bounded, and a value outside its bounds — or one
+that is not a number at all — is a 400 that says what the bounds are rather
+than a number quietly clamped or coerced into range; an unset one reads as its
+default. Two rules keep a bound from being a trapdoor: `receiptConfidence`
+stops at **0.95**, which is the highest score the classifier can produce, so
+there is no threshold the page offers that silently switches the watcher off;
+and a *days* setting is a floor, never a ceiling — the history window each
+watcher reads is computed from its setting with a week of room above it, so
+`promisedDays: 31` reports a week of news rather than the nothing a
+thirty-day window would have returned.
 
 ## 8. Drafts and sending
 
@@ -554,5 +671,6 @@ Gmail instead of app passwords.
 5. Draft lifecycle with the editor, and the owner's choice of sending
    identity on the approval card. **Built.**
 6. The remaining four sentinels (`promised-reply`, `receipt-or-bill`,
-   `suspicious-sender`, `unanswered-by-them`, §7); the search filters and the
-   trigram index (§9) — **built**; attachments on request (§10) — **built**.
+   `suspicious-sender`, `unanswered-by-them`, §7) with migration
+   `011_receipts.sql` and the three settings that go with them; the search
+   filters and the trigram index (§9); attachments on request (§10). **Built.**

@@ -6,7 +6,7 @@
  * kept in the vault and nowhere else, and a refusal keeps nothing at all.
  */
 import type { Pool } from 'pg';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createMemoryVault, type Vault } from '@buddi/core';
 import { secretNameFor } from '@buddi/tool-email';
 import type { ImapClientFactory } from '@buddi/tool-email';
@@ -18,6 +18,7 @@ import {
   listEmailAccounts,
   removeEmailAccount,
   readEmailWatchers,
+  writeEmailWatchers,
   readNewAccount,
   writeEmailPolicy,
   type EmailWebDeps,
@@ -513,4 +514,85 @@ it('says the settings could not be read rather than showing the defaults as stor
   const reply = await readEmailWatchers(pool);
   expect(reply.status).toBe(503);
   expect((reply.body as { error: string }).error).toContain('timeout expired');
+});
+
+/*
+ * The watcher settings route refuses, rather than clamping or coercing.
+ *
+ * `Number(raw)` used to do the parsing, and it reads `true` as 1, `null` and
+ * `''` as 0 and `[]` as 0 — so a malformed client could set the waiting window
+ * to one day and be answered 200. A setting the owner cannot see being wrong
+ * is worse than a refusal he can.
+ */
+describe('POST /api/email/watchers', () => {
+  const NOW = new Date('2026-09-21T12:00:00Z');
+  /** A pool nothing reaches: every case below is refused before any write. */
+  const refusing = {
+    async query() {
+      throw new Error('the route must not have written anything');
+    },
+  } as unknown as Pool;
+
+  const NOT_NUMBERS: Array<[string, unknown]> = [
+    ['true', true],
+    ['false', false],
+    ['a string', '3'],
+    ['null', null],
+    ['NaN', Number.NaN],
+    ['an array', []],
+    ['an object', {}],
+  ];
+
+  for (const key of ['promisedDays', 'receiptConfidence', 'nudgeDays'] as const) {
+    it.each(NOT_NUMBERS)(`refuses ${key} given as %s`, async (_name, value) => {
+      const reply = await writeEmailWatchers(refusing, { [key]: value }, NOW);
+      expect(reply.status).toBe(400);
+      expect((reply.body as { error: string }).error).toMatch(/between/);
+    });
+  }
+
+  const OUT_OF_RANGE: Array<[string, unknown]> = [
+    ['promisedDays', 0],
+    ['promisedDays', 61],
+    ['promisedDays', 3.5],
+    ['receiptConfidence', 0.09],
+    // 0.95 is the classifier's ceiling: a threshold above it is a watcher
+    // switched off without being told so.
+    ['receiptConfidence', 0.96],
+    ['nudgeDays', 0],
+    ['nudgeDays', 61],
+    ['nudgeDays', 2.5],
+  ];
+  it.each(OUT_OF_RANGE)('refuses %s = %s', async (key, value) => {
+    const reply = await writeEmailWatchers(refusing, { [key as string]: value }, NOW);
+    expect(reply.status).toBe(400);
+  });
+
+  it('refuses a patch that names nothing', async () => {
+    const reply = await writeEmailWatchers(refusing, {}, NOW);
+    expect(reply.status).toBe(400);
+    expect((reply.body as { error: string }).error).toContain('at least one');
+  });
+
+  it('accepts every boundary of the three new settings', async () => {
+    const written: unknown[][] = [];
+    const pool = {
+      async query(_sql: string, params: unknown[] = []) {
+        written.push(params);
+        return { rows: [] };
+      },
+    } as unknown as Pool;
+    for (const [key, value] of [
+      ['promisedDays', 1],
+      ['promisedDays', 60],
+      ['receiptConfidence', 0.1],
+      ['receiptConfidence', 0.95],
+      ['nudgeDays', 1],
+      ['nudgeDays', 60],
+    ] as Array<[string, number]>) {
+      const reply = await writeEmailWatchers(pool, { [key]: value }, NOW);
+      expect(reply.status, `${key} = ${value}`).toBe(200);
+    }
+    expect(written.length).toBeGreaterThan(0);
+  });
 });
