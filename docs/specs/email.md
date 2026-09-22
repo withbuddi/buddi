@@ -85,10 +85,21 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
 
 ## 4. Accounts
 
-- Settings → Email lists accounts: address, host, folders synced, last
-  sync, the vault secret's name, remove. "Add an account" takes address,
-  IMAP and SMTP hosts, and the app password, which goes to the vault under
-  a name derived from the address. Gmail and common hosts are prefilled.
+- Settings → Email lists accounts: address, the name the owner gave it, the
+  addresses it also receives as, host, last sync, the vault secret's name,
+  whether it is on and where it came from, and remove. It is a **page descriptor this
+  plugin contributes** (docs/specs/plugin-pages.md), not a screen compiled
+  into the dashboard: a table over the `accounts` query, with
+  `email.remove_account` on each row and a drawer that writes through
+  `email.add_account`. "Add an account" takes address and app password, and
+  the hosts only when they differ from the ones `email.add_account` works
+  out from the address — Gmail and the common providers are known to it,
+  and anything else falls back to `imap.`/`smtp.` on its own domain. Not
+  ported, on purpose: the old form *showed* those hosts in the fields as the
+  address was typed, and a page descriptor carries no such logic; the
+  inference happens in the tool, and the owner sees the result in the table
+  after it is added. The password goes to the vault under a name derived from
+  the address.
   The secret's name is *derived*, never chosen: `EMAIL_`, the address
   upper-cased with every non-alphanumeric character turned into an
   underscore, then eight hex digits of the address's SHA-256 — so
@@ -180,6 +191,19 @@ Three departures, as built:
   queues a run whose instruction is to send exactly that one line and
   nothing else. It saves the owner's attention, not a model call; only
   `ignore` saves the call.
+
+**Writing one, from the page.** "Add a rule" is a drawer on Settings → Email
+that writes through `email.add_rule` — the owner's own path to the same table,
+with no approval card in the way, because they are the one acting. Two of its
+fields are **picked, never typed**, and both for the same reason: the mailbox,
+because a rule with no mailbox decides for every mailbox and that has to be a
+choice somebody made rather than a field left empty; and, for a rule about one
+conversation, the conversation itself — the database names a thread by the root
+Message-ID of its chain, which is not something an owner has. The mailbox picker
+reads the `accounts` query; the conversation picker reads `rule_threads`, which
+depends on the mailbox above it and offers that mailbox's fifty most recent
+threads as `[mailbox] subject — participants`. "For every mailbox" is a tick,
+disabled for a conversation rule and refused by the tool besides.
 
 ## 6. What a triage run receives
 
@@ -389,9 +413,15 @@ this installation does not ship. Five numbers are on the Email settings page in
 a small "Watchers" block, saved together — `waitingDays` (2), `dateConfidence`
 (0.6), `promisedDays` (3), `receiptConfidence` (0.7) and `nudgeDays` (5) — and
 all five are readable and writable from a chat through `email.get_settings` and
-`email.set_settings`. Each is bounded, and a value outside its bounds — or one
-that is not a number at all — is a 400 that says what the bounds are rather
-than a number quietly clamped or coerced into range; an unset one reads as its
+`email.set_settings`. That form is the **one write on either page that is not
+`ownerOnly`**, and deliberately: how long a conversation may wait on the owner
+is a preference an agent may reasonably be asked to change, and the old
+route was owner-only because it was a route rather than because the tool is.
+Everything else the two pages write through — accounts, rules, drafts — is a
+tool no model is ever shown. Each setting is bounded, and a value outside its
+bounds — or one that is not a number at all — is refused with a sentence that
+says what the bounds are ("The waiting window is a whole number of days between
+1 and 30.") rather than a number quietly clamped or coerced into range; an unset one reads as its
 default. Two rules keep a bound from being a trapdoor: `receiptConfidence`
 stops at **0.95**, which is the highest score the classifier can produce, so
 there is no threshold the page offers that silently switches the watcher off;
@@ -444,12 +474,16 @@ the owner's pick against the declared list and hands it to `execute` as
 `ctx.choices.from`. The identity on the wire changes; the mailbox that
 authenticates does not.
 
-**The Mail page** (`#/email`) carries the owner's half of this, as a place of
-its own rather than a block under Settings → Email: that page is configuration,
-read once and then rarely, and this is a working surface with a message list, an
-editor and an approval card that dispatches mail. Conversations are listed
-newest first, each a link (`#/email/<threadId>`, so a draft can be linked to and
-come back to) with a small `draft` pill when one is waiting; opening one shows
+**The Mail page** (`#/p/email/mail`) carries the owner's half of this, as a
+place of its own rather than a block under Settings → Email: that page is
+configuration, read once and then rarely, and this is a working surface with a
+message list, an editor and an approval card that dispatches mail. It is a
+**page descriptor this plugin contributes** (docs/specs/plugin-pages.md): a
+list-detail over the `threads` and `thread` queries, and nothing in
+`packages/web` knows the word "mail". Conversations are listed newest first,
+each a link (`#/p/email/mail/<threadId>`, so a draft can be linked to and come
+back to — the old `#/email/<threadId>` still lands on it) with a small `draft`
+pill when one is waiting; opening one shows
 the thread's messages — snippets, with a body fetched only when a message is
 opened — and, under them, its drafts. A live draft shows the agent that wrote
 it, its status, when it last changed, and editable To/Cc/Bcc/Subject/Body with
@@ -457,9 +491,15 @@ it, its status, when it last changed, and editable To/Cc/Bcc/Subject/Body with
 **Discard** (status `discarded`) and **Send** — which does not send: it records
 the `email.send` action by the same path an agent takes and shows the approval
 card, alias select and all, for the owner to approve. Settings → Email keeps one
-line pointing across. The routes are `/api/email/threads`,
-`/api/email/messages/:id` and `/api/email/drafts` (list per thread, get, put,
-discard, send), behind the same session and CSRF gate as the rest of `/api`.
+line pointing across. There are no `/api/email/*` routes any more: the page
+reads through `GET /api/pages/email/<query>` (`threads`, `thread`, `message`,
+`draft`) and writes through `POST /api/pages/email/act` — `email.save_draft`,
+`email.discard_draft` and the gated `email.send` — behind the same session and
+CSRF gate as the rest of `/api`. Save, Discard and the version precondition are
+unchanged; they are a tool's refusals now rather than a route's status codes,
+and what a write says back — "Saved. These are your words now…", "Discarded. It
+is kept under Older drafts…" — is the tool's own sentence, drawn where the
+button is.
 
 **Two writers, one row.** Every rule above is in the SQL predicate, not in a
 check above the write, because everything here has a second writer: an agent
@@ -556,7 +596,8 @@ conversations since March" is about the ones that are still alive, not about
 when they began.
 
 The Mail page has a search field above the conversation list — text, from,
-since, until, with attachments — over `GET /api/email/search`. The route and
+since, until, with attachments — over the `threads` page query, which answers
+with the conversations and, when something narrows it, the hits. That query and
 the tool share **one query builder**
 (`packages/tools/email/src/search.ts`), so the owner and their agents asking
 the same question get the same answer. Each result links to the conversation
@@ -629,9 +670,12 @@ Also:
   buddi has no copy either. An **empty** attachment is called empty, which is
   a different thing from missing.
 - On the Mail page, an opened message lists its attachments with a Fetch per
-  row (`POST /api/email/messages/:id/attachments/:index/fetch`, the same
-  session and CSRF gate as every other write, the owner as `createdBy`), and
-  the row becomes a download link once the file is here.
+  row — `email.fetch_attachment` through the page's act route, the same
+  session and CSRF gate as every other write, the owner as `createdBy` — and
+  a file already here carries its download link in place of the button. The
+  heading is always "Attachments": a title that changes with the count is not
+  something a descriptor can say, and one file under a plural heading is a
+  smaller oddity than a component set that grows to fix it.
 
 **Retention does not touch them.** The body of a message is purged on the
 owner's window; the artifact a fetch produced is the owner's own file, in their

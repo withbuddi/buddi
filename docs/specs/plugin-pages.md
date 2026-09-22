@@ -1,7 +1,9 @@
 # Plugin pages: a plugin's screens, as data
 
-Status: specified 2026-09-22, not built. The proof of it is porting the Mail
-page and Settings → Email to it and deleting their compiled-in versions.
+Status: built 2026-09-22 — §7 step 1 (the engine), step 2 (the email port) and
+step 3 (docs/plugins.md §2.5a and §2.5b). The Mail page and Settings → Email
+are descriptors the email plugin contributes; their compiled-in versions are
+deleted, and `packages/web` names no plugin outside its redirect table.
 
 ## 1. The problem
 
@@ -194,9 +196,12 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
    component, exercised by a synthetic test plugin that uses each component
    once (its own DB tests and page tests).
 2. Port email: `queries` for threads, thread, message, drafts, accounts,
-   policies, watcher settings; `ownerOnly` tools for add/remove account, set
-   policy, bulk policies, save/discard/send draft, fetch attachment (thin over
-   the existing store functions); the two descriptors; then delete `Mail.tsx`,
+   policies, watcher settings; `ownerOnly` tools for add/remove account, the
+   owner's own rule, bulk policies and save/discard draft, thin over the
+   existing store functions. Send and fetch are **not** among them: the page
+   invokes the gated `email.send` and the `auto` `email.fetch_attachment` that
+   already exist, because a page proposing a send is proposing exactly what an
+   agent would. Then the two descriptors; then delete `Mail.tsx`,
    the email parts of `Email.tsx`, the email routes in the gateway, the `Mail`
    rail entry and the `email` settings section. The only email names left in
    `packages/web` and `packages/gateway/src/web` are in tests of the generic
@@ -209,7 +214,10 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 - The Mail page and Settings → Email look and behave as today, from
   descriptors, with a URL per thread.
 - `grep -ri email packages/web/src --exclude-dir=__fixtures__` finds nothing
-  outside tests.
+  outside tests and the documented redirect table (`routes.ts`, which maps the
+  hashes the owner's bookmarks and Telegram's links still carry) — plus
+  `'email'` as a *field type* in the component set, which is a shape rather
+  than a plugin.
 - A second plugin (the synthetic one) gets a rail entry and a settings tab
   with no change to `packages/web`.
 - A descriptor with a typo fails plugin load with the path to the field.

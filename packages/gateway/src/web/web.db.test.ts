@@ -362,16 +362,6 @@ suite('the dashboard API', () => {
     expect(rows[0].n).toBe(0);
   });
 
-  it('answers the mail watcher settings with the defaults when the plugin is not installed', async () => {
-    const client = await signedIn();
-    expect(await client.json<any>('/api/email/watchers')).toMatchObject({
-      waitingDays: 2,
-      dateConfidence: 0.6,
-      defaults: { waitingDays: 2, dateConfidence: 0.6 },
-      limits: { waitingDays: { min: 1, max: 60 } },
-    });
-  });
-
   it('still refuses the first-ever write from a browser with no session yet', async () => {
     // The mint happens in this response, so the page cannot have echoed its
     // csrf pair back yet — and a cross-site writer is exactly this client.

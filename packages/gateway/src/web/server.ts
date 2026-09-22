@@ -66,38 +66,12 @@ import {
   type TelegramWebDeps,
 } from './telegram.js';
 import {
-  EmailWebError,
-  addEmailAccount,
-  bulkEmailPolicies,
-  deleteEmailPolicy,
-  listEmailAccounts,
-  readEmailPolicies,
-  readEmailWatchers,
-  removeEmailAccount,
-  writeEmailPolicy,
-  writeEmailWatchers,
-  type EmailWebDeps,
-} from './email.js';
-import {
   PAGE_ROUTE,
   actOnPage,
   listPageDescriptors,
   runPageQuery,
   type PagesDeps,
 } from './pages.js';
-import {
-  discardEmailDraft,
-  fetchEmailAttachment,
-  readEmailDraft,
-  readEmailDrafts,
-  readEmailMessage,
-  readEmailThread,
-  readEmailThreads,
-  searchEmail,
-  sendEmailDraft,
-  writeEmailDraft,
-  type EmailDraftsDeps,
-} from './email-drafts.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
@@ -775,28 +749,6 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       return null;
     };
-    /**
-     * What the mail-account routes need: the pool the email schema lives in,
-     * and the live environment — which is where a password just added is kept
-     * for this process, so the next poll finds it without a restart.
-     */
-    const emailDeps = (): EmailWebDeps => ({
-      pool: deps.pool as never,
-      env: deps.env ?? process.env,
-    });
-    /**
-     * What the draft editor needs. The registry and the context are for Send
-     * alone, which proposes the `email.send` action by the same path an agent
-     * takes and never executes anything itself.
-     */
-    const draftDeps = (): EmailDraftsDeps => ({
-      pool: deps.pool,
-      registry: deps.registry,
-      ctx: deps.ctx,
-      // Search reads its day boundaries in the owner's zone, not the server's.
-      timezone: deps.timezone,
-      now: deps.now,
-    });
     /** What the two Telegram routes need. The environment is the live one. */
     const telegramDeps = (): TelegramWebDeps => ({
       pool: deps.pool,
@@ -1119,72 +1071,8 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
-        /*
-         * Settings → Email → Policies: the standing decisions about incoming
-         * mail, and the ones proposed from the owner's own history. A read.
-         */
-        /*
-         * Settings → Email → Watchers: the two settings §7's watchers read.
-         * A read; the counterpart writes them below.
-         */
-        case '/api/email/threads': {
-          const account = q.get('account');
-          const view = await readEmailThreads(draftDeps(), {
-            ...(account && account.trim() !== '' ? { accountId: account.trim() } : {}),
-          });
-          return sendJson(res, view.status, view.body);
-        }
-        /*
-         * The search field above the conversation list (docs/specs/email.md
-         * §9). Same query builder as `email.search`, so the owner and their
-         * agents ask the same question of the same table.
-         */
-        case '/api/email/search': {
-          // Every value goes through as it arrived: `searchEmail` validates
-          // them with the same function the tool uses, so a malformed one is
-          // a sentence rather than something quietly dropped.
-          const view = await searchEmail(draftDeps(), {
-            q: q.get('q') ?? undefined,
-            from: q.get('from') ?? undefined,
-            since: q.get('since') ?? undefined,
-            until: q.get('until') ?? undefined,
-            thread: q.get('thread') ?? undefined,
-            direction: q.get('direction') ?? undefined,
-            hasAttachments: q.get('hasAttachments') ?? undefined,
-            ...(q.get('account') ? { accountId: (q.get('account') as string).trim() } : {}),
-          });
-          return sendJson(res, view.status, view.body);
-        }
-        case '/api/email/drafts': {
-          const thread = q.get('thread');
-          if (!thread || thread.trim() === '') {
-            return sendJson(res, 400, { error: 'Name the conversation with `thread`.' });
-          }
-          const view = await readEmailDrafts(draftDeps(), thread.trim());
-          return sendJson(res, view.status, view.body);
-        }
-        case '/api/email/watchers': {
-          const view = await readEmailWatchers(deps.pool);
-          return sendJson(res, view.status, view.body);
-        }
-        case '/api/email/policies': {
-          const accountId = q.get('account');
-          const view = await readEmailPolicies(deps.pool, accountId && accountId !== '' ? accountId : undefined);
-          return sendJson(res, view.status, view.body);
-        }
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
-        /*
-         * The mailboxes this installation reads and sends as. Names of vault
-         * entries, never their values: nothing on this route has ever held a
-         * password, and the page has no field that shows one.
-         */
-        case '/api/email/accounts':
-          try {
-            return sendJson(res, 200, await listEmailAccounts(emailDeps()));
-          } catch (error) {
-            return sendJson(res, 503, { error: `Mail accounts are unavailable: ${error instanceof Error ? error.message : String(error)}` });
-          }
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1371,32 +1259,6 @@ export function createWebApp(deps: WebServerDeps): Server {
         return;
       }
 
-      /*
-       * One conversation, drawn whole: its newest messages, and its drafts
-       * under them (docs/specs/email.md §8). The live ones and the ended ones
-       * come back as two lists, because the page draws them as two things.
-       */
-      const thread = /^\/api\/email\/threads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
-      if (thread) {
-        const view = await readEmailThread(draftDeps(), thread[1] as string);
-        return sendJson(res, view.status, view.body);
-      }
-      const draft = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
-      if (draft) {
-        const view = await readEmailDraft(draftDeps(), draft[1] as string);
-        return sendJson(res, view.status, view.body);
-      }
-      /*
-       * One message's body, fetched when the owner opens it. The thread route
-       * ships snippets: twenty full bodies for a list of one-line rows is a
-       * page weight nobody reads.
-       */
-      const message = /^\/api\/email\/messages\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
-      if (message) {
-        const view = await readEmailMessage(draftDeps(), message[1] as string);
-        return sendJson(res, view.status, view.body);
-      }
-
       return sendJson(res, 404, { error: 'no such endpoint' });
     }
 
@@ -1466,31 +1328,6 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
       }
-      /*
-       * Revoke one mail policy. The row stays as the record that the owner once
-       * decided this; only its effect stops. Answers with both lists, so the
-       * page redraws from the reply rather than asking again.
-       */
-      const policyGone = /^\/api\/email\/policies\/([0-9a-f-]{36})$/i.exec(path);
-      if (policyGone) {
-        const reply = await deleteEmailPolicy(deps.pool, policyGone[1]!, deps.now());
-        return sendJson(res, reply.status, reply.body);
-      }
-      /*
-       * A mailbox the owner is done with: the row and the vault entry that
-       * opened it, together. A password left in the keychain after the account
-       * it belonged to is gone is a secret nobody is responsible for.
-       */
-      const accountGone = /^\/api\/email\/accounts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
-      if (accountGone) {
-        try {
-          const removed = await removeEmailAccount(emailDeps(), accountGone[1]!);
-          return removed.removed ? sendJson(res, 200, removed) : sendEmpty(res, 404);
-        } catch (error) {
-          if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
-          return sendJson(res, 500, { error: 'That mailbox could not be removed from here.' });
-        }
-      }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
       const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
@@ -1506,27 +1343,6 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      /*
-       * The owner's own save over a draft. No approval card: the gate on
-       * `email.draft_reply` exists because a model proposed something, and a
-       * person editing their own unsent letter has already said what they
-       * want. What it does do is mark the words as theirs — which is what
-       * stops the next agent draft from writing over them — and save a new
-       * artifact version, which is what makes a send approved a minute ago
-       * refuse rather than go out with different text.
-       */
-      const draftEdit = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
-      if (draftEdit) {
-        let edit: Record<string, unknown>;
-        try {
-          edit = await readJsonBody(req);
-        } catch (err) {
-          if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: err.message });
-          return sendJson(res, 400, { error: 'request body must be JSON' });
-        }
-        const view = await writeEmailDraft(draftDeps(), draftEdit[1] as string, edit);
-        return sendJson(res, view.status, view.body);
-      }
       const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
@@ -2238,22 +2054,6 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     /*
-     * A mailbox, added from the page: the address, its hosts, and the app
-     * password. The password is tested against IMAP once, kept in the vault
-     * under a name derived from the address, and never written to the database
-     * or to a file. A login the server refuses answers 400 in plain words, and
-     * nothing is kept.
-     */
-    if (path === '/api/email/accounts') {
-      try {
-        return sendJson(res, 200, await addEmailAccount(emailDeps(), body));
-      } catch (error) {
-        if (error instanceof EmailWebError) return sendJson(res, error.status, { error: error.message });
-        return sendJson(res, 500, { error: 'That mailbox could not be added from here.' });
-      }
-    }
-
-    /*
      * The owner's own profile. What an agent may write through owner.set_profile
      * the owner may write here directly; the same validation, the same row.
      */
@@ -2270,72 +2070,6 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
       const profile = await setOwnerProfile(deps.pool, patch);
       return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
-    }
-
-    /*
-     * Write a mail policy, or keep one that was only proposed. The owner acting
-     * on their own settings page needs no approval card: the gate on
-     * `email.set_policy` exists because a *model* proposed the rule.
-     */
-    if (path === '/api/email/policies') {
-      const reply = await writeEmailPolicy(deps.pool, body, deps.now());
-      return sendJson(res, reply.status, reply.body);
-    }
-
-    /*
-     * Keep or revoke a whole selection, in one transaction. The ids are the
-     * page's, exactly: there is no "all proposed" flag here, because the list
-     * the page is showing can be older than the table.
-     */
-    /*
-     * The two watcher settings. The owner's own preference over this plugin's
-     * rows: no card, no approval, and refused rather than clamped when it is
-     * not a number the watchers could mean anything by.
-     */
-    if (path === '/api/email/watchers') {
-      const reply = await writeEmailWatchers(deps.pool, body, deps.now());
-      return sendJson(res, reply.status, reply.body);
-    }
-
-    /*
-     * Discard, and Send. Send *proposes*: it records the `email.send` action by
-     * the same path an agent takes and answers with its id, and the owner
-     * approves it on the card — identity select and all. Nothing in this file
-     * reaches SMTP.
-     */
-    const draftDiscard = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/discard$/i.exec(path);
-    if (draftDiscard) {
-      const view = await discardEmailDraft(draftDeps(), draftDiscard[1] as string);
-      return sendJson(res, view.status, view.body);
-    }
-    /*
-     * One attachment, into the library (docs/specs/email.md §10). It proposes
-     * nothing and approves nothing: `email.fetch_attachment` is tier `auto`,
-     * and this route is the owner asking for a file their own server already
-     * delivered. The tool does the refusing — size, executables, mail that is
-     * no longer there — and its sentence is what comes back.
-     */
-    const attachmentFetch =
-      /^\/api\/email\/messages\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/attachments\/(\d{1,3})\/fetch$/i.exec(
-        path,
-      );
-    if (attachmentFetch) {
-      const view = await fetchEmailAttachment(
-        draftDeps(),
-        attachmentFetch[1] as string,
-        Number(attachmentFetch[2]),
-      );
-      return sendJson(res, view.status, view.body);
-    }
-    const draftSend = /^\/api\/email\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/send$/i.exec(path);
-    if (draftSend) {
-      const view = await sendEmailDraft(draftDeps(), draftSend[1] as string);
-      return sendJson(res, view.status, view.body);
-    }
-
-    if (path === '/api/email/policies/bulk') {
-      const reply = await bulkEmailPolicies(deps.pool, body, deps.now());
-      return sendJson(res, reply.status, reply.body);
     }
 
     /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */
