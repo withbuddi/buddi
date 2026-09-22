@@ -44,8 +44,9 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- [Email](specs/email.md) — 2 of 5 steps built (policies and the gate;
-  accounts plural); step 3 (threads and the Sent folder) in progress.
+- [Email](specs/email.md) — 4 of 5 steps built (policies and the gate;
+  accounts plural; threads and the Sent folder; the first two watchers with a
+  switch each); step 5 (draft lifecycle, alias choice on approval) remains.
 
 ## Next, in order
 
@@ -60,6 +61,15 @@ next. Checked against the code and `git log` on 2026-09-21.
 7. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
 8. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+
+Small, whenever a slot opens:
+
+- Agent avatar — an optional uploaded PNG or SVG on the agent record next to
+  the icon, size-capped and re-encoded on upload, served at
+  `/api/agents/:id/avatar`, shown in the roster, chat header, delegation view
+  and the Telegram profile photo; the icon remains the fallback. The mascot
+  artwork itself lives in the `buddi-design` repository, never here.
+- Artefacts page — the list of `core.artifacts` with preview and download.
 
 ## Later
 
