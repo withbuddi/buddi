@@ -310,6 +310,13 @@ export function isUnread(flags: readonly string[]): boolean {
  * that line.
  */
 export interface SenderHistory {
+  /** How often the owner has written back to this sender, and how quickly. */
+  replies?: {
+    count: number;
+    lastAt: string | null;
+    /** Mean hours between their message and the owner's answer, when known. */
+    averageHours: number | null;
+  } | null;
   /** The live policy for this sender, when there is one. */
   policy?: {
     action: string;
@@ -344,6 +351,21 @@ export function senderHistoryBlock(history: SenderHistory | undefined): string[]
         : `Standing policy: ${policy.action} for ${policy.scope} ${policy.matcher} (${policy.origin}).`,
     );
   }
+  // How often the owner writes back, from the Sent folder rather than from
+  // buddi's own drafts (docs/email.md §3): a sender answered from a phone is
+  // now a sender who was answered.
+  const replies = history.replies;
+  if (replies) {
+    lines.push(
+      replies.count === 0
+        ? 'The owner has never written back to this address.'
+        : `The owner has written back ${replies.count} time${replies.count === 1 ? '' : 's'}` +
+          (replies.averageHours !== null
+            ? `, usually within ${formatHours(replies.averageHours)}`
+            : '') +
+          (replies.lastAt ? `; last on ${replies.lastAt.slice(0, 10)}.` : '.'),
+    );
+  }
   if (verdicts && verdicts.length > 0) {
     lines.push(
       `Earlier verdicts on this sender, newest first: ${verdicts
@@ -360,6 +382,92 @@ export function senderHistoryBlock(history: SenderHistory | undefined): string[]
   ];
 }
 
+/** "three hours", "two days" — a latency said the way a person would say it. */
+export function formatHours(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) return 'an unknown time';
+  if (hours < 1.5) return 'an hour';
+  if (hours < 36) return `${Math.round(hours)} hours`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'}`;
+}
+
+/** One earlier message of the thread, as the prompt carries it. */
+export interface ThreadTurn {
+  direction: 'in' | 'out';
+  from: string;
+  date: string | null;
+  subject?: string;
+  snippet: string;
+  /** The text, when this turn is recent enough to be quoted at length. */
+  bodyText?: string | null;
+}
+
+/**
+ * The conversation a message arrived in, as a triage run is given it.
+ *
+ * docs/email.md §6: *«The thread, not the message: the last few messages of the
+ * thread in order, who wrote each, the thread state … Bodies are bounded; older
+ * ones summarised to one line.»* That is exactly the shape of this type — the
+ * bounding is the caller's, so that what the prompt shows and what the database
+ * holds cannot silently differ.
+ */
+export interface ThreadForPrompt {
+  id: string;
+  state: string;
+  messageCount: number;
+  /** The last few turns before this message, oldest first, quoted. */
+  recent: readonly ThreadTurn[];
+  /** Everything before those, oldest first, one line each. */
+  older?: readonly ThreadTurn[];
+}
+
+/** How much of an earlier message's body a turn carries. */
+export const THREAD_TURN_CHARS = 600;
+
+/** Who wrote a turn, in the two words that matter: the owner, or them. */
+function turnWho(turn: ThreadTurn): string {
+  return turn.direction === 'out' ? `the owner (${turn.from})` : turn.from;
+}
+
+function turnLine(turn: ThreadTurn): string {
+  const when = turn.date ? turn.date.slice(0, 10) : 'undated';
+  return `- ${when} — ${turnWho(turn)}: ${turn.snippet || '(no text)'}`;
+}
+
+/**
+ * The thread block: what this conversation is, and where it got to.
+ *
+ * It is evidence, like the message itself. The state line says who the
+ * conversation is waiting on, which is a fact derived from the mailbox (who
+ * wrote last, Sent folder included) and not from anything a sender claimed.
+ */
+export function threadBlock(thread: ThreadForPrompt | undefined): string[] {
+  if (!thread) return [];
+  const lines: string[] = [
+    '',
+    `This message is part of a conversation (thread id ${thread.id}) of ${thread.messageCount} message${thread.messageCount === 1 ? '' : 's'}, currently ${thread.state}.`,
+  ];
+  if (thread.older && thread.older.length > 0) {
+    lines.push(`Earlier in it, one line each, oldest first:`, ...thread.older.map(turnLine));
+  }
+  for (const turn of thread.recent) {
+    const body = (turn.bodyText ?? '').trim();
+    lines.push(
+      '',
+      `Earlier message — ${turnWho(turn)}, ${turn.date ?? '(undated)'}${turn.subject ? `, "${turn.subject}"` : ''}:`,
+      body === ''
+        ? turn.snippet || '(no text)'
+        : body.length > THREAD_TURN_CHARS
+          ? `${body.slice(0, THREAD_TURN_CHARS)}\n[… truncated]`
+          : body,
+    );
+  }
+  if (thread.recent.length === 0 && (!thread.older || thread.older.length === 0)) {
+    lines.push('Nothing else has been said in it yet.');
+  }
+  return lines;
+}
+
 export function triagePrompt(input: {
   messageId: string;
   from: string;
@@ -373,6 +481,8 @@ export function triagePrompt(input: {
   bodyChars?: number;
   /** The sender's standing policy and last verdicts, when they are known. */
   history?: SenderHistory;
+  /** The conversation this message belongs to (docs/email.md §6). */
+  thread?: ThreadForPrompt;
   /** A standing instruction from a policy, e.g. "draft a reply". */
   instruction?: string;
 }): string {
@@ -400,6 +510,7 @@ export function triagePrompt(input: {
     `Subject: ${input.subject || '(no subject)'}`,
     `Date: ${input.date ?? '(unknown)'}`,
     `Attachments: ${attachments}`,
+    ...threadBlock(input.thread),
     ...senderHistoryBlock(input.history),
     ...(input.instruction ? ['', `The owner has a standing instruction for this sender: ${input.instruction}`] : []),
     '',

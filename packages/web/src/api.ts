@@ -212,9 +212,21 @@ export interface EmailPolicy {
   revokedAt: string | null;
 }
 
+/** One conversation, offered by subject when a rule is about a thread. */
+export interface EmailThreadChoice {
+  id: string;
+  accountId: string;
+  subject: string;
+  state: string;
+  participants: string[];
+  lastAt: string | null;
+}
+
 export interface EmailPoliciesView {
   applied: EmailPolicy[];
   proposed: EmailPolicy[];
+  /** The conversations a `thread` rule may be about, newest first. */
+  threads?: EmailThreadChoice[];
   /** Set when the email plugin is not installed on this machine. */
   unavailable?: string;
 }

@@ -128,7 +128,9 @@ suite('the mail policy routes', () => {
   it('answers with two empty lists when nothing has been decided', async () => {
     const res = await send('GET', '/api/email/policies');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ applied: [], proposed: [] });
+    // `threads` is the list the "one conversation" rule is picked from; with
+    // no mail ingested there is nothing to pick.
+    expect(await res.json()).toEqual({ applied: [], proposed: [], threads: [] });
   });
 
   it('refuses a rule that says nothing about which mailbox it is for', async () => {

@@ -25,9 +25,10 @@
  *    read. A policy is the *owner's* standing instruction about a string, and
  *    the worst a forged header can do is claim a rule that starts the run it
  *    would have had anyway — never one that stops it. Which is the rule below:
- *  - **A thread or list-id match never silences a message on its own.**
- *    `threadKey` comes from `References`/`In-Reply-To` and `List-Id` is copied
- *    off the wire, so both are strings the sender chooses. An `ignore` on
+ *  - **A thread or list-id match never silences a message on its own.** A
+ *    thread is matched by its own id, but a message joins a thread through
+ *    `References`/`In-Reply-To`, and `List-Id` is copied off the wire: both
+ *    are still reachable by a string the sender chooses. An `ignore` on
  *    either applies only when the sender is corroborated — see
  *    `ignoreIsCorroborated`.
  *
@@ -113,8 +114,17 @@ export interface PolicyRecord {
 
 /** Everything the gate is allowed to look at. Deliberately not the body. */
 export interface MessageHeader {
-  /** The conversation key, as `threadKeyFor` derived it. */
-  threadKey: string | null;
+  /**
+   * The conversation this message was threaded into, by its row id.
+   *
+   * Not the `thread_key`: that is the root Message-ID off the wire, a string
+   * the sender writes, and a rule the owner made about "this conversation"
+   * should not be addressable by anybody who learns that string. The id is
+   * ours. The corroboration rule below stays all the same, because a *forged*
+   * key is still how a message gets threaded into somebody else's
+   * conversation in the first place.
+   */
+  threadId?: string | null;
   /** The From address, in whatever form it arrived. */
   from: string;
   /** The List-Id header, or null when the message carried none. */
@@ -146,8 +156,10 @@ export function matches(policy: PolicyRecord, header: MessageHeader): boolean {
   const matcher = policy.matcher.trim().toLowerCase();
   if (matcher === '') return false;
   switch (policy.scope) {
-    case 'thread':
-      return header.threadKey !== null && header.threadKey.trim().toLowerCase() === matcher;
+    case 'thread': {
+      const id = header.threadId?.trim().toLowerCase();
+      return id !== undefined && id !== '' && id === matcher;
+    }
     case 'sender': {
       // The normalised *exact* address, not `mailboxKey`. That key collapses
       // `+tags` onto the base mailbox for every domain, and plenty of
@@ -188,13 +200,14 @@ function newerFirst(a: PolicyRecord, b: PolicyRecord): number {
 /**
  * May this thread or list-id policy silence this message?
  *
- * **A thread or a List-Id match may never produce `ignore` on its own.** Both
- * are matched against headers the sender writes: `References`/`In-Reply-To`
- * decide `threadKey`, and `List-Id` is copied verbatim off the wire. Neither is
- * authenticated, so anyone who learns a muted thread's root id or a public
- * list's id could otherwise address a message into silence — and thread is the
- * *first* scope in the precedence order, so that silence would beat every
- * sender, list and domain rule the owner has.
+ * **A thread or a List-Id match may never produce `ignore` on its own.** The
+ * thread is matched by its own id now, but *how a message joins a thread* is
+ * still `References`/`In-Reply-To` — headers the sender writes — and `List-Id`
+ * is copied verbatim off the wire. Neither is authenticated, so anyone who
+ * learns a muted thread's root id or a public list's id could otherwise
+ * address a message into silence, and thread is the *first* scope in the
+ * precedence order, so that silence would beat every sender, list and domain
+ * rule the owner has.
  *
  * So an `ignore` carried by a `thread` or `list-id` policy applies only when
  * one of two things is also true:

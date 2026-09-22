@@ -11,12 +11,15 @@ import type {
   FetchedMessage,
   ImapClient,
   ImapClientFactory,
+  MailboxInfo,
   MailboxStatus,
 } from '../ports.js';
 
 export interface FakeMailbox {
   uidValidity: number;
   messages: FetchedMessage[];
+  /** The SPECIAL-USE attribute this folder is listed with, e.g. `\\Sent`. */
+  specialUse?: string | null;
 }
 
 export class FakeImapServer {
@@ -25,6 +28,8 @@ export class FakeImapServer {
   readonly fetches: Array<{ mailbox: string; sinceUid: number; limit: number; returned: number }> = [];
   opens = 0;
   closes = 0;
+  /** How many times the folders were listed. Discovery happens once. */
+  lists = 0;
 
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
@@ -56,6 +61,15 @@ export class FakeImapServer {
     box.uidValidity = uidValidity;
   }
 
+  /** What a LIST would return: every folder this server holds, in order. */
+  listing(): MailboxInfo[] {
+    return [...this.mailboxes.entries()].map(([name, box]) => ({
+      name,
+      specialUse: box.specialUse ?? null,
+      flags: [],
+    }));
+  }
+
   client(): ImapClient {
     return new FakeImapClient(this);
   }
@@ -69,6 +83,12 @@ class FakeImapClient implements ImapClient {
   #closed = false;
 
   constructor(private readonly server: FakeImapServer) {}
+
+  async listMailboxes(): Promise<MailboxInfo[]> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.lists += 1;
+    return this.server.listing();
+  }
 
   async open(mailbox: string): Promise<MailboxStatus> {
     this.server.opens += 1;

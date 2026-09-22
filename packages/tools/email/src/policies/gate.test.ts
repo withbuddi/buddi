@@ -31,15 +31,17 @@ function policy(over: Partial<PolicyRecord> & { scope: PolicyScope; matcher: str
   };
 }
 
+const THREAD_ID = '11111111-2222-3333-4444-555555555555';
+
 const header = {
-  threadKey: '<root@example.test>',
+  threadId: THREAD_ID,
   from: 'news@mail.example.com',
   listId: '<weekly.example.com>',
 };
 
 describe('precedence', () => {
   it('prefers the thread over the sender, the sender over the list, the list over the domain', () => {
-    const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action: 'wake' });
+    const thread = policy({ scope: 'thread', matcher: THREAD_ID, action: 'wake' });
     const sender = policy({ scope: 'sender', matcher: 'news@mail.example.com', action: 'notify' });
     const list = policy({ scope: 'list-id', matcher: 'weekly.example.com', action: 'draft' });
     const domain = policy({ scope: 'domain', matcher: 'mail.example.com', action: 'ignore' });
@@ -88,8 +90,8 @@ describe('what is live', () => {
 describe('matching', () => {
   it('matches a sender by the exact address — a capital or a display name, nothing more', () => {
     const p = policy({ scope: 'sender', matcher: 'jane@gmail.com' });
-    expect(matches(p, { threadKey: null, from: 'Jane <JANE@gmail.com>' })).toBe(true);
-    expect(matches(p, { threadKey: null, from: 'jane@other.test' })).toBe(false);
+    expect(matches(p, { threadId: null, from: 'Jane <JANE@gmail.com>' })).toBe(true);
+    expect(matches(p, { threadId: null, from: 'jane@other.test' })).toBe(false);
   });
 
   it('does not treat a plus-tag or a Gmail dot as the same sender', () => {
@@ -99,21 +101,21 @@ describe('matching', () => {
     // the other. Two separately stored policies matching one message would
     // also let the newest-wins tie-break pick a rule nobody meant.
     const p = policy({ scope: 'sender', matcher: 'jane@gmail.com' });
-    expect(matches(p, { threadKey: null, from: 'jane+news@gmail.com' })).toBe(false);
-    expect(matches(p, { threadKey: null, from: 'j.a.n.e@googlemail.com' })).toBe(false);
+    expect(matches(p, { threadId: null, from: 'jane+news@gmail.com' })).toBe(false);
+    expect(matches(p, { threadId: null, from: 'j.a.n.e@googlemail.com' })).toBe(false);
   });
 
   it('matches a domain on the sender, with or without the @', () => {
     const p = policy({ scope: 'domain', matcher: 'example.com' });
-    expect(matches(p, { threadKey: null, from: 'anyone@example.com' })).toBe(true);
+    expect(matches(p, { threadId: null, from: 'anyone@example.com' })).toBe(true);
     // A subdomain is a different domain; matching it would silence too much.
-    expect(matches(p, { threadKey: null, from: 'anyone@mail.example.com' })).toBe(false);
+    expect(matches(p, { threadId: null, from: 'anyone@mail.example.com' })).toBe(false);
   });
 
   it('matches a List-Id by its identifier, not by the phrase in front of it', () => {
     const p = policy({ scope: 'list-id', matcher: 'Weekly News <weekly.example.com>' });
-    expect(matches(p, { threadKey: null, from: 'x@y.test', listId: '<weekly.example.com>' })).toBe(true);
-    expect(matches(p, { threadKey: null, from: 'x@y.test', listId: null })).toBe(false);
+    expect(matches(p, { threadId: null, from: 'x@y.test', listId: '<weekly.example.com>' })).toBe(true);
+    expect(matches(p, { threadId: null, from: 'x@y.test', listId: null })).toBe(false);
   });
 
   it('never matches on an empty matcher', () => {
@@ -182,10 +184,10 @@ describe('validation at creation', () => {
  * `gate.ts` states it in full; these are the four cases it has.
  */
 describe('a thread or a list may not silence a message on its own', () => {
-  const muted = { threadKey: '<root@example.test>', from: 'stranger@elsewhere.test', listId: '<weekly.example.com>' };
+  const muted = { threadId: THREAD_ID, from: 'stranger@elsewhere.test', listId: '<weekly.example.com>' };
 
-  it('ignores nothing when a forged thread key is all there is', () => {
-    const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action: 'ignore' });
+  it('ignores nothing when a thread a stranger wrote into is all there is', () => {
+    const thread = policy({ scope: 'thread', matcher: THREAD_ID, action: 'ignore' });
     const decision = applyPolicies(muted, [thread]);
     expect(decision.action).toBe('none');
     expect(decision.policy).toBeNull();
@@ -199,7 +201,7 @@ describe('a thread or a list may not silence a message on its own', () => {
   it('applies when the policy recorded the sender and this is that sender', () => {
     const thread = policy({
       scope: 'thread',
-      matcher: '<root@example.test>',
+      matcher: THREAD_ID,
       action: 'ignore',
       params: { sender: 'Them <THEM@example.test>' },
     });
@@ -218,13 +220,13 @@ describe('a thread or a list may not silence a message on its own', () => {
 
   it('leaves every other action alone — only silence is bound to the sender', () => {
     for (const action of ['notify', 'draft', 'wake'] as PolicyAction[]) {
-      const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action });
+      const thread = policy({ scope: 'thread', matcher: THREAD_ID, action });
       expect(applyPolicies(muted, [thread]).action).toBe(action);
     }
   });
 
   it('falls through to the next scope rather than swallowing the message', () => {
-    const thread = policy({ scope: 'thread', matcher: '<root@example.test>', action: 'ignore' });
+    const thread = policy({ scope: 'thread', matcher: THREAD_ID, action: 'ignore' });
     const domainWake = policy({ scope: 'domain', matcher: 'elsewhere.test', action: 'wake' });
     // The domain rule corroborates the sender *and* is what decides: the
     // thread ignore applies once a sender rule exists, so use a header with no

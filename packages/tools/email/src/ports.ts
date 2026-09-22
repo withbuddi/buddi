@@ -45,6 +45,23 @@ export interface FetchedMessage {
   flags: string[];
 }
 
+/**
+ * One folder, as the server lists it.
+ *
+ * `specialUse` is the SPECIAL-USE attribute (RFC 6154) when the server offers
+ * one — `\Sent`, `\Drafts`, `\Trash` — and it is the only trustworthy way to
+ * find the Sent folder, because its *name* is whatever the owner's language
+ * and provider made it. `flags` is everything else the LIST reply carried, so
+ * a server that reports `\Sent` among the flags rather than as a special-use
+ * attribute is still understood.
+ */
+export interface MailboxInfo {
+  /** The IMAP path, as the server names it: `INBOX`, `[Gmail]/Sent Mail`. */
+  name: string;
+  specialUse: string | null;
+  flags: string[];
+}
+
 export interface MailboxStatus {
   /** The generation the mailbox's UIDs belong to. A change invalidates them all. */
   uidValidity: number;
@@ -58,6 +75,11 @@ export interface MailboxStatus {
  * message. An implementation that cannot guarantee that is not an `ImapClient`.
  */
 export interface ImapClient {
+  /**
+   * Every folder the account has, with whatever the server says each one is
+   * for. A listing, not a selection: nothing is opened and nothing is read.
+   */
+  listMailboxes(): Promise<MailboxInfo[]>;
   /** Open a mailbox read-only and report its state. */
   open(mailbox: string): Promise<MailboxStatus>;
   /**
