@@ -282,6 +282,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  claim?(input: I, ctx: ToolContext): Promise<void>;  // hold it, just before dispatch
   timeoutMs?: number;
   reusableApproval?: boolean;   // the owner may remember their yes
   producesArtifacts?: boolean;  // its output names files it saved
@@ -334,12 +335,13 @@ A defect never surfaces as success, and the model never sees a raw exception.
 
 ```ts
 export interface EffectDescription {
-  envelope: unknown;   // everything that decides what the world will see
-  preview: string;     // plain text, short, owner-facing
+  envelope: unknown;    // everything that decides what the world will see
+  preview: string;      // plain text, short, owner-facing
+  choices?: OwnerChoice[];  // what the owner may set when they approve it
 }
 ```
 
-Four rules, all of them load-bearing:
+Five rules, all of them load-bearing:
 
 1. **The envelope is complete.** Every recipient including BCC, the resolved
    account, the body and its hash, attachment hashes. `core.effect_attempts`
@@ -349,7 +351,13 @@ Four rules, all of them load-bearing:
    from text the model wrote. Plain text, no markdown.
 3. **`describe` is pure and read-only.** It runs *before* any approval exists. A
    `describe` that sent an email is the exact bug this boundary exists to stop.
-4. **If you omit it**, the registry falls back to the canonical arguments as the
+4. **A choice is picked, never typed.** `choices` is how a tool lets the owner
+   settle something at the moment they approve — which of their addresses a
+   send leaves from, say. The options come from the tool, before anyone is
+   asked; core validates the answer against them and fills an unanswered key in
+   from its default; `execute` reads `ctx.choices`. "What is approved is what is
+   shown" is untouched: the owner picks among what the envelope already listed.
+5. **If you omit it**, the registry falls back to the canonical arguments as the
    envelope and their JSON as the preview. Honest, complete, and plainly a
    fallback. `@buddi/tool-email` defines a `GatedToolDefinition` that makes
    `describe` required; copy that narrowing (`packages/tools/email/src/types.ts`).
@@ -375,18 +383,43 @@ if (!actionId) {
 }
 ```
 
-and then claim on it — atomically, in SQL, not in TypeScript. `email.send`'s
-claim is one statement:
+and then claim on it — atomically, in SQL, not in TypeScript, and in the `claim`
+hook so that a lost claim leaves no effect attempt behind. `email.send`'s claim
+is one statement:
 
 ```sql
-update email.drafts set sent_action_id = $2
- where id = $1 and sent_action_id is null
+update email.drafts set sent_action_id = $2, updated_at = $3
+ where id = $1
+   and sent_action_id is null
+   and status in ('draft', 'edited')     -- still live
+   and artifact_id = $4                  -- the version the envelope named
 returning ...
 ```
 
+Every clause is a race somebody can win against you. `sent_action_id is null`
+is the second executor; `status` is the owner discarding it while the card was
+open; `artifact_id` is the owner saving new text between the executor's
+re-description and this statement — the window `describe` cannot close, because
+`describe` reads and this writes.
+
 Zero rows back means someone else owns it: if the owner is the *same* action and
-the row is already sent, return the recorded receipt (`replayed: true`); if it is
-a different action, refuse. Re-dispatching is never the answer.
+the row is already sent, return the recorded receipt (`replayed: true`);
+otherwise throw, and the Executor settles the approval `refused` with no attempt
+recorded. Re-dispatching is never the answer.
+
+The other half of that guard belongs to everyone who writes the row: every
+editor of a claimable row carries `and sent_action_id is null` in its own
+predicate, so nothing can be edited out from under a dispatch that is already
+in flight — and every writer that read a version before writing carries that
+version too, so two writers who read the same row cannot silently replace each
+other.
+
+The Executor reaches `claim` through `ToolRegistry.lookup`, which builds the
+executable view of a tool field by field. A field it does not copy is a hook
+that silently never runs, and for this one the symptom is invisible in the happy
+path: the effect still refuses, one step later, as `failed` with an attempt row
+claiming it may have happened. `actions.db.test.ts` asserts `lookup(...).claim`
+is a function for exactly that reason.
 
 **`timeoutMs` and what `unknown` means.** The Executor waits `timeoutMs`
 (`DEFAULT_EFFECT_TIMEOUT_MS` when you declare none) and then records the attempt
@@ -411,11 +444,12 @@ interface ToolContext {
   delegationDepth?: number; // 0 or absent = the owner started this run
   jobId?: string;
   actionId?: string;        // gated execute only — your idempotency key
+  choices?: Readonly<Record<string, string>>;  // what the owner picked on the card
   signal?: AbortSignal;     // check it before each external operation
 }
 ```
 
-That is nine of eighteen fields; the rest are for the runtime's own tools
+That is ten of nineteen fields; the rest are for the runtime's own tools
 (`group`, `surface`, `ownerRequest`, `sessionTools`, `nativeSearch`,
 `approvedEffect`, `suspend`, `systemContext`, `toolUseId`) and §9 lists every
 one of them.
@@ -1848,6 +1882,7 @@ this says what it is *for*.
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
 | `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
+| `claim` | `(input, ctx) => Promise<void>` | no | For a `gated` tool whose subject someone else can edit while the owner decides: take exclusive hold of it in one conditional statement, immediately before the ledger row. A throw settles the approval `refused` and records no effect attempt. |
 | `timeoutMs` | `number` | no | How long the Executor waits before recording the attempt as `unknown`. `DEFAULT_EFFECT_TIMEOUT_MS` when absent. |
 | `sequential` | `boolean` | no | Dependent calls in the same model turn are skipped after this one fails. |
 | `waitsForOwner` | `boolean` | no | A successful call leaves a decision with the owner: no more tools this run. |
@@ -1868,6 +1903,7 @@ The tiers, as `packages/core/src/registry.ts` enforces them:
 | --- | --- | --- | --- |
 | `envelope` | `unknown` | yes | Everything that decides what the world will see — every recipient, the resolved account, the hashes. It is what `core.effect_attempts` hashes before dispatch. |
 | `preview` | `string` | yes | The short plain sentence the owner approves. Rendered from the envelope, never from model prose; no markdown. |
+| `choices` | `OwnerChoice[]` | no | Settings on this effect the *owner* decides when they approve it: `{ key, label, options, default }` each. Core refuses anything not on the declared list, and `execute` reads the result from `ctx.choices`. Declare one only when there is something to choose. |
 
 #### `ToolContext`
 
@@ -1896,6 +1932,7 @@ than guess.
 | `nativeSearch` | `{ provider; maxUses }` | no | Set when the provider is searching the web itself, server-side, instead of a tool being dispatched. |
 | `jobId` | `string` | no | The durable job this run belongs to, when a job started it. |
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
+| `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 
 #### `GroupContext`
 

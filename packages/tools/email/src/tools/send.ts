@@ -29,7 +29,8 @@ import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
-import type { EffectDescription, GatedToolDefinition, ToolContext } from '../types.js';
+import { claimDraftForSend, sendRefusalFor } from '../drafts.js';
+import type { EffectDescription, GatedToolDefinition, OwnerChoice, ToolContext } from '../types.js';
 import { accountOf, findMessage, identityChoices, identityFor, requireDraft, UUID } from './shared.js';
 
 /**
@@ -45,8 +46,26 @@ import { accountOf, findMessage, identityChoices, identityFor, requireDraft, UUI
  * because those are headers the sender writes. It is the envelope's own version
  * and is recorded inside it; the approval is bound to the plugin manifest's
  * version, which has not moved, so approvals already waiting stay valid.
+ *
+ * The alias became a *control* without moving this version, and deliberately:
+ * `toolVersion` is inside the envelope, the envelope is hashed, and the
+ * Executor re-describes before dispatch — so bumping it would have refused
+ * every `email.send` already waiting for the owner at the moment of the
+ * upgrade, each with "the effect changed since its preview" about a change
+ * nobody made to the mail. The envelope's *shape* is what this number is
+ * about, and it did not change: the same fields, the same `from`, the same
+ * `fromChoices`. What changed is where the alternatives are shown — a line of
+ * preview prose became an `EffectDescription.choices` entry the card draws as
+ * a select, and `execute` reads the answer from `ctx.choices.from`. Neither is
+ * part of the envelope.
+ *
+ * Move it when a field appears, disappears or changes meaning. Not for
+ * presentation.
  */
 export const SEND_TOOL_VERSION = '0.3.0';
+
+/** The key of the identity control. One name, used by the tool and its tests. */
+export const FROM_CHOICE_KEY = 'from';
 
 /** One dispatch's budget. Past it the Executor marks the attempt `unknown`. */
 export const SEND_TIMEOUT_MS = 60_000;
@@ -125,13 +144,10 @@ export function renderPreview(envelope: SendEnvelope): string {
     envelope.from === envelope.accountAddress
       ? `Send mail as ${envelope.from}`
       : `Send mail as ${envelope.from} (from the ${envelope.accountAddress} mailbox)`,
-    ...(envelope.fromChoices.filter((choice) => choice !== envelope.from).length > 0
-      ? [
-          `         or, if you choose it here, as ${envelope.fromChoices
-            .filter((choice) => choice !== envelope.from)
-            .join(' or ')}`,
-        ]
-      : []),
+    // The alternatives are not printed here any more. They are a control on the
+    // card now (`fromChoice`), and a preview that also listed them would be
+    // describing the control rather than the effect — and would go stale the
+    // moment the owner moved it.
     '',
     `To:      ${list(envelope.to)}`,
     `Cc:      ${list(envelope.cc)}`,
@@ -209,6 +225,19 @@ export async function buildEnvelope(
   draftId: string,
 ): Promise<SendEnvelope> {
   const draft = await requireDraft(ctx.db, draftId);
+  /*
+   * docs/specs/email.md §8: a draft that is discarded or lapsed is refused
+   * here, at describe time — before an approval card is ever put in front of
+   * the owner, and again on the Executor's re-describe, which is what makes a
+   * draft discarded while the card was open refuse instead of send.
+   *
+   * It throws rather than returning a refusal object because `describe` has
+   * exactly one way to say no, and the Executor turns a throwing re-describe
+   * into `refused` with this sentence in it — the action is marked as never
+   * having been attempted, which is the truth.
+   */
+  const refusal = sendRefusalFor(draft);
+  if (refusal) throw new Error(refusal);
   const account = await sendingAccount(ctx, draft);
   const original = draft.inReplyTo ? await findMessage(ctx.db, draft.inReplyTo) : null;
   const references = original?.threadKey
@@ -247,6 +276,90 @@ export async function buildEnvelope(
     artifactId: draft.artifactId,
     createdByAgent: draft.createdByAgent,
   };
+}
+
+/**
+ * The identity control, or nothing.
+ *
+ * Declared only when the account actually has an alias to offer: a select with
+ * one option is not a choice, it is a fact, and the preview already states it
+ * in its first line. The default is the account's own address — the identity
+ * that is certainly the owner's to send as — so an approval decided anywhere
+ * that draws no control at all sends exactly what the preview says it will.
+ */
+export function fromChoice(envelope: SendEnvelope): OwnerChoice | null {
+  if (envelope.fromChoices.length < 2) return null;
+  return {
+    key: FROM_CHOICE_KEY,
+    label: 'Send as',
+    options: [...envelope.fromChoices],
+    // The default is taken from the list itself, not from `envelope.from`.
+    // They agree for every account this build writes — both the settings page
+    // and the `.env` seed normalize the address on the way in — but a row put
+    // in by hand with a capitalised address would put `from` outside
+    // `fromChoices`, `validateDeclaredChoices` would throw inside
+    // `createAction`, and *every* send from that mailbox would fail before it
+    // ever reached a card. `fromChoices[0]` is the account's own address by
+    // construction (`identityChoices`), which is what the default means.
+    default: envelope.fromChoices.includes(envelope.from)
+      ? envelope.from
+      : (envelope.fromChoices[0] as string),
+  };
+}
+
+/**
+ * The identity this send will actually leave under.
+ *
+ * `ctx.choices` has already been validated by core against the menu the action
+ * declared, but this checks it again against the envelope the approval is bound
+ * to — the one object that certainly says what the owner was shown. A value
+ * that is not on it is refused rather than sent under: it is the identity of
+ * the message, and the whole reason the alias stopped being derived from
+ * headers is that nobody should be able to pick it but the owner.
+ */
+export function chosenIdentity(
+  envelope: SendEnvelope,
+  choices: Readonly<Record<string, string>> | undefined,
+): string {
+  const chosen = choices?.[FROM_CHOICE_KEY];
+  if (chosen === undefined) return envelope.from;
+  if (!envelope.fromChoices.includes(chosen)) {
+    throw new Error(
+      `email.send: ${chosen} is not one of the identities this approval offered (${envelope.fromChoices.join(', ')})`,
+    );
+  }
+  return chosen;
+}
+
+/**
+ * Refuse, in the owner's own terms, when the draft moved under a standing
+ * approval (docs/specs/email.md §8).
+ *
+ * The Executor already catches this: it re-describes before dispatch and
+ * compares envelope hashes, and a changed body changes both `bodySha256` and
+ * `artifactId`. What it cannot do is *say* what changed — "the effect changed
+ * since its preview" is true of a subject, a recipient and a whole rewritten
+ * letter alike. So the tool says it, here, in the one place that knows what
+ * these fields mean, and the Executor's refusal carries that sentence.
+ *
+ * It runs only when there is an approved envelope to compare against, so the
+ * first describe — the one that *creates* the approval — is untouched.
+ */
+export function assertUnchangedSinceApproval(envelope: SendEnvelope, ctx: ToolContext): void {
+  const approved = ctx.approvedEffect?.envelope as SendEnvelope | undefined;
+  if (!approved || approved.tool !== 'email.send') return;
+  if (approved.artifactId !== envelope.artifactId) {
+    throw new Error(
+      `email.send: draft ${envelope.draftId} has been edited since you approved it — ` +
+        'the body you approved is a different version of this draft. Nothing was sent; approve the new one.',
+    );
+  }
+  if (approved.bodySha256 !== envelope.bodySha256) {
+    throw new Error(
+      `email.send: the body of draft ${envelope.draftId} has changed since you approved it ` +
+        `(approved ${approved.bodySha256.slice(0, 12)}, now ${envelope.bodySha256.slice(0, 12)}). Nothing was sent.`,
+    );
+  }
 }
 
 const sendInput = z.object({
@@ -301,7 +414,58 @@ export function createSendTool(
 
     async describe(input, ctx): Promise<EffectDescription & { envelope: SendEnvelope }> {
       const envelope = await buildEnvelope(ctx, input.draftId);
-      return { envelope, preview: renderPreview(envelope) };
+      assertUnchangedSinceApproval(envelope, ctx);
+      const choices = fromChoice(envelope);
+      return {
+        envelope,
+        preview: renderPreview(envelope),
+        ...(choices ? { choices: [choices] } : {}),
+      };
+    },
+
+    /*
+     * The claim, run by the Executor after its re-description and before the
+     * ledger row exists (`ToolDefinition.claim`).
+     *
+     * Everything this guards against is somebody editing the draft while the
+     * owner was reading the card. The version the approved envelope named is a
+     * clause in the statement, so an edit that landed after the re-description
+     * takes the claim away rather than being overtaken by it — and a lost claim
+     * settles the approval `refused`, with no effect attempt, because nothing
+     * was attempted.
+     *
+     * Credentials are resolved first, still: a missing secret must refuse
+     * before the row is locked to a dead action, not after.
+     */
+    async claim(input, ctx: ToolContext): Promise<void> {
+      const actionId = ctx.actionId?.trim();
+      if (!actionId) {
+        throw new Error('email.send: no approved action id in the tool context; refusing to send');
+      }
+      const draft = await requireDraft(ctx.db, input.draftId);
+      if (draft.sentActionId === actionId && draft.sentAt) return; // a replay
+
+      // Configuration and the envelope are checked *before* the claim, so a
+      // missing secret or an effect that no longer matches never leaves a draft
+      // locked to an action that will not run.
+      const account = await sendingAccount(ctx, draft);
+      const auth = resolveAuth(account, opts.env ?? process.env);
+      if (!auth.ok) throw new EmailProblemError(auth.problem);
+      const envelope = await buildEnvelope(ctx, input.draftId);
+      // The tool's own sentence first — "this draft has been edited since you
+      // approved it" — because the generic hash refusal underneath is true of a
+      // subject, a recipient and a whole rewritten letter alike, and the owner
+      // is about to be told their mail did not go.
+      assertUnchangedSinceApproval(envelope, ctx);
+      assertApprovedEffect(ctx, envelope);
+
+      await claimDraftForSend({
+        db: ctx.db,
+        draftId: input.draftId,
+        actionId,
+        artifactId: envelope.artifactId,
+        now: ctx.now(),
+      });
     },
 
     async execute(input, ctx: ToolContext): Promise<SendResult> {
@@ -312,21 +476,16 @@ export function createSendTool(
         throw new Error('email.send: no approved action id in the tool context; refusing to send');
       }
 
-      const draft = await requireDraft(ctx.db, input.draftId);
-      if (draft.sentActionId && draft.sentActionId !== actionId) {
-        throw new Error(
-          `email.send: draft ${draft.id} was already sent under action ${draft.sentActionId}; refusing to send it again`,
-        );
-      }
-      if (draft.sentActionId === actionId && draft.sentAt) {
+      const found = await requireDraft(ctx.db, input.draftId);
+      if (found.sentActionId === actionId && found.sentAt) {
         // The same approved action, executed again: hand back the receipt
         // rather than putting a second copy on the wire.
-        return receipt(draft, actionId, true);
+        return receipt(found, actionId, true);
       }
 
       // Configuration is resolved *before* the claim, so a missing secret or an
       // unimplemented auth mode never leaves a draft locked to a dead action.
-      const account = await sendingAccount(ctx, draft);
+      const account = await sendingAccount(ctx, found);
       const auth = resolveAuth(account, opts.env ?? process.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 
@@ -336,26 +495,31 @@ export function createSendTool(
         throw new Error('the sending account changed; propose the send again');
       }
       if (envelope.to.length === 0) {
-        throw new Error(`email.send: draft ${draft.id} has no recipient`);
+        throw new Error(`email.send: draft ${found.id} has no recipient`);
       }
 
-      // Atomic claim. Two executors racing on one draft: exactly one proceeds.
-      const claim = await ctx.db.query(
-        `update email.drafts set sent_action_id = $2
-          where id = $1 and sent_action_id is null
-        returning ${DRAFT_COLUMNS}`,
-        [draft.id, actionId],
-      );
-      if (claim.rows.length === 0) {
-        const current = await requireDraft(ctx.db, draft.id);
-        if (current.sentActionId === actionId && current.sentAt) return receipt(current, actionId, true);
-        throw new Error(
-          `email.send: draft ${draft.id} is already claimed by action ${current.sentActionId}`,
-        );
-      }
+      /*
+       * The claim. Normally the `claim` hook already took this row a moment
+       * ago and this is the same hold asked for again — it is keyed on the
+       * action id, so re-taking it is a no-op. It is done here as well rather
+       * than assumed, because a tool that trusts a hook to have run is a tool
+       * that sends twice the day the hook is skipped, and because `execute` is
+       * reachable directly.
+       */
+      const claimed = await claimDraftForSend({
+        db: ctx.db,
+        draftId: input.draftId,
+        actionId,
+        artifactId: envelope.artifactId,
+        now: ctx.now(),
+      });
+      if (claimed === 'replayed') return receipt(await requireDraft(ctx.db, input.draftId), actionId, true);
+      const draft = claimed;
 
+      // The identity the owner picked on the card, or the envelope's default.
+      const from = chosenIdentity(envelope, ctx.choices);
       const wire: SmtpEnvelope = {
-        from: envelope.from,
+        from,
         to: envelope.to,
         cc: envelope.cc,
         bcc: envelope.bcc,
@@ -373,7 +537,8 @@ export function createSendTool(
         const result = await client.send(wire);
         const { rows } = await ctx.db.query(
           `update email.drafts
-              set sent_at = $2, sent_message_id = $3, sent_response = $4, send_error = null
+              set sent_at = $2, sent_message_id = $3, sent_response = $4, send_error = null,
+                  status = 'sent', updated_at = $2
             where id = $1
           returning ${DRAFT_COLUMNS}`,
           [draft.id, ctx.now(), result.messageId, result.response],

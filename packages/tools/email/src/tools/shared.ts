@@ -267,7 +267,12 @@ export function identityChoices(account: AccountRecord): string[] {
  * account's own address, always. See `identityChoices`.
  */
 export function identityFor(account: AccountRecord): string {
-  return account.address;
+  // Normalized exactly as `identityChoices` normalizes, so the default
+  // identity is always one of the options the owner is offered. A stored
+  // address that was never lowercased — a row inserted by hand — would
+  // otherwise make the two disagree and take every send from that mailbox
+  // down before it reached an approval card.
+  return normalizeAddress(account.address);
 }
 
 export async function findMessage(db: Pool, id: string): Promise<MessageRecord | null> {

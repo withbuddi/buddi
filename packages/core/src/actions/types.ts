@@ -9,6 +9,7 @@
  * invalidates the approval" is a fact about the code, not a promise.
  */
 import { createHash } from 'node:crypto';
+import type { OwnerChoice } from '../tools.js';
 // The narrow slice of `pg.Pool` core uses everywhere. Declared once, in
 // `owner.ts`, so `@buddi/core` exports exactly one `Queryable`.
 export type { Queryable } from '../owner.js';
@@ -26,6 +27,7 @@ export type ApprovalState =
   | 'executing'
   | 'succeeded'
   | 'failed'
+  | 'refused'
   | 'unknown';
 
 /** States from which nothing more will happen on its own. */
@@ -34,6 +36,7 @@ export const TERMINAL_STATES: readonly ApprovalState[] = [
   'expired',
   'succeeded',
   'failed',
+  'refused',
   'unknown',
 ];
 
@@ -59,6 +62,8 @@ export interface ActionRecord {
   jobId: string | null;
   canonicalArgs: unknown;
   envelope: unknown;
+  /** The controls the tool offered the owner. Empty for almost every action. */
+  choices: OwnerChoice[];
   argsHash: string;
   preview: string;
   expiresAt: Date;
@@ -71,6 +76,8 @@ export interface ActionRecord {
   decidedAt: Date | null;
   claimedBy: string | null;
   claimedAt: Date | null;
+  /** What the owner picked among `choices`, or null when they were never asked. */
+  ownerChoices: Record<string, string> | null;
   outcome: unknown;
   updatedAt: Date;
 }
@@ -133,9 +140,119 @@ export function hashEnvelope(envelope: unknown): string {
   return sha256(canonicalJson(envelope));
 }
 
-/** Policy 2 binds the resolved effect as well as the tool's input references. */
-export function hashAction(tool: string, toolVersion: string, args: unknown, envelope: unknown): string {
-  return sha256(canonicalJson({ tool, toolVersion, args, envelope }));
+/**
+ * Policy 2 binds the resolved effect as well as the tool's input references —
+ * and, when the tool offered the owner anything, the list of options they were
+ * offered.
+ *
+ * `choices` is folded in only when there are any. That is not an optimisation:
+ * an approval created before this column existed hashes to exactly the value it
+ * hashed to then, so nothing already waiting for the owner is invalidated by
+ * the upgrade. When there *are* choices, they are inside the hash, so an
+ * approval cannot be executed against a different menu than the one the owner
+ * read.
+ */
+export function hashAction(
+  tool: string,
+  toolVersion: string,
+  args: unknown,
+  envelope: unknown,
+  choices?: readonly OwnerChoice[] | null,
+): string {
+  const base = { tool, toolVersion, args, envelope };
+  return sha256(
+    canonicalJson(choices && choices.length > 0 ? { ...base, choices } : base),
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Owner choices
+ * ------------------------------------------------------------------ */
+
+/** A submitted set of choices that named something nobody offered. */
+export class InvalidChoiceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidChoiceError';
+  }
+}
+
+/**
+ * The map an effect runs with, from what the tool declared and what the owner
+ * submitted.
+ *
+ * This is the whole of "what is approved is what is shown" for choices, and it
+ * lives here — in core, on the decision path every surface goes through —
+ * rather than in any tool or any route:
+ *
+ *  - a key that was not declared is refused, so a surface cannot invent a
+ *    control the preview never mentioned;
+ *  - a value that is not one of that key's options is refused, so a surface
+ *    cannot smuggle a value past the list the owner read;
+ *  - a key the owner did not answer takes the declared default, so a CLI, an
+ *    old client and a Telegram keyboard that ran out of room all resolve to the
+ *    thing the preview says will happen.
+ *
+ * It throws rather than returning a result because every caller answers the
+ * same way: refuse the decision, change nothing.
+ */
+export function resolveOwnerChoices(
+  declared: readonly OwnerChoice[] | null | undefined,
+  submitted: unknown,
+): Record<string, string> {
+  const list = declared ?? [];
+  if (submitted !== undefined && submitted !== null) {
+    if (typeof submitted !== 'object' || Array.isArray(submitted)) {
+      throw new InvalidChoiceError('choices must be an object of key to value');
+    }
+  }
+  const given = (submitted ?? {}) as Record<string, unknown>;
+  const byKey = new Map(list.map((choice) => [choice.key, choice]));
+  for (const [key, value] of Object.entries(given)) {
+    const choice = byKey.get(key);
+    if (!choice) {
+      throw new InvalidChoiceError(
+        `this approval offers no choice called ${JSON.stringify(key)}`,
+      );
+    }
+    if (typeof value !== 'string' || !choice.options.includes(value)) {
+      throw new InvalidChoiceError(
+        `${JSON.stringify(String(value))} is not one of the options offered for ${JSON.stringify(key)}`,
+      );
+    }
+  }
+  const resolved: Record<string, string> = {};
+  for (const choice of list) {
+    const value = given[choice.key];
+    resolved[choice.key] = typeof value === 'string' ? value : choice.default;
+  }
+  return resolved;
+}
+
+/**
+ * A declared choice list, checked at the moment the action is recorded.
+ *
+ * A tool that declares a default outside its own options, or two controls with
+ * one key, has written something the owner could not honestly be shown — and
+ * the place to find that out is here, before anybody is asked, rather than at
+ * execute time with an approval already granted.
+ */
+export function validateDeclaredChoices(choices: readonly OwnerChoice[]): OwnerChoice[] {
+  const seen = new Set<string>();
+  return choices.map((choice) => {
+    const key = (choice.key ?? '').trim();
+    if (key === '') throw new Error('a declared choice needs a key');
+    if (seen.has(key)) throw new Error(`two declared choices share the key ${JSON.stringify(key)}`);
+    seen.add(key);
+    const options = [...(choice.options ?? [])];
+    if (options.length === 0) throw new Error(`the choice ${JSON.stringify(key)} offers no options`);
+    if (!options.includes(choice.default)) {
+      throw new Error(
+        `the default for ${JSON.stringify(key)} is not one of its options`,
+      );
+    }
+    return { key, label: choice.label ?? key, options, default: choice.default };
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -152,6 +269,9 @@ export function toActionRecord(row: any): ActionRecord {
     jobId: row.job_id === null || row.job_id === undefined ? null : String(row.job_id),
     canonicalArgs: parseJson(row.canonical_args),
     envelope: parseJson(row.envelope),
+    // A row read from a build before the column existed has none, which is the
+    // same thing as "this action offered the owner nothing to choose".
+    choices: toChoiceList(parseJson(row.choices ?? null)),
     argsHash: row.args_hash,
     preview: row.preview,
     expiresAt: new Date(row.expires_at),
@@ -163,6 +283,7 @@ export function toActionRecord(row: any): ActionRecord {
     decidedAt: row.decided_at ? new Date(row.decided_at) : null,
     claimedBy: row.claimed_by ?? null,
     claimedAt: row.claimed_at ? new Date(row.claimed_at) : null,
+    ownerChoices: toChoiceMap(parseJson(row.owner_choices ?? null)),
     outcome: parseJson(row.outcome ?? null),
     updatedAt: new Date(row.updated_at),
   };
@@ -180,6 +301,40 @@ export function toAttemptRecord(row: any): EffectAttemptRecord {
     result: parseJson(row.result ?? null),
     error: row.error ?? null,
   };
+}
+
+/** A stored `choices` value, read defensively: a malformed one offers nothing. */
+function toChoiceList(value: unknown): OwnerChoice[] {
+  if (!Array.isArray(value)) return [];
+  const out: OwnerChoice[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const choice = entry as Record<string, unknown>;
+    if (typeof choice.key !== 'string' || !Array.isArray(choice.options)) continue;
+    const options = choice.options.filter((o): o is string => typeof o === 'string');
+    if (options.length === 0) continue;
+    const fallback = options[0] as string;
+    out.push({
+      key: choice.key,
+      label: typeof choice.label === 'string' ? choice.label : choice.key,
+      options,
+      default:
+        typeof choice.default === 'string' && options.includes(choice.default)
+          ? choice.default
+          : fallback,
+    });
+  }
+  return out;
+}
+
+/** A stored `owner_choices` value. Null means the owner was never asked. */
+function toChoiceMap(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'string') out[key] = entry;
+  }
+  return out;
 }
 
 /** `jsonb` comes back parsed from `pg`; tolerate a string for other drivers. */

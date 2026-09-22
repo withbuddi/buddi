@@ -30,6 +30,7 @@ import {
   hashAction,
   hashEnvelope,
   POLICY_VERSION,
+  resolveOwnerChoices,
   toActionRecord,
   type ActionRecord,
   type ApprovalState,
@@ -48,6 +49,23 @@ export interface ExecutableTool {
   timeoutMs?: number | undefined;
   execute(input: any, ctx: ToolContext): Promise<unknown>;
   describe?(input: any, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  /**
+   * Take exclusive hold of whatever this effect is about, immediately before
+   * the ledger row is written — the last moment at which "nothing has
+   * happened" is still true.
+   *
+   * It exists because `describe` cannot close a race it does not hold a lock
+   * over: between the executor's re-description and the tool's own first write
+   * there is a window in which the owner can edit the row the envelope was
+   * built from, and a check that read the row a moment earlier would send the
+   * old text. A tool whose subject can be edited by anyone else does its guard
+   * here, as one conditional statement, and throws when it matches nothing.
+   *
+   * A throw settles the approval `refused` and writes **no effect attempt**,
+   * which is the honest record: the claim is what decides whether anything is
+   * attempted at all, so a claim that failed means nothing was.
+   */
+  claim?(input: any, ctx: ToolContext): Promise<void>;
 }
 
 export interface ToolLookup {
@@ -106,10 +124,10 @@ export async function executeApproved(
         and ap.state = 'approved'
         and a.expires_at > $3
       returning a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-                a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+                a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-                ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at`,
+                ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at`,
     [input.actionId, input.worker, now],
   );
 
@@ -129,7 +147,13 @@ export async function executeApproved(
       message: 'this approval predates full effect binding; propose the action again',
     });
   }
-  const recomputed = hashAction(action.tool, action.toolVersion, action.canonicalArgs, action.envelope);
+  const recomputed = hashAction(
+    action.tool,
+    action.toolVersion,
+    action.canonicalArgs,
+    action.envelope,
+    action.choices,
+  );
   if (recomputed !== action.argsHash) {
     return settleWithoutDispatch(pool, action, 'args-hash-mismatch', {
       message:
@@ -161,10 +185,30 @@ export async function executeApproved(
   // whatever the caller happened to be holding. `actionId` is the idempotency
   // key — this is the only place a tool can get one, and a tool that cannot
   // prove it has not already run refuses without it.
+  // What the owner picked, already validated against the declared menu at
+  // decision time. An action decided before choices existed, or by a surface
+  // that never asked, resolves every key to its declared default here, so a
+  // tool reading `ctx.choices` never has to tell the two cases apart.
+  //
+  // Guarded, although the args hash above already covers a swapped menu: the
+  // approval is claimed into `executing` by now, and an unguarded throw here
+  // would strand it there for good rather than settling it.
+  let ownerChoices: Readonly<Record<string, string>>;
+  try {
+    ownerChoices = Object.freeze(resolveOwnerChoices(action.choices, action.ownerChoices ?? {}));
+  } catch (err) {
+    return settleWithoutDispatch(pool, action, 'effect-changed', {
+      message: `the recorded choices no longer match what was offered: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+
   const ctx: ToolContext = {
     ...input.ctx,
     actionId: action.id,
     approvedEffect: { envelope: structuredClone(action.envelope) },
+    choices: ownerChoices,
     ...(action.agentId ? { agentId: action.agentId } : {}),
     ...(action.conversationId ? { conversationId: action.conversationId } : {}),
     ...(action.jobId ? { jobId: action.jobId } : {}),
@@ -198,6 +242,22 @@ export async function executeApproved(
     return settleWithoutDispatch(pool, action, 'effect-changed', {
       message: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  /*
+   * The tool's own claim, if it has one — after the re-description and before
+   * the ledger row, because a lost claim means nothing was attempted and must
+   * not leave an attempt behind saying otherwise.
+   */
+  if (tool.claim) {
+    try {
+      ctx.signal?.throwIfAborted();
+      await tool.claim(parsed.data, ctx);
+    } catch (err) {
+      return settleWithoutDispatch(pool, action, 'effect-changed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // 3. Intent before dispatch: the ledger row exists before anything leaves.
@@ -309,7 +369,7 @@ async function refuseClaim(
       message: 'the approval expired before it was executed',
     };
   }
-  if (state === 'executing' || state === 'succeeded' || state === 'failed') {
+  if (state === 'executing' || state === 'succeeded' || state === 'failed' || state === 'refused') {
     return {
       ok: false,
       state,
@@ -328,7 +388,13 @@ async function refuseClaim(
 /**
  * A refusal discovered *after* the claim but *before* dispatch. No effect
  * attempt is recorded, because nothing was attempted; the approval lands in
- * `failed` carrying the reason, and never goes back to `approved`.
+ * `refused` carrying the reason, and never goes back to `approved`.
+ *
+ * `refused` rather than `failed` is the whole distinction: `failed` means the
+ * effect was dispatched and threw, and for an irreversible effect that is a
+ * state the owner has to go and check. This one certainly did not happen — the
+ * body changed, the tool moved, the hash no longer matches — and saying so in
+ * the state means a reader does not have to open the outcome to find out.
  */
 async function settleWithoutDispatch(
   pool: Queryable,
@@ -336,14 +402,14 @@ async function settleWithoutDispatch(
   reason: 'args-hash-mismatch' | 'unknown-tool' | 'invalid-args' | 'effect-changed' | 'policy-version-mismatch',
   detail: Record<string, unknown> & { message: string },
 ): Promise<ExecuteApprovedResult> {
-  await settleApproval(pool, action, 'failed', { reason, ...detail });
+  await settleApproval(pool, action, 'refused', { reason, ...detail });
   await emitActionEvent(
     pool,
     'effect.refused',
     { actionId: action.id, tool: action.tool, reason, message: detail.message },
     action.conversationId,
   );
-  return { ok: false, state: 'failed', reason, message: detail.message };
+  return { ok: false, state: 'refused', reason, message: detail.message };
 }
 
 async function startAttempt(
@@ -397,7 +463,7 @@ async function finishAttempt(
 async function settleApproval(
   pool: Queryable,
   action: ActionRecord,
-  state: 'succeeded' | 'failed' | 'unknown',
+  state: 'succeeded' | 'failed' | 'refused' | 'unknown',
   outcome: Record<string, unknown>,
 ): Promise<ActionRecord> {
   const { rows } = await pool.query(

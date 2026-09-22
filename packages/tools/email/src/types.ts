@@ -11,7 +11,7 @@
  */
 import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core';
 
-export type { EffectDescription, Source, SourceContext, ToolContext } from '@buddi/core';
+export type { EffectDescription, OwnerChoice, Source, SourceContext, ToolContext } from '@buddi/core';
 
 /**
  * An effect tool: tier `gated`, with the `describe` the Executor renders from.

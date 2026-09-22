@@ -352,8 +352,90 @@ export interface JobRow {
   updatedAt: string;
 }
 
+/** One conversation in the list. `hasLiveDraft` is the small "draft" pill. */
+export interface EmailThreadRow {
+  id: string;
+  accountId: string;
+  subject: string;
+  participants: string[];
+  state: string;
+  lastAt: string | null;
+  messageCount: number;
+  hasLiveDraft: boolean;
+}
+
+/** One message as the thread list draws it: headers and a snippet, no body. */
+export interface EmailThreadMessage {
+  id: string;
+  direction: 'in' | 'out';
+  from: string;
+  to: string[];
+  subject: string;
+  date: string | null;
+  snippet: string;
+}
+
+export interface EmailDraftRow {
+  id: string;
+  threadId: string | null;
+  accountId: string | null;
+  inReplyTo: string | null;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  bodyText: string;
+  createdByAgent: string;
+  status: string;
+  editedBy: string | null;
+  updatedAt: string | null;
+  createdAt: string | null;
+  sentAt: string | null;
+  live: boolean;
+  /** The approved action holding this draft, when one is. */
+  sentActionId: string | null;
+  sendError: string | null;
+  /** Dispatched and never confirmed: nothing may be done to it until checked. */
+  unresolved: boolean;
+}
+
+/** One message read in full, on request. */
+export interface EmailMessageBody {
+  id: string;
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  date: string | null;
+  direction: 'in' | 'out';
+  /** Null once retention has purged it; the headers stay either way. */
+  bodyText: string | null;
+  purged: boolean;
+}
+
+export interface EmailThreadDetail {
+  thread: EmailThreadRow;
+  messages: EmailThreadMessage[];
+  /** The drafts still waiting on this conversation. */
+  drafts: EmailDraftRow[];
+  /** Sent, discarded and lapsed — folded away under "Older drafts". */
+  older: EmailDraftRow[];
+}
+
+/** One control the tool offered the owner on this approval. */
+export interface OwnerChoiceRow {
+  key: string;
+  label: string;
+  options: string[];
+  default: string;
+}
+
 export interface ApprovalRow {
   permissionScopes?: ('conversation' | 'always')[];
+  /** Controls to draw above the buttons. Empty for almost every action. */
+  choices?: OwnerChoiceRow[];
+  /** What the owner picked, once decided. */
+  ownerChoices?: Record<string, string> | null;
   id: string;
   tool: string;
   toolVersion: string;
@@ -1317,10 +1399,19 @@ export const api = {
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
   stopHost: (agentId: string, conversationId: string) => post<{ stopped: number }>('/host/stop', { agentId, conversationId }),
   revokeHost: (id: string) => post<{ revoked: boolean }>('/host/revoke', { id }),
-  decide: (id: string, decision: 'approve' | 'reject', permissionScope?: 'once' | 'conversation' | 'always') =>
+  decide: (
+    id: string,
+    decision: 'approve' | 'reject',
+    permissionScope?: 'once' | 'conversation' | 'always',
+    // What the owner set on the card's controls. The server checks every key
+    // and value against what the action declared; nothing here is trusted.
+    ownerChoices?: Record<string, string>,
+  ) =>
     post<{ action: ApprovalRow; execution: { state: string; message?: string } | null }>(
       `/approvals/${encodeURIComponent(id)}/${decision}`,
-      permissionScope ? { permissionScope } : undefined,
+      permissionScope || ownerChoices
+        ? { ...(permissionScope ? { permissionScope } : {}), ...(ownerChoices ? { ownerChoices } : {}) }
+        : undefined,
     ),
   setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }),
   service: () => get<ServiceView>('/service'),
@@ -1396,6 +1487,41 @@ export const api = {
     post<EmailPoliciesBulk>('/email/policies/bulk', { action, ids }),
   revokeEmailPolicy: (id: string) =>
     del<EmailPoliciesView>(`/email/policies/${encodeURIComponent(id)}`),
+  /* ---- conversations and drafts (docs/specs/email.md §8) ---- */
+  emailThreads: (accountId?: string) =>
+    get<{ threads: EmailThreadRow[] }>('/email/threads', accountId ? { account: accountId } : {}),
+  emailThread: (id: string) =>
+    get<EmailThreadDetail>(`/email/threads/${encodeURIComponent(id)}`),
+  emailDraft: (id: string) => get<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`),
+  /** One message's body, fetched when it is opened. The list ships snippets. */
+  emailMessage: (id: string) =>
+    get<{ message: EmailMessageBody }>(`/email/messages/${encodeURIComponent(id)}`),
+  /** The owner's own save. It makes the words theirs; no agent writes over them. */
+  saveEmailDraft: (
+    id: string,
+    body: {
+      to: string[];
+      cc: string[];
+      bcc: string[];
+      subject: string;
+      bodyText: string;
+      /**
+       * The version the editor loaded. Required: the route refuses with 409 and
+       * the current draft when it no longer matches, and with 400 when it is
+       * missing — an optional precondition is not one, and a save with no
+       * version is exactly the stale overwrite this exists to stop.
+       */
+      updatedAt: string;
+    },
+  ) => put<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}`, body),
+  discardEmailDraft: (id: string) =>
+    post<{ draft: EmailDraftRow }>(`/email/drafts/${encodeURIComponent(id)}/discard`, {}),
+  /**
+   * Propose the send. Nothing leaves here: the answer is the id of the
+   * `email.send` action, and the owner approves it on the card like any other.
+   */
+  sendEmailDraft: (id: string) =>
+    post<{ actionId: string; preview: string }>(`/email/drafts/${encodeURIComponent(id)}/send`, {}),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),

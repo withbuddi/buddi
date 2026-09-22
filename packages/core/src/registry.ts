@@ -325,6 +325,12 @@ export class ToolRegistry {
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
       ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
+      // `claim` travels with the rest. A tool declares it so that a lost race
+      // settles `refused` with nothing in the effect ledger; a lookup that
+      // dropped it would leave the hook silently never called, and the
+      // executor would go on to record an attempt for something that was
+      // never attempted.
+      ...(tool.claim ? { claim: (input: unknown, ctx: ToolContext) => tool.claim!(input, ctx) } : {}),
       execute: (input: unknown, ctx: ToolContext) => tool.execute(input, ctx),
     };
   }
@@ -428,6 +434,9 @@ export class ToolRegistry {
         canonicalArgs: args,
         envelope: described.envelope,
         preview: described.preview,
+        // The controls the tool offered the owner. They are part of what was
+        // shown, so they are recorded on the action and hashed with it.
+        ...(described.choices && described.choices.length > 0 ? { choices: described.choices } : {}),
         now: ctx.now(),
       });
       const permission = tool.reusableApproval

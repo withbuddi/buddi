@@ -129,6 +129,88 @@ describe('the turn that carries a decided approval', () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * A settled approval, classified for a human
+ * ------------------------------------------------------------------ */
+
+/**
+ * A pre-dispatch refusal is not a success, and the transcript is where that
+ * matters most.
+ *
+ * The gate's answer is replaced, on read, by the state of the action it names.
+ * If the classification forgets a terminal state, the block comes back `ok`
+ * with no error and `MessageList` draws a green tick — so an `email.send`
+ * refused because the owner edited the draft under a standing approval would
+ * read, in the one place they are most likely to look, as a send that happened.
+ */
+describe('a gated call whose approval has settled', () => {
+  const conversationId = '00000000-0000-4000-8000-00000000000c';
+  const actionId = '00000000-0000-4000-8000-00000000000d';
+  const toolUseId = 'tu-1';
+
+  function pool(state: string): never {
+    return {
+      query: vi.fn(async (sql: string) => {
+        if (/from core\.conversations/.test(sql)) {
+          return { rows: [{ id: conversationId, agent_id: 'ada', group_id: null, created_at: new Date() }] };
+        }
+        if (/from core\.messages/.test(sql)) {
+          return {
+            rows: [
+              {
+                id: 'm1',
+                role: 'assistant',
+                created_at: new Date(),
+                speaker: null,
+                content: [{ type: 'tool_use', id: toolUseId, name: 'email.send', input: { draftId: 'd1' } }],
+              },
+              {
+                id: 'm2',
+                role: 'user',
+                created_at: new Date(),
+                speaker: null,
+                content: [
+                  {
+                    type: 'tool_result',
+                    tool_use_id: toolUseId,
+                    content: `awaiting owner approval (action ${actionId}); this effect has not happened`,
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        if (/from core\.actions/.test(sql)) {
+          return {
+            rows: [{ id: actionId, tool: 'email.send', state, outcome: { reason: 'effect-changed' } }],
+          };
+        }
+        return { rows: [] };
+      }),
+    } as never;
+  }
+
+  it('draws a refused approval as a refusal, never as a green tick', async () => {
+    const transcript = await readChatTranscript(pool('refused'), conversationId);
+    const blocks = transcript!.messages.flatMap((m) => m.blocks);
+    const result = blocks.find((b) => b.type === 'tool_result') as never as {
+      ok: boolean;
+      error?: string;
+      approval?: { state: string };
+    };
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Action refused');
+    expect(result.approval).toMatchObject({ state: 'refused' });
+  });
+
+  it('still draws a succeeded one as a success', async () => {
+    const transcript = await readChatTranscript(pool('succeeded'), conversationId);
+    const blocks = transcript!.messages.flatMap((m) => m.blocks);
+    const result = blocks.find((b) => b.type === 'tool_result') as never as { ok: boolean };
+    expect(result.ok).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * A delegation, told where it went
  * ------------------------------------------------------------------ */
 

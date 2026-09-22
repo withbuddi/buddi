@@ -120,6 +120,18 @@ export interface ToolContext {
    * fails closed when it is absent rather than dispatching without a key.
    */
   actionId?: string;
+  /**
+   * What the owner chose on the approval card, by choice key — validated by
+   * core against the `choices` the tool declared at describe time, with every
+   * key the owner did not answer filled in from its default.
+   *
+   * Set only by `executeApproved`, for the same reason `actionId` is: it is a
+   * statement about a decision, and a tool that read it from anywhere else
+   * would be reading something nobody approved. A gated tool that declares
+   * choices must still cope with it being absent (an older action, a surface
+   * that never asked) by falling back to its own default.
+   */
+  choices?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -140,6 +152,39 @@ export interface EffectDescription {
   envelope: unknown;
   /** Plain text, short, owner-facing. Never markdown, never model prose. */
   preview: string;
+  /**
+   * Settings on this effect the *owner* decides, at the moment they approve it.
+   *
+   * "What is approved is what is shown" is unchanged and is the reason this
+   * exists in the description rather than on the decision: the owner can only
+   * pick among options the tool itself listed, before anyone was asked, in the
+   * same object the preview was rendered from. A surface that offered a value
+   * that is not in `options` is offering something nobody described, and core
+   * refuses it (`resolveOwnerChoices`).
+   *
+   * Declare a choice only when there is something to choose: a single-option
+   * list is a fact, and a fact belongs in the preview.
+   */
+  choices?: OwnerChoice[];
+}
+
+/**
+ * One thing the owner may set on an approval: a named control with a fixed set
+ * of values and one of them preselected.
+ *
+ * `default` is what happens if the owner says nothing — on a surface that draws
+ * no control, on an approval decided from the CLI, on a Telegram keyboard that
+ * ran out of buttons. It must be one of `options`.
+ */
+export interface OwnerChoice {
+  /** Stable, machine-facing; the key of the map `execute` receives. */
+  key: string;
+  /** Owner-facing, one short line: what this control is for. */
+  label: string;
+  /** Every value the owner may pick. Nothing outside this list is accepted. */
+  options: string[];
+  /** The value used when the owner picks nothing. One of `options`. */
+  default: string;
 }
 
 export interface ToolDefinition<I = unknown, O = unknown> {
@@ -169,6 +214,23 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * to prevent.
    */
   describe?(input: I, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  /**
+   * Take exclusive hold of what this effect is about, immediately before the
+   * effect ledger row is written — the last moment at which "nothing has
+   * happened" is still true.
+   *
+   * Only for a `gated` tool whose subject somebody else can edit while the
+   * owner is deciding. `describe` cannot close that race: it reads, and between
+   * that read and the tool's first write the row can move. So the guard goes
+   * here, as one conditional statement over the thing itself — `email.send`
+   * claims the draft row on the artifact version the envelope names — and it
+   * throws when the statement matches nothing.
+   *
+   * A throw settles the approval `refused` and records **no effect attempt**:
+   * the claim is what decides whether anything is attempted, so a lost claim
+   * means nothing was.
+   */
+  claim?(input: I, ctx: ToolContext): Promise<void>;
   /**
    * How long the Executor waits for this tool before recording the attempt as
    * `unknown` (never as failed, and never auto-retried). Defaults to

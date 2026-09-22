@@ -17,6 +17,7 @@ import { fmtTime } from '../../format';
 import { humanise } from '../resolve';
 import { fmtValue } from '../format';
 import { ErrorBanner } from '../../ui';
+import { useOwnerChoices } from '../../views/parts/OwnerChoices';
 import type { EnvelopeProps } from '../types';
 
 export function Envelope({
@@ -55,11 +56,17 @@ export function Envelope({
     };
   }, [props.approvalId]);
 
+  // The tool's own controls. Declared on the action, defaults preselected, and
+  // sent with the decision — the Code preview above stays exactly the tool's
+  // text and says nothing about them.
+  const { values, controls } = useOwnerChoices(action?.choices);
+
   const decide = (decision: 'approve' | 'reject', permissionScope?: 'once' | 'conversation' | 'always'): void => {
     setBusy(decision);
     setError(null);
-    api
-      .decide(props.approvalId, decision, permissionScope)
+    (values && decision === 'approve'
+      ? api.decide(props.approvalId, decision, permissionScope, values)
+      : api.decide(props.approvalId, decision, permissionScope))
       .then((result) => {
         setAction(result.action);
         onDecided?.(result.action);
@@ -98,6 +105,8 @@ export function Envelope({
       </div>
 
       <ErrorBanner message={error} />
+
+      {pending ? controls : null}
 
       {pending ? (
         <div className="wb-row-wrap wb-block">

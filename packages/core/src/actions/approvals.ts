@@ -17,7 +17,12 @@
  */
 import type { Queryable } from '../owner.js';
 import { emitActionEvent } from './store.js';
-import { toActionRecord, type ActionRecord, type ApprovalState } from './types.js';
+import {
+  resolveOwnerChoices,
+  toActionRecord,
+  type ActionRecord,
+  type ApprovalState,
+} from './types.js';
 import { getAction } from './store.js';
 import type { ToolLookup } from './execute.js';
 import type { PermissionScope } from './permissions.js';
@@ -34,13 +39,22 @@ export interface DecideApprovalInput {
   now?: Date;
   permissionScope?: PermissionScope;
   registry?: ToolLookup;
+  /**
+   * What the owner picked among the choices the action declared, by key.
+   *
+   * Validated here against the declared list — not by the surface that
+   * collected it — so "the owner can only pick among options the envelope
+   * itself listed" is one rule in one place, whatever surface the tap came
+   * from. Keys the owner left out take their declared default.
+   */
+  ownerChoices?: Record<string, unknown>;
 }
 
 export type DecideApprovalResult =
   | { ok: true; action: ActionRecord }
   | {
       ok: false;
-      reason: 'not-found' | 'expired' | 'already-decided' | 'invalid-permission';
+      reason: 'not-found' | 'expired' | 'already-decided' | 'invalid-permission' | 'invalid-choice';
       /** The state the approval is actually in, when there is a row. */
       state?: ApprovalState;
       message: string;
@@ -51,6 +65,40 @@ export async function decideApproval(
   input: DecideApprovalInput,
 ): Promise<DecideApprovalResult> {
   const now = input.now ?? new Date();
+
+  /*
+   * The owner's choices, resolved before anything moves.
+   *
+   * Read from the *stored* action, never from what the surface sent: the
+   * declared menu is part of the action object the hash binds, so validating
+   * against it is validating against what the owner was actually shown. An
+   * approval with no declared choices resolves to `{}` and this costs one
+   * extra read; a rejection is never a choice about anything and skips it.
+   */
+  let ownerChoices: Record<string, string> = {};
+  if (input.decision === 'approved') {
+    const declared = await getAction(pool, input.actionId);
+    if (declared) {
+      try {
+        ownerChoices = resolveOwnerChoices(declared.choices, input.ownerChoices);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'invalid-choice',
+          state: declared.state,
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+  } else if (input.ownerChoices && Object.keys(input.ownerChoices).length > 0) {
+    // Rejecting *and* choosing is incoherent enough to be a bug in the caller.
+    return {
+      ok: false,
+      reason: 'invalid-choice',
+      message: 'a rejection carries no choices',
+    };
+  }
+
   const remember = input.permissionScope && input.permissionScope !== 'once';
   if (remember) {
     const action = await getAction(pool, input.actionId);
@@ -77,24 +125,33 @@ export async function decideApproval(
 
   const { rows } = await pool.query(
     `${remember ? 'with decided as (' : ''}update core.approvals ap
-        set state = $2, decided_by = $3, decided_via = $4, decided_at = $5, updated_at = $5
+        set state = $2, decided_by = $3, decided_via = $4, decided_at = $5, updated_at = $5,
+            owner_choices = $6::jsonb
        from core.actions a
       where ap.action_id = a.id
         and ap.action_id = $1
         and ap.state = 'pending'
         and a.expires_at > $5
       returning a.id, a.tool, a.tool_version, a.agent_id, a.conversation_id, a.job_id,
-                a.canonical_args, a.envelope, a.args_hash, a.preview, a.expires_at,
+                a.canonical_args, a.envelope, a.choices, a.args_hash, a.preview, a.expires_at,
                 a.policy_version, a.created_at,
                 ap.state, ap.decided_by, ap.decided_via, ap.decided_at,
-                ap.claimed_by, ap.claimed_at, ap.outcome, ap.updated_at${remember ? `
+                ap.claimed_by, ap.claimed_at, ap.owner_choices, ap.outcome, ap.updated_at${remember ? `
       ), remembered as (
         insert into core.tool_permissions (owner_id, agent_id, tool, tool_version, conversation_id, granted_via)
-        select $3, agent_id, tool, tool_version, case when $6 = 'always' then '' else conversation_id::text end, $4 from decided
+        select $3, agent_id, tool, tool_version, case when $7 = 'always' then '' else conversation_id::text end, $4 from decided
         on conflict (owner_id, agent_id, tool, tool_version, conversation_id)
         do update set granted_via=excluded.granted_via
       ) select * from decided` : ''}`,
-    [input.actionId, input.decision, input.by, input.via, now, ...(remember ? [input.permissionScope] : [])],
+    [
+      input.actionId,
+      input.decision,
+      input.by,
+      input.via,
+      now,
+      input.decision === 'approved' ? JSON.stringify(ownerChoices) : null,
+      ...(remember ? [input.permissionScope] : []),
+    ],
   );
 
   if (rows[0]) {
@@ -110,6 +167,7 @@ export async function decideApproval(
         decidedVia: input.via,
         jobId: action.jobId,
         permissionScope: input.permissionScope ?? 'once',
+        ...(Object.keys(ownerChoices).length > 0 ? { ownerChoices } : {}),
       },
       action.conversationId,
     );

@@ -95,6 +95,7 @@ export async function decideApprovalFromWeb(
   actionId: string,
   decision: Decision,
   permissionScope: PermissionScope = 'once',
+  ownerChoices?: Record<string, unknown>,
 ): Promise<WriteResult<DecideResult>> {
   const now = deps.now();
   const outcome = await decideApproval(deps.pool, {
@@ -105,11 +106,15 @@ export async function decideApprovalFromWeb(
     now,
     permissionScope,
     registry: deps.registry,
+    ...(ownerChoices ? { ownerChoices } : {}),
   });
 
   if (!outcome.ok) {
     const current = await getAction(deps.pool, actionId);
-    const status = outcome.reason === 'not-found' ? 404 : 409;
+    // A choice nobody offered is a bad request, not a conflict: the card sent
+    // something the action never declared, and no state moved.
+    const status =
+      outcome.reason === 'not-found' ? 404 : outcome.reason === 'invalid-choice' ? 400 : 409;
     return {
       ok: false,
       status,

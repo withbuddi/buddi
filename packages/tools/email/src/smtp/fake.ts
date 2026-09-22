@@ -6,6 +6,15 @@ import type { SmtpClient, SmtpClientFactory, SmtpEnvelope, SmtpResult } from '..
 
 export class FakeSmtpServer {
   readonly sent: SmtpEnvelope[] = [];
+  /**
+   * The address of the account each client authenticated as, in order.
+   *
+   * Separate from `sent[].from` on purpose, and that separation is the point:
+   * an alias changes who the message is *from*, never which mailbox opened the
+   * connection. A test that only looked at `from` could not tell the two
+   * apart, and telling them apart is the whole of the identity choice.
+   */
+  readonly logins: string[] = [];
   closes = 0;
   /** Set to make the next send fail, the way a refused relay would. */
   failWith: Error | null = null;
@@ -41,6 +50,9 @@ export class FakeSmtpServer {
   }
 
   factory(): SmtpClientFactory {
-    return async () => this.client();
+    return async (account) => {
+      this.logins.push(account.address);
+      return this.client();
+    };
   }
 }

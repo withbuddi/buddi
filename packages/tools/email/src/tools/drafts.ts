@@ -11,10 +11,19 @@
  * provenance, and the draft row points at that version. That is what lets an
  * approval reference a version and what makes the preview *be* what ships.
  */
-import { saveArtifact, type ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core';
 import { z } from 'zod';
+import {
+  DraftWriteConflict,
+  insertLiveDraft,
+  liveDraftForThread,
+  listDraftsForThread,
+  OWNER_EDITOR,
+  threadOfMessageId,
+  updateDraftRow,
+} from '../drafts.js';
 import { normalizeAddresses, replyRecipients, replySubject } from '../mail.js';
-import { DRAFT_COLUMNS, toDraft } from '../rows.js';
+import type { DraftRecord } from '../rows.js';
 import {
   ACCOUNT_ARG,
   accountOf,
@@ -22,10 +31,10 @@ import {
   ownAddresses,
   requireAgentId,
   requireMessage,
+  requireDraft,
   requireOneAccount,
   UUID,
 } from './shared.js';
-import type { Pool } from 'pg';
 
 const ADDRESS = z.string().min(3).describe('One email address.');
 
@@ -34,73 +43,44 @@ const BODY = z
   .min(1)
   .describe('The full plain-text body of the message. Write it as it should be sent.');
 
-/** A filename for the stored artifact — readable in a listing, safe on disk. */
-export function draftFilename(subject: string, at: Date): string {
-  const slug = subject
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
-  return `draft-${at.toISOString().slice(0, 10)}-${slug || 'untitled'}.txt`;
-}
-
-interface InsertDraftInput {
-  db: Pool;
-  /** The mailbox this draft will leave from. Never inferred at send time. */
-  accountId: string;
+/**
+ * How a draft reads back to the agent that wrote it — or to the one that came
+ * along afterwards and found the owner had rewritten it.
+ */
+export interface DraftView {
+  id: string;
+  from: string;
+  account: string;
+  threadId: string | null;
   inReplyTo: string | null;
   to: string[];
   cc: string[];
   bcc: string[];
   subject: string;
   bodyText: string;
-  agentId: string;
-  conversationId?: string | undefined;
-  now: Date;
-  /** The account's address, for the result. */
-  accountAddress: string;
-  /** The identity this will be sent under: an alias, or the address itself. */
-  from: string;
+  artifactId: string | null;
+  createdBy: string;
+  status: string;
+  /** `owner` once the owner has saved over the words. */
+  editedBy: string | null;
+  updatedAt: string | null;
+  sent: boolean;
+  note: string;
 }
 
-async function insertDraft(input: InsertDraftInput) {
-  // The body lands in the artifact store first: an orphan artifact is harmless,
-  // a draft row pointing at an artifact that was never written is a broken
-  // reference an approval would later try to render.
-  const artifact = await saveArtifact(input.db, {
-    bytes: Buffer.from(input.bodyText, 'utf8'),
-    mime: 'text/plain',
-    filename: draftFilename(input.subject, input.now),
-    caption: input.subject,
-    createdBy: input.agentId,
-    conversationId: input.conversationId ?? null,
-  });
+const NOT_SENT =
+  'Nothing has been sent. A draft only leaves the machine through email.send, which the owner must approve.';
 
-  const { rows } = await input.db.query(
-    `insert into email.drafts
-       (account_id, in_reply_to, to_addrs, cc, bcc, subject, body_text, artifact_id, created_by_agent, created_at)
-     values ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10)
-     returning ${DRAFT_COLUMNS}`,
-    [
-      input.accountId,
-      input.inReplyTo,
-      JSON.stringify(input.to),
-      JSON.stringify(input.cc),
-      JSON.stringify(input.bcc),
-      input.subject,
-      input.bodyText,
-      artifact.id,
-      input.agentId,
-      input.now,
-    ],
-  );
-  const row = rows[0];
-  if (!row) throw new Error('draft insert returned no row');
-  const draft = toDraft(row);
+export function draftView(
+  draft: DraftRecord,
+  identity: { from: string; account: string },
+  note = NOT_SENT,
+): DraftView {
   return {
     id: draft.id,
-    from: input.from,
-    account: input.accountAddress,
+    from: identity.from,
+    account: identity.account,
+    threadId: draft.threadId,
     inReplyTo: draft.inReplyTo,
     to: draft.to,
     cc: draft.cc,
@@ -109,8 +89,11 @@ async function insertDraft(input: InsertDraftInput) {
     bodyText: draft.bodyText,
     artifactId: draft.artifactId,
     createdBy: draft.createdByAgent,
-    sent: false,
-    note: 'Nothing has been sent. A draft only leaves the machine through email.send, which the owner must approve.',
+    status: draft.status,
+    editedBy: draft.editedBy,
+    updatedAt: draft.updatedAt,
+    sent: draft.status === 'sent',
+    note,
   };
 }
 
@@ -172,25 +155,104 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
       );
     }
 
-    const draft = await insertDraft({
-      db: ctx.db,
-      accountId: account.id,
-      accountAddress: account.address,
-      // The account's own address. Never an alias picked off the original's
-      // To or Cc — those are headers the sender wrote (see `identityChoices`);
-      // the owner chooses an alias on the approval card, where the envelope
-      // lists them.
-      from: identityFor(account),
-      inReplyTo: original.id,
+    // docs/specs/email.md §8: one conversation, one live draft. A second
+    // `draft_reply` on the same thread rewrites the one that is there rather
+    // than stacking another beside it — "tapping Draft a reply twice edits one
+    // draft" (§12.4) — with the one exception that makes the whole lifecycle
+    // safe: a draft the *owner* has edited is the owner's words, and an agent
+    // does not get to write over those without having read them.
+    const threadId = original.threadId ?? (await threadOfMessageId(ctx.db, original.id));
+    const live = threadId ? await liveDraftForThread(ctx.db, threadId) : null;
+
+    // The account's own address. Never an alias picked off the original's To or
+    // Cc — those are headers the sender wrote (see `identityChoices`); the owner
+    // chooses an alias on the approval card, where the envelope lists them.
+    const identity = { from: identityFor(account), account: account.address };
+    const fields = {
       to: audience.to,
       cc: audience.cc,
       bcc: audience.bcc,
       subject: input.subjectOverride ?? replySubject(original.subject),
       bodyText: input.bodyText,
-      agentId,
-      conversationId: ctx.conversationId,
-      now: ctx.now(),
+    };
+
+    /*
+     * The owner-edit refusal, and where it is actually decided.
+     *
+     * The early return below is the *message*: it reads the row and produces
+     * the sentence that names `email.read_draft`. What enforces the rule is the
+     * predicate inside `updateDraftRow` (`edited_by is distinct from 'owner'`),
+     * because between this read and that write the owner can save — and a rule
+     * that protects the one thing in this plugin that cannot be recovered does
+     * not get to be a check that something else can overtake. Both paths end at
+     * the same result; only one of them can lose a race, and it is not the one
+     * that matters.
+     */
+    const refuseOwnerEdited = (edited: DraftRecord) => ({
+      ...draftView(edited, identity, ownerEditedNote(edited)),
+      wrote: false,
+      ownerEdited: edited.editedBy === OWNER_EDITOR,
+      ownerDecision: null,
     });
+    if (live && live.editedBy === OWNER_EDITOR) return refuseOwnerEdited(live);
+
+    let record: DraftRecord;
+    if (live) {
+      try {
+        record = await updateDraftRow({
+          db: ctx.db,
+          draftId: live.id,
+          ...fields,
+          editedBy: agentId,
+          byOwner: false,
+          // The version this run read. Two agents can reach the same live
+          // draft and both rewrite it; without a version in the predicate the
+          // second silently replaces work the first had already done, and
+          // neither the owner nor either agent would ever know.
+          expectedArtifactId: live.artifactId,
+          conversationId: ctx.conversationId ?? null,
+          now: ctx.now(),
+        });
+      } catch (err) {
+        // Somebody wrote in the window this exists to close: the owner
+        // (`owner-edited`) or another agent (`stale`). Either way the answer is
+        // the same — read what is there first.
+        if (
+          err instanceof DraftWriteConflict &&
+          (err.reason === 'owner-edited' || err.reason === 'stale') &&
+          err.current
+        ) {
+          return refuseOwnerEdited(err.current);
+        }
+        throw err;
+      }
+    } else {
+      try {
+        record = await insertLiveDraft({
+          db: ctx.db,
+          accountId: account.id,
+          inReplyTo: original.id,
+          threadId,
+          ...fields,
+          agentId,
+          conversationId: ctx.conversationId,
+          now: ctx.now(),
+        });
+      } catch (err) {
+        // The insert lost the race, and the winner is a draft the owner had
+        // already edited: the same refusal, from the other direction.
+        if (err instanceof DraftWriteConflict && err.reason === 'owner-edited' && err.current) {
+          return refuseOwnerEdited(err.current);
+        }
+        throw err;
+      }
+    }
+
+    const draft = {
+      ...draftView(record, identity),
+      wrote: true,
+      replaced: live ? live.id : null,
+    };
 
     // What the draft says about its own audience, so the agent can tell the
     // owner who this would reach without re-deriving it from the original.
@@ -307,13 +369,14 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
     const account = await requireOneAccount(ctx.db, input.account);
     const to = normalizeAddresses(Array.isArray(input.to) ? input.to : [input.to]);
     if (to.length === 0) throw new Error('email.draft_new: at least one recipient is required');
-    return insertDraft({
+    // `draft_new` always creates. It answers nothing, so there is no thread to
+    // hold a live draft, and two new messages to the same stranger are two
+    // messages rather than one rewritten (docs/specs/email.md §8).
+    const record = await insertLiveDraft({
       db: ctx.db,
       accountId: account.id,
-      accountAddress: account.address,
-      // Nothing was addressed to an alias, so this is the account speaking.
-      from: account.address,
       inReplyTo: null,
+      threadId: null,
       to,
       cc: normalizeAddresses(input.cc ?? []),
       bcc: normalizeAddresses(input.bcc ?? []),
@@ -323,5 +386,83 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
       conversationId: ctx.conversationId,
       now: ctx.now(),
     });
+    // Nothing was addressed to an alias, so this is the account speaking.
+    return { ...draftView(record, { from: account.address, account: account.address }), wrote: true };
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * email.read_draft
+ * ------------------------------------------------------------------ */
+
+/**
+ * What an agent is told when it tried to write over the owner's own words.
+ *
+ * It names the draft and the one tool that reads it, because the next thing the
+ * agent does must be to look at what the owner wrote rather than to try again
+ * with a slightly different sentence.
+ */
+export function ownerEditedNote(draft: DraftRecord): string {
+  const when = draft.updatedAt ? ` (last changed ${draft.updatedAt})` : '';
+  const who =
+    draft.editedBy === OWNER_EDITOR
+      ? `The owner has edited this draft${when}, so nothing was written over it: their words are not yours to replace.`
+      : `This draft was rewritten${when} while you were composing — by another run, working from something you have not seen — so nothing was written over it.`;
+  return (
+    `${who} ` +
+    `Read what is there with email.read_draft { draftId: "${draft.id}" }, and if a change is still needed, ` +
+    'say what you would change and let the owner decide — on the Mail page they can edit it themselves, or discard it and ask you for a new one.'
+  );
+}
+
+const readDraftInput = z.object({
+  draftId: UUID.describe('The draft to read, by its id.').optional(),
+  threadId: UUID.describe('A conversation, to read its live draft instead.').optional(),
+  includeOlder: z
+    .boolean()
+    .optional()
+    .describe('With `threadId`: also list the sent, discarded and lapsed drafts on that conversation.'),
+});
+
+export const readDraft: ToolDefinition<z.infer<typeof readDraftInput>, unknown> = {
+  name: 'email.read_draft',
+  description:
+    "Read a draft as it stands now — including one the owner has edited. Give a draft id, or a thread id to read that conversation's live draft. Read before rewriting: email.draft_reply will not write over a draft the owner has edited, and this is how you find out what they said.",
+  tier: 'auto',
+  input: readDraftInput,
+  async execute(input, ctx) {
+    if (!input.draftId && !input.threadId) {
+      throw new Error('email.read_draft: give either a draftId or a threadId');
+    }
+    const record = input.draftId
+      ? await requireDraft(ctx.db, input.draftId)
+      : await liveDraftForThread(ctx.db, input.threadId as string);
+    if (!record) {
+      return {
+        draft: null,
+        note: 'That conversation has no live draft. email.draft_reply would write a new one.',
+      };
+    }
+    const account = record.accountId ? await accountOf(ctx.db, record.accountId) : null;
+    const identity = {
+      from: account ? identityFor(account) : '',
+      account: account ? account.address : '',
+    };
+    const older =
+      input.includeOlder && record.threadId
+        ? (await listDraftsForThread(ctx.db, record.threadId))
+            .filter((d) => d.id !== record.id)
+            .map((d) => draftView(d, identity, ''))
+        : undefined;
+    return {
+      draft: draftView(
+        record,
+        identity,
+        record.editedBy === OWNER_EDITOR
+          ? 'These are the owner\'s own words. Do not rewrite them without being asked to.'
+          : 'Nothing has been sent. A draft only leaves the machine through email.send, which the owner must approve.',
+      ),
+      ...(older ? { olderDrafts: older } : {}),
+    };
   },
 };
