@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" width="400" height="440">
+  <title>Buddi Blob, core, neutral</title>
+  <desc>Layered vector master: shadow, feet, arms, body with the signature bump, face. Colours from the character bible.</desc>
+  <defs>
+    <radialGradient id="body" cx="40%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#5FA4FF"/>
+      <stop offset="1" stop-color="#3F8EF7"/>
+    </radialGradient>
+  </defs>
+  <g id="shadow">
+    <ellipse cx="204" cy="404" rx="100" ry="12" fill="#152642" opacity="0.10"/>
+  </g>
+  <g id="feet">
+    <ellipse cx="168" cy="392" rx="30" ry="14" fill="#3F8EF7"/>
+    <ellipse cx="248" cy="392" rx="30" ry="14" fill="#3F8EF7"/>
+  </g>
+  <g id="arm-left">
+    <path d="M100 262 C 66 254, 60 300, 92 306 C 112 310, 124 290, 114 274 Z" fill="#3F8EF7"/>
+  </g>
+  <g id="body-main">
+    <!-- Taller than wide, heavier at the bottom, leaning slightly right; the bump is part of the outline. -->
+    <path d="M186 74
+             C 226 60, 262 66, 288 46
+             C 302 36, 318 48, 306 64
+             C 296 78, 284 84, 282 96
+             C 314 126, 330 176, 328 232
+             C 326 300, 300 372, 226 384
+             C 142 396, 92 336, 88 254
+             C 84 178, 118 96, 186 74 Z" fill="url(#body)"/>
+  </g>
+  <g id="bump-tip">
+    <circle cx="308" cy="50" r="19" fill="#FF786A"/>
+  </g>
+  <g id="arm-right">
+    <path d="M318 256 C 350 250, 356 292, 328 300 C 308 306, 296 286, 306 270 Z" fill="#3F8EF7"/>
+  </g>
+  <g id="face">
+    <g id="eye-left">
+      <ellipse cx="164" cy="212" rx="30" ry="37" fill="#FFF7E8"/>
+      <ellipse cx="170" cy="216" rx="17" ry="22" fill="#152642"/>
+      <circle cx="177" cy="206" r="6" fill="#FFF7E8"/>
+    </g>
+    <g id="eye-right">
+      <ellipse cx="252" cy="206" rx="31" ry="38" fill="#FFF7E8"/>
+      <ellipse cx="258" cy="210" rx="17" ry="22" fill="#152642"/>
+      <circle cx="265" cy="200" r="6" fill="#FFF7E8"/>
+    </g>
+    <g id="mouth">
+      <path d="M192 272 C 202 284, 218 284, 228 272" fill="none" stroke="#152642" stroke-width="7" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>
