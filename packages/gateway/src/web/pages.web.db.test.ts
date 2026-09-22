@@ -146,6 +146,14 @@ suite('the plugin page routes', () => {
         },
         // Declared without `.strict()`: the framework adds it.
         { name: 'loose', params: z.object({}), produce: async () => ({ ok: true }) },
+        // An answer no JSON can hold: the 502 must be the route's, not a throw.
+        { name: 'unserialisable', params: z.object({}).strict(), produce: async () => ({ n: 1n }) },
+        // Every character of it two bytes wide: the cap is bytes, not length.
+        {
+          name: 'heavy',
+          params: z.object({}).strict(),
+          produce: async () => ({ text: 'é'.repeat(700_000) }),
+        },
       ],
     });
     registry.register(otherManifest);
@@ -328,6 +336,23 @@ suite('the plugin page routes', () => {
     expect(body.error).toBe('The demo plugin could not answer flood.');
     expect(body.reference).toMatch(/^[0-9a-f]{8}$/);
     expect(logged.some((line) => line.includes(body.reference) && line.includes('rows'))).toBe(true);
+  });
+
+  it('refuses an answer it cannot serialise, rather than failing on the way out', async () => {
+    const res = await new Client(base).get('/api/pages/demo/unserialisable');
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: string }).error).toBe('The demo plugin could not answer unserialisable.');
+    expect(logged.some((line) => line.includes('cannot be serialised'))).toBe(true);
+    // The server is still answering: nothing was thrown out of the route.
+    expect((await new Client(base).get('/api/pages/demo/items')).status).toBe(200);
+  });
+
+  it('weighs an answer in bytes, not in characters', async () => {
+    // 700k characters is under the 1 MB cap by `String.length` and well over
+    // it once it is UTF-8 on the wire.
+    const res = await new Client(base).get('/api/pages/demo/heavy');
+    expect(res.status).toBe(502);
+    expect(logged.some((line) => line.includes('bytes; a page reads at most'))).toBe(true);
   });
 
   it('refuses a parameter the query never declared, even when the plugin forgot `.strict()`', async () => {

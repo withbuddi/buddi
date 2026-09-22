@@ -73,7 +73,15 @@ function failed(deps: PagesDeps, plugin: string, query: string, detail: string):
   };
 }
 
-/** The biggest array anywhere in an answer, and what the whole thing weighs. */
+/**
+ * The biggest array anywhere in an answer, and what the whole thing weighs.
+ *
+ * Bytes, not characters: a page's answer is sent as UTF-8, and an answer full
+ * of accents or emoji weighs half again what `String.length` claims. The
+ * serialisation itself is inside the check, so a BigInt or a cycle a plugin
+ * handed back is the same 502 as an answer that is merely too big — never an
+ * exception on the way out of the route.
+ */
 function tooBig(value: unknown): string | null {
   const stack: unknown[] = [value];
   const seen = new Set<object>();
@@ -90,7 +98,12 @@ function tooBig(value: unknown): string | null {
     }
     stack.push(...Object.values(node as Record<string, unknown>));
   }
-  const size = JSON.stringify(value ?? null)?.length ?? 0;
+  let size: number;
+  try {
+    size = Buffer.byteLength(JSON.stringify(value ?? null) ?? 'null', 'utf8');
+  } catch (err) {
+    return `its answer cannot be serialised: ${err instanceof Error ? err.message : String(err)}`;
+  }
   if (size > PAGE_RESULT_LIMITS.bytes) {
     return `it answered with ${size} bytes; a page reads at most ${PAGE_RESULT_LIMITS.bytes}`;
   }
@@ -100,21 +113,35 @@ function tooBig(value: unknown): string | null {
 /** One session's recent writes, for the rate limit. Per process, like every other. */
 const acts = new Map<string, number[]>();
 
-/** Has this session run out of writes for the minute? */
+/** How many sessions the limiter will remember at once. */
+export const PAGE_ACT_SESSIONS = 1_000;
+
+/**
+ * Has this session run out of writes for the minute?
+ *
+ * The map is swept on every call and bounded above: a table keyed by session
+ * id, in a process that runs for months, is a slow leak otherwise. Insertion
+ * order is age order here — a session is re-inserted whenever it writes — so
+ * evicting from the front drops the least recently active first.
+ */
 export function actRateLimited(sessionId: string, now: number): boolean {
+  // Sweep first: every session whose window has gone by is forgotten.
+  for (const [id, times] of acts) {
+    if (times.every((at) => now - at >= PAGE_ACT_RATE.windowMs)) acts.delete(id);
+  }
   const recent = (acts.get(sessionId) ?? []).filter((at) => now - at < PAGE_ACT_RATE.windowMs);
   if (recent.length >= PAGE_ACT_RATE.perMinute) {
     acts.set(sessionId, recent);
     return true;
   }
   recent.push(now);
+  // Re-inserted at the back, so the oldest writer is the first key.
+  acts.delete(sessionId);
   acts.set(sessionId, recent);
-  // Nothing here grows without bound: a session that stops writing is dropped
-  // the next time any session writes.
-  if (acts.size > 64) {
-    for (const [id, times] of acts) {
-      if (times.every((at) => now - at >= PAGE_ACT_RATE.windowMs)) acts.delete(id);
-    }
+  while (acts.size > PAGE_ACT_SESSIONS) {
+    const oldest = acts.keys().next();
+    if (oldest.done) break;
+    acts.delete(oldest.value);
   }
   return false;
 }

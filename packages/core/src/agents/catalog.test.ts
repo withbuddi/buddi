@@ -558,6 +558,30 @@ describe('loadAgentCatalog', () => {
       expect(mailer.unavailableReason).toBe('Needs a plugin providing the email tools.');
     });
 
+    it('does not fail to start over an agent that predates the reserved ids', () => {
+      /*
+       * `owner` and `room` were reserved after some installations already had
+       * agents. Such a file must not stop the boot: it is said out loud, and
+       * it appears held back — with nothing granted and no way to be run.
+       */
+      const warned: string[] = [];
+      const file = agentFile('id: owner\nhandle: ownerly\nname: Owner\ndescription: An old agent.\ntools: []');
+      const catalog = loadAgentCatalog({
+        dir: catalogDir({ owner: file, concierge: CONCIERGE }),
+        registry: registryOf(),
+        env: { ANTHROPIC_API_KEY: 'k' },
+        log: (line) => warned.push(line),
+      });
+      expect(warned.some((line) => line.includes('/owner/agent.md') && line.includes('is reserved'))).toBe(true);
+      const held = catalog.resolve('owner');
+      expect(held.heldBack?.reason).toBe('reserved-id');
+      expect(held.available).toBe(false);
+      expect(held.tools).toEqual([]);
+      expect(held.availability.ok ? '' : held.availability.problem.code).toBe('reserved-id');
+      // And the installation still has the agents it can run.
+      expect(catalog.list().map((a) => a.id)).toContain('concierge');
+    });
+
     it('names the plugin when the installation knows which one provides the family', () => {
       const catalog = loadAgentCatalog({
         dir: catalogDir({ mailer: MAILER }),

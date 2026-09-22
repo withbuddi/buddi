@@ -199,6 +199,10 @@ inside them; `home` blocks and `views` remain the way into Home and the canvas.
 - A second plugin (the synthetic one) gets a rail entry and a settings tab
   with no change to `packages/web`.
 - A descriptor with a typo fails plugin load with the path to the field.
+  So does one that is not a screen: components nested deeper than 12, more than
+  400 nodes, more than 64 KB, or an object that contains itself. A descriptor
+  that *reuses* an object — the same action on two rows — is not a cycle and
+  loads.
 - A query cannot write, and **Postgres** is what says so: the `ToolContext` it
   receives has a pool wrapper that runs every statement inside
   `begin isolation level repeatable read read only; set local

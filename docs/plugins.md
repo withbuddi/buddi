@@ -685,6 +685,20 @@ means, the page knows how to draw a line, and this says which is which.
   `cards[0].name`. If a descriptor needs arithmetic, the *tool* should be
   returning the number — the owner cannot audit a calculation that happens in a
   chart.
+- **The rest of the set, in one line each.** `list-detail` has
+  `selection: 'route' | 'local'` — `local` for a second level inside a detail
+  the URL already owns. `search` takes `rows`, and optionally `count`, `note`
+  (both paths) and `auto: true` for a picker with no button. `editor` takes
+  `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
+  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `list` must say what keys a row — `key`, or a `select.key`; a row without
+  one, or with one another row already used, is not drawn.
+- **Write a shared piece once.** Two rows may carry the same action object and
+  two sections the same `ListItem`: reuse is reuse, not a cycle, and only a
+  descriptor that *contains itself* is refused. Nesting is counted in
+  components — each `body` level — up to twelve; the arrays and the small
+  objects between them are not levels.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   with zod (`packages/core/src/views.ts`), checks the renderer against its own
   map shape, and refuses a descriptor naming a tool your manifest does not
@@ -750,6 +764,7 @@ export interface PageDescriptor {
   icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file'
        | 'chart' | 'bell' | 'plug' | 'key' | 'globe';
   order?: number;
+  data?: QueryRef;             // one read for the page itself, resolved once
   body: Component[];           // the tree, from the fixed component set
 }
 
@@ -771,9 +786,14 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   tool yields an approval and the page draws the card in place, choices and
   all. There is no third path, so everything the owner can do from your screen
   is something an agent could be granted, audited the same way.
-- **A query cannot write.** `produce` is handed a `ToolContext` whose `db` is a
-  read-only wrapper: anything that is not a `select` (or a `with … select`)
-  throws, including `select … for update`. That is enforcement, not etiquette.
+- **A query cannot write, and Postgres is what says so.** `produce` is handed a
+  `ToolContext` whose `db` runs every statement inside a read-only transaction
+  with a five-second `statement_timeout` and rolls it back. `insert`, `update`,
+  `delete`, `create`, `select … into`, `nextval` and a large-object write are
+  all refused **including inside a volatile function you wrote yourself** — a
+  textual check could never have decided that. A cheap pre-filter in front of
+  it refuses what is plainly not a read (the first keyword, a second statement,
+  a locking clause); it is not the boundary.
 - **Every parameter arrives as a string**, because a query string is strings.
   Write `z.coerce.number()` for a number and `z.enum(['true','false'])` for a
   flag; a parameter your schema does not declare is refused, not ignored.
@@ -796,13 +816,26 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
 - **Text is a constant or a value.** `notice.text` and `expand.label` accept a
   `ValueRef` as well as a string, and `ToolRef.confirm` may contain `{count}`,
   replaced by the size of the selection.
+- **The rest of the set, in one line each.** `list-detail` has
+  `selection: 'route' | 'local'` — `local` for a second level inside a detail
+  the URL already owns. `search` takes `rows`, and optionally `count`, `note`
+  (both paths) and `auto: true` for a picker with no button. `editor` takes
+  `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
+  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `list` must say what keys a row — `key`, or a `select.key`; a row without
+  one, or with one another row already used, is not drawn.
+- **Write a shared piece once.** Two rows may carry the same action object and
+  two sections the same `ListItem`: reuse is reuse, not a cycle, and only a
+  descriptor that *contains itself* is refused. Nesting is counted in
+  components — each `body` level — up to twelve; the arrays and the small
+  objects between them are not levels.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   and checks every reference: a query name you do not contribute, a tool that
   is not yours, a link to a page that does not exist. A typo is a startup error
   naming the plugin, the page and the field path. So is a descriptor that is
-  not a screen: deeper than 12, more than 400 nodes, more than 64 KB of JSON,
-  or a graph that refers to itself. A `list` must say what keys a row (`key`,
-  or a `select.key`).
+  not a screen: components nested deeper than 12, more than 400 nodes, more
+  than 64 KB of JSON, or an object that contains itself.
 - **A page writes only through the tools its own descriptors name.**
   `POST /api/pages/<plugin>/act` refuses every other name, including your own
   plugin's other tools: those are an agent's business. It is rate-limited to 60
@@ -1986,7 +2019,7 @@ this says what it is *for*.
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
-| `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: the pool a query is handed refuses anything but a `select`. |
+| `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
@@ -2192,7 +2225,7 @@ than guess.
 | --- | --- | --- | --- |
 | `name` | `string` | yes | `threads`, `accounts`. Lower_snake_case, unique in your plugin; it is the `<query>` of `GET /api/pages/<plugin>/<query>`. |
 | `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
-| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` refuses anything but a `select`, so a query that tries to write fails loudly rather than writing something nobody approved. |
+| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. |
 | `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
 
 #### `NetworkUse`

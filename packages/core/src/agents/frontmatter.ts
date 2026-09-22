@@ -22,7 +22,9 @@ export class AgentFileError extends Error {
       | 'unterminated-frontmatter'
       | 'yaml-syntax'
       | 'invalid-frontmatter'
-      | 'id-mismatch',
+      | 'id-mismatch'
+      /** The id is one the installation already means something by. */
+      | 'reserved-id',
     message: string,
     readonly file?: string,
   ) {
@@ -264,6 +266,16 @@ export function parseAgentFile(
 ): ParsedAgentFile {
   const { frontmatter, body } = splitFrontmatter(source, opts.file);
   const raw = parseYamlSubset(frontmatter, opts.file);
+  /*
+   * Checked before the schema, and with its own code, because the catalog has
+   * something else to do about it: an installation that already has an agent
+   * called `owner` must not fail to start — that agent is held back and said
+   * so, exactly like one whose plugin is missing.
+   */
+  const declared = (raw as { id?: unknown }).id;
+  if (typeof declared === 'string' && RESERVED_AGENT_IDS.includes(declared)) {
+    throw new AgentFileError('reserved-id', reservedAgentIdMessage(declared), opts.file);
+  }
   const parsed = agentFrontmatterSchema.safeParse(raw);
   if (!parsed.success) {
     throw new AgentFileError(

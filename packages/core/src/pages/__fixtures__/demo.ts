@@ -183,9 +183,26 @@ const demoTools: PluginManifest['tools'] = [
     description: 'Add an account, with its password.',
     tier: 'auto',
     ownerOnly: true,
-    input: z.object({ address: z.string(), password: z.string() }).strict(),
+    /**
+     * Address and password, and the hosts only when the owner has to say.
+     * Working them out from the address is the *tool's* job — a page has no
+     * business inferring anything — so both overrides are optional and the
+     * tool refuses an address it cannot place.
+     */
+    input: z
+      .object({
+        address: z.string(),
+        password: z.string(),
+        imapHost: z.string().optional(),
+        smtpHost: z.string().optional(),
+      })
+      .strict(),
     async execute(args) {
-      demoWrites.push({ tool: 'demo.add_account', args: { address: (args as { address: string }).address } });
+      const { address, imapHost, smtpHost } = args as { address: string; imapHost?: string; smtpHost?: string };
+      demoWrites.push({
+        tool: 'demo.add_account',
+        args: { address, ...(imapHost ? { imapHost } : {}), ...(smtpHost ? { smtpHost } : {}) },
+      });
       return { added: true };
     },
   },
@@ -457,12 +474,24 @@ const settings: PageDescriptor = {
           fields: [
             { name: 'address', label: 'Address', type: 'email', required: true },
             { name: 'password', label: 'Password', type: 'secret', required: true, hint: 'Kept in the vault.' },
+            {
+              name: 'imapHost',
+              label: 'IMAP host',
+              type: 'text',
+              hint: 'Only if the address does not say; the tool works it out otherwise.',
+            },
+            { name: 'smtpHost', label: 'SMTP host', type: 'text', hint: 'The same.' },
           ],
           submit: {
             tool: 'demo.add_account',
             label: 'Add',
             tone: 'accent',
-            args: { address: { field: 'address' }, password: { field: 'password' } },
+            args: {
+              address: { field: 'address' },
+              password: { field: 'password' },
+              imapHost: { field: 'imapHost' },
+              smtpHost: { field: 'smtpHost' },
+            },
             then: 'close',
           },
         },
