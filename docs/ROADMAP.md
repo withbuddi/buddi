@@ -57,23 +57,25 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-Nothing at the moment; the next item below is learning.
+- [Learning](specs/learning.md) — buddi proposes, the owner keeps. Step 1
+  built 2026-09-23 (buddi 44792d6): the proposals table, the three
+  `learning.*` tools, Settings → Proposals with a count on Home, and
+  provenance with the untrusted mark. Next: skills as files (step 2), the
+  email plugin on `propose_policy` (step 3), persona changes through Agent
+  Father and the digest (step 4). Keeping records the decision; applying
+  waits for those steps.
 
 ## Next, in order
 
-1. [Learning](specs/learning.md) — buddi proposes, the owner keeps. Moved
-   ahead of messengers on 2026-09-23: a project's start recipe (database,
-   servers, in order) is exactly a learned skill, and the developer agent
-   needs one before it can pick a project back up without re-deriving it.
-2. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-3. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
+1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+2. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
-4. macOS app — a packaged desktop app around the existing service.
-5. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+3. macOS app — a packaged desktop app around the existing service.
+4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
-6. Drive and Dropbox — the provider APIs for backup, after the folder target
+5. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
-7. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+6. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
 
 Developer plugin, the visible layer (2026-09-23; the plugin itself is done —
 run mode by default, remembered commands, lockfile installs, local `npx`,
