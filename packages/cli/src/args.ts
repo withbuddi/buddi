@@ -95,6 +95,8 @@ export type Command =
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
+  /** buddi as an MCP server over stdio, for Claude Code or any MCP client. */
+  | { kind: 'mcp' }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
   /** Global pause control (ARCHITECTURE.md, "Queue, concurrency, recovery"). */
@@ -234,6 +236,11 @@ export function parseArgs(argv: string[]): Command {
     // A value is never an argument: it would land in shell history. `set`
     // prompts with the terminal's echo off instead.
     return { kind: 'vault', action: action as VaultAction, ...(name ? { name } : {}) };
+  }
+
+  if (head === 'mcp') {
+    if (rest.length > 0) throw new UsageError(`unexpected argument: ${rest[0]}`);
+    return { kind: 'mcp' };
   }
 
   if (head === 'dashboard') {
@@ -488,6 +495,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi dashboard --off      how to turn the dashboard off
   buddi dashboard --install-app   a double-clickable "Buddi Dashboard" in ~/Applications
   buddi dashboard --uninstall-app remove it
+  buddi mcp                  buddi as an MCP server over stdio:
+                             claude mcp add buddi -- buddi mcp
 
   buddi telegram pair        a QR code + deep link that pairs a device
   buddi telegram devices     every paired device

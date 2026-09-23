@@ -16,6 +16,8 @@ export * from './missions/watcher-mail.js';
 export * from './missions/reminders.js';
 export * from './web/index.js';
 export { startTelegram, describePaired } from './telegram/main.js';
+export { bindPlatformTools } from './agents/platform.js';
+export { MCP_REQUEST_KINDS, throughMcp } from './mcp/requests.js';
 
 // The one outbound HTTP transport (packages/runtime/src/transport.ts), re-exported
 // because the CLI depends on the gateway and not on the runtime — and every

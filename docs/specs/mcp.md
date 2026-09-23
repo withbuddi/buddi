@@ -1,7 +1,8 @@
 # buddi as an MCP server: configure it from any MCP client
 
-Status: accepted, not started, 2026-09-23. Supersedes the parked idea of
-2026-09-21, which exposed one tool (`buddi.ask`) and nothing else.
+Status: built, 2026-09-23. Supersedes the parked idea of 2026-09-21, which
+exposed one tool (`buddi.ask`) and nothing else. How to use it:
+[Using buddi from Claude Code](../mcp.md).
 
 ## 1. Why
 

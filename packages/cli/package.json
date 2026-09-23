@@ -27,6 +27,7 @@
     "@buddi/gateway": "workspace:*",
     "@buddi/tool-email": "workspace:*",
     "@buddi/tool-web": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.1",
     "dotenv": "^16.4.7",
     "pg": "^8.13.1",
     "qrcode-terminal": "^0.12.0"
@@ -36,6 +37,7 @@
     "@types/pg": "^8.11.10",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "zod": "^3.25.76"
   }
 }

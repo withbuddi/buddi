@@ -38,6 +38,7 @@
  */
 import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals } from './proposals.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
+import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
@@ -78,7 +79,7 @@ import {
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, inRecovery, isJobState, setSentinelEnabled, snoozeFinding } from '@buddi/core';
+import { getAction, inRecovery, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
 import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
 import { hostService } from '@buddi/tool-host';
@@ -259,6 +260,12 @@ export interface WebServerDeps {
    * says it will be there next time buddi starts.
    */
   telegram?: TelegramControl | undefined;
+  /**
+   * Post a pending approval to the owner's Telegram chat — the same hook an
+   * unattended run uses. An MCP write raises its card on both surfaces
+   * (docs/specs/mcp.md §2); without it the card is on the dashboard only.
+   */
+  askApproval?: ((action: ActionRecord) => Promise<void>) | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
   /**
@@ -505,6 +512,45 @@ export function createWebApp(deps: WebServerDeps): Server {
   const permissionScopes = (tool: string): Record<string, unknown> => deps.registry.lookup(tool)?.reusableApproval
     ? { permissionScopes: ['conversation', 'always'] } : {};
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
+  /*
+   * What an approved MCP write reaches: the functions the dashboard's own
+   * routes below call, and nothing else (docs/specs/mcp.md §2).
+   */
+  const unwrap = async <T>(result: WriteResult<T> | Promise<WriteResult<T>>): Promise<T> => {
+    const settled = await result;
+    if (!settled.ok) {
+      const error = (settled.body as { error?: unknown } | undefined)?.error;
+      throw new Error(typeof error === 'string' ? error : `refused (${settled.status})`);
+    }
+    return settled.body as T;
+  };
+  bindMcpRequests(deps.registry, {
+    pool: deps.pool,
+    catalog: deps.catalog,
+    ...(deps.providerAccounts
+      ? {
+          accounts: () => deps.providerAccounts!.view(),
+          assignAccount: (agentId: string, change: { accountId: string; model: string }) =>
+            deps.providerAccounts!.assign(agentId, change),
+        }
+      : {}),
+    setDefaultAgent: (agentId) =>
+      unwrap(setDefaultAgentFromWeb({ catalog: deps.catalog, record: (id) => writeDefaultAgentRecord(deps.pool, id) }, agentId)),
+    defaultAgent: () => readDefaultAgent(deps.catalog).defaultAgentId,
+    keepProposal: (id, text) =>
+      unwrap(keepProposalFromWeb(writeDeps, id, text, {
+        catalog: deps.catalog,
+        reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+        env: deps.env ?? process.env,
+      })),
+    discardProposal: (id, reason) => unwrap(discardProposalFromWeb(writeDeps, id, reason)),
+    memory: {
+      setPreference: (input) => setPreference(deps.pool, { ...input, now: deps.now() }),
+      forgetPreference: (input) => forgetPreference(deps.pool, { ...input, now: deps.now() }),
+      updateNote: (input) => updateNote(deps.pool, input),
+      forgetNote: (id) => forgetNote(deps.pool, { id, now: deps.now() }),
+    },
+  });
   // The binding is the credential: loopback is open, anything else keeps the
   // ticket-and-session gate. The override is a test seam, nothing more.
   const openAccess = deps.openAccess ?? (deps.env?.BUDDI_WEB_REQUIRE_AUTH !== '1' && isLoopback(deps.config.host));
@@ -1276,6 +1322,22 @@ export function createWebApp(deps: WebServerDeps): Server {
         const view = readAgentSkills(deps.catalog, decodeURIComponent(agentSkills[1] as string));
         if (!view) return sendJson(res, 404, { error: 'no such agent' });
         return sendJson(res, 200, view);
+      }
+      /*
+       * The agent's file as it is written: front matter and persona. A read,
+       * for `buddi mcp`'s `buddi.agent_read`; nothing here serves it otherwise.
+       */
+      const agentFileRead = /^\/api\/agents\/([^/]+)\/file$/.exec(path);
+      if (agentFileRead) {
+        const id = decodeURIComponent(agentFileRead[1] as string);
+        const agent = deps.catalog.get(id) ?? deps.catalog.byHandle(id);
+        if (!agent) return sendJson(res, 404, { error: 'no such agent' });
+        try {
+          const parsed = parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file });
+          return sendJson(res, 200, { id: agent.id, file: agent.file, frontmatter: parsed.frontmatter, persona: parsed.body });
+        } catch (err) {
+          return sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
       }
       // Every installed tool, for the picker on the Setup tab. A read.
       const toolPicker = /^\/api\/agents\/([^/]+)\/tools$/.exec(path);
@@ -2194,6 +2256,19 @@ export function createWebApp(deps: WebServerDeps): Server {
      * approval card in place. Behind the same session, Origin and CSRF gate as
      * every other write.
      */
+    /*
+     * A write asked for through `buddi mcp`. Never applied here: it becomes an
+     * approval whose envelope is the exact change (see `mcp/requests.ts`), and
+     * the client polls `/api/approvals/:id` for the owner's decision.
+     */
+    if (path === '/api/mcp/request') {
+      const answered = await requestThroughMcp(
+        { registry: deps.registry, ctx: deps.ctx, now: deps.now, pool: deps.pool, askApproval: deps.askApproval, log },
+        body,
+      );
+      return sendJson(res, answered.status, answered.body);
+    }
+
     const pageAct = /^\/api\/pages\/([a-z][a-z0-9_-]{0,39})\/act$/.exec(path);
     if (pageAct) {
       return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body, session));
@@ -2492,9 +2567,13 @@ export function createWebApp(deps: WebServerDeps): Server {
           throw error;
         }
       }
+      if (body.client !== undefined && (typeof body.client !== 'string' || body.client.trim() === '' || body.client.length > 80)) {
+        return sendJson(res, 400, { error: '`client` must be a short string naming the MCP client' });
+      }
       const sent = await chat.send({
         agentId: decodeURIComponent(messages[1] as string),
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
+        ...(typeof body.client === 'string' ? { client: body.client.trim() } : {}),
         text: body.opening === true ? await withFirstRunFacts(onboardingDeps(), body.text) : body.text,
         ...(ids ? { attachmentIds: ids as string[] } : {}),
         ...(body.opening === true ? { opening: true } : {}),

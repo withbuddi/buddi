@@ -17,6 +17,11 @@ describe('parseArgs', () => {
     expect(parseArgs(['agents'])).toEqual({ kind: 'chat-cli', argv: ['agents'] });
   });
 
+  it('parses mcp, which takes nothing', () => {
+    expect(parseArgs(['mcp'])).toEqual({ kind: 'mcp' });
+    expect(() => parseArgs(['mcp', '--http'])).toThrow(UsageError);
+  });
+
   it('strips the command word from a missions invocation', () => {
     expect(parseArgs(['missions', 'run-now', 'friday-recap', '--inline'])).toEqual({
       kind: 'missions',

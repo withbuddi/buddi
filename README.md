@@ -1012,6 +1012,7 @@ wrong, a test fails (`packages/cli/src/readme.test.ts`).
 | `buddi dashboard --off` | how to turn the dashboard off |
 | `buddi dashboard --install-app` | a double-clickable "Buddi Dashboard" in `~/Applications` |
 | `buddi dashboard --uninstall-app` | remove it |
+| `buddi mcp` | buddi as an MCP server over stdio: `claude mcp add buddi -- buddi mcp` ([docs](docs/mcp.md)) |
 | `buddi telegram pair` | a QR code + deep link that pairs a device |
 | `buddi telegram devices` | every paired device |
 | `buddi telegram unpair <id>` | revoke one |
