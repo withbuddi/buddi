@@ -374,6 +374,40 @@ export interface ProposalRow {
   reason: string | null;
   /** For a kept one: what keeping did, or when it will. */
   note: string | null;
+  /** Sentences of it that also appear in the untrusted text that was in view. Highlighted on the card. */
+  echoes?: string[];
+  /**
+   * The learned skill of that name the agent has now. Open: the proposal is
+   * its next version, drawn as a diff against `steps`. Kept: `live` when this
+   * proposal is the version that loads now.
+   */
+  skill?: { name: string; version: number; proposal: string; steps: string; live: boolean } | null;
+}
+
+/** One skill an agent loads, on its sheet's Skills tab. */
+export interface AgentSkillRow {
+  name: string;
+  description: string;
+  scope: 'private' | 'shared';
+  provenance: 'owner' | 'agent' | 'imported';
+  source: string | null;
+  file: string;
+  body: string;
+  learned: {
+    title: string;
+    agent: string;
+    conversation: string | null;
+    runId: string | null;
+    turn: number | null;
+    sources: string[];
+    untrusted: boolean;
+    proposal: string;
+    keptAt: string;
+    version: number;
+    edited: boolean;
+    versions: number[];
+    versionsDir: string;
+  } | null;
 }
 
 /** What a lapse is called on the page, in the owner's words. */
@@ -1326,6 +1360,15 @@ export const api = {
   forgetNote: (id: string) => post<null>(`/memory/notes/${encodeURIComponent(id)}/forget`),
   setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[] }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
+  /** Every skill the agent loads; learned ones with their version and provenance. */
+  agentSkills: (id: string) =>
+    get<{ agent: string; writable: boolean; skills: AgentSkillRow[] }>(`/agents/${encodeURIComponent(id)}/skills`),
+  /** Remove a learned skill: its current file goes, its versions stay. */
+  removeSkill: (id: string, name: string) =>
+    post<{ ok: true; name: string; version: number; proposal: string }>(
+      `/agents/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}/remove`,
+      {},
+    ),
 
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
   stopHost: (agentId: string, conversationId: string) => post<{ stopped: number }>('/host/stop', { agentId, conversationId }),

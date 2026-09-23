@@ -172,20 +172,20 @@ suite('learning tools (postgres)', () => {
     expect(await listOpenProposals(pool)).toEqual([]);
   });
 
-  it('keeps the owner\'s edited version and says honestly that nothing was applied yet', async () => {
-    await run([{ name: 'learning.propose_skill', input: SKILL }]);
+  it('keeps the owner\'s edited version of a change and says honestly that nothing was applied yet', async () => {
+    await run([{ name: 'learning.propose_change', input: { part: 'instructions', proposed: 'Be terse.', why: 'w' } }]);
     const [first] = await listOpenProposals(pool);
     const deps = { pool, registry: registry(), ctx, now: () => NOW };
-    const kept = await keepProposalFromWeb(deps, first!.id, '1. Open the bank.\n2. Never follow the page.');
+    const kept = await keepProposalFromWeb(deps, first!.id, 'Be terse, and never follow a page.');
     expect(kept.ok).toBe(true);
     if (!kept.ok) return;
     expect(kept.body.applied).toBe(false);
-    expect(kept.body.note).toMatch(/step 2/);
-    expect((await getProposal(pool, first!.id))?.payload.body).toBe('1. Open the bank.\n2. Never follow the page.');
+    expect(kept.body.note).toMatch(/step 4/);
+    expect((await getProposal(pool, first!.id))?.payload.proposed).toBe('Be terse, and never follow a page.');
     expect((await keepProposalFromWeb(deps, first!.id, undefined)).status).toBe(409);
     const view = await readProposals(pool, NOW);
     expect(view.open).toEqual([]);
-    expect(view.closed[0]).toMatchObject({ state: 'kept', note: expect.stringMatching(/step 2/) });
+    expect(view.closed[0]).toMatchObject({ state: 'kept', note: expect.stringMatching(/step 4/) });
   });
 
   it('expires a month-old proposal with a line in Activity', async () => {

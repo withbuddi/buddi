@@ -159,6 +159,14 @@ export interface ToolContext {
    * fails closed when it is absent.
    */
   provenance?: () => RunProvenance;
+  /**
+   * Directories no tool may write into, whatever it was granted: the owner's
+   * agent files and skills, learned ones included (docs/specs/learning.md §6).
+   * An agent learns by proposing; a file tool pointed at its own skills
+   * directory refuses rather than letting it rewrite itself. Absolute paths,
+   * set by the composition root; a tool that writes files checks them.
+   */
+  protectedPaths?: readonly string[];
 }
 
 /**

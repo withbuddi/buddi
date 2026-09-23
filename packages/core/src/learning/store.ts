@@ -184,6 +184,41 @@ export async function discardProposal(
   return rows[0] ? toProposal(rows[0]) : null;
 }
 
+/**
+ * Undo a keep whose apply failed: the proposal is open again, as it was a
+ * moment before, and the card stays in the inbox with the reason.
+ */
+export async function reopenProposal(db: Queryable, input: { id: string; payload?: Record<string, unknown> }): Promise<Proposal | null> {
+  const { rows } = await db.query(
+    `update core.proposals set state = 'open', decided_at = null, payload = coalesce($2::jsonb, payload)
+      where id::text = $1 and state = 'kept'
+      returning ${COLUMNS}`,
+    [input.id, input.payload ? JSON.stringify(input.payload) : null],
+  );
+  return rows[0] ? toProposal(rows[0]) : null;
+}
+
+/** The reason a removed skill's proposal carries. */
+export const REMOVED_REASON = 'removed by the owner';
+
+/**
+ * The owner removed what they had kept. The proposal becomes a discard as of
+ * now, so the fingerprint rule applies: the same skill is refused for 90 days,
+ * and the agent is told once, in its next run.
+ */
+export async function revokeKeptProposal(
+  db: Queryable,
+  input: { id: string; now: Date; reason?: string },
+): Promise<Proposal | null> {
+  const { rows } = await db.query(
+    `update core.proposals set state = 'discarded', decided_at = $2, reason = $3, told_at = null
+      where id::text = $1 and state = 'kept'
+      returning ${COLUMNS}`,
+    [input.id, input.now, input.reason ?? REMOVED_REASON],
+  );
+  return rows[0] ? toProposal(rows[0]) : null;
+}
+
 /** What the sweep writes on a proposal nobody decided. */
 export const EXPIRED_REASON = 'not decided in 30 days';
 

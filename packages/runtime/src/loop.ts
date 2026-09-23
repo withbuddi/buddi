@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, deriveUntrustedSources, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -1091,11 +1091,13 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
             // records provenance pays for the scan.
             provenance: () => {
               const seen = [...messages, { role: 'user' as const, content: results }];
+              const untrusted = collectUntrusted(seen, (name) => registry.untrustedKind(name));
               return {
                 runId: opts.runId ?? ctx.jobId ?? null,
                 turn: ownerTurn(seen),
                 step: turns,
-                sources: deriveUntrustedSources(seen, (name) => registry.untrustedKind(name)),
+                sources: untrusted.sources,
+                texts: untrusted.texts,
               };
             },
           })

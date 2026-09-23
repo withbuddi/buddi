@@ -77,6 +77,19 @@ export function deriveUntrustedSources(
   messages: readonly ProvenanceMessage[],
   untrustedKindOf: (tool: string) => UntrustedKind | undefined,
 ): UntrustedSource[] {
+  return collectUntrusted(messages, untrustedKindOf).sources;
+}
+
+/**
+ * The sources, and the untrusted text itself: what each counted result and
+ * fenced prompt said. The text is for finding echoes of it in a proposal
+ * (`echoes.ts`) at the moment it is made; it is never stored.
+ */
+export function collectUntrusted(
+  messages: readonly ProvenanceMessage[],
+  untrustedKindOf: (tool: string) => UntrustedKind | undefined,
+): { sources: UntrustedSource[]; texts: string[] } {
+  const texts: string[] = [];
   const calls = new Map<string, { name: string; input: unknown }>();
   for (const message of messages) {
     for (const block of message.content) {
@@ -107,22 +120,30 @@ export function deriveUntrustedSources(
         const declared = call ? untrustedKindOf(call.name) : undefined;
         if (declared) {
           add({ kind: declared, via: name, ...(ref ? { ref } : {}) });
+          texts.push(content);
           continue;
         }
         const fenced = fences(content);
         if (fenced.length > 0) {
           for (const kind of fenced) add({ kind, via: name, ...(ref ? { ref } : {}) });
+          texts.push(content);
           continue;
         }
-        if (!SELF.test(name) && SAYS_SO.test(content)) add({ kind: 'other', via: name, ...(ref ? { ref } : {}) });
+        if (!SELF.test(name) && SAYS_SO.test(content)) {
+          add({ kind: 'other', via: name, ...(ref ? { ref } : {}) });
+          texts.push(content);
+        }
       } else if (block.type === 'text' && message.role === 'user' && typeof block.text === 'string') {
-        for (const kind of fences(block.text)) add({ kind, via: 'prompt' });
+        const fenced = fences(block.text);
+        for (const kind of fenced) add({ kind, via: 'prompt' });
+        if (fenced.length > 0) texts.push(block.text);
       } else if (block.type === 'provider_native') {
         add({ kind: 'web', via: 'native-search' });
+        texts.push(JSON.stringify(block));
       }
     }
   }
-  return found;
+  return { sources: found, texts };
 }
 
 /**

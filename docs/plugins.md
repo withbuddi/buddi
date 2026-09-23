@@ -2445,6 +2445,7 @@ than guess.
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
 | `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 | `provenance` | `() => RunProvenance` | no | Set by the runtime loop on every call: the run's id, the owner turn it answers, the model step, and the untrusted inputs in its context, derived from the messages the model was shown. The learning tools record it; a tool that needs it fails closed when it is absent. |
+| `protectedPaths` | `readonly string[]` | no | Directories no tool may write into, whatever it was granted: the owner's agent files and skills, learned ones included. Set by the gateway. A plugin that writes files refuses a target inside any of them, even one inside a workspace it was given. |
 
 #### `GroupContext`
 
