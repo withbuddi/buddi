@@ -100,6 +100,32 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     return rows[0].n;
   }
 
+  /** When this account last *finished* a poll — null until one has. */
+  async function lastSynced(): Promise<Date | null> {
+    const { rows } = await pool.query(`select last_synced_at from email.accounts where id = $1`, [
+      accountId,
+    ]);
+    return rows[0].last_synced_at ?? null;
+  }
+
+  /*
+   * A mailbox that is quiet and a mailbox nobody is reading look identical
+   * through the messages table — `max(fetched_at)` says nothing either way —
+   * so the pass writes down that it finished. `email.waiting_on_me` reads it
+   * to say how current its count is, and refuses to answer at all for an
+   * account that has never got through one.
+   */
+  it('writes down that the pass finished, even when nothing new arrived', async () => {
+    const server = new FakeImapServer();
+    expect(await lastSynced()).toBeNull();
+
+    const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+    await source.poll(contextFor());
+
+    expect(await messageCount()).toBe(0);
+    expect(await lastSynced()).toEqual(new Date('2026-09-13T12:00:00Z'));
+  });
+
   it('ingests new mail, advances the cursor, and starts one triage run per message', async () => {
     const server = new FakeImapServer();
     server.add('INBOX', fakeMessage({ subject: 'Rent due', messageId: '<a@x>' }));

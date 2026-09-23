@@ -296,6 +296,18 @@ export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
   };
 }
 
+/**
+ * The same question as `isUnread`, asked of the stored row in SQL.
+ *
+ * One definition of "unread" for the whole plugin, so nothing that asks the
+ * question can drift from `email.list_recent`'s answer to it. Note what the
+ * column *is*, before counting anything with it: `flags` is written once at
+ * ingest and never re-synced (`sources/inbox-poll.ts`), so it says what the
+ * mailbox reported when the message arrived, not what the owner has read
+ * since.
+ */
+export const UNREAD_SQL = `not (flags @> '["\\\\Seen"]'::jsonb)`;
+
 /** True when the mailbox has not marked the message `\Seen`. */
 export function isUnread(flags: readonly string[]): boolean {
   return !flags.some((f) => f.toLowerCase() === '\\seen');

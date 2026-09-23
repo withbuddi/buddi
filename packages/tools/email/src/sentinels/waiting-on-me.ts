@@ -72,6 +72,12 @@ const WAITING_SOURCE = `
            coalesce(m.internal_date, m.fetched_at) as at
       from email.messages m
       join email.threads t on t.id = m.thread_id
+      -- Enabled mailboxes only, which is the scope every read tool has
+      -- (listAccounts defaults to it). A mailbox the owner switched off keeps
+      -- its mail and its cursor and is not walked; a watcher that nagged about
+      -- its threads -- or a goal that counted them -- would be speaking about
+      -- mail nothing else here will show him.
+      join email.accounts a on a.id = m.account_id and a.enabled
      where m.direction = 'in'
        and t.state = 'waiting-on-me'
      order by m.thread_id, coalesce(m.internal_date, m.fetched_at) desc, m.id desc
@@ -121,6 +127,15 @@ const WAITING_SOURCE = `
 /** Every key that is still true. No cap: see `WAITING_SOURCE`. */
 const WAITING_KEYS_SQL = `${WAITING_SOURCE} select thread_id, message_id from waiting`;
 
+/**
+ * How many conversations are waiting, by the same four conditions.
+ *
+ * `email.waiting_on_me` is this number and nothing else, which is the point:
+ * a goal to get the pile down must count what the watcher nags about, or the
+ * owner would be working against one number and hearing about another.
+ */
+export const WAITING_COUNT_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting`;
+
 /** The rows worth raising this tick: newest first, capped. */
 const WAITING_ROWS_SQL = `${WAITING_SOURCE}
   select thread_id, thread_subject, message_id, from_addr, subject, body_text, snippet, age_days
@@ -164,3 +179,18 @@ export function createWaitingOnMeSentinel(): Sentinel {
 }
 
 export const waitingOnMe: Sentinel = createWaitingOnMeSentinel();
+
+/**
+ * The count, over whatever `db` it is handed — the read-only pool included.
+ *
+ * It reads the owner's `waitingDays` exactly as the watcher does, so changing
+ * the setting moves the watcher and the goal together.
+ */
+export async function countWaitingOnMe(
+  db: Parameters<typeof loadWatcherSettings>[0],
+  now: Date,
+): Promise<number> {
+  const settings = await loadWatcherSettings(db);
+  const { rows } = await db.query(WAITING_COUNT_SQL, [now, settings.waitingDays, STALE_WAITING_DAYS]);
+  return Number((rows[0] as { n: unknown } | undefined)?.n ?? 0);
+}
