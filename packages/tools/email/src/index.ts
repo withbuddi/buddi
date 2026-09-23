@@ -131,8 +131,9 @@ export function createEmailManifest(
     pages: emailPages(),
     queries: emailQueries(),
     sources: createEmailSources(opts),
-    // The numbers a goal can watch: unread mail, and what is waiting on the
-    // owner. Read-only, and measured on core's schedule (`metrics.ts`).
+    // The number a goal can watch: what is waiting on the owner. Read-only,
+    // and measured on core's schedule (`metrics.ts`, which says why an unread
+    // count is not here yet).
     metrics: emailMetrics,
     // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
@@ -148,7 +149,7 @@ export const emailSources: Source[] = manifest.sources ?? [];
 
 export default manifest;
 
-export { emailMetrics, inboxUnread, waitingOnMe as waitingOnMeMetric } from './metrics.js';
+export { emailMetrics, stalestSync, waitingOnMe as waitingOnMeMetric } from './metrics.js';
 export { listRecent, readMessage, search } from './tools/read.js';
 // --- email step 6b: search and attachments ---
 export {

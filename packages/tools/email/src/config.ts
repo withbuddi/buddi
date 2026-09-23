@@ -176,12 +176,42 @@ export async function findAccount(
   return rows[0] ? toAccount(rows[0]) : null;
 }
 
+/** Write down that a poll of this account finished. The one writer of the column. */
+export async function markAccountSynced(pool: Pool, accountId: string, at: Date): Promise<void> {
+  await pool.query(`update email.accounts set last_synced_at = $2 where id = $1`, [accountId, at]);
+}
+
 /**
- * When mail last landed for each account, keyed by account id.
+ * When each account last *finished* a poll, keyed by account id.
+ *
+ * Stamped by the source at the end of a pass that did not fail
+ * (`sources/inbox-poll.ts`), so it answers "how current is what we hold"
+ * rather than "when did mail last arrive" — `lastSyncByAccount` below answers
+ * the second, and the settings page wants that one. `null` for an account that
+ * has never completed a poll, which is not the same as one that synced and
+ * found nothing.
+ */
+export async function lastSyncedByAccount(pool: Pool): Promise<Map<string, Date | null>> {
+  const { rows } = await pool.query(`select id, last_synced_at from email.accounts`);
+  const out = new Map<string, Date | null>();
+  for (const row of rows) {
+    const value = (row as { last_synced_at: unknown }).last_synced_at;
+    out.set(
+      String((row as { id: unknown }).id),
+      value instanceof Date ? value : value === null || value === undefined ? null : new Date(String(value)),
+    );
+  }
+  return out;
+}
+
+/**
+ * When mail last *landed* for each account, keyed by account id.
  *
  * Derived rather than stamped: the newest `fetched_at` among the account's
- * messages is a fact the ingest already writes, and a `last_sync_at` column
- * would be a second one to keep true. Null means nothing has ever arrived.
+ * messages. Null means nothing has ever arrived — which is what the settings
+ * page wants to show, and which is exactly why it cannot answer "how current
+ * is this mailbox": a quiet mailbox polled a minute ago reads the same as one
+ * nothing has polled since Tuesday. `lastSyncedByAccount` above is that one.
  */
 export async function lastSyncByAccount(pool: Pool): Promise<Map<string, string | null>> {
   const { rows } = await pool.query(
