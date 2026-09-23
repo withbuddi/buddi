@@ -57,12 +57,15 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-Nothing at the moment; the next item below is messengers.
+Nothing at the moment; the next item below is learning.
 
 ## Next, in order
 
-1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-2. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
+1. [Learning](specs/learning.md) — buddi proposes, the owner keeps. Moved
+   ahead of messengers on 2026-09-23: a project's start recipe (database,
+   servers, in order) is exactly a learned skill, and the developer agent
+   needs one before it can pick a project back up without re-deriving it.
+2. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
 3. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
 4. macOS app — a packaged desktop app around the existing service.
