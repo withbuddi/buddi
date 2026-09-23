@@ -389,6 +389,34 @@ export function scopeCookiePath(cookie: string, prefix: string): string {
 /** The one sentence a refused port gets. Never the error's own words. */
 export const PREVIEW_UNREACHABLE = 'That preview is not answering: the process behind it may have stopped.';
 
+/**
+ * Which loopback address the process is actually on.
+ *
+ * "Loopback" is two addresses. Vite, and anything else that binds
+ * `localhost`, lands on `::1` alone on a Mac, where the name resolves to the
+ * IPv6 address first — and a proxy that only ever dials 127.0.0.1 then reports
+ * a running server as stopped. So the port is knocked on at 127.0.0.1 and, if
+ * that refuses, at ::1; both are this machine and nothing else, so the SSRF
+ * boundary above is unchanged. A port that answers on neither is dialled at
+ * 127.0.0.1 and fails the way it always did, in one sentence.
+ */
+export async function loopbackHost(port: number): Promise<string> {
+  for (const host of ['127.0.0.1', '::1']) {
+    const open = await new Promise<boolean>((resolve) => {
+      const probe = connect({ port, host });
+      const finish = (value: boolean): void => {
+        probe.destroy();
+        resolve(value);
+      };
+      probe.setTimeout(250, () => finish(false));
+      probe.once('connect', () => finish(true));
+      probe.once('error', () => finish(false));
+    });
+    if (open) return host;
+  }
+  return '127.0.0.1';
+}
+
 export interface PreviewDeps {
   registry: Pick<ToolRegistry, 'previews'>;
   ctx: ToolContext;
@@ -497,7 +525,7 @@ export class PreviewApp {
       this.deps.log(`preview: ${target.plugin}/${target.name} resolved to port ${port}, which is not a preview`);
       return null;
     }
-    return { port, host: '127.0.0.1' };
+    return { port, host: await loopbackHost(port) };
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
