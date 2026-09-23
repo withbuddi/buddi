@@ -461,6 +461,15 @@ export async function createConversation(
  *    mid-call leaves a `tool_use` the loop never dispatched and never
  *    answered. It is dropped from the replay — the model is shown the words it
  *    wrote, not a call it is still owed an answer for.
+ *
+ * Dropping a block can empty a turn: a truncated turn whose only content *was*
+ * that call. An empty content array is itself a 400, and removing the turn
+ * puts its neighbours side by side — so turns are merged by role and the empty
+ * ones are gone, in one pass, for both roles. Order is preserved throughout,
+ * so no `tool_use` is ever separated from the result that answers it.
+ *
+ * Run on the whole request, opening turn included, because that turn is the
+ * one that lands next to whatever the history ended with.
  */
 export function normalizeForReplay(messages: readonly NeutralMessage[]): NeutralMessage[] {
   const answered = new Set<string>();
@@ -475,8 +484,12 @@ export function normalizeForReplay(messages: readonly NeutralMessage[]): Neutral
   const out: NeutralMessage[] = [];
   for (const message of messages) {
     const content = message.content.filter(keep);
+    // A turn with nothing left to say is not sent at all — and because it is
+    // not sent, the turns either side of it can now be the same role, which
+    // the merge below is what handles.
+    if (content.length === 0) continue;
     const last = out[out.length - 1];
-    if (last && last.role === 'assistant' && message.role === 'assistant') {
+    if (last && last.role === message.role) {
       last.content = [...last.content, ...content];
       continue;
     }
@@ -854,9 +867,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // history is replayed: a browser session is mostly page trees it already
   // acted on, and carrying all of them is what ends the conversation early.
   // The stored transcript is untouched (`compactObservations`).
-  const history = normalizeForReplay(compactObservations(
+  const history = compactObservations(
     opts.transcript ? await opts.transcript.load() : await loadMessages(pool, conversationId),
-  ));
+  );
   // Stored history carries artifact_ref blocks; the provider needs the bytes.
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 
@@ -893,10 +906,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // that accepts documents tomorrow still carries the real file.
   // A turn the surface already stored is already *in* the history that was
   // just loaded: appending it here would show the model the same words twice.
-  const messages: NeutralMessage[] = degradeMessages(
+  // Last, and over the whole request: what the history ended with decides
+  // whether the opening turn is adjacent to a turn of its own role.
+  const messages: NeutralMessage[] = normalizeForReplay(degradeMessages(
     opts.openingPersisted ? [...replayed] : [...replayed, { role: 'user', content: sentUserBlocks }],
     capabilities,
-  );
+  ));
   const ephemeralImages = new Set<ContentBlock>();
 
   await appendEvent(
@@ -1234,23 +1249,32 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
    * `text` block in `core.messages`, which means every surface already carries
    * it: it is in `result.text` through `spoken`, it reaches a streaming
    * surface through `onText`, and a reloaded transcript still has it. The web
-   * chat draws its marker from `run.finished`'s `stopped`/`turns`, already on
-   * the conversation's runs.
+   * chat draws its marker from `run.finished`, which carries `noticed` — the
+   * fact that this sentence was actually said — beside `stopped` and `turns`.
    *
-   * Only a run the owner is actually talking to says it — see `budgetNotice`.
-   * And it is said on a best effort: a run that did all its work and then lost
-   * the write of one sentence is still a run that finished, and `run.finished`
-   * is what every surface reads to stop drawing a spinner.
+   * Three runs stay silent:
+   *
+   *  - one the owner is not talking to — see `budgetNotice`;
+   *  - one the owner cancelled. They stopped it; being told it stopped is not
+   *    news, and the surface records the run as cancelled. The signal is
+   *    re-read here rather than trusted from the top of the loop, because the
+   *    owner can hit Stop while the last tool result is being written;
+   *  - one whose write failed. `result.text` still carries the sentence, so
+   *    the surfaces that send a run's answer still say it, and the run is
+   *    still recorded as finished — `run.finished` is what every surface reads
+   *    to stop drawing a spinner. `noticed` is then false, and the web chat
+   *    draws no marker for a message that is not there.
    */
-  if (budgetNotice && (stopped === 'max_turns' || stopped === 'max_tokens')) {
+  let noticed = false;
+  if (budgetNotice && ctx.signal?.aborted !== true && (stopped === 'max_turns' || stopped === 'max_tokens')) {
     const notice = stopped === 'max_turns' ? maxTurnsNotice(agent.maxTurns) : MAX_TOKENS_NOTICE;
     spoken.push({ text: notice, beforeToolCall: false });
     try {
       await persistMessage(pool, conversationId, 'assistant', [{ type: 'text', text: notice }], opts.transcript?.speaker);
+      noticed = true;
       await opts.onText?.(notice);
     } catch {
-      // `result.text` still carries the sentence, so the surfaces that send
-      // the run's answer still say it; what is lost is the transcript row.
+      // Deliberately swallowed: see above.
     }
   }
 
@@ -1260,6 +1284,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     {
       turns,
       stopped,
+      // Whether this run said so in the transcript. A budget stop that stayed
+      // silent — a delegate, a room member, a cancelled run, a lost write —
+      // is still a budget stop on the record, but there is no message under
+      // which a surface could honestly draw a marker.
+      noticed,
       usage,
       provider: snapshot.provider,
       model: snapshot.model,

@@ -878,6 +878,55 @@ describe('runAgent', () => {
     // The owner is told before the run is recorded as over: a surface that
     // acts on `run.finished` must not beat the sentence into the transcript.
     expect(db.writes.slice(-2)).toEqual(['message:assistant', 'event:run.finished']);
+    // And the event says the sentence was said, which is what the page needs
+    // to know before it draws a marker under it.
+    expect(db.events.at(-1)).toMatchObject({ payload: { stopped: 'max_turns', noticed: true } });
+  });
+
+  /*
+   * The owner pressed Stop. They know it stopped; being told so is not news,
+   * and the surface records the run as cancelled. The signal is re-read at the
+   * end rather than trusted from the last time round the loop, because Stop
+   * can land while the final tool result is being written.
+   */
+  it('says nothing about the budget when the owner cancelled the run', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const provider = scriptedProvider([
+      {
+        content: [{ type: 'tool_use', id: 'tu_loop', name: 'demo.double', input: { n: 1 } }],
+        stopReason: 'tool_use',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    /*
+     * A Stop that landed *after* the loop's last checkpoint. The double is a
+     * signal that reports itself aborted and throws for nobody — which is
+     * exactly the window this guard exists for: every `throwIfAborted` has
+     * already been passed, and the only thing left to decide is whether to
+     * speak.
+     */
+    const signal = new AbortController().signal;
+    Object.defineProperty(signal, 'aborted', { get: () => true });
+    const spoken: string[] = [];
+
+    const result = await runAgent({
+      agent: { ...agent, maxTurns: 1 },
+      provider,
+      registry: registryWithDouble(),
+      ctx: { ...ctx, signal },
+      pool: db,
+      conversationId,
+      userMessage: 'loop forever',
+      onText: (text) => { spoken.push(text); },
+    });
+
+    expect(result.stopped).toBe('max_turns');
+    expect(result.text).toBe('');
+    expect(spoken).toEqual([]);
+    expect(db.messages.map((m) => JSON.stringify(m.content)).join()).not.toContain('Stopped after');
+    expect(db.events.at(-1)).toMatchObject({ kind: 'run.finished', payload: { noticed: false } });
   });
 
   /*
@@ -1005,6 +1054,20 @@ describe('runAgent', () => {
     ]);
   });
 
+  it('drops a turn that was nothing but a call nobody answered', () => {
+    expect(
+      normalizeForReplay([
+        { role: 'user', content: [{ type: 'text', text: 'go' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_partial', name: 'demo.double', input: {} }] },
+        { role: 'user', content: [{ type: 'text', text: 'continue' }] },
+      ]),
+    ).toEqual([
+      // The turn is gone, and the two user turns it separated are now one:
+      // an empty content array and two user turns in a row are both 400s.
+      { role: 'user', content: [{ type: 'text', text: 'go' }, { type: 'text', text: 'continue' }] },
+    ]);
+  });
+
   it('keeps a tool_use that its result answers', () => {
     const history: NeutralMessage[] = [
       { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_1', name: 'demo.double', input: {} }] },
@@ -1042,6 +1105,64 @@ describe('runAgent', () => {
       { type: 'text', text: 'earlier' },
       { type: 'text', text: 'and then' },
     ]);
+  });
+
+  /*
+   * The worst shape the new silence can leave behind, end to end.
+   *
+   * A room member is cut off at `max_tokens` part-way through emitting a tool
+   * call, so its turn is stored as that call and nothing else. It says nothing
+   * — a member never does (`budgetNotice: false`) — so there is no text turn
+   * after it either. Ask the same member again in the same room and the turn
+   * has to vanish from the replay altogether: the call has no result, and what
+   * is left of the turn is an empty content array.
+   */
+  it('replays a valid request after a member run was cut off mid tool call', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'room');
+    const room = (speaker: string) => ({
+      load: () => loadMessages(db, conversationId),
+      speaker,
+      openingSpeaker: 'coordinator',
+    });
+
+    const cutOff = scriptedProvider([
+      {
+        content: [{ type: 'tool_use', id: 'tu_partial', name: 'demo.double', input: {} }],
+        stopReason: 'max_tokens',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+    ]);
+    const first = await runAgent({
+      agent, provider: cutOff, registry: registryWithDouble(), ctx, pool: db, conversationId,
+      userMessage: 'what do the books say?',
+      transcript: room('ledger'),
+      budgetNotice: false,
+    });
+    expect(first.stopped).toBe('max_tokens');
+    // The record keeps the half-written call; it is the replay that must cope.
+    expect(db.messages.at(-1)).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'tu_partial', name: 'demo.double', input: {} }],
+    });
+
+    const again = scriptedProvider([
+      { content: [{ type: 'text', text: 'Here they are.' }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' },
+    ]);
+    await runAgent({
+      agent, provider: again, registry: registryWithDouble(), ctx, pool: db, conversationId,
+      userMessage: 'try again',
+      transcript: room('ledger'),
+      budgetNotice: false,
+    });
+
+    const sent = again.calls[0]!.messages;
+    // Nothing empty, no role twice in a row, and no call left unanswered.
+    expect(sent.every((m) => m.content.length > 0)).toBe(true);
+    expect(sent.every((m, i) => i === 0 || m.role !== sent[i - 1]!.role)).toBe(true);
+    expect(sent.flatMap((m) => m.content).some((b) => b.type === 'tool_use')).toBe(false);
+    expect(sent.map((m) => m.role)).toEqual(['user']);
   });
 
   it('reports max_tokens as its own stop reason', async () => {
@@ -1089,9 +1210,11 @@ describe('runAgent', () => {
       userMessage: 'now',
     });
 
+    // A history that ends on the owner — the run before this one never
+    // answered — puts two owner turns side by side, which the wire refuses.
+    // They go as one turn, in order, both messages intact.
     expect(provider.calls[0]?.messages).toEqual([
-      { role: 'user', content: [{ type: 'text', text: 'earlier' }] },
-      { role: 'user', content: [{ type: 'text', text: 'now' }] },
+      { role: 'user', content: [{ type: 'text', text: 'earlier' }, { type: 'text', text: 'now' }] },
     ]);
   });
 });

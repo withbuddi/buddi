@@ -483,6 +483,11 @@ function files(message: ChatMessage): AttachmentBlock[] {
  * belongs under. The verdict itself is not on the message — it is on the run,
  * where the transcript endpoint already sends it — so a reloaded history shows
  * the marker exactly as the live run did.
+ *
+ * `noticed` is what makes that safe. A delegate's run and a room member's both
+ * end on the same `stopped: 'max_turns'` and write into windows that overlap
+ * the run the owner is watching, but they say nothing in the transcript — so
+ * there is no closing line to sit under, and they are not marked.
  */
 function budgetStops(shown: readonly ChatMessage[], runs: readonly ChatRun[]): Map<string, ChatRun> {
   /*
@@ -505,6 +510,10 @@ function budgetStops(shown: readonly ChatMessage[], runs: readonly ChatRun[]): M
   const out = new Map<string, ChatRun>();
   for (const run of windowed) {
     if (run.stopped !== 'max_turns' && run.stopped !== 'max_tokens') continue;
+    // Only a run that said so, and only a run that knows which one it is. An
+    // unnamed finish event is paired positionally by the server, onto the
+    // first run still open — which in a room is somebody else's.
+    if (run.noticed !== true || run.runId === null) continue;
     let last: ChatMessage | null = null;
     for (const message of shown) {
       if (message.role !== 'assistant' || !holds(run, message)) continue;
