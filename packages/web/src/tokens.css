@@ -135,6 +135,11 @@
   --face-6-bg: #f7e7ee;  --face-6-ink: #9c3d68;
 
   --code-bg: #f3f2ef;
+  /* A terminal is dark in either theme: it is what the owner's own terminal
+     looks like, and output reads as output rather than as page. */
+  --terminal-bg: #1d1f23;
+  --terminal-ink: #e4e2dd;
+  --terminal-muted: #9a968e;
 
   color-scheme: light;
 }
@@ -184,6 +189,10 @@
 
     --code-bg: #23262b;
 
+    --terminal-bg: #0b0c0e;
+    --terminal-ink: #e8e6e3;
+    --terminal-muted: #8f8b84;
+
     color-scheme: dark;
   }
 }
@@ -231,6 +240,10 @@
   --face-6-bg: #331c26;  --face-6-ink: #dd94b3;
 
   --code-bg: #23262b;
+
+  --terminal-bg: #0b0c0e;
+  --terminal-ink: #e8e6e3;
+  --terminal-muted: #8f8b84;
 
   color-scheme: dark;
 }

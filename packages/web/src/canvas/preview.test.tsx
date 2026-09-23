@@ -35,6 +35,7 @@ describe('resolving a preview', () => {
       port: 5173,
       awaiting: null,
       reloadsItself: false,
+      ports: [],
     });
     // A port that is not one is no link.
     expect(resolvePreview({ url: '/preview/developer/web/', port: '5173' }, map).port).toBeNull();
@@ -72,7 +73,7 @@ describe('resolving a preview', () => {
       { url: '/preview/developer/web/' },
     )).toEqual({
       renderer: 'preview',
-      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null, port: null, awaiting: null, reloadsItself: false },
+      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null, port: null, awaiting: null, reloadsItself: false, ports: [] },
     });
     expect(rendererFor('preview')).toBe(RENDERERS.preview);
   });
@@ -88,7 +89,7 @@ describe('the panel', () => {
     const link = vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
     render(
       <PreviewView
-        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms', port: 5173, awaiting: null, reloadsItself: false }}
+        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms', port: 5173, awaiting: null, reloadsItself: false, ports: [] }}
       />,
     );
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
@@ -126,7 +127,7 @@ describe('the panel', () => {
       .mockResolvedValueOnce({ url: `${TICKETED}2` });
     const open = vi.fn();
     vi.stubGlobal('open', open);
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false, ports: [] }} />);
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
 
     const anchor = screen.getByRole('link', { name: 'Open in a tab' });
@@ -143,16 +144,76 @@ describe('the panel', () => {
 
   it('says so when the link cannot be had, and frames nothing', async () => {
     vi.spyOn(api, 'previewLink').mockRejectedValue(new Error('no such preview'));
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false, ports: [] }} />);
     await waitFor(() => expect(screen.getByText('no such preview')).toBeInTheDocument());
     expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('draws nothing framed, and asks for nothing, when no process was named', () => {
     const link = vi.spyOn(api, 'previewLink');
-    render(<PreviewView props={{ target: null, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
+    render(<PreviewView props={{ target: null, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false, ports: [] }} />);
     expect(document.querySelector('iframe')).toBeNull();
     expect(link).not.toHaveBeenCalled();
     expect(screen.getByText(/names no preview/)).toBeInTheDocument();
+  });
+});
+
+describe('the port picker', () => {
+  const props = {
+    target: { plugin: 'demo', name: 'cms' },
+    title: 'cms',
+    output: null,
+    port: 3000,
+    awaiting: null,
+    reloadsItself: false,
+  };
+
+  it('reads the ports out of the result, each once and in order, and nothing that is not one', () => {
+    expect(
+      resolvePreview({ url: '/preview/demo/cms/', port: 3000, ports: [4321, 3000, 3000, '8080', 0, 70000, 3001.5] }, {
+        ...map,
+        ports: 'ports',
+      }).ports,
+    ).toEqual([3000, 4321]);
+    expect(resolvePreview({ url: '/preview/demo/cms/', ports: 'all of them' }, { ...map, ports: 'ports' }).ports).toEqual([]);
+    expect(resolvePreview({ url: '/preview/demo/cms/', ports: [3000] }, map).ports).toEqual([]);
+  });
+
+  it('is hidden when the process listens on one port', async () => {
+    vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
+    render(<PreviewView props={{ ...props, ports: [3000] }} />);
+    await waitFor(() => expect(screen.getByTitle('cms')).toBeInTheDocument());
+    expect(screen.queryByRole('combobox', { name: 'Port' })).toBeNull();
+  });
+
+  it('offers the listening ports with the current one selected, and reframes on another through the link route', async () => {
+    const link = vi
+      .spyOn(api, 'previewLink')
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:4318/preview/demo/cms/?ticket=a' })
+      .mockResolvedValueOnce({ url: 'http://127.0.0.1:4318/preview/demo/cms.4321/?ticket=b' });
+    render(<PreviewView props={{ ...props, ports: [3000, 4321] }} />);
+    await waitFor(() => expect(screen.getByTitle('cms')).toHaveAttribute('src', 'http://127.0.0.1:4318/preview/demo/cms/?ticket=a'));
+    const picker = screen.getByRole('combobox', { name: 'Port' }) as HTMLSelectElement;
+    expect([...picker.options].map((option) => option.value)).toEqual(['3000', '4321']);
+    expect(picker.value).toBe('3000');
+    expect(link).toHaveBeenLastCalledWith('demo', 'cms');
+
+    fireEvent.change(picker, { target: { value: '4321' } });
+    // The same ticketed route, for the same process on the other port.
+    await waitFor(() => expect(link).toHaveBeenLastCalledWith('demo', 'cms.4321'));
+    await waitFor(() =>
+      expect(screen.getByTitle('cms')).toHaveAttribute('src', 'http://127.0.0.1:4318/preview/demo/cms.4321/?ticket=b'),
+    );
+    expect(screen.getByRole('link', { name: 'localhost:4321' })).toHaveAttribute('href', 'http://localhost:4321/');
+  });
+
+  it('never offers a port the result did not list', async () => {
+    const link = vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
+    render(<PreviewView props={{ ...props, ports: [3000, 4321] }} />);
+    await waitFor(() => expect(screen.getByTitle('cms')).toBeInTheDocument());
+    const picker = screen.getByRole('combobox', { name: 'Port' });
+    // A value forced onto the control that is not one of its options.
+    fireEvent.change(picker, { target: { value: '5432' } });
+    expect(link).not.toHaveBeenCalledWith('demo', 'cms.5432');
   });
 });

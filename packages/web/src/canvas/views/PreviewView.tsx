@@ -27,6 +27,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { PreviewProps } from '../types';
+import { TerminalBody } from './TerminalView';
 
 /**
  * Is this dashboard open on the machine buddi runs on? Only then does a
@@ -49,13 +50,37 @@ function withoutTicket(url: string): string {
   }
 }
 
+/**
+ * The ports the picker offers: the ones the plugin checked the process's tree
+ * holds, and the one this preview is on. Never anything else.
+ */
+function portChoices(props: PreviewProps): number[] {
+  const ports = new Set(props.ports ?? []);
+  if (props.port !== null) ports.add(props.port);
+  return [...ports].sort((a, b) => a - b);
+}
+
 export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
   const [url, setUrl] = useState<string | null>(null);
   const [tabUrl, setTabUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showOutput, setShowOutput] = useState(false);
   const plugin = props.target?.plugin ?? null;
-  const name = props.target?.name ?? null;
+  const choices = portChoices(props);
+  const [picked, setPicked] = useState<number | null>(null);
+  // A port the owner picked, while it is still one of the choices.
+  const port = picked !== null && choices.includes(picked) ? picked : props.port;
+  /*
+   * Another port of the same process is the name with the port after a dot —
+   * the provider's own convention for it, answered only for a port that
+   * process's tree holds. The link route, the ticket and the cookie are the
+   * same ones; only the name they are minted for differs.
+   */
+  const name = props.target
+    ? port !== null && port !== props.port
+      ? `${props.target.name}.${port}`
+      : props.target.name
+    : null;
 
   /*
    * A page that does not reload itself is reloaded after a change.
@@ -86,6 +111,9 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
     setUrl(null);
     setTabUrl(null);
     setError(null);
+    // A new name is a new ticket: the frame must load it, not a clean URL
+    // whose cookie was bought for the other port.
+    setReloads(0);
     api
       .previewLink(plugin, name)
       .then((answer) => {
@@ -133,6 +161,21 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
     <div className="wb-preview" data-output={showOutput || undefined}>
       <div className="wb-row wb-preview-head">
         {props.title ? <h4 className="wb-doc-title">{props.title}</h4> : null}
+        {choices.length > 1 ? (
+          <select
+            className="wb-preview-port"
+            aria-label="Port"
+            title="The ports this process is listening on."
+            value={port ?? ''}
+            onChange={(event) => setPicked(Number(event.target.value))}
+          >
+            {choices.map((choice) => (
+              <option key={choice} value={choice}>
+                :{choice}
+              </option>
+            ))}
+          </select>
+        ) : null}
         {hasOutput ? (
           <button
             type="button"
@@ -158,15 +201,15 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
             Open in a tab
           </a>
         ) : null}
-        {props.port !== null && onThisMachine() ? (
+        {port !== null && onThisMachine() ? (
           <a
             className="wb-preview-direct"
-            href={`http://localhost:${props.port}/`}
+            href={`http://localhost:${port}/`}
             target="_blank"
             rel="noreferrer noopener"
             title="The process itself, on this machine only."
           >
-            localhost:{props.port}
+            localhost:{port}
           </a>
         ) : null}
       </div>
@@ -185,7 +228,7 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
         ) : (
           <p className="wb-empty wb-preview-frame">{error ?? 'Opening the preview…'}</p>
         )}
-        {hasOutput && showOutput ? <pre className="wb-preview-output">{props.output}</pre> : null}
+        {hasOutput && showOutput ? <TerminalBody text={props.output ?? ''} className="wb-preview-output" /> : null}
       </div>
     </div>
   );

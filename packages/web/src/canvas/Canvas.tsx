@@ -422,6 +422,8 @@ const SHAPE: Record<RendererName, string> = {
   keyvalue: 'a list of figures',
   document: 'a document to read',
   diff: 'a change to review',
+  terminal: 'what a command printed',
+  image: 'a picture',
   preview: 'the app, running',
   envelope: 'a decision to make',
   structured: 'the result, laid out',
@@ -453,6 +455,10 @@ const SHAPE_PATHS: Record<RendererName, JSX.Element> = {
   document: <path d="M4 2.4h5l3 3v8.2H4zM9 2.4v3h3M6 9h4M6 11.2h3" />,
   // A plus over a minus: lines in, lines out.
   diff: <path d="M8 2.6v5M5.5 5.1h5M5.5 11.6h5M3 14h10" />,
+  // A prompt and a cursor.
+  terminal: <path d="M2.2 3.4h11.6v9.2H2.2zM4.6 6.4l2 1.6-2 1.6M8 10h3" />,
+  // A frame with a hill and a sun.
+  image: <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 11l3.6-3.4 2.6 2.4 2-1.8 3.4 3M10.6 6.2h.01" />,
   // A window with a title bar: the app itself, framed.
   preview: <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 6h11.6M4.1 4.7h.01M6 4.7h.01" />,
   envelope: <path d="M2.2 4h11.6v8H2.2zM2.2 4.4 8 8.8l5.8-4.4" />,

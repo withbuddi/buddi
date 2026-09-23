@@ -17,6 +17,8 @@ import type {
   DiffProps,
   DocumentMap,
   DocumentProps,
+  ImageMap,
+  ImageProps,
   KeyValueMap,
   KeyValueProps,
   PreviewMap,
@@ -25,6 +27,8 @@ import type {
   TableCell,
   TableMap,
   TableProps,
+  TerminalMap,
+  TerminalProps,
   TimeseriesMap,
   TimeseriesProps,
   Tone,
@@ -289,6 +293,56 @@ export function resolveDiff(output: unknown, map: DiffMap): DiffProps {
 }
 
 /**
+ * What a command printed. The output is text or nothing; the numbers are
+ * numbers or nothing — an exit code of `"0"` from a descriptor pointed at the
+ * wrong field is not drawn as a success.
+ */
+export function resolveTerminal(output: unknown, map: TerminalMap): TerminalProps {
+  const text = map.output ? readPath(output, map.output) : undefined;
+  const integer = (path: string | undefined): number | null => {
+    const value = path ? readPath(output, path) : undefined;
+    return typeof value === 'number' && Number.isInteger(value) ? value : null;
+  };
+  const omitted = integer(map.omittedBytes);
+  const elapsed = map.elapsedMs ? readPath(output, map.elapsedMs) : undefined;
+  return {
+    command: asString(readRef(output, map.command)),
+    output: typeof text === 'string' ? text : null,
+    exitCode: integer(map.exitCode),
+    elapsedMs: typeof elapsed === 'number' && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null,
+    omittedBytes: omitted !== null && omitted > 0 ? omitted : null,
+    metadata: (map.metadata ?? []).map((item) => ({
+      label: item.label,
+      value: readRef(output, item.value),
+      unit: (item.unit ?? 'text') as Unit,
+    })),
+  };
+}
+
+const LIBRARY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A library file's id out of whatever the path found: the id itself, or an
+ * object carrying it as `id` or `artifactId`. Only a uuid counts — it is the
+ * one thing the panel puts in a URL, and it goes in a path the library owns.
+ */
+export function libraryFileId(value: unknown): string | null {
+  const candidate =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)['artifactId'] ?? (value as Record<string, unknown>)['id']
+      : value;
+  return typeof candidate === 'string' && LIBRARY_ID.test(candidate) ? candidate.toLowerCase() : null;
+}
+
+export function resolveImage(output: unknown, map: ImageMap): ImageProps {
+  return {
+    artifactId: map.src ? libraryFileId(readPath(output, map.src)) : null,
+    title: asString(readRef(output, map.title)),
+    caption: asString(readRef(output, map.caption)),
+  };
+}
+
+/**
  * Which preview a descriptor named, or null.
  *
  * A preview is not a URL this page may construct: it is served on another
@@ -331,7 +385,16 @@ export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
     // Only a real `true`: a string "true" from a descriptor pointed at the
     // wrong field would otherwise stop the reload a static page needs.
     reloadsItself: map.reloadsItself ? readPath(output, map.reloadsItself) === true : false,
+    ports: map.ports ? previewPorts(readPath(output, map.ports)) : [],
   };
+}
+
+/** Real ports, each once, in order; anything else in the list is dropped. */
+function previewPorts(value: unknown): number[] {
+  const ports = asArray(value).filter(
+    (port): port is number => typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65535,
+  );
+  return [...new Set(ports)].sort((a, b) => a - b);
 }
 
 /** Relative paths only. Anything with a scheme or `//` host is refused. */
@@ -372,6 +435,10 @@ export function applyDescriptor(
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
     case 'diff':
       return { renderer: 'diff', props: resolveDiff(output, map as DiffMap) };
+    case 'terminal':
+      return { renderer: 'terminal', props: resolveTerminal(output, map as TerminalMap) };
+    case 'image':
+      return { renderer: 'image', props: resolveImage(output, map as ImageMap) };
     case 'preview':
       return { renderer: 'preview', props: resolvePreview(output, map as PreviewMap) };
     default:
