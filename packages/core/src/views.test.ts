@@ -114,6 +114,15 @@ describe('view descriptors', () => {
     ).toThrow(/invalid view descriptor/);
   });
 
+  it('accepts a preview that is not listening yet, and whether it reloads itself', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.start',
+      renderer: 'preview',
+      map: { src: 'preview', awaiting: 'awaiting', reloadsItself: 'reloadsItself', port: 'port' },
+    });
+    expect(parsed.map).toMatchObject({ awaiting: 'awaiting', reloadsItself: 'reloadsItself' });
+  });
+
   it('accepts a diff that names its text, with a title and the facts about it', () => {
     const parsed = viewDescriptorSchema.parse({
       tool: 'demo.write',

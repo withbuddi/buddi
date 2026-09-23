@@ -184,6 +184,19 @@ export interface PreviewMap {
   output?: string;
   /** Path to the loopback port the process listens on, for a direct `localhost:<port>` link. */
   port?: string;
+  /**
+   * Path to a `/preview/<plugin>/<name>/` string naming a process that is not
+   * listening *yet*. The canvas asks the dashboard whether that preview is
+   * being served, for a few minutes, and opens it when it is; until then the
+   * result draws no tab.
+   */
+  awaiting?: string;
+  /**
+   * Path to a boolean: true when the process reloads its own page after a
+   * change (a hot-reloading dev server). When it is not true the canvas
+   * reloads the frame after a change to a file in the conversation.
+   */
+  reloadsItself?: string;
 }
 
 export type ViewMap =
@@ -376,6 +389,10 @@ const previewMapSchema = z
     output: viewPathSchema.optional(),
     /** Path to the loopback port the process listens on, for a direct link. */
     port: viewPathSchema.optional(),
+    /** Path to a preview that is not listening yet, opened once it is. */
+    awaiting: viewPathSchema.optional(),
+    /** Path to a boolean: the process reloads its own page after a change. */
+    reloadsItself: viewPathSchema.optional(),
   })
   .strict();
 

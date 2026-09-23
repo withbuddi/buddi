@@ -37,7 +37,7 @@ import { applyDescriptor } from './resolve';
 import { inferShape, isSubstantialResult } from './infer';
 import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
-import type { Renderable, RendererName, ViewDescriptor } from './types';
+import type { PreviewProps, Renderable, RendererName, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { commandResult } from './command-result';
 
@@ -113,16 +113,66 @@ export interface RenderableInput {
    * decision waiting on the owner outranks any panel.
    */
   folded?: ReadonlySet<string>;
+  /**
+   * Previews the dashboard has confirmed are being served, as
+   * `<plugin>/<name>`. A result naming a preview that was not listening yet
+   * (`awaiting`) draws its tab once its key is here, and not before.
+   */
+  served?: ReadonlySet<string>;
+}
+
+/** The key a preview is known by: `<plugin>/<name>`. */
+export function previewKey(target: { plugin: string; name: string }): string {
+  return `${target.plugin}/${target.name}`;
+}
+
+/**
+ * Is this result a change to a file? The same shape the tool row unfolds
+ * into a diff: a `diff` string. A preview of a page that does not reload
+ * itself reloads when one of these arrives.
+ */
+function isChange(output: unknown): boolean {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) return false;
+  const diff = (output as Record<string, unknown>)['diff'];
+  return typeof diff === 'string' && diff.trim() !== '';
+}
+
+/**
+ * The previews this conversation is waiting on: results whose view is a
+ * preview, naming a process that was not listening yet when they came back.
+ * The page asks whether each is being served, and `renderablesFrom` opens it
+ * when it is. Oldest first, with when the result arrived.
+ */
+export function awaitingPreviews({
+  messages,
+  descriptors,
+}: Pick<RenderableInput, 'messages' | 'descriptors'>): Array<{ plugin: string; name: string; at: string | null }> {
+  const byTool = new Map(descriptors.filter((d) => d.renderer === 'preview').map((d) => [d.tool, d]));
+  if (byTool.size === 0) return [];
+  const names = new Map<string, string>();
+  const found: Array<{ plugin: string; name: string; at: string | null }> = [];
+  for (const message of messages) {
+    for (const block of message.blocks ?? []) {
+      if (block.type === 'tool_use') names.set(block.id, block.name);
+      if (block.type !== 'tool_result' || block.ok === false) continue;
+      const descriptor = byTool.get(block.name || names.get(block.toolUseId) || '');
+      if (!descriptor) continue;
+      const props = applyDescriptor(descriptor, block.output).props as PreviewProps;
+      if (props.target === null && props.awaiting !== null) found.push({ ...props.awaiting, at: message.at ?? null });
+    }
+  }
+  return found;
 }
 
 /**
  * The canvas contents for a conversation, oldest first, capped at the last
  * few. `canvas.clear` empties what came before it and nothing after.
  */
-export function renderablesFrom({ messages, descriptors, awaiting, folded }: RenderableInput): Renderable[] {
+export function renderablesFrom({ messages, descriptors, awaiting, folded, served }: RenderableInput): Renderable[] {
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
   const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
   let collected: Renderable[] = [];
+  let changes = 0;
 
   for (const message of messages) {
     for (const block of message.blocks ?? []) {
@@ -217,9 +267,30 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded }: Ren
         continue;
       }
 
+      if (isChange(block.output)) changes += 1;
+
       const descriptor = byTool.get(tool);
       if (descriptor) {
-        const { renderer, props } = applyDescriptor(descriptor, block.output);
+        const applied = applyDescriptor(descriptor, block.output);
+        const { renderer } = applied;
+        let { props } = applied;
+        if (renderer === 'preview') {
+          const preview = props as PreviewProps;
+          // A process that was not listening yet opens its tab once the
+          // dashboard says it is being served; a preview with nothing to
+          // point at is a box, and draws no tab at all.
+          const target = preview.target
+            ?? (preview.awaiting && served?.has(previewKey(preview.awaiting)) ? preview.awaiting : null);
+          if (target === null) continue;
+          props = { ...preview, target, awaiting: null } satisfies PreviewProps;
+          // One tab per process: a later preview of the same one replaces
+          // the earlier, rather than framing it twice.
+          const key = previewKey(target);
+          collected = collected.filter((item) => !(item.source === 'descriptor'
+            && item.renderer === 'preview'
+            && (item.props as PreviewProps).target !== null
+            && previewKey((item.props as PreviewProps).target!) === key));
+        }
         // A declared view is the plugin author's judgement that this result is
         // worth looking at. It keeps its tab even when it came back empty —
         // "no rows this month" is an answer, drawn the way its author meant.
@@ -251,6 +322,13 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded }: Ren
     }
   }
 
+  // Every preview hears how many changes there have been: the panel reloads
+  // a page that does not reload itself when the count grows under it.
+  for (const item of collected) {
+    if (item.source === 'descriptor' && item.renderer === 'preview') {
+      item.props = { ...(item.props as PreviewProps), changes } satisfies PreviewProps;
+    }
+  }
   return capped(collected);
 }
 

@@ -33,6 +33,8 @@ describe('resolving a preview', () => {
       title: 'web',
       output: 'ready in 412 ms',
       port: 5173,
+      awaiting: null,
+      reloadsItself: false,
     });
     // A port that is not one is no link.
     expect(resolvePreview({ url: '/preview/developer/web/', port: '5173' }, map).port).toBeNull();
@@ -70,7 +72,7 @@ describe('resolving a preview', () => {
       { url: '/preview/developer/web/' },
     )).toEqual({
       renderer: 'preview',
-      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null, port: null },
+      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null, port: null, awaiting: null, reloadsItself: false },
     });
     expect(rendererFor('preview')).toBe(RENDERERS.preview);
   });
@@ -86,7 +88,7 @@ describe('the panel', () => {
     const link = vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
     render(
       <PreviewView
-        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms', port: 5173 }}
+        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms', port: 5173, awaiting: null, reloadsItself: false }}
       />,
     );
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
@@ -124,7 +126,7 @@ describe('the panel', () => {
       .mockResolvedValueOnce({ url: `${TICKETED}2` });
     const open = vi.fn();
     vi.stubGlobal('open', open);
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
 
     const anchor = screen.getByRole('link', { name: 'Open in a tab' });
@@ -141,14 +143,14 @@ describe('the panel', () => {
 
   it('says so when the link cannot be had, and frames nothing', async () => {
     vi.spyOn(api, 'previewLink').mockRejectedValue(new Error('no such preview'));
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
     await waitFor(() => expect(screen.getByText('no such preview')).toBeInTheDocument());
     expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('draws nothing framed, and asks for nothing, when no process was named', () => {
     const link = vi.spyOn(api, 'previewLink');
-    render(<PreviewView props={{ target: null, title: 'web', output: null, port: null }} />);
+    render(<PreviewView props={{ target: null, title: 'web', output: null, port: null, awaiting: null, reloadsItself: false }} />);
     expect(document.querySelector('iframe')).toBeNull();
     expect(link).not.toHaveBeenCalled();
     expect(screen.getByText(/names no preview/)).toBeInTheDocument();
