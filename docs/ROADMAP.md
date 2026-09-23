@@ -89,7 +89,7 @@ with a written brief; in order:
    listening on a port, the canvas opens and focuses the Preview tab itself
    instead of waiting for `developer.preview`. Plain HTML sites also need a
    frame reload after a write (Vite reloads itself over the proxied websocket).
-3. **File explorer** — a canvas tab over the workspace using `developer.list`
+3. **File explorer** — built 2026-09-23 (buddi `45cc58a`, buddi-plugins `f04d944`); reads are the plugin's page queries run as the owner on `/api/pages/<plugin>/<query>`, which now streams a query's `pageFile` bytes behind the same session check, the gateway deciding what shows inline. A canvas tab over the workspace using `developer.list`
    and `developer.read` as the owner (skips agent tiers; reads only), refreshed
    on writes in the conversation stream; click opens a file view; images and
    PDFs render as themselves; uploads/downloads through the Files library.
