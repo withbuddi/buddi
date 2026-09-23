@@ -58,6 +58,7 @@ export interface ReadOutput {
 export function createReadTool(fetcher: Fetcher): ToolDefinition<ReadInput, ReadOutput> {
   return {
     name: 'web.read',
+    untrusted: 'web',
     description:
       'Fetch one public web page and return it as plain text, with the URL that actually answered and the site it came from. ' +
       'Use it after web.search when you need the real figure behind a snippet, or when the owner gives you a link. ' +

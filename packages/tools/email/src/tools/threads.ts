@@ -102,6 +102,7 @@ const listInput = z.object({
 
 export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
   name: 'email.list_threads',
+  untrusted: 'mail',
   description:
     "The owner's mail as conversations rather than messages: subject, who is in it, how many messages, when it last moved, and which way — whether it is waiting on him or on them. The state is derived from who wrote last, the owner's Sent folder included, so a thread he answered from his phone says so. Filters, all optional: `state` ('waiting-on-me', 'waiting-on-them', 'closed', 'muted'), `participant` (an address, whoever wrote), and `since`/`until` (YYYY-MM-DD, against when the conversation last moved, read in the owner's own timezone). Most recently moved first, and every mailbox unless you name one with `account`. Use email.search to find a message; use this to see where the conversations stand.",
   tier: 'auto',
@@ -152,6 +153,7 @@ const readInput = z.object({
 
 export const readThread: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   name: 'email.read_thread',
+  untrusted: 'mail',
   description:
     'Read one conversation: its last messages in the order they were written, each saying who wrote it and whether it came in or went out from the owner. Use it before answering anything, so a reply is written to the conversation rather than to the newest message in it.',
   tier: 'auto',

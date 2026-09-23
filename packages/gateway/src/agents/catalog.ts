@@ -41,6 +41,7 @@ import { createPlatformManifest } from './platform.js';
 import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 import { createGoalManifest } from '../missions/goals.js';
+import { createLearningManifest } from './learning.js';
 
 /** Repo root relative to this module — resolved from the module URL, never cwd. */
 export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? path.resolve(
@@ -162,6 +163,10 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // watches a *metric*, and metrics are a plugin contribution — so what can be
   // watched here is exactly what is installed here, and nothing more.
   registry.register(createGoalManifest(registry));
+  // Learning, for the same reason: a proposal is core's row, and an agent may
+  // propose from any run. It takes the registry to name installed plugins for
+  // a policy and to read an agent's own file for a change.
+  registry.register(createLearningManifest(registry));
   // The canvas, for the same reason: what an agent can draw is a property of
   // the installation, not of one conversation. It owns no data, so it is here
   // rather than in `installedManifests` — there is nothing to migrate.

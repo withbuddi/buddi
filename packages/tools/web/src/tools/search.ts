@@ -87,6 +87,7 @@ export function createSearchTool(
 ): ToolDefinition<SearchInput, SearchOutput> {
   return {
     name: 'web.search',
+    untrusted: 'web',
     description:
       'Search the live web and get back a list of results, each with its title, its URL, the site it is on, and a short extract. ' +
       'Use it whenever the answer depends on something current — a price, a rate, a date, a product, a published term, anything that changed after your training data. ' +

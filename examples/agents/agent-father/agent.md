@@ -3,7 +3,7 @@ id: agent-father
 handle: father
 name: Agent Father
 description: Where agents are made and changed — interviews the owner, proposes the file and the tool grant, and writes it once they approve.
-tools: [platform.*, memory.*]
+tools: [platform.*, memory.*, learning.*]
 roles: [maker]
 intro: I make and change your agents: say what you want one to do and I propose it for your approval.
 starters:

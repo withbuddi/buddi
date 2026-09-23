@@ -24,6 +24,7 @@ import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
+import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -285,6 +286,12 @@ export class ToolRegistry {
             `a draft tool never executes, so there is nothing to decide per call`,
         );
       }
+      if (tool.untrusted !== undefined && !UNTRUSTED_KINDS.includes(tool.untrusted)) {
+        throw new Error(
+          `tool ${tool.name} (plugin ${manifest.name}) declares untrusted "${String(tool.untrusted)}"; ` +
+            `expected one of ${UNTRUSTED_KINDS.join(', ')}`,
+        );
+      }
       // The provider contract, checked where the plugin can still be named.
       schemas.set(tool.name, toolInputSchema(tool, manifest.name));
     }
@@ -452,6 +459,11 @@ export class ToolRegistry {
 
   waitsForOwner(name: string): boolean {
     return this.#tools.get(name)?.tool.waitsForOwner === true;
+  }
+
+  /** What kind of untrusted text this tool's output is, when it declares one. */
+  untrustedKind(name: string): UntrustedKind | undefined {
+    return this.#tools.get(name)?.tool.untrusted;
   }
 
   async image(name: string, output: unknown, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined> {

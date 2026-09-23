@@ -191,6 +191,27 @@ export function bindPlatformTools(registry: ToolRegistry, binding: PlatformBindi
   bindings.set(registry, binding);
 }
 
+/**
+ * One agent's own file as it is written: its persona and its `tools:` line.
+ * Null when no catalog is bound or the agent is not installed. Read-only; the
+ * learning tools show it as the "before" of a proposed change.
+ */
+export function readBoundAgentFile(
+  registry: ToolRegistry,
+  agentId: string,
+): { persona: string; tools: string[] } | null {
+  const binding = bindings.get(registry);
+  const agent = binding?.catalog.get(agentId);
+  if (!agent) return null;
+  try {
+    const parsed = parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file });
+    const tools = (parsed.frontmatter as { tools?: unknown }).tools;
+    return { persona: parsed.body, tools: Array.isArray(tools) ? tools.map(String) : [] };
+  } catch {
+    return null;
+  }
+}
+
 /** A refusal the owner (or the model) can act on. Never becomes an action. */
 export class PlatformRefusal extends Error {
   override readonly name = 'PlatformRefusal';

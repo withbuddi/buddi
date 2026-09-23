@@ -12,6 +12,7 @@ import type { HomeContribution } from './home.js';
 import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
+import type { RunProvenance, UntrustedKind } from './learning/types.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -29,7 +30,7 @@ export interface GroupContext {
 
 export interface ToolContext {
   /** Fresh owner timezone and host facts, supplied by the composition root. */
-  systemContext?: () => Promise<SystemContext>;
+  systemContext?: (run?: { agentId: string; tools: readonly string[] }) => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
   ownerRequest?: { id: string; text: string; expiresAt: number };
   /** Runtime-resolved session tool grants. Cannot be inherited by a delegate. */
@@ -149,6 +150,15 @@ export interface ToolContext {
    * that never asked) by falling back to its own default.
    */
   choices?: Readonly<Record<string, string>>;
+  /**
+   * What this run knows about itself when the call is made: its id, the owner
+   * turn it answers, and the untrusted inputs in its context (web pages, mail,
+   * files, chat). Stamped per call by the runtime loop from the messages the
+   * model was actually shown — never from anything the model said. The
+   * learning tools record it as a proposal's provenance; a tool that needs it
+   * fails closed when it is absent.
+   */
+  provenance?: () => RunProvenance;
 }
 
 /**
@@ -258,6 +268,15 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * tool that merely lists or returns files never does.
    */
   producesArtifacts?: boolean;
+  /**
+   * This tool's output is text somebody other than the owner wrote: a page, a
+   * mail, a file, a chat. Declared, so a run that called it is known to have
+   * had untrusted text in view whatever the result looked like — which is
+   * what a learning proposal's provenance is built from
+   * (`learning/sources.ts`). Absent for a tool whose output is the owner's or
+   * the platform's own.
+   */
+  untrusted?: UntrustedKind;
   input: ZodType<I>;
   execute(input: I, ctx: ToolContext): Promise<O>;
   /**

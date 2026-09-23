@@ -109,6 +109,7 @@ async function requireArtifact(id: string, ctx: ToolContext): Promise<ArtifactRo
 
 export const describe: ToolDefinition<z.infer<typeof idInput>, ArtifactDescription> = {
   name: 'artifacts.describe',
+  untrusted: 'file',
   description:
     `Look inside one artifact: its metadata plus, for a PDF or a text file, the first ${DESCRIBE_TEXT_CHARS.toLocaleString('en-US')} characters of its text. This is how you read a long statement — cheaper and more searchable than looking at the pages. For an image you are shown the picture itself, so this returns only metadata and, where it is cheap to tell, the pixel size.`,
   tier: 'auto',
@@ -167,6 +168,7 @@ export const text: ToolDefinition<
   { id: string; text: string; pages?: number; truncated: boolean; chars: number }
 > = {
   name: 'artifacts.text',
+  untrusted: 'file',
   description:
     'Return the full extracted text of a PDF or text artifact, for when artifacts.describe truncated what you needed. Long: ask for it only when you are going to read or quote the whole thing.',
   tier: 'auto',

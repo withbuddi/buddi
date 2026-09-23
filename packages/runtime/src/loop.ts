@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, deriveUntrustedSources, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -825,7 +825,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   };
   const memory = opts.memoryPreamble ? await opts.memoryPreamble(agent.id) : '';
-  const platformContext = await ctx.systemContext?.();
+  // The run's own agent and grant go along: a paragraph that is only for an
+  // agent holding certain tools (the learning one) is decided by the grant.
+  const platformContext = await ctx.systemContext?.({ agentId: agent.id, tools: tools.map((t) => t.name) });
   const system = composeSystem(
     agent.systemPrompt,
     [opts.systemSuffix, platformContext?.prompt].filter(Boolean).join('\n\n'),
@@ -1080,7 +1082,23 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       const outcome = ctx.signal?.aborted
         ? { ok: false as const, reason: 'cancelled' as const, message: 'Cancelled before dispatch; no action was taken.' }
         : allowedTools.has(call.name)
-        ? await registry.invoke(call.name, call.input, { ...toolCtx, toolUseId: call.id })
+        ? await registry.invoke(call.name, call.input, {
+            ...toolCtx,
+            toolUseId: call.id,
+            // Where this call stands, derived from what the model was shown:
+            // the history, this run's turns, and the results of the calls
+            // before this one in the same turn. Lazy — only a tool that
+            // records provenance pays for the scan.
+            provenance: () => {
+              const seen = [...messages, { role: 'user' as const, content: results }];
+              return {
+                runId: opts.runId ?? ctx.jobId ?? null,
+                turn: ownerTurn(seen),
+                step: turns,
+                sources: deriveUntrustedSources(seen, (name) => registry.untrustedKind(name)),
+              };
+            },
+          })
         : { ok: false as const, reason: registry.has(call.name) ? 'tool-not-granted' as const : 'unknown-tool' as const,
             message: `tool ${call.name} is not granted to this run` };
       // What the step did, for a surface that draws it. Presentation only:

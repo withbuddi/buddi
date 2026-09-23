@@ -74,6 +74,7 @@ const listRecentInput = z.object({
 
 export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown> = {
   name: 'email.list_recent',
+  untrusted: 'mail',
   description:
     'List recent messages in the inbox, newest first: sender, subject, date, a short snippet, whether it is unread, whether it has attachments, which of the owner\'s mailboxes it arrived in, and what triage decided about it if anything has. Every mailbox is searched unless you name one with `account`. Use it to see what has arrived; use email.read for the full body of one message.',
   tier: 'auto',
@@ -126,6 +127,7 @@ const readInput = z.object({
 
 export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   name: 'email.read',
+  untrusted: 'mail',
   description:
     'Read one message in full: which conversation it belongs to, every header that matters, the complete text body, and the attachments it carries (filename, type and size — the bytes are not downloaded). A body older than the retention window is no longer stored: the headers, the snippet and the triage decision still come back, with a note saying the body was purged. Reading never marks the message as read in the owner\'s mailbox.',
   tier: 'auto',
@@ -231,6 +233,7 @@ const searchInput = z.object({
 
 export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
   name: 'email.search',
+  untrusted: 'mail',
   description:
     'Search ingested mail. Give `query` for a case-insensitive substring of the subject, the sender or the body, and narrow it with any of `from` (a whole address, or a bare domain which also matches its subdomains), `since` and `until` (YYYY-MM-DD, against when the mail was received, read in the owner\'s own timezone), `thread` (one conversation), `direction` (`in` or `out`), and `hasAttachments`. `query` may be left out when at least one filter is given — `from: "acme.com", hasAttachments: true` is a search. Newest first, across every mailbox unless you name one with `account`. Subjects and senders are always searched in full; with a `query` and nothing to bound it (`since`, `from` or `thread`) only the last 90 days of message *bodies* are read, and the answer says so. Use it to find the earlier message a new one refers to.',
   tier: 'auto',

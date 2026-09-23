@@ -18,6 +18,7 @@ import { Providers } from './Providers';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
+import { Proposals } from './Proposals';
 import { Plugins } from './Plugins';
 
 export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
@@ -66,6 +67,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       ) : null}
       {section === 'you' ? <You embedded /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
+      {section === 'proposals' ? <Proposals embedded /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}

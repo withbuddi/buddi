@@ -420,7 +420,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     now,
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
-      systemContext: () => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }),
+      systemContext: (run) => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run),
       /*
        * A getter, not a value: this object is built before anything is bound,
        * and the preview listener publishes its port into the environment the
