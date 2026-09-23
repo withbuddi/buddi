@@ -233,7 +233,7 @@ export function PageFrame({
   if (embedded) {
     return (
       <div className="ui-stack" data-gap="lg">
-        {actions ? <div className="ui-toolbar">{actions}</div> : null}
+        {actions ? <div className="ui-toolbar" data-align="end">{actions}</div> : null}
         {children}
       </div>
     );

@@ -31,22 +31,36 @@ export interface MemoryNote {
   sourceConversationId: string | null;
 }
 
-/** Every current preference and every live note, whatever the scope. */
-export async function listMemory(db: Db, now: Date): Promise<{ preferences: MemoryPreference[]; notes: MemoryNote[] }> {
+/**
+ * Every current preference and every live note, whatever the scope — or, with
+ * `agent`, what that agent sees outside a room: the shared set plus its own.
+ * The same two scopes the tools read, so an agent's sheet shows exactly what
+ * the agent would recall. Filtered here rather than in the page because the
+ * note list is capped, and one busy agent must not crowd another off it.
+ */
+export async function listMemory(
+  db: Db,
+  now: Date,
+  opts: { agent?: string } = {},
+): Promise<{ preferences: MemoryPreference[]; notes: MemoryNote[] }> {
+  const agent = opts.agent?.trim() || null;
   const [{ rows: prefs }, { rows: notes }] = await Promise.all([
     db.query(
       `select key, value, agent_scope, revision, created_at
          from memory.preferences
         where superseded_at is null
+          and ($1::text is null or agent_scope is null or agent_scope = $1)
         order by key asc, agent_scope nulls first`,
+      [agent],
     ),
     db.query(
       `select id, content, kind, scope, created_at, expires_at, created_by_agent, source_conversation_id
          from memory.notes
         where deleted_at is null and (expires_at is null or expires_at > $1)
+          and ($2::text is null or scope = any(array[$3, $2]::text[]))
         order by created_at desc, seq desc
         limit 500`,
-      [now],
+      [now, agent, SHARED],
     ),
   ]);
   return {

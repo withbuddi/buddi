@@ -10,6 +10,7 @@ import { ToolRegistry, createPool, migrate } from '@buddi/core';
 import type { ToolContext } from '@buddi/core';
 import { manifest } from '../index.js';
 import { buildPreamble } from '../preamble.js';
+import { listMemory } from '../admin.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -297,5 +298,30 @@ suite('memory tools (postgres)', () => {
     await pool.query(`update memory.preferences set superseded_at = now() where agent_scope is null`);
     await pool.query(`update memory.notes set deleted_at = now() where scope = 'shared'`);
     expect(await buildPreamble(pool, 'stranger', { now })).toBe('');
+  });
+  /* ---------------- the owner's view of one agent ---------------- */
+
+  it("lists what one agent sees for its sheet: shared plus its own, never another agent's", async () => {
+    await call('sheet-dev', 'memory.note', { content: 'buddi starts with pnpm dev after the db container', kind: 'fact' });
+    await call('sheet-dev', 'memory.remember_preference', { key: 'branch_prefix', value: 'buddi/dev' });
+    await call('sheet-other', 'memory.note', { content: 'the other agent keeps this to itself', kind: 'fact' });
+    await call('sheet-other', 'memory.remember_preference', { key: 'other_secret', value: 'nope' });
+    await call('sheet-dev', 'memory.note', { content: 'every agent may read this sheet note', kind: 'fact', scope: 'shared' });
+    await call('sheet-dev', 'memory.remember_preference', { key: 'sheet_tone', value: 'short', scope: 'shared' });
+
+    const view = await listMemory(pool, now(), { agent: 'sheet-dev' });
+    const notes = view.notes.map((n) => `${n.scope}:${n.content}`);
+    expect(notes).toContain('sheet-dev:buddi starts with pnpm dev after the db container');
+    expect(notes).toContain('shared:every agent may read this sheet note');
+    expect(notes.some((n) => n.includes('keeps this to itself'))).toBe(false);
+    expect(view.notes.every((n) => n.scope === 'shared' || n.scope === 'sheet-dev')).toBe(true);
+    const prefs = view.preferences.map((p) => `${p.scope}:${p.key}`);
+    expect(prefs).toEqual(expect.arrayContaining(['sheet-dev:branch_prefix', 'shared:sheet_tone']));
+    expect(prefs).not.toContain('sheet-other:other_secret');
+
+    // Unfiltered, the owner still gets the room.
+    const all = await listMemory(pool, now());
+    expect(all.notes.some((n) => n.scope === 'sheet-other')).toBe(true);
+    expect(all.preferences.some((p) => p.key === 'other_secret')).toBe(true);
   });
 });
