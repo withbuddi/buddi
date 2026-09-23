@@ -106,6 +106,11 @@ Small, whenever a slot opens:
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
 - Artefacts page — the list of `core.artifacts` with preview and download.
+- Agent tool picker — the Setup tab's Tools box is a free textarea that
+  needs exact names; replace it with checkboxes grouped by plugin, each tool
+  with its description, globs kept as a row per family (2026-09-23).
+- Save errors beside the button — a refused save on the agent sheet surfaces
+  in a banner at the top of the tab, out of view; say why next to the button.
 - `email.inbox_unread` needs IMAP flag re-sync first — the metric is worth
   having and cannot exist until a poll refreshes `\Seen` on rows it already
   has. Today flags are written once at ingest (`on conflict … do nothing`), so
