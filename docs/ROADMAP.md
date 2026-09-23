@@ -94,9 +94,13 @@ with a written brief; in order:
    on writes in the conversation stream; click opens a file view; images and
    PDFs render as themselves; uploads/downloads through the Files library.
    No in-place editing at first.
-4. **Terminal and image renderers** — a terminal renderer for run output
+4. **Terminal and image renderers** — built 2026-09-23 (buddi `ab28132`, buddi-plugins `d97847e`); run and output draw as a dark terminal that follows the end and says what a cap dropped, and `image` takes a library file's id only, so the page builds nothing but the library's own URLs (the developer has no image result to use it on yet). A terminal renderer for run output
    (command on top) and an image renderer for any tool output naming a file
    in the library; useful to email, browser and finance too.
+   - Port picker on the Preview — built with it; start and preview carry `ports`
+     from the process tree, and choosing one reframes on `<name>.<port>`
+     through the same ticketed link, which the plugin serves only for a port
+     that tree holds.
 
 Small, whenever a slot opens:
 
