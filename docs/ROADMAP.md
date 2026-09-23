@@ -7,6 +7,9 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## Built
 
+- [Goals](specs/goals.md) — a target with a clock: metrics from plugins,
+  deterministic hourly checks, the holding agent woken when the owner drifts;
+  Home block, Goals page, first metrics in finance, email and developer.
 - [Install](install.md) — the published package, bundled Postgres, the
   first-run wizard, encrypted backup/restore, plugins from npm, the version
   check and upgrade action. [Packaged install foundation](install-foundation.md)
@@ -54,15 +57,13 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-Nothing at the moment; the next item below is the developer plugin.
+Nothing at the moment; the next item below is messengers.
 
 ## Next, in order
 
-1. [Goals](specs/goals.md) — a target with a clock: metrics from plugins,
-   deterministic checks, the holding agent woken when the owner drifts.
-2. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-3. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
-4. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
+1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+2. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
+3. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
 5. macOS app — a packaged desktop app around the existing service.
 6. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
