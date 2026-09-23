@@ -30,6 +30,11 @@ function Harness({ initial, onChange }: { initial: string[]; onChange?: (next: s
   return <ToolPicker view={view} chosen={chosen} onChange={(next) => { setChosen(next); onChange?.(next); }} />;
 }
 
+/** Unfold the named groups, which all start folded. */
+const unfold = (...plugins: string[]): void => {
+  for (const plugin of plugins) fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${plugin} `) }));
+};
+
 describe('grantFrom', () => {
   it('saves a whole group as its glob and a partial one as names', () => {
     expect(grantFrom(view.groups, ['orchard.rows', 'orchard.forecast', 'larder.note'])).toEqual(['larder.note', 'orchard.*']);
@@ -48,6 +53,7 @@ describe('grantFrom', () => {
 describe('the picker', () => {
   it('groups every installed tool by plugin, pre-checked from the grant', () => {
     render(<Harness initial={view.granted} />);
+    unfold('orchard', 'shed');
     expect(screen.getByRole('group', { name: 'orchard' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'shed' })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /orchard\.rows/ })).toBeChecked();
@@ -71,6 +77,7 @@ describe('the picker', () => {
   it('checks and clears a whole plugin with all and none', () => {
     const onChange = vi.fn();
     render(<Harness initial={[]} onChange={onChange} />);
+    unfold('orchard');
     fireEvent.click(screen.getByRole('button', { name: 'All orchard tools' }));
     expect(screen.getByRole('checkbox', { name: /orchard\.rows/ })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /orchard\.forecast/ })).toBeChecked();
@@ -80,6 +87,7 @@ describe('the picker', () => {
 
   it('draws the agent-writing tools disabled, with the note, and all never checks them', () => {
     render(<Harness initial={[]} />);
+    unfold('shed');
     const build = screen.getByRole('checkbox', { name: /shed\.build/ });
     expect(build).toBeDisabled();
     expect(screen.getByText(/Granted only by editing the file by hand/)).toBeInTheDocument();
@@ -91,6 +99,7 @@ describe('the picker', () => {
   it('tags core tools and asks once before removing one', () => {
     const onChange = vi.fn();
     render(<Harness initial={view.granted} onChange={onChange} />);
+    unfold('larder');
     const note = screen.getByRole('checkbox', { name: /larder\.note/ });
     expect(within(screen.getByRole('group', { name: 'larder' })).getAllByText('core')).toHaveLength(2);
     fireEvent.click(note);
@@ -107,6 +116,8 @@ describe('the picker', () => {
   it('offers the plugin\'s newer suggestions on top, one click each, applying none by itself', () => {
     render(<Harness initial={view.granted} />);
     const suggested = screen.getByRole('group', { name: 'Suggested by the orchard plugin since you accepted' });
+    expect(within(suggested).getByRole('button', { name: 'Add shed.inventory' })).toBeVisible();
+    unfold('shed');
     expect(screen.getByRole('checkbox', { name: /shed\.inventory/ })).not.toBeChecked();
     fireEvent.click(within(suggested).getByRole('button', { name: 'Add shed.inventory' }));
     expect(screen.getByRole('checkbox', { name: /shed\.inventory/ })).toBeChecked();
@@ -118,9 +129,54 @@ describe('the picker', () => {
     const search = screen.getByRole('searchbox');
     search.focus();
     expect(search).toHaveFocus();
+    unfold('orchard');
     const rows = screen.getByRole('checkbox', { name: /orchard\.rows/ });
     rows.focus();
     expect(rows).toHaveFocus();
     expect(rows.tagName).toBe('INPUT');
+  });
+
+  it('starts with every group folded, the count in its header', () => {
+    render(<Harness initial={['larder.note', 'orchard.rows', 'orchard.forecast']} />);
+    for (const plugin of ['larder', 'orchard', 'shed']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${plugin} `) })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByRole('group', { name: plugin })).not.toHaveAttribute('data-open');
+    }
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByRole('button', { name: /^larder / })).toHaveTextContent('1 of 2 granted');
+    // A whole group that saves as its glob says so.
+    expect(screen.getByRole('button', { name: /^orchard / })).toHaveTextContent('all 2');
+    // Nothing granted reads as a count, not as "all".
+    expect(screen.getByRole('button', { name: /^shed / })).toHaveTextContent('0 of 2 granted');
+    // all / none stay on the folded header.
+    expect(screen.getByRole('button', { name: 'All shed tools' })).toBeEnabled();
+  });
+
+  it('toggles a group from its header, by click or by keyboard', () => {
+    render(<Harness initial={[]} />);
+    const head = screen.getByRole('button', { name: /^orchard / });
+    fireEvent.click(head);
+    expect(head).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('group', { name: 'orchard' })).toHaveAttribute('data-open', 'true');
+    expect(screen.getByRole('checkbox', { name: /orchard\.rows/ })).toBeInTheDocument();
+    fireEvent.click(head);
+    expect(screen.queryByRole('checkbox', { name: /orchard\.rows/ })).toBeNull();
+    // A native button: Enter and Space press it.
+    expect(head.tagName).toBe('BUTTON');
+    head.focus();
+    expect(head).toHaveFocus();
+  });
+
+  it('unfolds the groups a search matches and folds them all when it clears', () => {
+    render(<Harness initial={[]} />);
+    const search = screen.getByRole('searchbox');
+    fireEvent.change(search, { target: { value: 'rows' } });
+    expect(screen.getByRole('button', { name: /^orchard / })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('checkbox', { name: /orchard\.rows/ })).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /orchard\.forecast/ })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'larder' })).toBeNull();
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByRole('button', { name: /^orchard / })).toHaveAttribute('aria-expanded', 'false');
   });
 });
