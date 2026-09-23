@@ -215,9 +215,12 @@ buddi service restart
 Grant `browser.*` to the agent you want to use, in its private `agent.md` tools
 list, or ask the agent-maker to update that grant and approve the configuration
 change. No agent gains browser access merely because this plugin is installed.
-For longer tasks, consider increasing that agent's `maxTurns`; its usual turn
-limit still applies. Do not replace its existing tools list with just browser
-tools. Reload/restart after a manual configuration edit.
+A browser task spends a turn on every page it reads, so it eats the agent's
+turn budget — 40 steps per run unless its `agent.md` pins another `maxTurns`.
+A run that reaches the budget stops there and says so in the chat, with the
+work it got to; ask it to continue, or raise that agent's `maxTurns`. Do not
+replace its existing tools list with just browser tools. Reload/restart after a
+manual configuration edit.
 
 Then ask the agent in dashboard chat or Telegram to open a website and perform a
 specific task. The request authorizes navigation, form entry and the requested

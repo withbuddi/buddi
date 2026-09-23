@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
-import { loadAgentCatalog, type ToolContext, type ToolDefinition } from '@buddi/core';
+import { DEFAULT_MAX_TURNS, loadAgentCatalog, type ToolContext, type ToolDefinition } from '@buddi/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createToolRegistry,
@@ -367,6 +367,16 @@ describe('the envelope carries the whole file and the resolved grant', () => {
     // And what it does not reach is named too.
     expect(preview).toContain('It reaches nothing else');
     expect(preview).toContain('web');
+  });
+
+  /*
+   * A new agent pins no `maxTurns` — the default is what it runs on — and the
+   * owner is approving that number, so the preview says it rather than the
+   * word "default".
+   */
+  it('names the turn budget a new agent will actually run on', () => {
+    const { preview } = described<CreateAgentEnvelope>(h, 'platform.create_agent', baseCreate);
+    expect(preview).toContain(`${DEFAULT_MAX_TURNS} turns per run`);
   });
 });
 

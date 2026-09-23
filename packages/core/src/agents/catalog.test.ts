@@ -736,6 +736,15 @@ describe('loadAgentCatalog', () => {
     expect(agent.language).toBe('mirror');
   });
 
+  /*
+   * The budget is a number an owner lives with, not an implementation detail:
+   * twelve steps ran out in the middle of a browser task, and the run went
+   * quiet. Pinned here so raising or lowering it is a deliberate edit.
+   */
+  it('gives an agent that pins nothing a budget of 40 steps', () => {
+    expect(DEFAULT_MAX_TURNS).toBe(40);
+  });
+
   it('honours a pinned model over BUDDI_MODEL, and BUDDI_MODEL over the default', () => {
     const pinned = CONCIERGE.replace('tools: []', 'tools: []\nmodel: claude-haiku-4-5');
     expect(load({ concierge: pinned }, { BUDDI_MODEL: 'from-env' }).resolve('concierge').model).toBe(

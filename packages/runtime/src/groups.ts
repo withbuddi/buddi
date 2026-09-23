@@ -236,6 +236,11 @@ export function createGroupAskTool(deps: GroupAskDeps): ToolDefinition<GroupAskI
           pool,
           conversationId: ctx.conversationId,
           userMessage: memberRequestMessage(fromHandle, group.name, input.request),
+          // A member's budget is `MAX_MEMBER_TURNS`, the same for everyone and
+          // not in anybody's agent.md, and its run writes into the room the
+          // owner is reading. It does not announce that cap as if it were the
+          // agent's own, nor offer a continuation only the coordinator drives.
+          budgetNotice: false,
           ...(transcript ? { transcript } : {}),
           ...(ctx.surface ? { surface: ctx.surface } : {}),
           ...(deps.memoryPreamble ? { memoryPreamble: deps.memoryPreamble } : {}),

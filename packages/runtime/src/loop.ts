@@ -97,6 +97,19 @@ export interface RunAgentOptions {
    * is `onText`.
    */
   onDelta?: (delta: CompletionDelta) => void;
+  /**
+   * Whether a run that runs out of budget says so in the transcript. Default
+   * true — the owner is owed the sentence.
+   *
+   * False for a run the owner is not in the room with: a delegate, or a group
+   * member the coordinator brought in. Those runs are capped by the platform
+   * (`MAX_NESTED_TURNS`, `MAX_MEMBER_TURNS`), not by the agent's own
+   * `maxTurns`, and their answer is quoted into somebody else's — so "Stopped
+   * after 8 steps; say continue to go on" would name a number the owner cannot
+   * change and offer a continuation nobody can take. The budget still shows up
+   * where it belongs: in `stopped` on that run's `run.finished`.
+   */
+  budgetNotice?: boolean;
   onToolCall?: (name: string, input: unknown) => void;
   /**
    * The same call, answered. Never awaited and never allowed to change the
@@ -329,6 +342,22 @@ export interface ApprovalResume {
   error?: string;
 }
 
+/**
+ * What a run says when it hits its turn budget.
+ *
+ * One sentence, written here and nowhere else, so the wording is a single
+ * fact a test can pin. It names the number the owner would have to change and
+ * it ends with the way out, because "continue" is what they were going to
+ * type anyway.
+ */
+export function maxTurnsNotice(maxTurns: number): string {
+  return `Stopped after ${maxTurns} steps; the work above is where I got to. Say "continue" to go on.`;
+}
+
+/** The same courtesy for the other silent ending: one answer that ran too long. */
+export const MAX_TOKENS_NOTICE =
+  'Stopped: the answer got too long and was cut off. Ask me to continue, or for a shorter version.';
+
 export interface RunResult {
   text: string;
   turns: number;
@@ -416,6 +445,57 @@ export async function createConversation(
     throw new Error('createConversation: insert returned no id');
   }
   return String(id);
+}
+
+/**
+ * Stored history, made replayable — without touching what is stored.
+ *
+ * The transcript is the honest record and keeps whatever happened. The wire is
+ * stricter than the record in two ways, and both are 400s rather than nuances:
+ *
+ *  - **Roles alternate.** Two assistant messages in a row happen now: a run cut
+ *    off at `max_tokens` writes the model's truncated turn and then the loop's
+ *    own "I stopped" line, with no owner turn between them. They are replayed
+ *    as one turn, blocks concatenated in order, so nothing is lost.
+ *  - **Every `tool_use` has a `tool_result`.** A turn the provider truncated
+ *    mid-call leaves a `tool_use` the loop never dispatched and never
+ *    answered. It is dropped from the replay — the model is shown the words it
+ *    wrote, not a call it is still owed an answer for.
+ *
+ * Dropping a block can empty a turn: a truncated turn whose only content *was*
+ * that call. An empty content array is itself a 400, and removing the turn
+ * puts its neighbours side by side — so turns are merged by role and the empty
+ * ones are gone, in one pass, for both roles. Order is preserved throughout,
+ * so no `tool_use` is ever separated from the result that answers it.
+ *
+ * Run on the whole request, opening turn included, because that turn is the
+ * one that lands next to whatever the history ended with.
+ */
+export function normalizeForReplay(messages: readonly NeutralMessage[]): NeutralMessage[] {
+  const answered = new Set<string>();
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'tool_result') answered.add(block.tool_use_id);
+    }
+  }
+  const keep = (block: ContentBlock): boolean =>
+    block.type !== 'tool_use' || answered.has(block.id);
+
+  const out: NeutralMessage[] = [];
+  for (const message of messages) {
+    const content = message.content.filter(keep);
+    // A turn with nothing left to say is not sent at all — and because it is
+    // not sent, the turns either side of it can now be the same role, which
+    // the merge below is what handles.
+    if (content.length === 0) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === message.role) {
+      last.content = [...last.content, ...content];
+      continue;
+    }
+    out.push({ ...message, content });
+  }
+  return out;
 }
 
 export async function loadMessages(
@@ -693,6 +773,7 @@ export function composeSystem(
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const { agent, provider, registry, ctx, pool, conversationId, userMessage } = opts;
+  const budgetNotice = opts.budgetNotice ?? true;
   ctx.signal?.throwIfAborted();
   const resume = opts.resume;
 
@@ -825,10 +906,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // that accepts documents tomorrow still carries the real file.
   // A turn the surface already stored is already *in* the history that was
   // just loaded: appending it here would show the model the same words twice.
-  const messages: NeutralMessage[] = degradeMessages(
+  // Last, and over the whole request: what the history ended with decides
+  // whether the opening turn is adjacent to a turn of its own role.
+  const messages: NeutralMessage[] = normalizeForReplay(degradeMessages(
     opts.openingPersisted ? [...replayed] : [...replayed, { role: 'user', content: sentUserBlocks }],
     capabilities,
-  );
+  ));
   const ephemeralImages = new Set<ContentBlock>();
 
   await appendEvent(
@@ -1152,12 +1235,60 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   }
   await letGo();
 
+  /*
+   * A run that ran out of budget says so, in the chat, in its own words.
+   *
+   * Before this, `stopped: 'max_turns'` was a line in the event log and
+   * nothing else: the loop ended after the last tool result, the transcript's
+   * final message was a tool result nobody reads, and the owner watched an
+   * agent go quiet mid-task with no way to tell a finished job from an
+   * abandoned one. `max_tokens` is the same silence for a different reason.
+   *
+   * So the loop writes one last assistant message itself — no model call, no
+   * cost, no chance of the model deciding not to mention it. It is an ordinary
+   * `text` block in `core.messages`, which means every surface already carries
+   * it: it is in `result.text` through `spoken`, it reaches a streaming
+   * surface through `onText`, and a reloaded transcript still has it. The web
+   * chat draws its marker from `run.finished`, which carries `noticed` — the
+   * fact that this sentence was actually said — beside `stopped` and `turns`.
+   *
+   * Three runs stay silent:
+   *
+   *  - one the owner is not talking to — see `budgetNotice`;
+   *  - one the owner cancelled. They stopped it; being told it stopped is not
+   *    news, and the surface records the run as cancelled. The signal is
+   *    re-read here rather than trusted from the top of the loop, because the
+   *    owner can hit Stop while the last tool result is being written;
+   *  - one whose write failed. `result.text` still carries the sentence, so
+   *    the surfaces that send a run's answer still say it, and the run is
+   *    still recorded as finished — `run.finished` is what every surface reads
+   *    to stop drawing a spinner. `noticed` is then false, and the web chat
+   *    draws no marker for a message that is not there.
+   */
+  let noticed = false;
+  if (budgetNotice && ctx.signal?.aborted !== true && (stopped === 'max_turns' || stopped === 'max_tokens')) {
+    const notice = stopped === 'max_turns' ? maxTurnsNotice(agent.maxTurns) : MAX_TOKENS_NOTICE;
+    spoken.push({ text: notice, beforeToolCall: false });
+    try {
+      await persistMessage(pool, conversationId, 'assistant', [{ type: 'text', text: notice }], opts.transcript?.speaker);
+      noticed = true;
+      await opts.onText?.(notice);
+    } catch {
+      // Deliberately swallowed: see above.
+    }
+  }
+
   await appendEvent(
     pool,
     'run.finished',
     {
       turns,
       stopped,
+      // Whether this run said so in the transcript. A budget stop that stayed
+      // silent — a delegate, a room member, a cancelled run, a lost write —
+      // is still a budget stop on the record, but there is no message under
+      // which a surface could honestly draw a marker.
+      noticed,
       usage,
       provider: snapshot.provider,
       model: snapshot.model,

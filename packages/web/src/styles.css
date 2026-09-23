@@ -1871,6 +1871,20 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   letter-spacing: 0.01em;
 }
 
+/*
+ * A run that ran out of budget, under the last thing it said. The agent has
+ * already said so in words; this is the fact behind the words — which budget,
+ * and how many steps — so nobody has to guess whether it finished or stopped.
+ * Same faint register as `.wb-msg-added`: it is about the run, not the answer.
+ */
+.wb-msg-budget {
+  align-self: flex-start;
+  font-size: var(--text-2xs);
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ------------------------------------------------------------------ *
  * The properties panel: what an agent is, and what it may do to you.
  *
