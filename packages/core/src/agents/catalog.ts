@@ -49,8 +49,15 @@ import {
   type SkillProvenance,
 } from './skills.js';
 
-/** Default turn budget when the agent file does not pin one. */
-export const DEFAULT_MAX_TURNS = 12;
+/**
+ * Default turn budget when the agent file does not pin one.
+ *
+ * Wide enough for real work — a browser task alone spends turns on every page
+ * it reads — because a run that hits the budget stops and says so, and an
+ * owner who has to say "continue" every few steps is paying for the lower
+ * number with their own attention.
+ */
+export const DEFAULT_MAX_TURNS = 40;
 
 /** The agent file inside each `agents/<id>/` directory. */
 export const AGENT_FILE = 'agent.md';

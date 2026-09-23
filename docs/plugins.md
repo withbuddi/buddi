@@ -2546,7 +2546,7 @@ than guess.
 | `roles` | `string[]` | no | Capabilities it answers for, e.g. `['overview']`. |
 | `model` | `string` | no | The model it runs on. Checked against the provider. |
 | `provider` | `'anthropic' \| 'openai'` | no | Which provider. |
-| `maxTurns` | `number` | no | Turn budget per run. |
+| `maxTurns` | `number` | no | Turn budget per run. Omitted, the default of 40 applies; a run that reaches the budget stops and says so. |
 | `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
 | `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
 

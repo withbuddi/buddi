@@ -259,6 +259,10 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           conversationId,
           runId,
           userMessage: delegationMessage(input, from),
+          // A delegate's budget is this platform's cap, not the agent's own,
+          // and its answer is quoted back into the caller's. It does not tell
+          // the owner to say "continue" to a conversation that ends here.
+          budgetNotice: false,
           // The delegate answers onto the caller's screen: its words are quoted
           // back verbatim into the same Telegram bubble or the same dashboard
           // panel. So it inherits the caller's surface profile rather than
