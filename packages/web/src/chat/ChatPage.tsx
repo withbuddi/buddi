@@ -17,7 +17,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
-import { Envelope } from '../canvas/views/Envelope';
 import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom } from '../canvas/renderables';
 import { useServedPreviews } from '../canvas/served';
 import { profileRenderable, profileTabId } from './properties';
@@ -36,6 +35,7 @@ import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttenti
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
 import { QuestionPicker } from './QuestionPicker';
+import { ApprovalDock, type DockedApproval } from './ApprovalDock';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
@@ -517,6 +517,11 @@ export function ChatPage({
     [renderables],
   );
   const inlineApproval = inlineApprovals.at(-1) ?? null;
+  /** What the dock holds: every pending approval here, oldest first. */
+  const docked: DockedApproval[] = useMemo(
+    () => inlineApprovals.map((item) => ({ approvalId: (item.props as { approvalId: string }).approvalId, toolUseId: item.id })),
+    [inlineApprovals],
+  );
 
   /*
    * What the canvas turns to on its own.
@@ -1180,17 +1185,6 @@ export function ChatPage({
           emptyHint={agent ? `Nothing here yet. Ask ${agent.name} for something.` : 'Loading agents…'}
         >
 
-        {inlineApprovals.length ? inlineApprovals.map(item => (
-          <div key={item.id} className="wb-inline-approval" data-testid="inline-approval">
-            <Envelope
-              props={item.props as { approvalId: string }}
-              timezone={timezone}
-              onDecided={onDecided}
-              compact
-              onOpenFull={() => { setActiveTab(item.id); if (narrow) onOpenCanvas?.(); }}
-            />
-          </div>
-        )) : null}
         </MessageList>
 
         {openOffers.length > 0 ? (
@@ -1223,7 +1217,18 @@ export function ChatPage({
               <a href={settingsRoute(blockedFix.section)}>{blockedFix.label}</a>
             </Notice>
           </div>
-        ) : conversation?.question ? (
+        ) : docked.length > 0 ? (
+          <ApprovalDock
+            approvals={docked}
+            timezone={timezone}
+            now={now}
+            version={conversation}
+            onDecided={onDecided}
+            onSay={(text) => send(text, [])}
+            onOpenFull={(toolUseId) => { setActiveTab(toolUseId); if (narrow) onOpenCanvas?.(); }}
+          />
+        ) : null}
+        {blocked || docked.length > 0 ? null : conversation?.question ? (
           <QuestionPicker
             key={conversation.question.id}
             question={conversation.question}
@@ -1231,7 +1236,14 @@ export function ChatPage({
             onAnswer={answerQuestion}
             onSkip={skipQuestion}
           />
-        ) : (
+        ) : null}
+        {blocked ? null : (
+          /*
+           * Hidden, not unmounted, while a question or an approval stands in
+           * its place: the half-written line and its files are exactly where
+           * the owner left them when it comes back.
+           */
+          <div hidden={docked.length > 0 || Boolean(conversation?.question)} data-testid="composer-slot">
           <Composer
             ref={composer}
             disabled={!agentId}
@@ -1249,6 +1261,7 @@ export function ChatPage({
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />
+          </div>
         )}
       </section>
 

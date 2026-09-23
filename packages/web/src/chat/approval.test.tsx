@@ -62,3 +62,29 @@ it('still counts as something to show, so the thread is not drawn as empty', () 
   draw(resumed);
   expect(screen.getByTestId('messages').querySelector('.wb-chat-empty')).toBeNull();
 });
+
+/*
+ * A call still waiting for the owner is one line in the thread — the decision
+ * is in the dock, the full request on the canvas — and the same line says
+ * what became of it once decided, wherever that was.
+ */
+function gated(state: string): ChatMessage[] {
+  return [
+    { id: 'u', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'gate', name: 'shed.run', input: { command: 'unzip -l site.zip' } }] },
+    { id: 'r', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'gate', name: 'shed.run', ok: !['rejected', 'expired'].includes(state), output: 'awaiting owner approval', approval: { id: 'a1', state } }] },
+  ];
+}
+
+it.each([
+  ['pending', 'waiting'],
+  ['succeeded', 'approved'],
+  ['rejected', 'rejected'],
+  ['expired', 'expired'],
+])('draws a %s approval as one compact line that reads %s', (state, reads) => {
+  draw(gated(state));
+  const line = screen.getByRole('button', { name: new RegExp(`Approval · shed\\.run unzip -l site\\.zip ${reads}`) });
+  expect(line.getAttribute('data-approval')).toBe('true');
+  // The card is not drawn in the thread any more.
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  expect(screen.queryByText(/See the full request/)).toBeNull();
+});

@@ -683,9 +683,11 @@ export class ToolRegistry {
      * so the sentence that explains the difference belongs in the preview —
      * which is also the only text an approval surface is allowed to render.
      * Appended rather than substituted: the tool's own account of the effect
-     * is still what is being approved.
+     * is still what is being approved. Once, though: a tool that already
+     * worked the reason into its own sentence is not followed by a second
+     * copy of it.
      */
-    const preview = tierReason
+    const preview = tierReason && !described.preview.includes(tierReason)
       ? `${described.preview.replace(/\s+$/, '')} — ${tierReason}`
       : described.preview;
 
