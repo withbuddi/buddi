@@ -77,7 +77,7 @@ run mode by default, remembered commands, lockfile installs, local `npx`,
 `git init`, previews on the tailnet). One at a time, one Opus subagent each,
 with a written brief; in order:
 
-1. **Tool row gist and diff renderer** — in progress (Opus, 2026-09-23). Each
+1. **Tool row gist and diff renderer** — built 2026-09-23 (buddi `2d899eb`, buddi-plugins `099db96`); rows unfold by the shape of the result (a `diff`, or a `command` with output), never by tool name, because `bundle.test.ts` forbids plugin tool names in the web source. Each
    chat tool row shows the path/command/query inline; write/edit rows expand
    to a colour-coded diff, run/start rows to command plus `plain` output; a
    `diff` canvas renderer replaces `document` for write, edit and summarise.
