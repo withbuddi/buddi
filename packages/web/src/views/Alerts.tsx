@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { api, type SentinelFinding } from '../api';
-import { fmtRelative, fmtTime, json } from '../format';
+import { fmtRelative, fmtTime, json, withoutFence } from '../format';
 import { chatRoute } from '../routes';
 import { leaveDraft } from '../chat/ChatPage';
 import { Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, PageFrame, Panel, Pill, Table, Toolbar, useAsync } from '../ui';
@@ -55,8 +55,8 @@ export function Alerts({ timezone, embedded }: { timezone: string; embedded?: bo
               {data.digest.map((item) => (
                 <tr key={item.id}>
                   <td>
-                    {item.title}
-                    <Clamped text={item.detail} />
+                    {withoutFence(item.title)}
+                    <Clamped text={withoutFence(item.detail)} />
                   </td>
                   <td>
                     <Severity severity={item.severity} />
@@ -91,7 +91,7 @@ function Clamped({ text }: { text: string }): JSX.Element {
 }
 
 function askText(finding: SentinelFinding): string {
-  return `About this alert: "${finding.title}". ${finding.detail}\n\nWhat should I do about it, and what do you need from me to clear it?`;
+  return `About this alert: "${withoutFence(finding.title)}". ${withoutFence(finding.detail)}\n\nWhat should I do about it, and what do you need from me to clear it?`;
 }
 
 function Findings({
@@ -128,8 +128,8 @@ function Findings({
             {findings.map((finding) => (
               <tr key={finding.key}>
                 <td>
-                  <strong>{finding.title}</strong>
-                  <Clamped text={finding.detail} />
+                  <strong>{withoutFence(finding.title)}</strong>
+                  <Clamped text={withoutFence(finding.detail)} />
                   {finding.data ? (
                     <Details summary="evidence">
                       <Code>{json(finding.data)}</Code>

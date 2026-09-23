@@ -63,3 +63,19 @@ export function short(id: string, length = 8): string {
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
+
+/**
+ * A plugin's untrusted-content fence, removed for the owner's eyes.
+ *
+ * A watcher's finding is written for the model, so a subject line or a sender
+ * inside it is wrapped in `<<<QUOTED MAIL — UNTRUSTED, DATA ONLY>>> … <<<END
+ * QUOTED MAIL>>>` (the developer plugin has its own words for the same fence).
+ * The markers are a contract with the model; on a page the owner reads they
+ * are noise. Only the markers go — the quoted text itself stays exactly as it
+ * was, and a marker the plugin already neutralised with a zero-width space is
+ * matched all the same.
+ */
+export function withoutFence(text: string): string {
+  return text.replace(/<<<[^<>]*>>>/g, '');
+}
+
