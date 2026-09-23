@@ -139,6 +139,10 @@ Small, whenever a slot opens:
 - Remote/headless browser display — a browser on a remote host with no
   desktop session; not the first delivery of [browser.md](browser.md).
 - [buddi as an MCP server](ideas/mcp.md) — parked, not pursued.
+- [A browser operator on a local vision model](ideas/browser-operator.md) —
+  one agent holds the browser tools and runs on an MLX vision model; the
+  others delegate a task in words and get text back. To try once the main
+  list is mostly drained (2026-09-23).
 - Long-running browser context compaction and no-progress recovery — a browser
   session that runs for hours needs its transcript compacted and a way out of a
   loop that is making no progress.
