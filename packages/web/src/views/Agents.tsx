@@ -65,9 +65,14 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
             {agents.map((agent) => {
               const waiting = waitingText(attention.get(agent.id));
               return (
-                <a key={agent.id} className="team-card" href={agentRoute(agent.id)} onClick={go(agentRoute(agent.id))} data-unavailable={agent.available ? undefined : 'true'}>
+                /*
+                 * The name is the card's link, stretched over the whole card,
+                 * so Talk can sit inside it without nesting one link in
+                 * another. A card opens on Conversations; Setup is a tab away.
+                 */
+                <div key={agent.id} className="team-card" data-unavailable={agent.available ? undefined : 'true'}>
                   <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} face={agent} />
-                  <span className="team-card-name">{agent.name}</span>
+                  <a className="team-card-name" href={agentRoute(agent.id, 'conversations')} onClick={go(agentRoute(agent.id, 'conversations'))}>{agent.name}</a>
                   <span className="team-card-handle">@{agent.handle}</span>
                   <span className="team-card-desc">{agent.description}</span>
                   <span className="team-card-foot">
@@ -75,8 +80,9 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
                         the owner hunting for what is missing. */}
                     {waiting ? <Pill tone="critical">waiting for you</Pill> : agent.available ? <Pill tone="good">ready</Pill> : <Pill tone="warning">{truncate(agent.unavailableReason ?? 'cannot run', 60)}</Pill>}
                     <span className="muted">{agent.model}</span>
+                    <ButtonLink className="team-card-talk" variant="accent" size="sm" href={chatRoute(agent.id)} onClick={go(chatRoute(agent.id))} aria-label={`Talk to ${agent.name}`}>Talk</ButtonLink>
                   </span>
-                </a>
+                </div>
               );
             })}
           </div>
