@@ -240,6 +240,19 @@ export class PreviewTickets {
     return id;
   }
 
+  /** Which preview a live cookie names, or nothing. */
+  previewFor(id: string | undefined): { plugin: string; name: string } | undefined {
+    this.#sweep();
+    if (!id) return undefined;
+    const held = this.#cookies.get(id);
+    if (!held) return undefined;
+    if (held.expiresAt <= this.now().getTime()) {
+      this.#cookies.delete(id);
+      return undefined;
+    }
+    return { plugin: held.plugin, name: held.name };
+  }
+
   /** Is this cookie a live one, for this preview? */
   holds(id: string | undefined, plugin: string, name: string): boolean {
     this.#sweep();
@@ -528,11 +541,33 @@ export class PreviewApp {
     return { port, host: await loopbackHost(port) };
   }
 
+  /**
+   * A path that is not under `/preview/…`, on this origin.
+   *
+   * A built app asks for `/assets/index.js` by its root, and under a prefix
+   * the browser sends that to this origin's root, where nothing lived and
+   * the page stayed blank. The cookie the browser sends with it names the
+   * one preview it was minted for, so the request is that preview's, at that
+   * path: nothing is rewritten, and a request with no live cookie is still
+   * the 404 it was. One cookie per browser means the most recently opened
+   * preview answers for the root, which is the one the owner is looking at.
+   */
+  #rootRelative(pathname: string, req: IncomingMessage): PreviewTarget | null {
+    const held = this.deps.tickets.previewFor(parseCookies(req.headers.cookie)[PREVIEW_COOKIE]);
+    if (!held) return null;
+    return {
+      plugin: held.plugin,
+      name: held.name,
+      rest: pathname,
+      prefix: `${PREVIEW_PREFIX}/${held.plugin}/${held.name}`,
+    };
+  }
+
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = parseUrl(req);
-    const target = parsePreviewPath(url.pathname);
+    const target = parsePreviewPath(url.pathname) ?? this.#rootRelative(url.pathname, req);
     // Nothing but previews answers here. Not the dashboard, not `/api`, not a
-    // static asset: this origin has one job.
+    // static asset of buddi's own: this origin has one job.
     if (!target) return previewEmpty(res, 404);
 
     const method = (req.method ?? 'GET').toUpperCase();
@@ -690,7 +725,7 @@ export class PreviewApp {
    */
   async #upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const url = parseUrl(req);
-    const target = parsePreviewPath(url.pathname);
+    const target = parsePreviewPath(url.pathname) ?? this.#rootRelative(url.pathname, req);
     if (!target) return refuse(socket, 404, 'Not Found');
     if (!this.deps.tickets.holds(parseCookies(req.headers.cookie)[PREVIEW_COOKIE], target.plugin, target.name)) {
       return refuse(socket, 401, 'Unauthorized');

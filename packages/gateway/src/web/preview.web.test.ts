@@ -483,6 +483,29 @@ it('forwards a write with its body, and scopes the cookie it sets', async () => 
   expect(res.headers.get('cache-control')).toBe('no-store');
 });
 
+it('serves a root-relative asset to the preview the cookie names, and to nobody else', async () => {
+  const app = await upstream((req, res) => {
+    if (req.url === '/assets/app.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      return res.end('console.log(1)');
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><head><script src="/assets/app.js"></script></head><body>hi</body></html>');
+  });
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+  const { cookie } = await signIn(web);
+  // The page, under its prefix, as the frame loads it.
+  expect((await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } })).status).toBe(200);
+  // What the browser then asks for, by the root, with the same cookie.
+  const asset = await fetch(`${web.previewOrigin}/assets/app.js`, { headers: { Cookie: cookie } });
+  expect(asset.status).toBe(200);
+  expect(await asset.text()).toBe('console.log(1)');
+  expect(app.seen.at(-1)?.url).toBe('/assets/app.js');
+  // No cookie, no preview to route to: the origin is as empty as before.
+  expect((await fetch(`${web.previewOrigin}/assets/app.js`)).status).toBe(404);
+  expect((await fetch(`${web.previewOrigin}/`)).status).toBe(404);
+});
+
 it('is 404 for a name nobody serves, and for a plugin with no previews', async () => {
   const web = await dashboard(pluginWith(async (name) => (name === 'web' ? { port: 1 } : null)));
   const { cookie } = await signIn(web, 'developer', 'gone');
