@@ -110,11 +110,15 @@ Small, whenever a slot opens:
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
 - Artefacts page — the list of `core.artifacts` with preview and download.
-- Agent tool picker — the Setup tab's Tools box is a free textarea that
-  needs exact names; replace it with checkboxes grouped by plugin, each tool
-  with its description, globs kept as a row per family (2026-09-23).
-- Save errors beside the button — a refused save on the agent sheet surfaces
-  in a banner at the top of the tab, out of view; say why next to the button.
+- Agent tool picker — built 2026-09-23 (buddi `c8c2e1c`); every installed tool
+  from `GET /api/agents/:id/tools`, grouped by plugin with its description, a
+  search, and all/none per plugin that saves as the family glob when the server
+  offers one. The agent-writing tools are drawn disabled, the memory tools are
+  tagged core (a new agent from `platform.create_agent` starts with them unless
+  `withoutMemory`; a plugin's proposal is left as written) and removing one asks
+  once, and a plugin's newer suggestions sit on top, one click each.
+- Save errors beside the button — built 2026-09-23 (buddi `c8c2e1c`); a refused
+  "Save who it is" says why next to the button instead of in a banner at the top.
 - `email.inbox_unread` needs IMAP flag re-sync first — the metric is worth
   having and cannot exist until a poll refreshes `\Seen` on rows it already
   has. Today flags are written once at ingest (`on conflict … do nothing`), so
