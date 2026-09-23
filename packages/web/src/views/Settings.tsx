@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_SECTIONS, WELCOME_ROUTE, parsePluginSettingsRoute, pluginSettingsRoute, pluginSettingsTab, settingsRoute } from '../routes';
+import { SETTINGS_SECTIONS, WELCOME_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, pluginSettingsRoute, pluginSettingsTab, settingsRoute } from '../routes';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
 import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
@@ -67,7 +67,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       ) : null}
       {section === 'you' ? <You embedded /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
-      {section === 'proposals' ? <Proposals embedded /> : null}
+      {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}
       {section === 'computer' ? <Browser embedded /> : null}
       {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}

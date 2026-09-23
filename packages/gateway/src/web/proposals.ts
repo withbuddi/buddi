@@ -3,9 +3,11 @@
  *
  * One read and two writes. Keeping records `kept` and the (possibly
  * corrected) payload, then asks the kind's apply. A skill is written as a
- * versioned file under the agent (learning step 2); a policy and a change
- * answer honestly that nothing was applied yet (steps 3–4), and the card
- * says so rather than pretending.
+ * versioned file under the agent (learning step 2); a policy is handed to its
+ * plugin's own apply, found on the installed manifest (step 3), and a plugin
+ * that registered none refuses the keep and leaves the card open; a change
+ * answers honestly that nothing was applied yet (step 4). Discarding a policy
+ * also tells its plugin, through its revoke.
  *
  * A skill proposal whose name the agent already has a learned skill under is
  * its next version: the view carries the current steps, and the page draws
@@ -14,6 +16,7 @@
 import {
   APPLY,
   appendEvent,
+  revokeDiscardedPolicy,
   describeUntrustedSource,
   discardProposal,
   getProposal,
@@ -24,7 +27,9 @@ import {
   proposalTitle,
   reopenProposal,
   type AgentCatalog,
+  type PolicyHandler,
   type Proposal,
+  type ToolRegistry,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { agentSkillsDirFor, currentLearnedSkill, skillKeepProblem, type CurrentLearnedSkill } from '../agents/learned-skills.js';
@@ -123,6 +128,11 @@ export interface KeepSkillDeps {
   env?: NodeJS.ProcessEnv;
 }
 
+/** The installed plugin's policy handler, read off its manifest. */
+export function policyHandlerFor(registry: Pick<ToolRegistry, 'manifests'>): (plugin: string) => PolicyHandler | null {
+  return (plugin) => registry.manifests().find((m) => m.name === plugin)?.policies ?? null;
+}
+
 const DECIDED_ALREADY = 'That proposal was already decided.';
 
 async function notOpen(deps: WriteDeps, id: string): Promise<WriteResult<never>> {
@@ -162,6 +172,8 @@ export async function keepProposalFromWeb(
   if (!kept) return notOpen(deps, id);
   const outcome = await APPLY[kept.kind](kept, {
     now,
+    db: deps.pool,
+    policyHandlerFor: policyHandlerFor(deps.registry),
     ...(skills
       ? {
           skillsDirFor: (agent: string) => agentSkillsDirFor(skills.catalog, agent),
@@ -196,8 +208,12 @@ export async function discardProposalFromWeb(
   id: string,
   reason: string | undefined,
 ): Promise<WriteResult<{ proposal: ProposalView }>> {
-  const discarded = await discardProposal(deps.pool, { id, reason: reason ?? null, now: deps.now() });
+  const now = deps.now();
+  const discarded = await discardProposal(deps.pool, { id, reason: reason ?? null, now });
   if (!discarded) return notOpen(deps, id);
+  // A policy's plugin drops whatever it holds for it. The discard stands either way.
+  const revoked = await revokeDiscardedPolicy(discarded, { now, db: deps.pool, policyHandlerFor: policyHandlerFor(deps.registry) });
+  if (revoked) deps.log?.(`proposal ${discarded.id}: ${revoked}`);
   await appendEvent(
     deps.pool,
     'proposal.discarded',

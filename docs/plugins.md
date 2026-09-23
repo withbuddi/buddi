@@ -848,6 +848,10 @@ means, the page knows how to draw a line, and this says which is which.
   another plugin, never a core page", and it is narrow on purpose: it opens a
   chat the owner already has, and a descriptor cannot write a URL. Use it for
   something that belongs to an agent — a goal's holder — not as a way out.
+- **And one to your proposed rules.** `{ proposals: true }` opens Settings →
+  Proposals filtered to your plugin's rules. It names nothing; the dashboard
+  fills in the plugin drawing the page. For a plugin with `policies`, it is
+  where the rules it learned wait, instead of a second copy on your own page.
 - **A tone is one of five.** `good`, `warning`, `critical`, `neutral` — and
   `accent`, for the thing this screen is *about*: a draft waiting on the
   owner is not good or bad. A figure never takes the accent; a pill and a
@@ -1038,6 +1042,10 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   another plugin, never a core page", and it is narrow on purpose: it opens a
   chat the owner already has, and a descriptor cannot write a URL. Use it for
   something that belongs to an agent — a goal's holder — not as a way out.
+- **And one to your proposed rules.** `{ proposals: true }` opens Settings →
+  Proposals filtered to your plugin's rules. It names nothing; the dashboard
+  fills in the plugin drawing the page. For a plugin with `policies`, it is
+  where the rules it learned wait, instead of a second copy on your own page.
 - **The rest of the set, in one line each.** `list-detail` has
   `selection: 'route' | 'local'` — `local` for a second level inside a detail
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
@@ -2368,6 +2376,7 @@ this says what it is *for*.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
+| `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
 

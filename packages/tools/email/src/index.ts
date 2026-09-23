@@ -31,6 +31,7 @@ import { createSendTool } from './tools/send.js';
 import { listPolicies, revokeEmailPolicy, setPolicy } from './tools/policies.js';
 import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
+import { emailPolicyHandler } from './policies/learned.js';
 import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
 import type { EnvLike } from './config.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
@@ -138,6 +139,10 @@ export function createEmailManifest(
     // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
     sentinels: emailSentinels,
+    // Learned rules are proposed on the owner's one inbox (core.proposals);
+    // keeping one comes back here, and this plugin writes the rule its gate
+    // reads (docs/specs/learning.md §2 item 3).
+    policies: emailPolicyHandler,
   };
 }
 
@@ -309,10 +314,21 @@ export {
   ownerReplies,
   REPLY_SAMPLE,
   senderVerdicts,
+  type LearnedPolicy,
   type OwnerReplies,
   type Proposal,
   type Verdict,
 } from './policies/learn.js';
+export {
+  adoptProposedPolicies,
+  applyLearnedPolicy,
+  emailPolicyHandler,
+  EMAIL_PLUGIN,
+  learnedPolicyInput,
+  mailSources,
+  revokeLearnedPolicy,
+  ruleOf,
+} from './policies/learned.js';
 export {
   DEFAULT_RETENTION_DAYS,
   MAX_RETENTION_DAYS,

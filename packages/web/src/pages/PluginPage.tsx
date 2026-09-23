@@ -24,7 +24,7 @@ import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
 import { readPath, readRef } from '../canvas/resolve';
-import { chatRoute, pluginPageRoute, pluginSettingsRoute } from '../routes';
+import { chatRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
@@ -145,6 +145,8 @@ function routeOf(scope: PageScope, to: RouteRef, data: unknown): string {
     const agentId = readRef(data, to.chat);
     return agentId === null || agentId === undefined ? '' : chatRoute(String(agentId));
   }
+  // The other: the owner's Proposals inbox, filtered to the plugin drawing this page.
+  if ('proposals' in to) return proposalsRoute(scope.plugin);
   const target = scope.pages.find((page) => page.id === to.page);
   if (target?.place === 'settings') return pluginSettingsRoute(scope.plugin, to.page);
   const item = to.item === undefined ? null : readRef(data, to.item);

@@ -20,6 +20,8 @@ import { triageRecord } from '../tools/triage.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { SourceContext, ToolContext } from '../types.js';
 import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
+import { adoptProposedPolicies, applyLearnedPolicy, revokeLearnedPolicy } from './learned.js';
+import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core';
 
 const FULL_SYNC = 10_000;
 const databaseUrl = await testDatabaseUrl();
@@ -56,6 +58,7 @@ suite('email policies (postgres + fake imap)', () => {
     await pool.query(
       'truncate email.events, email.policies, email.drafts, email.triage, email.messages, email.folders, email.accounts cascade',
     );
+    await pool.query('truncate core.proposals');
     const account = await ensureGmailAccount(pool, ENV);
     accountId = account!.id;
     const { rows } = await pool.query(
@@ -444,12 +447,37 @@ suite('email policies (postgres + fake imap)', () => {
       const third = (await triageRecord.execute(
         { messageId: ids[2]!, category: 'promo', urgency: 'low', summary: 'ad' },
         ctx,
-      )) as { learnedPolicy?: { action: string; proposed: boolean } };
+      )) as { learnedPolicy?: { action: string; proposed: boolean; proposal: string } };
       expect(third.learnedPolicy).toMatchObject({ action: 'ignore', proposed: true });
 
-      const policies = await loadPolicies(pool, accountId);
-      expect(policies).toHaveLength(1);
-      expect(policies[0]).toMatchObject({ origin: 'learned', proposed: true, action: 'ignore' });
+      // It is a card on the owner's inbox, not a row in this plugin: nothing
+      // is written here until the owner keeps it.
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+      const open = await listOpenProposals(pool);
+      expect(open).toHaveLength(1);
+      const card = open[0]!;
+      expect(card.id).toBe(third.learnedPolicy!.proposal);
+      expect(card).toMatchObject({ kind: 'policy', agent: 'mail-triage', untrusted: true });
+      expect(card.payload).toMatchObject({
+        plugin: 'email',
+        matcher: { sender: 'news@shop.test', account: 'owner@example.test', accountId },
+        action: 'ignore',
+        params: { category: 'promo', urgency: 'low' },
+      });
+      expect(card.payload.verdicts).toHaveLength(3);
+      // Mail is untrusted: the messages are its sources, by subject and sender only.
+      expect(card.provenance.sources).toHaveLength(3);
+      expect(card.provenance.sources[0]).toMatchObject({ kind: 'mail', via: 'email.triage_record' });
+      expect(card.provenance.sources[0]!.ref).toBe('"Subject" from news@shop.test');
+
+      // A fourth verdict proposes nothing new: the same card is already waiting.
+      const fourth = await storeMessage({ from: 'news@shop.test', at: '2026-09-04T09:00:00Z' });
+      const again = (await triageRecord.execute(
+        { messageId: fourth, category: 'promo', urgency: 'low', summary: 'ad' },
+        ctx,
+      )) as { learnedPolicy?: unknown };
+      expect(again.learnedPolicy).toBeUndefined();
+      expect(await listOpenProposals(pool)).toHaveLength(1);
 
       // Nothing applied itself: the fourth message from them still runs.
       const server = new FakeImapServer();
@@ -503,6 +531,92 @@ suite('email policies (postgres + fake imap)', () => {
       // has three, so nothing is learned anywhere.
       expect(await loadPolicies(pool, accountId)).toHaveLength(0);
       expect(await loadPolicies(pool, otherAccount)).toHaveLength(0);
+      expect(await listOpenProposals(pool)).toHaveLength(0);
+    });
+
+    it('proposes nothing to silence a sender the owner has written to', async () => {
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
+            subject, date, snippet, body_text, direction)
+         values ($1, $2, 1, 7777, '<out@x>', '<out@x>', 'owner@example.test', '["news@shop.test"]'::jsonb,
+                 'hi', '2026-08-01T09:00:00Z', '', '', 'out')`,
+        [accountId, mailboxId],
+      );
+      const ctx = toolContext();
+      for (let i = 0; i < 3; i += 1) {
+        const id = await storeMessage({ from: 'news@shop.test', at: `2026-09-0${i + 1}T09:00:00Z` });
+        await triageRecord.execute({ messageId: id, category: 'promo', urgency: 'low', summary: 'ad' }, ctx);
+      }
+      expect(await listOpenProposals(pool)).toHaveLength(0);
+    });
+
+    it('applies a kept card as a kept row the gate reads, and revokes it through the same plugin', async () => {
+      const ctx = toolContext();
+      for (let i = 0; i < 3; i += 1) {
+        const id = await storeMessage({ from: 'news@shop.test', at: `2026-09-0${i + 1}T09:00:00Z` });
+        await triageRecord.execute({ messageId: id, category: 'promo', urgency: 'low', summary: 'ad' }, ctx);
+      }
+      const [card] = await listOpenProposals(pool);
+      const kept = (await keepProposal(pool, { id: card!.id, now: NOW })) as CoreProposal;
+      const applied = await manifest.policies!.apply(kept, { db: pool, now: NOW });
+      expect(applied).toMatchObject({ ok: true });
+      const rules = await loadPolicies(pool, accountId);
+      expect(rules).toHaveLength(1);
+      expect(rules[0]).toMatchObject({ matcher: 'news@shop.test', action: 'ignore', origin: 'learned', proposed: false });
+      expect(rules[0]!.createdFrom).toHaveLength(3);
+
+      // Kept, it decides: the next message from them starts no run.
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'news@shop.test', messageId: '<k4@x>' }));
+      const poll = sourceContext();
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(poll);
+      expect(poll.runs).toHaveLength(0);
+
+      // The plugin's revoke takes back exactly the rule this card became.
+      expect(await revokeLearnedPolicy(kept, { db: pool, now: NOW })).toEqual({ note: 'Revoked the email rule about news@shop.test.' });
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+      expect(await revokeLearnedPolicy(kept, { db: pool, now: NOW })).toEqual({ note: 'Nothing to revoke: it was never kept.' });
+    });
+
+    it('refuses to apply a card that is not an email rule it can write', async () => {
+      const bogus = {
+        id: 'x', kind: 'policy', agent: 'a', payload: { plugin: 'email', matcher: { sender: 'a@b.test', accountId }, action: 'archive' },
+      } as unknown as CoreProposal;
+      const refused = await applyLearnedPolicy(bogus, { db: pool, now: NOW });
+      expect(refused.ok).toBe(false);
+      expect(await applyLearnedPolicy({ ...bogus, payload: { plugin: 'finance' } } as CoreProposal, { db: pool, now: NOW }))
+        .toMatchObject({ ok: false });
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+    });
+
+    it('moves the old proposed rows into core once, and leaves kept rows alone', async () => {
+      const ids = [
+        await storeMessage({ from: 'old@shop.test', subject: 'Sale', at: '2026-09-01T09:00:00Z' }),
+        await storeMessage({ from: 'old@shop.test', subject: 'Sale 2', at: '2026-09-02T09:00:00Z' }),
+      ];
+      await createPolicy(pool, {
+        accountId, scope: 'sender', matcher: 'old@shop.test', action: 'ignore', origin: 'learned', proposed: true,
+        params: { category: 'promo', urgency: 'low' },
+        createdFrom: ids.map((messageId) => ({ messageId, processingVersion: PROCESSING_VERSION })),
+      }, NOW);
+      await createPolicy(pool, {
+        accountId, scope: 'sender', matcher: 'kept@shop.test', action: 'ignore', origin: 'learned', proposed: false,
+      }, NOW);
+
+      expect(await adoptProposedPolicies({ db: pool, now: NOW })).toBe(1);
+      const rows = await loadPolicies(pool, accountId);
+      expect(rows.map((r) => [r.matcher, r.proposed])).toEqual([['kept@shop.test', false]]);
+      const open = await listOpenProposals(pool);
+      expect(open).toHaveLength(1);
+      expect(open[0]).toMatchObject({ kind: 'policy', agent: 'email', untrusted: true });
+      expect(open[0]!.payload).toMatchObject({ plugin: 'email', action: 'ignore', matcher: { sender: 'old@shop.test', accountId } });
+      expect(open[0]!.provenance.sources.map((x) => x.ref)).toEqual(['"Sale" from old@shop.test', '"Sale 2" from old@shop.test']);
+
+      // Idempotent: nothing is left to move, and the card is not doubled.
+      expect(await adoptProposedPolicies({ db: pool, now: NOW })).toBe(0);
+      expect(await listOpenProposals(pool)).toHaveLength(1);
+      expect(await getProposal(pool, open[0]!.id)).not.toBeNull();
     });
 
     it('only proposes, never applies, when the pattern is not promo', async () => {
@@ -514,9 +628,10 @@ suite('email policies (postgres + fake imap)', () => {
           ctx,
         );
       }
-      const policies = await loadPolicies(pool, accountId);
-      expect(policies).toHaveLength(1);
-      expect(policies[0]).toMatchObject({ action: 'notify', origin: 'learned', proposed: true });
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+      const open = await listOpenProposals(pool);
+      expect(open).toHaveLength(1);
+      expect(open[0]!.payload).toMatchObject({ plugin: 'email', action: 'notify', matcher: { sender: 'colleague@work.test' } });
 
       // And a proposal decides nothing: the next message still starts a run.
       const server = new FakeImapServer();

@@ -1,6 +1,6 @@
 # Learning: buddi proposes, the owner keeps
 
-Status: in progress — step 1 (proposals, tools, inbox, provenance) and step 2 (skills as versioned files, the Skills tab, the agent paragraph) built 2026-09-23
+Status: in progress — step 1 (proposals, tools, inbox, provenance), step 2 (skills as versioned files, the Skills tab, the agent paragraph) and step 3 (policies proposed through core, applied by their plugin; the email plugin moved onto it) built 2026-09-23
 
 ## 1. The rule
 

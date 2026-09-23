@@ -40,7 +40,13 @@ export function identifyingFields(kind: ProposalKind, payload: Record<string, un
   }
 }
 
+/**
+ * A policy is the plugin's rule, whichever agent's run noticed it: two triage
+ * agents seeing the same sender propose one card, and a discard holds for both.
+ * So a policy's fingerprint leaves the agent out.
+ */
 export function proposalFingerprint(kind: ProposalKind, agent: string, payload: Record<string, unknown>): string {
-  const basis = fingerprintJson({ kind, agent: norm(agent), id: identifyingFields(kind, payload) });
+  const who = kind === 'policy' ? '' : norm(agent);
+  const basis = fingerprintJson({ kind, agent: who, id: identifyingFields(kind, payload) });
   return createHash('sha256').update(basis).digest('hex');
 }

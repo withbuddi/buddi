@@ -250,15 +250,6 @@ function idsTool(
   };
 }
 
-/** Turn proposals on. They start deciding straight away, with no model run. */
-export function createKeepPoliciesTool(): ToolDefinition<PolicyIdsInput, unknown> {
-  return idsTool(
-    'email.keep_policies',
-    'keep',
-    "The owner keeping rules buddi proposed from their own mail, from their settings page. They start deciding straight away, with no model run.",
-  );
-}
-
 /** Take rules back. They stop deciding anything from now on. */
 export function createRevokePoliciesTool(): ToolDefinition<PolicyIdsInput, unknown> {
   return idsTool(

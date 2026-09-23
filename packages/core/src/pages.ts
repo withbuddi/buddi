@@ -164,8 +164,14 @@ export type ArgRef =
  * sentence no page of the `goal` plugin can be. It is a *conversation*, not a
  * core page with state of its own: the widest thing a plugin can do with it is
  * open a chat the owner already has in their rail.
+ *
+ * `{ proposals: true }` is the second, as narrow: the owner's Proposals inbox
+ * (docs/specs/learning.md), filtered to *this* plugin's rules. A plugin that
+ * proposes policies through core has its proposals there, not on its own
+ * page, and the only useful thing its page can say about them is where they
+ * are. It names no plugin: the dashboard fills in the one drawing the page.
  */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef };
+export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true };
 
 /** A write: a tool of this plugin, invoked as the owner. */
 export interface ToolRef {
@@ -493,6 +499,8 @@ const routeRefSchema = z.union([
   // An agent's chat. `chat` is a value read out of the data — an agent id the
   // query answered — never a page id and never a URL the descriptor wrote.
   z.object({ chat: valueRefSchema }).strict(),
+  // The owner's Proposals inbox, filtered to this plugin. Names nothing.
+  z.object({ proposals: z.literal(true) }).strict(),
 ]);
 
 const TOOL_NAME = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;

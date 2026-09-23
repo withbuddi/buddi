@@ -2402,7 +2402,7 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     /*
      * Keeping or discarding what an agent proposed. The same gate as every
-     * other write; neither applies anything in this build (see proposals.ts).
+     * other write; what keeping does is the kind's own apply (see proposals.ts).
      */
     const proposal = /^\/api\/proposals\/([^/]+)\/(keep|discard)$/.exec(path);
     if (proposal) {

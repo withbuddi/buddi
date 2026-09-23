@@ -6,6 +6,7 @@
  * act the owner performs on a page. What a kept proposal becomes — a skill
  * file, a plugin's policy, a line in the agent file — is the kind's own job.
  */
+import type { Pool } from 'pg';
 
 /** The three kinds a proposal can be. Memory, the fourth kind, is the memory plugin's. */
 export type ProposalKind = 'skill' | 'policy' | 'change';
@@ -79,8 +80,15 @@ export interface SkillPayload {
 /** `learning.propose_policy`: a repeated decision, as a plugin's rule. */
 export interface PolicyPayload {
   plugin: string;
+  /**
+   * What the rule matches, in the plugin's own terms. Drawn on the card as
+   * key and value; a key ending in `Id` is the plugin's internal handle and
+   * is not shown.
+   */
   matcher: unknown;
   action: string;
+  /** What the action needs beyond its name (a label, a category), in the plugin's terms. Not identifying. */
+  params?: Record<string, unknown>;
   verdicts: unknown[];
   why: string;
 }
@@ -121,3 +129,29 @@ export const PROPOSAL_TTL_MS = 30 * DAY_MS;
 export const PROPOSAL_FOLD_MS = 7 * DAY_MS;
 /** How many sources a provenance keeps. A run that read more is marked either way. */
 export const MAX_SOURCES = 25;
+
+/**
+ * What a plugin gives core so a kept policy becomes the plugin's own rule
+ * (docs/specs/learning.md §2 item 3, §4). Core stores the proposal; the
+ * plugin stores the rule. Registered as `PluginManifest.policies`.
+ */
+export interface PolicyHandlerContext {
+  db: Pool;
+  now: Date;
+}
+
+export type PolicyApplyResult =
+  | { ok: true; note: string; ref?: string }
+  | { ok: false; note: string };
+
+export interface PolicyHandler {
+  /** The owner kept it: write the rule the plugin's gate reads. `ok: false` leaves the card open with the note. */
+  apply(proposal: Proposal, ctx: PolicyHandlerContext): Promise<PolicyApplyResult>;
+  /** The owner discarded it (or took it back): undo whatever the plugin holds for it. */
+  revoke?(proposal: Proposal, ctx: PolicyHandlerContext): Promise<{ note: string }>;
+  /**
+   * Move proposals the plugin held in its own tables before it proposed
+   * through core. Run once per start; idempotent. Returns how many moved.
+   */
+  adopt?(ctx: PolicyHandlerContext): Promise<number>;
+}

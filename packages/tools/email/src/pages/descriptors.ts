@@ -771,57 +771,26 @@ const settings: PageDescriptor = {
           ],
           empty: 'No policies are deciding anything yet. buddi proposes them from your own mail.',
         },
+        /*
+         * Learned rules are proposed on the owner's one inbox, beside what the
+         * agents propose (docs/specs/learning.md §2 item 3). A link rather
+         * than a second copy of those cards: keeping one is core's act and
+         * this plugin's apply, and one place to do it is one place to get it
+         * right. The link lands filtered to this plugin's rules.
+         */
+        /*
+         * Learned rules are proposed on the owner's one inbox (docs/specs/
+         * learning.md §2 item 3). A link rather than a second copy of those
+         * cards: keeping one is core's act and this plugin's apply, and one
+         * place to do it is one place to get it right. It lands filtered to
+         * this plugin's rules.
+         */
         {
-          kind: 'list',
+          kind: 'notice',
           title: 'Learned, proposed',
-          note: 'What buddi noticed in your own history. These decide nothing until you keep them.',
-          query: { query: 'policies' },
-          rows: 'proposed',
-          item: {
-            title: { path: 'matcher' },
-            sub: { path: 'sub' },
-            pill: { value: { path: 'action' }, tone: 'neutral' },
-          },
-          select: { key: 'id' },
-          actions: [
-            {
-              tool: 'email.keep_policies',
-              label: 'Keep',
-              tone: 'accent',
-              confirm: 'Keep the rule about {matcher}? It starts deciding straight away.',
-              done: { path: 'note' },
-              args: { ids: { row: 'ids' } },
-            },
-            {
-              tool: 'email.revoke_policies',
-              label: 'Revoke',
-              confirm: 'Revoke the rule about {matcher}? Nothing proposed it again for a while.',
-              done: { path: 'note' },
-              args: { ids: { row: 'ids' } },
-            },
-          ],
-          bulk: [
-            {
-              tool: 'email.keep_policies',
-              all: true,
-              label: 'Keep {count} {rule|rules}',
-              tone: 'accent',
-              confirm: 'Keep {count} {rule|rules}? They start deciding straight away, with no model run.',
-              done: { path: 'note' },
-              args: { ids: { selected: true } },
-            },
-            {
-              tool: 'email.revoke_policies',
-              all: true,
-              label: 'Revoke {count} {rule|rules}',
-              tone: 'danger',
-              confirm: 'Revoke {count} {rule|rules}? They stop deciding anything from now on.',
-              done: { path: 'note' },
-              args: { ids: { selected: true } },
-            },
-          ],
-          empty: 'Nothing proposed. A sender needs three verdicts running before buddi suggests a rule.',
+          text: 'Rules buddi learns from your own mail wait in Settings → Proposals, beside what your agents propose, and decide nothing until you keep them there. Kept, they appear under Applied.',
         },
+        { kind: 'link', label: 'Review proposed rules', to: { proposals: true } },
         addRule,
       ],
     },

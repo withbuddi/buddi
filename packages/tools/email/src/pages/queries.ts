@@ -485,7 +485,24 @@ export function accountsQuery(): PageQuery {
   };
 }
 
-/** The two lists of standing decisions, their counts, and what they have saved. */
+/**
+ * How many of this plugin's rules wait on Settings → Proposals. Zero on an
+ * installation whose core has no proposals table yet.
+ */
+async function openEmailRuleProposals(db: ToolContext['db']): Promise<number> {
+  try {
+    const { rows } = await db.query(
+      `select count(*)::int as n from core.proposals
+        where kind = 'policy' and state = 'open' and payload->>'plugin' = 'email'`,
+    );
+    return Number(rows[0]?.n ?? 0);
+  } catch (error) {
+    if (undefinedTable(error)) return 0;
+    throw error;
+  }
+}
+
+/** The applied rules, how many learned ones wait in Proposals, and what the rules have saved. */
 export function policiesQuery(): PageQuery {
   return {
     name: 'policies',
@@ -509,7 +526,6 @@ export function policiesQuery(): PageQuery {
         if (undefinedTable(error)) {
           return {
             applied: [],
-            proposed: [],
             appliedCount: 0,
             proposedCount: 0,
             savedRuns: 0,
@@ -530,9 +546,9 @@ export function policiesQuery(): PageQuery {
       const savedRuns = view.applied.reduce((n, p) => n + p.runsSaved, 0);
       return {
         applied: view.applied.map(line),
-        proposed: view.proposed.map(line),
         appliedCount: view.applied.length,
-        proposedCount: view.proposed.length,
+        // Learned rules wait on the owner's Proposals inbox, not here.
+        proposedCount: await openEmailRuleProposals(ctx.db),
         savedRuns,
         unavailable: false,
       };

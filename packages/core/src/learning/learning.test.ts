@@ -2,9 +2,10 @@
  * The pure half of learning: the fingerprint and the untrusted sources.
  */
 import { describe, expect, it } from 'vitest';
+import { applyKeptPolicy, revokeDiscardedPolicy } from './apply.js';
 import { proposalFingerprint } from './fingerprint.js';
 import { deriveUntrustedSources, ownerTurn, type ProvenanceMessage } from './sources.js';
-import type { UntrustedKind } from './types.js';
+import type { PolicyHandler, Proposal, UntrustedKind } from './types.js';
 
 describe('proposalFingerprint', () => {
   const skill = (over: Record<string, unknown> = {}) => ({ name: 'Check a bank balance', when: 'w', body: 'steps', why: 'y', ...over });
@@ -28,6 +29,41 @@ describe('proposalFingerprint', () => {
     const b = proposalFingerprint('policy', 'postman', { plugin: 'email', matcher: { subject: 'x', from: 'a@b.c' }, action: 'ignore', verdicts: [1, 2, 3], why: 'z' });
     expect(b).toBe(a);
     expect(proposalFingerprint('policy', 'postman', { plugin: 'email', matcher: { from: 'a@b.c', subject: 'x' }, action: 'notify' })).not.toBe(a);
+  });
+
+  it('leaves the agent out of a policy: the rule is the plugin\'s, whoever noticed it', () => {
+    const rule = { plugin: 'email', matcher: { sender: 'a@b.c' }, action: 'ignore' };
+    expect(proposalFingerprint('policy', 'triage-a', rule)).toBe(proposalFingerprint('policy', 'email', rule));
+  });
+});
+
+describe('applyKeptPolicy', () => {
+  const proposal = { id: 'p1', kind: 'policy', agent: 'a', payload: { plugin: 'rules', action: 'ignore' } } as unknown as Proposal;
+  const db = {} as never;
+  const now = new Date('2026-09-23T12:00:00Z');
+
+  it('hands the proposal to its plugin\'s apply', async () => {
+    const seen: string[] = [];
+    const handler: PolicyHandler = {
+      apply: async (p) => { seen.push(p.id); return { ok: true, note: 'Written.' }; },
+      revoke: async (p) => { seen.push(`revoke ${p.id}`); return { note: 'Gone.' }; },
+    };
+    const out = await applyKeptPolicy(proposal, { now, db, policyHandlerFor: (name) => (name === 'rules' ? handler : null) });
+    expect(out).toEqual({ applied: true, note: 'Written.' });
+    expect(await revokeDiscardedPolicy(proposal, { now, db, policyHandlerFor: () => handler })).toBe('Gone.');
+    expect(seen).toEqual(['p1', 'revoke p1']);
+  });
+
+  it('refuses cleanly when no plugin applies it, and when the plugin refuses or throws', async () => {
+    expect(await applyKeptPolicy(proposal, { now, db, policyHandlerFor: () => null })).toMatchObject({ applied: false, failed: true });
+    expect(await applyKeptPolicy(proposal, { now })).toMatchObject({ applied: false, failed: true });
+    const refusing: PolicyHandler = { apply: async () => ({ ok: false, note: 'no such account.' }) };
+    expect(await applyKeptPolicy(proposal, { now, db, policyHandlerFor: () => refusing })).toEqual({
+      applied: false, failed: true, note: 'Not applied: no such account.',
+    });
+    const throwing: PolicyHandler = { apply: async () => { throw new Error('boom'); } };
+    expect(await applyKeptPolicy(proposal, { now, db, policyHandlerFor: () => throwing })).toMatchObject({ failed: true, note: 'Not applied: boom' });
+    expect(await revokeDiscardedPolicy(proposal, { now, db, policyHandlerFor: () => refusing })).toBeNull();
   });
 });
 

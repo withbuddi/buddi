@@ -78,7 +78,7 @@ import { createInlineMissionRunner, type InlineMissionDeps } from './missions/in
 import { createDigestPrepare } from './missions/recap.js';
 import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
-import { PROPOSAL_SWEEP_MS, createProposalSweep } from './agents/learning.js';
+import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
@@ -843,6 +843,8 @@ export async function main(): Promise<void> {
     // Proposals nobody decided in 30 days are expired, each with a line in
     // Activity. Hourly: the clock is a month long.
     const proposalSweep = createProposalSweep({ pool, now, log: (line) => console.log(line) });
+    // A plugin's rules proposed before they came through core move here once.
+    if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line));
     const proposalLoop = recovering ? idle.loop : startLoop({
       name: 'proposals',
       everyMs: PROPOSAL_SWEEP_MS,

@@ -9,9 +9,11 @@
  *    sender judged promo, promo, reply-needed, promo is a sender the owner may
  *    well hear from, and the run is counted from the newest verdict back, so
  *    one dissenting judgement resets it.
- *  - **Nothing applies itself.** A proposal is a row with `proposed = true`;
- *    the gate does not read it, and the settings page shows it under "Learned,
- *    proposed" with Keep and Revoke. Promo is no exception. Since step 3 the
+ *  - **Nothing applies itself.** A proposal is a card on the owner's
+ *    Settings → Proposals inbox (`core.proposals`, docs/specs/learning.md §2
+ *    item 3), beside what the agents propose; this plugin writes no rule until
+ *    the owner keeps it there, and then writes it through its own apply
+ *    (`learned.ts`). The gate reads only kept rows. Promo is no exception. Since step 3 the
  *    Sent folder is synced, so "the owner never wrote back" is read off his own
  *    mail rather than inferred from drafts buddi sent — but a mailbox is synced
  *    from *now*, not from its beginning, and a sender answered before buddi
@@ -27,9 +29,11 @@
  * The rule is a pure function; the query around it is the only database part.
  */
 import type { Pool, PoolClient } from 'pg';
+import { proposePolicy, type Proposal as CoreProposal, type ToolContext } from '@buddi/core';
 import { normalizeAddress } from '../mail.js';
-import { createPolicy, policyForSender, type CreatePolicyInput } from './store.js';
-import type { PolicyAction, PolicyRecord } from './gate.js';
+import { policyForSender } from './store.js';
+import type { PolicyAction } from './gate.js';
+import { learnedPolicyInput, mailSources } from './learned.js';
 
 type Db = Pool | PoolClient;
 
@@ -265,19 +269,35 @@ export async function ownerReplies(
   };
 }
 
+/** What `learnFromVerdict` proposed: a new card on the owner's inbox. */
+export interface LearnedPolicy {
+  proposal: CoreProposal;
+  action: PolicyAction;
+  matcher: string;
+}
+
 /**
- * Called after a verdict is recorded. Writes at most one policy and returns it,
- * or null when nothing was learned — which is the usual answer.
+ * Called after a verdict is recorded. Proposes at most one rule on the
+ * owner's Proposals inbox and returns it, or null when nothing was learned —
+ * which is the usual answer. The rule itself is written only when the owner
+ * keeps the card (`learned.ts`, `applyLearnedPolicy`).
  *
  * A sender that already has a live policy learns nothing: whatever is there is
- * either the owner's decision or a proposal they have not looked at yet, and
- * overwriting either would be this plugin arguing with itself.
+ * the owner's decision, and overwriting it would be this plugin arguing with
+ * itself. A card already waiting for the same rule, or one the owner discarded
+ * in the last 90 days, is not proposed again (core's fingerprint).
+ *
+ * `run` is the triage call that noticed: its agent, conversation and run are
+ * the proposal's provenance. The verdicts were made on mail, which is
+ * untrusted, so the messages are the proposal's sources — by subject and
+ * sender, never by body.
  */
 export async function learnFromVerdict(
   db: Db,
   input: { from: string; accountId: string },
   now: Date,
-): Promise<PolicyRecord | null> {
+  run: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null = null,
+): Promise<LearnedPolicy | null> {
   const address = normalizeAddress(input.from);
   // No account is no learning. A policy learned from "every mailbox" would be a
   // rule about mail it was never shown.
@@ -290,18 +310,24 @@ export async function learnFromVerdict(
   const proposal = learnedProposal(verdicts, replied);
   if (!proposal) return null;
 
-  const create: CreatePolicyInput = {
+  const ask = await learnedPolicyInput(db, {
     accountId: input.accountId,
-    scope: 'sender',
-    matcher: address,
+    sender: address,
     action: proposal.action,
     params:
       proposal.action === 'ignore'
         ? { category: verdicts[0]?.category ?? 'promo', urgency: 'low' }
         : { note: proposal.why },
-    origin: 'learned',
-    proposed: proposal.proposed,
-    createdFrom: proposal.createdFrom,
-  };
-  return createPolicy(db, create, now);
+    verdicts: verdicts.slice(0, CONSISTENT_VERDICTS).map((v) => ({
+      messageId: v.messageId,
+      processingVersion: v.processingVersion,
+      category: v.category,
+      urgency: v.urgency,
+    })),
+    why: proposal.why,
+    sources: await mailSources(db, proposal.createdFrom.map((v) => v.messageId)),
+  });
+  const result = await proposePolicy(db, run, ask, now);
+  if (!result.ok) return null;
+  return { proposal: result.proposal, action: proposal.action, matcher: address };
 }
