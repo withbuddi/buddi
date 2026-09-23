@@ -17,7 +17,10 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
+import { DiffLines } from '../canvas/views/DiffLines';
 import { FileTile } from './FileTile';
+import { gistFor } from './gist';
+import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
 import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
 import { AgentAvatar } from '../ui';
@@ -261,6 +264,8 @@ export function MessageList({
                     ok={result?.ok ?? null}
                     running={result === null}
                     status={result && approvalIdOf(result) ? 'Awaiting approval' : result?.approval?.state}
+                    gist={gistFor(block.name, block.input)}
+                    body={result ? toolBodyFor(result.output) : null}
                     opens
                     onOpen={() => onOpen(block.id)}
                   />
@@ -580,6 +585,9 @@ function stringify(value: unknown): string {
   }
 }
 
+/** How many diff lines a row unfolds before it points at the canvas for the rest. */
+const INLINE_DIFF_LINES = 40;
+
 export function ToolRow({
   label,
   tool,
@@ -589,6 +597,8 @@ export function ToolRow({
   opens,
   onOpen,
   status,
+  gist = null,
+  body = null,
 }: {
   label: string;
   tool: string;
@@ -599,7 +609,12 @@ export function ToolRow({
   opens: boolean;
   onOpen: () => void;
   status?: string;
+  /** One line out of the call's arguments — the path, the command. See `gist.ts`. */
+  gist?: string | null;
+  /** What the row unfolds into, in place. See `tool-body.ts`. */
+  body?: ToolBody | null;
 }): JSX.Element {
+  const [open, setOpen] = useState(false);
   const marks = (
     <>
       {running ? (
@@ -608,14 +623,60 @@ export function ToolRow({
         <span className="wb-tool-mark" data-ok={status === 'Awaiting approval' || status === 'approved' || status === 'executing' ? 'pending' : ok === false ? 'false' : 'true'} aria-hidden="true" />
       )}
       <span className="wb-tool-label">{label}</span>
+      {gist ? <span className="wb-tool-gist mono" data-testid="tool-gist">{gist}</span> : null}
       {elapsed === undefined ? null : <span className="wb-tool-elapsed">{elapsed}s</span>}
       {status || ok === false ? <span className="wb-tool-elapsed">{status ?? 'failed'}</span> : null}
     </>
   );
+  const flags = {
+    'data-ok': ok === null ? undefined : ok,
+    'data-running': running,
+    'data-gist': gist ? true : undefined,
+  };
+
+  /*
+   * A row with something to read in place is two controls, not one: the row
+   * itself unfolds it, and the arrow at the end still opens the canvas. Two
+   * buttons side by side rather than one inside the other — a button in a
+   * button is not a thing a keyboard or a screen reader can use.
+   */
+  if (body) {
+    return (
+      <div className="wb-toolcall" data-open={open || undefined}>
+        <div className="wb-tool" data-split="true" {...flags}>
+          <button
+            type="button"
+            className="wb-tool-toggle"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <ChevronIcon />
+            {marks}
+          </button>
+          {opens ? (
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button type="button" className="wb-tool-open" aria-label="Open on the canvas" onClick={onOpen}>
+                  <ArrowIcon />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="ui-tip" sideOffset={6}>
+                  <span className="ui-tip-title">Open on the canvas</span>
+                  <span className="ui-tip-hint mono">{tool}</span>
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          ) : null}
+        </div>
+        {open ? <ToolBodyView body={body} onOpen={opens ? onOpen : null} /> : null}
+      </div>
+    );
+  }
 
   if (!opens) {
     return (
-      <span className="wb-tool" data-static="true" data-ok={ok === null ? undefined : ok} data-running={running}>
+      <span className="wb-tool" data-static="true" {...flags}>
         {marks}
       </span>
     );
@@ -624,7 +685,7 @@ export function ToolRow({
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <button className="wb-tool" data-ok={ok === null ? undefined : ok} data-running={running} onClick={onOpen}>
+        <button className="wb-tool" {...flags} onClick={onOpen}>
           {marks}
           <ArrowIcon />
         </button>
@@ -636,6 +697,62 @@ export function ToolRow({
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+/**
+ * A row, unfolded: a change as its diff, a command as what it printed. Bounded
+ * — the chat is a column to scroll past, and the whole of it is on the canvas.
+ */
+function ToolBodyView({ body, onOpen }: { body: ToolBody; onOpen: (() => void) | null }): JSX.Element {
+  const more = onOpen ? { label: 'Open on the canvas', onClick: onOpen } : undefined;
+  if (body.kind === 'diff') {
+    return (
+      <div className="wb-tool-body" data-kind="diff" data-testid="tool-body">
+        <DiffLines text={body.diff} limit={INLINE_DIFF_LINES} {...(more ? { more } : {})} />
+      </div>
+    );
+  }
+  const facts = [
+    body.exitCode === null ? null : `exit ${body.exitCode}`,
+    body.elapsedMs === null ? null : seconds(body.elapsedMs),
+  ].filter((fact): fact is string => fact !== null);
+  return (
+    <div className="wb-tool-body" data-kind="command" data-testid="tool-body">
+      <div className="wb-tool-command">
+        <code className="mono">{body.command}</code>
+        {facts.length > 0 ? (
+          <span className="wb-tool-facts" data-failed={body.exitCode !== null && body.exitCode !== 0 ? true : undefined}>
+            {facts.join(' · ')}
+          </span>
+        ) : null}
+      </div>
+      {body.output ? <pre className="wb-tool-output">{body.output}</pre> : null}
+    </div>
+  );
+}
+
+/** `1234` → `1.2s`; under a second stays in milliseconds. */
+function seconds(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function ChevronIcon(): JSX.Element {
+  return (
+    <svg
+      className="wb-tool-chevron"
+      width="11"
+      height="11"
+      viewBox="0 0 11 11"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />
+    </svg>
   );
 }
 

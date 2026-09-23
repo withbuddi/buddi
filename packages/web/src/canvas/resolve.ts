@@ -13,6 +13,8 @@ import type {
   BarsMap,
   BarsProps,
   ColumnType,
+  DiffMap,
+  DiffProps,
   DocumentMap,
   DocumentProps,
   KeyValueMap,
@@ -269,6 +271,24 @@ export function resolveDocument(output: unknown, map: DocumentMap): DocumentProp
 }
 
 /**
+ * A diff and the facts about it. The diff is read as text and nothing else: a
+ * path that lands on an object draws as "no diff", not as `[object Object]`
+ * coloured green.
+ */
+export function resolveDiff(output: unknown, map: DiffMap): DiffProps {
+  const diff = map.diff ? readPath(output, map.diff) : undefined;
+  return {
+    diff: typeof diff === 'string' && diff.trim() !== '' ? diff : null,
+    title: asString(readRef(output, map.title)),
+    metadata: (map.metadata ?? []).map((item) => ({
+      label: item.label,
+      value: readRef(output, item.value),
+      unit: (item.unit ?? 'text') as Unit,
+    })),
+  };
+}
+
+/**
  * Which preview a descriptor named, or null.
  *
  * A preview is not a URL this page may construct: it is served on another
@@ -345,6 +365,8 @@ export function applyDescriptor(
       return { renderer: 'keyvalue', props: resolveKeyValue(output, map as KeyValueMap) };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
+    case 'diff':
+      return { renderer: 'diff', props: resolveDiff(output, map as DiffMap) };
     case 'preview':
       return { renderer: 'preview', props: resolvePreview(output, map as PreviewMap) };
     default:

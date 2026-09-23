@@ -15,7 +15,7 @@
  *     installation with no finance plugin ships no finance code.
  *
  *  2. **The renderers are generic.** `timeseries`, `table`, `bars`,
- *     `keyvalue`, `document`, `preview`, `envelope`, `structured` — shapes, not
+ *     `keyvalue`, `document`, `diff`, `preview`, `envelope`, `structured` — shapes, not
  *     domains. Nothing in the web package is allowed to know the word "cashflow".
  *
  * A plugin with no descriptors is the normal case: its tool results fall back
@@ -29,6 +29,7 @@ export type RendererName =
   | 'bars'
   | 'keyvalue'
   | 'document'
+  | 'diff'
   | 'preview'
   | 'envelope'
   | 'structured';
@@ -149,6 +150,22 @@ export interface DocumentMap {
 }
 
 /**
+ * A change to read: a diff, with the facts about it above.
+ *
+ * A `document` can carry a diff as text; what it cannot do is tell the reader
+ * which lines went in and which came out. `diff` is the same shape — title,
+ * metadata, body — with a body the page draws line by line, added and removed
+ * told apart. The text is git's unified form or the short `- old` / `+ new`
+ * form; the page reads prefixes, not a grammar.
+ */
+export interface DiffMap {
+  /** Path to the diff text. */
+  diff: string;
+  title?: ValueRef;
+  metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
+}
+
+/**
  * A process of the owner's, framed beside what it is printing.
  *
  * `src` is a path into the output, and what it finds *names* a process —
@@ -175,6 +192,7 @@ export type ViewMap =
   | BarsMap
   | KeyValueMap
   | DocumentMap
+  | DiffMap
   | PreviewMap
   | Record<string, never>;
 
@@ -320,26 +338,36 @@ const keyValueMapSchema = z
     'a keyvalue view needs either `pairs` or `from`',
   );
 
+/** The facts drawn above a body: a document's, a diff's. */
+const metadataSchema = z
+  .array(
+    z
+      .object({ label: z.string().min(1), value: valueRefSchema, unit: unitSchema.optional() })
+      .strict(),
+  )
+  .max(12);
+
 const documentMapSchema = z
   .object({
     kind: valueRefSchema.optional(),
     text: viewPathSchema.optional(),
     src: viewPathSchema.optional(),
     title: valueRefSchema.optional(),
-    metadata: z
-      .array(
-        z
-          .object({ label: z.string().min(1), value: valueRefSchema, unit: unitSchema.optional() })
-          .strict(),
-      )
-      .max(12)
-      .optional(),
+    metadata: metadataSchema.optional(),
   })
   .strict()
   .refine(
     (map) => map.text !== undefined || map.src !== undefined,
     'a document view needs either `text` or `src`',
   );
+
+const diffMapSchema = z
+  .object({
+    diff: viewPathSchema,
+    title: valueRefSchema.optional(),
+    metadata: metadataSchema.optional(),
+  })
+  .strict();
 
 const previewMapSchema = z
   .object({
@@ -372,6 +400,7 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('bars'), map: barsMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('keyvalue'), map: keyValueMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('document'), map: documentMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('diff'), map: diffMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('preview'), map: previewMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('envelope'), map: emptyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('structured'), map: emptyMapSchema }).strict(),
