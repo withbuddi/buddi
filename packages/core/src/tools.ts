@@ -10,7 +10,7 @@ import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
 import type { HomeContribution } from './home.js';
 import type { MetricDefinition } from './metrics.js';
-import type { PageDescriptor, PageQuery } from './pages.js';
+import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -543,6 +543,11 @@ export interface PluginManifest {
    * `select`. A plugin with `pages` needs these; nothing else uses them.
    */
   queries?: PageQuery[];
+  /**
+   * The page queries that read a per-agent directory, for the canvas's Files
+   * tab (optional; see `WorkspaceFiles`). Each must name one of `queries`.
+   */
+  files?: WorkspaceFiles;
   /**
    * Agents this plugin proposes (optional). Proposals only, exactly like
    * `missions`: installing a plugin never creates a principal. The owner

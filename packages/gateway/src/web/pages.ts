@@ -25,9 +25,13 @@
  *     approval card in place. There is no third path.
  */
 import { randomUUID } from 'node:crypto';
+import type { ServerResponse } from 'node:http';
+import type { Readable } from 'node:stream';
 import {
   OWNER_AGENT_ID,
   QueryRefusal,
+  isPageFile,
+  type PageFile,
   ReadOnlyRefusal,
   pageQueryContext,
   type ToolContext,
@@ -46,6 +50,8 @@ export interface PagesDeps {
 export interface PagesReply {
   status: number;
   body: unknown;
+  /** A query that answered with bytes: streamed by `sendPageFile`, not as JSON. */
+  file?: PageFile;
 }
 
 /** How many parameters a query route will look at. A page asks small questions. */
@@ -160,7 +166,7 @@ export function actRateLimited(sessionId: string, now: number): boolean {
  * this process — the browser learns what to *ask for*, not how it is answered.
  */
 export function listPageDescriptors(deps: PagesDeps): PagesReply {
-  return { status: 200, body: { pages: deps.registry.pages() } };
+  return { status: 200, body: { pages: deps.registry.pages(), files: deps.registry.files() } };
 }
 
 /**
@@ -219,6 +225,10 @@ export async function runPageQuery(
       error instanceof ReadOnlyRefusal ? `the query tried to write — ${detail}` : detail,
     );
   }
+
+  // Bytes rather than data: no result shape or row count applies, and the
+  // route streams them (`sendPageFile`) instead of serialising.
+  if (isPageFile(produced)) return { status: 200, body: null, file: produced };
 
   if (query.result) {
     const checked = query.result.safeParse(produced);
@@ -295,6 +305,56 @@ export async function actOnPage(
   if (result.reason === 'invalid-args') return { status: 400, body: { error: result.message } };
   if (result.reason === 'unknown-tool') return { status: 404, body: { error: result.message } };
   return { status: 400, body: { error: result.message } };
+}
+
+/**
+ * What may be shown inline on the dashboard's own origin, and as what.
+ *
+ * The same three families the Files library previews (`/api/artifacts/<id>/
+ * preview`), for the same reasons: text is always `text/plain`, so nothing in
+ * it is parsed as markup; images are passive; a PDF goes to the browser's own
+ * viewer. The CSP sandbox withholds scripts from all of them, an SVG included.
+ * Whatever else a plugin asks to show is served as a download of
+ * `application/octet-stream` — the plugin names the file, the gateway decides
+ * what the browser does with it.
+ */
+const INLINE_IMAGES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/x-icon', 'image/svg+xml']);
+
+export function pageFileHeaders(file: PageFile): Record<string, string> {
+  const base = file.contentType.split(';')[0]!.trim().toLowerCase();
+  const kind = base.startsWith('text/') ? 'text' : base === 'application/pdf' ? 'pdf' : INLINE_IMAGES.has(base) ? 'image' : null;
+  const inline = file.disposition === 'inline' && kind !== null;
+  const name = encodeURIComponent(file.filename || 'download').replace(/'/g, '%27');
+  const headers: Record<string, string> = {
+    'Content-Type': !inline ? (kind === 'text' ? 'text/plain; charset=utf-8' : 'application/octet-stream') : kind === 'text' ? 'text/plain; charset=utf-8' : base,
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${name}`,
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'Cache-Control': file.immutable ? 'private, max-age=86400, immutable' : 'no-store',
+  };
+  if (inline) headers['Content-Security-Policy'] = kind === 'pdf' ? "default-src 'none'; sandbox allow-same-origin" : "default-src 'none'; sandbox";
+  if (file.size !== undefined) headers['Content-Length'] = String(file.size);
+  return headers;
+}
+
+/** Stream a query's file out. A read that fails half-way ends the response. */
+export function sendPageFile(res: ServerResponse, file: PageFile, head = false): Promise<void> {
+  res.writeHead(200, pageFileHeaders(file));
+  if (Buffer.isBuffer(file.body)) {
+    res.end(head ? undefined : file.body);
+    return Promise.resolve();
+  }
+  const stream = file.body as Readable;
+  if (head) {
+    stream.destroy?.();
+    res.end();
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    stream.on('error', () => { res.destroy(); resolve(); });
+    res.on('close', () => { stream.destroy?.(); resolve(); });
+    stream.pipe(res);
+  });
 }
 
 /** `/api/pages/<plugin>/<query>` and `/api/pages/<plugin>/act`, as a path. */

@@ -230,3 +230,20 @@ export interface PageActResult {
   approvalId?: string;
   preview?: string;
 }
+
+/**
+ * A plugin's per-agent directory, as `GET /api/pages` names it under `files`:
+ * the page queries the canvas's Files tab reads it with.
+ */
+export interface WorkspaceFiles {
+  workspace: string;
+  list: string;
+  stat: string;
+  read: string;
+  archive: string;
+}
+
+/** Served with the plugin that contributes it. */
+export interface PluginWorkspaceFiles extends WorkspaceFiles {
+  plugin: string;
+}

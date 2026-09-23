@@ -21,7 +21,7 @@ import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolContext, ToolDefinition } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
-import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery } from './pages.js';
+import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 
@@ -323,6 +323,14 @@ export class ToolRegistry {
         : parseMetrics(manifest.name, manifest.metrics, (id) =>
             [...this.#metrics.values()].some((list) => list.some((m) => m.id === id)),
           );
+    if (manifest.files !== undefined) {
+      const names = new Set((manifest.queries ?? []).map((q) => q.name));
+      for (const [role, name] of Object.entries(manifest.files)) {
+        if (typeof name !== 'string' || !names.has(name)) {
+          throw new Error(`plugin ${manifest.name}: files.${role} names ${String(name)}, which is not a query of this plugin`);
+        }
+      }
+    }
     this.#manifests.set(manifest.name, manifest);
     if (metrics) this.#metrics.set(manifest.name, metrics);
     if (contributions) {
@@ -369,6 +377,14 @@ export class ToolRegistry {
    */
   queries(): RegisteredQuery[] {
     return [...this.#queries].flatMap(([plugin, queries]) => queries.map((query) => ({ ...query, plugin })));
+  }
+
+  /**
+   * The plugins that read a per-agent directory, and the queries they read it
+   * with — what the canvas's Files tab is drawn over. Served with the pages.
+   */
+  files(): Array<WorkspaceFiles & { plugin: string }> {
+    return [...this.#manifests.values()].flatMap((m) => (m.files ? [{ ...m.files, plugin: m.name }] : []));
   }
 
   /**

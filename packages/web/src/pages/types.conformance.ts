@@ -42,6 +42,7 @@ import type {
   Selection as CoreSelection,
   ToolRef as CoreToolRef,
   Visibility as CoreVisibility,
+  WorkspaceFiles as CoreWorkspaceFiles,
 } from '@buddi/core';
 import type {
   ArgRef,
@@ -64,6 +65,7 @@ import type {
   Selection,
   ToolRef,
   Visibility,
+  WorkspaceFiles,
 } from './types';
 
 /*
@@ -124,6 +126,7 @@ interface Conformance {
   listComponent: Exact<Extract<CoreComponent, { kind: 'list' }>, ListComponent>;
   /** The served descriptor is core's, plus the plugin the route carries. */
   descriptor: Exact<CorePageDescriptor & { plugin: string }, PluginPageDescriptor>;
+  workspaceFiles: Exact<CoreWorkspaceFiles, WorkspaceFiles>;
 }
 
 export const CONTRACTS_AGREE: Conformance = {
@@ -146,6 +149,7 @@ export const CONTRACTS_AGREE: Conformance = {
   sectionAction: true,
   listComponent: true,
   descriptor: true,
+  workspaceFiles: true,
 };
 
 /** And the component union, one arm at a time. */
@@ -199,12 +203,14 @@ export const CHECKED_TYPES = [
   'SectionAction',
   'Component',
   'PageDescriptor',
+  'WorkspaceFiles',
 ] as const;
 
 /** Core's named types that are deliberately *not* mirrored, and why. */
 export const NOT_MIRRORED: Record<string, string> = {
   PageQuery: 'a function and two zod schemas; it never leaves the server',
   PageContributions: "the registry's own result, not part of the descriptor",
+  PageFile: 'bytes a query answers with; the gateway streams them, the page only links to the route',
 };
 
 /** The web's own names, and what they are, for the test's other direction. */
@@ -212,6 +218,7 @@ export const WEB_TYPES: Record<string, string> = {
   PluginPageDescriptor: 'PageDescriptor',
   ListComponent: 'Component',
   PageActResult: 'the act route’s reply, which core does not declare',
+  PluginWorkspaceFiles: 'WorkspaceFiles, plus the plugin the route carries',
 };
 
 /* ------------------------------------------------------------------ *

@@ -262,6 +262,7 @@ export interface PluginManifest {
   metrics?: MetricDefinition[];  // numbers a GOAL can watch — see §2.3a
   pages?: PageDescriptor[];   // screens of your own: a rail place, a settings tab
   queries?: PageQuery[];      // the read-only functions those screens draw from
+  files?: WorkspaceFiles;     // queries that read a per-agent directory: a Files tab
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
   skills?: SuggestedSkill[];  // shared procedures you propose
   description?: string;       // one line, shown before anyone installs you
@@ -2360,6 +2361,7 @@ this says what it is *for*.
 | `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
+| `files` | `WorkspaceFiles` | no | For a plugin that keeps a directory per agent: the five `queries` (`workspace`, `list`, `stat`, `read`, `archive`) the chat canvas's **Files** tab reads it with, for any conversation whose agent has one. `read` and `archive` answer with `pageFile(...)` — bytes the gateway streams on the query route, deciding itself what may be shown inline. Each name must be one of your `queries`, checked at `register()`. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |

@@ -67,6 +67,7 @@ import {
 } from './telegram.js';
 import {
   PAGE_ROUTE,
+  sendPageFile,
   actOnPage,
   listPageDescriptors,
   runPageQuery,
@@ -1210,7 +1211,9 @@ export function createWebApp(deps: WebServerDeps): Server {
        */
       const pageQuery = PAGE_ROUTE.exec(path);
       if (pageQuery) {
-        return reply(res, await runPageQuery(pagesDeps(), pageQuery[1] as string, pageQuery[2] as string, q));
+        const answered = await runPageQuery(pagesDeps(), pageQuery[1] as string, pageQuery[2] as string, q);
+        if (answered.file) return sendPageFile(res, answered.file, method === 'HEAD');
+        return reply(res, answered);
       }
 
       const upgradeJob = /^\/api\/upgrade\/jobs\/([0-9a-f-]{36})$/i.exec(path);
