@@ -72,6 +72,29 @@ Nothing at the moment; the next item below is messengers.
    has been used for real.
 7. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
 
+Developer plugin, the visible layer (2026-09-23; the plugin itself is done —
+run mode by default, remembered commands, lockfile installs, local `npx`,
+`git init`, previews on the tailnet). One at a time, one Opus subagent each,
+with a written brief; in order:
+
+1. **Tool row gist and diff renderer** — in progress (Opus, 2026-09-23). Each
+   chat tool row shows the path/command/query inline; write/edit rows expand
+   to a colour-coded diff, run/start rows to command plus `plain` output; a
+   `diff` canvas renderer replaces `document` for write, edit and summarise.
+   Write's execute result gains `diff` (edit already has it).
+2. **Auto-switch to Preview** — when a `developer.start` process is confirmed
+   listening on a port, the canvas opens and focuses the Preview tab itself
+   instead of waiting for `developer.preview`. Plain HTML sites also need a
+   frame reload after a write (Vite reloads itself over the proxied websocket).
+3. **File explorer** — a canvas tab over the workspace using `developer.list`
+   and `developer.read` as the owner (skips agent tiers; reads only), refreshed
+   on writes in the conversation stream; click opens a file view; images and
+   PDFs render as themselves; uploads/downloads through the Files library.
+   No in-place editing at first.
+4. **Terminal and image renderers** — a terminal renderer for run output
+   (command on top) and an image renderer for any tool output naming a file
+   in the library; useful to email, browser and finance too.
+
 Small, whenever a slot opens:
 
 - Agent avatar — an optional uploaded PNG, SVG or GIF on the agent record next to
