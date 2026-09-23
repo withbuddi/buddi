@@ -261,6 +261,36 @@ export function createLearningManifest(registry?: ToolRegistry): PluginManifest 
 }
 
 /* ------------------------------------------------------------------ *
+ * Policies plugins held before they proposed through core
+ * ------------------------------------------------------------------ */
+
+/**
+ * Ask every plugin with a policy handler to move the proposals it kept in its
+ * own tables into `core.proposals` (learning step 3). Each `adopt` is
+ * idempotent, so this runs on every start; one plugin failing costs its own
+ * move, not the start. Returns how many moved, per plugin.
+ */
+export async function adoptPluginPolicies(
+  pool: Pool,
+  manifests: readonly PluginManifest[],
+  now: Date,
+  log: (line: string) => void = () => undefined,
+): Promise<Record<string, number>> {
+  const moved: Record<string, number> = {};
+  for (const manifest of manifests) {
+    const adopt = manifest.policies?.adopt;
+    if (!adopt) continue;
+    try {
+      moved[manifest.name] = await adopt.call(manifest.policies, { db: pool, now });
+      if (moved[manifest.name]! > 0) log(`learning: moved ${moved[manifest.name]} proposed ${manifest.name} rule(s) to Settings → Proposals`);
+    } catch (err) {
+      log(`learning: could not move ${manifest.name}'s proposed rules: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return moved;
+}
+
+/* ------------------------------------------------------------------ *
  * The expiry sweep
  * ------------------------------------------------------------------ */
 

@@ -12,7 +12,7 @@ import type { HomeContribution } from './home.js';
 import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
-import type { RunProvenance, UntrustedKind } from './learning/types.js';
+import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -613,4 +613,10 @@ export interface PluginManifest {
    * Documentation, not a sandbox — see `NetworkUse`.
    */
   network?: NetworkUse[];
+  /**
+   * How this plugin applies a policy the owner kept (optional). A plugin that
+   * proposes rules through `proposePolicy` registers this; keeping a policy
+   * proposal for a plugin without one is refused and the card stays open.
+   */
+  policies?: PolicyHandler;
 }

@@ -143,6 +143,8 @@ const board: Component[] = [
           { kind: 'link', label: 'The agent that holds it', to: { chat: { path: 'holder' } } },
           // …and the same link over a field the data does not answer.
           { kind: 'link', label: 'Nobody holds it', to: { chat: { path: 'nobody' } } },
+          // The other: the owner's Proposals inbox, filtered to this plugin.
+          { kind: 'link', label: 'Proposed rules', to: { proposals: true } },
         ],
       },
       {
@@ -444,6 +446,12 @@ describe('the pieces a descriptor is made of', () => {
    * navigates to the empty hash — which is what returning `''` used to do —
    * is worse than no button: the shell re-renders on a route to nowhere.
    */
+  it('links to the Proposals inbox filtered to the plugin drawing the page', async () => {
+    draw('board', 'a1');
+    const link = await screen.findByRole('link', { name: 'Proposed rules' });
+    expect(link).toHaveAttribute('href', '#/settings/proposals?plugin=demo');
+  });
+
   it('draws no link when the chat id is missing', async () => {
     draw('board', 'a1');
     await screen.findByRole('link', { name: 'The agent that holds it' });

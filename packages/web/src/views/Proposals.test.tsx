@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProposalRow } from '../api';
-import { Proposals } from './Proposals';
+import { inFilter, matcherLine, Proposals } from './Proposals';
 import { Home } from './Home';
 
 vi.mock('../api', async (importOriginal) => {
@@ -124,8 +124,34 @@ describe('the Proposals inbox', () => {
       closed: [],
     });
     await renderPage();
-    expect(screen.getByText('{"from":"news@x.com"}')).toBeInTheDocument();
+    expect(screen.getByText('from news@x.com')).toBeInTheDocument();
+    expect(screen.getByText('2 decisions')).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /The steps/ })).not.toBeInTheDocument();
+  });
+
+  it('draws a rule from its payload\'s shape, leaving the plugin\'s internal ids out', () => {
+    expect(matcherLine({ sender: 'a@b.test', account: 'me@x.test', accountId: 'uuid-1' })).toBe('sender a@b.test · account me@x.test');
+    expect(matcherLine({})).toBe('');
+  });
+
+  it('shows only one plugin\'s rules when filtered to it, with a way back to everything', async () => {
+    vi.mocked(api.proposals).mockResolvedValue({
+      open: [
+        proposal({ id: 'r-1', kind: 'policy', title: 'Rule for rules: mute', editable: null, payload: { plugin: 'rules', matcher: { sender: 'a@b.test' }, action: 'mute', verdicts: [1, 2, 3] } }),
+        proposal({ id: 'r-2', kind: 'policy', title: 'Rule for other: pin', editable: null, payload: { plugin: 'other', matcher: {}, action: 'pin', verdicts: [] } }),
+        proposal({ id: 's-1' }),
+      ],
+      closed: [],
+    });
+    await act(async () => {
+      render(<Proposals plugin="rules" />);
+    });
+    await waitFor(() => expect(screen.getByText('Rule for rules: mute')).toBeInTheDocument());
+    expect(screen.queryByText('Rule for other: pin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Skill: Check a bank balance in the browser')).not.toBeInTheDocument();
+    expect(screen.getByText('3 decisions')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Show every proposal' })).toHaveAttribute('href', '#/settings/proposals');
+    expect(inFilter(proposal({ id: 's-1' }), null)).toBe(true);
   });
 });
 

@@ -173,6 +173,26 @@ export function settingsRoute(section?: string): string {
   return section ? `${SETTINGS_ROUTE}/${section}` : SETTINGS_ROUTE;
 }
 
+/**
+ * Settings → Proposals, optionally filtered to one plugin's rules:
+ * `#/settings/proposals?plugin=<name>`. The name comes from wherever the
+ * link was drawn (a plugin page's own scope), never from this file.
+ */
+export function proposalsRoute(plugin?: string | null): string {
+  return `${settingsRoute('proposals')}${plugin ? `?plugin=${encodeURIComponent(plugin)}` : ''}`;
+}
+
+/** The plugin a proposals hash is filtered to, or null. */
+export function parseProposalsFilter(hash: string): string | null {
+  const match = /^#\/settings\/proposals\?(.*)$/.exec(hash);
+  if (!match) return null;
+  try {
+    return new URLSearchParams(match[1]).get('plugin') || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The primary places, in rail order. */
 export const PLACES = [
   { route: HOME_ROUTE, label: 'Home' },

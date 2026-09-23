@@ -90,7 +90,7 @@ const listInput = z.object({
 export const listPolicies: ToolDefinition<z.infer<typeof listInput>, unknown> = {
   name: 'email.list_policies',
   description:
-    'The standing decisions about incoming mail: which senders, domains, lists and threads are ignored, notified, drafted, handed to an agent or triaged as usual, where each rule came from, and how many triage runs it has saved. Policies proposed from the owner\'s own history are listed separately and do not decide anything until the owner keeps them.',
+    'The standing decisions about incoming mail: which senders, domains, lists and threads are ignored, notified, drafted, handed to an agent or triaged as usual, where each rule came from, and how many triage runs it has saved. Rules learned from the owner\'s own history are proposed on Settings → Proposals and decide nothing until the owner keeps them there.',
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {

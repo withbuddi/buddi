@@ -7,7 +7,9 @@
  *
  *  - `applyKeptSkill`   — built (step 2): write version n+1 of a skill file in
  *                          the agent's own skills directory (`skill-files.ts`).
- *  - `applyKeptPolicy`  — step 3: hand the policy to its plugin's apply.
+ *  - `applyKeptPolicy`  — built (step 3): hand the policy to its plugin's own
+ *                          `policies.apply`, which writes the rule its gate
+ *                          reads. A plugin that registered none is refused.
  *  - `applyKeptChange`  — step 4: Agent Father's update with the diff as the
  *                          approved envelope.
  *
@@ -16,7 +18,7 @@
  * prevent.
  */
 import { writeLearnedSkill } from './skill-files.js';
-import type { Proposal, ProposalKind } from './types.js';
+import type { PolicyHandler, PolicyHandlerContext, Proposal, ProposalKind } from './types.js';
 
 export interface ApplyOutcome {
   applied: boolean;
@@ -36,6 +38,10 @@ export interface ApplyDeps {
   skillsDirFor?: (agent: string) => string | null;
   /** Reload the catalog, so the next run loads what was written. Throws when the tree no longer loads. */
   reload?: () => void;
+  /** The pool a plugin's policy apply writes through. */
+  db?: PolicyHandlerContext['db'];
+  /** The installed plugin's policy handler, or null when it has none (or is not installed). */
+  policyHandlerFor?: (plugin: string) => PolicyHandler | null;
 }
 
 export async function applyKeptSkill(proposal: Proposal, deps: ApplyDeps): Promise<ApplyOutcome> {
@@ -66,8 +72,40 @@ export async function applyKeptSkill(proposal: Proposal, deps: ApplyDeps): Promi
   };
 }
 
-export async function applyKeptPolicy(_proposal: Proposal, _deps: ApplyDeps): Promise<ApplyOutcome> {
-  return { applied: false, note: keptNote('policy') };
+export async function applyKeptPolicy(proposal: Proposal, deps: ApplyDeps): Promise<ApplyOutcome> {
+  const plugin = String(proposal.payload.plugin ?? '').trim();
+  const handler = plugin ? deps.policyHandlerFor?.(plugin) ?? null : null;
+  if (!handler || !deps.db) {
+    return {
+      applied: false,
+      failed: true,
+      note: plugin
+        ? `Not applied: the ${plugin} plugin is not installed here or does not apply rules. The card stays open.`
+        : 'Not applied: the proposal names no plugin.',
+    };
+  }
+  try {
+    const result = await handler.apply(proposal, { db: deps.db, now: deps.now });
+    return result.ok ? { applied: true, note: result.note } : { applied: false, failed: true, note: `Not applied: ${result.note}` };
+  } catch (err) {
+    return { applied: false, failed: true, note: `Not applied: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
+ * The owner discarded a policy proposal: tell its plugin, so it drops
+ * whatever it holds for it. Best effort — a discard is the safe direction,
+ * and it stands whatever the plugin answers. Null when there is nobody to tell.
+ */
+export async function revokeDiscardedPolicy(proposal: Proposal, deps: ApplyDeps): Promise<string | null> {
+  if (proposal.kind !== 'policy') return null;
+  const handler = deps.policyHandlerFor?.(String(proposal.payload.plugin ?? '').trim()) ?? null;
+  if (!handler?.revoke || !deps.db) return null;
+  try {
+    return (await handler.revoke(proposal, { db: deps.db, now: deps.now })).note;
+  } catch (err) {
+    return `The plugin could not revoke it: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 export async function applyKeptChange(_proposal: Proposal, _deps: ApplyDeps): Promise<ApplyOutcome> {
@@ -86,7 +124,7 @@ export function keptNote(kind: ProposalKind): string {
     case 'skill':
       return 'Kept; written as a skill file under the agent.';
     case 'policy':
-      return 'Kept; applied by its plugin when learning step 3 ships.';
+      return 'Kept; applied by its plugin as one of its rules.';
     case 'change':
       return 'Kept; applied through Agent Father when learning step 4 ships.';
   }

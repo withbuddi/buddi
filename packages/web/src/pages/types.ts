@@ -48,7 +48,8 @@ export interface QueryRef {
 export type ArgRef = ValueRef | { param: string } | { field: string } | { row: string } | { selected: true };
 
 /** Another page of the same plugin, or — the one exception — an agent's chat. */
-export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef };
+/** `{ proposals: true }`: the owner's Proposals inbox, filtered to the plugin drawing the page. */
+export type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef } | { proposals: true };
 
 export interface ToolRef {
   tool: string;

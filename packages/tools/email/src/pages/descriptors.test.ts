@@ -50,7 +50,6 @@ describe('the mail pages, as contributions', () => {
       'email.add_account',
       'email.remove_account',
       'email.add_rule',
-      'email.keep_policies',
       'email.revoke_policies',
       'email.save_draft',
       'email.discard_draft',

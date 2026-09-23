@@ -14,7 +14,6 @@ import type { PageDescriptor, PageQuery, ToolDefinition } from '@buddi/core';
 import { createAddAccountTool, createRemoveAccountTool, type AccountToolOptions } from './accounts.js';
 import {
   createAddRuleTool,
-  createKeepPoliciesTool,
   createRevokePoliciesTool,
 } from './policies-tools.js';
 import { createDiscardDraftTool, createSaveDraftTool } from './drafts-tools.js';
@@ -34,7 +33,6 @@ export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, 
     createAddAccountTool(opts),
     createRemoveAccountTool(opts),
     createAddRuleTool(),
-    createKeepPoliciesTool(),
     createRevokePoliciesTool(),
     createSaveDraftTool(),
     createDiscardDraftTool(),

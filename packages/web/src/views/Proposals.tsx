@@ -16,13 +16,19 @@
  * is its next version and is drawn as a diff against the one that loads now;
  * the sentences that also appeared in untrusted text are highlighted in it.
  * The fold offers to remove a kept skill that is still the live version.
+ *
+ * A rule (a policy) is drawn from its payload's shape alone — plugin,
+ * matcher, action, how many decisions it was learned from — so this page
+ * knows no plugin. A plugin page links here filtered to its own rules
+ * (`#/settings/proposals?plugin=<name>`); keeping one calls that plugin's
+ * apply on the server.
  */
 import { useState } from 'react';
 import { api, type ProposalRow } from '../api';
 import { DiffLines } from '../canvas/views/DiffLines';
 import { lineDiff } from '../canvas/line-diff';
 import { fmtRelative } from '../format';
-import { agentRoute, transcriptRoute } from '../routes';
+import { agentRoute, settingsRoute, transcriptRoute } from '../routes';
 import {
   Button,
   Card,
@@ -49,7 +55,21 @@ const KIND_LABEL: Record<ProposalRow['kind'], string> = {
   change: 'change to itself',
 };
 
-export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
+/** The matcher as the owner reads it: key and value, the plugin's `…Id` handles left out. */
+export function matcherLine(matcher: unknown): string {
+  if (matcher === null || typeof matcher !== 'object' || Array.isArray(matcher)) return String(matcher ?? '');
+  return Object.entries(matcher as Record<string, unknown>)
+    .filter(([key, value]) => !/Id$/.test(key) && value !== null && value !== undefined && value !== '')
+    .map(([key, value]) => `${key} ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+    .join(' · ');
+}
+
+/** True when the proposal belongs under a plugin filter (none: everything does). */
+export function inFilter(proposal: ProposalRow, plugin: string | null | undefined): boolean {
+  return !plugin || (proposal.kind === 'policy' && proposal.payload.plugin === plugin);
+}
+
+export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: string | null }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.proposals(), [], 30_000);
   const [failure, setFailure] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -69,8 +89,8 @@ export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
     }
   };
 
-  const open = data?.open ?? [];
-  const closed = data?.closed ?? [];
+  const open = (data?.open ?? []).filter((p) => inFilter(p, plugin));
+  const closed = (data?.closed ?? []).filter((p) => inFilter(p, plugin));
 
   return (
     <PageFrame
@@ -79,6 +99,11 @@ export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
       lede="What your agents learned and would like to keep: a procedure, a rule, a change to their own instructions. Nothing here applies itself. Keep what is right, correct what is nearly right, discard the rest."
     >
       <ErrorBanner message={error ?? failure} />
+      {plugin ? (
+        <Notice role="status">
+          Showing the rules {plugin} proposes. <a href={settingsRoute('proposals')}>Show every proposal</a>
+        </Notice>
+      ) : null}
       {done ? (
         <Notice tone="good" role="status">
           {done}
@@ -87,7 +112,11 @@ export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
       {!data ? (
         <Empty>Loading…</Empty>
       ) : open.length === 0 ? (
-        <Empty>Nothing proposed. When an agent learns something worth keeping, it waits here.</Empty>
+        <Empty>
+          {plugin
+            ? `No rule from ${plugin} is waiting. It proposes one when you decide the same way several times running.`
+            : 'Nothing proposed. When an agent learns something worth keeping, it waits here.'}
+        </Empty>
       ) : (
         <Stack>
           {open.map((proposal) => (
@@ -303,11 +332,14 @@ function ProposalCard({
           <KV
             items={[
               { label: 'Plugin', value: <span className="mono">{String(payload.plugin ?? '')}</span> },
-              { label: 'Matches', value: <span className="mono">{JSON.stringify(payload.matcher ?? {})}</span> },
+              { label: 'Matches', value: <span className="mono">{matcherLine(payload.matcher ?? {})}</span> },
               { label: 'Does', value: String(payload.action ?? '') },
               {
                 label: 'Learned from',
-                value: `${Array.isArray(payload.verdicts) ? payload.verdicts.length : 0} decision(s)`,
+                value: (() => {
+                  const n = Array.isArray(payload.verdicts) ? payload.verdicts.length : 0;
+                  return `${n} ${n === 1 ? 'decision' : 'decisions'}`;
+                })(),
               },
             ]}
           />

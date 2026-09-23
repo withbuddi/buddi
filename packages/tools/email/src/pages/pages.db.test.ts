@@ -331,7 +331,6 @@ suite('the mail pages, over postgres', () => {
       'thread.older',
       'accounts.accounts',
       'policies.applied',
-      'policies.proposed',
       // The rule drawer's two pickers: the mailboxes, and that mailbox's
       // conversations.
       'accounts.accounts',
@@ -488,7 +487,6 @@ suite('the mail pages, over postgres', () => {
 
     expect(await query('policies').produce({}, failing('42P01'))).toEqual({
       applied: [],
-      proposed: [],
       appliedCount: 0,
       proposedCount: 0,
       savedRuns: 0,
@@ -701,20 +699,26 @@ suite('the mail pages, over postgres', () => {
     ).toBe('Choose the conversation this rule is about.');
   });
 
-  it('keeps and revokes a selection in one act, by the ids the page is showing', async () => {
+  it('counts the rules waiting in Proposals, and revokes a selection of kept ones in one act', async () => {
+    await pool.query(`delete from core.proposals`);
     await pool.query(
-      `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
-       select id, 'sender', 'ads@shop.test', 'ignore', '{}'::jsonb, 'learned', true from email.accounts limit 1`,
+      `insert into core.proposals (kind, agent, payload, fingerprint)
+       values ('policy', 'email', '{"plugin":"email","matcher":{"sender":"x@y.test"},"action":"ignore"}'::jsonb, 'fp-email'),
+              ('policy', 'other', '{"plugin":"elsewhere","matcher":{},"action":"x"}'::jsonb, 'fp-other'),
+              ('skill', 'ada', '{"name":"n"}'::jsonb, 'fp-skill')`,
     );
-    await pool.query(
-      `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
-       select id, 'domain', 'shop.test', 'ignore', '{}'::jsonb, 'learned', true from email.accounts limit 1`,
-    );
-    const proposed = await ask('policies');
-    expect(proposed.proposedCount).toBe(2);
+    // Only this plugin's open rules; the page links to them rather than copying them.
+    expect((await ask('policies')).proposedCount).toBe(1);
+    await pool.query(`delete from core.proposals`);
 
-    const kept = await act('email.keep_policies', { ids: proposed.proposed.map((p: any) => p.id) });
-    expect(kept).toMatchObject({ kept: 2, revoked: 0 });
+    await pool.query(
+      `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
+       select id, 'sender', 'ads@shop.test', 'ignore', '{}'::jsonb, 'learned', false from email.accounts limit 1`,
+    );
+    await pool.query(
+      `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
+       select id, 'domain', 'shop.test', 'ignore', '{}'::jsonb, 'learned', false from email.accounts limit 1`,
+    );
     expect((await ask('policies')).appliedCount).toBe(2);
 
     const one = (await ask('policies')).applied[0];
