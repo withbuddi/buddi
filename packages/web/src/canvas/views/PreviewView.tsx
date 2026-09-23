@@ -28,6 +28,16 @@ import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import type { PreviewProps } from '../types';
 
+/**
+ * Is this dashboard open on the machine buddi runs on? Only then does a
+ * `localhost:<port>` link mean the process; from the tailnet it means the
+ * phone, and is not offered.
+ */
+function onThisMachine(): boolean {
+  const host = window.location.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
+}
+
 /** The frame's URL without its spent ticket: what a live cookie answers for. */
 function withoutTicket(url: string): string {
   try {
@@ -125,7 +135,7 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
             Open in a tab
           </a>
         ) : null}
-        {props.port !== null ? (
+        {props.port !== null && onThisMachine() ? (
           <a
             className="wb-preview-direct"
             href={`http://localhost:${props.port}/`}

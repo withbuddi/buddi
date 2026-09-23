@@ -108,7 +108,8 @@ describe('the panel', () => {
       'href',
       'http://127.0.0.1:4318/preview/developer/web/',
     );
-    // And the process itself, for when the owner is at the machine.
+    // And the process itself, for when the owner is at the machine — which a
+    // test, on localhost, is; from the tailnet the link is not offered.
     expect(screen.getByRole('link', { name: 'localhost:5173' })).toHaveAttribute('href', 'http://localhost:5173/');
     // The process output is there on request, not beside the app by default.
     expect(screen.queryByText('ready in 412 ms')).not.toBeInTheDocument();
