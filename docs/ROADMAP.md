@@ -69,6 +69,9 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## Next, in order
 
+0. [MCP server](specs/mcp.md) — configure buddi from Claude Code: reads at
+   once, every write an approval card, `buddi.ask` to talk to an agent.
+   Taken ahead of Learning step 4 on 2026-09-23.
 1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
 2. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
@@ -139,7 +142,6 @@ Small, whenever a slot opens:
   second consumer exists.
 - Remote/headless browser display — a browser on a remote host with no
   desktop session; not the first delivery of [browser.md](browser.md).
-- [buddi as an MCP server](ideas/mcp.md) — parked, not pursued.
 - [A browser operator on a local vision model](ideas/browser-operator.md) —
   one agent holds the browser tools and runs on an MLX vision model; the
   others delegate a task in words and get text back. To try once the main
