@@ -11,11 +11,18 @@
  * Keep and Discard are the two answers. For a skill or a change the owner can
  * correct the text before keeping it. Kept and discarded ones stay under the
  * fold for a week, and a proposal nobody decides is expired after 30 days.
+ *
+ * A kept skill is a file under the agent. A later proposal on the same skill
+ * is its next version and is drawn as a diff against the one that loads now;
+ * the sentences that also appeared in untrusted text are highlighted in it.
+ * The fold offers to remove a kept skill that is still the live version.
  */
 import { useState } from 'react';
 import { api, type ProposalRow } from '../api';
+import { DiffLines } from '../canvas/views/DiffLines';
+import { lineDiff } from '../canvas/line-diff';
 import { fmtRelative } from '../format';
-import { transcriptRoute } from '../routes';
+import { agentRoute, transcriptRoute } from '../routes';
 import {
   Button,
   Card,
@@ -113,7 +120,29 @@ export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
                   key={proposal.id}
                   title={proposal.title}
                   sub={`${proposal.agent}: ${closedSentence(proposal)}`}
-                  side={fmtRelative(proposal.decidedAt ?? proposal.createdAt)}
+                  side={
+                    proposal.kind === 'skill' && proposal.state === 'kept' && proposal.skill?.live ? (
+                      <Toolbar align="end">
+                        <span className="muted">{fmtRelative(proposal.decidedAt ?? proposal.createdAt)}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy === proposal.id}
+                          onClick={() =>
+                            void act(proposal.id, async () => {
+                              const skill = proposal.skill!;
+                              await api.removeSkill(proposal.agent, skill.name);
+                              return `Removed ${skill.name} from ${proposal.agent}. Its versions are kept, and ${proposal.agent} will not propose it again for 90 days.`;
+                            })
+                          }
+                        >
+                          Remove this skill
+                        </Button>
+                      </Toolbar>
+                    ) : (
+                      fmtRelative(proposal.decidedAt ?? proposal.createdAt)
+                    )
+                  }
                 />
               ))}
             </List>
@@ -129,7 +158,11 @@ export function Proposals({ embedded }: { embedded?: boolean }): JSX.Element {
 export function closedSentence(proposal: ProposalRow): string {
   switch (proposal.state) {
     case 'kept':
-      return proposal.note ?? 'Kept.';
+      return proposal.kind === 'skill' && proposal.skill
+        ? proposal.skill.live
+          ? `Kept as ${proposal.skill.name}, version ${proposal.skill.version}; it loads on the agent's next run.`
+          : `Kept; ${proposal.skill.name} has a newer version now (${proposal.skill.version}).`
+        : proposal.note ?? 'Kept.';
     case 'discarded':
       return proposal.reason ? `Discarded: ${proposal.reason}` : 'Discarded.';
     case 'expired':
@@ -154,6 +187,7 @@ function ProposalCard({
   const [reason, setReason] = useState('');
   const edited = proposal.editable !== null && text !== proposal.editable;
   const payload = proposal.payload;
+  const echoes = proposal.echoes ?? [];
   return (
     <Card
       tone={proposal.untrusted ? 'warning' : 'accent'}
@@ -214,11 +248,37 @@ function ProposalCard({
                 </li>
               ))}
             </ul>
+            {echoes.length > 0 ? (
+              <>
+                <p className="proposal-echo-lede">These sentences of it also appear in that text:</p>
+                <ul className="proposal-sources" aria-label="Sentences found in the untrusted text">
+                  {echoes.map((echo) => (
+                    <li key={echo}>
+                      <mark className="wb-diff-mark">{echo}</mark>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
           </Notice>
         ) : null}
         {proposal.kind === 'skill' ? (
           <>
             {typeof payload.when === 'string' ? <p className="ui-card-meta">When: {payload.when}</p> : null}
+            {proposal.skill ? (
+              <Stack gap="sm">
+                <p className="ui-card-meta">
+                  {proposal.agent} already has this skill (
+                  <a href={agentRoute(proposal.agent, 'skills')}>{proposal.skill.name}, version {proposal.skill.version}</a>
+                  ). Keeping this writes version {proposal.skill.version + 1}; the earlier ones stay readable.
+                </p>
+                <DiffLines
+                  text={lineDiff(proposal.skill.steps, text)}
+                  marks={echoes}
+                  label={`Version ${proposal.skill.version} against this proposal`}
+                />
+              </Stack>
+            ) : null}
             <Field label="The steps, as it would follow them" hint="Correct them here and keep your version.">
               <textarea rows={8} value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
             </Field>

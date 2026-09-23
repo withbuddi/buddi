@@ -46,6 +46,11 @@ export interface RunProvenance {
   /** The model step within this run (1-based). */
   step: number;
   sources: UntrustedSource[];
+  /**
+   * What those sources said, for finding echoes of it in a proposal. Never
+   * stored with the proposal; only the matching sentences are.
+   */
+  texts?: string[];
 }
 
 /** What a proposal row records about where it came from. */
@@ -57,6 +62,8 @@ export interface ProposalProvenance {
   step?: number | null;
   toolUseId?: string | null;
   sources: UntrustedSource[];
+  /** Sentences of the proposal that also appear in that untrusted text (`echoes.ts`). */
+  echoes?: string[];
 }
 
 /** `learning.propose_skill`: a procedure, written by the agent for itself. */

@@ -42,6 +42,35 @@ function kindOf(line: string): DiffLineKind {
 }
 
 /**
+ * A line with the given phrases marked, case-insensitively: the sentences of
+ * a proposal that also appeared in untrusted text, so an instruction that
+ * came from a page is visible in the change that would keep it.
+ */
+function Marked({ text, marks }: { text: string; marks: readonly string[] }): JSX.Element {
+  const lower = text.toLowerCase();
+  const spans: Array<[number, number]> = [];
+  for (const mark of marks) {
+    const needle = mark.trim().toLowerCase();
+    if (needle === '') continue;
+    for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, at + needle.length)) {
+      spans.push([at, at + needle.length]);
+    }
+  }
+  if (spans.length === 0) return <>{text === '' ? ' ' : text}</>;
+  spans.sort((x, y) => x[0] - y[0]);
+  const parts: JSX.Element[] = [];
+  let cursor = 0;
+  for (const [start, end] of spans) {
+    if (start < cursor) continue;
+    if (start > cursor) parts.push(<span key={`t${cursor}`}>{text.slice(cursor, start)}</span>);
+    parts.push(<mark key={`m${start}`} className="wb-diff-mark">{text.slice(start, end)}</mark>);
+    cursor = end;
+  }
+  if (cursor < text.length) parts.push(<span key={`t${cursor}`}>{text.slice(cursor)}</span>);
+  return <>{parts}</>;
+}
+
+/**
  * The lines, in a scrolling block. `limit` cuts the drawing, not the text: the
  * chat shows the head of a long diff and says how much more there is, and
  * `more` is what it offers for the rest — the canvas, where the whole thing is.
@@ -51,11 +80,14 @@ export function DiffLines({
   limit,
   more,
   label = 'Diff',
+  marks,
 }: {
   text: string;
   limit?: number;
   more?: { label: string; onClick: () => void };
   label?: string;
+  /** Phrases to highlight wherever they occur. */
+  marks?: readonly string[];
 }): JSX.Element {
   const all = diffLines(text);
   const shown = limit === undefined ? all : all.slice(0, limit);
@@ -65,7 +97,7 @@ export function DiffLines({
       <pre className="wb-diff" aria-label={label} data-testid="diff">
         {shown.map((line, index) => (
           <span key={index} className="wb-diff-line" data-kind={line.kind}>
-            {line.text === '' ? ' ' : line.text}
+            {marks && marks.length > 0 ? <Marked text={line.text} marks={marks} /> : line.text === '' ? ' ' : line.text}
           </span>
         ))}
       </pre>

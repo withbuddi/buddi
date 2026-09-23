@@ -17,6 +17,7 @@ import { Avatar, Button, ButtonLink, Empty, ErrorBanner, Field, List, ListRow, N
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Memory } from './Memory';
+import { AgentSkills } from './parts/AgentSkills';
 import { Reminders } from './Reminders';
 import { AgentSetup } from './parts/AgentSetup';
 
@@ -33,6 +34,7 @@ const AGENT_TABS = [
   { id: 'offers', label: 'Offers' },
   { id: 'reminders', label: 'Reminders' },
   { id: 'memory', label: 'Memory' },
+  { id: 'skills', label: 'Skills' },
   { id: 'setup', label: 'Setup' },
 ] as const;
 
@@ -246,6 +248,7 @@ function AgentPage({
       {tab === 'offers' ? <Offers embedded agentId={agentId} agentName={name} /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded agentId={agentId} /> : null}
       {tab === 'memory' ? <Memory embedded agents={agents} timezone={timezone} agentId={agentId} /> : null}
+      {tab === 'skills' ? <AgentSkills agentId={agentId} agentName={name} /> : null}
       {tab === 'setup' ? <AgentSetup agentId={agentId} /> : null}
     </div>
   );

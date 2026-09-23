@@ -43,6 +43,7 @@ import {
   type ReloadableAgentCatalog,
 } from './agents/catalog.js';
 import { bindDelegation } from './agents/delegation.js';
+import { protectedWritePaths } from './agents/learned-skills.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
 import { loadDefaultAgentRecord, writeDefaultAgentRecord } from './agents/default-agent.js';
@@ -420,6 +421,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     now,
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
+      protectedPaths: protectedWritePaths(),
       systemContext: (run) => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run),
       /*
        * A getter, not a value: this object is built before anything is bound,

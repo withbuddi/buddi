@@ -2,9 +2,14 @@
  * Settings → Proposals: what the agents learned, waiting for the owner.
  *
  * One read and two writes. Keeping records `kept` and the (possibly
- * corrected) payload, then asks the kind's apply — which, until learning
- * steps 2–4 ship, answers honestly that nothing was applied yet. The page
- * says so on the card rather than pretending.
+ * corrected) payload, then asks the kind's apply. A skill is written as a
+ * versioned file under the agent (learning step 2); a policy and a change
+ * answer honestly that nothing was applied yet (steps 3–4), and the card
+ * says so rather than pretending.
+ *
+ * A skill proposal whose name the agent already has a learned skill under is
+ * its next version: the view carries the current steps, and the page draws
+ * the proposal as a diff against them.
  */
 import {
   APPLY,
@@ -17,9 +22,12 @@ import {
   listClosedProposals,
   listOpenProposals,
   proposalTitle,
+  reopenProposal,
+  type AgentCatalog,
   type Proposal,
 } from '@buddi/core';
 import type { Pool } from 'pg';
+import { agentSkillsDirFor, currentLearnedSkill, skillKeepProblem, type CurrentLearnedSkill } from '../agents/learned-skills.js';
 import type { WriteDeps, WriteResult } from './write.js';
 
 export interface ProposalView {
@@ -43,6 +51,25 @@ export interface ProposalView {
   reason: string | null;
   /** For a kept proposal: what keeping did, or when it will. */
   note: string | null;
+  /** Sentences of it that also appear in the untrusted text that was in view: the page highlights them. */
+  echoes: string[];
+  /**
+   * A skill proposal: the learned skill of that name the agent has now, when
+   * it has one. Open, the proposal is its next version and is drawn as a diff
+   * against `steps`; kept, `live` says this proposal is the version loading
+   * now, which is the one the fold offers to remove.
+   */
+  skill: (CurrentLearnedSkill & { live: boolean }) | null;
+}
+
+/** What a proposal view can know about the files a kept skill became. */
+export interface ProposalSkillLookup {
+  current(agent: string, title: string): CurrentLearnedSkill | null;
+}
+
+/** The lookup over a catalog: the agent's own skills directory, read now. */
+export function catalogSkillLookup(catalog: AgentCatalog): ProposalSkillLookup {
+  return { current: (agent, title) => currentLearnedSkill(catalog, agent, title) };
 }
 
 /** The field of the payload the editor writes, per kind. */
@@ -50,8 +77,12 @@ function editableField(kind: Proposal['kind']): 'body' | 'proposed' | null {
   return kind === 'skill' ? 'body' : kind === 'change' ? 'proposed' : null;
 }
 
-export function toProposalView(p: Proposal): ProposalView {
+export function toProposalView(p: Proposal, skills?: ProposalSkillLookup): ProposalView {
   const field = editableField(p.kind);
+  const current =
+    p.kind === 'skill' && skills && (p.state === 'open' || p.state === 'kept')
+      ? skills.current(p.agent, String(p.payload.name ?? ''))
+      : null;
   return {
     id: p.id,
     kind: p.kind,
@@ -70,15 +101,26 @@ export function toProposalView(p: Proposal): ProposalView {
     decidedAt: p.decidedAt,
     reason: p.reason,
     note: p.state === 'kept' ? keptNote(p.kind) : null,
+    echoes: Array.isArray(p.provenance.echoes) ? p.provenance.echoes.filter((e) => typeof e === 'string') : [],
+    skill: current ? { ...current, live: current.proposal === p.id } : null,
   };
 }
 
 export async function readProposals(
   pool: Pool,
   now: Date,
+  skills?: ProposalSkillLookup,
 ): Promise<{ open: ProposalView[]; closed: ProposalView[] }> {
   const [open, closed] = await Promise.all([listOpenProposals(pool), listClosedProposals(pool, { now })]);
-  return { open: open.map(toProposalView), closed: closed.map(toProposalView) };
+  const view = (p: Proposal): ProposalView => toProposalView(p, skills);
+  return { open: open.map(view), closed: closed.map(view) };
+}
+
+/** What keeping a skill needs: the catalog it is written under and reloaded into. */
+export interface KeepSkillDeps {
+  catalog: AgentCatalog;
+  reload?: () => void;
+  env?: NodeJS.ProcessEnv;
 }
 
 const DECIDED_ALREADY = 'That proposal was already decided.';
@@ -99,25 +141,54 @@ export async function keepProposalFromWeb(
   deps: WriteDeps,
   id: string,
   text: string | undefined,
+  skills?: KeepSkillDeps,
 ): Promise<WriteResult<{ proposal: ProposalView; applied: boolean; note: string }>> {
   const current = await getProposal(deps.pool, id);
   if (!current) return notOpen(deps, id);
   if (current.state !== 'open') return notOpen(deps, id);
+  if (current.kind === 'skill') {
+    // Asked before anything is recorded: a refusal leaves the card open.
+    const problem = skills ? skillKeepProblem(skills.catalog, current, skills.env) : 'This process cannot write skill files.';
+    if (problem) return { ok: false, status: 409, body: { error: problem } };
+  }
   const field = editableField(current.kind);
   let payload: Record<string, unknown> | undefined;
   if (text !== undefined && field) {
     if (text.trim() === '') return { ok: false, status: 400, body: { error: 'The kept version cannot be empty.' } };
     if (text !== current.payload[field]) payload = { ...current.payload, [field]: text, edited: true };
   }
-  const kept = await keepProposal(deps.pool, { id, now: deps.now(), ...(payload ? { payload } : {}) });
+  const now = deps.now();
+  const kept = await keepProposal(deps.pool, { id, now, ...(payload ? { payload } : {}) });
   if (!kept) return notOpen(deps, id);
-  const outcome = await APPLY[kept.kind](kept);
+  const outcome = await APPLY[kept.kind](kept, {
+    now,
+    ...(skills
+      ? {
+          skillsDirFor: (agent: string) => agentSkillsDirFor(skills.catalog, agent),
+          ...(skills.reload ? { reload: skills.reload } : {}),
+        }
+      : {}),
+  });
+  if (outcome.failed) {
+    // Nothing is on disk: the keep is undone and the card stays, with why.
+    await reopenProposal(deps.pool, { id: kept.id, payload: current.payload });
+    return { ok: false, status: 409, body: { error: outcome.note } };
+  }
   await appendEvent(
     deps.pool,
     'proposal.kept',
-    { id: kept.id, kind: kept.kind, agent: kept.agent, title: proposalTitle(kept), edited: payload !== undefined, applied: outcome.applied },
+    {
+      id: kept.id,
+      kind: kept.kind,
+      agent: kept.agent,
+      title: proposalTitle(kept),
+      edited: payload !== undefined,
+      applied: outcome.applied,
+      ...(outcome.file ? { file: outcome.file, version: outcome.version } : {}),
+    },
   ).catch(() => undefined);
-  return { ok: true, status: 200, body: { proposal: toProposalView(kept), applied: outcome.applied, note: outcome.note } };
+  const lookup = skills ? catalogSkillLookup(skills.catalog) : undefined;
+  return { ok: true, status: 200, body: { proposal: toProposalView(kept, lookup), applied: outcome.applied, note: outcome.note } };
 }
 
 export async function discardProposalFromWeb(

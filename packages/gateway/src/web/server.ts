@@ -36,7 +36,8 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
-import { discardProposalFromWeb, keepProposalFromWeb, readProposals } from './proposals.js';
+import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals } from './proposals.js';
+import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
@@ -1080,7 +1081,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             }),
           );
         case '/api/proposals':
-          return sendJson(res, 200, await readProposals(deps.pool, now));
+          return sendJson(res, 200, await readProposals(deps.pool, now, catalogSkillLookup(deps.catalog)));
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -1266,6 +1267,13 @@ export function createWebApp(deps: WebServerDeps): Server {
           { catalog: deps.catalog, registry: deps.registry },
           decodeURIComponent(profile[1] as string),
         );
+        if (!view) return sendJson(res, 404, { error: 'no such agent' });
+        return sendJson(res, 200, view);
+      }
+      // The Skills tab: every skill the agent loads, learned ones with their versions.
+      const agentSkills = /^\/api\/agents\/([^/]+)\/skills$/.exec(path);
+      if (agentSkills) {
+        const view = readAgentSkills(deps.catalog, decodeURIComponent(agentSkills[1] as string));
         if (!view) return sendJson(res, 404, { error: 'no such agent' });
         return sendJson(res, 200, view);
       }
@@ -2402,9 +2410,32 @@ export function createWebApp(deps: WebServerDeps): Server {
       return finish(
         res,
         proposal[2] === 'keep'
-          ? await keepProposalFromWeb(writeDeps, id, typeof body.text === 'string' ? body.text : undefined)
+          ? await keepProposalFromWeb(writeDeps, id, typeof body.text === 'string' ? body.text : undefined, {
+              catalog: deps.catalog,
+              reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+              env: deps.env ?? process.env,
+            })
           : await discardProposalFromWeb(writeDeps, id, typeof body.reason === 'string' ? body.reason : undefined),
       );
+    }
+
+    /*
+     * "Remove this skill": a learned skill's current file goes, its versions
+     * stay, and the proposal it came from counts as discarded from now.
+     */
+    const removeSkill = /^\/api\/agents\/([^/]+)\/skills\/([^/]+)\/remove$/.exec(path);
+    if (removeSkill) {
+      const result = await removeLearnedSkillFromWeb(
+        {
+          pool: deps.pool,
+          catalog: deps.catalog,
+          now: deps.now,
+          reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+        },
+        decodeURIComponent(removeSkill[1] as string),
+        decodeURIComponent(removeSkill[2] as string),
+      );
+      return result.ok ? sendJson(res, 200, result) : sendJson(res, result.status, { error: result.error });
     }
 
     const reminder = /^\/api\/reminders\/([^/]+)\/cancel$/.exec(path);

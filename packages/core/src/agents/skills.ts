@@ -66,12 +66,43 @@ export const skillFrontmatterSchema = z
     source: asText.optional(),
     created: asText.optional(),
     agents: z.array(z.string().min(1)).optional(),
+    /*
+     * A learned skill's provenance (docs/specs/learning.md §2): the proposal
+     * it was kept from and where that proposal came from. Written by the
+     * keep, read by the agent sheet; none of it grants anything.
+     */
+    title: asText.optional(),
+    agent: asText.optional(),
+    conversation: asText.optional(),
+    run_id: asText.optional(),
+    turn: z.number().int().positive().optional(),
+    sources: z.array(z.string()).optional(),
+    untrusted: z.boolean().optional(),
+    proposal: asText.optional(),
+    kept_at: asText.optional(),
+    version: z.number().int().positive().optional(),
+    edited: z.boolean().optional(),
   })
   .strict();
 
 export type SkillFrontmatter = z.infer<typeof skillFrontmatterSchema>;
 
 export type SkillScope = 'private' | 'shared';
+
+/** Where a learned skill came from: the kept proposal, and the run that proposed it. */
+export interface LearnedSkillMeta {
+  title: string;
+  agent: string;
+  conversation: string | null;
+  runId: string | null;
+  turn: number | null;
+  sources: string[];
+  untrusted: boolean;
+  proposal: string;
+  keptAt: string;
+  version: number;
+  edited: boolean;
+}
 
 export interface Skill {
   name: string;
@@ -86,6 +117,8 @@ export interface Skill {
   body: string;
   file: string;
   scope: SkillScope;
+  /** Present on a skill kept from a learning proposal. */
+  learned?: LearnedSkillMeta;
 }
 
 /** The skills subdirectory inside an agent directory. */
@@ -146,7 +179,25 @@ export function parseSkillFile(
     throw new SkillFileError('invalid-frontmatter', 'skill body is empty', opts.file);
   }
 
+  const d = parsed.data;
+  const learned: LearnedSkillMeta | undefined =
+    d.proposal === undefined
+      ? undefined
+      : {
+          title: d.title ?? d.name,
+          agent: d.agent ?? '',
+          conversation: d.conversation ?? null,
+          runId: d.run_id ?? null,
+          turn: d.turn ?? null,
+          sources: d.sources ?? [],
+          untrusted: d.untrusted === true,
+          proposal: d.proposal,
+          keptAt: d.kept_at ?? '',
+          version: d.version ?? 1,
+          edited: d.edited === true,
+        };
   return {
+    ...(learned ? { learned } : {}),
     name: parsed.data.name,
     description: parsed.data.description,
     provenance: parsed.data.provenance ?? 'owner',
