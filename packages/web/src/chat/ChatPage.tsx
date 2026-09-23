@@ -18,7 +18,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
 import { Envelope } from '../canvas/views/Envelope';
-import { inspectToolCall, renderablesFrom } from '../canvas/renderables';
+import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom } from '../canvas/renderables';
+import { useServedPreviews } from '../canvas/served';
 import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserView } from '../canvas/views/BrowserView';
@@ -28,7 +29,7 @@ import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, settingsRoute } from '../routes';
-import type { Renderable, ViewDescriptor } from '../canvas/types';
+import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar } from '../ui';
 import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
@@ -457,11 +458,22 @@ export function ChatPage({
    * The owner asked a question about the agent; they did not ask the canvas to
    * stop following the work.
    */
+  /*
+   * Previews this conversation is waiting on: a process that was started but
+   * was not listening yet. Asked about until it is served, then drawn.
+   */
+  const awaitedPreviews = useMemo(
+    () => awaitingPreviews({ messages: conversation?.messages ?? [], descriptors }),
+    [conversation, descriptors],
+  );
+  const servedPreviews = useServedPreviews(awaitedPreviews, conversationId ?? null);
+
   const renderables: Renderable[] = useMemo(() => {
     const fromTranscript = renderablesFrom({
       messages: conversation?.messages ?? [],
       descriptors,
       awaiting,
+      served: servedPreviews.served,
       // While the Browser panel is on this canvas it is already drawing every
       // one of those calls. Without a session there is no panel, and they fall
       // back to a tab each, exactly as an old conversation has always shown.
@@ -478,7 +490,7 @@ export function ChatPage({
     if (browserTab) items.push(browserTab);
     for (const file of openedFiles) items.push(artifactRenderable(file));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles, servedPreviews.served]);
 
   /*
    * What the owner has said here, newest first, for the composer's Up key.
@@ -546,6 +558,27 @@ export function ChatPage({
     // Nothing substantial has ever arrived: show the newest tab rather than none.
     if (activeTab === null && lastId) setActiveTab(lastId);
   }, [focusId, activeTab, lastId]);
+
+  /*
+   * A preview that has just started being served is selected once, the way a
+   * new result is — unless the owner has moved off what the canvas last
+   * turned to, or a decision is waiting. Only one confirmed while it was
+   * being waited for: reopening an old conversation opens nothing by itself.
+   */
+  const previousLive = useRef<ReadonlySet<string>>(servedPreviews.live);
+  useEffect(() => {
+    const before = previousLive.current;
+    previousLive.current = servedPreviews.live;
+    const arrived = [...servedPreviews.live].filter((key) => !before.has(key));
+    if (arrived.length === 0 || inlineApproval) return;
+    const ownerMoved = activeTab !== null && activeTab !== previousFocus.current;
+    if (ownerMoved) return;
+    const tab = [...renderables].reverse().find((item) => item.source === 'descriptor'
+      && item.renderer === 'preview'
+      && (item.props as PreviewProps).target !== null
+      && arrived.includes(previewKey((item.props as PreviewProps).target!)));
+    if (tab) setActiveTab(tab.id);
+  }, [servedPreviews.live, renderables, inlineApproval, activeTab]);
 
   // Select once when a session appears. Polls must not steal a chart the owner
   // selected, and a pending approval remains more important than the preview.

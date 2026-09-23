@@ -109,6 +109,10 @@ export interface PreviewMap {
   output?: string;
   /** Path to the loopback port the process listens on, for a direct link. */
   port?: string;
+  /** Path to a `/preview/<plugin>/<name>/` string naming a process not listening yet. */
+  awaiting?: string;
+  /** Path to a boolean: the process reloads its own page after a change. */
+  reloadsItself?: string;
 }
 
 export type ViewMap =
@@ -206,6 +210,20 @@ export interface PreviewProps {
    * the proxied link stays the default.
    */
   port: number | null;
+  /**
+   * The preview this result will be once its process listens, when it is not
+   * listening yet. Such a result draws no tab until the dashboard says the
+   * preview is being served; then `target` is this and the tab opens.
+   */
+  awaiting: { plugin: string; name: string } | null;
+  /** True when the process reloads its own page after a change (hot reload). */
+  reloadsItself: boolean;
+  /**
+   * How many changes to files this conversation has made, set by the page.
+   * The panel reloads its frame when this grows while it is on screen —
+   * unless the process reloads itself.
+   */
+  changes?: number;
 }
 
 export interface EnvelopeProps {

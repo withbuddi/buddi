@@ -321,11 +321,16 @@ export function previewTarget(src: string): { plugin: string; name: string } | n
 export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
   const src = map.src ? asString(readPath(output, map.src)) : null;
   const port = map.port ? readPath(output, map.port) : null;
+  const awaiting = map.awaiting ? asString(readPath(output, map.awaiting)) : null;
   return {
     target: src ? previewTarget(src) : null,
     title: asString(readRef(output, map.title)),
     output: map.output ? asString(readPath(output, map.output)) : null,
     port: typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65535 ? port : null,
+    awaiting: awaiting ? previewTarget(awaiting) : null,
+    // Only a real `true`: a string "true" from a descriptor pointed at the
+    // wrong field would otherwise stop the reload a static page needs.
+    reloadsItself: map.reloadsItself ? readPath(output, map.reloadsItself) === true : false,
   };
 }
 

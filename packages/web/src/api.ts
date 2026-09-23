@@ -1122,6 +1122,13 @@ export const api = {
    */
   previewLink: (plugin: string, name: string) =>
     get<{ url: string }>(`/preview/${encodeURIComponent(plugin)}/${encodeURIComponent(name)}/link`),
+  /**
+   * Is this preview being served right now? Asked while a process that was
+   * not listening yet is starting, so its tab opens when it is. Not rate
+   * limited like `previewLink`, and mints nothing.
+   */
+  previewCheck: (plugin: string, name: string) =>
+    get<{ ok: boolean; absoluteAssets: boolean }>(`/preview/${encodeURIComponent(plugin)}/${encodeURIComponent(name)}/check`),
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),

@@ -24,7 +24,7 @@
  *    `frame-ancestors` policy of its own cannot be framed at all and shows an
  *    empty box, and the same app in a tab of its own works.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { PreviewProps } from '../types';
 
@@ -56,6 +56,29 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
   const [showOutput, setShowOutput] = useState(false);
   const plugin = props.target?.plugin ?? null;
   const name = props.target?.name ?? null;
+
+  /*
+   * A page that does not reload itself is reloaded after a change.
+   *
+   * A hot-reloading dev server tells its page over the websocket the proxy
+   * carries, and a second reload on top of its own would throw away the
+   * state it just kept. A static server tells nobody, so the owner would be
+   * looking at the page from before the write. Counted from when the panel
+   * came on screen: a change it was not showing is already in the frame it
+   * loads.
+   *
+   * The reload is a fresh frame on the clean URL, not the ticketed one: the
+   * ticket was spent on the first load, and the cookie it bought answers for
+   * the clean one.
+   */
+  const changes = props.changes ?? 0;
+  const seenChanges = useRef(changes);
+  const [reloads, setReloads] = useState(0);
+  useEffect(() => {
+    if (changes <= seenChanges.current) return;
+    seenChanges.current = changes;
+    if (!props.reloadsItself) setReloads((count) => count + 1);
+  }, [changes, props.reloadsItself]);
 
   useEffect(() => {
     if (plugin === null || name === null) return undefined;
@@ -150,8 +173,9 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
       <div className="wb-preview-body">
         {url ? (
           <iframe
+            key={reloads}
             className="wb-preview-frame"
-            src={url}
+            src={reloads === 0 ? url : withoutTicket(url)}
             title={props.title ?? 'Preview'}
             // No `allow-top-navigation`, and no `allow-popups`: a dev server
             // that redirects must not be able to take the dashboard's own tab
