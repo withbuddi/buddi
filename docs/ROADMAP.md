@@ -82,7 +82,7 @@ with a written brief; in order:
    to a colour-coded diff, run/start rows to command plus `plain` output; a
    `diff` canvas renderer replaces `document` for write, edit and summarise.
    Write's execute result gains `diff` (edit already has it).
-2. **Auto-switch to Preview** — when a `developer.start` process is confirmed
+2. **Auto-switch to Preview** — built 2026-09-23 (buddi `1f2fdfb`, buddi-plugins `7d1458f`); a start that is not listening yet names the preview it will be, the plugin watches the pid for three minutes and writes the port on its row, and the canvas asks the existing `check` route until it is served, then opens it. When a `developer.start` process is confirmed
    listening on a port, the canvas opens and focuses the Preview tab itself
    instead of waiting for `developer.preview`. Plain HTML sites also need a
    frame reload after a write (Vite reloads itself over the proxied websocket).
