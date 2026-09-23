@@ -1126,6 +1126,70 @@ export class QueryRefusal extends Error {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Files: the one answer that is not JSON
+ * ------------------------------------------------------------------ */
+
+const PAGE_FILE = Symbol.for('buddi.page-file');
+
+/**
+ * A query answering with bytes rather than data: a file of a workspace to
+ * show, or an archive of a folder to download.
+ *
+ * The query route carries JSON, and a picture or a PDF drawn from JSON would
+ * be base64 inside a 1 MB cap, which is neither honest nor small. So a query
+ * may return one of these instead, and the gateway streams it on the same
+ * route, behind the same session check, with the content type and the
+ * disposition said here — **except** that the gateway, not the plugin, decides
+ * what may be shown inline on the dashboard's origin (plain text, passive
+ * images, PDF) and serves everything else as a download of
+ * `application/octet-stream`. Branded with a registered symbol rather than a
+ * class, so a plugin built against another copy of core is still recognised.
+ */
+export interface PageFile {
+  readonly [PAGE_FILE]: true;
+  /** The bytes, whole or as a stream the gateway pipes out and closes. */
+  body: Buffer | NodeJS.ReadableStream;
+  /** What the plugin says it is. The gateway narrows it (see above). */
+  contentType: string;
+  /** The name a download is saved under. */
+  filename: string;
+  /** `inline` to show it, `attachment` to save it. */
+  disposition: 'inline' | 'attachment';
+  /** The length, when it is known before the first byte. */
+  size?: number;
+  /** True when the bytes are addressed by a version the URL carries: cacheable. */
+  immutable?: boolean;
+}
+
+export function pageFile(file: Omit<PageFile, typeof PAGE_FILE>): PageFile {
+  return { ...file, [PAGE_FILE]: true } as PageFile;
+}
+
+export function isPageFile(value: unknown): value is PageFile {
+  return typeof value === 'object' && value !== null && (value as Record<symbol, unknown>)[PAGE_FILE] === true;
+}
+
+/**
+ * A plugin that keeps a directory per agent names the page queries that read
+ * it, and the chat's canvas draws a Files tab over them for any conversation
+ * whose agent has one. The dashboard learns the names from `GET /api/pages`,
+ * so it never names the plugin. Every one must be a query of the same plugin:
+ *
+ *  - `workspace` `{ agent }` → `{ workspace: { name, dir } | null }`;
+ *  - `list` `{ agent, path? }` → one folder's entries;
+ *  - `stat` `{ agent, path }` → one file's type, size and mtime;
+ *  - `read` `{ agent, path, v?, download? }` → a `PageFile`;
+ *  - `archive` `{ agent, path? }` → a `PageFile` (a zip), or a refusal naming its cap.
+ */
+export interface WorkspaceFiles {
+  workspace: string;
+  list: string;
+  stat: string;
+  read: string;
+  archive: string;
+}
+
 /** A query tried to do something other than read. */
 export class ReadOnlyRefusal extends Error {
   constructor(message: string) {

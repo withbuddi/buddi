@@ -30,6 +30,7 @@ import type { Renderable, RendererName, ViewDescriptor } from './types';
 import { Profile, type ProfileProps } from './views/Profile';
 import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
+import { FilesView, type FilesViewProps } from './views/FilesView';
 import type { ChatAgent } from '../chat/types';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
@@ -152,7 +153,7 @@ export function Canvas({
             data-renderer={item.source === 'descriptor' && item.renderer === 'preview' ? 'preview' : undefined}
           >
             <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
-              {item.source !== 'browser' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
+              {item.source !== 'browser' && item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.tool}</span>
               </header> : null}
@@ -171,6 +172,8 @@ export function Canvas({
                 />
               ) : item.source === 'artifact' ? (
                 <ArtifactView {...(item.props as ArtifactViewProps)} />
+              ) : item.source === 'files' ? (
+                <FilesView {...(item.props as FilesViewProps)} />
               ) : item.source === 'delegate' ? (
                 <DelegateView {...(item.props as DelegateViewProps)} agents={agents ?? []} />
               ) : (
@@ -200,6 +203,8 @@ export function Canvas({
 function closeable(item: Renderable): boolean {
   if (item.source === 'approval') return false;
   if (item.source === 'browser') return item.pinned !== true;
+  // The workspace is the agent's, not a moment of the conversation.
+  if (item.source === 'files') return false;
   return true;
 }
 

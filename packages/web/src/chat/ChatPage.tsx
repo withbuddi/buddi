@@ -19,6 +19,7 @@ import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../
 import { Canvas } from '../canvas/Canvas';
 import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom } from '../canvas/renderables';
 import { useServedPreviews } from '../canvas/served';
+import { FILES_TAB_ID, filesRenderable, useAgentWorkspace, workspaceChanges } from '../canvas/files';
 import { profileRenderable, profileTabId } from './properties';
 import { useAsync } from '../ui';
 import { BrowserView } from '../canvas/views/BrowserView';
@@ -468,6 +469,14 @@ export function ChatPage({
   );
   const servedPreviews = useServedPreviews(awaitedPreviews, conversationId ?? null);
 
+  /*
+   * The agent's workspace, when a plugin keeps one for it: a Files tab, first
+   * on the strip and pinned there, read again whenever a change to a file
+   * comes back in this conversation. A room has no one agent, so no tab.
+   */
+  const workspace = useAgentWorkspace(group ? null : agentId);
+  const fileChanges = useMemo(() => workspaceChanges(conversation?.messages ?? []), [conversation]);
+
   const renderables: Renderable[] = useMemo(() => {
     const fromTranscript = renderablesFrom({
       messages: conversation?.messages ?? [],
@@ -489,8 +498,9 @@ export function ChatPage({
     }
     if (browserTab) items.push(browserTab);
     for (const file of openedFiles) items.push(artifactRenderable(file));
+    if (workspace) items.unshift(filesRenderable(workspace, fileChanges));
     return profile ? [...items, profileRenderable(profile)] : items;
-  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles, servedPreviews.served]);
+  }, [conversation, descriptors, awaiting, profile, browserTabId, browserTab?.title, activeTab, dismissedTabs, conversationId, openedFiles, servedPreviews.served, workspace, fileChanges]);
 
   /*
    * What the owner has said here, newest first, for the composer's Up key.
@@ -550,10 +560,11 @@ export function ChatPage({
    * transcript, so "the newest tab" would mean a panel of history every time
    * the owner opened an old conversation, instead of whatever that
    * conversation actually produced. A live one is not skipped — it has its own
-   * rule below, and it really is the newest thing.
+   * rule below, and it really is the newest thing. The Files tab is never
+   * chosen here: it is shown when it is alone, and selected only by the owner.
    */
-  const lastId = renderables.filter((item) => item.source !== 'browser' || item.pinned === true).at(-1)?.id
-    ?? renderables.at(-1)?.id ?? null;
+  const lastId = renderables.filter((item) => (item.source !== 'browser' || item.pinned === true) && item.id !== FILES_TAB_ID).at(-1)?.id
+    ?? renderables.filter((item) => item.id !== FILES_TAB_ID).at(-1)?.id ?? null;
   useEffect(() => {
     if (focusId && focusId !== previousFocus.current) {
       previousFocus.current = focusId;

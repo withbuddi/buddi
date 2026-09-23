@@ -7,7 +7,7 @@
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
 import type { ViewDescriptor } from './canvas/types';
-import type { PageActResult, PluginPageDescriptor } from './pages/types';
+import type { PageActResult, PluginPageDescriptor, PluginWorkspaceFiles } from './pages/types';
 import type {
   AgentHoldBack,
   AgentsResponse,
@@ -1220,10 +1220,18 @@ export const api = {
    * views: the page owns the components and learns from here which of them go
    * where — an installation without a plugin is served none of its screen.
    */
-  pages: () => get<{ pages: PluginPageDescriptor[] }>('/pages'),
+  pages: () => get<{ pages: PluginPageDescriptor[]; files?: PluginWorkspaceFiles[] }>('/pages'),
   /** One plugin page query. Every parameter is a string; the plugin's schema decides. */
   pageQuery: <T = unknown>(plugin: string, query: string, params: Record<string, string> = {}) =>
     get<{ data: T }>(`/pages/${encodeURIComponent(plugin)}/${encodeURIComponent(query)}`, params),
+  /**
+   * The same route, as a URL for the browser to load itself: a query that
+   * answers with bytes (an image, a PDF, a download) rather than data.
+   */
+  pageFileUrl: (plugin: string, query: string, params: Record<string, string> = {}) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '')).toString();
+    return `/api/pages/${encodeURIComponent(plugin)}/${encodeURIComponent(query)}${qs ? `?${qs}` : ''}`;
+  },
   /**
    * One write from a plugin page: a tool of that plugin, invoked as the owner.
    * An `auto` tool answers with its result; a `gated` one with the id of the

@@ -21,6 +21,7 @@ import {
   createPool,
   ensureOwner,
   migrate,
+  pageFile,
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
@@ -29,6 +30,7 @@ import {
 import { DEMO_DATA, demoPagesManifest, demoWrites } from '@buddi/core/testing/pages';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PAGE_ACT_RATE } from './pages.js';
@@ -148,6 +150,24 @@ suite('the plugin page routes', () => {
         { name: 'loose', params: z.object({}), produce: async () => ({ ok: true }) },
         // An answer no JSON can hold: the 502 must be the route's, not a throw.
         { name: 'unserialisable', params: z.object({}).strict(), produce: async () => ({ n: 1n }) },
+        // Bytes rather than data: a file, streamed, shown or saved.
+        {
+          name: 'bytes',
+          params: z.object({ as: z.enum(['png', 'html', 'pdf', 'text']), download: z.enum(['1']).optional() }).strict(),
+          produce: async (params) => {
+            const { as, download } = params as { as: string; download?: string };
+            const type = { png: 'image/png', html: 'text/html', pdf: 'application/pdf', text: 'text/plain' }[as]!;
+            const body = Buffer.from(as === 'html' ? '<script>alert(1)</script>' : `bytes of ${as}`);
+            return pageFile({
+              body: as === 'text' ? Readable.from([body]) : body,
+              contentType: type,
+              filename: `thing.${as}`,
+              disposition: download === '1' ? 'attachment' : 'inline',
+              ...(as === 'text' ? {} : { size: body.length }),
+              immutable: as === 'png',
+            });
+          },
+        },
         // Every character of it two bytes wide: the cap is bytes, not length.
         {
           name: 'heavy',
@@ -156,7 +176,13 @@ suite('the plugin page routes', () => {
         },
       ],
     });
-    registry.register(otherManifest);
+    registry.register({
+      ...otherManifest,
+      queries: [
+        { name: 'root', params: z.object({ agent: z.string() }).strict(), produce: async () => ({ workspace: null }) },
+      ],
+      files: { workspace: 'root', list: 'root', stat: 'root', read: 'root', archive: 'root' },
+    });
     const ctx: ToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
 
     web = await startWebServer({
@@ -214,6 +240,58 @@ suite('the plugin page routes', () => {
     expect(body.pages[0]?.icon).toBe('chart');
     // Data, all the way down: a query's function and schema never leave.
     expect(JSON.stringify(body.pages)).not.toContain('produce');
+  });
+
+  it('names the plugins whose queries read a per-agent directory', async () => {
+    const body = await new Client(base).json<{ files: Array<{ plugin: string; read: string }> }>('/api/pages');
+    expect(body.files).toEqual([{ plugin: 'other', workspace: 'root', list: 'root', stat: 'root', read: 'root', archive: 'root' }]);
+  });
+
+  it('refuses at load a files contribution that names no query of the plugin', () => {
+    const registry = new ToolRegistry();
+    expect(() =>
+      registry.register({ ...otherManifest, files: { workspace: 'nope', list: 'nope', stat: 'nope', read: 'nope', archive: 'nope' } }),
+    ).toThrow(/files.workspace names nope/);
+  });
+
+  /* ---------------- a query that answers with bytes ---------------- */
+
+  it('streams a file a query answers with, on the same route', async () => {
+    const client = new Client(base);
+    const png = await client.get('/api/pages/demo/bytes?as=png');
+    expect(png.status).toBe(200);
+    expect(png.headers.get('content-type')).toBe('image/png');
+    expect(png.headers.get('content-disposition')).toBe("inline; filename*=UTF-8''thing.png");
+    expect(png.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+    expect(png.headers.get('x-content-type-options')).toBe('nosniff');
+    // Versioned by the page, so it may be kept; an unversioned one may not.
+    expect(png.headers.get('cache-control')).toMatch(/immutable/);
+    expect(await png.text()).toBe('bytes of png');
+
+    const pdf = await client.get('/api/pages/demo/bytes?as=pdf');
+    expect(pdf.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox allow-same-origin");
+    expect(pdf.headers.get('cache-control')).toBe('no-store');
+
+    const streamed = await client.get('/api/pages/demo/bytes?as=text');
+    expect(streamed.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(await streamed.text()).toBe('bytes of text');
+  });
+
+  it('decides what is shown inline, whatever the plugin asked for', async () => {
+    const client = new Client(base);
+    // HTML is text, and text is never parsed as markup on this origin.
+    const html = await client.get('/api/pages/demo/bytes?as=html');
+    expect(html.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    const saved = await client.get('/api/pages/demo/bytes?as=png&download=1');
+    expect(saved.headers.get('content-type')).toBe('application/octet-stream');
+    expect(saved.headers.get('content-disposition')).toBe("attachment; filename*=UTF-8''thing.png");
+    expect(saved.headers.get('content-security-policy')).toBeNull();
+  });
+
+  it('keeps a file behind the session like every other read', async () => {
+    const res = await new Client(closedBase).get('/api/pages/demo/bytes?as=png');
+    expect(res.status).toBe(401);
+    expect(await res.text()).toBe('');
   });
 
   it('is session-gated like every other read', async () => {

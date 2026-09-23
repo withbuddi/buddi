@@ -86,6 +86,16 @@ may be invoked, at 60 writes a minute per session, and CSRF as every other
 write. A gated tool's `then` is held until the approval has actually
 executed — nothing has happened yet when the card appears.
 
+A query may also answer with bytes rather than data: `pageFile({ body,
+contentType, filename, disposition })` from core. The query route then streams
+it — same session check, same parameter validation — instead of serialising
+JSON, and the gateway, not the plugin, decides what is shown inline on the
+dashboard's origin: text (always as `text/plain`), passive images and PDF, each
+under a sandboxing CSP; anything else is an `application/octet-stream`
+download. This is what the chat canvas's Files tab reads a workspace with
+(`files` on the manifest names the queries; added 2026-09-23 for the developer
+plugin), and it is the only non-JSON answer the route has.
+
 Tools an owner may call from a page but no agent should see carry
 `ownerOnly: true` (new `ToolDefinition` field, off by default): the registry
 never lists them to a model. `email.add_account` (which stores a secret) is

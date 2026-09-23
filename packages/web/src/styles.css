@@ -3034,3 +3034,45 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .wb-browser-outcome { font-size: var(--text-sm); color: var(--text-muted); }
 .wb-browser-outcome[data-state='ok'] { color: var(--good); }
 .wb-browser-outcome[data-state='failed'] { color: var(--critical); }
+
+/* ---- the canvas's Files tab: a workspace, read-only ---- */
+.wb-files { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.wb-files .ui-toolbar { flex-wrap: nowrap; min-width: 0; }
+.wb-files-crumbs { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1); min-width: 0; font-size: var(--text-sm); }
+.wb-files-crumb { display: inline-flex; align-items: baseline; gap: var(--space-1); min-width: 0; }
+.wb-files-sep { color: var(--text-faint); }
+.wb-files-step {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.wb-files-here { color: var(--text); overflow-wrap: anywhere; }
+.wb-files-icon { display: inline-flex; color: var(--text-faint); }
+.wb-files-icon[data-kind='dir'] { color: var(--accent); }
+.wb-files-note { margin: 0; color: var(--text-faint); font-size: var(--text-sm); }
+.wb-files-picture {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.wb-files-picture img { display: block; max-width: 100%; max-height: 65vh; height: auto; object-fit: contain; }
+.wb-files-text {
+  margin: 0;
+  max-height: 70vh;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+  tab-size: 4;
+  white-space: pre;
+}
+.wb-files-text[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
