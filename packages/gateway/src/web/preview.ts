@@ -614,7 +614,16 @@ export class PreviewApp {
                  * request that has no business reaching a preview.
                  */
                 sameSite: 'Strict',
-                path: target.prefix,
+                /*
+                 * The origin's root, not the prefix. A built app asks for
+                 * `/assets/app.js` by its root, and a cookie scoped under
+                 * `/preview/x/y` would not travel with that request, which
+                 * is how a framed page stayed blank while the app was fine on
+                 * its own port. The cookie names one preview whatever path
+                 * it is sent to, and `holds` checks that name on every
+                 * request, so the wider path buys no wider access.
+                 */
+                path: '/',
               }),
             }),
       });

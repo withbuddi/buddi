@@ -372,7 +372,9 @@ it('lets the dashboard mint a link, and the link buy a cookie', async () => {
   // Strict, like every cookie buddi sets. The dashboard-to-preview navigation
   // is same-site — `SameSite` ignores the port — so it still travels.
   expect(set).toContain('SameSite=Strict');
-  expect(set).toContain('Path=/preview/developer/web');
+  // The origin's root, so it travels with a root-relative asset request; the
+  // cookie names one preview whatever path it reaches.
+  expect(set).toContain('Path=/;');
 
   const cookie = set.split(';')[0] as string;
   const served = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
@@ -496,6 +498,10 @@ it('serves a root-relative asset to the preview the cookie names, and to nobody 
   const { cookie } = await signIn(web);
   // The page, under its prefix, as the frame loads it.
   expect((await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } })).status).toBe(200);
+  // The cookie must be one a browser would send to the root at all: `Path=/`.
+  const link = await fetch(`${web.origin}/api/preview/developer/web/link`);
+  const spent = await fetch(((await link.json()) as { url: string }).url, { redirect: 'manual' });
+  expect(spent.headers.getSetCookie()[0]).toContain('Path=/;');
   // What the browser then asks for, by the root, with the same cookie.
   const asset = await fetch(`${web.previewOrigin}/assets/app.js`, { headers: { Cookie: cookie } });
   expect(asset.status).toBe(200);
