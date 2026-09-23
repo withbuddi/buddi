@@ -558,6 +558,35 @@ export interface AgentsView {
 }
 
 /** The front matter the runtime reads, as the agent's page edits it. */
+/**
+ * Every installed tool, for the picker on the Setup tab —
+ * `GET /api/agents/:id/tools`. The shape is the server's
+ * (`packages/gateway/src/web/tool-picker.ts`): which group a tool is in, what a
+ * whole group saves as, which tools are never grantable here, which are core
+ * and what a plugin suggests are all decided there, so the page names no tool.
+ */
+export interface PickerTool {
+  name: string;
+  description: string;
+  tier: string;
+  gated: boolean;
+  grantable: boolean;
+  core: boolean;
+}
+
+export interface PickerGroup {
+  plugin: string;
+  glob?: string;
+  tools: PickerTool[];
+}
+
+export interface ToolPickerView {
+  id: string;
+  groups: PickerGroup[];
+  granted: string[];
+  suggested?: { plugin: string; label: string; tools: Array<{ name: string; description: string }> };
+}
+
 export interface AgentFileEdit {
   name?: string;
   handle?: string;
@@ -1383,6 +1412,7 @@ export const api = {
   cancelJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/cancel`),
   setDefaultAgent: (agentId: string) =>
     post<DefaultAgentView & { note: string }>('/agents/default', { agentId }),
+  agentTools: (id: string) => get<ToolPickerView>(`/agents/${encodeURIComponent(id)}/tools`),
   updateAgentFile: (id: string, change: AgentFileEdit) =>
     post<{ id: string; handle: string; file: string; tools: string[]; changed: string[]; personaChanged: boolean; live: boolean; message: string }>(
       `/agents/${encodeURIComponent(id)}/file`,

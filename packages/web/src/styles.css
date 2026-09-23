@@ -2483,6 +2483,20 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .delegate-list label { cursor: pointer; }
 .delegate-list input:disabled + label { opacity: 0.55; cursor: default; }
 
+/* ---- the tool picker on the Setup tab ---- */
+.tool-picker { display: flex; flex-direction: column; gap: var(--space-3); }
+.tool-picker-search { display: flex; flex-direction: column; gap: var(--space-1); max-width: 40ch; }
+.tool-picker-group + .tool-picker-group { border-top: 1px solid var(--line); padding-top: var(--space-3); }
+.tool-picker-head { display: flex; align-items: center; gap: var(--space-2); }
+.tool-picker-plugin { font-weight: var(--weight-semibold); }
+.tool-picker-list .ui-list-row { gap: var(--space-3); }
+.tool-picker-list .ui-list-title { display: flex; align-items: center; gap: var(--space-2); }
+.tool-picker-list .ui-list-sub { white-space: normal; }
+.tool-picker-list label { cursor: pointer; }
+.tool-picker-list input:disabled + label { opacity: 0.55; cursor: default; }
+.tool-picker-confirm { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.save-error { overflow-wrap: anywhere; max-width: 72ch; }
+
 /* ---- memory ---- */
 .memory-note { max-width: 48ch; white-space: pre-wrap; }
 .memory-expires { color: var(--text-faint); }

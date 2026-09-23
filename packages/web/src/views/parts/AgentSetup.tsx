@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
 import { Button, Empty, ErrorBanner, Field, Notice, Pill, Row, Section, Stack, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
+import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
 
@@ -259,7 +260,8 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
   const [name, setName] = useState(agent.name);
   const [handle, setHandle] = useState(agent.handle);
   const [description, setDescription] = useState(agent.description);
-  const [tools, setTools] = useState(agent.tools.join('\n'));
+  const picker = useAsync(() => api.agentTools(agent.id), [agent.id]);
+  const [picked, setPicked] = useState<string[] | null>(null);
   const [roles, setRoles] = useState((agent.roles ?? []).join(', '));
   const [avatar, setAvatar] = useState(agent.avatar ?? '');
   const [busy, setBusy] = useState(false);
@@ -268,7 +270,9 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
 
   const list = (text: string, separator: RegExp): string[] =>
     text.split(separator).map((t) => t.trim()).filter((t) => t !== '');
-  const nextTools = list(tools, /[\n,]/);
+  const granted = picker.data?.granted ?? agent.tools;
+  const chosen = picked ?? granted;
+  const toolsChanged = picker.data !== undefined && !sameTools(chosen, granted);
   const nextRoles = list(roles, /[\n,]/);
   const same = (a: readonly string[], b: readonly string[]): boolean => a.join(',') === b.join(',');
   const dirty =
@@ -276,7 +280,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
     handle.trim().replace(/^@/, '') !== agent.handle ||
     description.trim() !== agent.description ||
     avatar.trim() !== (agent.avatar ?? '') ||
-    !same(nextTools, agent.tools) ||
+    toolsChanged ||
     !same(nextRoles, agent.roles ?? []);
 
   const save = async (): Promise<void> => {
@@ -288,11 +292,14 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         name: name.trim(),
         handle: handle.trim().replace(/^@/, ''),
         description: description.trim(),
-        tools: nextTools,
+        // Only a changed selection is sent, so a rename never rewrites the grant.
+        ...(toolsChanged && picker.data ? { tools: grantFrom(picker.data.groups, chosen) } : {}),
         roles: nextRoles,
         ...(avatar.trim() === '' ? {} : { avatar: avatar.trim() }),
       });
       setSaved(result.message);
+      setPicked(null);
+      picker.reload();
       onSaved();
     } catch (err) {
       setFailure(err instanceof Error ? err.message : String(err));
@@ -309,7 +316,6 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
           then these fields can change.
         </Notice>
       ) : null}
-      <ErrorBanner message={failure} />
       {saved ? <Notice tone="good" role="status">{saved}</Notice> : null}
       <Toolbar valign="end">
         <Field label="Name" hint="What it is called, everywhere.">
@@ -328,18 +334,29 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
       <Field label="Description" hint="One or two sentences. Its colleagues read this.">
         <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />
       </Field>
-      <Field label="Tools" hint="One grant per line. A name or a family glob, e.g. web.*. Saving replaces the grant.">
-        <textarea rows={4} className="mono" value={tools} disabled={busy || agent.isExample} onChange={(e) => setTools(e.target.value)} />
-      </Field>
+      <div className="ui-field">
+        <span className="ui-field-label">Tools</span>
+        {picker.error ? (
+          <ErrorBanner message={picker.error} />
+        ) : !picker.data ? (
+          <Empty>Loading the installed tools…</Empty>
+        ) : (
+          <ToolPicker view={picker.data} chosen={chosen} onChange={setPicked} disabled={busy || agent.isExample} />
+        )}
+      </div>
       <p className="ui-card-meta">
         Its persona — the body of the file below the front matter — is not edited here. Ask the agent that
         makes agents to rewrite it, or edit <span className="mono">agent.md</span> directly.
       </p>
       {!agent.isExample ? (
         <Toolbar>
-          <span className={dirty ? 'warning' : 'muted'}>
-            {dirty ? 'Not saved yet.' : 'Saved. Applies to new runs.'}
-          </span>
+          {failure ? (
+            <span className="critical save-error" role="alert">{failure}</span>
+          ) : (
+            <span className={dirty ? 'warning' : 'muted'}>
+              {dirty ? 'Not saved yet.' : 'Saved. Applies to new runs.'}
+            </span>
+          )}
           <span className="ui-toolbar-spacer" />
           <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>
             Save who it is

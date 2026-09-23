@@ -83,6 +83,7 @@ import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '
 import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } from './catalog.js';
 import { DELEGATES_FILE, readDelegates } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
+import { withCoreTools } from './core-tools.js';
 import {
   composeAgentFile,
   composeSkillFile,
@@ -721,6 +722,13 @@ const createInput = z
       .array(z.string().min(1))
       .optional()
       .describe('Agent ids it may hand work to. Authorization: name only what it genuinely needs.'),
+    withoutMemory: z
+      .boolean()
+      .optional()
+      .describe(
+        'A new agent starts with the memory tools, so it remembers between conversations. Set true only ' +
+          'when the owner asked for an agent that remembers nothing.',
+      ),
     replacesExample: z
       .boolean()
       .optional()
@@ -2077,6 +2085,13 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     },
   };
 
+  // A new agent starts with the memory tools. Only this door: a plugin's
+  // accepted proposal is built from the plugin's own grant, untouched.
+  const withCore = (input: CreateInput): CreateInput => ({
+    ...input,
+    tools: withCoreTools(input.tools, registry, input.withoutMemory === true),
+  });
+
   const createAgent: ToolDefinition<CreateInput, unknown> = {
     name: 'platform.create_agent',
     description:
@@ -2091,14 +2106,14 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const binding = resolved(registry);
       return describing(
         (i: CreateInput) =>
-          buildCreateEnvelope(i, { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
+          buildCreateEnvelope(withCore(i), { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
         (envelope) => renderCreatePreview(envelope, specsFor(registry)),
       )(input);
     },
     async execute(input, ctx) {
       const binding = resolved(registry);
       // Rebuild and compare at the write boundary, after the executor's check.
-      const envelope = buildCreateEnvelope(input, {
+      const envelope = buildCreateEnvelope(withCore(input), {
         binding,
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
