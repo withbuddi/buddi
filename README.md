@@ -312,7 +312,8 @@ description: Tracks my accounts and answers "can I afford this?".   # required. 
 provider: anthropic        # optional. anthropic | openai. Absent means anthropic
 model: claude-sonnet-5     # optional. validated against that provider's catalogue
 tools: [finance.*, memory.*, reminder.*]   # required. globs allowed; nothing else is callable
-maxTurns: 12               # optional. how many model turns one run may take
+maxTurns: 40               # optional. steps one run may take before it stops
+                           #           and says so. Absent means 40
 language: mirror           # optional. mirror | en | fr — mirror answers in the language you wrote
 roles: [overview, recap]   # optional. free-form capability claims; /status asks for `overview`,
                            #           /recap for `recap`, /new for `maker`
@@ -368,7 +369,6 @@ name: Concierge
 description: The agent buddi ships with — answers general questions, explains the platform, and hands domain work to the agent that owns it.
 default: true
 tools: [memory.*, reminder.*, schedule.*, owner.*, canvas.*, agent.delegate, platform.list_agents, platform.read_agent, platform.installed_tools, platform.list_skills]
-maxTurns: 8
 language: mirror
 ---
 

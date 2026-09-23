@@ -43,6 +43,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   assertApprovedEffect,
+  DEFAULT_MAX_TURNS,
   HANDLE,
   HANDLE_MAX,
   HANDLE_MIN,
@@ -567,7 +568,9 @@ export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readon
       ? `Runs on: the "${envelope.account.label}" account (${envelope.account.kind}), model ${envelope.account.model}`
       : `Runs on: ${envelope.model ?? 'the installation default model'}` +
         `${envelope.provider === null ? '' : ` (${envelope.provider})`}`) +
-      `, ${envelope.maxTurns ?? 'the default'} turns per run.`,
+      // The number the owner is approving, whether or not the file pins it:
+      // "the default turns per run" tells them nothing they can decide on.
+      `, ${envelope.maxTurns ?? DEFAULT_MAX_TURNS} turns per run.`,
     ...(envelope.roles.length === 0 ? [] : [`Roles it answers for: ${envelope.roles.join(', ')}.`]),
     ...(envelope.avatar || envelope.accent
       ? [`Face: ${[envelope.avatar, envelope.accent].filter(Boolean).join(', ')}.`]
@@ -700,7 +703,7 @@ const createInput = z
       ),
     model: z.string().min(1).optional().describe("Pin a model the account serves. Leave it out for the account's default."),
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
-    maxTurns: z.number().int().positive().max(64).optional().describe('Turn budget per run. Default 12.'),
+    maxTurns: z.number().int().positive().max(64).optional().describe('Turn budget per run. Leave it out for the default of 40.'),
     language: z.enum(['mirror', 'en', 'fr']).optional().describe('Default "mirror": answer in the owner\'s language.'),
     avatar: z
       .string()

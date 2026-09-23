@@ -195,6 +195,13 @@ export interface ChatRun {
   finishedAt: string | null;
   turns: number | null;
   stopped: string | null;
+  /**
+   * The run said in the transcript that it had run out of budget. A budget
+   * stop that stayed silent — a delegate, a room member, a cancelled run —
+   * is still `stopped: 'max_turns'`, but there is no message under which to
+   * draw the marker. Optional: an older server does not send it.
+   */
+  noticed?: boolean;
   usage: { input: number; output: number };
   actionId: string | null;
   resumed: boolean;

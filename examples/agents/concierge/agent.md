@@ -11,7 +11,6 @@ starters:
   - "Who works here, and what does each of them do?"
   - What is buddi, and what can it do for me?
   - Remind me to call the bank tomorrow morning
-maxTurns: 8
 language: mirror
 ---
 
