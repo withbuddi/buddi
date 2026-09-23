@@ -1659,35 +1659,52 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-doc-pdf { width: 100%; height: 70vh; border-radius: var(--radius); border: 1px solid var(--line); }
 
 /* ---- a running process, framed beside its output ---- */
-.wb-preview-head { justify-content: space-between; margin-bottom: var(--space-2); }
-.wb-preview-head .wb-doc-title { margin: 0; }
-.wb-preview-open { margin-left: auto; }
-.wb-preview-body { display: flex; gap: var(--space-3); align-items: stretch; }
+/* ---- preview: the app is the tab; buddi is one thin strip above it ---- */
+.wb-canvas-body[data-renderer='preview'] { padding: 0; display: flex; }
+.wb-canvas-body[data-renderer='preview'] > .ui-panel {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.wb-preview { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.wb-preview-head {
+  justify-content: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-sunken);
+}
+.wb-preview-head .wb-doc-title { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.wb-preview-open { margin-left: auto; font-size: var(--text-sm); }
+.wb-preview-direct { font-size: var(--text-sm); color: var(--text-muted); font-family: var(--font-mono); }
+.wb-preview-body { display: flex; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .wb-preview-frame {
-  flex: 2 1 0;
+  flex: 1 1 auto;
   min-width: 0;
-  height: 70vh;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  min-height: 0;
+  height: 100%;
+  border: 0;
   background: var(--surface);
 }
+.wb-preview-frame.wb-empty { display: flex; align-items: center; justify-content: center; }
 .wb-preview-output {
-  flex: 1 1 0;
+  flex: 0 0 min(36%, 420px);
   min-width: 0;
   margin: 0;
-  height: 70vh;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--surface-sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-left: 1px solid var(--line);
   padding: 12px 14px;
   font-size: var(--text-sm);
 }
 @media (max-width: 900px) {
   .wb-preview-body { flex-direction: column; }
-  .wb-preview-frame, .wb-preview-output { height: 50vh; }
+  .wb-preview-output { flex-basis: 40%; border-left: 0; border-top: 1px solid var(--line); }
 }
 
 /* ---- the chart ---- */

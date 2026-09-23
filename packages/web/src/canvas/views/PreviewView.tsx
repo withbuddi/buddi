@@ -24,13 +24,26 @@
  *    `frame-ancestors` policy of its own cannot be framed at all and shows an
  *    empty box, and the same app in a tab of its own works.
  */
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import type { PreviewProps } from '../types';
 
+/** The frame's URL without its spent ticket: what a live cookie answers for. */
+function withoutTicket(url: string): string {
+  try {
+    const clean = new URL(url);
+    clean.searchParams.delete('ticket');
+    return clean.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
   const [url, setUrl] = useState<string | null>(null);
+  const [tabUrl, setTabUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showOutput, setShowOutput] = useState(false);
   const plugin = props.target?.plugin ?? null;
   const name = props.target?.name ?? null;
 
@@ -38,10 +51,17 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
     if (plugin === null || name === null) return undefined;
     let live = true;
     setUrl(null);
+    setTabUrl(null);
     setError(null);
     api
       .previewLink(plugin, name)
-      .then((answer) => { if (live) setUrl(answer.url); })
+      .then((answer) => {
+        if (!live) return;
+        setUrl(answer.url);
+        // Loading the frame spends the ticket and buys the cookie; the clean
+        // URL is then what a tab of its own can open on that cookie.
+        setTabUrl(withoutTicket(answer.url));
+      })
       .catch((err: unknown) => {
         if (live) setError(err instanceof Error ? err.message : 'That preview could not be opened.');
       });
@@ -49,28 +69,21 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
   }, [plugin, name]);
 
   /*
-   * A tab of its own, on a ticket of its own.
+   * A tab of its own is a plain link, opened by the browser on the click.
    *
-   * The blank tab is opened *synchronously*, before the request: a
-   * `window.open` from inside a promise is a pop-up as far as the browser is
-   * concerned and is blocked. The `href` stays on the element for a
-   * middle-click or the context menu, which works too — a spent ticket with a
-   * live preview cookie is served, which is exactly the case that link is.
+   * `window.open` from inside a promise is a pop-up and is blocked, and with
+   * `noopener` it hands back nothing to navigate — which is how the tab came
+   * up `about:blank`. So the link's `href` is ready before the click: the
+   * clean URL, which the cookie the frame bought answers for; and on hover a
+   * fresh ticket replaces it, so a cookie that has since expired is not a
+   * 401 in the new tab.
    */
-  const openInTab = (event: MouseEvent<HTMLAnchorElement>): void => {
+  const refreshTabLink = (): void => {
     if (plugin === null || name === null) return;
-    event.preventDefault();
-    const tab = window.open('', '_blank', 'noopener');
     api
       .previewLink(plugin, name)
-      .then((answer) => {
-        if (tab) tab.location = answer.url;
-        else window.location.assign(answer.url);
-      })
-      .catch((err: unknown) => {
-        tab?.close();
-        setError(err instanceof Error ? err.message : 'That preview could not be opened.');
-      });
+      .then((answer) => setTabUrl(answer.url))
+      .catch(() => undefined);
   };
 
   if (props.target === null) {
@@ -82,13 +95,45 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
     );
   }
 
+  const hasOutput = !(props.output === null || props.output === '');
   return (
-    <div className="wb-preview">
+    <div className="wb-preview" data-output={showOutput || undefined}>
       <div className="wb-row wb-preview-head">
         {props.title ? <h4 className="wb-doc-title">{props.title}</h4> : null}
-        {url ? (
-          <a className="wb-preview-open" href={url} target="_blank" rel="noreferrer" onClick={openInTab}>
+        {hasOutput ? (
+          <button
+            type="button"
+            className="ui-btn wb-preview-toggle"
+            data-variant="ghost"
+            data-size="sm"
+            aria-pressed={showOutput}
+            onClick={() => setShowOutput((value) => !value)}
+          >
+            {showOutput ? 'Hide output' : 'Output'}
+          </button>
+        ) : null}
+        {tabUrl ? (
+          <a
+            className="wb-preview-open"
+            href={tabUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            onPointerEnter={refreshTabLink}
+            onFocus={refreshTabLink}
+            title="Through buddi: works from anywhere the dashboard does, including the tailnet."
+          >
             Open in a tab
+          </a>
+        ) : null}
+        {props.port !== null ? (
+          <a
+            className="wb-preview-direct"
+            href={`http://localhost:${props.port}/`}
+            target="_blank"
+            rel="noreferrer noopener"
+            title="The process itself, on this machine only."
+          >
+            localhost:{props.port}
           </a>
         ) : null}
       </div>
@@ -106,9 +151,7 @@ export function PreviewView({ props }: { props: PreviewProps }): JSX.Element {
         ) : (
           <p className="wb-empty wb-preview-frame">{error ?? 'Opening the preview…'}</p>
         )}
-        {props.output === null || props.output === '' ? null : (
-          <pre className="wb-preview-output">{props.output}</pre>
-        )}
+        {hasOutput && showOutput ? <pre className="wb-preview-output">{props.output}</pre> : null}
       </div>
     </div>
   );

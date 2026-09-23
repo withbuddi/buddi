@@ -98,6 +98,8 @@ export interface PreviewMap {
   title?: ValueRef;
   /** Path to the process's recent output text. */
   output?: string;
+  /** Path to the loopback port the process listens on, for a direct link. */
+  port?: string;
 }
 
 export type ViewMap =
@@ -182,6 +184,12 @@ export interface PreviewProps {
   title: string | null;
   /** What the process has printed lately, shown beside the frame. */
   output: string | null;
+  /**
+   * The port the process itself listens on, for a `localhost:<port>` link
+   * beside the proxied one — reachable only at this machine, which is why
+   * the proxied link stays the default.
+   */
+  port: number | null;
 }
 
 export interface EnvelopeProps {

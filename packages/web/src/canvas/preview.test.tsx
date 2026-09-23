@@ -9,7 +9,7 @@
  * site, a path that resolves out of the prefix — names no process and is
  * drawn as nothing.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyDescriptor, previewTarget, resolvePreview } from './resolve';
@@ -21,18 +21,22 @@ import type { PreviewMap } from './types';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const map: PreviewMap = { src: 'url', title: { path: 'name' }, output: 'recent' };
+const map: PreviewMap = { src: 'url', title: { path: 'name' }, output: 'recent', port: 'port' };
 const TICKETED = 'http://127.0.0.1:4318/preview/developer/web/?ticket=abc';
 
 describe('resolving a preview', () => {
   it('takes the process, the heading and the output out of the result', () => {
     expect(
-      resolvePreview({ url: '/preview/developer/web/', name: 'web', recent: 'ready in 412 ms' }, map),
+      resolvePreview({ url: '/preview/developer/web/', name: 'web', recent: 'ready in 412 ms', port: 5173 }, map),
     ).toEqual({
       target: { plugin: 'developer', name: 'web' },
       title: 'web',
       output: 'ready in 412 ms',
+      port: 5173,
     });
+    // A port that is not one is no link.
+    expect(resolvePreview({ url: '/preview/developer/web/', port: '5173' }, map).port).toBeNull();
+    expect(resolvePreview({ url: '/preview/developer/web/', port: 70000 }, map).port).toBeNull();
   });
 
   it('names no process for anything that is not a preview', () => {
@@ -66,7 +70,7 @@ describe('resolving a preview', () => {
       { url: '/preview/developer/web/' },
     )).toEqual({
       renderer: 'preview',
-      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null },
+      props: { target: { plugin: 'developer', name: 'web' }, title: null, output: null, port: null },
     });
     expect(rendererFor('preview')).toBe(RENDERERS.preview);
   });
@@ -82,7 +86,7 @@ describe('the panel', () => {
     const link = vi.spyOn(api, 'previewLink').mockResolvedValue({ url: TICKETED });
     render(
       <PreviewView
-        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms' }}
+        props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: 'ready in 412 ms', port: 5173 }}
       />,
     );
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
@@ -98,40 +102,52 @@ describe('the panel', () => {
       'allow-scripts allow-forms allow-same-origin allow-modals allow-downloads',
     );
     // An app that refuses framing shows an empty box; the link is the answer.
-    expect(screen.getByRole('link', { name: 'Open in a tab' })).toHaveAttribute('href', TICKETED);
+    // Its href is the clean URL: the frame's load spent the ticket and bought
+    // the cookie, and the cookie answers for the clean path.
+    expect(screen.getByRole('link', { name: 'Open in a tab' })).toHaveAttribute(
+      'href',
+      'http://127.0.0.1:4318/preview/developer/web/',
+    );
+    // And the process itself, for when the owner is at the machine.
+    expect(screen.getByRole('link', { name: 'localhost:5173' })).toHaveAttribute('href', 'http://localhost:5173/');
+    // The process output is there on request, not beside the app by default.
+    expect(screen.queryByText('ready in 412 ms')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Output' }));
     expect(screen.getByText('ready in 412 ms')).toBeInTheDocument();
   });
 
-  it('opens a tab on a fresh ticket, never on the one the frame already spent', async () => {
+  it('readies a fresh ticket for the tab on hover, and never opens a window itself', async () => {
     const link = vi
       .spyOn(api, 'previewLink')
       .mockResolvedValueOnce({ url: TICKETED })
       .mockResolvedValueOnce({ url: `${TICKETED}2` });
-    const tab = { location: '' as unknown as Location, close: vi.fn() };
-    const open = vi.fn(() => tab as unknown as Window);
+    const open = vi.fn();
     vi.stubGlobal('open', open);
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null }} />);
     await waitFor(() => expect(screen.getByTitle('web')).toBeInTheDocument());
 
-    screen.getByRole('link', { name: 'Open in a tab' }).click();
-    // The blank tab is opened before the request, or the browser calls it a
-    // pop-up and blocks it.
-    expect(open).toHaveBeenCalledWith('', '_blank', 'noopener');
-    await waitFor(() => expect(tab.location).toBe(`${TICKETED}2`));
+    const anchor = screen.getByRole('link', { name: 'Open in a tab' });
+    // A real link the browser opens: `window.open` with `noopener` hands
+    // back nothing to navigate, which is how the tab came up about:blank.
+    expect(anchor).toHaveAttribute('target', '_blank');
+    expect(anchor.getAttribute('rel')).toContain('noopener');
+    fireEvent.pointerEnter(anchor);
+    await waitFor(() => expect(anchor).toHaveAttribute('href', `${TICKETED}2`));
     expect(link).toHaveBeenCalledTimes(2);
+    expect(open).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
   it('says so when the link cannot be had, and frames nothing', async () => {
     vi.spyOn(api, 'previewLink').mockRejectedValue(new Error('no such preview'));
-    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null }} />);
+    render(<PreviewView props={{ target: { plugin: 'developer', name: 'web' }, title: 'web', output: null, port: null }} />);
     await waitFor(() => expect(screen.getByText('no such preview')).toBeInTheDocument());
     expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('draws nothing framed, and asks for nothing, when no process was named', () => {
     const link = vi.spyOn(api, 'previewLink');
-    render(<PreviewView props={{ target: null, title: 'web', output: null }} />);
+    render(<PreviewView props={{ target: null, title: 'web', output: null, port: null }} />);
     expect(document.querySelector('iframe')).toBeNull();
     expect(link).not.toHaveBeenCalled();
     expect(screen.getByText(/names no preview/)).toBeInTheDocument();

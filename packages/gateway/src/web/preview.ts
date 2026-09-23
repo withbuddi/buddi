@@ -614,6 +614,10 @@ export class PreviewApp {
                  * request that has no business reaching a preview.
                  */
                 sameSite: 'Strict',
+                // Behind `tailscale serve` the listener is reached over
+                // HTTPS, and Serve says so; a cookie set there is marked
+                // Secure like the dashboard's own remote cookies.
+                secure: req.headers['x-forwarded-proto'] === 'https',
                 /*
                  * The origin's root, not the prefix. A built app asks for
                  * `/assets/app.js` by its root, and a cookie scoped under

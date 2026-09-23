@@ -24,6 +24,12 @@ export interface WebConfig {
   port: number;
   /** Explicit HTTPS reverse-proxy origin; never derived from request headers. */
   publicOrigin?: string;
+  /**
+   * The same for the preview listener: where a `tailscale serve` mapping
+   * puts it on the tailnet, so a preview link minted for a remote session
+   * names an origin that device can reach. Never derived from headers.
+   */
+  previewPublicOrigin?: string;
 }
 
 /** `BUDDI_WEB=0` (or `off`/`false`/`no`) turns the dashboard off; default on. */
@@ -39,14 +45,32 @@ export function webConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const parsed = rawPort === '' ? NaN : Number(rawPort);
   const port =
     Number.isInteger(parsed) && parsed >= 0 && parsed <= 65_535 ? parsed : DEFAULT_WEB_PORT;
-  const external = env.BUDDI_WEB_PUBLIC_ORIGIN?.trim();
-  let publicOrigin: string | undefined;
-  if (external) {
-    const url = new URL(external);
-    if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('BUDDI_WEB_PUBLIC_ORIGIN must be an HTTPS origin without credentials, path, query or fragment');
-    publicOrigin = url.origin;
+  const publicOrigin = httpsOrigin(env.BUDDI_WEB_PUBLIC_ORIGIN, 'BUDDI_WEB_PUBLIC_ORIGIN');
+  const previewPublicOrigin = httpsOrigin(env.BUDDI_PREVIEW_PUBLIC_ORIGIN, 'BUDDI_PREVIEW_PUBLIC_ORIGIN');
+  if (previewPublicOrigin && !publicOrigin) {
+    throw new Error('BUDDI_PREVIEW_PUBLIC_ORIGIN needs BUDDI_WEB_PUBLIC_ORIGIN: a preview is reached from the dashboard');
   }
-  return { enabled: webEnabled(env), host, port, ...(publicOrigin ? { publicOrigin } : {}) };
+  if (previewPublicOrigin && previewPublicOrigin === publicOrigin) {
+    throw new Error('BUDDI_PREVIEW_PUBLIC_ORIGIN must differ from BUDDI_WEB_PUBLIC_ORIGIN: a preview is another origin, by design');
+  }
+  return {
+    enabled: webEnabled(env),
+    host,
+    port,
+    ...(publicOrigin ? { publicOrigin } : {}),
+    ...(previewPublicOrigin ? { previewPublicOrigin } : {}),
+  };
+}
+
+/** An HTTPS origin and nothing more, or undefined when the variable is unset. */
+function httpsOrigin(raw: string | undefined, name: string): string | undefined {
+  const external = raw?.trim();
+  if (!external) return undefined;
+  const url = new URL(external);
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(`${name} must be an HTTPS origin without credentials, path, query or fragment`);
+  }
+  return url.origin;
 }
 
 /** Is this a loopback binding? Only then do `localhost` aliases count as us. */
