@@ -256,14 +256,17 @@ export function MessageList({
               if (block.type === 'tool_use') {
                 if (plain) return null;
                 const result = findResult(messages, block.id);
+                // A gated call is one line here: the decision itself is in
+                // the dock, and the whole request is on the canvas.
+                const gate = result ? approvalLine(result) : null;
                 return (
                   <ToolRow
                     key={blockIndex}
-                    label={labelFor(block.name)}
+                    label={gate ? `Approval · ${block.name}` : labelFor(block.name)}
                     tool={block.name}
                     ok={result?.ok ?? null}
                     running={result === null}
-                    status={result && approvalIdOf(result) ? 'Awaiting approval' : result?.approval?.state}
+                    {...(gate ? { status: gate.status, waiting: gate.waiting, approval: true } : {})}
                     gist={gistFor(block.name, block.input)}
                     body={result ? toolBodyFor(result.output) : null}
                     opens
@@ -588,6 +591,21 @@ function stringify(value: unknown): string {
 /** How many diff lines a row unfolds before it points at the canvas for the rest. */
 const INLINE_DIFF_LINES = 40;
 
+/**
+ * How a gated call reads in the stream: waiting, or what became of it.
+ *
+ * Read off the result's shape — an approval id still pending, or the settled
+ * state the transcript joined onto it — never off the tool's name.
+ */
+export function approvalLine(result: Extract<ChatBlock, { type: 'tool_result' }>): { status: string; waiting: boolean } | null {
+  if (approvalIdOf(result)) return { status: 'waiting', waiting: true };
+  const state = result.approval?.state;
+  if (!state) return null;
+  if (state === 'approved' || state === 'executing') return { status: 'approved', waiting: true };
+  if (state === 'succeeded') return { status: 'approved', waiting: false };
+  return { status: state, waiting: false };
+}
+
 export function ToolRow({
   label,
   tool,
@@ -597,6 +615,8 @@ export function ToolRow({
   opens,
   onOpen,
   status,
+  waiting = false,
+  approval = false,
   gist = null,
   body = null,
 }: {
@@ -609,6 +629,10 @@ export function ToolRow({
   opens: boolean;
   onOpen: () => void;
   status?: string;
+  /** Still to be decided, or decided and still running: the mark says so. */
+  waiting?: boolean;
+  /** A gated call, drawn as the compact approval line. */
+  approval?: boolean;
   /** One line out of the call's arguments — the path, the command. See `gist.ts`. */
   gist?: string | null;
   /** What the row unfolds into, in place. See `tool-body.ts`. */
@@ -620,7 +644,7 @@ export function ToolRow({
       {running ? (
         <span className="wb-pulse" aria-hidden="true" />
       ) : (
-        <span className="wb-tool-mark" data-ok={status === 'Awaiting approval' || status === 'approved' || status === 'executing' ? 'pending' : ok === false ? 'false' : 'true'} aria-hidden="true" />
+        <span className="wb-tool-mark" data-ok={waiting ? 'pending' : ok === false ? 'false' : 'true'} aria-hidden="true" />
       )}
       <span className="wb-tool-label">{label}</span>
       {gist ? <span className="wb-tool-gist mono" data-testid="tool-gist">{gist}</span> : null}
@@ -632,6 +656,7 @@ export function ToolRow({
     'data-ok': ok === null ? undefined : ok,
     'data-running': running,
     'data-gist': gist ? true : undefined,
+    'data-approval': approval || undefined,
   };
 
   /*

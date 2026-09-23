@@ -362,6 +362,19 @@ describe('tierFor: a tier decided per call', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it('does not repeat a reason the tool already put in its own preview', async () => {
+    const r = new ToolRegistry();
+    const { manifest: m } = deciding(async () => ({ tier: 'gated', reason: 'unzip is not on the run list' }));
+    const tool = m.tools[0]!;
+    r.register({
+      ...m,
+      tools: [{ ...tool, describe: () => ({ envelope: { n: 1 }, preview: 'It needs your approval: unzip is not on the run list.' }) }],
+    });
+    const { db, previews } = recordingDb();
+    await r.invoke('demo.double', { n: 1 }, granted({ db }));
+    expect(previews).toEqual(['It needs your approval: unzip is not on the run list.']);
+  });
+
   it('leaves the preview alone when no reason was given', async () => {
     const r = new ToolRegistry();
     const { manifest: m } = deciding(async () => ({ tier: 'gated' }));

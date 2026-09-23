@@ -47,14 +47,14 @@ describe('conversation browser canvas', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Raw JSON' }));
     expect(screen.getByText(/"target": "garden"/)).toHaveTextContent('All ready');
   });
-  it('restores an approval inside chat after reload and removes it after a decision', async () => {
+  it('restores an approval in the dock after reload and returns the composer after a decision', async () => {
     vi.mocked(api.browser).mockResolvedValue({ state: 'idle', enabled: true, busy: false, hasScreenshot: false });
     const transcript: ChatConversation = { conversationId: 'c1', agentId: 'keeper', messages: [
       { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'gate', name: 'shed.run', input: { command: 'calculate' } }] },
       { id: 'm2', role: 'user', at: '', blocks: [{ type: 'tool_result', toolUseId: 'gate', name: 'shed.run', ok: true, output: 'awaiting owner approval', approval: { id: 'a1', state: 'pending' } }] },
     ] };
     vi.mocked(chatApi.conversation).mockResolvedValue(transcript);
-    const approval = { id: 'a1', state: 'pending', tool: 'shed.run', permissionScopes: ['conversation', 'always'], preview: 'Run calculate', envelope: {}, canonicalArgs: {} } as never;
+    const approval = { id: 'a1', state: 'pending', tool: 'shed.run', permissionScopes: ['conversation', 'always'], preview: 'Run calculate', envelope: {}, canonicalArgs: { command: 'calculate' }, expiresAt: '2999-01-01T00:00:00Z' } as never;
     vi.spyOn(api, 'approval').mockResolvedValue(approval);
     vi.spyOn(api, 'overview').mockResolvedValue({} as never);
     vi.spyOn(api, 'decide').mockImplementation(async () => {
@@ -65,13 +65,17 @@ describe('conversation browser canvas', () => {
       return { action: { ...approval as object, state: 'succeeded' } as never, execution: { state: 'succeeded' } };
     });
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
-    const inline = await screen.findByTestId('inline-approval');
-    expect(screen.getByTestId('messages')).toContainElement(inline);
-    expect(await within(inline).findByRole('button', { name: 'Always: this agent' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Shed · Run calculate Awaiting approval/ })).toBeInTheDocument();
-    fireEvent.click(within(inline).getByRole('button', { name: 'Allow once' }));
-    await waitFor(() => expect(screen.queryByTestId('inline-approval')).not.toBeInTheDocument());
+    const dock = await screen.findByTestId('approval-dock');
+    expect(screen.getByTestId('messages')).not.toContainElement(dock);
+    expect(await within(dock).findByRole('button', { name: 'Always: this agent' })).toBeInTheDocument();
+    // In the thread it is one line, not the card.
+    expect(screen.getByRole('button', { name: /Approval · shed\.run calculate waiting/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('inline-approval')).not.toBeInTheDocument();
+    fireEvent.click(within(dock).getByRole('button', { name: 'Allow once' }));
+    await waitFor(() => expect(screen.queryByTestId('approval-dock')).not.toBeInTheDocument());
     expect(api.decide).toHaveBeenCalledWith('a1', 'approve', undefined);
+    expect(screen.getByTestId('composer-slot')).not.toHaveAttribute('hidden');
+    expect(await screen.findByRole('button', { name: /Approval · shed\.run calculate approved/ })).toBeInTheDocument();
   });
   it('opens a matching session beside chat with scoped controls and a full-page link', async () => {
     render(<ChatPage {...props} />);
@@ -160,7 +164,7 @@ describe('conversation browser canvas', () => {
     });
     expect(within(screen.getByTestId('browser-view')).getByText('Awaiting approval')).toBeInTheDocument();
     // And its row goes to the envelope, not to the panel.
-    fireEvent.click(screen.getByRole('button', { name: /Browser · Act/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Approval · browser\.act/ }));
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Approval' })).toHaveAttribute('data-state', 'active'));
   });
 
