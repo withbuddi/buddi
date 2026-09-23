@@ -32,6 +32,9 @@ function run(over: Partial<ChatRun>): ChatRun {
     finishedAt: '2026-01-01T10:01:00.000Z',
     turns: 40,
     stopped: 'end_turn',
+    // The default fixture is a run that said so; the tests that care say
+    // otherwise. A budget stop that stayed silent is its own case below.
+    noticed: true,
     usage: { input: 0, output: 0 },
     actionId: null,
     resumed: false,
@@ -96,6 +99,40 @@ describe('the turn-budget marker', () => {
 
   it('ignores a finish event that has no run to belong to', () => {
     show([run({ stopped: 'max_turns', startedAt: null, turns: null })]);
+    expect(screen.queryByTestId('budget-stop')).toBeNull();
+  });
+
+  it('ignores a finish event that does not say which run it is', () => {
+    show([run({ stopped: 'max_turns', runId: null })]);
+    expect(screen.queryByTestId('budget-stop')).toBeNull();
+  });
+
+  /*
+   * The one that matters in a room. A member spends `MAX_MEMBER_TURNS` inside
+   * a coordinator run that finishes perfectly well: the member's run row says
+   * `max_turns`, and its window holds the member's own answer — but the member
+   * said nothing about a budget, so there is nothing to mark.
+   */
+  it('says nothing about a member run that exhausted the room’s per-member cap', () => {
+    render(
+      <MessageList
+        messages={[
+          said[0]!,
+          { id: 'm2', role: 'assistant', at: '2026-01-01T10:00:30.000Z', blocks: [{ type: 'text', text: 'Ledger here, as far as I got.' }] },
+          { id: 'm3', role: 'assistant', at: '2026-01-01T10:00:45.000Z', blocks: [{ type: 'text', text: 'That is what the room has.' }] },
+        ]}
+        runs={[
+          run({ runId: 'coordinator', startedAt: '2026-01-01T10:00:00.000Z', finishedAt: '2026-01-01T10:00:50.000Z', stopped: 'end_turn', noticed: false }),
+          run({ runId: 'ledger', startedAt: '2026-01-01T10:00:20.000Z', finishedAt: '2026-01-01T10:00:35.000Z', stopped: 'max_turns', turns: 6, noticed: false }),
+        ]}
+        agentName="Keeper" onOpen={() => {}} live={[]} now={Date.now()} emptyHint="Nothing yet." working={false}
+      />,
+    );
+    expect(screen.queryByTestId('budget-stop')).toBeNull();
+  });
+
+  it('says nothing when the run ran out but its sentence never landed', () => {
+    show([run({ stopped: 'max_turns', noticed: false })]);
     expect(screen.queryByTestId('budget-stop')).toBeNull();
   });
 

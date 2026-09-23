@@ -369,6 +369,13 @@ export interface ChatRunView {
   finishedAt: string | null;
   turns: number | null;
   stopped: string | null;
+  /**
+   * The run said in the transcript that it had run out of budget. False for
+   * every other ending, and for a budget stop that stayed silent — a delegate,
+   * a room member, a run the owner cancelled. The page draws its budget marker
+   * only where there is a message saying so to draw it under.
+   */
+  noticed: boolean;
   usage: { input: number; output: number };
   actionId: string | null;
   resumed: boolean;
@@ -858,6 +865,7 @@ async function runsOf(
         finishedAt: null,
         turns: null,
         stopped: null,
+        noticed: false,
         usage: { input: 0, output: 0 },
         actionId: typeof p.actionId === 'string' ? p.actionId : null,
         resumed: event.kind === 'run.resumed',
@@ -883,6 +891,9 @@ async function runsOf(
       finishedAt: new Date(event.created_at).toISOString(),
       turns: typeof p.turns === 'number' ? p.turns : null,
       stopped: typeof p.stopped === 'string' ? p.stopped : null,
+      // Absent on every row written before the loop said so out loud, which is
+      // the honest answer for those runs: they did not.
+      noticed: p.noticed === true,
       usage: { input: Number(p.usage?.input ?? 0), output: Number(p.usage?.output ?? 0) },
     };
     if (open) {
