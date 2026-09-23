@@ -113,8 +113,11 @@ All paths relative to the workspace; every result says the path it acted on.
   is a stale row rather than a signal sent to a stranger. A process name
   belongs to one agent at a time across the installation, because a preview is
   asked for by name alone.
-- `developer.git` `{ action: status | diff | log | branch | commit | stash,
-  … }`: read actions auto; a branch create is gated in `ask` and auto
+- `developer.git` `{ action: status | diff | log | branch | commit | stash |
+  init, … }`: read actions auto; `init` makes a workspace that is not yet a
+  repository into one, is gated in every mode, and is refused inside an
+  existing repository (a nested repository is the "somewhere above me"
+  confusion the root check exists for); a branch create is gated in `ask` and auto
   otherwise, and creates with `switch -c … HEAD`, which moves a ref and
   leaves the working tree alone; **`commit` is auto only in `run` mode** —
   `git add` runs a repository's own clean filters and `commit` its own hooks,
