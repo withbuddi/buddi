@@ -65,12 +65,12 @@ Nothing at the moment; the next item below is messengers.
 2. [Learning](specs/learning.md) — buddi proposes, the owner keeps.
 3. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
-5. macOS app — a packaged desktop app around the existing service.
-6. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+4. macOS app — a packaged desktop app around the existing service.
+5. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
-7. Drive and Dropbox — the provider APIs for backup, after the folder target
+6. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
-8. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+7. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
 
 Small, whenever a slot opens:
 
