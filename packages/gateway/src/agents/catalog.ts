@@ -38,6 +38,7 @@ import { recordedDefaultAgent } from './default-agent.js';
 import { createDelegationManifest, readDelegates } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
 import { createPlatformManifest } from './platform.js';
+import { createMcpManifest } from '../mcp/requests.js';
 import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
 import { createReminderManifest, createScheduleManifest } from '../missions/reminders.js';
 import { createGoalManifest } from '../missions/goals.js';
@@ -180,6 +181,9 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // takes the registry for two reasons: a proposed grant is resolved against
   // it, and `platform.installed_tools` is a reflection of it.
   registry.register(createPlatformManifest(registry));
+  // The writes `buddi mcp` asks for, each one an approval (docs/specs/mcp.md).
+  // Owner-only: no model's tool list holds them and no grant reaches them.
+  registry.register(createMcpManifest(registry));
   // Delegation is registered last and takes the registry itself: the nested run
   // executes against this same registry, and its catalog and provider are bound
   // by `bindDelegation` once they exist (the catalog is loaded *against* this

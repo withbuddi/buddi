@@ -35,7 +35,8 @@ import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js'
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
 import { jobsCancel, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
-import { loadEnvironment, REPO_ROOT } from './paths.js';
+import { loadEnv, loadEnvironment, REPO_ROOT } from './paths.js';
+import { runMcp } from './mcp/server.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
 import { runUpgrade } from './upgrade.js';
@@ -196,6 +197,12 @@ export async function dispatch(command: Command): Promise<number> {
     case 'dashboard':
       await loadEnvironment();
       return runDashboard(command.action);
+    case 'mcp':
+      // Only `.env`: the dashboard's host and port, and the credential names
+      // whose values are cut from every result. No database, no plugins, and
+      // nothing on stdout, which belongs to the protocol.
+      loadEnv();
+      return runMcp();
     case 'telegram': {
       await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);

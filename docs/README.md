@@ -20,6 +20,7 @@ order of what comes next.
 - [Groups](groups.md), [Files](files.md), [Host execution](host-execution.md)
 - [Built-in system context](system-context.md), [the web plugin](web.md)
 - [Writing a plugin](plugins.md)
+- [Using buddi from Claude Code](mcp.md) (`buddi mcp`)
 
 ## Specs (accepted, not fully built)
 

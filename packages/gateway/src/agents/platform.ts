@@ -1602,6 +1602,27 @@ export interface OwnerEditResult {
 }
 
 /**
+ * What `updateAgentFromOwner` would write, without writing it: the envelope
+ * and the preview `platform.update_agent` shows, with every refusal it has
+ * (a hand-only tool, a taken handle, an example file) thrown in the same words.
+ *
+ * For a caller that must turn an owner-shaped edit into an approval first —
+ * `buddi mcp`, where the client is a model rather than the owner.
+ */
+export function describeOwnerAgentEdit(
+  registry: ToolRegistry,
+  input: OwnerAgentEdit,
+  proposedBy: string,
+): { envelope: UpdateAgentEnvelope; preview: string } {
+  const binding = resolved(registry);
+  if (input.default !== undefined) {
+    refuse('not-a-field', 'which agent is the default is an installation record, not a field of the file');
+  }
+  const envelope = buildUpdateEnvelope(input, { binding, registry, proposedBy });
+  return { envelope, preview: renderUpdatePreview(envelope, specsFor(registry)) };
+}
+
+/**
  * Change an agent from the dashboard, with the tool's validation and none of
  * its approval.
  *

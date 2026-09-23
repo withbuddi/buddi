@@ -899,6 +899,9 @@ export async function main(): Promise<void> {
             botUsername: () => telegram?.botUsername ?? null,
           },
           jobs: { resumeJob },
+          // A write asked for through `buddi mcp` raises its card on Telegram
+          // too, through the same hook an unattended run's approval uses.
+          askApproval,
           // The browser as a talking surface. Every one of these is the object
           // the other surfaces already use — the per-agent provider adapter,
           // the shared artifact store, the memory hook, and the same pause gate

@@ -1091,6 +1091,12 @@ export interface SendRequest {
    * reaches this field.
    */
   offer?: { id: string; label: string } | undefined;
+  /**
+   * The MCP client this turn came through (`buddi.ask`), by the name it gave
+   * in its handshake. Recorded as an `mcp.ask` event on the conversation, so
+   * Activity says who asked; it changes nothing about how the turn runs.
+   */
+  client?: string | undefined;
 }
 
 export type SendResult =
@@ -1300,6 +1306,9 @@ export class WebChat {
 
     const runId = randomUUID();
     const target = conversationId;
+    if (request.client !== undefined) {
+      await this.#event(target, 'mcp.ask', { client: request.client, agentId: agent.id, runId, via: `requested through MCP (${request.client})` });
+    }
     const opening = request.opening === true;
     const offer = request.offer;
     this.#enqueue(target, async () => { await this.#run({ agent, conversationId: target, runId, text, files, opening, ...(offer ? { offer } : {}) }); });
