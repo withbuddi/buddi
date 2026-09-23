@@ -339,6 +339,8 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
       return count(record['pairs']) > 0;
     case 'document':
       return Boolean(record['text']) || Boolean(record['src']);
+    case 'diff':
+      return Boolean(record['diff']);
     // A frame with nothing to point at is a box: the tab is earned by there
     // being a process to look at.
     case 'preview':

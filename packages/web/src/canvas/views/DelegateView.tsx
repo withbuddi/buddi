@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 import { chatApi } from '../../api';
 import { Markdown } from '../../chat/markdown';
+import { gistFor } from '../../chat/gist';
 import { ToolRow, Thought } from '../../chat/MessageList';
 import type { ChatAgent, ChatBlock, ChatConversation, ChatMessage } from '../../chat/types';
 import { chatRoute } from '../../routes';
@@ -118,6 +119,7 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
                     tool={block.name}
                     ok={outcome?.ok ?? null}
                     running={outcome === null}
+                    gist={gistFor(block.name, block.input)}
                     opens={false}
                     onOpen={() => {}}
                   />

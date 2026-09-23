@@ -18,6 +18,7 @@ export type RendererName =
   | 'bars'
   | 'keyvalue'
   | 'document'
+  | 'diff'
   | 'preview'
   | 'envelope'
   | 'structured';
@@ -91,6 +92,14 @@ export interface DocumentMap {
   metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
 }
 
+/** A change to read: the diff text, and the facts about it. */
+export interface DiffMap {
+  /** Path to the diff text — git's unified form or the short `-`/`+` form. */
+  diff: string;
+  title?: ValueRef;
+  metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
+}
+
 /** A loopback process of the owner's, framed beside what it is printing. */
 export interface PreviewMap {
   /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
@@ -108,6 +117,7 @@ export type ViewMap =
   | BarsMap
   | KeyValueMap
   | DocumentMap
+  | DiffMap
   | PreviewMap
   | Record<string, never>;
 
@@ -166,6 +176,12 @@ export interface DocumentProps {
   kind: 'text' | 'image' | 'pdf';
   text: string | null;
   src: string | null;
+  title: string | null;
+  metadata: Array<{ label: string; value: unknown; unit: Unit }>;
+}
+
+export interface DiffProps {
+  diff: string | null;
   title: string | null;
   metadata: Array<{ label: string; value: unknown; unit: Unit }>;
 }

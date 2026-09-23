@@ -763,6 +763,112 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 }
 .wb-tool-mark[data-ok='false'] { background: var(--critical); }
 .wb-tool-mark[data-ok='pending'] { background: var(--warning); }
+
+/* The gist: which file, which command — the thing that tells twelve rows of
+   the same verb apart. The label keeps its width; the gist takes what is left
+   and gives way first, with an ellipsis rather than a wrap. */
+.wb-tool[data-gist='true'] .wb-tool-label { flex: 0 0 auto; }
+.wb-tool-gist {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* A row that unfolds in place: the row is the toggle, the arrow still opens
+   the canvas. Two buttons in one bordered line, so the line keeps its look. */
+.wb-toolcall { display: flex; flex-direction: column; gap: var(--space-1); align-self: stretch; max-width: 68ch; min-width: 0; }
+.wb-tool[data-split='true'] { cursor: default; padding-left: var(--space-2); }
+.wb-tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wb-tool-open {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: var(--space-0);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.wb-tool-open:hover .wb-tool-arrow, .wb-tool-open:focus-visible .wb-tool-arrow { color: var(--accent); }
+.wb-tool[data-split='true']:hover .wb-tool-arrow { color: var(--text-faint); }
+.wb-tool-chevron { flex: 0 0 auto; color: var(--text-faint); transform: rotate(-90deg); transition: transform 120ms ease; }
+.wb-toolcall[data-open='true'] .wb-tool-chevron { transform: none; }
+@media (prefers-reduced-motion: reduce) { .wb-tool-chevron { transition: none; } }
+
+/* What it unfolds into: a diff, or a command and what it printed. Bounded —
+   the canvas holds the whole of it. */
+.wb-tool-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.wb-tool-body .wb-diff { max-height: 22rem; }
+.wb-tool-command { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); }
+.wb-tool-command code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-family: var(--font-mono); font-size: var(--text-xs); }
+.wb-tool-command code::before { content: '$ '; color: var(--text-faint); }
+.wb-tool-facts { flex: 0 0 auto; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.wb-tool-facts[data-failed='true'] { color: var(--critical); }
+.wb-tool-output {
+  margin: 0;
+  max-height: 18rem;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* A diff, line by line: added green, removed red, headers and hunks quiet.
+   Shared by the chat's inline rows and the canvas's diff panel. */
+.wb-diff-wrap { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.wb-diff {
+  margin: 0;
+  max-height: 65vh;
+  overflow: auto;
+  padding: var(--space-1) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-loose);
+  tab-size: 4;
+}
+.wb-diff-line { display: block; min-width: max-content; padding: 0 var(--space-3); white-space: pre; color: var(--text); }
+.wb-diff-line[data-kind='add'] { background: var(--good-soft); color: var(--good); }
+.wb-diff-line[data-kind='del'] { background: var(--critical-soft); color: var(--critical); }
+.wb-diff-line[data-kind='hunk'] { color: var(--text-muted); background: var(--surface-sunken); }
+.wb-diff-line[data-kind='meta'] { color: var(--text-faint); }
+.wb-diff-more { margin: 0; color: var(--text-faint); font-size: var(--text-sm); }
+.wb-diff-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.wb-diff-open:hover { text-decoration: underline; text-underline-offset: 2px; }
 .wb-artifacts { display: grid; gap: 20px; margin-bottom: 20px; }
 .wb-command-result { min-width: 0; display: grid; gap: 16px; }
 .wb-command-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }

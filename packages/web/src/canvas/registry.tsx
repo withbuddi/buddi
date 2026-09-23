@@ -2,7 +2,7 @@
  * The renderer registry.
  *
  * Keyed by **shape**, never by tool. `timeseries`, `table`, `bars`,
- * `keyvalue`, `document`, `preview`, `envelope`, `structured` — eight
+ * `keyvalue`, `document`, `diff`, `preview`, `envelope`, `structured` — nine
  * entries, and a default. What decides which one a given tool result gets is a view
  * descriptor the plugin declared and the server handed over as data; this file
  * has no opinion about any plugin, and an installation with no plugins still
@@ -15,6 +15,7 @@ import type { ComponentType } from 'react';
 import type { ApprovalRow } from '../api';
 import type {
   BarsProps,
+  DiffProps,
   DocumentProps,
   EnvelopeProps,
   KeyValueProps,
@@ -25,6 +26,7 @@ import type {
   TimeseriesProps,
 } from './types';
 import { Bars } from './views/Bars';
+import { DiffView } from './views/DiffView';
 import { DocumentView } from './views/DocumentView';
 import { Envelope } from './views/Envelope';
 import { KeyValue } from './views/KeyValue';
@@ -57,6 +59,7 @@ export const RENDERERS: Record<RendererName, RendererComponent> = {
   bars: erase<BarsProps>(Bars),
   keyvalue: erase<KeyValueProps>(KeyValue),
   document: erase<DocumentProps>(DocumentView),
+  diff: erase<DiffProps>(DiffView),
   preview: erase<PreviewProps>(PreviewView),
   envelope: erase<EnvelopeProps>(Envelope),
   structured: erase<StructuredProps>(Structured),

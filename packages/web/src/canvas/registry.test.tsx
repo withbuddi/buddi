@@ -85,6 +85,7 @@ describe('the renderer registry', () => {
   it('holds one renderer per shape and nothing per domain', () => {
     expect(Object.keys(RENDERERS).sort()).toEqual([
       'bars',
+      'diff',
       'document',
       'envelope',
       'keyvalue',

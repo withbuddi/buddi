@@ -114,6 +114,31 @@ describe('view descriptors', () => {
     ).toThrow(/invalid view descriptor/);
   });
 
+  it('accepts a diff that names its text, with a title and the facts about it', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.write',
+      renderer: 'diff',
+      map: {
+        diff: 'diff',
+        title: { path: 'path' },
+        metadata: [{ label: 'Bytes', value: { path: 'bytes' }, unit: 'number' }],
+      },
+    });
+    expect(parsed.renderer).toBe('diff');
+    // A diff view with no diff has nothing to draw; `text` is a document's
+    // field, not this one's, and is refused rather than ignored.
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.write', renderer: 'diff', map: { title: { path: 'path' } } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.write', renderer: 'diff', map: { diff: 'diff', text: 'plain' } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+  });
+
   it('refuses a descriptor for a tool the plugin does not contribute', () => {
     expect(() =>
       parseViewDescriptors([{ tool: 'demo.gone', renderer: 'structured', map: {} }], {

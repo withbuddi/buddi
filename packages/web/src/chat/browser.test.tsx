@@ -68,7 +68,7 @@ describe('conversation browser canvas', () => {
     const inline = await screen.findByTestId('inline-approval');
     expect(screen.getByTestId('messages')).toContainElement(inline);
     expect(await within(inline).findByRole('button', { name: 'Always: this agent' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Shed · Run Awaiting approval/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Shed · Run calculate Awaiting approval/ })).toBeInTheDocument();
     fireEvent.click(within(inline).getByRole('button', { name: 'Allow once' }));
     await waitFor(() => expect(screen.queryByTestId('inline-approval')).not.toBeInTheDocument());
     expect(api.decide).toHaveBeenCalledWith('a1', 'approve', undefined);
