@@ -57,14 +57,15 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- [Learning](specs/learning.md) — buddi proposes, the owner keeps. Steps 1–2
-  built 2026-09-23 (buddi 44792d6, 55210a4): the proposals table, the three
-  `learning.*` tools, Settings → Proposals with a count on Home, provenance
-  with the untrusted mark and its echoed sentences highlighted; a kept skill
-  is a versioned file under the agent (a later one is a diff), removable from
-  the inbox or the agent's Skills tab, and no file tool writes an agent's own
-  skills. Next: the email plugin on `propose_policy` (step 3), persona
-  changes through Agent Father and the digest (step 4).
+- [Learning](specs/learning.md) — buddi proposes, the owner keeps. Steps 1–3
+  built 2026-09-23 (buddi 44792d6, 55210a4, 37a4fff): the proposals table, the
+  three `learning.*` tools, Settings → Proposals with a count on Home,
+  provenance with the untrusted mark and its echoed sentences highlighted; a
+  kept skill is a versioned file under the agent (a later one is a diff),
+  removable from the inbox or the agent's Skills tab, and no file tool writes
+  an agent's own skills; a plugin proposes rules through core and applies the
+  kept ones itself, and the email plugin's learned rules wait in the same
+  inbox. Next: persona changes through Agent Father and the digest (step 4).
 
 ## Next, in order
 
