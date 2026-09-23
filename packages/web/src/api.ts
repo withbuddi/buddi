@@ -1239,7 +1239,8 @@ export const api = {
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
   /* ---- memory ---- */
-  memory: () => get<MemoryView>('/memory'),
+  /** Everything, or — with an agent id — what that agent sees: shared plus its own. */
+  memory: (agentId?: string) => get<MemoryView>(agentId ? `/memory?agent=${encodeURIComponent(agentId)}` : '/memory'),
   setPreference: (body: { key: string; value: string; scope: string }) => post<MemoryPreference>('/memory/preferences', body),
   forgetPreference: (body: { key: string; scope: string }) => post<null>('/memory/preferences/forget', body),
   updateNote: (id: string, change: { content?: string; scope?: string; kind?: string }) => post<MemoryNote>(`/memory/notes/${encodeURIComponent(id)}`, change),

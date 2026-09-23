@@ -16,12 +16,18 @@ import { useState } from 'react';
 import { ApiError, api, type MemoryNote, type MemoryPreference } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
-import { Button, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
+import { Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
 
 const KINDS = ['fact', 'observation', 'todo'] as const;
 
-export function Memory({ embedded, agents, timezone }: { embedded?: boolean; agents: ChatAgent[]; timezone: string }): JSX.Element {
-  const { data, error, reload } = useAsync(() => api.memory(), [], 30_000);
+export function Memory({ embedded, agents, timezone, agentId }: {
+  embedded?: boolean;
+  agents: ChatAgent[];
+  timezone: string;
+  /** On an agent's sheet: its own memory first, and the shared set it also reads under a fold. */
+  agentId?: string;
+}): JSX.Element {
+  const { data, error, reload } = useAsync(() => api.memory(agentId), [agentId], 30_000);
   /** The preference sheet: open with a key to correct, or empty for a new one. */
   const [adding, setAdding] = useState<{ key: string; scope: string } | null>(null);
   const [editing, setEditing] = useState<MemoryNote | null>(null);
@@ -34,75 +40,61 @@ export function Memory({ embedded, agents, timezone }: { embedded?: boolean; age
     catch (err) { setProblem(err instanceof ApiError ? err.message : String(err)); }
   };
 
+  const rows = {
+    nameOf,
+    timezone,
+    onChangePreference: (pref: MemoryPreference) => setAdding({ key: pref.key, scope: pref.scope }),
+    onForgetPreference: (pref: MemoryPreference) => void run(api.forgetPreference({ key: pref.key, scope: pref.scope })),
+    onEditNote: (note: MemoryNote) => setEditing(note),
+    onForgetNote: (note: MemoryNote) => void run(api.forgetNote(note.id)),
+  };
+  const agentName = agentId ? nameOf(agentId) : '';
+  const own = agentId && data ? {
+    preferences: data.preferences.filter((p) => p.scope === agentId),
+    notes: data.notes.filter((n) => n.scope === agentId),
+  } : null;
+  const shared = agentId && data ? {
+    preferences: data.preferences.filter((p) => p.scope === 'shared'),
+    notes: data.notes.filter((n) => n.scope === 'shared'),
+  } : null;
+
   return (
     <PageFrame
       embedded={embedded}
       title="Memory"
       lede="What your agents have kept about you. Correct anything here; they see the change on their next turn."
-      actions={<Button variant="accent" onClick={() => setAdding({ key: '', scope: 'shared' })}>Add a preference</Button>}
+      actions={<Button variant="accent" onClick={() => setAdding({ key: '', scope: agentId ?? 'shared' })}>Add a preference</Button>}
     >
       <ErrorBanner message={error ?? problem} />
-      <Stack divided>
-        <Section title="Preferences" aside={<span className="muted">what you said you want, one current value each</span>}>
-          {!data ? null : data.preferences.length === 0 ? (
-            <Empty>Nothing stated yet. Tell any agent "from now on…" or add one here.</Empty>
-          ) : (
-            <Panel flush>
-              <Table>
-                <thead><tr><th>Preference</th><th>Value</th><th>Who sees it</th><th className="num">Since</th><th /></tr></thead>
-                <tbody>
-                  {data.preferences.map((pref) => (
-                    <tr key={`${pref.scope}:${pref.key}`}>
-                      <td className="mono">{pref.key}</td>
-                      <td>{pref.value}</td>
-                      <td><ScopePill scope={pref.scope} name={nameOf(pref.scope)} /></td>
-                      <td className="num muted" title={pref.updatedAt ?? ''}>{pref.updatedAt ? fmtRelative(pref.updatedAt, Date.now()) : ''}{pref.revision > 1 ? ` · rev ${pref.revision}` : ''}</td>
-                      <td className="num">
-                        <Toolbar align="end">
-                          <Button size="sm" onClick={() => setAdding({ key: pref.key, scope: pref.scope })} title="Store a new value for this key">Change</Button>
-                          <Button size="sm" variant="ghost" onClick={() => void run(api.forgetPreference({ key: pref.key, scope: pref.scope }))}>Forget</Button>
-                        </Toolbar>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </Panel>
-          )}
-        </Section>
-
-        <Section title="Notes" aside={<span className="muted">what an agent wrote down, with who wrote it</span>}>
-          {!data ? null : data.notes.length === 0 ? (
-            <Empty>No notes yet. An agent writes one when you state something durable about your life.</Empty>
-          ) : (
-            <Panel flush>
-              <Table>
-                <thead><tr><th>Note</th><th>Kind</th><th>Who sees it</th><th>Written by</th><th className="num">When</th><th /></tr></thead>
-                <tbody>
-                  {data.notes.map((note) => (
-                    <tr key={note.id}>
-                      <td className="memory-note">{note.content}</td>
-                      <td><Pill tone={note.kind === 'todo' ? 'warning' : note.kind === 'fact' ? 'good' : undefined}>{note.kind}</Pill></td>
-                      <td><ScopePill scope={note.scope} name={nameOf(note.scope)} /></td>
-                      <td className="muted">{note.createdByAgent ? nameOf(note.createdByAgent) : ''}</td>
-                      <td className="num muted" title={note.createdAt ?? ''}>
-                        {note.createdAt ? fmtRelative(note.createdAt, Date.now()) : ''}
-                        {note.expiresAt ? <span className="memory-expires"> · until {new Date(note.expiresAt).toLocaleDateString(undefined, { timeZone: timezone })}</span> : null}
-                      </td>
-                      <td className="num">
-                        <Toolbar align="end">
-                          <Button size="sm" onClick={() => setEditing(note)}>Edit</Button>
-                          <Button size="sm" variant="ghost" onClick={() => void run(api.forgetNote(note.id))}>Forget</Button>
-                        </Toolbar>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </Panel>
-          )}
-        </Section>
-      </Stack>
+      {own && shared ? (
+        <Stack divided>
+          <Section title="Preferences" aside={<span className="muted">what you told {agentName} alone</span>}>
+            <PreferenceTable preferences={own.preferences} empty={`Nothing stated to ${agentName} alone yet.`} {...rows} />
+          </Section>
+          <Section title="Notes" aside={<span className="muted">what {agentName} wrote down for itself</span>}>
+            <NoteTable notes={own.notes} empty={`${agentName} has kept no private notes yet.`} {...rows} />
+          </Section>
+          <Details summary={`Shared with every agent, which ${agentName} also reads · ${shared.preferences.length} preferences, ${shared.notes.length} notes`}>
+            <Stack divided>
+              <Section title="Shared preferences">
+                <PreferenceTable preferences={shared.preferences} empty="No shared preferences." {...rows} />
+              </Section>
+              <Section title="Shared notes">
+                <NoteTable notes={shared.notes} empty="No shared notes." {...rows} />
+              </Section>
+            </Stack>
+          </Details>
+        </Stack>
+      ) : (
+        <Stack divided>
+          <Section title="Preferences" aside={<span className="muted">what you said you want, one current value each</span>}>
+            {data ? <PreferenceTable preferences={data.preferences} empty={'Nothing stated yet. Tell any agent "from now on…" or add one here.'} {...rows} /> : null}
+          </Section>
+          <Section title="Notes" aside={<span className="muted">what an agent wrote down, with who wrote it</span>}>
+            {data ? <NoteTable notes={data.notes} empty="No notes yet. An agent writes one when you state something durable about your life." {...rows} /> : null}
+          </Section>
+        </Stack>
+      )}
 
       {adding ? (
         <PreferenceSheet
@@ -129,6 +121,79 @@ export function Memory({ embedded, agents, timezone }: { embedded?: boolean; age
         />
       ) : null}
     </PageFrame>
+  );
+}
+
+interface RowActions {
+  nameOf: (scope: string) => string;
+  timezone: string;
+  onChangePreference: (pref: MemoryPreference) => void;
+  onForgetPreference: (pref: MemoryPreference) => void;
+  onEditNote: (note: MemoryNote) => void;
+  onForgetNote: (note: MemoryNote) => void;
+}
+
+function PreferenceTable({ preferences, empty, nameOf, onChangePreference, onForgetPreference }: RowActions & {
+  preferences: MemoryPreference[];
+  empty: string;
+}): JSX.Element {
+  if (preferences.length === 0) return <Empty>{empty}</Empty>;
+  return (
+    <Panel flush>
+      <Table>
+        <thead><tr><th>Preference</th><th>Value</th><th>Who sees it</th><th className="num">Since</th><th /></tr></thead>
+        <tbody>
+          {preferences.map((pref) => (
+            <tr key={`${pref.scope}:${pref.key}`}>
+              <td className="mono">{pref.key}</td>
+              <td>{pref.value}</td>
+              <td><ScopePill scope={pref.scope} name={nameOf(pref.scope)} /></td>
+              <td className="num muted" title={pref.updatedAt ?? ''}>{pref.updatedAt ? fmtRelative(pref.updatedAt, Date.now()) : ''}{pref.revision > 1 ? ` · rev ${pref.revision}` : ''}</td>
+              <td className="num">
+                <Toolbar align="end">
+                  <Button size="sm" onClick={() => onChangePreference(pref)} title="Store a new value for this key">Change</Button>
+                  <Button size="sm" variant="ghost" onClick={() => onForgetPreference(pref)}>Forget</Button>
+                </Toolbar>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Panel>
+  );
+}
+
+function NoteTable({ notes, empty, nameOf, timezone, onEditNote, onForgetNote }: RowActions & {
+  notes: MemoryNote[];
+  empty: string;
+}): JSX.Element {
+  if (notes.length === 0) return <Empty>{empty}</Empty>;
+  return (
+    <Panel flush>
+      <Table>
+        <thead><tr><th>Note</th><th>Kind</th><th>Who sees it</th><th>Written by</th><th className="num">When</th><th /></tr></thead>
+        <tbody>
+          {notes.map((note) => (
+            <tr key={note.id}>
+              <td className="memory-note">{note.content}</td>
+              <td><Pill tone={note.kind === 'todo' ? 'warning' : note.kind === 'fact' ? 'good' : undefined}>{note.kind}</Pill></td>
+              <td><ScopePill scope={note.scope} name={nameOf(note.scope)} /></td>
+              <td className="muted">{note.createdByAgent ? nameOf(note.createdByAgent) : ''}</td>
+              <td className="num muted" title={note.createdAt ?? ''}>
+                {note.createdAt ? fmtRelative(note.createdAt, Date.now()) : ''}
+                {note.expiresAt ? <span className="memory-expires"> · until {new Date(note.expiresAt).toLocaleDateString(undefined, { timeZone: timezone })}</span> : null}
+              </td>
+              <td className="num">
+                <Toolbar align="end">
+                  <Button size="sm" onClick={() => onEditNote(note)}>Edit</Button>
+                  <Button size="sm" variant="ghost" onClick={() => onForgetNote(note)}>Forget</Button>
+                </Toolbar>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Panel>
   );
 }
 

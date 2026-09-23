@@ -16,6 +16,7 @@ import { cannotRunFix, cannotRunSentence, waitingText } from '../shell/roster';
 import { Avatar, Button, ButtonLink, Empty, ErrorBanner, Field, List, ListRow, Notice, Panel, Pill, Section, Sheet, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
+import { Memory } from './Memory';
 import { Reminders } from './Reminders';
 import { AgentSetup } from './parts/AgentSetup';
 
@@ -31,6 +32,7 @@ const AGENT_TABS = [
   { id: 'missions', label: 'Missions' },
   { id: 'offers', label: 'Offers' },
   { id: 'reminders', label: 'Reminders' },
+  { id: 'memory', label: 'Memory' },
   { id: 'setup', label: 'Setup' },
 ] as const;
 
@@ -85,6 +87,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
           <AgentPage
             agentId={location.agentId}
             agent={agents.find((a) => a.id === location.agentId)}
+            agents={agents}
             tab={location.tab ?? 'conversations'}
             timezone={timezone}
             navigate={navigate}
@@ -187,6 +190,7 @@ function DefaultAgentPicker(): JSX.Element | null {
 function AgentPage({
   agentId,
   agent,
+  agents,
   tab,
   timezone,
   navigate,
@@ -194,6 +198,7 @@ function AgentPage({
 }: {
   agentId: string;
   agent: ChatAgent | undefined;
+  agents: ChatAgent[];
   tab: string;
   timezone: string;
   navigate: (route: string) => void;
@@ -234,6 +239,7 @@ function AgentPage({
       {tab === 'missions' ? <Missions timezone={timezone} embedded agentId={agentId} /> : null}
       {tab === 'offers' ? <Offers embedded agentId={agentId} agentName={name} /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded agentId={agentId} /> : null}
+      {tab === 'memory' ? <Memory embedded agents={agents} timezone={timezone} agentId={agentId} /> : null}
       {tab === 'setup' ? <AgentSetup agentId={agentId} /> : null}
     </div>
   );

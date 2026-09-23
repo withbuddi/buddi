@@ -1185,7 +1185,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/memory': {
           try {
-            return sendJson(res, 200, await listMemory(deps.pool, deps.now()));
+            // `?agent=` narrows it to what that agent sees: the agent sheet's tab.
+            const agent = url.searchParams.get('agent') ?? undefined;
+            return sendJson(res, 200, await listMemory(deps.pool, deps.now(), agent ? { agent } : {}));
           } catch (err) {
             return sendJson(res, 503, { error: `Memory is unavailable: ${err instanceof Error ? err.message : String(err)}` });
           }

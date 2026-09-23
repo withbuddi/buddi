@@ -37,6 +37,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { manifest as memoryManifest } from '@buddi/tool-memory';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { TelegramApprovals } from '../telegram/approvals.js';
@@ -315,6 +316,23 @@ suite('the dashboard API', () => {
     expect(client.cookies.get('buddi_session')).toBeTruthy();
     return client;
   };
+
+  /* ---------------- memory, narrowed to one agent ---------------- */
+
+  it("narrows /api/memory to what one agent sees when the agent sheet asks", async () => {
+    await migrate(pool, { schema: memoryManifest.schema, dir: memoryManifest.migrationsDir });
+    await pool.query(
+      `insert into memory.notes (content, kind, scope, created_by_agent, created_at)
+       values ('dev runs the stack with make up', 'fact', 'dev-sheet', 'dev-sheet', now()),
+              ('every agent reads this', 'fact', 'shared', 'dev-sheet', now()),
+              ('someone else keeps this', 'fact', 'other-sheet', 'other-sheet', now())`,
+    );
+    const client = await signedIn();
+    const narrowed = await client.json<any>('/api/memory?agent=dev-sheet');
+    expect(narrowed.notes.map((n: any) => n.scope).sort()).toEqual(['dev-sheet', 'shared']);
+    const all = await client.json<any>('/api/memory');
+    expect(all.notes.map((n: any) => n.scope)).toContain('other-sheet');
+  });
 
   /* ---------------- authentication ---------------- */
 
