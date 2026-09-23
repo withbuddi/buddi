@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { learningContext } from './agents/learning.js';
 import { getOwnerProfile, isKnownTimezone, localDateTimeString, type PluginManifest, type SystemContext, type ToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
@@ -63,11 +64,18 @@ export async function systemInfo(ctx: ToolContext) {
   return { time, host, note: 'Host facts do not grant access. Use granted host/browser status tools for live permissions and availability. Existing schedules retain their saved timezone.' };
 }
 
-export async function systemContext(ctx: ToolContext): Promise<SystemContext> {
-  const [info, owner] = await Promise.all([systemInfo(ctx), ownerLines(ctx)]);
+export async function systemContext(
+  ctx: ToolContext,
+  run?: { agentId: string; tools: readonly string[] },
+): Promise<SystemContext> {
+  const [info, owner, learning] = await Promise.all([
+    systemInfo(ctx),
+    ownerLines(ctx),
+    run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
+  ]);
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
-    (owner === '' ? '' : `\n\n${owner}`) };
+    (owner === '' ? '' : `\n\n${owner}`) + (learning === '' ? '' : `\n\n${learning}`) };
 }
 
 /**

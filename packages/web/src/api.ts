@@ -348,6 +348,34 @@ export interface OfferRow {
   lapseReason?: 'owner-moved-on' | 'rolled-over' | 'agent-removed' | null;
 }
 
+/**
+ * One thing an agent learned and proposed, as the inbox draws it.
+ *
+ * `untrusted` and `sources` come from the run, never from the agent: they are
+ * the web pages, mail and files that were in its context when it proposed.
+ */
+export interface ProposalRow {
+  id: string;
+  kind: 'skill' | 'policy' | 'change';
+  agent: string;
+  title: string;
+  why: string;
+  /** The text the owner may correct before keeping. Null for a policy. */
+  editable: string | null;
+  payload: Record<string, unknown>;
+  conversationId: string | null;
+  turn: number | null;
+  runId: string | null;
+  untrusted: boolean;
+  sources: string[];
+  state: 'open' | 'kept' | 'discarded' | 'expired';
+  createdAt: string;
+  decidedAt: string | null;
+  reason: string | null;
+  /** For a kept one: what keeping did, or when it will. */
+  note: string | null;
+}
+
 /** What a lapse is called on the page, in the owner's words. */
 export function lapseSentence(row: OfferRow): string {
   if (row.dismissedAt) return 'You said no to this one.';
@@ -1192,6 +1220,20 @@ export const api = {
   /** The owner cleared exactly the displayed offers. */
   dismissOffers: (ids: readonly string[]) =>
     post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
+  /** Open proposals, and under `closed` what was kept, discarded or expired this week. */
+  proposals: () => get<{ open: ProposalRow[]; closed: ProposalRow[] }>('/proposals'),
+  /** Keep one, optionally with the owner's corrected text. */
+  keepProposal: (id: string, text?: string) =>
+    post<{ proposal: ProposalRow; applied: boolean; note: string }>(
+      `/proposals/${encodeURIComponent(id)}/keep`,
+      text === undefined ? {} : { text },
+    ),
+  /** Discard one, with the owner's reason when they gave one. */
+  discardProposal: (id: string, reason?: string) =>
+    post<{ proposal: ProposalRow }>(
+      `/proposals/${encodeURIComponent(id)}/discard`,
+      reason ? { reason } : {},
+    ),
   reminders: () => get<{ reminders: ReminderRow[] }>('/reminders'),
   sentinels: () => get<SentinelsView>('/sentinels'),
   /**

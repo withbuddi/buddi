@@ -78,6 +78,7 @@ import { createInlineMissionRunner, type InlineMissionDeps } from './missions/in
 import { createDigestPrepare } from './missions/recap.js';
 import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
+import { PROPOSAL_SWEEP_MS, createProposalSweep } from './agents/learning.js';
 import { startLoop } from './loop.js';
 import { ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
@@ -839,6 +840,19 @@ export async function main(): Promise<void> {
       log: (line) => console.error(line),
     });
 
+    // Proposals nobody decided in 30 days are expired, each with a line in
+    // Activity. Hourly: the clock is a month long.
+    const proposalSweep = createProposalSweep({ pool, now, log: (line) => console.log(line) });
+    const proposalLoop = recovering ? idle.loop : startLoop({
+      name: 'proposals',
+      everyMs: PROPOSAL_SWEEP_MS,
+      abortAfterMs: PROPOSAL_SWEEP_MS,
+      run: async () => {
+        await proposalSweep();
+      },
+      log: (line) => console.error(line),
+    });
+
     const scheduler = recovering ? idle.scheduler : runScheduler({
       pool,
       now,
@@ -908,7 +922,7 @@ export async function main(): Promise<void> {
         );
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
-          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop();
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); proposalLoop.stop();
           await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
           throw err;
         }
@@ -987,6 +1001,7 @@ export async function main(): Promise<void> {
       sourceLoop.stop();
       reminderLoop.stop();
       deadLetterLoop.stop();
+      proposalLoop.stop();
       closingDashboard = dashboard?.close();
       closingDashboard?.catch(() => {});
       void hostBrowser(process.env).shutdown();

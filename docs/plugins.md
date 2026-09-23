@@ -291,6 +291,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   timeoutMs?: number;
   reusableApproval?: boolean;   // the owner may remember their yes
   producesArtifacts?: boolean;  // its output names files it saved
+  untrusted?: UntrustedKind;    // its output is a page, a mail, a file, a chat
   sequential?: boolean;         // dependent calls are skipped after it fails
   waitsForOwner?: boolean;      // a success ends the run: the owner decides next
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
@@ -2387,6 +2388,7 @@ this says what it is *for*.
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0` — and neither can a tool with a `tierFor`: a permission is keyed on the tool, and the whole point of `tierFor` is that one tool has many costs. |
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
+| `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'other'` | no | This tool's output is text someone other than the owner wrote. A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/specs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
 | `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
@@ -2425,7 +2427,7 @@ than guess.
 | `ownerId` | `string` | yes | Whose installation this is. |
 | `now` | `() => Date` | yes | The clock. Never read the wall clock directly. |
 | `timezone` | `string` | yes | The owner's IANA zone. Render a *day* with `localDateString`, never in UTC. |
-| `systemContext` | `() => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. |
+| `systemContext` | `(run?) => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. The loop passes the run's agent and grant, so a paragraph meant only for agents holding certain tools (the learning one) is decided by the grant. |
 | `ownerRequest` | `{ id; text; expiresAt }` | no | Issued by an authenticated interactive surface, never by a model. What a `session` tool is checked against. |
 | `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate never inherits them. |
 | `signal` | `AbortSignal` | no | Cooperative cancellation. Check it before each external operation. |
@@ -2442,6 +2444,7 @@ than guess.
 | `previewPort` | `number` | no | The port this gateway serves previews on, or absent when it is not serving them. For a plugin with `previews` that has to build a URL of its own — a `tailscale serve` target, a line in a result. Never compute it from the dashboard's port. See §2.5c. |
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
 | `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
+| `provenance` | `() => RunProvenance` | no | Set by the runtime loop on every call: the run's id, the owner turn it answers, the model step, and the untrusted inputs in its context, derived from the messages the model was shown. The learning tools record it; a tool that needs it fails closed when it is absent. |
 
 #### `GroupContext`
 

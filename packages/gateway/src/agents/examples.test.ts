@@ -33,7 +33,7 @@ describe('the examples this repository ships', () => {
     expect(summaries.every((a) => a.source === 'example')).toBe(true);
   });
 
-  it('grant the shipped agent nothing but memory, reminders, schedules, the owner profile, the canvas, a colleague and a look at the roster', () => {
+  it('grant the shipped agent nothing but memory, learning proposals, reminders, schedules, the owner profile, the canvas, a colleague and a look at the roster', () => {
     const shipped = catalog().resolve('concierge');
     expect(shipped.tools.length).toBeGreaterThan(0);
     // The canvas is on the list because it is the platform's own, owns no data
@@ -47,6 +47,8 @@ describe('the examples this repository ships', () => {
       shipped.tools.every(
         (name) =>
           name.startsWith('memory.') ||
+          // A proposal changes nothing until the owner keeps it (learning.md §6).
+          name.startsWith('learning.') ||
           name.startsWith('reminder.') ||
           name.startsWith('schedule.') ||
           name.startsWith('owner.') ||
@@ -96,9 +98,12 @@ describe('the examples this repository ships', () => {
     expect(father.tools).toContain('platform.create_agent');
     expect(father.tools).toContain('platform.delete_agent');
     // Its own grant is the argument it makes to the owner: it writes agents, it
-    // does not read their money or their mail.
+    // does not read their money or their mail. Proposing what it learned
+    // changes nothing until the owner keeps it.
     expect(
-      father.tools.every((name) => name.startsWith('platform.') || name.startsWith('memory.')),
+      father.tools.every(
+        (name) => name.startsWith('platform.') || name.startsWith('memory.') || name.startsWith('learning.'),
+      ),
     ).toBe(true);
     // Only one agent in a fresh clone may write.
     const writers = loaded

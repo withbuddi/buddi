@@ -50,6 +50,7 @@ export function Home({
   const reminders = useAsync(() => api.reminders(), [], 60_000);
   const conversations = useAsync(() => api.conversations(), [], 30_000);
   const offers = useAsync(() => api.offers(), [], 30_000);
+  const proposals = useAsync(() => api.proposals(), [], 60_000);
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
 
   const data = overview.data;
@@ -59,7 +60,8 @@ export function Home({
   const pending: ApprovalRow[] = approvals.data?.pending ?? [];
   const failedJobs = data?.jobs?.failed ?? 0;
   const urgent = data?.sentinels?.openUrgent ?? 0;
-  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0);
+  const proposed = proposals.data?.open.length ?? 0;
+  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0);
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
@@ -74,7 +76,7 @@ export function Home({
       <header className="home-hero">
         <p className="home-date">{fmtDay(data?.now, timezone)}</p>
         <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
-        <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false)}</p>
+        <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
       </header>
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
@@ -103,6 +105,13 @@ export function Home({
               <Notice tone="critical">
                 <a href={`${ACTIVITY_ROUTE}/alerts`} onClick={go(`${ACTIVITY_ROUTE}/alerts`)}>
                   {urgent} urgent alert{urgent === 1 ? '' : 's'} from your watchers.
+                </a>
+              </Notice>
+            ) : null}
+            {proposed > 0 ? (
+              <Notice tone="accent">
+                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
+                  {proposed} proposal{proposed === 1 ? '' : 's'} from your agents to keep or discard.
                 </a>
               </Notice>
             ) : null}
@@ -351,13 +360,14 @@ function fmtDay(iso: string | undefined, timezone: string): string {
   }
 }
 
-export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean): string {
+export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0): string {
   if (needs === 0) return 'Nothing needs you. Your agents are on it.';
   const parts: string[] = [];
   if (approvals > 0) parts.push(`${approvals} approval${approvals === 1 ? '' : 's'} waiting`);
   if (failed > 0) parts.push(`${failed} failed job${failed === 1 ? '' : 's'}`);
   if (urgent > 0) parts.push(`${urgent} urgent finding${urgent === 1 ? '' : 's'}`);
   if (paused) parts.push('the installation is paused');
+  if (proposals > 0) parts.push(`${proposals} proposal${proposals === 1 ? '' : 's'} to review`);
   const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
   return `${capitalise(list)}.`;
 }

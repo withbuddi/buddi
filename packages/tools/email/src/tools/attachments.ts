@@ -247,6 +247,7 @@ export function createFetchAttachmentTool(
 ): ToolDefinition<FetchAttachmentInput, FetchAttachmentResult> {
   return {
     name: 'email.fetch_attachment',
+    untrusted: 'mail',
     description:
       "Download one attachment of one message and keep it as a file in the owner's library, so it can be read, shown or referred to later. Name the message, and the attachment by `index` (its position in the list email.read shows) or by `filename`. Fetching the same file twice gives back the same file — it is stored by its contents, not by its name. Refused, with the reason, when the attachment is bigger than 25 MB, when it is a program rather than a document, and when the message is no longer on the server. Reading never marks the message as read.",
     tier: 'auto',

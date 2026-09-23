@@ -36,6 +36,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
+import { discardProposalFromWeb, keepProposalFromWeb, readProposals } from './proposals.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
@@ -1078,6 +1079,8 @@ export function createWebApp(deps: WebServerDeps): Server {
               agentIds: deps.catalog.list().map((a) => a.id),
             }),
           );
+        case '/api/proposals':
+          return sendJson(res, 200, await readProposals(deps.pool, now));
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -2386,6 +2389,21 @@ export function createWebApp(deps: WebServerDeps): Server {
               }
             : {}),
         }),
+      );
+    }
+
+    /*
+     * Keeping or discarding what an agent proposed. The same gate as every
+     * other write; neither applies anything in this build (see proposals.ts).
+     */
+    const proposal = /^\/api\/proposals\/([^/]+)\/(keep|discard)$/.exec(path);
+    if (proposal) {
+      const id = decodeURIComponent(proposal[1] as string);
+      return finish(
+        res,
+        proposal[2] === 'keep'
+          ? await keepProposalFromWeb(writeDeps, id, typeof body.text === 'string' ? body.text : undefined)
+          : await discardProposalFromWeb(writeDeps, id, typeof body.reason === 'string' ? body.reason : undefined),
       );
     }
 

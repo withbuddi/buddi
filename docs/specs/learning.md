@@ -1,6 +1,6 @@
 # Learning: buddi proposes, the owner keeps
 
-Status: accepted, not started, 2026-09-21
+Status: in progress — step 1 (proposals, tools, inbox, provenance) built 2026-09-23
 
 ## 1. The rule
 
