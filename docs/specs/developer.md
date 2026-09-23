@@ -36,12 +36,26 @@ never by the agent:
 - `ask`: every write and every command is gated. For a workspace with
   something to lose.
 - `edit`: reads, searches, edits and writes inside the workspace are auto;
-  commands are gated. The default.
+  commands are gated.
 - `run`: a short, pinned list of commands runs inside the workspace without a
   card — the project's own test, build and lint scripts, and the ordinary
   read-only tools (§5). Everything else still asks. For a project the owner
   would let Claude Code run freely in, and an owner who understands that the
-  project's own scripts then run as them.
+  project's own scripts then run as them. **The default** since 2026-09-23:
+  `edit` as the default made every first session a wall of cards for `npm run
+  build`, and an owner who granted a workspace at all almost always wants
+  this one. The other two stay a select away.
+
+**Remembering an answer.** A gated command's card carries one choice besides
+yes: remember this, in this workspace. Either exactly this argv, or any
+command that begins the way this one does (the program and its subcommand,
+`npm install …`). A remembered command is `auto` in `edit` and `run` mode
+and never in `ask`, is matched on the argv that will be spawned (so only a
+plain command can ever be remembered), is bound to the agent *and* the
+directory (a workspace moved elsewhere starts with nothing remembered), and
+is listed and revocable on Settings → Developer under "Commands you
+allowed". It is the run list's floor grown by the owner, one card at a time,
+rather than a switch that means "anything".
 
 The mode is what the `session` tier was made for: the runtime resolves the
 agent's session grants from the *declared* tier at run start, so a delegate
@@ -185,7 +199,7 @@ would be, so it is written out per program:
 | --- | --- | --- | --- |
 | `node` | — | `--test` | files; at least one, unless `--test` |
 | `npm` `pnpm` `yarn` `bun` | one of `run test build lint typecheck`, required | none at all | at most one script name (`[a-z0-9:_.-]+`) |
-| `python` `python3` | — | `-m <word>`, and it must be the **first** word | the module, one of `pytest unittest mypy ruff black`; everything after it is read by that module's own row |
+| `python` `python3` | — | `-m <word>`, and it must be the **first** word | the module, one of `pytest unittest mypy ruff black`; everything after it is read by that module's own row — **or** one file of the project's own, with no flags at all (`python3 scripts/build.py`) |
 | `pytest` | — | `-q -x -v -k <word> --maxfail=<n> -p <word>` | paths |
 | `unittest` | — | none | bare words |
 | `go` | one of `test build vet fmt`, required | `-v -run <re>` | `./...`, `pkg/...` or paths |
@@ -210,6 +224,23 @@ would be, so it is written out per program:
 | `echo` | — | none | any words |
 | `pwd` | — | none | none |
 | `which` | — | none | one bare word |
+
+Two more allowances turn on a file being there, so they are decided by the
+caller that owns the filesystem (`runListFor`) rather than by the table:
+
+- **An install that only reproduces the lockfile.** `npm ci`, a bare `npm
+  install`, `pnpm install [--frozen-lockfile]`, `yarn [install]
+  [--immutable]`, `bun install` — with no package named and no flag beyond
+  the frozen/offline/no-scripts ones — fetch what the repository already
+  declares, which is what the owner did when they cloned it. Allowed when the
+  matching lockfile is in the command's directory; `npm install <package>`
+  names something new and stays a card.
+- **`npx` of the project's own binary.** `npx vite build` when
+  `node_modules/.bin/vite` exists between the command's directory and the
+  workspace root runs the project's own code, exactly as `npm run` does, and
+  `npx` fetches nothing when the binary is there. Its arguments are bounded
+  the one way the grammar can: none absolute, none climbing with `..`, none
+  starting at `~`. `npx cowsay` with no such binary is a card, as before.
 
 Everything else asks, and the card names the program. The old parser survives
 for one job: putting a *name* on that card ("npm install installs packages
@@ -242,9 +273,12 @@ keeping the last two whole.
 ## 8. Settings and pages
 
 Settings → Developer: the workspaces list (agent, directory, mode, running
-processes), a "Stop all processes" action, and the sentence "A developer
+processes), a "Stop all processes" action, the sentence "A developer
 agent runs code you did not write, inside this directory, with the rights
-of your user. Give it a workspace you would let a colleague use."
+of your user. Give it a workspace you would let a colleague use." — and
+"Commands you allowed": every "always" the owner said on a card (§3), with
+the agent, the workspace, the command and whether it is exact or a prefix,
+each with a Forget action (`developer.forget_command`, owner-only).
 
 ## 9. What it is not, and what is left over
 

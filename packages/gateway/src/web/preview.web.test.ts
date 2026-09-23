@@ -50,6 +50,7 @@ interface Seen {
 /** A dev server on a loopback port, answering whatever the test tells it to. */
 async function upstream(
   answer: (req: IncomingMessage, res: ServerResponse, seen: Seen) => void,
+  host = '127.0.0.1',
 ): Promise<{ port: number; seen: Seen[]; server: Server }> {
   const seen: Seen[] = [];
   const server = createServer((req, res) => {
@@ -67,7 +68,7 @@ async function upstream(
     });
   });
   upstreams.push(server);
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, host, () => resolve()));
   return { port: (server.address() as AddressInfo).port, seen, server };
 }
 
@@ -523,6 +524,17 @@ it('is 502, in one sentence, when the port refuses', async () => {
   expect((await res.json()) as { error: string }).toEqual({
     error: 'That preview is not answering: the process behind it may have stopped.',
   });
+});
+
+it('reaches an app that bound the IPv6 loopback alone, as Vite does for `localhost`', async () => {
+  const app = await upstream((_req, res) => res.end('six'), '::1');
+  const web = await dashboard(pluginWith(async () => ({ port: app.port })));
+  const link = await fetch(`${web.origin}/api/preview/developer/web/link`);
+  const exchanged = await fetch(((await link.json()) as { url: string }).url, { redirect: 'manual' });
+  const cookie = exchanged.headers.getSetCookie()[0]?.split(';')[0] ?? '';
+  const res = await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: cookie } });
+  expect(res.status).toBe(200);
+  expect(await res.text()).toBe('six');
 });
 
 it('tells the plugin when the app assumes it owns the root of a host', async () => {
