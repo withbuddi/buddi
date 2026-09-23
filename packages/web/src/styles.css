@@ -1792,6 +1792,57 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-doc-image { border-radius: var(--radius); }
 .wb-doc-pdf { width: 100%; height: 70vh; border-radius: var(--radius); border: 1px solid var(--line); }
 
+/* ---- a command's output, as a terminal: dark in either theme ---- */
+.wb-terminal { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.wb-terminal-head { flex-wrap: nowrap; }
+.wb-terminal-command {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.wb-terminal-command::before { content: '$ '; color: var(--text-faint); }
+.wb-terminal-fact { flex: none; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-muted); }
+.wb-terminal-head .ui-pill { flex: none; }
+.wb-terminal-note { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.wb-terminal-body {
+  margin: 0;
+  min-width: 0;
+  max-height: 60vh;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  background: var(--terminal-bg);
+  color: var(--terminal-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading);
+  white-space: pre;
+  tab-size: 4;
+}
+.wb-terminal-body:focus-visible { outline-offset: var(--space-0); }
+.wb-terminal-facts { margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--line); }
+
+/* ---- a picture from the Files library ---- */
+.wb-image { margin: 0; display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.wb-image-frame {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.wb-image-link { display: block; max-width: 100%; cursor: zoom-in; }
+.wb-image-link img { display: block; max-width: 100%; max-height: 65vh; object-fit: contain; border-radius: var(--radius); }
+.wb-image-caption { display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.wb-image-name { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.wb-image-facts { color: var(--text-muted); font-size: var(--text-sm); }
+.wb-image-note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
 /* ---- a running process, framed beside its output ---- */
 /* ---- preview: the app is the tab; buddi is one thin strip above it ---- */
 .wb-canvas-body[data-renderer='preview'] { padding: 0; display: flex; }
@@ -1824,21 +1875,18 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
   background: var(--surface);
 }
 .wb-preview-frame.wb-empty { display: flex; align-items: center; justify-content: center; }
-.wb-preview-output {
+.wb-preview-output.wb-terminal-body {
   flex: 0 0 min(36%, 420px);
-  min-width: 0;
-  margin: 0;
-  overflow: auto;
+  max-height: none;
+  border-radius: 0;
+  border-left: 1px solid var(--line);
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--surface-sunken);
-  border-left: 1px solid var(--line);
-  padding: 12px 14px;
-  font-size: var(--text-sm);
 }
+.wb-preview-port { height: var(--control-h-sm); font-family: var(--font-mono); font-size: var(--text-sm); }
 @media (max-width: 900px) {
   .wb-preview-body { flex-direction: column; }
-  .wb-preview-output { flex-basis: 40%; border-left: 0; border-top: 1px solid var(--line); }
+  .wb-preview-output.wb-terminal-body { flex-basis: 40%; border-left: 0; border-top: 1px solid var(--line); }
 }
 
 /* ---- the chart ---- */

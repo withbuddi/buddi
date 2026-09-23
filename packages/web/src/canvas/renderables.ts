@@ -419,6 +419,10 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
       return Boolean(record['text']) || Boolean(record['src']);
     case 'diff':
       return Boolean(record['diff']);
+    case 'terminal':
+      return Boolean(record['output']) || Boolean(record['command']);
+    case 'image':
+      return Boolean(record['artifactId']);
     // A frame with nothing to point at is a box: the tab is earned by there
     // being a process to look at.
     case 'preview':

@@ -134,6 +134,7 @@ describe('reloading the frame after a change', () => {
     port: null,
     awaiting: null,
     reloadsItself: false,
+    ports: [],
     changes: 3,
   };
 

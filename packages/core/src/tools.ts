@@ -478,7 +478,16 @@ export interface NetworkUse {
  * pointed, and that is the plugin's half of the boundary.
  */
 export interface PreviewProvider {
-  /** The port behind `/preview/<plugin>/<name>/`, or null when there is none. */
+  /**
+   * The port behind `/preview/<plugin>/<name>/`, or null when there is none.
+   *
+   * A name may also be `<name>.<port>`: the same process, framed on another
+   * port it listens on — a server that answers on several (a site, its admin
+   * and its API). The canvas asks for it when the owner picks a port from the
+   * list a result carried. A provider that does not offer that answers null;
+   * one that does answers only for a port the process itself (or a child of
+   * it) holds right now, checked as afresh as the plain name is.
+   */
   resolve(name: string, ctx: ToolContext): Promise<{ port: number; host?: '127.0.0.1' } | null>;
 }
 

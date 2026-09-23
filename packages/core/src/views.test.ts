@@ -148,6 +148,66 @@ describe('view descriptors', () => {
     ).toThrow(/invalid view descriptor/);
   });
 
+  it('accepts the ports a preview may be moved between', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.start',
+      renderer: 'preview',
+      map: { src: 'preview', port: 'port', ports: 'ports' },
+    });
+    expect(parsed.map).toMatchObject({ ports: 'ports' });
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.start', renderer: 'preview', map: { src: 'preview', ports: [3000] } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+  });
+
+  it('accepts a terminal that names its output, with the command and the facts beside it', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.run',
+      renderer: 'terminal',
+      map: {
+        output: 'plain',
+        command: { path: 'command' },
+        exitCode: 'exitCode',
+        elapsedMs: 'elapsedMs',
+        omittedBytes: 'omittedBytes',
+        metadata: [{ label: 'Directory', value: { path: 'path' } }],
+      },
+    });
+    expect(parsed.renderer).toBe('terminal');
+    // No output, nothing to draw; and a document's `text` is not this one's field.
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.run', renderer: 'terminal', map: { command: { path: 'command' } } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.run', renderer: 'terminal', map: { output: 'plain', text: 'plain' } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+  });
+
+  it('accepts an image that names a library file, and nothing it could load from elsewhere', () => {
+    const parsed = viewDescriptorSchema.parse({
+      tool: 'demo.snap',
+      renderer: 'image',
+      map: { src: 'file', title: { path: 'name' }, caption: { const: 'The page, as rendered' } },
+    });
+    expect(parsed.renderer).toBe('image');
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.snap', renderer: 'image', map: { title: { path: 'name' } } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+    expect(() =>
+      parseViewDescriptors([{ tool: 'demo.snap', renderer: 'image', map: { src: 'file', url: 'https' } }], {
+        plugin: 'demo',
+      }),
+    ).toThrow(/invalid view descriptor/);
+  });
+
   it('refuses a descriptor for a tool the plugin does not contribute', () => {
     expect(() =>
       parseViewDescriptors([{ tool: 'demo.gone', renderer: 'structured', map: {} }], {

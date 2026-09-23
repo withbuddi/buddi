@@ -30,6 +30,8 @@ export type RendererName =
   | 'keyvalue'
   | 'document'
   | 'diff'
+  | 'terminal'
+  | 'image'
   | 'preview'
   | 'envelope'
   | 'structured';
@@ -166,6 +168,44 @@ export interface DiffMap {
 }
 
 /**
+ * What a command printed, the way a terminal shows it.
+ *
+ * The command is the header line; the output is the body, plain text in a
+ * dark monospace box that follows the end as it grows. The exit code and the
+ * elapsed time are the facts beside the command. `omittedBytes` is how much
+ * of the head a cap dropped, which the panel says rather than letting a tail
+ * pass for the whole.
+ */
+export interface TerminalMap {
+  /** Path to the output text. Plain text: the page draws no colour codes. */
+  output: string;
+  /** The command line, drawn on top. */
+  command?: ValueRef;
+  /** Path to the exit code. */
+  exitCode?: string;
+  /** Path to how long it took, in milliseconds. */
+  elapsedMs?: string;
+  /** Path to how many bytes were dropped from the start of the output. */
+  omittedBytes?: string;
+  metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
+}
+
+/**
+ * A picture from the Files library.
+ *
+ * `src` is a path into the output whose value is a library file: its id (the
+ * artifact's uuid), or an object carrying one as `id` or `artifactId`. Like a
+ * preview it *names* a file rather than being a URL: the page builds the only
+ * two it will use, the library's own preview and download routes, so a
+ * descriptor cannot point an image anywhere else.
+ */
+export interface ImageMap {
+  src: string;
+  title?: ValueRef;
+  caption?: ValueRef;
+}
+
+/**
  * A process of the owner's, framed beside what it is printing.
  *
  * `src` is a path into the output, and what it finds *names* a process —
@@ -197,6 +237,13 @@ export interface PreviewMap {
    * reloads the frame after a change to a file in the conversation.
    */
   reloadsItself?: string;
+  /**
+   * Path to every port the process's tree is listening on that a preview may
+   * use. With more than one the panel offers a picker; choosing another port
+   * asks the link route for `<name>.<port>`, which the plugin's `previews`
+   * provider answers only for a port that same tree holds.
+   */
+  ports?: string;
 }
 
 export type ViewMap =
@@ -206,6 +253,8 @@ export type ViewMap =
   | KeyValueMap
   | DocumentMap
   | DiffMap
+  | TerminalMap
+  | ImageMap
   | PreviewMap
   | Record<string, never>;
 
@@ -382,6 +431,26 @@ const diffMapSchema = z
   })
   .strict();
 
+const terminalMapSchema = z
+  .object({
+    output: viewPathSchema,
+    command: valueRefSchema.optional(),
+    exitCode: viewPathSchema.optional(),
+    elapsedMs: viewPathSchema.optional(),
+    omittedBytes: viewPathSchema.optional(),
+    metadata: metadataSchema.optional(),
+  })
+  .strict();
+
+const imageMapSchema = z
+  .object({
+    /** Path to a library file: its id, or an object carrying `id` / `artifactId`. */
+    src: viewPathSchema,
+    title: valueRefSchema.optional(),
+    caption: valueRefSchema.optional(),
+  })
+  .strict();
+
 const previewMapSchema = z
   .object({
     src: viewPathSchema,
@@ -393,6 +462,8 @@ const previewMapSchema = z
     awaiting: viewPathSchema.optional(),
     /** Path to a boolean: the process reloads its own page after a change. */
     reloadsItself: viewPathSchema.optional(),
+    /** Path to the ports the process's tree listens on, for the picker. */
+    ports: viewPathSchema.optional(),
   })
   .strict();
 
@@ -418,6 +489,8 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('keyvalue'), map: keyValueMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('document'), map: documentMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('diff'), map: diffMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('terminal'), map: terminalMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('image'), map: imageMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('preview'), map: previewMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('envelope'), map: emptyMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('structured'), map: emptyMapSchema }).strict(),

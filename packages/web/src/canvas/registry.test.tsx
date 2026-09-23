@@ -88,10 +88,12 @@ describe('the renderer registry', () => {
       'diff',
       'document',
       'envelope',
+      'image',
       'keyvalue',
       'preview',
       'structured',
       'table',
+      'terminal',
       'timeseries',
     ]);
   });

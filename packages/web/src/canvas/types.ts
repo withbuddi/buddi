@@ -19,6 +19,8 @@ export type RendererName =
   | 'keyvalue'
   | 'document'
   | 'diff'
+  | 'terminal'
+  | 'image'
   | 'preview'
   | 'envelope'
   | 'structured';
@@ -100,6 +102,27 @@ export interface DiffMap {
   metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
 }
 
+/** What a command printed: the command on top, the output as a terminal body. */
+export interface TerminalMap {
+  /** Path to the output text, plain. */
+  output: string;
+  command?: ValueRef;
+  /** Path to the exit code. */
+  exitCode?: string;
+  /** Path to the elapsed time, in milliseconds. */
+  elapsedMs?: string;
+  /** Path to how many bytes a cap dropped from the start. */
+  omittedBytes?: string;
+  metadata?: Array<{ label: string; value: ValueRef; unit?: Unit }>;
+}
+
+/** A picture from the Files library: `src` is a path to its id. */
+export interface ImageMap {
+  src: string;
+  title?: ValueRef;
+  caption?: ValueRef;
+}
+
 /** A loopback process of the owner's, framed beside what it is printing. */
 export interface PreviewMap {
   /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
@@ -113,6 +136,8 @@ export interface PreviewMap {
   awaiting?: string;
   /** Path to a boolean: the process reloads its own page after a change. */
   reloadsItself?: string;
+  /** Path to the ports the process's tree listens on, for the picker. */
+  ports?: string;
 }
 
 export type ViewMap =
@@ -122,6 +147,8 @@ export type ViewMap =
   | KeyValueMap
   | DocumentMap
   | DiffMap
+  | TerminalMap
+  | ImageMap
   | PreviewMap
   | Record<string, never>;
 
@@ -190,6 +217,29 @@ export interface DiffProps {
   metadata: Array<{ label: string; value: unknown; unit: Unit }>;
 }
 
+export interface TerminalProps {
+  /** The command line, drawn as the header. */
+  command: string | null;
+  /** What it printed, plain text; null when the result carried none. */
+  output: string | null;
+  exitCode: number | null;
+  elapsedMs: number | null;
+  /** Bytes a cap dropped from the head, when any were. */
+  omittedBytes: number | null;
+  metadata: Array<{ label: string; value: unknown; unit: Unit }>;
+}
+
+export interface ImageProps {
+  /**
+   * The library file, by id — a uuid and nothing else, so the only URLs the
+   * panel builds are the library's own preview and download routes. Null
+   * when the descriptor pointed at something that is not one.
+   */
+  artifactId: string | null;
+  title: string | null;
+  caption: string | null;
+}
+
 export interface PreviewProps {
   /**
    * Which preview to ask the dashboard for a link to, or null when the
@@ -218,6 +268,12 @@ export interface PreviewProps {
   awaiting: { plugin: string; name: string } | null;
   /** True when the process reloads its own page after a change (hot reload). */
   reloadsItself: boolean;
+  /**
+   * Every port the process's tree listens on that a preview may use, as the
+   * plugin checked them. More than one draws a picker; the panel never offers
+   * a port that is not in this list.
+   */
+  ports: number[];
   /**
    * How many changes to files this conversation has made, set by the page.
    * The panel reloads its frame when this grows while it is on screen —
