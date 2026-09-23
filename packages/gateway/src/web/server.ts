@@ -2440,7 +2440,8 @@ export function createWebApp(deps: WebServerDeps): Server {
     const questionAnswer = /^\/api\/chat\/questions\/([^/]+)\/answer$/.exec(path);
     if (questionAnswer) {
       if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
-      if (typeof body.answer !== 'string' || body.answer.trim() === '') {
+      const skipped = body.skipped === true;
+      if (!skipped && (typeof body.answer !== 'string' || body.answer.trim() === '')) {
         return sendJson(res, 400, { error: '`answer` must be a non-empty string' });
       }
       if (body.optionId !== undefined && typeof body.optionId !== 'string') {
@@ -2448,8 +2449,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       const answered = await chat.answer({
         id: decodeURIComponent(questionAnswer[1] as string),
-        answer: body.answer,
+        answer: typeof body.answer === 'string' ? body.answer : '',
         ...(typeof body.optionId === 'string' ? { optionId: body.optionId } : {}),
+        ...(skipped ? { skipped: true } : {}),
       });
       if (!answered.ok) return sendJson(res, answered.status, { error: answered.error });
       return sendJson(res, 202, answered);

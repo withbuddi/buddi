@@ -81,20 +81,31 @@ export async function getQuestion(pool: Queryable, id: string): Promise<Question
   return rows[0] ? toQuestion(rows[0]) : null;
 }
 
+/**
+ * What the agent reads when the owner skips a question instead of answering
+ * it. Plain words, because it travels as the owner's next message: the agent
+ * must go on without the answer, not ask again.
+ */
+export const SKIPPED_ANSWER = 'Skipped. Go on without an answer and use your own judgement.';
+
 export async function answerQuestion(
   pool: Queryable,
-  input: { id: string; answer: string; optionId?: string; via: string; now: Date },
+  input: { id: string; answer: string; optionId?: string; skipped?: boolean; via: string; now: Date },
 ): Promise<{ ok: true; question: Question } | { ok: false; reason: 'unknown' | 'closed' | 'expired' | 'invalid-option' }> {
-  const answer = input.answer.trim();
+  // A skip is neither an option nor free text, so it is checked against
+  // neither — it is always allowed while the question is open.
+  const answer = input.skipped ? SKIPPED_ANSWER : input.answer.trim();
   const { rows: found } = await pool.query(`select ${QUESTION_COLUMNS} from core.questions where id = $1`, [input.id]);
   if (!found[0]) return { ok: false, reason: 'unknown' };
   const current = toQuestion(found[0]);
   if (current.answeredAt) return { ok: false, reason: 'closed' };
   if (Date.parse(current.expiresAt) <= input.now.getTime()) return { ok: false, reason: 'expired' };
-  if (input.optionId && !current.options.some((option) => option.id === input.optionId && option.label === answer)) {
-    return { ok: false, reason: 'invalid-option' };
+  if (!input.skipped) {
+    if (input.optionId && !current.options.some((option) => option.id === input.optionId && option.label === answer)) {
+      return { ok: false, reason: 'invalid-option' };
+    }
+    if (!input.optionId && !current.allowOther) return { ok: false, reason: 'invalid-option' };
   }
-  if (!input.optionId && !current.allowOther) return { ok: false, reason: 'invalid-option' };
   const { rows } = await pool.query(
     `update core.questions set answered_at = $2, answered_via = $3, answer = $4
       where id = $1 and answered_at is null and expires_at > $2

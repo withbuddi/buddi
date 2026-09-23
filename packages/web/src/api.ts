@@ -1062,7 +1062,7 @@ export const chatApi = {
       queued?: boolean;
       pendingId?: string;
     }>(`/chat/${encodeURIComponent(agentId)}/messages`, body),
-  answerQuestion: (id: string, body: { answer: string; optionId?: string }) =>
+  answerQuestion: (id: string, body: { answer: string; optionId?: string; skipped?: boolean }) =>
     post<{ conversationId: string; runId: string }>(
       `/chat/questions/${encodeURIComponent(id)}/answer`,
       body,
