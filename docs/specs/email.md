@@ -430,6 +430,35 @@ watcher reads is computed from its setting with a week of room above it, so
 `promisedDays: 31` reports a week of news rather than the nothing a
 thirty-day window would have returned.
 
+### 7a. Numbers a goal can watch
+
+**Built** (migration `013_last_synced.sql`). Metrics are core's way of letting
+a goal watch a number a plugin owns (`docs/plugins.md` §2.3a,
+`docs/specs/goals.md`); this plugin contributes one:
+
+- **`email.waiting_on_me`** (count, down, no narrowing) — how many
+  conversations are waiting on the owner. It is the `email.waiting-on-me`
+  watcher's own query with `count(*)` where its findings would be, so the pile
+  a goal counts and the pile the watcher nags about are the same pile: the same
+  waiting window, the same "you have written to them before", the same ignore
+  policies, the same thirty-day ceiling and the same **enabled** mailboxes.
+  Both read that scope from one place — the shared CTE joins `accounts` and
+  requires `enabled`, so a mailbox the owner switched off counts for neither.
+- **`asOf` is the stalest completed poll** among the enabled accounts, read
+  from `accounts.last_synced_at`, which the source stamps at the end of a pass
+  that got all the way through. Not `now` — mail is only as current as the last
+  poll — and not the newest sync either, because an aggregate is as fresh as
+  its stalest part. An account that has never finished a poll makes the whole
+  answer *not measurable*: the count would be "everything except whatever is in
+  that mailbox". A mailbox that synced and found nothing waiting answers **0**,
+  which is the fact `max(fetched_at)` over the messages could never state.
+
+**`email.inbox_unread` is deliberately not shipped.** `flags` is written once
+at ingest and never re-synced — the fetch is a peek and the insert is `on
+conflict … do nothing` — so a count over it only ever climbs, whatever the
+owner reads. A goal on it would be settled `missed` for an inbox somebody had
+actually emptied. It needs an IMAP flag re-sync first (ROADMAP, small items).
+
 ## 8. Drafts and sending
 
 **Built** (step 5, migration `010_drafts.sql`).

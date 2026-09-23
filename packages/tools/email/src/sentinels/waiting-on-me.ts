@@ -72,6 +72,12 @@ const WAITING_SOURCE = `
            coalesce(m.internal_date, m.fetched_at) as at
       from email.messages m
       join email.threads t on t.id = m.thread_id
+      -- Enabled mailboxes only, which is the scope every read tool has
+      -- (listAccounts defaults to it). A mailbox the owner switched off keeps
+      -- its mail and its cursor and is not walked; a watcher that nagged about
+      -- its threads -- or a goal that counted them -- would be speaking about
+      -- mail nothing else here will show him.
+      join email.accounts a on a.id = m.account_id and a.enabled
      where m.direction = 'in'
        and t.state = 'waiting-on-me'
      order by m.thread_id, coalesce(m.internal_date, m.fetched_at) desc, m.id desc

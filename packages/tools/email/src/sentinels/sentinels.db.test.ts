@@ -277,6 +277,18 @@ suite('email watchers (postgres)', () => {
       expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
     });
 
+    it('says nothing about a mailbox the owner switched off', async () => {
+      // A disabled account keeps its mail and is not polled; its threads are
+      // not something to be nagged about, and `email.waiting_on_me` counts
+      // them for nothing either — one query, one scope, both of them.
+      await waitingThread({ ageDays: 5 });
+      expect(await raise(waitingOnMe, ctx())).toHaveLength(1);
+      await pool.query(`update email.accounts set enabled = false where id = $1`, [accountId]);
+      const report = await waitingOnMe.run(ctx());
+      expect(findingsOf(report)).toEqual([]);
+      expect([...stillTrueKeys(report)]).toEqual([]);
+    });
+
     it('respects a muted conversation', async () => {
       const { threadId } = await waitingThread({ ageDays: 5 });
       await setThreadState(pool, threadId, 'muted');

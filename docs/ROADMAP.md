@@ -79,6 +79,10 @@ Small, whenever a slot opens:
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
 - Artefacts page — the list of `core.artifacts` with preview and download.
+- `email.inbox_unread` needs IMAP flag re-sync first — the metric is worth
+  having and cannot exist until a poll refreshes `\Seen` on rows it already
+  has. Today flags are written once at ingest (`on conflict … do nothing`), so
+  the count only climbs and a goal on it would be missed by construction.
 - `ToolRef.pending` on plugin pages — a sentence drawn above a gated action's
   approval card while it waits ("Nothing has been sent…"); the one Mail
   behaviour the port could not express.

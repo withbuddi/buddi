@@ -1,18 +1,19 @@
 /**
- * `email.inbox_unread` and `email.waiting_on_me`, without a database.
+ * `email.waiting_on_me`, without a database.
  *
  * A fake `db` that answers a regex with rows, the way the tools' own unit
  * tests fake one. What is worth pinning here is not the SQL — the DB suite
- * runs the real statements — but the *answers around* it: which mailboxes are
- * counted, that the number is stamped with the last sync rather than with now,
- * and the three silences that must be `null` instead of a confident zero.
+ * runs the real statements — but the answers around it: that the number is
+ * stamped with the *stalest* completed poll rather than with now or with the
+ * freshest, and the silences that must be `null` instead of a confident zero.
  */
 import { describe, expect, it } from 'vitest';
-import { emailMetrics, inboxUnread, waitingOnMe } from './metrics.js';
+import { emailMetrics, stalestSync, waitingOnMe } from './metrics.js';
 import { createEmailManifest } from './index.js';
 
 const NOW = new Date('2026-09-22T09:00:00Z');
-const SYNCED = '2026-09-22T06:30:00.000Z';
+const FRESH = new Date('2026-09-22T08:55:00Z');
+const STALE = new Date('2026-09-20T10:00:00Z');
 
 const account = (id: string, address: string) => ({
   id,
@@ -31,16 +32,11 @@ const account = (id: string, address: string) => ({
   created_at: new Date('2026-01-01T00:00:00Z'),
 });
 
-/**
- * One fake context. Later patterns win nothing: the first that matches the
- * statement answers it, so the more specific ones are listed first.
- */
-function ctx(rows: Array<[string, unknown[] | ((params: unknown[]) => unknown[])]>): never {
-  const query = async (sql: string, params: unknown[] = []) => {
+/** One fake context: the first pattern that matches the statement answers it. */
+function ctx(rows: Array<[string, unknown[]]>): never {
+  const query = async (sql: string) => {
     for (const [pattern, result] of rows) {
-      if (new RegExp(pattern).test(sql)) {
-        return { rows: typeof result === 'function' ? result(params) : result };
-      }
+      if (new RegExp(pattern).test(sql)) return { rows: result };
     }
     return { rows: [] };
   };
@@ -50,80 +46,63 @@ function ctx(rows: Array<[string, unknown[] | ((params: unknown[]) => unknown[])
 const ACCOUNTS = [account('a1', 'owner@example.test'), account('a2', 'owner@work.test')];
 
 function mailbox(
-  opts: { accounts?: unknown[]; synced?: Array<[string, string]>; unread?: number; waiting?: number } = {},
+  opts: { accounts?: unknown[]; synced?: Array<[string, Date | null]>; waiting?: number } = {},
 ): never {
   const synced = opts.synced ?? [
-    ['a1', SYNCED],
-    ['a2', '2026-09-20T10:00:00.000Z'],
+    ['a1', FRESH],
+    ['a2', STALE],
   ];
   return ctx([
-    ['max\\(fetched_at\\)', synced.map(([id, at]) => ({ account_id: id, last_sync: new Date(at) }))],
-    ['count\\(\\*\\)::int as n from email\\.messages', [{ n: opts.unread ?? 0 }]],
+    ['last_synced_at from email\\.accounts', synced.map(([id, at]) => ({ id, last_synced_at: at }))],
     ['from waiting', [{ n: opts.waiting ?? 0 }]],
     ['from email\\.settings', []],
-    // Naming one mailbox is a lookup by address, alias or id, and the fake
-    // has to answer it the way the table does — or "the account you named"
-    // would silently be "the first account there is".
-    [
-      'or id::text = \\$1',
-      (params: unknown[]) =>
-        (opts.accounts ?? ACCOUNTS).filter(
-          (a) => (a as { address: string; id: string }).address === params[0] || (a as { id: string }).id === params[0],
-        ),
-    ],
     ['from email\\.accounts', opts.accounts ?? ACCOUNTS],
   ]);
 }
 
 describe('the metrics this plugin contributes', () => {
-  it('are on the manifest, as counts that should come down', () => {
+  it('is one count that should come down, and no unread count yet', () => {
     expect(createEmailManifest().metrics).toEqual(emailMetrics);
-    expect(emailMetrics.map((m) => m.id)).toEqual(['email.inbox_unread', 'email.waiting_on_me']);
+    expect(emailMetrics.map((m) => m.id)).toEqual(['email.waiting_on_me']);
     expect(emailMetrics.every((m) => m.unit === 'count' && m.direction === 'down')).toBe(true);
   });
 });
 
-describe('email.inbox_unread', () => {
-  it('counts every mailbox by default, as of the newest sync', async () => {
-    const reading = await inboxUnread.measure({}, mailbox({ unread: 17 }));
-    expect(reading?.value).toBe(17);
-    expect(reading?.asOf.toISOString()).toBe(SYNCED);
-    expect(reading?.note).toBe('across 2 mailboxes');
+describe('how current the answer is', () => {
+  it('is the stalest completed poll, not the newest', async () => {
+    expect((await stalestSync(mailbox({}), ['a1', 'a2']))?.toISOString()).toBe(STALE.toISOString());
+    expect((await stalestSync(mailbox({}), ['a1']))?.toISOString()).toBe(FRESH.toISOString());
   });
 
-  it('counts one mailbox when it is named, and says which', async () => {
-    const reading = await inboxUnread.measure({ account: 'owner@work.test' }, mailbox({ unread: 4 }));
-    expect(reading?.value).toBe(4);
-    expect(reading?.note).toBe('owner@work.test');
-  });
-
-  it('refuses a mailbox this installation does not have, in the tools\' own words', async () => {
-    await expect(inboxUnread.measure({ account: 'someone@else.test' }, mailbox({}))).rejects.toThrow(
-      /no mail account here is someone@else\.test/,
-    );
-  });
-
-  it('is null with no mailbox configured, and null before the first sync', async () => {
-    expect(await inboxUnread.measure({}, mailbox({ accounts: [] }))).toBeNull();
-    expect(await inboxUnread.measure({}, mailbox({ synced: [], unread: 3 }))).toBeNull();
-  });
-
-  it('takes a mailbox and nothing else', () => {
-    expect(inboxUnread.params?.safeParse({}).success).toBe(true);
-    expect(inboxUnread.params?.safeParse({ account: 'owner@example.test' }).success).toBe(true);
-    expect(inboxUnread.params?.strict().safeParse({ unreadOnly: true }).success).toBe(false);
+  it('is nothing at all when one of the mailboxes has never finished a poll', async () => {
+    expect(await stalestSync(mailbox({ synced: [['a1', FRESH], ['a2', null]] }), ['a1', 'a2'])).toBeNull();
+    expect(await stalestSync(mailbox({}), [])).toBeNull();
   });
 });
 
 describe('email.waiting_on_me', () => {
-  it('is the watcher\'s own count, as of the last sync', async () => {
+  it('is the watcher\'s own count, as of the stalest sync', async () => {
     const reading = await waitingOnMe.measure({}, mailbox({ waiting: 6 }));
     expect(reading?.value).toBe(6);
-    expect(reading?.asOf.toISOString()).toBe(SYNCED);
+    expect(reading?.asOf.toISOString()).toBe(STALE.toISOString());
+    expect(reading?.note).toContain('2 mailboxes');
   });
 
-  it('is null with no mailbox, and before the first sync', async () => {
+  it('answers zero — a mailbox that synced and found nothing waiting is an answer', async () => {
+    const reading = await waitingOnMe.measure({}, mailbox({ waiting: 0 }));
+    expect(reading?.value).toBe(0);
+    expect(reading?.asOf.toISOString()).toBe(STALE.toISOString());
+  });
+
+  it('is null with no mailbox, and while one in scope has never synced', async () => {
     expect(await waitingOnMe.measure({}, mailbox({ accounts: [] }))).toBeNull();
-    expect(await waitingOnMe.measure({}, mailbox({ synced: [], waiting: 2 }))).toBeNull();
+    expect(
+      await waitingOnMe.measure({}, mailbox({ synced: [['a1', FRESH], ['a2', null]], waiting: 2 })),
+    ).toBeNull();
+  });
+
+  it('takes no narrowing', () => {
+    expect(waitingOnMe.params?.safeParse({}).success).toBe(true);
+    expect(waitingOnMe.params?.strict().safeParse({ account: 'owner@work.test' }).success).toBe(false);
   });
 });
