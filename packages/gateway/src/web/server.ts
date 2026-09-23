@@ -94,6 +94,7 @@ import {
 import { writeDefaultAgentRecord } from '../agents/default-agent.js';
 import { ownerEditableInput, updateAgentFromOwner, PlatformRefusal } from '../agents/platform.js';
 import { readAgentProfile } from './profile.js';
+import { readToolPicker } from './tool-picker.js';
 import { AVATAR_IMAGE } from './chat.js';
 import path_ from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -1261,6 +1262,16 @@ export function createWebApp(deps: WebServerDeps): Server {
         const view = readAgentProfile(
           { catalog: deps.catalog, registry: deps.registry },
           decodeURIComponent(profile[1] as string),
+        );
+        if (!view) return sendJson(res, 404, { error: 'no such agent' });
+        return sendJson(res, 200, view);
+      }
+      // Every installed tool, for the picker on the Setup tab. A read.
+      const toolPicker = /^\/api\/agents\/([^/]+)\/tools$/.exec(path);
+      if (toolPicker) {
+        const view = readToolPicker(
+          { catalog: deps.catalog, registry: deps.registry },
+          decodeURIComponent(toolPicker[1] as string),
         );
         if (!view) return sendJson(res, 404, { error: 'no such agent' });
         return sendJson(res, 200, view);

@@ -345,6 +345,27 @@ describe('the envelope carries the whole file and the resolved grant', () => {
     expect(envelope.tools.every((t) => t.startsWith('memory.') || t.startsWith('reminder.'))).toBe(true);
   });
 
+  it('starts a new agent with the memory tools, unless the request opts out', () => {
+    const withCore = described<CreateAgentEnvelope>(h, 'platform.create_agent', { ...baseCreate, tools: ['reminder.*'] }).envelope;
+    expect(withCore.tools).toContain('memory.note');
+    expect(withCore.tools).toContain('memory.recall');
+    const without = described<CreateAgentEnvelope>(h, 'platform.create_agent', { ...baseCreate, tools: ['reminder.*'], withoutMemory: true }).envelope;
+    expect(without.tools.some((t) => t.startsWith('memory.'))).toBe(false);
+  });
+
+  it('leaves a plugin proposal that omits the memory tools exactly as the plugin wrote it', () => {
+    h.registry.register({
+      name: 'orchard',
+      version: '1.0.0',
+      schema: 'orchard',
+      migrationsDir: '',
+      tools: [],
+      agents: [{ id: 'grower', handle: 'grower', name: 'Grower', description: 'Grows.', persona: 'You grow.', tools: ['reminder.*'] }],
+    });
+    const { envelope } = described<CreateAgentEnvelope>(h, 'platform.accept_plugin_agent', { plugin: 'orchard', agent: 'grower' });
+    expect(envelope.tools.some((t) => t.startsWith('memory.'))).toBe(false);
+  });
+
   it('carries the complete resulting file and the path it lands on', () => {
     const { envelope } = described<CreateAgentEnvelope>(h, 'platform.create_agent', baseCreate);
     expect(envelope.file).toBe(path.join(h.agentsDir, 'bookkeeper', 'agent.md'));
