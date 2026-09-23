@@ -147,7 +147,7 @@ model is handed the sentence.
 that changed (`effect-changed`); a `describe` that measured again would put a
 live number into a hashed envelope, so one mail arriving between the card and
 the tap would void a perfectly good approval — fine for a debt, hopeless for
-`email.inbox_unread`, which is one of the metrics step 3 ships. At
+`email.inbox_unread` (§8: not shipped, and for this kind of reason). At
 re-description the approved envelope is on the context and `describe` reuses
 its baseline. Everything else still re-derives, so an approval whose target,
 deadline or holder changed is still refused.
@@ -350,9 +350,14 @@ the projection lands short, the second miss wakes the advisor, which reads
 the cards and the statement dates, and answers with what changed and one
 recommendation, or proposes `goal.update`. At −10k the advisor says so, once.
 
-The email plugin declares `email.inbox_unread` and `email.waiting_on_me`; the
-developer plugin `developer.failing_tests` for a workspace; none of them knows
-about goals.
+The email plugin declares `email.waiting_on_me`; the developer plugin
+`developer.failing_tests` for a workspace; none of them knows about goals.
+
+`email.inbox_unread` is **not** shipped and is named here as the shape of one
+that could be: a message's `flags` are written once at ingest and never
+re-synced, so a count over them only ever climbs whatever the owner reads, and
+a goal on it would be settled `missed` for an inbox somebody had actually
+emptied. It needs an IMAP flag re-sync first.
 
 ## 9. What it is not
 
@@ -390,5 +395,6 @@ stated as such).
    is a change to core's `runSentinels`, not to where a goal shows, and it
    stands as written.
 3. Metrics in finance (`total_debt`, `card_balance`, `cash_available`) and
-   email (`inbox_unread`, `waiting_on_me`); the developer plugin's
-   `failing_tests` when it lands. (half a day, in buddi-plugins for finance)
+   email (`waiting_on_me`; `inbox_unread` waits on an IMAP flag re-sync, §8);
+   the developer plugin's `failing_tests`. (half a day, in buddi-plugins for
+   finance and developer)

@@ -43,7 +43,7 @@
  * no double triage.
  */
 import type { Pool, PoolClient } from 'pg';
-import { INBOX, listAccounts, resolveAuth, type EnvLike } from '../config.js';
+import { INBOX, listAccounts, markAccountSynced, resolveAuth, type EnvLike } from '../config.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
 import { scanMessageDates, skipDates } from '../dates-store.js';
@@ -524,6 +524,14 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
         // Both folders are walked over the same connection.
         let client: ImapClient | null = null;
         const pending: PendingTriage[] = [];
+        /*
+         * Did this account's pass get all the way through? Only then is it a
+         * sync, and only then is `last_synced_at` moved: a Sent folder that
+         * timed out still let the inbox land, but it means what we hold for
+         * this mailbox is no longer everything the server has, and a metric
+         * that stamped it "as of now" would be saying otherwise.
+         */
+        let complete = true;
         try {
           client = await withDeadline(
             'connect',
@@ -555,6 +563,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
                 `email.inbox-poll: could not initialize Sent folder ${account.address}/${folder.name}: ` +
                   `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
               );
+              complete = false;
               failures.push(err);
             }
           }
@@ -577,10 +586,19 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
                 `email.inbox-poll: could not poll Sent folder ${account.address}/${folder.name}: ` +
                   `${err instanceof Error ? err.message : String(err)}; INBOX was still polled`,
               );
+              complete = false;
               failures.push(err);
             }
           }
+          /*
+           * The pass finished. This is the one place `last_synced_at` moves,
+           * and it moves whether or not a single message was new: "we read
+           * this mailbox and there was nothing" is an answer, and without a
+           * mark of its own it is indistinguishable from never having looked.
+           */
+          if (complete) await markAccountSynced(ctx.db, account.id, ctx.now());
         } catch (err) {
+          complete = false;
           if (err instanceof ImapTimeoutError) {
             // A recorded give-up. Rethrowing it at the end of the pass is
             // deliberate: `runSources` writes it to
