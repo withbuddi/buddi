@@ -850,8 +850,20 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         previewLinks.fail(session.id, now);
         const ticket = previewTickets.mintTicket(previewApi.plugin, previewApi.name);
+        /*
+         * Where the link points is decided by where the owner *is*. A session
+         * that came through the public origin is on another device, and
+         * 127.0.0.1 there is that device, not this one; the preview's own
+         * public origin — a second `tailscale serve` mapping, configured and
+         * never inferred — is the only address such a link can name. Without
+         * one, the loopback link is still handed out, and says nothing new.
+         */
+        const origin =
+          session.scope === 'remote' && deps.config.previewPublicOrigin
+            ? deps.config.previewPublicOrigin
+            : `http://127.0.0.1:${port}`;
         return sendJson(res, 200, {
-          url: `http://127.0.0.1:${port}/preview/${previewApi.plugin}/${previewApi.name}/?ticket=${ticket}`,
+          url: `${origin}/preview/${previewApi.plugin}/${previewApi.name}/?ticket=${ticket}`,
         });
       }
 

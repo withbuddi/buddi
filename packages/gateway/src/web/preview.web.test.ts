@@ -382,6 +382,20 @@ it('lets the dashboard mint a link, and the link buy a cookie', async () => {
   expect(await served.text()).toBe('<html><body>hello</body></html>');
 });
 
+it('mints a loopback link for a local session whatever is configured, and a Secure cookie only behind HTTPS', async () => {
+  const web = await dashboard(pluginWith(async () => ({ port: 1 })), {
+    BUDDI_WEB_PUBLIC_ORIGIN: 'https://buddi.example.ts.net:9443',
+    BUDDI_PREVIEW_PUBLIC_ORIGIN: 'https://buddi.example.ts.net:9444',
+  });
+  const local = (await (await fetch(`${web.origin}/api/preview/developer/web/link`)).json()) as { url: string };
+  expect(local.url.startsWith(`http://127.0.0.1:${web.previewPort}/preview/developer/web/?ticket=`)).toBe(true);
+  const plain = await fetch(local.url, { redirect: 'manual' });
+  expect(plain.headers.getSetCookie()[0]).not.toContain('Secure');
+  const fresh = (await (await fetch(`${web.origin}/api/preview/developer/web/link`)).json()) as { url: string };
+  const served = await fetch(fresh.url, { redirect: 'manual', headers: { 'x-forwarded-proto': 'https' } });
+  expect(served.headers.getSetCookie()[0]).toContain('Secure');
+});
+
 it('serves a link whose ticket is spent, to a browser that already has the cookie', async () => {
   // This is "Open in a tab" from a frame that has been sitting there for an
   // hour, and a bookmark, and a restored tab: the URL's ticket went the

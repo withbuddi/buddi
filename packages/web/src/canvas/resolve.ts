@@ -300,10 +300,12 @@ export function previewTarget(src: string): { plugin: string; name: string } | n
 
 export function resolvePreview(output: unknown, map: PreviewMap): PreviewProps {
   const src = map.src ? asString(readPath(output, map.src)) : null;
+  const port = map.port ? readPath(output, map.port) : null;
   return {
     target: src ? previewTarget(src) : null,
     title: asString(readRef(output, map.title)),
     output: map.output ? asString(readPath(output, map.output)) : null,
+    port: typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65535 ? port : null,
   };
 }
 

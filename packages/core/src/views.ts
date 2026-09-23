@@ -163,8 +163,10 @@ export interface PreviewMap {
   /** Path to a `/preview/<plugin>/<name>/` string naming which process. */
   src: string;
   title?: ValueRef;
-  /** Path to the process's recent output text, shown beside the frame. */
+  /** Path to the process's recent output text, shown on request beside the frame. */
   output?: string;
+  /** Path to the loopback port the process listens on, for a direct `localhost:<port>` link. */
+  port?: string;
 }
 
 export type ViewMap =
@@ -344,6 +346,8 @@ const previewMapSchema = z
     src: viewPathSchema,
     title: valueRefSchema.optional(),
     output: viewPathSchema.optional(),
+    /** Path to the loopback port the process listens on, for a direct link. */
+    port: viewPathSchema.optional(),
   })
   .strict();
 

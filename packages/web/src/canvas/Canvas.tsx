@@ -145,9 +145,14 @@ export function Canvas({
           <MoreTabs items={hidden} onActivate={onActivate} timezone={timezone} />
         </div>
         {renderables.map((item) => (
-          <Tabs.Content key={item.id} value={item.id} className="wb-canvas-body">
-            <section className="ui-panel">
-              {item.source !== 'browser' ? <header className="ui-panel-head">
+          <Tabs.Content
+            key={item.id}
+            value={item.id}
+            className="wb-canvas-body"
+            data-renderer={item.source === 'descriptor' && item.renderer === 'preview' ? 'preview' : undefined}
+          >
+            <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
+              {item.source !== 'browser' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.tool}</span>
               </header> : null}

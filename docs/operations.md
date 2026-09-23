@@ -244,6 +244,22 @@ Do not put a ticket in logs or persistent configuration. After sign-in, bookmark
 the clean URL. A service restart or expired session requires a fresh ticket.
 Disable only this mapping with `tailscale serve --https=9443 off`.
 
+**Previews on the move.** A developer agent's preview is served on a second
+listener, the dashboard port plus one (4318 by default), and a preview link
+minted on the tailnet would otherwise name `127.0.0.1`, which on a phone is
+the phone. Publish that listener too and tell buddi where it landed:
+
+```
+tailscale serve --bg --https=9444 http://127.0.0.1:4318
+BUDDI_PREVIEW_PUBLIC_ORIGIN=https://<machine>.<tailnet>.ts.net:9444
+```
+
+A remote session's "Open in a tab" and its framed preview then use that
+origin; a local session keeps the loopback one. The preview keeps its own
+single-use ticket and cookie, marked Secure behind Serve. The panel also
+offers the process's own `localhost:<port>` link, for when you are at the
+machine.
+
 **Signing in through Tailscale.** With Serve in front of the dashboard, you can
 skip the ticket entirely: Settings → System → *Sign in through Tailscale*, turn
 it on and name the Tailscale login that may sign in (the field is prefilled with
