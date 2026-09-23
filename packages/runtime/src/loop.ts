@@ -97,6 +97,19 @@ export interface RunAgentOptions {
    * is `onText`.
    */
   onDelta?: (delta: CompletionDelta) => void;
+  /**
+   * Whether a run that runs out of budget says so in the transcript. Default
+   * true — the owner is owed the sentence.
+   *
+   * False for a run the owner is not in the room with: a delegate, or a group
+   * member the coordinator brought in. Those runs are capped by the platform
+   * (`MAX_NESTED_TURNS`, `MAX_MEMBER_TURNS`), not by the agent's own
+   * `maxTurns`, and their answer is quoted into somebody else's — so "Stopped
+   * after 8 steps; say continue to go on" would name a number the owner cannot
+   * change and offer a continuation nobody can take. The budget still shows up
+   * where it belongs: in `stopped` on that run's `run.finished`.
+   */
+  budgetNotice?: boolean;
   onToolCall?: (name: string, input: unknown) => void;
   /**
    * The same call, answered. Never awaited and never allowed to change the
@@ -329,6 +342,22 @@ export interface ApprovalResume {
   error?: string;
 }
 
+/**
+ * What a run says when it hits its turn budget.
+ *
+ * One sentence, written here and nowhere else, so the wording is a single
+ * fact a test can pin. It names the number the owner would have to change and
+ * it ends with the way out, because "continue" is what they were going to
+ * type anyway.
+ */
+export function maxTurnsNotice(maxTurns: number): string {
+  return `Stopped after ${maxTurns} steps; the work above is where I got to. Say "continue" to go on.`;
+}
+
+/** The same courtesy for the other silent ending: one answer that ran too long. */
+export const MAX_TOKENS_NOTICE =
+  'Stopped: the answer got too long and was cut off. Ask me to continue, or for a shorter version.';
+
 export interface RunResult {
   text: string;
   turns: number;
@@ -416,6 +445,44 @@ export async function createConversation(
     throw new Error('createConversation: insert returned no id');
   }
   return String(id);
+}
+
+/**
+ * Stored history, made replayable — without touching what is stored.
+ *
+ * The transcript is the honest record and keeps whatever happened. The wire is
+ * stricter than the record in two ways, and both are 400s rather than nuances:
+ *
+ *  - **Roles alternate.** Two assistant messages in a row happen now: a run cut
+ *    off at `max_tokens` writes the model's truncated turn and then the loop's
+ *    own "I stopped" line, with no owner turn between them. They are replayed
+ *    as one turn, blocks concatenated in order, so nothing is lost.
+ *  - **Every `tool_use` has a `tool_result`.** A turn the provider truncated
+ *    mid-call leaves a `tool_use` the loop never dispatched and never
+ *    answered. It is dropped from the replay — the model is shown the words it
+ *    wrote, not a call it is still owed an answer for.
+ */
+export function normalizeForReplay(messages: readonly NeutralMessage[]): NeutralMessage[] {
+  const answered = new Set<string>();
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'tool_result') answered.add(block.tool_use_id);
+    }
+  }
+  const keep = (block: ContentBlock): boolean =>
+    block.type !== 'tool_use' || answered.has(block.id);
+
+  const out: NeutralMessage[] = [];
+  for (const message of messages) {
+    const content = message.content.filter(keep);
+    const last = out[out.length - 1];
+    if (last && last.role === 'assistant' && message.role === 'assistant') {
+      last.content = [...last.content, ...content];
+      continue;
+    }
+    out.push({ ...message, content });
+  }
+  return out;
 }
 
 export async function loadMessages(
@@ -693,6 +760,7 @@ export function composeSystem(
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   const { agent, provider, registry, ctx, pool, conversationId, userMessage } = opts;
+  const budgetNotice = opts.budgetNotice ?? true;
   ctx.signal?.throwIfAborted();
   const resume = opts.resume;
 
@@ -786,9 +854,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // history is replayed: a browser session is mostly page trees it already
   // acted on, and carrying all of them is what ends the conversation early.
   // The stored transcript is untouched (`compactObservations`).
-  const history = compactObservations(
+  const history = normalizeForReplay(compactObservations(
     opts.transcript ? await opts.transcript.load() : await loadMessages(pool, conversationId),
-  );
+  ));
   // Stored history carries artifact_ref blocks; the provider needs the bytes.
   const replayed = await hydrateMessages(history, opts.loadArtifact);
 
@@ -1151,6 +1219,40 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     throw err;
   }
   await letGo();
+
+  /*
+   * A run that ran out of budget says so, in the chat, in its own words.
+   *
+   * Before this, `stopped: 'max_turns'` was a line in the event log and
+   * nothing else: the loop ended after the last tool result, the transcript's
+   * final message was a tool result nobody reads, and the owner watched an
+   * agent go quiet mid-task with no way to tell a finished job from an
+   * abandoned one. `max_tokens` is the same silence for a different reason.
+   *
+   * So the loop writes one last assistant message itself — no model call, no
+   * cost, no chance of the model deciding not to mention it. It is an ordinary
+   * `text` block in `core.messages`, which means every surface already carries
+   * it: it is in `result.text` through `spoken`, it reaches a streaming
+   * surface through `onText`, and a reloaded transcript still has it. The web
+   * chat draws its marker from `run.finished`'s `stopped`/`turns`, already on
+   * the conversation's runs.
+   *
+   * Only a run the owner is actually talking to says it — see `budgetNotice`.
+   * And it is said on a best effort: a run that did all its work and then lost
+   * the write of one sentence is still a run that finished, and `run.finished`
+   * is what every surface reads to stop drawing a spinner.
+   */
+  if (budgetNotice && (stopped === 'max_turns' || stopped === 'max_tokens')) {
+    const notice = stopped === 'max_turns' ? maxTurnsNotice(agent.maxTurns) : MAX_TOKENS_NOTICE;
+    spoken.push({ text: notice, beforeToolCall: false });
+    try {
+      await persistMessage(pool, conversationId, 'assistant', [{ type: 'text', text: notice }], opts.transcript?.speaker);
+      await opts.onText?.(notice);
+    } catch {
+      // `result.text` still carries the sentence, so the surfaces that send
+      // the run's answer still say it; what is lost is the transcript row.
+    }
+  }
 
   await appendEvent(
     pool,

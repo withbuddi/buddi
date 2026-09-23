@@ -19,7 +19,7 @@ import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { FileTile } from './FileTile';
 import { Markdown, MarkdownAgents } from './markdown';
-import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage } from '../chat/types';
+import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
 import { AgentAvatar } from '../ui';
 
 /**
@@ -62,6 +62,7 @@ export function MessageList({
   empty,
   plain = false,
   workingLine,
+  runs,
 }: {
   messages: ChatMessage[];
   live: LiveCall[];
@@ -106,6 +107,11 @@ export function MessageList({
   plain?: boolean;
   /** The whole sentence to show while the agent is working, in place of the default. */
   workingLine?: string;
+  /**
+   * The conversation's runs, so a run that ran out of budget is marked as one.
+   * The agent already says so in its own words; this is the fact under it.
+   */
+  runs?: ChatRun[];
 }): JSX.Element {
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -116,6 +122,7 @@ export function MessageList({
   const writing = partial && !partial.settled && (partial.text !== '' || partial.thinking !== '');
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
+  const stops = budgetStops(shown, runs ?? []);
 
   return (
     <MarkdownAgents.Provider value={agents ?? speakers ?? []}>
@@ -193,6 +200,7 @@ export function MessageList({
             </details>
           );
         }
+        const stop = stops.get(message.id) ?? null;
         return (
           <div key={message.id} className="wb-msg" data-role={mine || interjected ? 'user' : 'assistant'}>
             {interjected ? (
@@ -260,6 +268,9 @@ export function MessageList({
               }
               return null;
             })}
+            {stop ? (
+              <div className="wb-msg-budget" data-testid="budget-stop">{budgetLine(stop)}</div>
+            ) : null}
           </div>
         );
       })}
@@ -462,6 +473,59 @@ function askedFor(message: ChatMessage): { handle: string; request: string } | n
 
 function files(message: ChatMessage): AttachmentBlock[] {
   return (message.blocks ?? []).filter((block): block is AttachmentBlock => block.type === 'attachment');
+}
+
+/**
+ * Which message a run stopped on, for the runs that ran out of budget.
+ *
+ * The loop's own closing line is the last thing a budgeted run writes, so the
+ * run's last assistant message before `finishedAt` is the one the marker
+ * belongs under. The verdict itself is not on the message — it is on the run,
+ * where the transcript endpoint already sends it — so a reloaded history shows
+ * the marker exactly as the live run did.
+ */
+function budgetStops(shown: readonly ChatMessage[], runs: readonly ChatRun[]): Map<string, ChatRun> {
+  /*
+   * Both ends or nothing. A run row with no start (an unpaired `run.finished`
+   * from an older installation) has no window, and a message with no timestamp
+   * is in nobody's window — either one, matched loosely, hangs the marker off
+   * whatever message happens to be last and tells the owner a reply that
+   * finished cleanly ran out of budget.
+   */
+  const windowed = runs.filter((run) => run.startedAt !== null && run.finishedAt !== null);
+  const holds = (run: ChatRun, message: ChatMessage): boolean =>
+    message.at !== '' && message.at >= run.startedAt! && message.at <= run.finishedAt!;
+  /** A run that started later and ended earlier: a delegate, or a member the coordinator asked. */
+  const inside = (inner: ChatRun, outer: ChatRun): boolean =>
+    inner !== outer
+    && inner.startedAt! >= outer.startedAt!
+    && inner.finishedAt! <= outer.finishedAt!
+    && (inner.startedAt! > outer.startedAt! || inner.finishedAt! < outer.finishedAt!);
+
+  const out = new Map<string, ChatRun>();
+  for (const run of windowed) {
+    if (run.stopped !== 'max_turns' && run.stopped !== 'max_tokens') continue;
+    let last: ChatMessage | null = null;
+    for (const message of shown) {
+      if (message.role !== 'assistant' || !holds(run, message)) continue;
+      last = message;
+    }
+    // A room's runs overlap: the coordinator's spans the member's. A message
+    // written inside a nested run is that run's, so the outer run's budget is
+    // not what the owner is looking at, and nothing is said under it.
+    if (last === null || windowed.some((other) => inside(other, run) && holds(other, last!))) continue;
+    if (!out.has(last.id)) out.set(last.id, run);
+  }
+  return out;
+}
+
+/** The quiet line under the last message of a run that ran out of budget. */
+export function budgetLine(run: ChatRun): string {
+  if (run.stopped === 'max_tokens') return 'Length limit reached · answer cut off';
+  const steps = run.turns;
+  // No count rather than a made-up one: an unpaired finish event carries none.
+  if (steps === null) return 'Turn budget reached';
+  return `Turn budget reached · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
 }
 
 /** A block worth a line on screen. A bare tool result is not one. */

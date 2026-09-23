@@ -1113,6 +1113,7 @@ export function ChatPage({
           working={running}
           partial={partial}
           agents={everyone}
+          {...(conversation?.runs ? { runs: conversation.runs } : {})}
           {...(group ? { speakers: everyone, coordinatorId: group.coordinator } : {})}
           {...(runningAgentId ? { workingAs: everyone.find((a) => a.id === runningAgentId)?.name ?? runningAgentId } : {})}
           onOpenFile={openFile}
