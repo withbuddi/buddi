@@ -14,6 +14,9 @@
  *  - Removing a core tool asks once, because an agent without them forgets.
  *  - A plugin's newer suggestions sit on top, each one click to add, and none
  *    of them is applied by itself.
+ *  - Every group starts folded: its header says how much of it is granted.
+ *    A search unfolds the groups with a match and shows only the matching
+ *    rows; clearing it folds them all again. Nothing is remembered.
  */
 import { useId, useState } from 'react';
 import type { PickerGroup, ToolPickerView } from '../../api';
@@ -55,6 +58,19 @@ export function ToolPicker({
 }): JSX.Element {
   const [query, setQuery] = useState('');
   const [pending, setPending] = useState<{ plugin: string; names: string[] } | null>(null);
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (plugin: string): void =>
+    setOpen((was) => {
+      const next = new Set(was);
+      if (next.has(plugin)) next.delete(plugin);
+      else next.add(plugin);
+      return next;
+    });
+  const search = (value: string): void => {
+    setQuery(value);
+    // A new search starts from its own matches; an empty one folds everything.
+    setOpen(new Set());
+  };
   const base = useId();
   const picked = new Set(chosen);
   const coreNames = new Set(view.groups.flatMap((g) => g.tools.filter((t) => t.core).map((t) => t.name)));
@@ -106,7 +122,7 @@ export function ToolPicker({
 
       <label className="tool-picker-search">
         <span className="ui-field-label">Find a tool</span>
-        <input type="search" value={query} placeholder="Name or what it does" onChange={(e) => setQuery(e.target.value)} />
+        <input type="search" value={query} placeholder="Name or what it does" onChange={(e) => search(e.target.value)} />
       </label>
 
       {groups.length === 0 ? <Empty>No installed tool matches “{query.trim()}”.</Empty> : null}
@@ -114,13 +130,33 @@ export function ToolPicker({
       {groups.map(({ group, tools }) => {
         const grantable = group.tools.filter((t) => t.grantable).map((t) => t.name);
         const held = group.tools.filter((t) => picked.has(t.name)).length;
+        const whole = Boolean(group.glob) && held === group.tools.length;
         const headId = `${base}-${group.plugin}`;
+        const listId = `${base}-${group.plugin}-list`;
+        // Searching unfolds whatever matched; otherwise the owner's clicks decide.
+        const expanded = needle !== '' ? !open.has(group.plugin) : open.has(group.plugin);
         return (
-          <div key={group.plugin} className="tool-picker-group" role="group" aria-labelledby={headId}>
+          <div
+            key={group.plugin}
+            className="tool-picker-group"
+            role="group"
+            aria-labelledby={headId}
+            data-open={expanded ? 'true' : undefined}
+          >
             <div className="tool-picker-head">
-              <span id={headId} className="tool-picker-plugin">{group.plugin}</span>
-              <span className="muted">{held} of {group.tools.length}</span>
-              <span className="ui-toolbar-spacer" />
+              <button
+                type="button"
+                className="tool-picker-toggle"
+                aria-expanded={expanded}
+                aria-controls={listId}
+                onClick={() => toggle(group.plugin)}
+              >
+                <ChevronIcon />
+                <span id={headId} className="tool-picker-plugin">{group.plugin}</span>
+                <span className="muted">
+                  {whole ? `all ${group.tools.length}` : `${held} of ${group.tools.length} granted`}
+                </span>
+              </button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -159,7 +195,7 @@ export function ToolPicker({
                 </div>
               </Notice>
             ) : null}
-            <ul className="ui-list tool-picker-list">
+            <ul id={listId} className="ui-list tool-picker-list" hidden={!expanded}>
               {tools.map((tool) => {
                 const id = `${base}-${tool.name}`;
                 return (
@@ -189,5 +225,13 @@ export function ToolPicker({
         );
       })}
     </div>
+  );
+}
+
+function ChevronIcon(): JSX.Element {
+  return (
+    <svg className="tool-picker-chevron" viewBox="0 0 11 11" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />
+    </svg>
   );
 }

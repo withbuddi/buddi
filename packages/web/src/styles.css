@@ -2489,6 +2489,14 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .tool-picker-group + .tool-picker-group { border-top: 1px solid var(--line); padding-top: var(--space-3); }
 .tool-picker-head { display: flex; align-items: center; gap: var(--space-2); }
 .tool-picker-plugin { font-weight: var(--weight-semibold); }
+.tool-picker-toggle {
+  flex: 1 1 auto; display: flex; align-items: center; gap: var(--space-2); min-width: 0;
+  padding: var(--space-1) 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.tool-picker-chevron { flex: 0 0 auto; width: 0.75em; height: 0.75em; color: var(--text-faint); transform: rotate(-90deg); transition: transform 120ms ease; }
+.tool-picker-group[data-open='true'] .tool-picker-chevron { transform: none; }
+@media (prefers-reduced-motion: reduce) { .tool-picker-chevron { transition: none; } }
 .tool-picker-list .ui-list-row { gap: var(--space-3); }
 .tool-picker-list .ui-list-title { display: flex; align-items: center; gap: var(--space-2); }
 .tool-picker-list .ui-list-sub { white-space: normal; }
