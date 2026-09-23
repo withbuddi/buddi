@@ -735,14 +735,16 @@ export function ChatPage({
       .finally(() => setTakingOffer(null));
   };
 
-  const answerQuestion = (answer: string, optionId?: string): void => {
+  const answerQuestion = (answer: string, optionId?: string): void => settleQuestion({ answer, ...(optionId ? { optionId } : {}) });
+  const skipQuestion = (): void => settleQuestion({ answer: '', skipped: true });
+  const settleQuestion = (body: { answer: string; optionId?: string; skipped?: boolean }): void => {
     const question = conversation?.question;
     if (!question) return;
     setError(null);
     setAnsweringQuestion(true);
     setRunning(true);
     chatApi
-      .answerQuestion(question.id, { answer, ...(optionId ? { optionId } : {}) })
+      .answerQuestion(question.id, body)
       .then(() => {
         if (conversationId) return refresh(conversationId);
       })
@@ -1194,6 +1196,7 @@ export function ChatPage({
             question={conversation.question}
             disabled={answeringQuestion || running}
             onAnswer={answerQuestion}
+            onSkip={skipQuestion}
           />
         ) : (
           <Composer

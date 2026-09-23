@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
-import { answerQuestion, askQuestion, openQuestion } from './store.js';
+import { SKIPPED_ANSWER, answerQuestion, askQuestion, openQuestion } from './store.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -74,6 +74,24 @@ suite('structured questions (postgres)', () => {
       now: NOW,
     });
     expect(result).toEqual({ ok: false, reason: 'invalid-option' });
+  });
+
+  it('can be skipped, even when it allows neither free text nor a matching option', async () => {
+    const question = await askQuestion(pool, {
+      agentId: 'ledger',
+      conversationId,
+      question: 'Which account?',
+      options: [{ label: 'Checking', hint: null, recommended: false }],
+      allowOther: false,
+      now: NOW,
+    });
+    const skipped = await answerQuestion(pool, { id: question.id, answer: '', skipped: true, via: 'web', now: NOW });
+    expect(skipped.ok).toBe(true);
+    if (skipped.ok) expect(skipped.question.answer).toBe(SKIPPED_ANSWER);
+    expect(await openQuestion(pool, { conversationId, now: NOW })).toBeNull();
+    // Only once: the second skip finds it closed.
+    const again = await answerQuestion(pool, { id: question.id, answer: '', skipped: true, via: 'web', now: NOW });
+    expect(again).toEqual({ ok: false, reason: 'closed' });
   });
 
   it('closes a superseded question before opening its replacement', async () => {

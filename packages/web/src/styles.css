@@ -1027,7 +1027,15 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   overflow: hidden;
   background: var(--surface);
 }
-.wb-question-head { display: grid; gap: 4px; }
+.wb-question-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 4px;
+}
+.wb-question-head > strong { grid-column: 1 / -1; }
+.wb-question-skip { justify-self: end; }
 .wb-question-kicker {
   color: var(--accent);
   font-size: var(--text-2xs);

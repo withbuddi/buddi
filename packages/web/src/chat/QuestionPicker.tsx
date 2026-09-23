@@ -1,20 +1,45 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Button } from '../ui';
 import type { ChatQuestion } from './types';
 
 export function QuestionPicker({
   question,
   disabled,
   onAnswer,
+  onSkip,
 }: {
   question: ChatQuestion;
   disabled: boolean;
   onAnswer: (answer: string, optionId?: string) => void;
+  /** Close the question without an answer; the agent goes on by itself. */
+  onSkip: () => void;
 }): JSX.Element {
   const [other, setOther] = useState('');
+  // Esc skips, from anywhere on the page, while the question is showing.
+  useEffect(() => {
+    if (disabled) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      onSkip();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [disabled, onSkip]);
   return (
     <section className="wb-question" aria-label="Question from agent" data-testid="question-picker">
       <div className="wb-question-head">
         <span className="wb-question-kicker">Needs your input</span>
+        <Button
+          className="wb-question-skip"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          onClick={onSkip}
+          title="Skip this question (Esc). The agent carries on without an answer."
+        >
+          Skip
+        </Button>
         <strong>{question.question}</strong>
       </div>
       {question.options.length > 0 ? (
@@ -57,7 +82,7 @@ export function QuestionPicker({
           </button>
         </form>
       ) : null}
-      <p className="wb-question-note">This answers a question. It does not approve an action.</p>
+      <p className="wb-question-note">This answers a question. It does not approve an action. Esc skips it.</p>
     </section>
   );
 }

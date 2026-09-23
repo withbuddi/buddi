@@ -1306,11 +1306,16 @@ export class WebChat {
     return { ok: true, conversationId: target, runId };
   }
 
-  /** Answer one exact structured question, then continue its conversation. */
+  /**
+   * Answer one exact structured question, then continue its conversation. A
+   * skip closes the question the same way and sends the agent the skipped
+   * sentence instead of an answer, so the run carries on without one.
+   */
   async answer(input: {
     id: string;
     answer: string;
     optionId?: string;
+    skipped?: boolean;
   }): Promise<SendResult> {
     const settled = await answerQuestion(this.#deps.pool, {
       ...input,
@@ -1322,14 +1327,17 @@ export class WebChat {
       return { ok: false, status, error: 'That question is no longer waiting for an answer.' };
     }
     const groupId = await conversationGroup(this.#deps.pool, settled.question.conversationId).catch(() => null);
+    // What was recorded is what the agent reads: the option's label, the
+    // owner's own words, or the skipped sentence.
+    const text = settled.question.answer ?? input.answer;
     if (groupId) {
-      const sent = await this.sendToGroup({ groupId, conversationId: settled.question.conversationId, text: input.answer });
+      const sent = await this.sendToGroup({ groupId, conversationId: settled.question.conversationId, text });
       return sent.ok ? { ok: true, conversationId: sent.conversationId, runId: sent.runId } : sent;
     }
     return this.send({
       agentId: settled.question.agentId,
       conversationId: settled.question.conversationId,
-      text: input.answer,
+      text,
     });
   }
 
