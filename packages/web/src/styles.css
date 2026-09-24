@@ -234,6 +234,102 @@ main[data-ground='plain'] { background: var(--bg); }
   background: linear-gradient(180deg, color-mix(in oklab, var(--agent-fill) 9%, var(--surface)), var(--surface));
 }
 
+/* ---- Settings: the grouped list beside the rail ----
+ *
+ * A column on the rail's own surface, flush against it the way the chat's
+ * roster is, holding the sections under the roster's kicker labels. Each
+ * entry is a rail entry laid on its side: the icon, the word, a count where
+ * the section keeps one; the open one tinted and marked on the column's edge
+ * as the rail marks its place. The section is drawn to its right, on the
+ * page's field, and scrolls on its own so the list stays put.
+ */
+main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
+.settings { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.settings-nav {
+  flex: 0 0 auto;
+  width: var(--roster-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 10px 8px 8px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+.settings-nav::-webkit-scrollbar { display: none; }
+.settings-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-group + .settings-nav-group { margin-top: var(--space-2); }
+.settings-nav-label { padding: 8px 10px 4px; font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-kicker); text-transform: uppercase; color: var(--text-faint); }
+.settings-nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.settings-nav-link:hover { background: var(--surface-sunken); color: var(--text); text-decoration: none; }
+.settings-nav-link:focus-visible { outline: none; box-shadow: var(--shadow-focus); color: var(--text); }
+.settings-nav-link[data-active='true'] { background: var(--accent-soft); color: var(--accent); }
+.settings-nav-link[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.settings-nav-icon { flex: 0 0 auto; }
+.settings-nav-text { flex: 1 1 auto; min-width: 0; font-family: var(--font-display); font-size: var(--text-md); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-nav-link:not([data-active='true']) .settings-nav-text { color: var(--text); }
+.settings-nav-count { flex: 0 0 auto; box-shadow: none; }
+
+/* The section, to the right: the main column's own padding, and the page
+   width the owner chose less the list beside it. */
+.settings-body { flex: 1 1 auto; min-width: 0; overflow: auto; padding: var(--space-6) var(--page-gutter) 60px; }
+.settings-body > .ui-page { max-width: calc(var(--page-max) - var(--roster-w)); }
+:root[data-width='full'] .settings-body > .ui-page { max-width: none; }
+
+/* Narrow: the list is one menu at the top of the section. */
+.settings-menu { display: flex; }
+.settings-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 100%;
+  height: var(--control-h-lg);
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur) ease;
+}
+.settings-menu-trigger:hover { border-color: var(--line-strong); }
+.settings-menu-trigger:focus-visible, .settings-menu-trigger[data-state='open'] { border-color: var(--accent); outline: none; box-shadow: var(--shadow-focus); }
+.settings-menu-trigger .settings-nav-icon { color: var(--accent); }
+.settings-menu-trigger .settings-nav-text { text-align: left; }
+.settings-menu-chevron { flex: 0 0 auto; color: var(--text-muted); }
+.settings-menu-list { width: var(--roster-w); max-height: var(--radix-dropdown-menu-content-available-height); overflow-y: auto; }
+.settings-menu-entry { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--text-muted); }
+.settings-menu-entry .settings-nav-text { color: var(--text); }
+.settings-menu-item[data-active='true'] { background: var(--accent-soft); }
+.settings-menu-item[data-active='true'] .settings-menu-entry,
+.settings-menu-item[data-active='true'] .settings-nav-text { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .settings-body { padding: var(--space-4); }
+}
+
 /* ---- the second rail: the team ----
  *
  * Beside the section rail, on the same ground, separated by one line. Faces

@@ -49,14 +49,15 @@ import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
+import { NARROW_QUERY, useMediaQuery } from './useMediaQuery';
 import { Meet } from './views/Meet';
 import { MascotProvider } from './views/parts/Avatar';
 import { RecoveryBanner, useRecovery } from './views/Recovery';
 
 export { PLACES };
 
-/** The width below which the canvas stops being a column and becomes a sheet. */
-export const NARROW_QUERY = '(max-width: 900px)';
+/** Kept on the shell for the callers that import them from here. */
+export { NARROW_QUERY, useMediaQuery };
 
 /**
  * The width below which the *agent* rail lies down.
@@ -82,28 +83,6 @@ export function useHash(): [string, (next: string, replace?: boolean) => void] {
   return [hash, navigate];
 }
 
-/** A media query as state, degrading to "wide" where `matchMedia` is absent. */
-export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() => {
-    try {
-      return window.matchMedia(query).matches;
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    let list: MediaQueryList;
-    try {
-      list = window.matchMedia(query);
-    } catch {
-      return undefined;
-    }
-    const onChange = (event: MediaQueryListEvent): void => setMatches(event.matches);
-    list.addEventListener?.('change', onChange);
-    return () => list.removeEventListener?.('change', onChange);
-  }, [query]);
-  return matches;
-}
 
 /**
  * The owner's theme, through the shared appearance store: the rail's menu and
@@ -391,7 +370,10 @@ export function App(): JSX.Element {
               onCloseCanvas={() => setCanvasOpen(false)}
             />
           ) : (
-            <main data-ground={plainGround(place, hash) ? 'plain' : undefined}>
+            <main
+              data-ground={plainGround(place, hash) ? 'plain' : undefined}
+              data-layout={place === SETTINGS_ROUTE ? 'split' : undefined}
+            >
               <Place
                 hash={hash}
                 place={place}
