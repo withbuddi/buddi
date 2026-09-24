@@ -2379,6 +2379,7 @@ this says what it is *for*.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §9b. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
@@ -2435,6 +2436,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
+| `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments. Set by core on every context it hands you. See §9b; `db`, `ownerId`, `now`, `timezone`, `previewPort`, `protectedPaths` and `providerAccounts` are what it wraps, and are deprecated in its favour. |
 | `db` | `Pool` | yes | The installation's pool. Your schema is yours; nothing stops you reading another's, and nothing excuses it. |
 | `ownerId` | `string` | yes | Whose installation this is. |
 | `now` | `() => Date` | yes | The clock. Never read the wall clock directly. |
@@ -2485,6 +2487,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
+| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this source. See §9b; the fields below are what it wraps, and are deprecated in its favour. |
 | `db` | `Pool` | yes | The pool. Commit your rows and your cursor in one transaction. |
 | `now` | `() => Date` | yes | The clock. |
 | `timezone` | `string` | yes | The owner's IANA zone, for a source that needs a *day*. |
@@ -2506,6 +2509,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
+| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this sentinel. See §9b; the fields below are what it wraps, and are deprecated in its favour. |
 | `db` | `Pool` | yes | The pool. |
 | `ownerId` | `string` | yes | The owner this installation belongs to. A sentinel that only reads its own rows never needs it; one that calls something written for a *tool* does — `measureMetric` takes a `ToolContext`, and a `ToolContext` has an owner. |
 | `now` | `() => Date` | yes | The clock. |
@@ -2642,3 +2646,159 @@ cannot reach the network. It is compared with the `Hosts:` line of your
 | `EXECUTABLE_TIERS` | `['auto']` — what `invoke` runs inline. |
 | `GATED_TIERS` | `['gated']` — what it turns into an action. |
 | `DEFAULT_EFFECT_TIMEOUT_MS` | The wait before an effect attempt is recorded `unknown`. |
+
+## 9b. The host: `ctx.buddi`
+
+Everything a plugin reaches beyond its own arguments, in one object bound to
+the plugin (docs/specs/plugin-host-api.md). Core builds it at `register()` from
+your manifest's name, schema, tools, `network` and `uses`, and puts it on every
+context it hands you: a tool's, a page query's, a metric's, a source's, a
+sentinel's. The other fields of those contexts are the *call*; this is the
+*host*.
+
+Six areas are always there, because they reach nothing beyond your plugin.
+The rest exist only when your manifest's `uses` declares them — and the same
+list in `package.json` as `buddi.uses`, which is what the install card shows
+the owner before anything of yours runs. An area you did not declare is absent:
+`ctx.buddi.http` is `undefined`, not a refusal. Import the types and the pure
+helpers from `@buddi/core/plugin`.
+
+`ctx.buddi.version` is `major.minor`, now `1.0`. Say what you were built
+against as `buddi.hostApi` in `package.json` (`"^1.0"`); a buddi with less is
+refused at staging, before anything is imported. "Since" below is the version
+that introduced each member. In 1.0 the old context fields still work beside
+it, unchanged; plugins move onto it one at a time.
+
+On the install card, each declared area is one line:
+
+| `uses` | The owner reads |
+| --- | --- |
+| `http` | sends web requests |
+| `accounts` | uses a model account you pick |
+| `files` | keeps files in your Files library |
+| `files:library` | reads every file in your Files library |
+| `memory` | reads and writes memory as the agent that calls it |
+| `proposals` | proposes rules |
+| `schedule` | starts agent runs by itself |
+| `secrets` | fills secrets you bind to it |
+
+An upgrade that adds an area says so on its card.
+
+#### `BuddiHost`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `version` | `string` | yes | 1.0 | `major.minor`, `HOST_API_VERSION`. |
+| `plugin` | `string` | yes | 1.0 | Your manifest's `name`. |
+| `log` | `(line) => void` | yes | 1.0 | An operational line, prefixed with your name. Never the owner's channel. |
+| `owner` | `OwnerArea` | yes | 1.0 | Who this installation belongs to. |
+| `clock` | `ClockArea` | yes | 1.0 | The clock. |
+| `db` | `DbArea` | yes | 1.0 | The database, never a raw pool. |
+| `dir` | `DirArea` | yes | 1.0 | A directory of your own. |
+| `approvals` | `ApprovalsArea` | yes | 1.0 | The owner's decisions about your own tools. |
+| `pages` | `PagesArea` | yes | 1.0 | What a query or a tool asks about pages and previews. |
+| `http` | `HttpArea` | no | 1.0 | Declared as `http`. |
+| `accounts` | `AccountsArea` | no | 1.0 | Declared as `accounts`. |
+| `files` | `FilesArea` | no | 1.0 | Declared as `files` or `files:library`. |
+| `memory` | `MemoryArea` | no | 1.0 | Declared as `memory`. A type only in 1.0: never present yet. |
+| `proposals` | `ProposalsArea` | no | 1.0 | Declared as `proposals`. |
+| `schedule` | `ScheduleArea` | no | 1.0 | Declared as `schedule`. |
+| `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. A type only in 1.0: never present yet. |
+
+#### `OwnerArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `id` | `string` | yes | 1.0 | The owner's id. |
+| `timezone` | `string` | yes | 1.0 | The owner's IANA zone. |
+| `agentForRole` | `(role) => string \| undefined` | yes | 1.0 | The first runnable agent holding a role, or `undefined`. Never an agent's file, grant or provider. |
+| `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
+
+#### `ClockArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `now` | `() => Date` | yes | 1.0 | Now. Never read the wall clock directly. |
+| `today` | `() => string` | yes | 1.0 | The owner's local date, `YYYY-MM-DD`. |
+
+#### `DbArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `query` | `(sql, params?) => Promise<{rows}>` | yes | 1.0 | One statement on the shared pool. Name your tables with your schema, as today. In a page query or a metric it is read-only. |
+| `transaction` | `(fn) => Promise<T>` | yes | 1.0 | One connection: `begin`, your schema first on `search_path`, `fn(tx)`, then commit — or rollback when `fn` throws. |
+
+#### `DirArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `path` | `string` | yes | 1.0 | `<data>/plugins-data/<plugin>`, absolute, created on first read. Never the data directory itself. |
+
+#### `ApprovalsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `assert` | `(ctx, envelope) => void` | yes | 1.0 | Throw unless `envelope` is the effect the owner approved on this call. |
+| `standing` | `(tool) => Promise<ToolPermission \| null>` | yes | 1.0 | The standing permission that answers for one of your tools on this call. Refused for another plugin's tool. |
+| `approvedInConversation` | `(tool, conversationId) => Promise<boolean>` | yes | 1.0 | Whether the owner approved your `tool` in this conversation or one delegated from it. Refused for another plugin's tool. |
+
+#### `PagesArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `previewPort` | `() => number \| undefined` | yes | 1.0 | The port previews are served on, when they are. |
+| `previewUrl` | `(name) => string \| undefined` | yes | 1.0 | `http://127.0.0.1:<port>/preview/<plugin>/<name>/`, when there is a port. |
+
+#### `HttpArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. |
+
+#### `AccountsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `list` | `() => ProviderAccountListing[]` | yes | 1.0 | Every model account, never a key. |
+| `resolve` | `(id, model, signal?) => Promise<ResolvedProvider>` | yes | 1.0 | An HTTP account's endpoint and key. Refused for an account the owner has not bound to you. |
+| `withCodexProfile` | `(id, use, signal?) => Promise<T>` | yes | 1.0 | Run `use` with a Codex account staged. Refused for an account the owner has not bound to you. |
+| `bind` | `(id) => Promise<void>` | yes | 1.0 | Bind an account to you: the owner's pick on your settings page, from an `ownerOnly` tool. Refused from any other call. |
+
+#### `FilesArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `save` | `({bytes, mime, filename?, source?}) => Promise<FileRow>` | yes | 1.0 | Keep a file in the Files library. Who made it and where it lives are filled in by core. |
+| `get` | `(id) => Promise<FileRow \| null>` | yes | 1.0 | One file in scope, or `null`. |
+| `read` | `(id) => Promise<Buffer>` | yes | 1.0 | Its bytes. |
+| `list` | `({since?, before?, kind?, limit?}) => Promise<FileRow[]>` | yes | 1.0 | Newest first, at most 100. In scope: the files you saved and the files handed into the conversation your tool runs in — every file with `files:library`. |
+
+#### `MemoryArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `recall` | `(query, opts?) => Promise<MemoryNote[]>` | yes | 1.0 | As the calling agent, under `memory.recall`'s scope rules. A type only in 1.0. |
+| `note` | `(text, opts?) => Promise<{id}>` | yes | 1.0 | As the calling agent, under `memory.note`'s scope rules. A type only in 1.0. |
+
+#### `ProposalsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `proposePolicy` | `(ctx, input) => Promise<CreateProposalResult>` | yes | 1.0 | Core's `proposePolicy`, with your name and the clock filled in. |
+| `countOpen` | `() => Promise<number>` | yes | 1.0 | How many of your policy proposals are open. |
+
+#### `ScheduleArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `enqueueRun` | `({agentId, prompt, dedupKey, conversationHint?}) => Promise<void>` | yes | 1.0 | Start an agent run. Idempotent on `dedupKey`. |
+| `remindersFor` | `({contextKey, values}, days) => Promise<{value, day}[]>` | yes | 1.0 | Which of these values already have a pending reminder due on one of these days, read by one key of the reminder's context. Never a reminder's text. |
+
+#### `SecretsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `use` | `(ctx, {name, destination, target}) => Promise<…>` | yes | 1.0 | Ask for a bound secret to be delivered into one of your destinations. A type only in 1.0. |
+| `list` | `() => Promise<SecretListing[]>` | yes | 1.0 | Names and bindings that point at your destinations. No values. A type only in 1.0. |
+| `store` | `(name, value, binding) => Promise<void>` | yes | 1.0 | For an `ownerOnly` tool storing an account credential the owner typed. A type only in 1.0. |
+| `remove` | `(name) => Promise<boolean>` | yes | 1.0 | Remove one. A type only in 1.0. |

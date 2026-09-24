@@ -14,6 +14,8 @@ import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 import type { ProviderAccountsAccess } from './provider-accounts.js';
+import type { BuddiHost } from './host/types.js';
+import type { PluginUse } from './plugin/uses.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -30,6 +32,13 @@ export interface GroupContext {
 }
 
 export interface ToolContext {
+  /**
+   * The host: everything a plugin reaches beyond its arguments, bound to this
+   * plugin (docs/specs/plugin-host-api.md). Set by core every time it hands a
+   * plugin a context; absent only on a context no plugin has been handed yet.
+   * The fields marked deprecated below are what it wraps.
+   */
+  buddi?: BuddiHost;
   /** Fresh owner timezone and host facts, supplied by the composition root. */
   systemContext?: (run?: { agentId: string; tools: readonly string[] }) => Promise<SystemContext>;
   /** Issued by an authenticated interactive surface, never by a model/tool. */
@@ -40,14 +49,19 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Set only by the executor; the exact effect the owner approved. */
   approvedEffect?: { envelope: unknown };
+  /** @deprecated Use `ctx.buddi.db` (docs/specs/plugin-host-api.md). Kept, unchanged, until every plugin has moved. */
   db: Pool;
+  /** @deprecated Use `ctx.buddi.owner.id`. Kept, unchanged, until every plugin has moved. */
   ownerId: string;
+  /** @deprecated Use `ctx.buddi.clock.now`. Kept, unchanged, until every plugin has moved. */
   now: () => Date;
   /**
    * The owner's timezone (an IANA name). `now()` is an instant; a tool that
    * needs a *day* — a default date, the start of a projection — must render it
    * in this zone with `localDateString`, never in UTC, or "today" flips at 8 PM
    * in New York.
+   *
+   * @deprecated Use `ctx.buddi.owner.timezone` and `ctx.buddi.clock.today()`.
    */
   timezone: string;
   /**
@@ -130,6 +144,8 @@ export interface ToolContext {
    * Absent when previews could not be bound, and outside a gateway process.
    * `BUDDI_PREVIEW_PORT` in the environment carries the same number, for a
    * plugin that reads its configuration rather than its context.
+   *
+   * @deprecated Use `ctx.buddi.pages.previewPort()`.
    */
   previewPort?: number;
   /**
@@ -166,6 +182,8 @@ export interface ToolContext {
    * An agent learns by proposing; a file tool pointed at its own skills
    * directory refuses rather than letting it rewrite itself. Absolute paths,
    * set by the composition root; a tool that writes files checks them.
+   *
+   * @deprecated Use `ctx.buddi.owner.protectedPaths`.
    */
   protectedPaths?: readonly string[];
   /**
@@ -173,6 +191,8 @@ export interface ToolContext {
    * that calls a model with an account the owner chose on its own settings
    * page. Set by the gateway's composition root; absent elsewhere, and a tool
    * that needs it refuses. See `ProviderAccountsAccess`.
+   *
+   * @deprecated Use `ctx.buddi.accounts`, declared as `uses: ['accounts']`.
    */
   providerAccounts?: ProviderAccountsAccess;
 }
@@ -385,12 +405,25 @@ export interface ToolDefinition<I = unknown, O = unknown> {
  * its next pass and creates nothing new.
  */
 export interface SourceContext {
+  /** The host, bound to the plugin this source belongs to. See `ToolContext.buddi`. */
+  buddi?: BuddiHost;
+  /** @deprecated Use `ctx.buddi.db`. */
   db: Pool;
+  /** @deprecated Use `ctx.buddi.clock.now`. */
   now: () => Date;
-  /** The owner's timezone (an IANA name), for a source that needs a *day*. */
+  /**
+   * The owner's timezone (an IANA name), for a source that needs a *day*.
+   *
+   * @deprecated Use `ctx.buddi.owner.timezone`.
+   */
   timezone: string;
-  /** Operational logging. Never the owner's channel — a source notifies nobody. */
+  /**
+   * Operational logging. Never the owner's channel — a source notifies nobody.
+   *
+   * @deprecated Use `ctx.buddi.log`.
+   */
   log: (line: string) => void;
+  /** @deprecated Use `ctx.buddi.schedule.enqueueRun`, declared as `uses: ['schedule']`. */
   enqueueRun(input: {
     agentId: string;
     prompt: string;
@@ -664,4 +697,13 @@ export interface PluginManifest {
    * proposal for a plugin without one is refused and the card stays open.
    */
   policies?: PolicyHandler;
+  /**
+   * What this plugin reaches in buddi beyond itself: the areas of `ctx.buddi`
+   * that are not always present (docs/specs/plugin-host-api.md §5). Shown on
+   * the install card one plain line each, and repeated in `package.json` as
+   * `buddi.uses` because the card is drawn before anything is imported; the
+   * two must match or the plugin does not register. An area not declared is
+   * absent from `ctx.buddi`.
+   */
+  uses?: PluginUse[];
 }

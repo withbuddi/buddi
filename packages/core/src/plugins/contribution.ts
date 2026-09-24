@@ -25,6 +25,7 @@
  * by a test, without a database, a disk or a process.
  */
 import type { PluginManifest, Tier } from '../tools.js';
+import { PLUGIN_USE_WORDS, parsePluginUses, type PluginUse } from '../plugin/uses.js';
 
 export interface ContributedTool {
   name: string;
@@ -80,6 +81,8 @@ export interface PluginContribution {
   skills: Array<{ name: string; description: string }>;
   views: number;
   network: Array<{ host: string; why: string }>;
+  /** The areas of buddi it declares it reaches beyond itself (`uses`). */
+  uses: PluginUse[];
 }
 
 /** Everything one manifest brings, as data. */
@@ -128,6 +131,12 @@ export function contributionOf(manifest: PluginManifest): PluginContribution {
     skills: (manifest.skills ?? []).map((s) => ({ name: s.name, description: s.description })),
     views: (manifest.views ?? []).length,
     network: (manifest.network ?? []).map((n) => ({ host: n.host, why: n.why })),
+    // An unreadable list is refused at `register()`; here it is shown as
+    // nothing rather than thrown, so the summary can always be drawn.
+    uses: (() => {
+      const parsed = parsePluginUses(manifest.uses, 'uses');
+      return parsed.ok ? parsed.uses : [];
+    })(),
   };
 }
 
@@ -202,6 +211,9 @@ export function renderContribution(c: PluginContribution): string[] {
   }
   lines.push('');
 
+  lines.push(...renderUses(c.uses));
+  lines.push('');
+
   lines.push(`NETWORK (${c.network.length})`);
   if (c.network.length === 0) {
     lines.push('  It declares no outbound host. Nothing enforces that — an undeclared host means');
@@ -238,6 +250,20 @@ export function renderContribution(c: PluginContribution): string[] {
     lines.push('');
     lines.push(`It also ships ${c.views} view descriptor${c.views === 1 ? '' : 's'}: how its results are drawn`);
     lines.push('on the dashboard. Descriptors are data; they run no code in the browser.');
+  }
+  return lines;
+}
+
+/**
+ * The areas of buddi a plugin reaches beyond itself, one plain line each —
+ * the same lines the install card on the dashboard shows. `added` marks the
+ * ones an upgrade brings that the installed version did not have.
+ */
+export function renderUses(uses: readonly PluginUse[], added: readonly PluginUse[] = []): string[] {
+  const lines = [`IN BUDDI, BEYOND ITSELF (${uses.length})`];
+  if (uses.length === 0) lines.push('  Nothing beyond its own schema, its own folder and its own tools\' approvals.');
+  for (const use of uses) {
+    lines.push(`  It ${PLUGIN_USE_WORDS[use]}.${added.includes(use) ? '  (NEW in this version)' : ''}`);
   }
   return lines;
 }

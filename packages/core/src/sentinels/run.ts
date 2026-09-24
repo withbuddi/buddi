@@ -20,6 +20,7 @@ import { appendEvent } from '../events.js';
 import { OWNER_ID } from '../owner.js';
 import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
 import type { PluginManifest } from '../tools.js';
+import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
 import {
   INFO_COOLDOWN_MS,
   SENTINEL_FINDING_COLUMNS,
@@ -30,6 +31,7 @@ import {
   toSentinelFinding,
   type Finding,
   type Sentinel,
+  type SentinelContext,
   type SentinelFinding,
   type SentinelFindingRow,
   type SentinelOutcome,
@@ -110,6 +112,13 @@ export async function runSentinels(
 ): Promise<SentinelOutcome[]> {
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
+  // Which plugin each sentinel belongs to, for its `ctx.buddi`.
+  const bindings = new Map<string, HostBinding>();
+  for (const manifest of manifests) {
+    if ((manifest.sentinels ?? []).length === 0) continue;
+    const binding = hostBindingOf(manifest);
+    for (const sentinel of manifest.sentinels ?? []) bindings.set(sentinel.id, binding);
+  }
 
   // The owner's switches, read once per tick. Absent means on.
   const switches = await sentinelSwitches(pool);
@@ -143,7 +152,7 @@ export async function runSentinels(
       outcomes.push({ sentinelId: sentinel.id, ran: false, findings: 0, fired: 0, resolved: 0 });
       continue;
     }
-    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId));
+    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId, bindings.get(sentinel.id)));
   }
   return outcomes;
 }
@@ -155,10 +164,13 @@ async function runOne(
   timezone: string,
   agentForRole: (role: string) => string | undefined,
   ownerId: string,
+  binding: HostBinding | undefined,
 ): Promise<SentinelOutcome> {
   let result: SentinelResult;
   try {
-    result = await sentinel.run({ db: pool, ownerId, now: () => now, timezone, agentForRole });
+    const ctx: SentinelContext = { db: pool, ownerId, now: () => now, timezone, agentForRole };
+    if (binding !== undefined) ctx.buddi = createPluginHost(binding, ctx);
+    result = await sentinel.run(ctx);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordRun(pool, sentinel.id, now, message);
