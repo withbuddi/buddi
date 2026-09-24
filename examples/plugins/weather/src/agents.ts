@@ -24,7 +24,7 @@
  *    works. The skills listed here are written into the agent's own directory
  *    by the same approval, and they grant nothing.
  */
-import type { SuggestedAgent } from '@buddi/core';
+import type { SuggestedAgent } from '@buddi/core/plugin';
 
 export const weatherAgents: SuggestedAgent[] = [
   {

@@ -6,7 +6,7 @@
  * the `overview` role. A suggestion whose role nobody claims is skipped out
  * loud, never quietly registered on the default agent.
  */
-import type { SuggestedMission } from '@buddi/core';
+import type { SuggestedMission } from '@buddi/core/plugin';
 
 export const MORNING_WEATHER_ID = 'morning-weather';
 export const MORNING_WEATHER_CRON = '0 7 * * *';

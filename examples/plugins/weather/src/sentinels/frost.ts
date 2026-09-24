@@ -6,7 +6,7 @@
  * "resolved". Firing at most once a day, and whether it wakes anyone at all,
  * are core's decisions (`packages/core/src/sentinels/run.ts`).
  */
-import { localDateString, type Finding, type Sentinel, type SentinelContext } from '@buddi/core';
+import { localDateString, type Finding, type Sentinel, type SentinelContext } from '@buddi/core/plugin';
 import { frostFinding } from '../frost.js';
 import { loadLocation } from '../location.js';
 import type { FetchForecast } from '../ports.js';
@@ -20,19 +20,20 @@ export function createFrostSentinel(fetchForecast: FetchForecast): Sentinel {
     description: "Warns when tomorrow's forecast low is below freezing.",
     every: EVERY_6H,
     async run(ctx: SentinelContext): Promise<Finding[]> {
-      const location = await loadLocation(ctx.db);
+      const buddi = ctx.buddi!;
+      const location = await loadLocation(buddi.db);
       // No location configured is a valid, quiet state — not a failure.
       if (!location) return [];
 
       const days = await fetchForecast({
         latitude: location.latitude,
         longitude: location.longitude,
-        timezone: ctx.timezone,
+        timezone: buddi.owner.timezone,
         days: 2,
-      });
+      }, buddi.http);
       const tomorrow = localDateString(
-        new Date(ctx.now().getTime() + 86_400_000),
-        ctx.timezone,
+        new Date(buddi.clock.now().getTime() + 86_400_000),
+        buddi.owner.timezone,
       );
       const day = days.find((d) => d.date === tomorrow);
       if (!day) return [];

@@ -4,7 +4,8 @@
  *
  * This is not a sandbox — a plugin runs in buddi's process and could import a
  * file by absolute path — it is what makes a reach past the host visible in
- * review. It walks every plugin's `src` under `packages/tools/*` and fails,
+ * review. It walks every plugin's `src` under `packages/tools/*` (and the
+ * example under `examples/plugins/*`) and fails,
  * naming the file, on:
  *
  *  - an import of `@buddi/core` other than `@buddi/core/plugin`, or
@@ -131,9 +132,12 @@ function pluginViolations(packageRoot: string, repoRoot: string, allowRuntime: R
   return found;
 }
 
-const PLUGINS = readdirSync(TOOLS)
-  .map((name) => path.join(TOOLS, name))
-  .filter((dir) => statSync(dir).isDirectory());
+const EXAMPLES = path.join(REPO, 'examples', 'plugins');
+const PLUGINS = [TOOLS, EXAMPLES].flatMap((root) =>
+  readdirSync(root)
+    .map((name) => path.join(root, name))
+    .filter((dir) => statSync(dir).isDirectory()),
+);
 
 describe('a plugin reaches core through ctx.buddi alone', () => {
   it('finds the plugins it checks', () => {

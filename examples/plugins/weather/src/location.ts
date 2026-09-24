@@ -1,5 +1,5 @@
 /** The stored location, and the one line that reads it. */
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 
 export interface Location {
   label: string;
@@ -8,7 +8,7 @@ export interface Location {
 }
 
 /** The owner's location, or null when nobody has set one. */
-export async function loadLocation(db: Pool): Promise<Location | null> {
+export async function loadLocation(db: Pick<DbArea, 'query'>): Promise<Location | null> {
   const { rows } = await db.query<Location>(
     `select label, latitude, longitude from weather.location where id = 1`,
   );

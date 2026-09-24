@@ -14,7 +14,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
 import { weatherAgents } from './agents.js';
 import { weatherMissions } from './missions.js';
 import { openMeteo } from './open-meteo.js';
@@ -40,6 +40,7 @@ export function createWeatherManifest(
     description: 'The local forecast, a frost watcher, and an agent that reads them.',
     schema: 'weather',
     migrationsDir: MIGRATIONS_DIR,
+    uses: ['http'],
     tools: [createForecastTool(fetchForecast)],
     sentinels: [createFrostSentinel(fetchForecast)],
     missions: weatherMissions,

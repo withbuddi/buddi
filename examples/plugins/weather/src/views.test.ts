@@ -4,7 +4,7 @@
  * copies: validate against the shared schema, and prove the paths actually hit
  * the shape your own tool returns.
  */
-import { parseViewDescriptors, ToolRegistry } from '@buddi/core';
+import { parseViewDescriptors, ToolRegistry } from '@buddi/core/testing';
 import { describe, expect, it } from 'vitest';
 import { createWeatherManifest } from './index.js';
 import type { ForecastOutput } from './tools/forecast.js';

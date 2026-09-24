@@ -7,7 +7,7 @@
  * nothing about weather; this file knows about weather and nothing about SVG.
  * Neither has to change when the other does.
  */
-import type { ViewDescriptor } from '@buddi/core';
+import type { ViewDescriptor } from '@buddi/core/plugin';
 
 export const weatherViews: ViewDescriptor[] = [
   {
