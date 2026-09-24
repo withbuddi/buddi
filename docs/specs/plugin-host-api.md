@@ -409,11 +409,20 @@ About a week.
 7. Every plugin in both repositories passes its tests after its migration
    commit with only its context fixture changed.
 
-## 11. Open questions
+## 11. Decisions taken (2026-09-24)
 
-- Should `files` scope default to "own and handed in" as written, or is the
-  whole library the honest default for a personal assistant?
-- `memory`: ship the area empty until a plugin needs it, or build it in
-  step 1?
-- Per-plugin Postgres roles need `createrole` on the owner's database; is
-  that acceptable on every install path (Homebrew, the app bundle)?
+- **`files` defaults to own and handed in.** The whole library is
+  `files:library`, declared and shown at install; a personal assistant that
+  reads everything should say so.
+- **`memory` ships as a type only** until a plugin needs it; no plugin
+  reads memory today, and an empty area is cheaper to get right later than
+  to carry now.
+- **Per-plugin Postgres roles are deferred.** They need `createrole` on
+  every install path, which the bundled Postgres has and a Homebrew or
+  remote one may not. Until then the import test's `core.` table check is
+  the scope rule for `db`; step 4 of §9 lists roles as "when every install
+  path can grant them".
+
+## 11a. Open questions
+
+- None at the moment.

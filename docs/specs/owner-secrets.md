@@ -49,7 +49,7 @@ in that one `deliver` call, and nowhere else.
 | --- | --- | --- | --- |
 | `browser.field` | browser (extension and Playwright backends) | exact origin (scheme, host, port) | pre-approved |
 | `http.header` | core's `http` area | exact host and header name, HTTPS only | pre-approved |
-| `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved |
+| `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved per workspace |
 | `native.type` | browser (macOS accessibility) | the app's bundle id | every time |
 | `form.data` | browser | exact origin and field | every time, every use logged |
 | `<plugin>.account` | the plugin that owns the account | its account id | pre-approved |
@@ -81,13 +81,19 @@ in that one `deliver` call, and nowhere else.
 - **Developer environment variables.** `developer.env`. The cour des
   comptes password and token become two secrets bound to that workspace's
   `ADMIN_PASSWORD` and `API_TOKEN`, and the `.env` lines are deleted.
-  `developer.write` refuses content containing any stored value and says to
-  bind it instead.
+  `developer.write` and `developer.edit` refuse content that **contains a
+  stored value**, whatever the file, and say to bind it instead. The file
+  is never the test: agents write `.env` files with ordinary configuration
+  all the time, and they keep doing so.
 - **Plugin account credentials.** The email IMAP and SMTP passwords today;
   messengers and model accounts as they are added. They move into the owner
   vault as secrets bound to `<plugin>.account`, pre-approved because the
   owner typed them on that plugin's own page, and they appear in Settings
-  like any other.
+  like any other. **This kind is the exception to "never held":** an IMAP
+  connection keeps its password for hours, so `deliver` hands the value to
+  the plugin's process for as long as its connection lives. What protects
+  it there is the scrub (§5) and the cleared environment (host API §6), not
+  the no-read rule. The card and the Settings row say so in one line.
 - **Database and service connection strings.** `developer.env` for a
   workspace's `DATABASE_URL`; `<plugin>.account` for a plugin's own service.
 - **SSH and git credentials.** Named here so the design holds them: a
@@ -150,6 +156,14 @@ is about the owner and what buddi learned about them.
   target is the owner's own action on the page, never a tool.
 - The value is **never shown again** after save. "Replace value" is the only
   way to change it.
+- **On save, buddi looks for the value where it may already be**: events,
+  memory notes and preferences, learned skills, and files under the bound
+  workspaces. It reports each place found and offers to scrub them, one
+  tap; the cour des comptes token and password are already in a note and
+  in events.
+- buddi's own keys are listed at the bottom, read-only, by name and last
+  use, so the page shows everything the vault holds. They cannot be bound
+  or replaced from here.
 - Each row shows its bindings, **last use** (when, which agent, which
   destination and target) and a link to its use log.
 - Every write is an `ownerOnly` tool: no model sees it, as with email's
@@ -215,17 +229,23 @@ old entry only after the new one reads back.
 6. A TOTP secret delivers a code only after the owner turned TOTP on for it.
 7. The use log shows every use with agent, destination and target.
 
-## 10. Open questions
+## 10. Decisions taken (2026-09-24)
 
-- History: the cour des comptes values are already in events and a memory
-  note. On save, should buddi search events, memory and workspace files for
-  the new value, report where it was found, and offer to scrub them?
-- Should `developer.env` allow pre-approved, or at most first time per
-  workspace?
-- Should buddi's own keys be listed read-only on the page, or stay on
-  System?
-- Is the extension backend acceptable for fills, given the value crosses the
-  local WebSocket to the extension?
+- **History is scrubbed on save** (§6): the value is searched for and the
+  owner offered a one-tap scrub, because the cour des comptes values are
+  already in a note and in events.
+- **`developer.env` may be pre-approved, per workspace**: the value only
+  ever reaches the owner's own processes.
+- **buddi's own keys are listed read-only** on the Keys and secrets page,
+  so one page shows everything the vault holds.
+- **The extension backend is acceptable for fills.** The value crosses a
+  loopback WebSocket to buddi's own paired extension, and the card shows
+  the origin the extension checked. No other route reaches the owner's
+  signed-in Chrome.
+
+## 10a. Open questions
+
+- None at the moment.
 
 ## 11. Order of work
 
