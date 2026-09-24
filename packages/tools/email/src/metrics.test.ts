@@ -8,7 +8,7 @@
  * freshest, and the silences that must be `null` instead of a confident zero.
  */
 import { describe, expect, it } from 'vitest';
-import { emailMetrics, stalestSync, waitingOnMe } from './metrics.js';
+import { emailMetrics, inboxUnread, stalestSync, waitingOnMe } from './metrics.js';
 import { createEmailManifest } from './index.js';
 
 const NOW = new Date('2026-09-22T09:00:00Z');
@@ -46,7 +46,12 @@ function ctx(rows: Array<[string, unknown[]]>): never {
 const ACCOUNTS = [account('a1', 'owner@example.test'), account('a2', 'owner@work.test')];
 
 function mailbox(
-  opts: { accounts?: unknown[]; synced?: Array<[string, Date | null]>; waiting?: number } = {},
+  opts: {
+    accounts?: unknown[];
+    synced?: Array<[string, Date | null]>;
+    waiting?: number;
+    unread?: number;
+  } = {},
 ): never {
   const synced = opts.synced ?? [
     ['a1', FRESH],
@@ -55,15 +60,16 @@ function mailbox(
   return ctx([
     ['last_synced_at from email\\.accounts', synced.map(([id, at]) => ({ id, last_synced_at: at }))],
     ['from waiting', [{ n: opts.waiting ?? 0 }]],
+    ['from email\\.folders', [{ n: opts.unread ?? 0 }]],
     ['from email\\.settings', []],
     ['from email\\.accounts', opts.accounts ?? ACCOUNTS],
   ]);
 }
 
 describe('the metrics this plugin contributes', () => {
-  it('is one count that should come down, and no unread count yet', () => {
+  it('is two counts that should come down: what waits on you, and what is unread', () => {
     expect(createEmailManifest().metrics).toEqual(emailMetrics);
-    expect(emailMetrics.map((m) => m.id)).toEqual(['email.waiting_on_me']);
+    expect(emailMetrics.map((m) => m.id)).toEqual(['email.waiting_on_me', 'email.inbox_unread']);
     expect(emailMetrics.every((m) => m.unit === 'count' && m.direction === 'down')).toBe(true);
   });
 });
@@ -104,5 +110,40 @@ describe('email.waiting_on_me', () => {
   it('takes no narrowing', () => {
     expect(waitingOnMe.params?.safeParse({}).success).toBe(true);
     expect(waitingOnMe.params?.strict().safeParse({ account: 'owner@work.test' }).success).toBe(false);
+  });
+});
+
+describe('email.inbox_unread', () => {
+  it('is the unread count over every enabled inbox, as of the stalest sync', async () => {
+    const reading = await inboxUnread.measure({}, mailbox({ unread: 14 }));
+    expect(reading?.value).toBe(14);
+    expect(reading?.asOf.toISOString()).toBe(STALE.toISOString());
+    expect(reading?.note).toBe('unread across 2 inboxes');
+  });
+
+  it('narrows to one mailbox by address, dated by that mailbox\'s own sync', async () => {
+    const reading = await inboxUnread.measure(
+      { account: 'owner@example.test' },
+      mailbox({ accounts: [ACCOUNTS[0]], unread: 3 }),
+    );
+    expect(reading?.value).toBe(3);
+    expect(reading?.asOf.toISOString()).toBe(FRESH.toISOString());
+    expect(reading?.note).toBe('unread in owner@example.test');
+  });
+
+  it('is null with no mailbox, an unknown one, or one that never synced', async () => {
+    expect(await inboxUnread.measure({}, mailbox({ accounts: [] }))).toBeNull();
+    expect(await inboxUnread.measure({ account: 'nobody@x.test' }, mailbox({ accounts: [] }))).toBeNull();
+    expect(
+      await inboxUnread.measure({}, mailbox({ synced: [['a1', FRESH], ['a2', null]], unread: 2 })),
+    ).toBeNull();
+  });
+
+  it('takes an account and nothing else, and says what it counts for the goal editor', () => {
+    expect(inboxUnread.params?.strict().safeParse({ account: 'owner@work.test' }).success).toBe(true);
+    expect(inboxUnread.params?.strict().safeParse({}).success).toBe(true);
+    expect(inboxUnread.params?.strict().safeParse({ folder: 'INBOX' }).success).toBe(false);
+    expect(inboxUnread.description).toMatch(/unread/);
+    expect(inboxUnread.description).toContain('2,000');
   });
 });

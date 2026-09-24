@@ -102,6 +102,19 @@ export interface MailboxStatus {
   uidValidity: number;
   uidNext: number;
   exists: number;
+  /**
+   * HIGHESTMODSEQ (RFC 7162), as a decimal string — a modseq is 63 bits and a
+   * JavaScript number is not. Null or absent when the server does not do
+   * CONDSTORE for this mailbox, which is what sends the flag re-sync down its
+   * capped full-fetch path instead of asking only for what changed.
+   */
+  highestModseq?: string | null;
+}
+
+/** One message's flags as the server holds them now. No headers, no body. */
+export interface FlagState {
+  uid: number;
+  flags: string[];
 }
 
 /**
@@ -122,6 +135,15 @@ export interface ImapClient {
    * Peek semantics: flags are reported, never changed.
    */
   fetchSince(mailbox: string, sinceUid: number, limit: number): Promise<FetchedMessage[]>;
+  /**
+   * `UID FETCH <uids> (FLAGS)` — flags only, never a header or a body, so it
+   * is cheap and it cannot set `\Seen`. With `changedSince` (a modseq from an
+   * earlier `open`) the server answers only for the messages among `uids`
+   * whose flags changed since then (`CHANGEDSINCE`); without it, for every one
+   * of them still in the mailbox. A uid missing from the answer is a message
+   * no longer there (or, with `changedSince`, one that did not change).
+   */
+  fetchFlags(mailbox: string, uids: readonly number[], changedSince?: string | null): Promise<FlagState[]>;
   /**
    * The attachment listing of one message, read from its body structure.
    *

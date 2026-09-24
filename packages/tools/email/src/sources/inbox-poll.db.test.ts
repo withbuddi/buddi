@@ -12,8 +12,11 @@ import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
 import type { SourceContext } from '../types.js';
+import { inboxUnread } from '../metrics.js';
 import {
   createInboxPollSource,
+  FLAG_SYNC_BATCH,
+  FLAG_SYNC_WINDOW,
   ImapTimeoutError,
   MAX_PER_POLL,
   triageDedupKey,
@@ -376,6 +379,8 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
         listAttachments: (name: string, uid: number) => real.listAttachments(name, uid),
         downloadAttachment: (name: string, uid: number, part: string, max: number) =>
           real.downloadAttachment(name, uid, part, max),
+        fetchFlags: (name: string, uids: readonly number[], since?: string | null) =>
+          real.fetchFlags(name, uids, since),
         close: async () => {
           closed += 1;
           await real.close();
@@ -412,6 +417,8 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
         listAttachments: (name: string, uid: number) => real.listAttachments(name, uid),
         downloadAttachment: (name: string, uid: number, part: string, max: number) =>
           real.downloadAttachment(name, uid, part, max),
+        fetchFlags: (name: string, uids: readonly number[], since?: string | null) =>
+          real.fetchFlags(name, uids, since),
         close: async () => {
           closed += 1;
           await real.close();
@@ -475,5 +482,142 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     await noSecret.poll(ctx);
     expect(logged.join('\n')).toContain('secret-missing');
     expect(await messageCount()).toBe(0);
+  });
+  /*
+   * Flags move after ingest: the owner reads a message on the phone and the
+   * next poll must say so. FLAGS only, rows updated in place, never a body
+   * fetched and never a second row.
+   */
+  describe('flag re-sync', () => {
+    const SEEN = '\\Seen';
+
+    async function flagsByUid(): Promise<Record<number, string[]>> {
+      const { rows } = await pool.query(`select uid, flags from email.messages order by uid`);
+      return Object.fromEntries(rows.map((r: any) => [Number(r.uid), r.flags]));
+    }
+
+    async function storedModseq(): Promise<string | null> {
+      const { rows } = await pool.query(
+        `select highest_modseq from email.folders where account_id = $1 and kind = 'inbox'`,
+        [accountId],
+      );
+      return rows[0].highest_modseq === null ? null : String(rows[0].highest_modseq);
+    }
+
+    function metricContext() {
+      return { db: pool, ownerId: 'owner', now: () => new Date('2026-09-13T12:00:00Z'), timezone: 'UTC' } as never;
+    }
+
+    it('without CONDSTORE, re-reads every held message\'s FLAGS and sees one read elsewhere', async () => {
+      const server = new FakeImapServer();
+      for (const id of ['a', 'b', 'c']) server.add('INBOX', fakeMessage({ messageId: `<${id}@x>` }));
+      const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+      await source.poll(contextFor());
+      expect(await flagsByUid()).toEqual({ 1: [], 2: [], 3: [] });
+      expect((await inboxUnread.measure({}, metricContext()))?.value).toBe(3);
+
+      // Read on the phone; archived elsewhere.
+      server.setFlags('INBOX', 2, [SEEN]);
+      server.remove('INBOX', 3);
+      const fetchesBefore = server.fetches.length;
+      const flagFetchesBefore = server.flagFetches.length;
+      const again = contextFor();
+      await source.poll(again);
+
+      expect(await flagsByUid()).toEqual({ 1: [], 2: [SEEN], 3: [] });
+      // One FLAGS fetch of every held uid, with no CHANGEDSINCE to ask with.
+      expect(server.flagFetches.slice(flagFetchesBefore)).toEqual([
+        { mailbox: 'INBOX', uids: [1, 2, 3], changedSince: null, returned: 2 },
+      ]);
+      // No body: the only message fetch was the cursor's, and it found nothing.
+      expect(server.fetches.slice(fetchesBefore).every((f) => f.returned === 0)).toBe(true);
+      expect(server.downloads).toEqual([]);
+      // Updated in place, never re-ingested, and nobody triaged it twice.
+      expect(await messageCount()).toBe(3);
+      expect(again.runs).toEqual([]);
+      expect(await storedModseq()).toBeNull();
+      // The archived one keeps its last flags: the schema has no "in the inbox" field.
+      expect((await inboxUnread.measure({}, metricContext()))?.value).toBe(2);
+    });
+
+    it('caps the full fetch at the newest FLAG_SYNC_WINDOW rows, in batches', async () => {
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ messageId: '<first@x>' }));
+      const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+      await source.poll(contextFor());
+      const total = FLAG_SYNC_WINDOW + 25;
+      // Rows buddi already holds, written straight in: 2,025 polls of 50 would
+      // prove nothing more about the cap.
+      await pool.query(
+        `insert into email.messages (account_id, folder_id, uidvalidity, uid, from_addr, triage_enqueued_at)
+         select f.account_id, f.id, 1, g, 'bulk@example.test', now()
+           from email.folders f, generate_series(2, $2::int) g
+          where f.account_id = $1 and f.kind = 'inbox'`,
+        [accountId, total],
+      );
+      const before = server.flagFetches.length;
+      await source.poll(contextFor());
+      const asked = server.flagFetches.slice(before);
+      expect(asked.map((f) => f.uids.length)).toEqual(
+        Array(FLAG_SYNC_WINDOW / FLAG_SYNC_BATCH).fill(FLAG_SYNC_BATCH),
+      );
+      const uids = asked.flatMap((f) => f.uids);
+      expect(uids.length).toBe(FLAG_SYNC_WINDOW);
+      expect(Math.min(...uids)).toBe(total - FLAG_SYNC_WINDOW + 1);
+      expect(Math.max(...uids)).toBe(total);
+      expect(asked.every((f) => f.changedSince === null)).toBe(true);
+    });
+
+    it('with CONDSTORE, asks only for what changed since the stored HIGHESTMODSEQ', async () => {
+      const server = new FakeImapServer({ INBOX: { uidValidity: 1, messages: [], condstore: true } });
+      for (const id of ['a', 'b', 'c']) server.add('INBOX', fakeMessage({ messageId: `<${id}@x>` }));
+      const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+
+      // First pass: nothing stored to ask CHANGEDSINCE with, so the full fetch,
+      // and the HIGHESTMODSEQ it saw is written down.
+      await source.poll(contextFor());
+      expect(server.flagFetches.map((f) => f.changedSince)).toEqual([null]);
+      const first = await storedModseq();
+      expect(first).toBe(String(server.mailbox('INBOX').highestModseq));
+
+      // Nothing changed: the modseq says so and no command is sent at all.
+      await source.poll(contextFor());
+      expect(server.flagFetches).toHaveLength(1);
+
+      // Read elsewhere: one CHANGEDSINCE fetch, one message in the answer.
+      server.setFlags('INBOX', 2, [SEEN, '\\Flagged']);
+      const logged: string[] = [];
+      const ctx = contextFor();
+      ctx.log = (line) => logged.push(line);
+      await source.poll(ctx);
+      expect(server.flagFetches.slice(1)).toEqual([
+        { mailbox: 'INBOX', uids: [1, 2, 3], changedSince: first, returned: 1 },
+      ]);
+      expect(await flagsByUid()).toEqual({ 1: [], 2: [SEEN, '\\Flagged'], 3: [] });
+      expect(await storedModseq()).toBe(String(server.mailbox('INBOX').highestModseq));
+      expect(logged.join('\n')).toMatch(/flags on owner@example\.test\/INBOX re-synced via condstore in \d+ms — 3 held, 1 reported, 1 changed/);
+      expect(server.downloads).toEqual([]);
+      expect(await messageCount()).toBe(3);
+
+      const reading = await inboxUnread.measure({}, metricContext());
+      expect(reading?.value).toBe(2);
+      expect(reading?.note).toBe('unread in owner@example.test');
+      expect((await inboxUnread.measure({ account: 'owner@example.test' }, metricContext()))?.value).toBe(2);
+      expect(await inboxUnread.measure({ account: 'nobody@example.test' }, metricContext())).toBeNull();
+    });
+
+    it('forgets the stored HIGHESTMODSEQ when UIDVALIDITY changes', async () => {
+      const server = new FakeImapServer({ INBOX: { uidValidity: 1, messages: [], condstore: true } });
+      server.add('INBOX', fakeMessage({ messageId: '<a@x>' }));
+      const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+      await source.poll(contextFor());
+      expect(await storedModseq()).not.toBeNull();
+
+      server.resetUidValidity('INBOX', 2);
+      const before = server.flagFetches.length;
+      await source.poll(contextFor());
+      // The new generation's rows are asked for in full, never CHANGEDSINCE an old modseq.
+      expect(server.flagFetches.slice(before).every((f) => f.changedSince === null)).toBe(true);
+    });
   });
 });

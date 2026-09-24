@@ -132,9 +132,9 @@ export function createEmailManifest(
     pages: emailPages(),
     queries: emailQueries(),
     sources: createEmailSources(opts),
-    // The number a goal can watch: what is waiting on the owner. Read-only,
-    // and measured on core's schedule (`metrics.ts`, which says why an unread
-    // count is not here yet).
+    // The numbers a goal can watch: what is waiting on the owner, and what is
+    // unread in the inbox. Read-only, and measured on core's schedule
+    // (`metrics.ts`).
     metrics: emailMetrics,
     // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
