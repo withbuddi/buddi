@@ -18,7 +18,7 @@ import { api } from '../api';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, WELCOME_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PageIcon, PluginPageDescriptor } from '../pages/types';
 import type { ThemeChoice } from '../theme';
-import { Icon, Segment, useAsync } from '../ui';
+import { Icon, Mark, Segment, useAsync } from '../ui';
 
 export function Rail({
   attention,
@@ -44,7 +44,7 @@ export function Rail({
   return (
     <nav className="rail" aria-label="Places">
       <a className="rail-mark" href={HOME_ROUTE} onClick={(e) => { e.preventDefault(); onNavigate(HOME_ROUTE); }} aria-label="buddi home">
-        b
+        <Mark />
       </a>
 
       {PLACES.filter((entry) => entry.route !== SETTINGS_ROUTE).map((entry) => (
