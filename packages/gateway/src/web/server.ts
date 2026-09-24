@@ -329,6 +329,9 @@ export interface WebServer {
  * existing caller keeps its one-line construction, and a server that is
  * garbage-collected takes its queue with it.
  */
+/** `buddi service`'s launchd label (SERVICE_LABEL in the cli, which depends on this package, not the other way). */
+export const LAUNCHD_LABEL = 'com.buddi.serve';
+
 const WEB_CHATS = new WeakMap<Server, WebChat>();
 
 /**
@@ -1178,8 +1181,18 @@ export function createWebApp(deps: WebServerDeps): Server {
          * gateway is whatever started it, and it has nothing to report.
          */
         case '/api/service': {
-          const socket = (deps.env ?? process.env).BUDDI_SUPERVISOR_SOCKET;
-          if (!socket) return sendJson(res, 200, { supervised: false });
+          const env = deps.env ?? process.env;
+          const socket = env.BUDDI_SUPERVISOR_SOCKET;
+          if (!socket) {
+            // `buddi service` runs serve.js straight under launchd, with no
+            // control socket. launchd names its job in XPC_SERVICE_NAME, so
+            // the gateway is supervised all the same; there is only nothing
+            // here to stop or restart it with.
+            if (env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
+              return sendJson(res, 200, { supervised: true, supervisor: 'launchd', label: LAUNCHD_LABEL });
+            }
+            return sendJson(res, 200, { supervised: false });
+          }
           try {
             const reply = await supervisorCall(socket, '/status', 'GET');
             if (reply.status !== 200) return sendJson(res, 502, { error: 'The supervisor refused to report its status.' });

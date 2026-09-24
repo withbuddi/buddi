@@ -5,7 +5,8 @@
  * exactly when nobody is looking.
  */
 import { describe, expect, it } from 'vitest';
-import { PAGE_ACT_RATE, PAGE_ACT_SESSIONS, actRateLimited } from './pages.js';
+import { z } from 'zod';
+import { PAGE_ACT_RATE, PAGE_ACT_SESSIONS, actRateLimited, describeParams } from './pages.js';
 
 describe('the act rate limit', () => {
   it('gives a session a minute\'s worth and then refuses', () => {
@@ -45,5 +46,22 @@ describe('the act rate limit', () => {
     for (let i = 0; i < PAGE_ACT_RATE.perMinute; i += 1) {
       expect(actRateLimited(first, now)).toBe(false);
     }
+  });
+});
+
+describe('a query\'s parameters, as names and types', () => {
+  it('reads them off the zod object without handing the schema out', () => {
+    const schema = z
+      .object({
+        id: z.string(),
+        limit: z.coerce.number().int().optional(),
+        as: z.enum(['png', 'pdf']),
+        all: z.enum(['true', 'false']).default('false'),
+        since: z.string().transform((v) => v.trim()).nullable(),
+      })
+      .strict();
+    expect(describeParams(schema)).toEqual({ id: 'string', limit: 'number?', as: 'png|pdf', all: 'true|false?', since: 'string' });
+    expect(describeParams(z.object({}).strict())).toEqual({});
+    expect(describeParams(z.string())).toEqual({});
   });
 });

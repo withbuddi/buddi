@@ -844,6 +844,9 @@ export interface ServiceStatus {
 export interface ServiceView {
   supervised: boolean;
   status?: ServiceStatus;
+  /** A launchd job with no control socket: supervised, with nothing to control from here. */
+  supervisor?: 'launchd';
+  label?: string;
   /** A stop or a restart that was accepted; it takes this page down with it. */
   pending?: 'stop' | 'restart';
 }

@@ -179,6 +179,66 @@ interface PickerRoute {
 }
 
 /* ------------------------------------------------------------------ *
+ * Shaping reads for a model
+ * ------------------------------------------------------------------ */
+
+/** What stands in for a sensitive Home block when it is left out. */
+export const SENSITIVE_OMITTED = 'ask with includeSensitive';
+
+/**
+ * The overview with every Home block a plugin marks `sensitive` replaced by
+ * its name. The dashboard masks those until the owner asks; this is the same
+ * rule for a client that has no mask, only a transcript.
+ */
+export function withoutSensitive(overview: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(overview.home)) return overview;
+  return {
+    ...overview,
+    home: overview.home.map((block: unknown) => {
+      const b = block as { id?: unknown; title?: unknown; sensitive?: unknown } | null;
+      return b && b.sensitive === true ? { id: b.id, title: b.title, sensitive: true, omitted: SENSITIVE_OMITTED } : block;
+    }),
+  };
+}
+
+interface PagesRoute {
+  pages: Array<{ plugin: string; id: string; title: string; place: string } & Record<string, unknown>>;
+  queries?: Array<{ plugin: string; name: string; params: Record<string, string> }>;
+}
+
+/** Every `{ query: name }` in a descriptor, in the order the page reads them. */
+function queriesIn(node: unknown, out: Set<string>): Set<string> {
+  if (Array.isArray(node)) {
+    for (const item of node) queriesIn(item, out);
+  } else if (node && typeof node === 'object') {
+    const q = (node as { query?: unknown }).query;
+    if (typeof q === 'string') out.add(q);
+    for (const value of Object.values(node)) queriesIn(value, out);
+  }
+  return out;
+}
+
+/**
+ * Pages as a model needs them: where each is and what it reads, with the
+ * parameters buddi.page_query takes. The layout is the dashboard's business.
+ */
+export function summarizePages(route: PagesRoute): unknown {
+  const params = new Map((route.queries ?? []).map((q) => [`${q.plugin}/${q.name}`, q.params]));
+  return {
+    pages: route.pages.map((p) => ({
+      plugin: p.plugin,
+      id: p.id,
+      title: p.title,
+      place: p.place,
+      queries: [...queriesIn([p.data, p.body], new Set())].map((name) => ({
+        name,
+        params: params.get(`${p.plugin}/${name}`) ?? {},
+      })),
+    })),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * The tools
  * ------------------------------------------------------------------ */
 
@@ -188,9 +248,15 @@ export const TOOLS: McpTool[] = [
     name: 'buddi.overview',
     description:
       'The state of this buddi at a glance: version, whether the service is running, every agent with its account, model and status, open approvals, open proposals, and what is waiting on the owner.',
-    inputSchema: object({}),
-    async run(_args, rt) {
+    inputSchema: object({
+      includeSensitive: {
+        type: 'boolean',
+        description: 'Include the Home blocks a plugin marks sensitive (balances and the like). Off by default: each is then only named.',
+      },
+    }),
+    async run(args, rt) {
       const g = rt.gateway;
+      const includeSensitive = args.includeSensitive === true;
       const [session, service, overview, agents, approvals, proposals, attention] = await Promise.all([
         g.get<{ version?: unknown; recovery?: unknown }>('/api/session'),
         g.get<unknown>('/api/service').catch(() => null),
@@ -218,7 +284,7 @@ export const TOOLS: McpTool[] = [
         approvals: approvals.pending.map((a) => ({ id: a.id, tool: a.tool, preview: a.preview })),
         proposals: proposals.open.map((p) => ({ id: p.id, kind: p.kind, agent: p.agent, title: p.title })),
         needsYou: attention,
-        overview,
+        overview: includeSensitive ? overview : withoutSensitive(overview),
       };
     },
   },
@@ -322,7 +388,7 @@ export const TOOLS: McpTool[] = [
     description: "Every plugin page the dashboard shows, with the queries each page reads — the names buddi.page_query takes.",
     inputSchema: object({}),
     async run(_args, rt) {
-      return rt.gateway.get('/api/pages');
+      return summarizePages(await rt.gateway.get<PagesRoute>('/api/pages'));
     },
   },
   {
