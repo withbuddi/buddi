@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from 'react';
 import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
-import { Button, Empty, ErrorBanner, Field, Notice, Pill, Row, Section, Stack, Toolbar, useAsync } from '../../ui';
+import { Button, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
 import { Avatar, type Face } from './Avatar';
@@ -122,7 +122,7 @@ function Agent({
         {accounts ? (
           <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
         ) : (
-          <Toolbar valign="end">
+          <FormGrid>
             <Field label="Provider">
               <select value={provider} onChange={(e) => switchProvider(e.target.value)}>
                 {providers.map((p) => (
@@ -149,7 +149,7 @@ function Agent({
                 ))}
               </datalist>
             </Field>
-          </Toolbar>
+          </FormGrid>
         )}
         {!accounts ? (
           <p className="ui-card-meta">
@@ -167,7 +167,7 @@ function Agent({
       </Section>
 
       <Section title="Behaviour" aside="saved as you change them" panel>
-        <Toolbar valign="end">
+        <FormGrid>
           <Field label="Max turns" hint="Per run. The agent stops when it runs out.">
             <input
               type="number"
@@ -202,7 +202,7 @@ function Agent({
               <option value="off">Off</option>
             </select>
           </Field>
-        </Toolbar>
+        </FormGrid>
       </Section>
 
       <Delegation agent={agent} all={all} onSaved={onSaved} />
@@ -344,7 +344,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         </Notice>
       ) : null}
       {saved ? <Notice tone="good" role="status">{saved}</Notice> : null}
-      <Toolbar valign="end">
+      <FormGrid>
         <Field label="Name" hint="What it is called, everywhere.">
           <input value={name} disabled={busy || agent.isExample} onChange={(e) => setName(e.target.value)} />
         </Field>
@@ -357,7 +357,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         <Field label="Roles" hint="Capabilities it answers for, comma separated.">
           <input value={roles} disabled={busy || agent.isExample} onChange={(e) => setRoles(e.target.value)} />
         </Field>
-      </Toolbar>
+      </FormGrid>
       <Picture agent={agent} onChanged={onSaved} />
       <Field label="Description" hint="One or two sentences. Its colleagues read this.">
         <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />

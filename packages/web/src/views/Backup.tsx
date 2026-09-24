@@ -26,6 +26,7 @@ import {
   Empty,
   ErrorBanner,
   Field,
+  FormGrid,
   Notice,
   Pill,
   Section,
@@ -337,7 +338,7 @@ function Schedule({ onSaved }: { onSaved: () => void }): JSX.Element {
               <input type="checkbox" checked={current.enabled} onChange={(event) => set({ enabled: event.target.checked })} />
               <span>Back this buddi up on its own</span>
             </label>
-            <Toolbar valign="end">
+            <FormGrid>
               <Field label="At">
                 <input type="time" value={current.time} onChange={(event) => set({ time: event.target.value })} />
               </Field>
@@ -350,15 +351,15 @@ function Schedule({ onSaved }: { onSaved: () => void }): JSX.Element {
                   onChange={(event) => set({ keep: Number(event.target.value) || 1 })}
                 />
               </Field>
-              <label className="backup-check">
-                <input
-                  type="checkbox"
-                  checked={current.encryptLocal}
-                  onChange={(event) => set({ encryptLocal: event.target.checked })}
-                />
-                <span>Lock each one with the passphrase</span>
-              </label>
-            </Toolbar>
+            </FormGrid>
+            <label className="backup-check">
+              <input
+                type="checkbox"
+                checked={current.encryptLocal}
+                onChange={(event) => set({ encryptLocal: event.target.checked })}
+              />
+              <span>Lock each one with the passphrase</span>
+            </label>
           </Stack>
         </Section>
         <Section>
@@ -615,7 +616,7 @@ function FromAFile({
         <Section>
           <Stack gap="sm">
             <p className="ui-card-meta">A backup from another buddi, or one you keep somewhere else.</p>
-            <Toolbar valign="end">
+            <FormGrid>
               <Field label="The backup file">
                 <input
                   type="file"
@@ -628,7 +629,7 @@ function FromAFile({
               <Field label="Its passphrase" hint="Only if it was locked with one.">
                 <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
               </Field>
-            </Toolbar>
+            </FormGrid>
             {asking ? null : (
               <Toolbar align="end">
                 <Button variant="accent" disabled={busy || !file} onClick={() => setAsking(true)}>

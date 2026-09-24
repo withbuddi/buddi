@@ -32,6 +32,7 @@ import {
   Empty,
   ErrorBanner,
   Field as FieldBox,
+  FormGrid,
   KV,
   List,
   ListRow,
@@ -665,14 +666,14 @@ function FieldControl({
   }
   if (field.type === 'textarea') {
     return (
-      <FieldBox label={field.label} hint={field.hint}>
+      <FieldBox label={field.label} hint={field.hint} wide>
         <textarea {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} rows={6} />
       </FieldBox>
     );
   }
   if (field.type === 'checkbox') {
     return (
-      <FieldBox label={field.label} hint={field.hint} inline>
+      <FieldBox label={field.label} hint={field.hint} inline wide>
         <input {...shared} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
       </FieldBox>
     );
@@ -757,7 +758,7 @@ function Fields({
    */
   const asked = askedOf(values, data);
   return (
-    <Stack gap="sm">
+    <FormGrid>
       {fields
         .filter((field) => field.when === undefined || holds(asked, field.when))
         .map((field) => (
@@ -771,7 +772,7 @@ function Fields({
             onChange={(value) => onChange(field.name, value)}
           />
         ))}
-    </Stack>
+    </FormGrid>
   );
 }
 

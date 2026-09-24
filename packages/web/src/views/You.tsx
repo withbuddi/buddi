@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { ApiError, api, type OwnerView } from '../api';
-import { Button, ErrorBanner, Field, Notice, PageFrame, Section, Stack, Toolbar, useAsync } from '../ui';
+import { Button, ErrorBanner, Field, FormGrid, Notice, PageFrame, Section, Stack, Toolbar, useAsync } from '../ui';
 
 export function You({ embedded }: { embedded?: boolean }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.owner(), []);
@@ -75,8 +75,8 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
     >
       <Stack divided gap="lg">
         <Section title="Name and place">
-          <Toolbar valign="end">
-            <Field label="What the agents call you" grow>
+          <FormGrid>
+            <Field label="What the agents call you">
               <input value={name} maxLength={80} placeholder={initial.displayName ?? 'Your name'} onChange={(e) => { setSaved(false); setName(e.target.value); }} />
             </Field>
             <Field label="Timezone" hint={`This host is in ${initial.detectedTimezone}. Existing schedules keep the zone they were made in.`}>
@@ -88,7 +88,7 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
             <Field label="Answer me in" hint="A language, as you would say it. Blank mirrors whatever you write in.">
               <input value={language} maxLength={40} placeholder="English, français…" onChange={(e) => { setSaved(false); setLanguage(e.target.value); }} />
             </Field>
-          </Toolbar>
+          </FormGrid>
         </Section>
         <Section title="About you">
           <Field label="In your own words" hint="Who you are, how you like answers, anything every agent should keep in mind. A few lines is plenty.">
