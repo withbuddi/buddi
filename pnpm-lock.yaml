@@ -413,9 +413,6 @@ importers:
       '@buddi/core':
         specifier: workspace:*
         version: link:../../core
-      '@buddi/runtime':
-        specifier: workspace:*
-        version: link:../../runtime
       pg:
         specifier: ^8.13.1
         version: 8.23.0
@@ -423,6 +420,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@buddi/runtime':
+        specifier: workspace:*
+        version: link:../../runtime
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.2

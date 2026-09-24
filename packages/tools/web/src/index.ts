@@ -42,8 +42,8 @@
  *    and on every redirect hop, with the resolver wired into the socket so
  *    there is no second lookup to poison.
  *  - **Everything is bounded** — bytes, time, hops, content type: `http.ts`.
- *  - **One transport.** `@buddi/runtime`'s, as every long-lived outbound
- *    caller in this repository uses.
+ *  - **One transport.** `ctx.buddi.http`'s, the one every long-lived
+ *    outbound caller in this repository shares.
  *
  * It owns the `web` schema: one audit table saying what was fetched, never what
  * came back. Deleting this directory leaves core booting, with one schema to
@@ -51,7 +51,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
 import { createFetcher, type Fetcher, type FetcherOptions } from './http.js';
 import { webSkills } from './skills.js';
 import { createReadTool } from './tools/read.js';
@@ -106,6 +106,7 @@ export function createWebManifest(opts: WebPluginOptions = {}): PluginManifest {
       createStatusTool(shared),
     ],
     skills: webSkills,
+    uses: ['http'],
     // Two kinds of destination, and the difference is the whole privacy story.
     network: [
       ...PROVIDERS.map((p) => ({
@@ -156,12 +157,10 @@ export {
   blockedV4,
   blockedV6,
   checkUrl,
-  guardedLookup,
   isBlockedHostname,
   type AddressPolicy,
   type BlockReason,
   type CheckedUrl,
-  type LookupAll,
 } from './guard.js';
 export { decodeEntities, extractTitle, htmlToText, plainToText } from './extract.js';
 export { CITE_NOTICE, NO_SEARCH_KEY_NOTICE, UNTRUSTED_NOTICE } from './notice.js';

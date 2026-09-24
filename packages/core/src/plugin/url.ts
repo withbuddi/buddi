@@ -5,11 +5,10 @@
  * Moved here from `@buddi/tool-web`'s `guard.ts` (docs/specs/plugin-host-api.md
  * §3) so a plugin can check a URL without importing another plugin: the browser
  * plugin was the first. Pure — a URL in, a verdict out, nothing resolved. The
- * half that resolves, `guardedLookup`, does I/O and stays in the web plugin,
- * which re-exports everything here so nothing that imported it moves.
+ * half that resolves, `guardedLookup`, does I/O and lives with the `http` area
+ * in `host/http.ts`, where every request a plugin sends goes through both.
  *
- * Why the rules are what they are is written at the top of
- * `packages/tools/web/src/guard.ts`.
+ * Why the rules are what they are is written at the top of `host/http.ts`.
  */
 import { isIP } from 'node:net';
 

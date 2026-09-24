@@ -22,7 +22,7 @@
  * provider is named in every result, and why `docs/web.md` says so in a
  * paragraph of its own instead of leaving it implied.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { recordFetch } from '../log.js';
 import { CITE_NOTICE, NO_SEARCH_KEY_NOTICE, UNTRUSTED_NOTICE } from '../notice.js';
@@ -107,7 +107,7 @@ export function createSearchTool(
         // The honest degraded answer. Not an exception, because the agent
         // should keep talking and say what it cannot do — and not an empty
         // result list, because an empty list reads like "nothing was found".
-        await recordFetch(ctx.db, {
+        await recordFetch(ctx.buddi!.db, {
           kind: 'search',
           agentId: ctx.agentId,
           conversationId: ctx.conversationId,
@@ -140,14 +140,14 @@ export function createSearchTool(
         {
           key: key.key,
           fetch: async (request) => {
-            const raw = await options.fetcher.json(request);
+            const raw = await options.fetcher.json(request, ctx.buddi?.http);
             return { ok: raw.ok, status: raw.status, body: raw.body, url: raw.url };
           },
         },
       );
 
       if (!result.ok) {
-        await recordFetch(ctx.db, {
+        await recordFetch(ctx.buddi!.db, {
           kind: 'search',
           agentId: ctx.agentId,
           conversationId: ctx.conversationId,
@@ -169,7 +169,7 @@ export function createSearchTool(
         };
       }
 
-      await recordFetch(ctx.db, {
+      await recordFetch(ctx.buddi!.db, {
         kind: 'search',
         agentId: ctx.agentId,
         conversationId: ctx.conversationId,

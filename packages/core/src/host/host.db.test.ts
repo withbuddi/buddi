@@ -22,6 +22,7 @@ import type { PluginManifest, ToolContext } from '../tools.js';
 import type { ProviderAccountsAccess } from '../provider-accounts.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from './build.js';
 import type { BuddiHost } from './types.js';
+import { BlockedError } from '../plugin/url.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -222,7 +223,7 @@ suite('ctx.buddi', () => {
     const sent: string[] = [];
     configurePluginHost({
       log: (line) => lines.push(line),
-      http: async (url) => {
+      httpTransport: () => async (url) => {
         sent.push(url);
         return {
           ok: true,
@@ -244,6 +245,25 @@ suite('ctx.buddi', () => {
     await host.http!.request({ url: 'https://example.com/b' });
     expect(sent).toHaveLength(3);
     expect(lines).toEqual(['[weather] a request to example.com, which its manifest does not declare under network']);
+  });
+
+  it('refuses a URL the address rules refuse, before anything is sent, and resolves through the guard', async () => {
+    const lookups: unknown[] = [];
+    configurePluginHost({
+      httpTransport: ({ lookup }) => {
+        lookups.push(lookup);
+        return async () => {
+          throw new Error('nothing should be sent');
+        };
+      },
+    });
+    const host = createPluginHost(hostBindingOf(plugin('weather', { uses: ['http'] })), ctx());
+    await expect(host.http!.request({ url: 'http://127.0.0.1:4317/api/session' })).rejects.toBeInstanceOf(BlockedError);
+    await expect(host.http!.request({ url: 'http://169.254.169.254/latest/meta-data' })).rejects.toBeInstanceOf(BlockedError);
+    expect(lookups).toEqual([]);
+    await expect(host.http!.request({ url: 'https://example.com/' })).rejects.toThrow('nothing should be sent');
+    expect(lookups).toHaveLength(1);
+    expect(typeof lookups[0]).toBe('function');
   });
 
   it('answers approvals for its own tools only', async () => {

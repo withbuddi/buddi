@@ -15,7 +15,7 @@
  * a blocked address and a timeout are five different things the owner would
  * want to hear five different answers about.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { DEFAULT_MAX_CHARS, MAX_MAX_CHARS, hostOf, type Fetcher } from '../http.js';
 import { recordFetch } from '../log.js';
@@ -70,14 +70,14 @@ export function createReadTool(fetcher: Fetcher): ToolDefinition<ReadInput, Read
     timeoutMs: 30_000,
 
     async execute(input, ctx): Promise<ReadOutput> {
-      const retrievedAt = ctx.now().toISOString();
+      const retrievedAt = ctx.buddi!.clock.now().toISOString();
       const outcome = await fetcher.page({
         url: input.url,
         ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
-      });
+      }, ctx.buddi?.http);
 
       if (!outcome.ok) {
-        await recordFetch(ctx.db, {
+        await recordFetch(ctx.buddi!.db, {
           kind: 'read',
           agentId: ctx.agentId,
           conversationId: ctx.conversationId,
@@ -98,7 +98,7 @@ export function createReadTool(fetcher: Fetcher): ToolDefinition<ReadInput, Read
         };
       }
 
-      await recordFetch(ctx.db, {
+      await recordFetch(ctx.buddi!.db, {
         kind: 'read',
         agentId: ctx.agentId,
         conversationId: ctx.conversationId,

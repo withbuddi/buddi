@@ -12,9 +12,9 @@ import {
   DEFAULT_POLICY,
   blockedAddress,
   checkUrl,
-  guardedLookup,
   isBlockedHostname,
-} from './guard.js';
+} from '../plugin/url.js';
+import { guardedLookup } from './http.js';
 
 /** Call the guarded lookup as a socket would, and promise its outcome. */
 function lookupOnce(

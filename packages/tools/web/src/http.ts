@@ -9,7 +9,7 @@
  * ## The four bounds
  *
  *  - **Bytes.** `maxBytes`, enforced *while the body arrives* by the shared
- *    transport (`TransportRequest.maxBytes`), not by checking `content-length`
+ *    transport behind `ctx.buddi.http` (`maxBytes`), not by checking `content-length`
  *    afterwards. A header is a claim; the byte count is a fact, and by the time
  *    you can check the header the memory is already spent.
  *  - **Time.** One `AbortSignal.timeout` covering the *whole* retrieval,
@@ -30,16 +30,14 @@
  * An agent that gets a vague failure retries with a different URL; an agent
  * that is told "that is a PDF" says so.
  */
-import { defaultHttpTransport, createHttpTransport, type HttpTransport } from '@buddi/runtime';
+import type { HttpArea } from '@buddi/core/plugin';
 import { extractTitle, htmlToText, plainToText } from './extract.js';
 import {
   BlockedError,
   checkUrl,
   DEFAULT_POLICY,
-  guardedLookup,
   type AddressPolicy,
   type BlockReason,
-  type LookupAll,
 } from './guard.js';
 
 /** The most bytes a page may be before it is refused mid-flight. 2 MiB. */
@@ -132,10 +130,12 @@ export type FetchOutcome =
 export interface FetcherOptions {
   /** The address rules. Always `DEFAULT_POLICY` in anything that ships. */
   policy?: AddressPolicy;
-  /** How names are resolved. A test answers here instead of asking a resolver. */
-  resolve?: LookupAll;
-  /** The transport. Built here so the guarded `lookup` is wired into it. */
-  transport?: HttpTransport;
+  /**
+   * The area requests go through, when the fetcher is built with one: a test's,
+   * over its fixture server. Otherwise each call hands over its tool's
+   * `ctx.buddi.http`.
+   */
+  http?: HttpArea;
   maxBytes?: number;
   timeoutMs?: number;
   maxRedirects?: number;
@@ -161,39 +161,32 @@ export interface RawOutcome {
 }
 
 export type Fetcher = {
-  page(request: FetchRequest): Promise<FetchOutcome>;
+  page(request: FetchRequest, http?: HttpArea): Promise<FetchOutcome>;
   /**
    * The same guarded path, without extraction, for a caller that knows what it
    * is talking to — the search providers, which speak JSON to one declared
    * host. Everything about the guard still applies: a provider whose DNS
    * answered `127.0.0.1` is refused exactly as a page would be.
    */
-  json(request: FetchRequest): Promise<RawOutcome>;
+  json(request: FetchRequest, http?: HttpArea): Promise<RawOutcome>;
 };
 
 /**
  * Build a fetcher.
  *
- * The transport is constructed *here*, with the guarded lookup, rather than
- * taken as a default from `@buddi/runtime`: `defaultHttpTransport` resolves
- * names with `dns.lookup`, and a fetcher that used it would have the address
- * check only in front of the socket rather than inside it. That is the
- * difference between checking a URL and checking a connection.
+ * Every hop goes out through `ctx.buddi.http`, whose transport resolves names
+ * with the guarded lookup, so the address check is inside the socket and not
+ * only in front of it. That is the difference between checking a URL and
+ * checking a connection.
  */
 export function createFetcher(options: FetcherOptions = {}): Fetcher {
   const policy = options.policy ?? DEFAULT_POLICY;
   const maxBytes = options.maxBytes ?? MAX_BYTES;
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
-  const transport =
-    options.transport ??
-    createHttpTransport({
-      lookup: guardedLookup(options.resolve, policy),
-      idleTimeoutMs: IDLE_TIMEOUT_MS,
-    });
-
   async function walk(
     request: FetchRequest,
+    http: HttpArea | undefined,
   ): Promise<
     | { ok: true; status: number; body: string; contentType: string; url: string; bytes: number; chain: string[] }
     | (FetchFailure & { ok: false; url: string; status: number | null; message: string; chain: string[] })
@@ -230,7 +223,10 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
 
       let response;
       try {
-        response = await transport(checked.url.toString(), {
+        const area = options.http ?? http;
+        if (area === undefined) throw new Error('web: no HTTP area to send the request through');
+        response = await area.request({
+          url: checked.url.toString(),
           method: request.method ?? 'GET',
           headers: {
             'user-agent': USER_AGENT,
@@ -301,16 +297,16 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
   }
 
   return {
-    async json(request) {
-      const result = await walk({ ...request, raw: true });
+    async json(request, http) {
+      const result = await walk({ ...request, raw: true }, http);
       if (!result.ok) {
         return { ok: false, status: result.status ?? 0, body: result.message, contentType: '', url: result.url };
       }
       return { ok: true, status: result.status, body: result.body, contentType: result.contentType, url: result.url };
     },
 
-    async page(request) {
-      const result = await walk(request);
+    async page(request, http) {
+      const result = await walk(request, http);
       if (!result.ok) {
         return { ...result, source: hostOf(result.url) };
       }
@@ -425,6 +421,3 @@ function networkFailure(
   }
   return { ...base, reason: 'network', message: `I could not reach that site: ${message}` };
 }
-
-/** The transport used when a caller supplies neither one nor a lookup seam. */
-export { defaultHttpTransport };

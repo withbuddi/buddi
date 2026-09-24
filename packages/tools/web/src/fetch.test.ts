@@ -18,6 +18,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHttpArea, type LookupAll } from '@buddi/core';
+import { createHttpTransport } from '@buddi/runtime';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';
 import { createFetcher, MAX_BYTES } from './http.js';
 
@@ -66,10 +68,23 @@ function testPolicy(): AddressPolicy {
 
 const fixture = (path: string): string => `http://127.0.0.1:${port}${path}`;
 
+/** `ctx.buddi.http` as core builds it, over the real transport, with this policy and resolver. */
+function area(policy?: AddressPolicy, resolve?: LookupAll) {
+  return createHttpArea({
+    plugin: 'web',
+    network: [],
+    log: () => {},
+    transport: createHttpTransport,
+    ...(policy === undefined ? {} : { policy }),
+    ...(resolve === undefined ? {} : { resolve }),
+  });
+}
+
 function fetcher(over: { maxBytes?: number; timeoutMs?: number; maxRedirects?: number; resolve?: any } = {}) {
+  const policy = testPolicy();
   return createFetcher({
-    policy: testPolicy(),
-    ...(over.resolve ? { resolve: over.resolve } : {}),
+    policy,
+    http: area(policy, over.resolve),
     ...(over.maxBytes === undefined ? {} : { maxBytes: over.maxBytes }),
     ...(over.timeoutMs === undefined ? {} : { timeoutMs: over.timeoutMs }),
     ...(over.maxRedirects === undefined ? {} : { maxRedirects: over.maxRedirects }),
@@ -241,7 +256,7 @@ describe('a name that resolves somewhere it should not', () => {
     // resolver here is the one the socket itself uses, so there is no second
     // lookup for a rebinding attack to win.
     const guarded = createFetcher({
-      resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+      http: area(undefined, async () => [{ address: '127.0.0.1', family: 4 }]),
     });
     const result = await guarded.page({ url: 'http://research-notes.example/prices' });
     expect(result.ok).toBe(false);
@@ -257,7 +272,7 @@ describe('a name that resolves somewhere it should not', () => {
     });
     const named = createFetcher({
       policy: testPolicy(),
-      resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+      http: area(testPolicy(), async () => [{ address: '127.0.0.1', family: 4 }]),
     });
     const result = await named.page({ url: `http://fixture.example:${port}/named` });
     expect(result.ok).toBe(true);
