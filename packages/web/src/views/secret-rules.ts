@@ -51,13 +51,13 @@ export const UNBOUND_LINE = 'Stored, not usable until it has a binding.';
  * the parts separated by one.
  */
 export function targetPlaceholder(kind: string): string {
-  if (kind === 'browser.field') return 'the exact origin, e.g. https://www.pnc.com';
-  if (kind === 'browser.form.data') return 'the origin, then the field name — e.g. https://bank.example card-number';
+  if (kind === 'browser.field') return 'the exact origin — scheme, host and port — e.g. https://localhost:8443';
+  if (kind === 'browser.form.data') return 'the origin, then the field name — e.g. https://localhost:8443 card-number';
   if (kind === 'browser.native.type') return 'the app’s bundle id, e.g. com.bank.app';
-  if (kind === 'http.header') return 'the host, then the header name — e.g. api.example.com Authorization';
+  if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
   if (kind === 'developer.env') return 'the workspace, then the variable name — e.g. cour des comptes ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'the account id, e.g. acct-1';
-  return 'the place, as JSON — e.g. {"host":"api.example.com","header":"Authorization"}';
+  return 'the place, as JSON — e.g. {"host":"localhost","header":"Authorization"}';
 }
 
 /** The two-part kinds, and the JSON each pair builds. */
@@ -93,7 +93,7 @@ export function parseTargetInput(kind: string, text: string): TargetParse {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return { ok: true, target: parsed };
-      return { ok: false, error: 'A target in JSON is an object, like {"host":"api.example.com","header":"Authorization"}.' };
+      return { ok: false, error: 'A target in JSON is an object, like {"host":"localhost","header":"Authorization"}.' };
     } catch {
       return { ok: false, error: 'That opens like JSON but does not parse.' };
     }

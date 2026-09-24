@@ -69,7 +69,7 @@ describe('the settings list', () => {
       .toEqual(['You', 'Models and access', 'Running', 'Plugins']);
     const names = (group: HTMLElement): string[] => within(group).getAllByRole('link').map((a) => a.textContent ?? '');
     expect(names(groups[0]!)).toEqual(['Profile', 'Appearance', 'Memory', 'Proposals']);
-    expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser']);
+    expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser', 'Keys and secrets']);
     expect(names(groups[2]!)).toEqual(['Watchers', 'Backup', 'System']);
     expect(names(groups[3]!)[0]).toBe('All plugins');
     // No tab strip is left.
@@ -210,7 +210,7 @@ describe('on a narrow window', () => {
     const options = [...list.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
     expect(options.map((o) => o.textContent)).toEqual([
       'Profile', 'Appearance', 'Memory', 'Proposals',
-      'Model accounts', 'Computer & browser',
+      'Model accounts', 'Computer & browser', 'Keys and secrets',
       'Watchers', 'Backup', 'System',
       'All plugins', 'Alpha', 'mike', 'Zulu',
     ]);
@@ -219,7 +219,7 @@ describe('on a narrow window', () => {
     expect(option('Backup')).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(option('Backup'));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/settings/backup'));
-    // Radix registers each of the thirteen items as the menu opens, which jsdom
+    // Radix registers each of the fourteen items as the menu opens, which jsdom
     // takes its time over (the canvas's overflow menu is slow the same way).
   }, 20_000);
 });
