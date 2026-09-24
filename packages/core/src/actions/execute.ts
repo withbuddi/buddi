@@ -24,6 +24,7 @@
  */
 import type { CoreToolContext, EffectDescription } from '../tools.js';
 import type { Queryable } from '../owner.js';
+import { primeSecretScrubber, scrubDeep, scrubText } from '../secrets/scrub.js';
 import { emitActionEvent } from './store.js';
 import {
   DEFAULT_EFFECT_TIMEOUT_MS,
@@ -301,10 +302,18 @@ export async function executeApproved(
   }
 
   if (outcome.kind === 'ok') {
-    await finishAttempt(pool, attempt.id, 'succeeded', { result: outcome.value });
+    /*
+     * Choke point 1 of the scrub (owner-secrets §5), executor side: the
+     * result, before it is recorded on the attempt, settled into the
+     * approval, or returned. A gated tool whose output echoes a value is the
+     * same exposure as an `auto` one.
+     */
+    await primeSecretScrubber();
+    const result = scrubDeep(outcome.value);
+    await finishAttempt(pool, attempt.id, 'succeeded', { result });
     const settled = await settleApproval(pool, action, 'succeeded', {
       attempt: attempt.attempt,
-      result: outcome.value,
+      result,
     });
     await emitActionEvent(
       pool,
@@ -312,7 +321,7 @@ export async function executeApproved(
       { actionId: action.id, tool: action.tool, attempt: attempt.attempt },
       action.conversationId,
     );
-    return { ok: true, state: 'succeeded', action: settled, result: outcome.value, attempt: attempt.attempt };
+    return { ok: true, state: 'succeeded', action: settled, result, attempt: attempt.attempt };
   }
 
   if (outcome.kind === 'timeout' || outcome.kind === 'cancelled' || ctx.signal.aborted) {
@@ -333,7 +342,7 @@ export async function executeApproved(
     return { ok: false, state: 'unknown', reason, message, attempt: attempt.attempt };
   }
 
-  const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+  const message = scrubText(outcome.error instanceof Error ? outcome.error.message : String(outcome.error));
   await finishAttempt(pool, attempt.id, 'failed', { error: message });
   await settleApproval(pool, action, 'failed', { attempt: attempt.attempt, reason: 'tool-error', error: message });
   await emitActionEvent(

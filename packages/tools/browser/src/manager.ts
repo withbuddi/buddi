@@ -1,4 +1,4 @@
-import { BrowserService, type BrowserController, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover } from './service.js';
+import { BrowserService, type BrowserController, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover, type SecretFillInput, type SecretTypeInput } from './service.js';
 import type { BrowserCommand, BrowserDriver } from './types.js';
 import type { ToolContext } from '@buddi/core/plugin';
 
@@ -100,6 +100,40 @@ export class BrowserManager implements BrowserController {
     }
     this.#requests.set(request.id, { key, expiresAt: request.expiresAt, ended: false });
     try { return await child.execute(command, ctx); }
+    finally { this.#sweep(); }
+  }
+  /**
+   * The child this conversation owns, under the same gates `execute` runs: a
+   * secret use is a browser action too, and every one of those gates guards
+   * the value's one route through it. There is no bootstrap here — a secret
+   * acts on a page the conversation is already driving, so a conversation with
+   * no session has nothing for it to act on.
+   */
+  #sessionFor(ctx: ToolContext, what: string): BrowserService {
+    ctx.signal?.throwIfAborted();
+    const request = ctx.ownerRequest;
+    if (!request?.id || !request.text.trim() || request.expiresAt <= Date.now() || !ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0) throw new Error('A current authenticated owner request is required.');
+    if (!this.#enabled) throw new Error('Browser driving is available through buddi serve.');
+    if (this.#stopped) throw new Error('The owner stopped all browser sessions. Only the owner can resume access.');
+    if (this.#controlling) throw new Error('Browser owner controls are changing. Wait for them to settle.');
+    this.#sweep();
+    const key = JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId]);
+    if (this.#opening.has(key)) throw new Error('This conversation is opening its browser tab. Wait for that action.');
+    const prior = this.#requests.get(request.id);
+    if (prior && (prior.ended || prior.key !== key)) throw new Error('This browser request has ended or belongs to another conversation. A new owner message is required.');
+    const child = this.#children.get(key);
+    if (!child) throw new Error(`Start with navigate and observe before ${what}; it acts on the page this conversation is already driving.`);
+    this.#requests.set(request.id, { key, expiresAt: request.expiresAt, ended: false });
+    return child;
+  }
+  async secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown> {
+    const child = this.#sessionFor(ctx, 'secret.fill');
+    try { return await child.secretFill(input, ctx); }
+    finally { this.#sweep(); }
+  }
+  async secretType(input: SecretTypeInput, ctx: ToolContext): Promise<unknown> {
+    const child = this.#sessionFor(ctx, 'secret.type');
+    try { return await child.secretType(input, ctx); }
     finally { this.#sweep(); }
   }
   control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus> {

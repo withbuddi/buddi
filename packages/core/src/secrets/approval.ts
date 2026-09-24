@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import type { CoreToolContext, EffectDescription, PluginManifest, ToolDefinition } from '../tools.js';
 import { secretDestination } from './destinations.js';
+import { SECRETS_QUERIES, SECRETS_SETTINGS_TOOLS } from './settings.js';
 
 export const SECRETS_PLUGIN = 'secrets';
 export const SECRETS_TOOL = 'secrets.use';
@@ -81,13 +82,14 @@ const useTool: ToolDefinition<SecretUseApproval, unknown> = {
   },
 };
 
-/** Core's own manifest for the approval tool. Registered by the gateway beside the other core families. */
+/** Core's own manifest for the approval tool and the Keys and secrets page. Registered by the gateway beside the other core families. */
 export function createSecretsManifest(): PluginManifest {
   return {
     name: SECRETS_PLUGIN,
     version: SECRETS_TOOL_VERSION,
     schema: 'core',
     migrationsDir: '',
-    tools: [useTool],
-  };
+    tools: [useTool, ...SECRETS_SETTINGS_TOOLS],
+    queries: SECRETS_QUERIES,
+  } as PluginManifest;
 }

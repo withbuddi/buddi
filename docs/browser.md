@@ -191,7 +191,11 @@ so a redirect between observing and acting is refused instead of clicked
 through. Observations carry the same `e12` refs, tree, tabs and screenshots as
 Playwright mode, and `open` (native apps) and coordinate targets are refused here
 exactly as they are there. The extension never fills a password field: it
-refuses with a precondition error, and you sign in yourself.
+refuses with a precondition error, and you sign in yourself. The one exception
+is `secret.fill` with one of the owner's own secrets
+([owner-secrets.md](specs/owner-secrets.md)): the owner's card, the origin the
+extension itself re-reads before anything is focused or cleared, and the value
+typed in one piece through the debugger — never a value the agent typed.
 
 ## Optional: Playwright browser automation
 

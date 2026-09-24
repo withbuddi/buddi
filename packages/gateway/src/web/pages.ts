@@ -34,6 +34,8 @@ import {
   type PageFile,
   ReadOnlyRefusal,
   pageQueryContext,
+  primeSecretScrubber,
+  scrubDeep,
   type CoreToolContext,
   type ToolRegistry,
 } from '@buddi/core';
@@ -296,6 +298,11 @@ export async function runPageQuery(
   let produced: unknown;
   try {
     produced = await query.produce(parsed.data, pageQueryContext(deps.ctx));
+    // Choke point 1 of the scrub (owner-secrets §5) for what a page query
+    // serves the dashboard: a file query that reads the `.env` a value was
+    // written into before the rule existed must answer with the marker.
+    await primeSecretScrubber();
+    produced = scrubDeep(produced);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     /*

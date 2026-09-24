@@ -84,4 +84,15 @@ describe('native computer driver', () => {
     await driver.close(); finish({ opened: true });
     await expect(task).rejects.toThrow('cancelled'); expect(run).toHaveBeenCalledTimes(1);
   });
+  it('reports the focused app the helper names and types into it through the secret operation', async () => {
+    const { driver, run } = setup();
+    run.mockResolvedValue({ appId: 'com.apple.keynote' });
+    await expect(driver.focusedBundleId()).resolves.toBe('com.apple.keynote');
+    await driver.nativeType('typed-value');
+    expect(run).toHaveBeenLastCalledWith({ operation: 'secretType', appId: 'com.apple.keynote', value: 'typed-value' });
+    // An empty answer is no focused app, and the typing refuses rather than guess.
+    run.mockResolvedValue({ appId: '' });
+    await expect(driver.focusedBundleId()).resolves.toBeUndefined();
+    await expect(driver.nativeType('typed-value')).rejects.toThrow(/No focused application/);
+  });
 });

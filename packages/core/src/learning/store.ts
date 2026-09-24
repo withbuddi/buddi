@@ -7,6 +7,7 @@
  * owner kept it, and what keeping *does* is `apply.ts`.
  */
 import type { Queryable } from '../owner.js';
+import { primeSecretScrubber, scrubDeep } from '../secrets/scrub.js';
 import { proposalFingerprint } from './fingerprint.js';
 import {
   DISCARD_MEMORY_MS,
@@ -70,7 +71,15 @@ export function discardedLine(existing: Proposal): string {
  * the card and the sources under it can never disagree.
  */
 export async function createProposal(db: Queryable, input: CreateProposalInput): Promise<CreateProposalResult> {
-  const fingerprint = proposalFingerprint(input.kind, input.agent, input.payload);
+  /*
+   * Choke point 5 of the scrub (owner-secrets §5): a proposal's payload is
+   * what a skill or a policy becomes, so a stored value must not survive into
+   * it. Scrubbed before the fingerprint, so two proposals that differ only by
+   * one having had the value dedupe as the same one.
+   */
+  await primeSecretScrubber();
+  const payload = scrubDeep(input.payload) as Record<string, unknown>;
+  const fingerprint = proposalFingerprint(input.kind, input.agent, payload);
   const since = new Date(input.now.getTime() - DISCARD_MEMORY_MS);
   const prior = await db.query(
     `select ${COLUMNS} from core.proposals
@@ -99,8 +108,8 @@ export async function createProposal(db: Queryable, input: CreateProposalInput):
     [
       input.kind,
       input.agent,
-      JSON.stringify(input.payload),
-      JSON.stringify(input.provenance),
+      JSON.stringify(payload),
+      JSON.stringify(scrubDeep(input.provenance)),
       input.provenance.sources.length > 0,
       fingerprint,
       input.now,

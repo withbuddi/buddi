@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
-  resolveProviderAccount, vaultState, type AgentCatalog, type AgentFrontmatter,
+  putOwnerSecret, registerSecretDestination, resolveProviderAccount, useOwnerSecret, vaultState,
+  type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
 import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
@@ -11,6 +12,7 @@ import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
+import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
 type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean };
 type Binding = { agentId: string; accountId: string; model: string };
@@ -80,6 +82,8 @@ export class ProviderAccounts {
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
   #modelRequests = new Map<string, Promise<AccountModels>>();
+  /** The vault the OAuth adapters see, with account names translated onto owner secrets. */
+  readonly accountVault: Vault | undefined;
   constructor(readonly deps: {
     pool: Pick<Pool, 'query' | 'connect'>; env: NodeJS.ProcessEnv;
     catalog: () => AgentCatalog; reload: () => void; vault?: Vault;
@@ -87,8 +91,26 @@ export class ProviderAccounts {
     listModels?: typeof listProviderModels;
   }) {
     this.vault = deps.vault ?? createVault({ env: deps.env });
-    if (deps.env.BUDDI_CODEX_EXPERIMENT === '1' && this.vault) this.codex = new CodexAccounts({ vault: this.vault });
-    if (this.vault) this.anthropic = new AnthropicAccounts(this.vault);
+    // The account credentials are owner secrets bound to `accounts.provider`
+    // (docs/specs/owner-secrets.md §3, §7): the destination is registered here,
+    // where the accounts live, and the adapters read and write through names
+    // translated onto the owner secrets the adoption saved. buddi's own keys
+    // (the legacy accounts' environment variables) pass through untouched.
+    if (this.vault) {
+      this.accountVault = ownerSecretVault(this.vault, this.deps.pool);
+      registerSecretDestination('accounts', accountsProviderDestination(
+        async (id) => {
+          const { rows } = await this.deps.pool.query(`select 1 from core.provider_accounts where id = $1`, [id]);
+          return rows.length > 0;
+        },
+        (id) => {
+          const row = this.#rows.get(id);
+          return row === undefined ? 'a provider account' : `the model account “${row.label}”`;
+        },
+      ));
+    }
+    if (deps.env.BUDDI_CODEX_EXPERIMENT === '1' && this.accountVault) this.codex = new CodexAccounts({ vault: this.accountVault });
+    if (this.accountVault) this.anthropic = new AnthropicAccounts(this.accountVault);
   }
 
   get anthropicOAuthEnabled() { return this.deps.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT === '1' && !!this.anthropic; }
@@ -126,10 +148,16 @@ export class ProviderAccounts {
     await this.load();
   }
 
+  /**
+   * Whether the credential is there, not a recorded use: `load()` runs this for
+   * every account on every reload, and a delivered use row per account per
+   * reload would be noise. The real deliveries go through `#usableSecret`,
+   * which records them (owner-secrets §7).
+   */
   async #secret(row: Row): Promise<string | null> {
     if (row.auth === 'none') return null;
     try {
-      const value = row.secretRef ? await this.vault?.get(row.secretRef) : null;
+      const value = row.secretRef ? await this.accountVault?.get(row.secretRef) : null;
       // Only a migrated account may use its original, explicitly named env.
       // Rotation clears legacyEnv; disable/delete never rediscovers another key.
       return value ?? (row.legacyEnv ? this.deps.env[row.legacyEnv]?.trim() || null : null);
@@ -297,9 +325,15 @@ export class ProviderAccounts {
     let secretRef = old?.secretRef ?? (input.auth === 'anthropic-oauth' ? `ANTHROPIC_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : input.kind === 'codex' ? `CODEX_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : null);
     if (input.secret) {
       if (!this.vault) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
+      // The credential is an owner secret bound to this account row
+      // (owner-secrets §7), pre-approved because the owner typed it here.
       secretRef = `PROVIDER_ACCOUNT_${randomUUID().replaceAll('-', '_')}`;
-      try { await this.vault.set(secretRef, input.secret); }
-      catch { throw new ProviderAccountError(409, 'Could not save the credential to the vault.'); }
+      try {
+        await putOwnerSecret(this.deps.pool as Pool, this.vault, {
+          name: secretRef, value: input.secret,
+          bindings: [{ kind: ACCOUNTS_PROVIDER_KIND, target: id, rule: 'pre-approved' }],
+        });
+      } catch { throw new ProviderAccountError(409, 'Could not save the credential to the vault.'); }
     }
     try {
       if (old) {
@@ -313,12 +347,12 @@ export class ProviderAccounts {
           input.contextWindowTokens ?? null]);
     } catch (error) {
       // Only delete the new, unreferenced secret; never alter the previous one.
-      if (input.secret && secretRef) await this.vault?.delete(secretRef).catch(() => {});
+      if (input.secret && secretRef) await deleteAccountSecret(this.deps.pool as Pool, this.vault, secretRef);
       throw error;
     }
     let warning: string | undefined;
     if (input.secret && old?.secretRef && !old.legacyEnv) {
-      try { await this.vault?.delete(old.secretRef); }
+      try { await deleteAccountSecret(this.deps.pool as Pool, this.vault, old.secretRef); }
       catch { warning = 'Account saved. Its retired credential could not be removed from the vault.'; }
     }
     this.#tests.delete(id);
@@ -361,7 +395,7 @@ export class ProviderAccounts {
       where id=$1 and revision=$2 returning id`, [id,revision]);
     if (!disabled.rows.length) throw new ProviderAccountError(409, 'This account changed. Reload before removing it.');
     await this.load();
-    try { if (row.secretRef) await this.vault?.delete(row.secretRef); }
+    try { await deleteAccountSecret(this.deps.pool as Pool, this.vault, row.secretRef ?? undefined); }
     catch { throw new ProviderAccountError(409, 'Account disabled, but its credential could not be removed. Unlock the vault and retry removal.'); }
     await this.deps.pool.query('delete from core.provider_accounts where id=$1 and deleting=true and revision=$2', [id,revision+1]);
     this.#tests.delete(id); await this.load();
@@ -449,7 +483,38 @@ export class ProviderAccounts {
   }
 
   async #usableSecret(row: Row, signal?: AbortSignal): Promise<string | null> {
-    if (row.auth !== 'anthropic-oauth') return this.#secret(row);
+    if (row.auth !== 'anthropic-oauth') {
+      if (row.auth === 'none' || row.secretRef === null) return this.#secret(row);
+      /*
+       * The run path reads the credential through the owner secrets area
+       * (owner-secrets §7): the binding found and the rule applied, the use
+       * recorded — `pre-approved` delivers, so no card stands between an
+       * agent and its model call. A legacy account's named environment
+       * variable is buddi's own key and answers from the raw vault as before.
+       */
+      let value: string | null | undefined;
+      const result = await useOwnerSecret(
+        {
+          pool: this.deps.pool as Pool,
+          vault: this.vault,
+          plugin: 'accounts',
+          buddi: { version: '0.0', plugin: 'accounts' } as unknown as BuddiHost,
+          now: () => new Date(),
+          deliverInto: (delivered) => {
+            value = delivered;
+          },
+        },
+        { name: row.secretRef, kind: ACCOUNTS_PROVIDER_KIND, target: row.id },
+      );
+      if ('done' in result) return value ?? null;
+      if ('pending' in result) throw new ProviderAccountError(409, `The owner has not approved this account's credential yet (action ${result.pending}).`);
+      if (/not bound|no secret named|no vault/.test(result.refused)) {
+        // Not an owner secret (a legacy entry the adoption has not reached, or
+        // a fresh row): the raw vault answers as it always has.
+        return this.#secret(row);
+      }
+      throw new ProviderAccountError(409, result.refused);
+    }
     if (!this.anthropicOAuthEnabled) throw new ProviderAccountError(409, 'Claude OAuth experiment is disabled.');
     const lease = await this.#anthropicAccess(row, true, signal);
     try { return await this.anthropic!.credential(row.secretRef!); }
@@ -501,7 +566,7 @@ export class ProviderAccounts {
         } else {
           this.anthropic!.forget(id);
           if (action === 'logout') {
-            try { await this.vault!.delete(row.secretRef!); }
+            try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef!); }
             catch { throw new ProviderAccountError(409, 'Could not remove Claude credentials. Unlock the vault and retry.'); }
           }
         }
@@ -562,7 +627,7 @@ export class ProviderAccounts {
     if (action === 'logout') {
       await this.#cancelCodex(id);
       const lease = await this.#codexAccess(row, false);
-      try { await this.vault!.delete(row.secretRef); }
+      try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
       finally { await lease.release(); }
       await this.load();
       this.codex.forget(id);

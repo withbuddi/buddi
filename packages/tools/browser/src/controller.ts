@@ -8,7 +8,7 @@ import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import type { BrowserController, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover } from './service.js';
+import type { BrowserController, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
 import type { BrowserCommand } from './types.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
@@ -79,6 +79,26 @@ export class HostController implements BrowserController {
     }
     if (this.#settings.mode !== 'computer' && (command.action === 'open' || command.target?.x !== undefined)) throw new Error('Native apps and coordinate targets require Computer mode. Only the owner can change modes.');
     return this.#manager.execute(command, ctx);
+  }
+  /**
+   * The gates `execute` runs before anything reaches a manager, secret uses
+   * included: settings are not changing mid-flight, and a request the owner
+   * revoked while changing them is not one a secret can ride.
+   */
+  #secret(run: (manager: BrowserManager) => Promise<unknown>, ctx: ToolContext): Promise<unknown> {
+    if (this.#changing) throw new Error('Computer/browser settings are changing. Wait for the owner.');
+    for (const [id, record] of this.#requests) if (record.expiresAt <= Date.now()) this.#requests.delete(id);
+    if (ctx.ownerRequest) {
+      if (this.#requests.get(ctx.ownerRequest.id)?.revoked) throw new Error('Control settings changed. A new owner request is required.');
+      this.#requests.set(ctx.ownerRequest.id, { expiresAt: ctx.ownerRequest.expiresAt, revoked: false });
+    }
+    return run(this.#manager);
+  }
+  async secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown> {
+    return this.#secret((manager) => manager.secretFill(input, ctx), ctx);
+  }
+  async secretType(input: SecretTypeInput, ctx: ToolContext): Promise<unknown> {
+    return this.#secret((manager) => manager.secretType(input, ctx), ctx);
   }
   async control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus> {
     if (this.#changing) throw new Error('Wait for the settings change to finish.');

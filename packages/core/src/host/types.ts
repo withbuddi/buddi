@@ -29,6 +29,14 @@ export interface BuddiHost {
   readonly plugin: string;
   /** An operational log line, prefixed with the plugin's name. Never the owner's channel. */
   log(line: string): void;
+  /**
+   * Replace any stored value a text contains with `‹secret:NAME›`
+   * (docs/specs/owner-secrets.md §5) — buddi's own keys included, under their
+   * own names. Never the reverse, and never a read: the only thing a plugin
+   * learns is *that* a value was there, which is exactly what it must refuse
+   * to store. Always present, like `log`.
+   */
+  scrub(text: string): string;
   owner: OwnerArea;
   clock: ClockArea;
   db: DbArea;
@@ -139,6 +147,14 @@ export interface HttpRequest {
   /** `GET` when absent. */
   method?: string;
   headers?: Record<string, string>;
+  /**
+   * A secret goes into one header of this request (docs/specs/owner-secrets.md
+   * §3, `http.header`): core reads the secret by name, finds the binding that
+   * names this request's host and header, applies the rule, and inserts the
+   * header itself after the address checks — the value never passes through
+   * the caller's hands. HTTPS only; `header` is `Authorization` when absent.
+   */
+  auth?: { secret: string; header?: string };
   body?: string | Buffer;
   signal?: AbortSignal;
   /** How long the request may go silent. */

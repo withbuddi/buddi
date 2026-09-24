@@ -1,8 +1,11 @@
 # Secrets the agent can use but never see
 
-Status: spec written 2026-09-24, not started. Depends on the `secrets` area
-of [plugin-host-api.md](plugin-host-api.md) §4.2.
-Captured: 2026-09-21, rewritten 2026-09-24
+Status: built and merged 2026-09-24. The `secrets` area it
+depends on ([plugin-host-api.md](plugin-host-api.md) §4.2) was built with the
+host API; the rest of this spec followed — the scrubber, the six
+destination kinds, the tools, the provider-account migration and the Settings
+page — with what bent written in §12.
+Captured: 2026-09-21, rewritten 2026-09-24, built 2026-09-24
 
 ## 1. The problem
 
@@ -262,6 +265,52 @@ After the host API's `secrets` area (plugin-host-api.md §9 step 3):
    whole (one day).
 
 About five days.
+
+## 12. As built
+
+Where the build bent this document, one line each.
+
+- **The browser kinds carry the plugin's namespace.** §3's table was written
+  before the host API's `<plugin>.<what>` rule, which the registry enforces:
+  the browser registers `browser.field`, `browser.native.type` and
+  `browser.form.data`, not `native.type` and `form.data`. Same rule, same
+  owners; the names name the plugin that answers for them.
+- **The fill tool routes on what the page marks.** §3 named `browser.field`
+  the login destination and `form.data` the card-and-account one; the tool
+  `secret.fill` reads the field the ref names and asks for the kind that field
+  is: a TOTP secret fills any field the ref names (an authenticator field is
+  rarely marked as a password, and §4's "into `browser.field` only" is about
+  the destination, not the field's type), a password-marked field is
+  `browser.field`, and anything else is `browser.form.data` — so a password
+  cannot land in a visible field and a card number always goes through the
+  every-time destination.
+- **Core's save-time look covers events, the transcript and memory** — notes
+  and preferences — and skips a place that is not installed. Learned skills are
+  clean by construction (a proposal's payload is scrubbed when it is created,
+  before it can become a skill); the files under a bound workspace are the
+  developer plugin's to scan, and its `developer.write` and `developer.edit`
+  refuse a stored value from then on.
+- **The scrub is also applied to the transcript rows** (`core.messages`) as
+  they are written, and to `executeApproved`'s recorded result — both are what
+  a surface reads and what a backup takes, and §5's list said so by intent.
+- **The gateway reads a provider account's credential through a recorded
+  `accounts.provider` use** on the run path; the `configured` computation on
+  reload reads the vault directly, because a delivered use row per account per
+  reload is noise, and nothing outside the gateway's own code reaches it.
+- **A page query's answer is scrubbed too** (`packages/gateway/src/web/pages.ts`),
+  the same choke point as a tool result: the developer plugin's `file` query
+  reading a `.env` a value was written into before the rule answers with the
+  marker. The scrubber is primed once at boot (`createWiringAsync`), so the
+  synchronous sinks — a plugin's `buddi.log`, the serve loops — scrub from the
+  first line.
+- **`held` uses are swept after 30 days.** A credential read by its own plugin
+  (a mail poll, a model call) is one row each, thousands a week; the hourly
+  proposal loop deletes `held` rows older than a month. Delivered, pending,
+  refused and failed rows are the owner's audit log and are never swept.
+- **The OAuth adapters (Codex, Claude) keep their secret-name API** and read
+  through a translating vault: the names they ask for resolve onto the owner
+  secrets the adoption saved, so a refresh lands under the same
+  `owner-secret:<id>` without the adapters learning the storage scheme.
 
 ## Related work
 

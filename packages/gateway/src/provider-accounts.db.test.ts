@@ -232,7 +232,10 @@ suite('named provider accounts', () => {
     expect(f.test).toHaveBeenLastCalledWith(expect.objectContaining({ secret: 'rotated-private-fixture' }));
     const row = (await pool.query('select secret_ref, legacy_env from core.provider_accounts where id=$1', [id])).rows[0];
     expect(row.legacy_env).toBeNull();
-    await f.vault.delete(row.secret_ref);
+    // The rotated credential is an owner secret: deleting its storage entry
+    // (not the retired raw name) is what takes the account offline.
+    const { rows: secretRows } = await pool.query('select id from core.secrets where name = $1', [row.secret_ref]);
+    await f.vault.delete(`owner-secret:${secretRows[0].id}`);
     await f.service.load();
     expect((await f.service.test(id)).state).toBe('unavailable');
     expect(f.test).toHaveBeenCalledTimes(1);

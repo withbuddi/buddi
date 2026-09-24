@@ -275,6 +275,7 @@ interface BuddiHost {
   readonly version: string;   // '1.0' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
+  scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
   owner: OwnerArea;           // id, timezone, agentForRole, protectedPaths
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
@@ -3049,6 +3050,7 @@ that say otherwise.
 | `version` | `string` | yes | 1.0 | `major.minor`, `HOST_API_VERSION`. |
 | `plugin` | `string` | yes | 1.0 | Your manifest's `name`. |
 | `log` | `(line) => void` | yes | 1.0 | An operational line, prefixed with your name. Never the owner's channel. |
+| `scrub` | `(text) => string` | yes | 1.0 | Every stored value a text contains becomes `‹secret:NAME›` — buddi's own keys under their own names (§6). Never the reverse, and never a read. |
 | `owner` | `OwnerArea` | yes | 1.0 | Who this installation belongs to. |
 | `clock` | `ClockArea` | yes | 1.0 | The clock. |
 | `db` | `DbArea` | yes | 1.0 | The database, never a raw pool. |
@@ -3112,7 +3114,7 @@ that say otherwise.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. |
+| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. With `auth: { secret, header? }` one of the owner's secrets goes into one header of this request (docs/specs/owner-secrets.md §3, `http.header`): core reads the secret by name, finds the binding that names this request's host and header, applies the rule, and inserts the header itself after the address checks — the value never passes through your hands. HTTPS only; `header` is `Authorization` when absent; a use waiting on the owner throws `SecretPendingError` with the action id, a refusal throws the refusal. |
 
 #### `AccountsArea`
 
