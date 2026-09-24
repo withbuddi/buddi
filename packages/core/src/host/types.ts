@@ -173,7 +173,16 @@ export interface FilesArea {
   save(input: { bytes: Buffer; mime: string; filename?: string; caption?: string; source?: ArtifactSource }): Promise<FileRow>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
-  list(opts?: { since?: Date; before?: Date; kind?: ArtifactKind; limit?: number }): Promise<FileRow[]>;
+  list(opts?: {
+    since?: Date;
+    before?: Date;
+    kind?: ArtifactKind;
+    /** Only files with these bytes. */
+    sha256?: string;
+    /** Only files handed in by this surface (`email`, `telegram`, …). */
+    surface?: string;
+    limit?: number;
+  }): Promise<FileRow[]>;
 }
 
 /** One remembered note. */
@@ -192,7 +201,10 @@ export interface MemoryArea {
 /** Rules this plugin proposes on the owner's inbox. */
 export interface ProposalsArea {
   /** Core's `proposePolicy`, with the plugin's name and the clock filled in. */
-  proposePolicy(ctx: ToolContext, input: Omit<ProposePolicyInput, 'plugin'>): Promise<CreateProposalResult>;
+  proposePolicy(
+    ctx: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null,
+    input: Omit<ProposePolicyInput, 'plugin'>,
+  ): Promise<CreateProposalResult>;
   /** How many of this plugin's policy proposals are open. */
   countOpen(): Promise<number>;
 }
