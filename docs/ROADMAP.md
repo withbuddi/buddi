@@ -123,7 +123,7 @@ with a written brief; in order:
 
 Small, whenever a slot opens:
 
-- Canvas empty state per agent — every agent's empty canvas suggests the
+- Canvas empty state per agent — built 2026-09-23; the roster carries each agent's resolved grant, and the empty canvas lists only the view descriptors those tools declare (a room's, its members'), different shapes first, and no list at all when none applies. Every agent's empty canvas suggested the
   finance examples (Projected balance, Accounts, Spending by category), even
   agents with no finance tools. Suggest only what the agent's own granted
   tools can draw (2026-09-23).

@@ -991,6 +991,7 @@ export function ChatPage({
         />
       ) : null}
       descriptors={descriptors}
+      grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
       emptyHint={conversation ? `Nothing in this conversation has produced a view yet. ${madeHere}` : madeHere}
     />

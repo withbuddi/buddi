@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
 import type { PluginManifest, Tier, ToolContext } from './tools.js';
+import { ToolRefusal } from './tools.js';
 
 const ctx: ToolContext = {
   db: {} as ToolContext['db'],
@@ -302,6 +303,40 @@ describe('tierFor: a tier decided per call', () => {
       await r.invoke('demo.double', { n: 1 }, granted({ db, delegationDepth: 1 })),
     ).toMatchObject({ ok: false, reason: 'session-not-authorized' });
     expect(previews).toEqual([]);
+  });
+
+  it('passes a deliberate refusal through as it stands, before anything is asked', async () => {
+    const sentence = 'refused: no image account is chosen yet. The owner picks one in Settings → Image.';
+    for (const where of ['tierFor', 'describe'] as const) {
+      const r = new ToolRegistry();
+      const execute = vi.fn(async (i: { n: number }) => i.n * 2);
+      const base = manifest('auto', execute as never);
+      r.register({
+        ...base,
+        tools: [{
+          ...base.tools[0]!,
+          tierFor: async () => {
+            if (where === 'tierFor') throw new ToolRefusal(sentence);
+            return { tier: 'gated' };
+          },
+          describe: async () => {
+            throw Object.assign(new Error(sentence), { refusal: true });
+          },
+        }],
+      });
+      const { db, previews } = recordingDb();
+      const res = await r.invoke('demo.double', { n: 1 }, granted({ db }));
+      expect(res, where).toEqual({ ok: false, reason: 'tool-error', message: sentence });
+      expect(previews, where).toEqual([]);
+      expect(execute).not.toHaveBeenCalled();
+    }
+    // An ordinary throw is still reported as the defect it is.
+    const r = new ToolRegistry();
+    const base = manifest('auto', vi.fn() as never);
+    r.register({ ...base, tools: [{ ...base.tools[0]!, tierFor: async () => { throw new Error('boom'); } }] });
+    expect(((await r.invoke('demo.double', { n: 1 }, granted())) as { message: string }).message).toMatch(
+      /could not decide what this call needs: boom/,
+    );
   });
 
   it('will not let a gated tool decide it is not gated', async () => {

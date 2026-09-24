@@ -185,6 +185,11 @@ export interface ChatAgentView {
    * talks, beside the model name, and the Agents page writes the same key.
    */
   thinking: 'on' | 'off' | null;
+  /**
+   * The tools this agent is granted here, resolved. The empty canvas reads it
+   * to promise only what this agent's own tools can draw.
+   */
+  tools: string[];
   /** The face to draw, if the file names one. An image is fetched from this origin only. */
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
@@ -276,6 +281,7 @@ export function readChatAgents(
       model: modelOf(full),
       anchor: anchorOf(summary.roles),
       thinking: full?.thinking ?? null,
+      tools: [...(full?.tools ?? [])],
       ...(summary.intro === undefined ? {} : { intro: summary.intro }),
       ...(summary.starters === undefined || summary.starters.length === 0
         ? {}
@@ -778,7 +784,7 @@ function toChatBlock(
           output: action.state === 'pending' ? output : action.state === 'succeeded'
             ? (action.outcome as { result?: unknown } | null)?.result ?? null
             : action.outcome ?? { state: action.state },
-          ...(failed ? { error: `Action ${action.state}` } : {}),
+          ...(failed ? { error: failureOf(action) } : {}),
         };
       }
       return {
@@ -807,6 +813,23 @@ function toChatBlock(
     default:
       return { type: 'unknown', raw: block };
   }
+}
+
+/**
+ * Why a settled action did not happen, in the sentence the agent was given.
+ *
+ * The ledger keeps it in the outcome — `error` for a call that threw after
+ * approval, `message` for one core refused at execution — and the canvas's
+ * failure panel prints `error` first. "Action failed" there, while the agent
+ * read the tool's own refusal, is the owner being told less than the model.
+ */
+function failureOf(action: TranscriptApproval): string {
+  const outcome = (action.outcome ?? {}) as Record<string, unknown>;
+  for (const key of ['error', 'message']) {
+    const text = outcome[key];
+    if (typeof text === 'string' && text.trim() !== '') return text.trim();
+  }
+  return `Action ${action.state}`;
 }
 
 /**

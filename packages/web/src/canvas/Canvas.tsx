@@ -16,10 +16,10 @@
  * silently: the control wears its dot.
  *
  * Empty, it teaches rather than apologises. The things it names are the view
- * descriptors actually installed on this machine — real titles from real
- * plugins, arriving as data over `GET /api/chat/views` — so a fresh install
- * with one plugin promises one thing, and this file still knows the name of no
- * tool at all.
+ * descriptors of the tools this conversation's agent is granted — real titles
+ * from real plugins, arriving as data over `GET /api/chat/views` and matched
+ * against the agent's resolved grant — so the Illustrator promises a picture
+ * and not a balance, and this file still knows the name of no tool at all.
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as Tabs from '@radix-ui/react-tabs';
@@ -65,6 +65,7 @@ export function Canvas({
   onChangeAgent,
   emptyHint,
   descriptors,
+  grantedTools,
   agentName,
   maxTabs,
   browserPanel,
@@ -81,6 +82,12 @@ export function Canvas({
   emptyHint?: string;
   /** The installed view descriptors, used to say what could appear here. */
   descriptors?: ViewDescriptor[];
+  /**
+   * The tools of the agent (or the room's members) this canvas belongs to.
+   * The empty state promises only what these can draw; without them it
+   * promises nothing.
+   */
+  grantedTools?: readonly string[];
   agentName?: string;
   /** Forces how many tabs fit, for tests: jsdom lays nothing out and measures 0. */
   maxTabs?: number;
@@ -112,7 +119,7 @@ export function Canvas({
             <p className="wb-empty-body">
               {emptyHint ?? 'Ask for something. Whatever the run looks at will be drawn here.'}
             </p>
-            <Examples descriptors={descriptors ?? []} />
+            <Examples descriptors={descriptors ?? []} grantedTools={grantedTools ?? []} />
           </div>
         </div>
       </div>
@@ -367,21 +374,21 @@ function ChevronIcon(): JSX.Element {
 }
 
 /**
- * Two or three things this installation can actually draw, each shown as the
- * shape it would take. With no plugin installed there is nothing honest to
- * promise, so nothing is promised.
+ * Two or three things this agent can actually draw, each shown as the shape
+ * it would take: the view descriptors of the tools it is granted, and nothing
+ * else. An agent none of whose tools declares a view — or a canvas that does
+ * not know whose it is — promises nothing, because there is nothing honest to
+ * promise. Different shapes come first, so an agent that can draw a diff and
+ * a terminal says both rather than three kinds of table.
  */
-function Examples({ descriptors }: { descriptors: ViewDescriptor[] }): JSX.Element | null {
-  const seen = new Set<string>();
-  const examples = descriptors
-    .filter((descriptor) => {
-      const title = titleOf(descriptor);
-      if (seen.has(title)) return false;
-      seen.add(title);
-      return true;
-    })
-    .slice(0, MAX_EXAMPLES);
-
+export function Examples({
+  descriptors,
+  grantedTools,
+}: {
+  descriptors: ViewDescriptor[];
+  grantedTools: readonly string[];
+}): JSX.Element | null {
+  const examples = examplesFor(descriptors, grantedTools);
   if (examples.length === 0) return null;
 
   return (
@@ -402,6 +409,27 @@ function Examples({ descriptors }: { descriptors: ViewDescriptor[] }): JSX.Eleme
       </ul>
     </>
   );
+}
+
+/** The descriptors an agent's granted tools produce, one per title, shapes varied. */
+export function examplesFor(descriptors: readonly ViewDescriptor[], grantedTools: readonly string[]): ViewDescriptor[] {
+  const granted = new Set(grantedTools);
+  const seen = new Set<string>();
+  const own = descriptors.filter((descriptor) => {
+    if (!granted.has(descriptor.tool)) return false;
+    const title = titleOf(descriptor);
+    if (seen.has(title)) return false;
+    seen.add(title);
+    return true;
+  });
+  const shapes = new Set<string>();
+  const firstOfShape = own.filter((descriptor) => {
+    if (shapes.has(descriptor.renderer)) return false;
+    shapes.add(descriptor.renderer);
+    return true;
+  });
+  const rest = own.filter((descriptor) => !firstOfShape.includes(descriptor));
+  return [...firstOfShape, ...rest].slice(0, MAX_EXAMPLES);
 }
 
 /** The descriptor's own title, or the tool's name turned back into words. */

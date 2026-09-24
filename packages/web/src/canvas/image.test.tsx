@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import { applyDescriptor, libraryFileId, resolveImage } from './resolve';
 import { RENDERERS, rendererFor } from './registry';
-import { hasSubstance } from './renderables';
+import { hasSubstance, renderablesFrom } from './renderables';
 import { ImageView } from './views/ImageView';
 import type { ImageMap } from './types';
 
@@ -94,5 +94,42 @@ describe('the panel', () => {
     expect(screen.queryByRole('img')).toBeNull();
     expect(entry).not.toHaveBeenCalled();
     expect(screen.getByText(/names no file/)).toBeInTheDocument();
+  });
+});
+
+describe('what the owner reads under the picture', () => {
+  const made = {
+    shot: ID,
+    name: 'fox.png',
+    prompt: 'A red fox asleep on a mossy stone, flat vector',
+    forAgent: 'You have not seen it: tell the owner what you asked for, and give the id.',
+  };
+  const descriptor = {
+    tool: 'demo.draw',
+    renderer: 'image' as const,
+    map: { src: 'shot', title: { path: 'name' }, caption: { path: 'prompt' }, captionLabel: { const: 'Prompt' } },
+  };
+
+  it('never draws the text a result keeps for the agent, even when a descriptor points at it', () => {
+    const messages = [
+      { id: 'm1', role: 'assistant', at: null, blocks: [{ type: 'tool_use', id: 't1', name: 'demo.draw', input: {} }] },
+      { id: 'm2', role: 'user', at: null, blocks: [{ type: 'tool_result', toolUseId: 't1', name: 'demo.draw', ok: true, output: made }] },
+    ] as never;
+    const nosy = { ...descriptor, map: { ...descriptor.map, caption: { path: 'forAgent' } } };
+    for (const d of [descriptor, nosy]) {
+      const [tab] = renderablesFrom({ messages, descriptors: [d] } as never);
+      expect(JSON.stringify(tab?.props)).not.toContain('You have not seen it');
+    }
+  });
+
+  it('folds a named caption away under its name', () => {
+    vi.spyOn(api, 'libraryEntry').mockResolvedValue({ entry: { filename: 'fox.png', sizeBytes: 10 } } as never);
+    const props = applyDescriptor(descriptor, made).props as never;
+    expect(props).toMatchObject({ caption: made.prompt, captionLabel: 'Prompt' });
+    render(<ImageView props={props} />);
+    const summary = screen.getByText('Prompt');
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText(made.prompt).closest('details')).toBe(summary.closest('details'));
   });
 });

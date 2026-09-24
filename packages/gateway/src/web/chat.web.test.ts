@@ -147,7 +147,7 @@ describe('a gated call whose approval has settled', () => {
   const actionId = '00000000-0000-4000-8000-00000000000d';
   const toolUseId = 'tu-1';
 
-  function pool(state: string): never {
+  function pool(state: string, outcome: unknown = { reason: 'effect-changed' }): never {
     return {
       query: vi.fn(async (sql: string) => {
         if (/from core\.conversations/.test(sql)) {
@@ -181,7 +181,7 @@ describe('a gated call whose approval has settled', () => {
         }
         if (/from core\.actions/.test(sql)) {
           return {
-            rows: [{ id: actionId, tool: 'email.send', state, outcome: { reason: 'effect-changed' } }],
+            rows: [{ id: actionId, tool: 'email.send', state, outcome }],
           };
         }
         return { rows: [] };
@@ -200,6 +200,22 @@ describe('a gated call whose approval has settled', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe('Action refused');
     expect(result.approval).toMatchObject({ state: 'refused' });
+  });
+
+  it('carries the reason the agent was given, so the canvas can print it', async () => {
+    const said = 'refused: no image account is chosen yet. The owner picks one in Settings → Image.';
+    for (const [state, outcome] of [
+      ['failed', { attempt: 1, reason: 'tool-error', error: said }],
+      ['refused', { reason: 'effect-changed', message: said }],
+    ] as const) {
+      const transcript = await readChatTranscript(pool(state, outcome), conversationId);
+      const result = transcript!.messages.flatMap((m) => m.blocks).find((b) => b.type === 'tool_result') as never as {
+        ok: boolean;
+        error?: string;
+      };
+      expect(result.ok, state).toBe(false);
+      expect(result.error, state).toBe(said);
+    }
   });
 
   it('still draws a succeeded one as a success', async () => {

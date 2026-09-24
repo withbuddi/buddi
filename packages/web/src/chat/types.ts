@@ -30,6 +30,8 @@ export interface ChatAgent {
    */
   heldBack?: AgentHoldBack;
   roles: string[];
+  /** The tools this agent is granted, resolved — what its canvas can draw. */
+  tools?: string[];
   provider: string;
   model: string;
   /**

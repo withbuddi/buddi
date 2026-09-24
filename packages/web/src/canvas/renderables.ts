@@ -157,7 +157,7 @@ export function awaitingPreviews({
       if (block.type !== 'tool_result' || block.ok === false) continue;
       const descriptor = byTool.get(block.name || names.get(block.toolUseId) || '');
       if (!descriptor) continue;
-      const props = applyDescriptor(descriptor, block.output).props as PreviewProps;
+      const props = applyDescriptor(descriptor, forOwner(block.output)).props as PreviewProps;
       if (props.target === null && props.awaiting !== null) found.push({ ...props.awaiting, at: message.at ?? null });
     }
   }
@@ -250,13 +250,14 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // step list is where the action and its reason are read.
       if (folded?.has(tool)) continue;
 
+      const output = forOwner(block.output);
       if (block.ok === false) {
         collected.push({
           id: block.toolUseId,
           tool,
           title: labelFor(tool),
           renderer: 'structured',
-          props: { value: block.error ?? block.output ?? null, failed: true },
+          props: { value: block.error ?? output ?? null, failed: true },
           at,
           tone: 'critical',
           source: 'fallback',
@@ -267,11 +268,11 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         continue;
       }
 
-      if (isChange(block.output)) changes += 1;
+      if (isChange(output)) changes += 1;
 
       const descriptor = byTool.get(tool);
       if (descriptor) {
-        const applied = applyDescriptor(descriptor, block.output);
+        const applied = applyDescriptor(descriptor, output);
         const { renderer } = applied;
         let { props } = applied;
         if (renderer === 'preview') {
@@ -307,7 +308,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
         continue;
       }
 
-      const props = { value: commandResult(block.output) ? { input: use?.input, output: block.output } : block.output };
+      const props = { value: commandResult(output) ? { input: use?.input, output: output } : output };
       if (!earnsTab('structured', props)) continue;
       collected.push({
         id: block.toolUseId,
@@ -330,6 +331,21 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
     }
   }
   return capped(collected);
+}
+
+/**
+ * The key of a result's text for the model only (core's `AGENT_ONLY_FIELD`).
+ * An instruction written for the agent — "you have not seen this picture" —
+ * is not something to print on the owner's screen.
+ */
+export const AGENT_ONLY_FIELD = 'forAgent';
+
+/** The result as the owner sees it: the same, less its agent-only text. */
+export function forOwner(output: unknown): unknown {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) return output;
+  if (!(AGENT_ONLY_FIELD in output)) return output;
+  const { [AGENT_ONLY_FIELD]: _forAgent, ...rest } = output as Record<string, unknown>;
+  return rest;
 }
 
 /**
