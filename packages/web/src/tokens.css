@@ -241,6 +241,11 @@
     var(--bg);
 }
 
+/* Page width, from Settings → Appearance: narrow caps dense pages at the old
+   1100px, full lets them take the whole column. Wide is the default above. */
+:root[data-width='narrow'] { --page-max: 1100px; }
+:root[data-width='full'] { --page-max: 100%; }
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%);

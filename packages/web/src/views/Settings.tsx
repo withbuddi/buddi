@@ -4,14 +4,16 @@
  * — and, after them, a tab for each screen an installed plugin contributes. Nothing here is a page an owner visits daily, which is why it is
  * behind the gear and not on the rail's first screen.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { SETTINGS_SECTIONS, WELCOME_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, pluginSettingsRoute, pluginSettingsTab, settingsRoute } from '../routes';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
-import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
+import { useAppearance, type Ground, type PageWidth } from '../appearance';
+import type { ThemeChoice } from '../theme';
+import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Segment, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -66,6 +68,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
         />
       ) : null}
       {section === 'you' ? <You embedded /> : null}
+      {section === 'appearance' ? <AppearanceSection /> : null}
       {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
       {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
       {section === 'accounts' ? <Providers embedded /> : null}
@@ -74,6 +77,56 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       {section === 'backup' ? <Backup /> : null}
       {section === 'plugins' ? <Plugins /> : null}
       {section === 'system' ? <System timezone={timezone} /> : null}
+    </div>
+  );
+}
+
+/**
+ * How the dashboard looks in this browser. Kept here, not on the server: a
+ * second browser keeps its own choice, and nothing about it is reported.
+ */
+function AppearanceSection(): JSX.Element {
+  const [appearance, set] = useAppearance();
+  return (
+    <Panel title="Appearance">
+      <Stack divided gap="lg">
+        <PrefRow label="Theme" hint="System follows your Mac.">
+          <Segment<ThemeChoice>
+            label="Theme"
+            options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]}
+            value={appearance.theme}
+            onChange={(theme) => set({ theme })}
+          />
+        </PrefRow>
+        <PrefRow label="Background" hint="Blue carries the first-run colours through the app. Sand is quieter.">
+          <Segment<Ground>
+            label="Background"
+            options={[{ value: 'blue', label: 'Blue' }, { value: 'sand', label: 'Sand' }]}
+            value={appearance.ground}
+            onChange={(ground) => set({ ground })}
+          />
+        </PrefRow>
+        <PrefRow label="Page width" hint="How far pages stretch on a wide screen.">
+          <Segment<PageWidth>
+            label="Page width"
+            options={[{ value: 'narrow', label: 'Narrow' }, { value: 'wide', label: 'Wide' }, { value: 'full', label: 'Full' }]}
+            value={appearance.width}
+            onChange={(width) => set({ width })}
+          />
+        </PrefRow>
+      </Stack>
+    </Panel>
+  );
+}
+
+function PrefRow({ label, hint, children }: { label: string; hint: string; children: ReactNode }): JSX.Element {
+  return (
+    <div className="pref-row ui-section">
+      <div className="pref-text">
+        <span className="pref-label">{label}</span>
+        <span className="ui-field-hint">{hint}</span>
+      </div>
+      {children}
     </div>
   );
 }

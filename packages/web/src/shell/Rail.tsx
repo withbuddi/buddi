@@ -1,19 +1,24 @@
 /**
- * The rail: the five places, and where you are.
+ * The rail: the places, and where you are.
  *
- * Home, Chat, Agents, Activity, Settings — each a drawn icon with its word
- * under it, so the rail is read rather than guessed. The current place is
- * filled and accented and marked on the rail's own edge. Home carries the one
- * badge in the rail: the count of things waiting on the owner, which is the
- * reason to go there.
+ * Home, Chat, Agents, Activity, Files, then whatever the plugins add, and
+ * Settings last — each a drawn icon with its word under it, so the rail is
+ * read rather than guessed. The current place is filled and accented and
+ * marked on the rail's own edge. Home carries the one badge in the rail: the
+ * count of things waiting on the owner, which is the reason to go there.
+ *
+ * Under a hairline at the foot, the owner's initial: a small menu with the
+ * quick theme switch, the way to Appearance, and Replay first run.
  *
  * Icons are drawn, not typed: no emoji stands in for a place here.
  */
-import * as Tooltip from '@radix-ui/react-tooltip';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { ReactNode } from 'react';
-import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, pluginPageRoute } from '../routes';
+import { api } from '../api';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, WELCOME_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PageIcon, PluginPageDescriptor } from '../pages/types';
-import { nextTheme, themeLabel, type ThemeChoice } from '../theme';
+import type { ThemeChoice } from '../theme';
+import { Segment, useAsync } from '../ui';
 
 export function Rail({
   attention,
@@ -42,7 +47,7 @@ export function Rail({
         b
       </a>
 
-      {PLACES.map((entry) => (
+      {PLACES.filter((entry) => entry.route !== SETTINGS_ROUTE).map((entry) => (
         <RailLink
           key={entry.route}
           label={entry.label}
@@ -73,21 +78,76 @@ export function Rail({
 
       <div className="rail-spacer" />
 
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <button className="rail-link" aria-label={`Theme: ${themeLabel(theme)}`} onClick={() => onTheme(nextTheme(theme))}>
-            <span className="rail-icon"><ThemeIcon choice={theme} /></span>
-            <span className="rail-label">Theme</span>
-          </button>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content className="ui-tip" side="right" sideOffset={8}>
-            <span className="ui-tip-title">{themeLabel(theme)}</span>
-            <span className="ui-tip-hint">Click to change</span>
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
+      <RailLink
+        label="Settings"
+        href={SETTINGS_ROUTE}
+        active={place === SETTINGS_ROUTE}
+        badge={0}
+        onClick={() => onNavigate(SETTINGS_ROUTE)}
+      >
+        {ICONS[SETTINGS_ROUTE]}
+      </RailLink>
+
+      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} />
     </nav>
+  );
+}
+
+const THEMES: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'System' },
+];
+
+/**
+ * The owner's own corner: who this is, and the switches worth having one
+ * click away. Everything else about appearance is in Settings.
+ */
+function OwnerMenu({
+  theme,
+  onTheme,
+  onNavigate,
+}: {
+  theme: ThemeChoice;
+  onTheme: (choice: ThemeChoice) => void;
+  onNavigate: (route: string) => void;
+}): JSX.Element {
+  const owner = useAsync(() => api.owner(), []);
+  const name = owner.data?.preferredName?.trim() || null;
+  const initial = (name ?? 'You').slice(0, 1).toUpperCase();
+  return (
+    <div className="rail-owner">
+      <DropdownMenu.Root modal={false}>
+        <DropdownMenu.Trigger asChild>
+          <button type="button" className="rail-owner-btn" aria-label={name ? `You: ${name}` : 'You'}>
+            <span className="rail-owner-face" aria-hidden="true">{initial}</span>
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="ui-menu rail-owner-menu" side="right" align="end" sideOffset={10}>
+            <div className="rail-owner-head">
+              <span className="rail-owner-face" data-size="lg" aria-hidden="true">{initial}</span>
+              <span className="rail-owner-who">
+                <span className="rail-owner-name">{name ?? 'You'}</span>
+                <span className="rail-owner-sub">On this Mac</span>
+              </span>
+            </div>
+            <DropdownMenu.Separator className="ui-menu-sep" />
+            <DropdownMenu.Label className="ui-menu-label">Theme</DropdownMenu.Label>
+            <div className="rail-owner-theme">
+              <Segment label="Theme" options={THEMES} value={theme} onChange={onTheme} />
+            </div>
+            <DropdownMenu.Separator className="ui-menu-sep" />
+            <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
+              Appearance
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(WELCOME_ROUTE)}>
+              Replay first run
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
   );
 }
 
@@ -238,28 +298,3 @@ const PLUGIN_ICONS: Record<PageIcon, JSX.Element> = {
     </svg>
   ),
 };
-
-/** Sun, moon, or a screen: the three states, each drawn as itself. */
-function ThemeIcon({ choice }: { choice: ThemeChoice }): JSX.Element {
-  if (choice === 'light') {
-    return (
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-        <circle cx="10" cy="10" r="3.6" />
-        <path d="M10 2.2v1.8M10 16v1.8M2.2 10H4M16 10h1.8M4.5 4.5l1.3 1.3M14.2 14.2l1.3 1.3M15.5 4.5l-1.3 1.3M5.8 14.2l-1.3 1.3" />
-      </svg>
-    );
-  }
-  if (choice === 'dark') {
-    return (
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-        <path d="M16.4 12A6.9 6.9 0 0 1 8 3.6a6.9 6.9 0 1 0 8.4 8.4Z" />
-      </svg>
-    );
-  }
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <rect x="2.8" y="4" width="14.4" height="9.6" rx="1.6" />
-      <path d="M7.4 16.8h5.2" />
-    </svg>
-  );
-}

@@ -206,6 +206,7 @@ export const PLACES = [
 /** The settings sections, in tab order. */
 export const SETTINGS_SECTIONS = [
   { id: 'you', label: 'You' },
+  { id: 'appearance', label: 'Appearance' },
   { id: 'memory', label: 'Memory' },
   { id: 'proposals', label: 'Proposals' },
   { id: 'accounts', label: 'Model accounts' },
