@@ -134,20 +134,20 @@ describe('finding the extension from the dashboard', () => {
   it('says the extension is missing when nothing answers', async () => {
     answers(new Error('Could not establish connection.'));
     render(<Browser />);
-    expect(await screen.findByText('The buddi extension is not installed in this browser.')).toBeInTheDocument();
+    expect(await screen.findByText(/The browser you are reading this in has no buddi extension/)).toBeInTheDocument();
     expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
   });
 
   it('says so in a browser that has no extensions at all', async () => {
     render(<Browser />);
-    expect(await screen.findByText('The buddi extension is not installed in this browser.')).toBeInTheDocument();
+    expect(await screen.findByText(/The browser you are reading this in has no buddi extension/)).toBeInTheDocument();
   });
 
   it('names the version it found, and fills in the code it is showing', async () => {
     answers({ installed: true, version: '0.1.0', state: 'pairing', code: '482 913', gateway: here() });
     vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: true, path: '/opt/buddi/extension' });
     render(<Browser />);
-    expect(await screen.findByText(/Extension found, version 0\.1\.0/)).toBeInTheDocument();
+    expect(await screen.findByText(/has the extension, version 0\.1\.0/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText('Pairing code')).toHaveValue('482 913'));
     // Pair is the only thing to press: the code arrived, nothing else changed.
     const pair = screen.getByRole('button', { name: 'Pair' });
