@@ -385,7 +385,7 @@ export function App(): JSX.Element {
               onCloseCanvas={() => setCanvasOpen(false)}
             />
           ) : (
-            <main>
+            <main data-ground={plainGround(place, hash) ? 'plain' : undefined}>
               <Place
                 hash={hash}
                 place={place}
@@ -403,6 +403,16 @@ export function App(): JSX.Element {
       </Toast.Provider>
     </Tooltip.Provider>
   );
+}
+
+/**
+ * The dense places keep the flat ground whatever the owner chose: Settings,
+ * Activity, Files and every plugin page (mail, tables). No gradient is drawn
+ * behind data. Home and Agents sit on the quiet page gradient.
+ */
+export function plainGround(place: string, hash: string): boolean {
+  if (parsePluginPageRoute(hash)) return true;
+  return place === SETTINGS_ROUTE || place === ACTIVITY_ROUTE || place === FILES_ROUTE;
 }
 
 export interface PlaceProps {

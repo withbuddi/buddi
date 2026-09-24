@@ -12,7 +12,21 @@
 @import './ui.css';
 
 /* ---- the monitoring pages: a main column, a crumb line, a page ---- */
-main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0; overflow: auto; }
+/*
+ * Two grounds. A page that is not dense sits on the quiet page gradient (blue,
+ * or sand when the owner chose it); a dense one — Settings, Activity, Files, a
+ * plugin's table — says `data-ground="plain"` and keeps the flat ground,
+ * because nothing is drawn behind data.
+ */
+main {
+  flex: 1 1 auto;
+  padding: var(--space-6) var(--page-gutter) 60px;
+  min-width: 0;
+  overflow: auto;
+  background: var(--gradient-page);
+  background-attachment: local;
+}
+main[data-ground='plain'] { background: var(--bg); }
 .page-crumbs { color: var(--text-muted); font-size: var(--text-sm); margin-bottom: var(--space-3); display: flex; gap: var(--space-3); }
 .page-crumbs a { color: var(--accent); }
 
@@ -2576,7 +2590,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   position: relative;
   height: 100%;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--field-base);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2585,51 +2599,26 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 
 /*
- * The backdrop.
+ * The backdrop: the design system's field.
  *
- * Four soft shapes in the one accent hue and one warm token, blurred far past
- * their own edges and faded into `--bg` before they reach any of them, so the
- * card keeps its own surface and every word keeps its contrast. Generated
- * here — radial gradients on one pseudo-element — because this page fetches
- * nothing, and the colours are the tokens', so dark mode gets the deep
- * version of this rather than a washed one.
- *
- * It drifts, once a minute and a half, with nothing but a transform: slow
- * enough to be noticed only by someone who stops to look, and motionless for
- * anyone who has asked for less of it.
+ * Three soft shapes — blue high in the middle, sand low on the right, blue
+ * low on the left — blurred far past their own edges over `--field-base`, so
+ * the card keeps its own surface and every word keeps its contrast. The
+ * colours are the tokens', so dark mode gets the deep glow rather than a
+ * washed field. It drifts once every ninety seconds, with nothing but a
+ * transform, and stands still for anyone who asked for less motion.
  */
 .meet::before {
   content: '';
   position: absolute;
   /* Wider than the page: the blur's own edges must never cross into view. */
-  inset: -25%;
+  inset: -20%;
   z-index: -1;
-  background:
-    /* The big one, sitting partly behind the board's right edge. */
-    radial-gradient(64vw 64vw at 58% 24%, color-mix(in oklab, var(--accent) 62%, transparent), transparent 66%),
-    /* Warm, low and to the right, where the page has room to breathe. */
-    radial-gradient(48vw 48vw at 88% 74%, color-mix(in oklab, var(--warning) 52%, transparent), transparent 66%),
-    /* Low and to the left, under the board. */
-    radial-gradient(42vw 42vw at 14% 92%, color-mix(in oklab, var(--accent) 46%, transparent), transparent 68%),
-    /* And a quiet one over the header, which is the one place words sit on
-       this rather than on a surface. */
-    radial-gradient(30vw 30vw at 16% 4%, color-mix(in oklab, var(--accent) 20%, transparent), transparent 70%);
-  filter: blur(60px);
-  opacity: 0.9;
-  animation: meet-drift 90s ease-in-out infinite alternate;
+  background: var(--gradient-field);
+  filter: blur(48px);
+  opacity: var(--field-opacity);
+  animation: ui-drift var(--drift) ease-in-out infinite alternate;
   pointer-events: none;
-}
-
-/* A deep version, not a washed one: on a dark page the accent glows rather
-   than fades, and a little more blur keeps it from reading as a light. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .meet::before { opacity: 0.7; filter: blur(80px); }
-}
-:root[data-theme='dark'] .meet::before { opacity: 0.7; filter: blur(80px); }
-
-@keyframes meet-drift {
-  from { transform: translate3d(-2%, -1%, 0) scale(1.02); }
-  to { transform: translate3d(3%, 2%, 0) scale(1.08); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2677,19 +2666,19 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   width: 44px;
   height: 44px;
   border-radius: 14px;
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--surface-brand-strong);
+  color: var(--on-brand);
   font-family: var(--font-display);
   font-size: 26px;
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   line-height: 1;
 }
 .meet-head-name {
   font-family: var(--font-display);
   font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   color: var(--text);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-title);
 }
 /* It sits on the backdrop rather than on a surface, so it takes the page's
    own text colour and a little weight: a muted grey over a tinted field is
@@ -2710,9 +2699,9 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
+  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
 }
 
@@ -2732,8 +2721,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 /* Room to read: the page's own body size rather than the transcript's dense
    one, with more air between lines, because this is the first thing anybody
    reads here and it is read once, slowly. */
-.meet .wb-bubble { font-size: var(--text-base); line-height: 1.75; }
-.meet .wb-working { font-size: var(--text-base); line-height: 1.75; }
+.meet .wb-bubble { font-size: var(--text-base); line-height: var(--leading-read); }
+.meet .wb-working { font-size: var(--text-base); line-height: var(--leading-read); }
 
 /* buddi speaks once under its name, not once per sentence: a run of its turns
    carries one heading, exactly as a run of the agent's does in the chat. An
@@ -2754,11 +2743,11 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--surface-brand-strong);
+  color: var(--on-brand);
   font-family: var(--font-display);
   font-size: 13px;
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   line-height: 1;
 }
 
