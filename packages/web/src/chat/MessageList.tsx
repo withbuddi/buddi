@@ -262,7 +262,7 @@ export function MessageList({
                 return (
                   <ToolRow
                     key={blockIndex}
-                    label={gate ? `Approval · ${block.name}` : labelFor(block.name)}
+                    label={gate && !result?.delegation ? `Approval · ${block.name}` : labelFor(block.name)}
                     tool={block.name}
                     ok={result?.ok ?? null}
                     running={result === null}
@@ -598,6 +598,11 @@ const INLINE_DIFF_LINES = 40;
  * state the transcript joined onto it — never off the tool's name.
  */
 export function approvalLine(result: Extract<ChatBlock, { type: 'tool_result' }>): { status: string; waiting: boolean } | null {
+  // A delegation whose colleague is paused on the owner: the call is not
+  // back, and nothing about it is a success yet.
+  if (result.delegation?.state === 'waiting') {
+    return { status: result.delegation.approvalId ? 'waiting for your approval' : 'running', waiting: true };
+  }
   if (approvalIdOf(result)) return { status: 'waiting', waiting: true };
   const state = result.approval?.state;
   if (!state) return null;

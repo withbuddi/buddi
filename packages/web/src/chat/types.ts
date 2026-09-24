@@ -65,7 +65,11 @@ export interface AgentsResponse {
 export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string } }
+  | {
+      type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: unknown; approval?: { id: string; state: string };
+      /** A delegation whose colleague is paused on the owner, or carrying on after a decision. */
+      delegation?: { state: 'waiting'; approvalId: string | null };
+    }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
   /** A gated action the owner decided, come back into the thread as its result. */
@@ -188,6 +192,21 @@ export interface ChatConversation {
    * reads it to tell "slow" from "never".
    */
   runs?: ChatRun[];
+  /**
+   * Approvals waiting anywhere under this conversation's delegations. The
+   * same rows the colleague's own thread shows: deciding one here decides it.
+   */
+  delegatedApprovals?: DelegatedApproval[];
+}
+
+/** A colleague's approval, shown where the owner is. */
+export interface DelegatedApproval {
+  approvalId: string;
+  /** The `agent.delegate` call in this conversation the work went out through. */
+  toolUseId: string | null;
+  tool: string;
+  /** Agent ids from the one that raised it up to the one this thread is with. */
+  chain: string[];
 }
 
 /** One run of the agent in this conversation. */

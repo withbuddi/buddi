@@ -229,6 +229,9 @@ import {
   type WriteResult,
 } from './write.js';
 
+
+/** How often approvals past their expiry are swept, and waiting delegations told. */
+export const EXPIRY_SWEEP_MS = 60_000;
 export interface WebServerDeps {
   /** Host controller; test instances can inject a fake. Reads never enable it. */
   browser?: BrowserController;
@@ -2765,6 +2768,19 @@ export async function startWebServer(
    * and `ToolContext.previewPort` reads the same value.
    */
   if (previewPort !== null) publishPreviewPort(deps.env ?? process.env, previewPort);
+  /*
+   * An approval nobody decides expires, and a delegation waiting on one is
+   * handed the expiry as its failure: the approval's own lifetime is the
+   * longest an agent waits on a colleague. Once a minute is plenty for a
+   * bound measured in hours; unref'd so it never holds the process open.
+   */
+  const sweepChat = webChatOf(server);
+  const expirySweep = sweepChat
+    ? setInterval(() => {
+        void sweepChat.sweepExpiredDelegations().catch((err) => (deps.log ?? console.log)(`web chat: expiring approvals failed: ${err instanceof Error ? err.message : String(err)}`));
+      }, EXPIRY_SWEEP_MS)
+    : null;
+  expirySweep?.unref?.();
   return {
     server,
     port,
@@ -2772,6 +2788,7 @@ export async function startWebServer(
     url: webUrl({ host: deps.config.host, port }),
     chat: webChatOf(server),
     close: async () => {
+      if (expirySweep) clearInterval(expirySweep);
       // Both listeners, both awaited. A preview socket still open is a port
       // still held, and the next thing to want it — the next test, the
       // gateway coming back up — finds it taken.

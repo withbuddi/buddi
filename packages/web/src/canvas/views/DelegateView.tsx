@@ -22,7 +22,8 @@ import { gistFor } from '../../chat/gist';
 import { ToolRow, Thought } from '../../chat/MessageList';
 import type { ChatAgent, ChatBlock, ChatConversation, ChatMessage } from '../../chat/types';
 import { chatRoute } from '../../routes';
-import { AgentAvatar, useAsync } from '../../ui';
+import { AgentAvatar, Button, useAsync } from '../../ui';
+import { focusApprovalDock } from '../../chat/ApprovalDock';
 import { labelFor } from '../renderables';
 
 /** How often the colleague's transcript is re-read while its run is open. */
@@ -34,13 +35,18 @@ export interface DelegateViewProps {
   runId?: string | null;
   /** The delegation's own result, once the call has come back. */
   result?: { ok: boolean; text: string | null } | null;
+  /**
+   * The call has not come back because the colleague is paused on the owner,
+   * or carrying on after they decided. `approvalId` is the approval up now.
+   */
+  waiting?: { approvalId: string | null } | null;
   /** The roster, for the colleague's name and face. */
   agents?: readonly ChatAgent[];
 }
 
-type Status = 'working' | 'done' | 'failed';
+type Status = 'working' | 'waiting' | 'done' | 'failed';
 
-export function DelegateView({ conversationId, agentId, runId = null, result = null, agents = [] }: DelegateViewProps): JSX.Element {
+export function DelegateView({ conversationId, agentId, runId = null, result = null, waiting = null, agents = [] }: DelegateViewProps): JSX.Element {
   // The call has come back: whatever the colleague did is done, and the
   // transcript is read once more rather than watched.
   const settled = result !== null;
@@ -52,10 +58,13 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
    * and only then does the asking stop.
    */
   const [done, setDone] = useState(settled);
+  // A delegation paused on the owner is not over, whatever its first run
+  // says: the colleague carries on the moment they decide.
+  const watching = !done || waiting !== null;
   const { data, error } = useAsync<ChatConversation | undefined>(
     () => chatApi.conversation(conversationId),
-    [conversationId, done],
-    done ? undefined : DELEGATE_POLL_MS,
+    [conversationId, done, waiting?.approvalId ?? null],
+    watching ? DELEGATE_POLL_MS : undefined,
   );
 
   /*
@@ -70,14 +79,16 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
    */
   const runs = data?.runs ?? [];
   const own = runId === null ? null : runs.find((run) => run.runId === runId) ?? null;
-  const over = settled || (runId !== null
+  const over = settled || (waiting === null && (runId !== null
     ? own !== null && own.finishedAt !== null
-    : runs.length > 0 && runs.every((run) => run.finishedAt !== null));
+    : runs.length > 0 && runs.every((run) => run.finishedAt !== null)));
   useEffect(() => {
     if (over) setDone(true);
   }, [over]);
 
-  const status: Status = result ? (result.ok ? 'done' : 'failed') : over ? 'done' : 'working';
+  const status: Status = result
+    ? (result.ok ? 'done' : 'failed')
+    : waiting?.approvalId ? 'waiting' : over ? 'done' : 'working';
 
   const colleague = agents.find((agent) => agent.id === agentId) ?? null;
   const name = colleague?.name ?? data?.agentId ?? agentId;
@@ -96,7 +107,7 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
                 Working
                 <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
               </>
-            ) : status === 'failed' ? 'Failed' : 'Done'}
+            ) : status === 'waiting' ? 'Waiting for your approval' : status === 'failed' ? 'Failed' : 'Done'}
           </span>
         </div>
       </header>
@@ -111,14 +122,16 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
                 return block.text.trim() === '' ? null : <Thought key={blockIndex} text={block.text} />;
               }
               if (block.type === 'tool_use') {
-                const outcome = resultOf(messages, block.id);
+                const step = stepOf(resultOf(messages, block.id));
                 return (
                   <ToolRow
                     key={blockIndex}
                     label={labelFor(block.name)}
                     tool={block.name}
-                    ok={outcome?.ok ?? null}
-                    running={outcome === null}
+                    ok={step.ok}
+                    running={step.running}
+                    waiting={step.waiting}
+                    status={step.status}
                     gist={gistFor(block.name, block.input)}
                     opens={false}
                     onOpen={() => {}}
@@ -135,13 +148,18 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
         <div className="wb-delegate-answer" data-testid="delegate-answer">
           <Markdown text={answer} />
         </div>
-      ) : status === 'working' ? (
+      ) : status === 'working' || status === 'waiting' ? (
         <p className="muted">{name} has not answered yet.</p>
       ) : null}
 
       {/* The way out of the summary and into the thread itself. On the right,
           where every action on this dashboard is. */}
       <div className="wb-delegate-actions">
+        {/* The decision is the dock's: the same card, the same row, whether
+            it is decided here or in the colleague's own thread. */}
+        {status === 'waiting' ? (
+          <Button variant="accent" onClick={() => focusApprovalDock()} data-testid="delegate-to-approval">Go to the approval</Button>
+        ) : null}
         {/* The call may carry no colleague id — an older row, a call whose
             event named only the conversation — and a link to `/chat//<id>`
             goes nowhere. The transcript knows whose thread it is. */}
@@ -173,4 +191,27 @@ function resultOf(messages: readonly ChatMessage[], toolUseId: string): Extract<
     }
   }
   return null;
+}
+
+/**
+ * What one of the colleague's calls is doing now, from its result row.
+ *
+ * A gated call's result is the gate's text until the owner decides, so a
+ * result being there says nothing about success: the approval's state does.
+ * Pending is still to decide; approved or executing is running; succeeded is
+ * done; anything else is a failure, named.
+ */
+export function stepOf(outcome: Extract<ChatBlock, { type: 'tool_result' }> | null): {
+  running: boolean;
+  ok: boolean | null;
+  waiting: boolean;
+  status: string | undefined;
+} {
+  if (outcome === null) return { running: true, ok: null, waiting: false, status: undefined };
+  const state = outcome.approval?.state;
+  if (state === 'pending') return { running: false, ok: null, waiting: true, status: 'waiting approval' };
+  if (state === 'approved' || state === 'executing') return { running: true, ok: null, waiting: false, status: 'running' };
+  if (state === 'succeeded') return { running: false, ok: true, waiting: false, status: undefined };
+  if (state) return { running: false, ok: false, waiting: false, status: state };
+  return { running: false, ok: outcome.ok, waiting: false, status: undefined };
 }

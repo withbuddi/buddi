@@ -10,7 +10,9 @@
  *
  *  1. **A pending approval.** A run proposed a gated effect and stopped. It is
  *     literally suspended until a decision arrives: the strongest possible
- *     "needs you" an installation has.
+ *     "needs you" an installation has. One raised inside a delegation counts
+ *     for the colleague and for every agent that asked on the way down, since
+ *     each of their runs is paused on it.
  *  2. **A held question.** The turn ended by calling `conversation.ask` — the
  *     agent declared that it cannot finish without an answer. The dashboard
  *     registers that tool for its interactive turns exactly as Telegram and the
@@ -35,6 +37,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
 import { PENDING_TTL_MS } from '../surfaces/pending-question.js';
 import { streamLog, type LogRow } from './stream.js';
+import { ancestry } from '../agents/delegation-chain.js';
 
 /** The turn declared it is waiting for an answer. Payload: `{ agentId }`. */
 export const QUESTION_ASKED = 'chat.question.asked';
@@ -112,11 +115,19 @@ async function pendingByAgent(
 ): Promise<Map<string, { count: number; oldestAt: string }>> {
   const pending = await listPendingActions(pool, { now, limit: APPROVAL_SCAN_LIMIT });
   const byAgent = new Map<string, { count: number; oldestAt: string }>();
+  const count = (agentId: string, at: string): void => {
+    const seen = byAgent.get(agentId);
+    if (seen === undefined) byAgent.set(agentId, { count: 1, oldestAt: at });
+    else byAgent.set(agentId, { count: seen.count + 1, oldestAt: min(seen.oldestAt, at) });
+  };
   for (const action of pending) {
     const at = action.createdAt.toISOString();
-    const seen = byAgent.get(action.agentId);
-    if (seen === undefined) byAgent.set(action.agentId, { count: 1, oldestAt: at });
-    else byAgent.set(action.agentId, { count: seen.count + 1, oldestAt: min(seen.oldestAt, at) });
+    count(action.agentId, at);
+    // Raised inside a delegation: every agent up the chain is paused on it
+    // too, and the one the owner was talking to is where they will look.
+    if (!action.conversationId) continue;
+    const chain = await ancestry(pool, action.conversationId).catch(() => []);
+    for (const link of chain) if (link.parentAgentId && link.parentAgentId !== action.agentId) count(link.parentAgentId, at);
   }
   return byAgent;
 }

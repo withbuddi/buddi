@@ -10,7 +10,11 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chatApi } from '../api';
-import { DelegateView, DELEGATE_POLL_MS } from './views/DelegateView';
+import { DelegateView, DELEGATE_POLL_MS, stepOf } from './views/DelegateView';
+import { askedByLine } from '../chat/ChatPage';
+import { ApprovalDock, APPROVAL_DOCK_ID } from '../chat/ApprovalDock';
+import { api } from '../api';
+import { fireEvent } from '@testing-library/react';
 import { chatRoute } from '../routes';
 import { POLL_ERROR_LIMIT } from '../ui/async';
 import { renderablesFrom, type DelegatePanelProps } from './renderables';
@@ -233,5 +237,99 @@ describe('a delegation on the canvas', () => {
     // server strips whatever the model wrote and puts them back only from the
     // event a real delegation writes.
     expect(panels.some((panel) => panel.source === 'delegate')).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * A colleague paused on the owner
+ * ------------------------------------------------------------------ */
+
+describe('a delegation waiting on an approval', () => {
+  const GATE = '11111111-2222-4333-8444-555555555555';
+  const gated = (state: string | null): ChatMessage[] => [
+    { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'u1', name: 'image.generate', input: { prompt: 'a fisherman' } }] },
+    ...(state === null ? [] : [{ id: 'm2', role: 'user', at: '', blocks: [{
+      type: 'tool_result' as const, toolUseId: 'u1', name: 'image.generate', ok: !['rejected', 'expired', 'failed'].includes(state),
+      output: null, approval: { id: GATE, state },
+    }] }]),
+  ];
+
+  it('says "Waiting for your approval", draws the gated call as waiting — not green — and sends the owner to the dock', async () => {
+    // The colleague's own run is over: it stopped on the gate. That is not done.
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(transcript({ runs: [run('r1', '2026-09-21T09:00:05Z')], messages: gated('pending') }));
+    const dock = document.createElement('section');
+    dock.id = APPROVAL_DOCK_ID;
+    dock.tabIndex = -1;
+    document.body.appendChild(dock);
+
+    render(<DelegateView conversationId="conv-2" agentId="ledger" runId="r1" waiting={{ approvalId: GATE }} agents={agents as never} />);
+
+    await waitFor(() => expect(screen.getByTestId('delegate-view')).toHaveAttribute('data-status', 'waiting'));
+    expect(screen.getByRole('status')).toHaveTextContent('Waiting for your approval');
+    const mark = (await screen.findByText('Image · Generate')).parentElement!.querySelector('.wb-tool-mark');
+    expect(mark).toHaveAttribute('data-ok', 'pending');
+    expect(screen.getByText('waiting approval')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('delegate-to-approval'));
+    expect(document.activeElement).toBe(dock);
+    dock.remove();
+  });
+
+  it('keeps working, not done, while the colleague carries on after the decision', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(transcript({ runs: [run('r1', '2026-09-21T09:00:05Z')], messages: gated('executing') }));
+    render(<DelegateView conversationId="conv-2" agentId="ledger" runId="r1" waiting={{ approvalId: null }} agents={agents as never} />);
+    await screen.findByText('Image · Generate');
+    expect(screen.getByTestId('delegate-view')).toHaveAttribute('data-status', 'working');
+    expect(screen.queryByTestId('delegate-to-approval')).toBeNull();
+  });
+
+  it('reads each step off its real state: pending, waiting approval, succeeded, failed', () => {
+    expect(stepOf(null)).toMatchObject({ running: true, ok: null });
+    const result = (approval?: { id: string; state: string }, ok = true) => ({ type: 'tool_result' as const, toolUseId: 'u1', name: 'x', ok, output: null, ...(approval ? { approval } : {}) });
+    expect(stepOf(result({ id: GATE, state: 'pending' }))).toMatchObject({ waiting: true, ok: null, status: 'waiting approval' });
+    expect(stepOf(result({ id: GATE, state: 'executing' }))).toMatchObject({ running: true, ok: null });
+    expect(stepOf(result({ id: GATE, state: 'succeeded' }))).toMatchObject({ running: false, ok: true, waiting: false });
+    expect(stepOf(result({ id: GATE, state: 'rejected' }, false))).toMatchObject({ ok: false, status: 'rejected' });
+    expect(stepOf(result(undefined, false))).toMatchObject({ ok: false });
+    expect(stepOf(result())).toMatchObject({ ok: true });
+  });
+
+  it('keeps the panel open, not done, while the call is waiting on the colleague', () => {
+    const panels = renderablesFrom({
+      messages: [
+        { id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'tool_use', id: 'd1', name: 'agent.delegate', input: { conversationId: 'conv-2', agentId: 'ledger', runId: 'r1' } }] },
+        { id: 'm2', role: 'user', at: '', blocks: [{
+          type: 'tool_result', toolUseId: 'd1', name: 'agent.delegate', ok: true,
+          output: { status: 'awaiting-approval', text: '', waitingOn: { action: GATE, tool: 'image.generate' } },
+          delegation: { state: 'waiting', approvalId: GATE },
+        }] },
+      ],
+      descriptors: [],
+    });
+    expect(panels).toHaveLength(1);
+    expect(panels[0]).toMatchObject({ source: 'delegate', tone: 'warning' });
+    expect(panels[0]!.props as DelegatePanelProps).toMatchObject({ result: null, waiting: { approvalId: GATE } });
+  });
+
+  it('labels the root dock\'s card with who raised it and who asked', async () => {
+    const roster = [
+      { id: 'illustrator', handle: 'art' },
+      { id: 'playground', handle: 'playground' },
+    ];
+    expect(askedByLine(['illustrator', 'playground'], roster as never)).toBe('@art, asked by @playground');
+    expect(askedByLine(['illustrator', 'scout', 'playground'], roster as never)).toBe('@art, asked by @scout, asked by @playground');
+
+    vi.spyOn(api, 'approval').mockResolvedValue({
+      id: GATE, tool: 'image.generate', state: 'pending', preview: 'Generate an image', canonicalArgs: { prompt: 'a fisherman' },
+      envelope: {}, expiresAt: '2999-01-01T00:00:00Z', choices: [],
+    } as never);
+    render(
+      <ApprovalDock
+        approvals={[{ approvalId: GATE, toolUseId: 'd1', askedBy: '@art, asked by @playground' }]}
+        timezone="UTC" now={Date.parse('2026-09-21T09:00:00Z')}
+        onDecided={() => {}} onSay={() => {}} onOpenFull={() => {}}
+      />,
+    );
+    expect(await screen.findByTestId('approval-dock-asker')).toHaveTextContent('@art, asked by @playground');
   });
 });

@@ -56,6 +56,9 @@ export const STREAM_KINDS: Readonly<Record<string, string>> = {
   'run.finished': 'run.finished',
   'chat.message.appended': 'message.appended',
   'chat.awaiting-approval': 'awaiting-approval',
+  // A colleague this conversation delegated to stopped on another approval
+  // while carrying on: the dock here holds it too, so the page reads again.
+  'delegation.waiting': 'awaiting-approval',
   // A run that threw, was cancelled, or was refused never reaches the runtime's
   // own `run.finished`. It still has to end on the stream, or the page waits
   // forever — so it ends as one, with the honest `stopped`.

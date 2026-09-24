@@ -10,6 +10,7 @@
  * `startTelegram` is the reusable half: `buddi serve` starts the same surface
  * next to the scheduler in one process, sharing one pool and one provider.
  */
+import { waitingDelegation } from '../agents/delegation-chain.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
@@ -243,7 +244,8 @@ export interface TelegramDeps {
   /**
    * Where a group's suspended request resumes. Groups live on the dashboard
    * (docs/groups.md); a decision taken here is handed over, never run here as
-   * an ordinary turn. Returns false when no dashboard is running to take it.
+   * an ordinary turn. A delegation paused on a colleague's approval is handed
+   * over the same way. Returns false when no dashboard is running to take it.
    */
   resumeGroup?: (action: ActionRecord, resume: ApprovalResume) => Promise<boolean>;
   /**
@@ -359,6 +361,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       // A room never runs as one agent's ordinary turn: it has a budget, a
       // projection and a memory scope of its own, all of which live with the
       // dashboard's group path.
+      // A colleague's approval inside a delegation continues where the
+      // delegation is carried on: the colleague, then the agent that asked.
+      if (await waitingDelegation(pool, action.conversationId).catch(() => null)) {
+        const taken = (await deps.resumeGroup?.(action, resume)) === true;
+        await api.sendMessage(chatId, taken
+          ? `Decided. ${agent.name} carries on, and its answer goes back to the agent that asked, on the dashboard.`
+          : 'Decided. That was asked through a delegation; it continues when the dashboard is running.');
+        return;
+      }
       if (await conversationGroup(pool, action.conversationId).catch(() => null)) {
         const taken = (await deps.resumeGroup?.(action, resume)) === true;
         await api.sendMessage(chatId, taken

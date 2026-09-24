@@ -48,6 +48,7 @@ import {
   type TelegramUpdate,
 } from './api.js';
 import { SURFACE } from './surface.js';
+import { waitingDelegation } from '../agents/delegation-chain.js';
 
 /** The prefix every approval callback carries. Short: 64 bytes is the ceiling. */
 export const CALLBACK_PREFIX = 'apr';
@@ -409,6 +410,11 @@ export class TelegramApprovals {
         await this.#edit(chatId, messageId, decidedText(action, 'rejected'));
       }
       await this.#wake(action, { state: 'rejected' });
+      // A colleague's approval inside a delegation: the agent that asked is
+      // owed the rejection as its answer, and that continues on the dashboard.
+      if (!action.jobId && await this.#delegated(action)) {
+        await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state: 'rejected' });
+      }
       return;
     }
 
@@ -439,11 +445,17 @@ export class TelegramApprovals {
     if (action.tool === 'host.exec' && !action.jobId && outcome.ok &&
         (outcome.result as { state?: string })?.state === 'completed') {
       await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state, result: outcome.result });
-    } else if (!action.jobId && action.conversationId && await conversationGroup(pool, action.conversationId).catch(() => null)) {
+    } else if (!action.jobId && action.conversationId && (await conversationGroup(pool, action.conversationId).catch(() => null) || await this.#delegated(action))) {
       // A group's member was waiting on this. The room resumes on its own
       // path whatever the tool was; the surface only hands the decision on.
       await this.#opts.resumeInteractive?.(chatId, action, { actionId: action.id, state, ...(outcome.ok ? { result: outcome.result } : {}) });
     }
+  }
+
+  /** Whether a delegation is paused on this action, with its asker waiting. */
+  async #delegated(action: ActionRecord): Promise<boolean> {
+    if (!action.conversationId) return false;
+    return (await waitingDelegation(this.#opts.pool, action.conversationId).catch(() => null)) !== null;
   }
 
   /** Wake the suspended run, if there is one. Never fails the decision. */

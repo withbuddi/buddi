@@ -34,6 +34,23 @@ export interface DockedApproval {
   approvalId: string;
   /** The call it gates: the canvas tab that holds the full request. */
   toolUseId: string;
+  /**
+   * Raised by a colleague under a delegation, not by this thread's agent:
+   * who, and who asked it — "@art, asked by @playground". The row is the
+   * colleague's own, so deciding it here is the one decision.
+   */
+  askedBy?: string;
+}
+
+/** The dock's element id, so a panel elsewhere can send the owner to it. */
+export const APPROVAL_DOCK_ID = 'approval-dock';
+
+/** Bring the dock into view and put the keyboard on it. */
+export function focusApprovalDock(): void {
+  const dock = document.getElementById(APPROVAL_DOCK_ID);
+  if (!dock) return;
+  dock.scrollIntoView?.({ block: 'nearest' });
+  dock.focus();
 }
 
 type Scope = 'once' | 'conversation' | 'always';
@@ -167,11 +184,12 @@ function DockCard({
   const where = action ? whereOf(action) : null;
 
   return (
-    <section className="wb-question" data-kind="approval" aria-label="Approval needed" data-testid="approval-dock">
+    <section id={APPROVAL_DOCK_ID} tabIndex={-1} className="wb-question" data-kind="approval" aria-label="Approval needed" data-testid="approval-dock">
       <div className="wb-question-head">
         <span className="wb-question-kicker">Needs your approval</span>
         {count > 1 ? <span className="wb-dock-count" data-testid="approval-dock-count">1 of {count}</span> : null}
         <strong>{action ? labelFor(action.tool) : 'Loading the request…'}</strong>
+        {item.askedBy ? <span className="wb-dock-asker" data-testid="approval-dock-asker">{item.askedBy}</span> : null}
       </div>
 
       {subject || where ? (

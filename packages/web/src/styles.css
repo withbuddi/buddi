@@ -1133,6 +1133,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
 }
 .wb-question[data-kind='approval'] .wb-question-kicker { color: var(--warning); }
 .wb-question[data-kind='approval'] > .wb-question-head { padding-bottom: var(--space-3); }
+.wb-dock-asker { grid-column: 1 / -1; color: var(--text-muted); font-size: var(--text-sm); }
 .wb-dock-count { justify-self: end; color: var(--text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .wb-dock-section {
   padding: var(--space-3) 0;
@@ -3047,6 +3048,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .wb-delegate-status[data-status='failed'] { color: var(--critical); }
 .wb-delegate-status[data-status='done'] { color: var(--good); }
+.wb-delegate-status[data-status='waiting'] { color: var(--warning); }
 .wb-delegate-work { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .wb-delegate-turn { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .wb-delegate-answer {
@@ -3055,7 +3057,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   min-width: 0;
 }
 /* Every action on this dashboard sits at the right edge of its section. */
-.wb-delegate-actions { display: flex; justify-content: flex-end; }
+.wb-delegate-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 
 /* Four refusals in a row are one piece of news. Folded, with the individual
    rows underneath when the owner wants them. */
