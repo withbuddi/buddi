@@ -31,7 +31,7 @@ import {
   QueryRefusal,
   ToolRegistry,
   type Vault,
-} from '@buddi/core';
+} from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME, listAccounts, secretNameFor } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
@@ -41,7 +41,7 @@ import { emailPageDescriptors } from './descriptors.js';
 import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
 import type { ImapClientFactory } from '../ports.js';
 import type { ToolContext } from '../types.js';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */

@@ -6,8 +6,8 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ToolRegistry, createPool, migrate } from '@buddi/core';
-import type { ToolContext } from '@buddi/core';
+import { ToolRegistry, createPool, migrate } from '@buddi/core/testing';
+import type { ToolContext } from '@buddi/core/testing';
 import { manifest } from '../index.js';
 import { buildPreamble } from '../preamble.js';
 import { listMemory } from '../admin.js';

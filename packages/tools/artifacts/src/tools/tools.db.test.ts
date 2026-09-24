@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ToolRegistry, createPool, migrateCore, saveArtifact } from '@buddi/core';
-import type { ToolContext } from '@buddi/core';
+import { ToolRegistry, createPool, migrateCore, saveArtifact } from '@buddi/core/testing';
+import type { ToolContext } from '@buddi/core/testing';
 import { manifest } from '../index.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 

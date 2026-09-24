@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core';
+import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core/testing';
 import { browserStoppedMessage, BrowserService } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';

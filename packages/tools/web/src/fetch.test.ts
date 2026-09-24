@@ -18,7 +18,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createHttpArea, type LookupAll } from '@buddi/core';
+import { createHttpArea, type LookupAll } from '@buddi/core/testing';
 import { createHttpTransport } from '@buddi/runtime';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';
 import { createFetcher, MAX_BYTES } from './http.js';

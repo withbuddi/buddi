@@ -21,7 +21,7 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations } from '@buddi/core';
+import { createPool, runMigrations } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from './config.js';
 import { FakeImapServer, fakeMessage } from './imap/fake.js';
@@ -37,7 +37,7 @@ import {
 import { policiesView } from './tools/policies.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
 import type { SourceContext, ToolContext } from './types.js';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
 function hosted<C>(facts: C): C {

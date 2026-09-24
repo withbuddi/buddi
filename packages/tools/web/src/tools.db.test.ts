@@ -8,7 +8,7 @@
 import type { Pool } from 'pg';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createHttpArea, createPool, runMigrations, ToolRegistry, type ToolContext } from '@buddi/core';
+import { createHttpArea, createPool, runMigrations, ToolRegistry, type ToolContext } from '@buddi/core/testing';
 import { createHttpTransport } from '@buddi/runtime';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';

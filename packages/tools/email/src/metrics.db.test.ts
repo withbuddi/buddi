@@ -15,8 +15,8 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { ToolRegistry, createPool, measureMetricResult, runMigrations } from '@buddi/core';
-import type { ToolContext } from '@buddi/core';
+import { ToolRegistry, createPool, measureMetricResult, runMigrations } from '@buddi/core/testing';
+import type { ToolContext } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME, markAccountSynced } from './config.js';
 import { manifest } from './index.js';

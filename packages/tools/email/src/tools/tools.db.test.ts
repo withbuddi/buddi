@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations, ToolRegistry } from '@buddi/core';
+import { createPool, runMigrations, ToolRegistry } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
@@ -20,7 +20,7 @@ import type { GatedToolDefinition, ToolContext } from '../types.js';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
 import { CATEGORIES, PROCESSING_VERSION } from './shared.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */

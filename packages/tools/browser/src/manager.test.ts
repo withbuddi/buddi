@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ToolContext } from '@buddi/core';
-import { ToolRegistry, createPluginHost, hostBindingOf } from '@buddi/core';
+import type { ToolContext } from '@buddi/core/testing';
+import { ToolRegistry, createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
