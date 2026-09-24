@@ -14,11 +14,11 @@
  *  - `ensureGmailAccount` seeds the one account `GMAIL_USER` names, on every
  *    boot, exactly as it always did. It refreshes hosts and auth mode, and it
  *    touches nothing the owner set on the page.
- *  - the settings page inserts the rest, each with its own vault secret.
+ *  - the settings page inserts the rest, each with its own owner secret.
  *
- * The schema stores the *name* of the secret, never the secret. Resolution goes
- * through `resolveAuth`, which reads the named entry from the environment the
- * caller hands it; the vault is what fills that environment at startup.
+ * The schema stores the *name* of the secret, never the secret. The installed
+ * plugin resolves it through the owner's secrets (`credentials.ts`); a caller
+ * that injects an environment (a test) is answered by `resolveAuth` from it.
  */
 import { createHash } from 'node:crypto';
 import type { DbArea } from '@buddi/core/plugin';

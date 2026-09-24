@@ -127,15 +127,12 @@ export async function hydrateSecrets(
   env: NodeJS.ProcessEnv = process.env,
   vault: Vault | undefined = createVault({ env }),
 ): Promise<SecretHydration> {
-  // Mail accounts are plural and their names are not knowable in advance: each
-  // one the owner adds on the settings page files its password under
-  // `EMAIL_<address>`, so what has to be hydrated is *whatever the vault holds*
-  // under that prefix rather than a list written down here. Listing names needs
-  // no key and reveals no value; a vault that will not even list is simply one
-  // with no mail accounts in it, and each account then fails closed with its
-  // own `secret-missing` problem.
-  const accountSecrets = await (vault?.list() ?? Promise.resolve([])).catch(() => [] as string[]);
-  const names = [...WIRED_SECRETS, ...accountSecrets.filter((name) => name.startsWith('EMAIL_'))];
+  // Mail accounts' passwords are not hydrated: they are owner secrets, which
+  // the email plugin asks `ctx.buddi.secrets` for and never reads from the
+  // environment (`owner-secrets.ts`). `GMAIL_APP_PASSWORD` still is, once, so
+  // the start can adopt a `.env` copy; it is cleared from the environment
+  // after that.
+  const names = [...WIRED_SECRETS];
   const resolved = await resolveSecrets(names, { vault, env });
   for (const name of names) {
     const value = resolved.env[name];

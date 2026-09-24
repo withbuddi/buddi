@@ -11,11 +11,13 @@
  *     host and a password that IMAP refuses is not an account — it is a typo,
  *     and the owner finds out now rather than at the next poll, from a log line
  *     they will never read.
- *  2. **The password goes to the vault**, under a name derived from the
- *     address, so it is the same name on the page, in the row, in the keychain
- *     and in `buddi doctor`. A name another row already owns is refused before
- *     the vault is touched: that name holds someone's password.
- *  3. **The row is written**, carrying that name and nothing else.
+ *  2. **The row is written**, carrying the secret's name and nothing else:
+ *     a name derived from the address, so it is the same on the page, in the
+ *     row and in Settings. A name another row already owns is refused before
+ *     anything is written: that name holds someone's password.
+ *  3. **The password becomes an owner secret** under that name, bound to this
+ *     mailbox's login (`email.account`, the row's id) and kept in the vault by
+ *     core (`ctx.buddi.secrets.put`). This plugin never opens the vault.
  *
  * Removing an account undoes both halves. A password left behind in the
  * keychain after the mailbox it opened was removed is a secret nobody is
@@ -28,14 +30,11 @@
  * empty — the convention the form used, in the one place that can still apply it.
  */
 import type { ToolDefinition } from '@buddi/core/plugin';
-// step 3: mailbox passwords stay on core's vault until the `secrets` area
-// (docs/specs/plugin-host-api.md §9, step 3; owner-secrets.md).
-import { createVault, type Vault } from '@buddi/core';
 import { z } from 'zod';
 import { INBOX, secretNameFor } from '../config.js';
+import { ACCOUNT_KIND } from '../credentials.js';
 import { ACCOUNT_COLUMNS, toAccount } from '../rows.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
-import type { EnvLike } from '../config.js';
 
 /** One provider's endpoints. Implicit or STARTTLS on the ports named here. */
 export interface MailHosts {
@@ -92,10 +91,6 @@ export class AccountRefusal extends Error {
 export interface AccountToolOptions {
   /** How the login is tested. Injected by tests; the real IMAP client otherwise. */
   connect: ImapClientFactory;
-  /** Where the password is kept. Injected by tests; the machine's vault otherwise. */
-  vault?: Vault | undefined;
-  /** Where the secret's name is also written, so the next poll finds it. */
-  env?: EnvLike | undefined;
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
@@ -225,7 +220,7 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
   return {
     name: 'email.add_account',
     description:
-      "Add one of the owner's mailboxes: its address, its app password, and the hosts its mail lives on. The password is kept in this machine's vault and never in the database.",
+      "Add one of the owner's mailboxes: its address, its app password, and the hosts its mail lives on. The password is kept as one of the owner's secrets, in this machine's vault and never in the database.",
     tier: 'auto',
     ownerOnly: true,
     input: addInput,
@@ -243,14 +238,13 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
 
       await testLogin(opts.connect, account);
 
-      const env = opts.env ?? process.env;
-      const vault = opts.vault ?? createVault({ env: env as NodeJS.ProcessEnv });
-      if (!vault) throw new AccountRefusal('This installation has nowhere safe to keep the password.');
+      const secrets = ctx.buddi!.secrets;
+      if (!secrets) throw new AccountRefusal('This installation has nowhere safe to keep the password.');
       const secretName = secretNameFor(account.address);
 
       /*
-       * Nobody else's secret, checked before the vault is touched at all. The
-       * name carries a hash of the address, so two mailboxes cannot collide by
+       * Nobody else's secret, checked before anything is written. The name
+       * carries a hash of the address, so two mailboxes cannot collide by
        * accident — but "cannot by accident" is not "cannot", and what is at
        * stake is another account's password.
        */
@@ -264,15 +258,7 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
         );
       }
 
-      try {
-        await vault.set(secretName, account.password);
-      } catch {
-        throw new AccountRefusal('The password could not be kept safely. Unlock this machine and try again.');
-      }
-      // Into this process's environment too, so the next poll finds it without
-      // a restart. Startup reads the same name back out of the vault.
-      (env as Record<string, string | undefined>)[secretName] = account.password;
-
+      let written: AccountRecord;
       try {
         const { rows } = await ctx.buddi!.db.query(
           `insert into email.accounts
@@ -293,21 +279,33 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
         );
         const row = rows[0];
         if (!row) throw new Error('the account row was not written');
-        const written = toAccount(row);
-        return {
-          added: true,
-          address: written.address,
-          note: `${written.address} is set up. buddi will read it from the next poll.`,
-        };
+        written = toAccount(row);
       } catch (error) {
-        await vault.delete(secretName).catch(() => {});
-        delete (env as Record<string, string | undefined>)[secretName];
         throw new AccountRefusal(
           `${account.address} opened, but the account could not be written down: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
       }
+      /*
+       * The password, as an owner secret bound to this mailbox's login
+       * (email.account, its id), pre-approved because the owner typed it here.
+       * The row first, because the binding names its id; a password that
+       * cannot be kept takes the row back out.
+       */
+      try {
+        await secrets.put(secretName, account.password, [
+          { kind: ACCOUNT_KIND, target: written.id, rule: 'pre-approved' },
+        ]);
+      } catch {
+        await ctx.buddi!.db.query(`delete from email.accounts where id = $1`, [written.id]).catch(() => {});
+        throw new AccountRefusal('The password could not be kept safely. Unlock this machine and try again.');
+      }
+      return {
+        added: true,
+        address: written.address,
+        note: `${written.address} is set up. buddi will read it from the next poll.`,
+      };
     },
   };
 }
@@ -318,7 +316,7 @@ const removeInput = z.object({ id: z.string().uuid() }).strict();
  * Remove a mailbox and the password it used.
  *
  * The row goes first: the mail, the drafts and the cursor go with it by
- * cascade. Then the vault entry, which is only removed when it is *this*
+ * cascade. Then the owner secret, which is only removed when it is *this*
  * account's — the env-seeded account shares its secret with the variable that
  * named it, and deleting that from under `.env` would be a surprise.
  */
@@ -328,7 +326,7 @@ export function createRemoveAccountTool(
   return {
     name: 'email.remove_account',
     description:
-      "Remove one of the owner's mailboxes, its mail and its drafts, and the password it used from this machine's vault. The mailbox itself is untouched.",
+      "Remove one of the owner's mailboxes, its mail and its drafts, and the password it used from the owner's secrets. The mailbox itself is untouched.",
     tier: 'auto',
     ownerOnly: true,
     input: removeInput,
@@ -343,10 +341,7 @@ export function createRemoveAccountTool(
 
       let secretRemoved = false;
       if (account.addedVia === 'page' && account.secretName === secretNameFor(account.address)) {
-        const env = opts.env ?? process.env;
-        const vault = opts.vault ?? createVault({ env: env as NodeJS.ProcessEnv });
-        secretRemoved = (await vault?.delete(account.secretName).catch(() => false)) ?? false;
-        delete (env as Record<string, string | undefined>)[account.secretName];
+        secretRemoved = (await ctx.buddi!.secrets?.delete(account.secretName).catch(() => false)) ?? false;
       }
       return {
         removed: true,
