@@ -62,26 +62,28 @@ next. Checked against the code and `git log` on 2026-09-21.
   an agent's own file kept through the platform update, and a weekly digest on
   Telegram and Home.
 
+- [MCP server](specs/mcp.md) — configure buddi from Claude Code: reads at
+  once, every write an approval card, `buddi.ask` to talk to an agent
+  (buddi a329cf6, 31d7128); `claude mcp add -s user buddi -- buddi mcp`.
+
 ## In progress
 
-- [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-  Next in the main list; not started.
+- The small items below ("Small, whenever a slot opens"), cleared before
+  the main list resumes with owner secrets (2026-09-23).
 
 ## Next, in order
 
-0. [MCP server](specs/mcp.md) — configure buddi from Claude Code: reads at
-   once, every write an approval card, `buddi.ask` to talk to an agent.
-   Built 2026-09-23 (buddi a329cf6); `claude mcp add buddi -- buddi mcp`, see
-   [mcp.md](mcp.md).
-1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
-2. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
+1. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
-3. macOS app — a packaged desktop app around the existing service.
-4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+2. macOS app — a packaged desktop app around the existing service.
+3. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
-5. Drive and Dropbox — the provider APIs for backup, after the folder target
+4. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
-6. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+5. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+6. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+   Moved to last on 2026-09-23: taken once everything else here and the small
+   items below are cleared.
 
 Developer plugin, the visible layer (2026-09-23; the plugin itself is done —
 run mode by default, remembered commands, lockfile installs, local `npx`,
