@@ -22,7 +22,8 @@ import { createMemoryVault } from '../vault/memory.js';
 import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import { createSecretsManifest } from './approval.js';
 import { registerSecretDestination, resetSecretDestinations } from './destinations.js';
-import { adoptVaultEntry, findSecret } from './store.js';
+import { adoptVaultEntry, findSecret, putOwnerSecret } from './store.js';
+import { useOwnerSecret } from './use.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -286,5 +287,81 @@ suite('ctx.buddi.secrets', () => {
     });
     await expect(adoptVaultEntry(pool, liar, { ...input, from: 'OLD', name: 'OLD' })).rejects.toThrow(/old entry was kept/);
     expect(await inner.get('OLD')).toBe(VALUE);
+  });
+
+  it('hands a core-internal caller the value through deliverInto, recorded like any use', async () => {
+    // Core's own destinations (the http area, the gateway's provider accounts)
+    // register under their own name and take the value through `deliverInto`.
+    registerSecretDestination('core-internal', {
+      kind: 'core-internal.thing',
+      maxRule: 'pre-approved',
+      checkTarget: (target, bound) => target === bound,
+      describe: () => 'the thing',
+      deliver: () => {
+        throw new Error('the internal caller delivers through deliverInto');
+      },
+    });
+    // The Settings page stores through the store directly; the host area's
+    // `put` is the plugin's own narrower path.
+    await putOwnerSecret(pool, vault, {
+      name: 'Header key',
+      value: VALUE,
+      bindings: [{ kind: 'core-internal.thing', target: 'acct-1', rule: 'pre-approved' }],
+    });
+    const taken: Array<{ value: string; target: unknown; use: string }> = [];
+    const result = await useOwnerSecret(
+      {
+        pool,
+        vault,
+        plugin: 'core-internal',
+        buddi: owner(),
+        now: () => now,
+        deliverInto: (value, target, use) => {
+          taken.push({ value, target, use });
+        },
+      },
+      { name: 'Header key', kind: 'core-internal.thing', target: 'acct-1' },
+    );
+    expect(result).toEqual({ done: true, use: expect.any(String) });
+    expect(taken).toEqual([{ value: VALUE, target: 'acct-1', use: (result as { use: string }).use }]);
+    const { rows } = await pool.query(`select plugin, outcome from core.secret_uses`);
+    expect(rows).toEqual([{ plugin: 'core-internal', outcome: 'delivered' }]);
+    resetSecretDestinations();
+  });
+
+  it('a TOTP secret delivers the current code into a browser field only (acceptance 6)', async () => {
+    // RFC 6238's own test seed and vector: T0, 30-second steps, six digits.
+    const seedBase32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; // ASCII "12345678901234567890"
+    const ownerHost = owner();
+    await putOwnerSecret(pool, vault, {
+      name: 'Second factor',
+      value: seedBase32,
+      totp: true,
+      bindings: [{ kind: 'browser.field', target: 'https://example.test', rule: 'pre-approved' }],
+    });
+    // The `browser.field` destination belongs to the plugin that fills
+    // browser fields; a `browser` manifest stands in as that plugin.
+    const browser = manifest('browser', [
+      {
+        kind: 'browser.field',
+        maxRule: 'pre-approved',
+        checkTarget: (target, bound) => target === bound,
+        describe: (target) => `the field on ${String(target)}`,
+        deliver: (value, _target, { use }) => {
+          delivered.set(use, value);
+        },
+      },
+    ]);
+    registry.register(browser);
+    const at = new Date('1970-01-01T00:00:59Z');
+    const result = await hostFor(browser, { now: () => at }).secrets!.use('Second factor', 'browser.field', 'https://example.test');
+    expect(result).toEqual({ done: true, use: expect.any(String) });
+    expect(delivered.get((result as { use: string }).use)).toBe('287082');
+    // The seed is never what crosses, and every code generated is logged.
+    const { rows } = await pool.query(`select detail from core.secret_uses where kind = 'browser.field'`);
+    expect(rows[0].detail).toMatch(/code generated for the window ending 1970-01-01T00:01:00/);
+    // Another kind is refused before any card or delivery.
+    const elsewhere = await ownerHost.secrets!.use('Second factor', 'mail.account', 'acct-1');
+    expect(elsewhere).toEqual({ refused: expect.stringMatching(/TOTP secret/) });
   });
 });

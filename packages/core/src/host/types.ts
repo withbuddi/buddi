@@ -147,6 +147,14 @@ export interface HttpRequest {
   /** `GET` when absent. */
   method?: string;
   headers?: Record<string, string>;
+  /**
+   * A secret goes into one header of this request (docs/specs/owner-secrets.md
+   * §3, `http.header`): core reads the secret by name, finds the binding that
+   * names this request's host and header, applies the rule, and inserts the
+   * header itself after the address checks — the value never passes through
+   * the caller's hands. HTTPS only; `header` is `Authorization` when absent.
+   */
+  auth?: { secret: string; header?: string };
   body?: string | Buffer;
   signal?: AbortSignal;
   /** How long the request may go silent. */
