@@ -36,6 +36,7 @@ import { fmtRelative } from '../format';
 import { badgeOf, canGroup, waitingText, type AgentAttention, type AgentGroups } from './roster';
 import type { GroupView } from '../chat/types';
 import { FaceMark } from '../views/parts/Avatar';
+import { accentAttrs, accentOf } from './accent';
 
 export interface AgentRailProps {
   /** Already grouped and ordered — `groupAgents` decides, in one place. */
@@ -152,7 +153,7 @@ export function AgentRail({
                 <span className="wb-face-mark wb-group-stack" aria-hidden="true">
                   {group.members.slice(0, 3).map((id) => {
                     const agent = everyone.find((a) => a.id === id);
-                    return <FaceMark key={id} className="wb-group-chip" tint={tintOf(id)} name={agent?.name ?? '?'} face={agent} initials={1} />;
+                    return <FaceMark key={id} className="wb-group-chip" id={id} name={agent?.name ?? '?'} face={agent} initials={1} />;
                   })}
                   {group.members.length > 3 ? <span className="wb-group-chip wb-group-more">+{group.members.length - 3}</span> : null}
                 </span>
@@ -234,7 +235,7 @@ export function AgentFace({
       <Tooltip.Trigger asChild>
         <button
           className="wb-face"
-          data-tint={tintOf(agent.id)}
+          {...accentAttrs(accentOf(agent))}
           data-active={active ? 'true' : undefined}
           data-unavailable={agent.available ? undefined : 'true'}
           data-testid={`agent-face-${agent.id}`}
@@ -243,7 +244,7 @@ export function AgentFace({
           disabled={!agent.available}
           onClick={() => agent.available && onSelect(agent.id)}
         >
-          <FaceMark className="wb-face-mark" name={agent.name} face={agent} />
+          <FaceMark className="wb-face-mark" id={agent.id} name={agent.name} face={agent} />
           <span className="wb-face-text" aria-hidden="true">
             {/* The handle rides the title line, muted, because it is the other
                 half of the name: it is what the owner types. The second line

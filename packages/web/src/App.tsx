@@ -41,6 +41,7 @@ import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
 import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
+import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
 import { Activity } from './views/Activity';
@@ -223,6 +224,7 @@ export function App(): JSX.Element {
         .then((list) => {
           if (cancelled) return;
           setAgents(list.agents);
+          rememberDefaultAgent(list.defaultAgentId ?? null);
           setDefaultAgentId(list.defaultAgentId ?? null);
           setAgentId((current) => current ?? list.defaultAgentId ?? list.agents[0]?.id ?? null);
         })

@@ -4,17 +4,18 @@
  *
  * Order of truth: the picture the owner uploaded (served from the database),
  * else the icon its file names — an image its folder ships or an emoji — else
- * its initials in its own accent, else its initials in a tint hashed from its
- * id. A picture that fails to load falls back to the icon rather than a broken
- * image. The accent travels as one custom property; nothing else is styled
- * inline.
+ * its initials on its accent's soft ground. A picture that fails to load falls
+ * back to the icon rather than a broken image. The accent (see
+ * `shell/accent.ts`) travels as `data-agent`, plus one custom property when
+ * the agent chose its own colour; nothing else is styled inline.
  */
-import { useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 import type { ChatAgent } from '../../chat/types';
+import { accentAttrs, accentOf } from '../../shell/accent';
 import { tintOf } from '../../shell/AgentRail';
 import { monogram } from '../../shell/roster';
 
-export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'>;
+export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'> & { roles?: readonly string[] | undefined };
 
 /**
  * The one component that draws a face's mark. `className` is the frame it
@@ -23,6 +24,7 @@ export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'>;
  */
 export function FaceMark({
   className,
+  id,
   name,
   face,
   tint,
@@ -31,6 +33,8 @@ export function FaceMark({
   initials = 2,
 }: {
   className: string;
+  /** The agent's id: with it the mark wears the agent's accent. */
+  id?: string | undefined;
   name: string;
   face?: Face | undefined;
   tint?: number | string | undefined;
@@ -43,16 +47,15 @@ export function FaceMark({
   const picture = face?.picture && face.picture !== broken ? face.picture : undefined;
   const icon = face?.avatar;
   const kind = picture ? 'image' : icon?.kind;
-  const style = face?.accent ? ({ '--face-accent': face.accent } as CSSProperties) : undefined;
+  const accent = id ? accentAttrs(accentOf({ id, accent: face?.accent, roles: face?.roles })) : undefined;
   return (
     <span
       className={className}
-      data-tint={tint}
+      data-tint={accent ? undefined : tint}
       data-size={size}
       data-kind={kind}
-      data-accent={face?.accent ? 'true' : undefined}
       data-unavailable={unavailable ? 'true' : undefined}
-      style={style}
+      {...accent}
       aria-hidden="true"
     >
       {picture ? (
@@ -81,7 +84,7 @@ export function Avatar({
   unavailable?: boolean;
   face?: Face;
 }): JSX.Element {
-  return <FaceMark className="ui-avatar" tint={tintOf(id)} name={name} size={size} unavailable={unavailable} face={face} />;
+  return <FaceMark className="ui-avatar" id={id} tint={tintOf(id)} name={name} size={size} unavailable={unavailable} face={face} />;
 }
 
 /** The face of an agent in a roster, by id: falls back to initials for an id the roster does not know. */

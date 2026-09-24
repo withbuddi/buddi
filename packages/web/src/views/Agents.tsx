@@ -20,6 +20,7 @@ import { Memory } from './Memory';
 import { AgentSkills } from './parts/AgentSkills';
 import { Reminders } from './Reminders';
 import { AgentSetup } from './parts/AgentSetup';
+import { accentAttrs, accentOf } from '../shell/accent';
 
 const INDEX_TABS = [
   { id: 'team', label: 'Team' },
@@ -72,7 +73,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
                  * so Talk can sit inside it without nesting one link in
                  * another. A card opens on Conversations; Setup is a tab away.
                  */
-                <div key={agent.id} className="team-card" data-unavailable={agent.available ? undefined : 'true'}>
+                <div key={agent.id} className="team-card" {...accentAttrs(accentOf(agent))} data-unavailable={agent.available ? undefined : 'true'}>
                   <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} face={agent} />
                   <a className="team-card-name" href={agentRoute(agent.id, 'conversations')} onClick={go(agentRoute(agent.id, 'conversations'))}>{agent.name}</a>
                   <span className="team-card-handle">@{agent.handle}</span>
